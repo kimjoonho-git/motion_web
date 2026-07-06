@@ -1,0 +1,33 @@
+# ROS2 / colcon generated files
+build/
+install/
+log/
+
+# Python generated files
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Local backups and runtime artifacts
+backups/
+*.bak
+*.bak-*
+*.tmp
+*.log
+
+# Motion runtime data
+motion_data/files/
+motion_data/mappings/
+
+# Local machine files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Do not include the separate low-level motor-system repository here.
+src/motion_system/
+
+# Misc local files
+packages.microsoft.gpg
+sdo.txt

@@ -1,0 +1,101 @@
+period: 1000000
+masters:
+- id: 0
+  type: ethercat
+  number_of_slaves: 2
+  ethercat_master_index: 0
+  slaves:
+  - controller_index: 0
+    name: 테스트모터 1
+    driver_id: 0
+    alias: 403
+    position: 0
+    vendor_id: 1647
+    product_id: 1614282756
+    profile_mode: 0
+  - controller_index: 2
+    name: 테스트 모터 2
+    driver_id: 0
+    alias: 101
+    position: 0
+    vendor_id: 1647
+    product_id: 1614282756
+    profile_mode: 0
+- id: 1
+  type: serial
+  number_of_slaves: 2
+  serial_port: /dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FTAAMMJV-if00-port0
+  serial_baudrate: 1000000
+  slaves:
+  - controller_index: 1
+    name: 다이나믹셀모터 5
+    driver_id: 1
+    bus_id: 5
+    profile_mode: 0
+  - controller_index: 3
+    name: 다이나믹셀모터 3
+    driver_id: 2
+    bus_id: 3
+    profile_mode: 0
+drivers:
+- id: 0
+  driver_model: MADLN05BE
+  pulse_per_revolution: 8388608
+  rated_effort: 0.16
+  unit_effort: 0.1
+  rated_current: 1.1
+  rated_power_w: 50
+  rated_speed_rpm: 3000
+  lower: -27000.0
+  upper: 27000.0
+  speed: 2000000.0
+  acceleration: 180000.0
+  deceleration: 180000.0
+  profile_velocity: 18000.0
+  profile_acceleration: 180000.0
+  profile_deceleration: 180000.0
+  profile_position_value: 1
+  profile_velocity_value: 3
+  profile_effort_value: 4
+  type: minas
+  param_file: /home/joonho_test/ros2_ws/src/motion_system/ros2/motion_system_ros2/motion_control_bridge/param
+- id: 1
+  driver_model: XM540-W270-R
+  pulse_per_revolution: 4096
+  rated_effort: 1.0
+  unit_effort: 0.00269
+  rated_current: 1.0
+  rated_speed_rpm: 37
+  lower: -180.0
+  upper: 180.0
+  speed: 222.0
+  acceleration: 703104.5
+  deceleration: 703104.5
+  profile_velocity: 222.0
+  profile_acceleration: 703104.5
+  profile_deceleration: 703104.5
+  profile_position_value: 3
+  profile_velocity_value: 1
+  profile_effort_value: 0
+  type: dynamixel
+  param_file: /home/joonho_test/ros2_ws/config/dynamixel_xm540_w270.yaml
+- id: 2
+  driver_model: XM540-W150
+  pulse_per_revolution: 4096
+  rated_effort: 1.0
+  unit_effort: 0.00269
+  rated_current: 1.0
+  rated_speed_rpm: 66
+  lower: -180.0
+  upper: 180.0
+  speed: 396.0
+  acceleration: 703104.5
+  deceleration: 703104.5
+  profile_velocity: 396.0
+  profile_acceleration: 703104.5
+  profile_deceleration: 703104.5
+  profile_position_value: 3
+  profile_velocity_value: 1
+  profile_effort_value: 0
+  type: dynamixel
+  param_file: /home/joonho_test/ros2_ws/config/dynamixel_xm540_w150.yaml

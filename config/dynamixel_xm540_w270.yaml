@@ -1,0 +1,24 @@
+protocol:
+  broadcast_id: 254
+  read: 2
+  write: 3
+  status: 85
+  bulk_read: 146
+  bulk_write: 147
+
+model_file: /home/joonho_test/ros2_ws/src/motion_system/lib/motor_manager/hardware/dynamixel/control_table/xm540_w270.model
+
+items: []
+
+interfaces:
+  - { id: 98, index: 0 }
+  - { id: 0, name: "Torque Enable", type: u8 }
+  - { id: 1, name: "Goal Position", type: s32 }
+  - { id: 2, name: "Goal Velocity", type: s32 }
+  - { id: 3, name: "Goal Current", type: s16 }
+  - { id: 99, index: 0 }
+  - { id: 4, name: "Torque Enable", type: u8 }
+  - { id: 5, name: "Hardware Error Status", type: u8 }
+  - { id: 6, name: "Present Position", type: s32 }
+  - { id: 7, name: "Present Velocity", type: s32 }
+  - { id: 8, name: "Present Current", type: s16 }
