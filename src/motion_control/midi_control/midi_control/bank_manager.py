@@ -5,6 +5,8 @@ from typing import Any, Dict, List
 
 MIDI_CHANNEL_COUNT = 8
 MAX_MIDI_BANKS = 8
+FILTER_LEVEL_MIN = 0
+FILTER_LEVEL_MAX = 13
 MOTION_ID_PATTERN = re.compile(r'^[1-9]\d*-[1-9]\d*$')
 
 
@@ -27,7 +29,7 @@ class MidiBankManager:
                 'min_deg': -180.0,
                 'max_deg': 180.0,
                 'reversed': False,
-                'filter_level': 0.0,
+                'filter_level': 0,
             }
             for channel in range(MIDI_CHANNEL_COUNT)
         ]
@@ -69,9 +71,14 @@ class MidiBankManager:
             max_deg = cls._finite_float(item.get('max_deg', 180.0), 'max_deg')
             if abs(max_deg - min_deg) < 1e-9:
                 raise ValueError(f'channel {channel + 1}: min_deg and max_deg must differ')
-            filter_level = cls._finite_float(item.get('filter_level', 0.0), 'filter_level')
-            if filter_level < 0.0 or filter_level > 1.0:
-                raise ValueError(f'channel {channel + 1}: filter_level must be 0..1')
+            filter_value = cls._finite_float(item.get('filter_level', 0), 'filter_level')
+            filter_level = int(filter_value)
+            if (
+                filter_value != filter_level
+                or filter_level < FILTER_LEVEL_MIN
+                or filter_level > FILTER_LEVEL_MAX
+            ):
+                raise ValueError(f'channel {channel + 1}: filter_level must be an integer 0..13')
             motion_id = str(item.get('motion_id') or '').strip()
             if not MOTION_ID_PATTERN.fullmatch(motion_id):
                 raise ValueError(
@@ -84,7 +91,7 @@ class MidiBankManager:
                 'min_deg': min_deg,
                 'max_deg': max_deg,
                 'reversed': bool(item.get('reversed', False)),
-                'filter_level': round(filter_level, 6),
+                'filter_level': filter_level,
             }
         defaults = cls.default_mappings()
         return [dict(by_channel.get(channel, defaults[channel])) for channel in range(MIDI_CHANNEL_COUNT)]

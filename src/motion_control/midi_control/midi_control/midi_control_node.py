@@ -10,7 +10,11 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 
-from midi_control.bank_manager import MIDI_CHANNEL_COUNT, MidiBankManager
+from midi_control.bank_manager import (
+    FILTER_LEVEL_MAX,
+    MIDI_CHANNEL_COUNT,
+    MidiBankManager,
+)
 
 
 MIDI_VALUE_MIN = 0
@@ -28,11 +32,12 @@ def second_order_low_pass(
     stage2_previous: float,
 ) -> tuple[float, float, float]:
     """Apply two cascaded first-order sections as a stable second-order LPF."""
-    level = max(0.0, min(1.0, float(filter_level)))
-    if level <= 0.0:
+    level = max(0, min(FILTER_LEVEL_MAX, int(filter_level)))
+    if level <= 0:
         value = float(input_value)
         return value, value, value
-    tau_sec = level * FILTER_MAX_TIME_CONSTANT_SEC
+    normalized_level = level / FILTER_LEVEL_MAX
+    tau_sec = normalized_level * FILTER_MAX_TIME_CONSTANT_SEC
     dt_sec = max(1e-6, min(float(dt_sec), FILTER_MAX_STEP_SEC))
     alpha = 1.0 - math.exp(-dt_sec / tau_sec)
     stage1 = stage1_previous + alpha * (input_value - stage1_previous)
@@ -216,6 +221,8 @@ class MidiControlNode(Node):
             'motor_output_enabled': False,
             'touch_gated_input': True,
             'filter_order': FILTER_ORDER,
+            'filter_level_min': 0,
+            'filter_level_max': FILTER_LEVEL_MAX,
             'filter_max_time_constant_sec': FILTER_MAX_TIME_CONSTANT_SEC,
             'bank_storage': bank_state['storage'],
             'bank_persistent': bank_state['persistent'],

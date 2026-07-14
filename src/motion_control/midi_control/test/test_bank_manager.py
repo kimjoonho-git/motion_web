@@ -65,6 +65,17 @@ def test_bank_count_is_limited_to_eight():
         manager.create_bank('Bank 9')
 
 
+@pytest.mark.parametrize('filter_level', range(14))
+def test_filter_level_accepts_all_fourteen_integer_steps(filter_level):
+    manager = MidiBankManager()
+    mappings = manager.active_bank()['mappings']
+    mappings[0]['filter_level'] = filter_level
+
+    updated = manager.update_bank('bank_1', mappings=mappings)
+
+    assert updated['mappings'][0]['filter_level'] == filter_level
+
+
 @pytest.mark.parametrize('motion_id', ['1-1', '4-3', '12-25'])
 def test_motion_id_accepts_positive_number_pair(motion_id):
     manager = MidiBankManager()
