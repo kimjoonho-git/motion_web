@@ -13,12 +13,12 @@ from std_msgs.msg import String
 from midi_control.bank_manager import (
     FILTER_LEVEL_MAX,
     MIDI_CHANNEL_COUNT,
+    MIDI_VALUE_MAX,
+    MIDI_VALUE_MIN,
     MidiBankManager,
 )
 
 
-MIDI_VALUE_MIN = 0
-MIDI_VALUE_MAX = 16383
 FILTER_ORDER = 2
 FILTER_MAX_TIME_CONSTANT_SEC = 0.5
 FILTER_MAX_STEP_SEC = 0.05
@@ -46,11 +46,11 @@ def second_order_low_pass(
 
 
 class MidiControlNode(Node):
-    """Read-only MIDI monitor and 14-bit-to-degree converter.
+    """Read-only MIDI monitor with configurable 14-bit filtered output.
 
     This node intentionally has no motor command publisher. It only consumes the
-    X-Touch state, converts fader values using a user mapping, and publishes a
-    JSON status for the web bridge.
+    X-Touch state, filters/maps fader values, and publishes JSON status for the
+    web bridge.
     """
 
     def __init__(self) -> None:
@@ -164,14 +164,12 @@ class MidiControlNode(Node):
             self._last_received_wall = time.time()
 
     @staticmethod
-    def _motion_degrees(raw_value: int, mapping: Dict[str, Any]) -> float | None:
-        if not mapping['enabled']:
-            return None
-        normalized = max(0.0, min(1.0, float(raw_value) / MIDI_VALUE_MAX))
+    def _filtered_output_14bit(filtered_value: float, mapping: Dict[str, Any]) -> float:
+        normalized = max(0.0, min(1.0, float(filtered_value) / MIDI_VALUE_MAX))
         if mapping['reversed']:
             normalized = 1.0 - normalized
-        value = mapping['min_deg'] + (
-            (mapping['max_deg'] - mapping['min_deg']) * normalized
+        value = mapping['min_14bit'] + (
+            (mapping['max_14bit'] - mapping['min_14bit']) * normalized
         )
         return round(value, 6)
 
@@ -196,15 +194,16 @@ class MidiControlNode(Node):
         channels = []
         for channel, mapping in enumerate(mappings):
             raw_value = raw_values[channel]
-            filtered_value = filtered_values[channel]
+            filtered_input_value = filtered_values[channel]
+            filtered_value = self._filtered_output_14bit(filtered_input_value, mapping)
             channels.append({
                 **mapping,
                 'channel_number': channel + 1,
                 'raw_value': raw_value,
                 'filtered_value': round(filtered_value, 6),
+                'filtered_input_value': round(filtered_input_value, 6),
                 'raw_normalized': round(raw_value / MIDI_VALUE_MAX, 6),
                 'normalized': round(filtered_value / MIDI_VALUE_MAX, 6),
-                'motion_deg': self._motion_degrees(filtered_value, mapping),
                 'value_confirmed': confirmed[channel],
                 'touch': touch[channel],
                 'dial': dial[channel],
@@ -221,7 +220,7 @@ class MidiControlNode(Node):
             'value_bits': 14,
             'value_min': MIDI_VALUE_MIN,
             'value_max': MIDI_VALUE_MAX,
-            'unit': 'deg',
+            'unit': '14bit',
             'motor_output_enabled': False,
             'touch_gated_input': True,
             'filter_order': FILTER_ORDER,

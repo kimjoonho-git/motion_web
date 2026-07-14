@@ -5,6 +5,8 @@ from typing import Any, Dict, List
 
 MIDI_CHANNEL_COUNT = 8
 MAX_MIDI_BANKS = 8
+MIDI_VALUE_MIN = 0
+MIDI_VALUE_MAX = 16383
 FILTER_LEVEL_MIN = 0
 FILTER_LEVEL_MAX = 13
 MOTION_ID_PATTERN = re.compile(r'^[1-9]\d*-[1-9]\d*$')
@@ -26,8 +28,8 @@ class MidiBankManager:
                 'channel': channel,
                 'enabled': True,
                 'motion_id': f'1-{channel + 1}',
-                'min_deg': -180.0,
-                'max_deg': 180.0,
+                'min_14bit': MIDI_VALUE_MIN,
+                'max_14bit': MIDI_VALUE_MAX,
                 'reversed': False,
                 'filter_level': 0,
             }
@@ -67,10 +69,16 @@ class MidiBankManager:
                 raise ValueError(f'mappings[{index}].channel must be an integer') from exc
             if channel < 0 or channel >= MIDI_CHANNEL_COUNT:
                 raise ValueError(f'mappings[{index}].channel must be 0..7')
-            min_deg = cls._finite_float(item.get('min_deg', -180.0), 'min_deg')
-            max_deg = cls._finite_float(item.get('max_deg', 180.0), 'max_deg')
-            if abs(max_deg - min_deg) < 1e-9:
-                raise ValueError(f'channel {channel + 1}: min_deg and max_deg must differ')
+            min_value = cls._finite_float(item.get('min_14bit', MIDI_VALUE_MIN), 'min_14bit')
+            max_value = cls._finite_float(item.get('max_14bit', MIDI_VALUE_MAX), 'max_14bit')
+            min_14bit = int(min_value)
+            max_14bit = int(max_value)
+            if min_value != min_14bit or not MIDI_VALUE_MIN <= min_14bit <= MIDI_VALUE_MAX:
+                raise ValueError(f'channel {channel + 1}: min_14bit must be an integer 0..16383')
+            if max_value != max_14bit or not MIDI_VALUE_MIN <= max_14bit <= MIDI_VALUE_MAX:
+                raise ValueError(f'channel {channel + 1}: max_14bit must be an integer 0..16383')
+            if min_14bit >= max_14bit:
+                raise ValueError(f'channel {channel + 1}: min_14bit must be less than max_14bit')
             filter_value = cls._finite_float(item.get('filter_level', 0), 'filter_level')
             filter_level = int(filter_value)
             if (
@@ -88,8 +96,8 @@ class MidiBankManager:
                 'channel': channel,
                 'enabled': bool(item.get('enabled', True)),
                 'motion_id': motion_id,
-                'min_deg': min_deg,
-                'max_deg': max_deg,
+                'min_14bit': min_14bit,
+                'max_14bit': max_14bit,
                 'reversed': bool(item.get('reversed', False)),
                 'filter_level': filter_level,
             }

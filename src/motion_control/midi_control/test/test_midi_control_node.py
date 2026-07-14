@@ -12,39 +12,37 @@ from midi_control.midi_control_node import (
 )
 
 
-def test_14bit_degree_conversion_and_reverse():
+def test_14bit_filtered_output_range_and_reverse():
     mapping = {
         'enabled': True,
-        'min_deg': -90.0,
-        'max_deg': 90.0,
+        'min_14bit': 1000,
+        'max_14bit': 15000,
         'reversed': False,
     }
-    assert MidiControlNode._motion_degrees(0, mapping) == -90.0
-    assert MidiControlNode._motion_degrees(MIDI_VALUE_MAX, mapping) == 90.0
+    assert MidiControlNode._filtered_output_14bit(0, mapping) == 1000
+    assert MidiControlNode._filtered_output_14bit(MIDI_VALUE_MAX, mapping) == 15000
 
     mapping['reversed'] = True
-    assert MidiControlNode._motion_degrees(0, mapping) == 90.0
-    assert MidiControlNode._motion_degrees(MIDI_VALUE_MAX, mapping) == -90.0
+    assert MidiControlNode._filtered_output_14bit(0, mapping) == 15000
+    assert MidiControlNode._filtered_output_14bit(MIDI_VALUE_MAX, mapping) == 1000
 
 
-def test_disabled_channel_has_no_motion_value():
-    mapping = {
-        'enabled': False,
-        'min_deg': -180.0,
-        'max_deg': 180.0,
-        'reversed': False,
-    }
-    assert MidiControlNode._motion_degrees(8192, mapping) is None
-
-
-def test_mapping_rejects_equal_degree_limits():
+def test_mapping_rejects_invalid_14bit_limits():
     node = MidiControlNode.__new__(MidiControlNode)
-    with pytest.raises(ValueError, match='must differ'):
+    with pytest.raises(ValueError, match='less than'):
         node._validated_mapping([{
             'channel': 0,
             'motion_id': '1-1',
-            'min_deg': 10.0,
-            'max_deg': 10.0,
+            'min_14bit': 10000,
+            'max_14bit': 10000,
+        }])
+
+    with pytest.raises(ValueError, match='integer 0..16383'):
+        node._validated_mapping([{
+            'channel': 0,
+            'motion_id': '1-1',
+            'min_14bit': -1,
+            'max_14bit': MIDI_VALUE_MAX,
         }])
 
 
@@ -55,8 +53,8 @@ def test_mapping_rejects_filter_level_outside_integer_zero_to_thirteen(filter_le
         node._validated_mapping([{
             'channel': 0,
             'motion_id': '1-1',
-            'min_deg': -10.0,
-            'max_deg': 10.0,
+            'min_14bit': 0,
+            'max_14bit': MIDI_VALUE_MAX,
             'filter_level': filter_level,
         }])
 
