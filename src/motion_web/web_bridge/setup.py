@@ -22,9 +22,6 @@ setup(
     entry_points={
         'console_scripts': [
             'motion_web_bridge = motion_web_bridge.bridge_node:main',
-            'motion_mapping_manager = motion_web_bridge.motion_mapping_manager:main',
-            'motion_run_manager = motion_web_bridge.motion_run_manager:main',
-            'midi_monitor_node = motion_web_bridge.midi_monitor_node:main',
         ],
     },
 )

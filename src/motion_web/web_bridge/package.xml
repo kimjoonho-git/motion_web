@@ -10,8 +10,6 @@
 
   <depend>rclpy</depend>
   <depend>motion_control_msgs</depend>
-  <depend>midi_msgs</depend>
-  <exec_depend>midi_input_bridge</exec_depend>
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>
   <depend>ament_index_python</depend>

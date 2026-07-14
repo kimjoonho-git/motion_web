@@ -38,6 +38,9 @@ ros2_ws/src
 ├─ motion_control
 │   ├─ motion_state_monitor
 │   ├─ motion_supervisor
+│   ├─ motion_runtime
+│   ├─ midi_input_bridge
+│   ├─ midi_control
 │   ├─ motion_manual_control
 │   ├─ motion_config
 │   └─ motion_sequence_executor
@@ -972,3 +975,33 @@ Codex는 이 프로젝트에서 사용자의 질문에 답할 때 다음 원칙�
 ```
 
 사용자 확인 전에는 `motion_system` 파일을 수정하지 않는다.
+
+## 14. 2026-07 실제 패키지 경계
+
+현재 구현에서는 웹 노드에 있던 모션 실행·매핑과 MIDI 입력 처리를 `motion_control`로 이동한다. `motion_system`은 수정하지 않고 기존 하드웨어 인터페이스로만 사용한다.
+
+| 패키지 | 책임 | 제한 |
+|---|---|---|
+| `motion_state_monitor` | 모터 상태 가공, 연결·오류 판정 | 모터 명령 생성 금지 |
+| `motion_runtime` | 모션축 매핑, 준비 검사, 초기 이동, 1회·연속 모션 실행 | 최종 모터 명령 토픽 직접 발행 금지 |
+| `motion_supervisor` | 수동·모션 명령 중재, 상태 검사, 최종 명령 발행 | `/motion_control/motor_command` 단일 발행자 |
+| `midi_input_bridge` | USB MIDI 장치 입출력과 페이더·터치 신호 수집 | 모터 명령 발행 금지 |
+| `midi_control` | 14-bit MIDI 값 검증, 터치 입력 판별, 각도 변환, 축 매핑 | 현재 단계에서 모터 출력 금지 |
+| `motion_web_bridge` | HTTP/WebSocket API, ROS 요청 전달, 파일 입출력 | 모션 계산·안전 판단·모터 명령 생성 금지 |
+| `web_ui` | 표시, 사용자 입력, API 호출 | ROS/하드웨어 직접 제어 금지 |
+
+최종 모션 명령 경로는 다음과 같다.
+
+```text
+web UI
+  → motion_web_bridge (요청 전달)
+  → motion_runtime (매핑·보간·제한값 적용)
+  → /motion_control/motion_run_command
+  → motion_supervisor (상태·수동 명령 충돌 검사)
+  → /motion_control/motor_command
+  → motion_system
+```
+
+`motion_run_manager`는 중간 토픽으로만 명령을 보낸다. 따라서 웹, MIDI, 모션 실행기가 `motion_system`을 우회하여 최종 명령을 보낼 수 없다.
+
+MIDI 경로는 현재 장치 연결, 터치, 실시간 값, 14-bit 값의 모션 각도 변환까지만 허용한다. MIDI에서 실제 모터를 움직이는 기능은 별도 안전 규칙과 `motion_supervisor` 중재 경로가 완성된 후에만 추가한다.

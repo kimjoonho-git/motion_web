@@ -48,12 +48,12 @@ patterns=(
   "install/motion_state_monitor/lib/motion_state_monitor/motion_state_monitor"
   "install/motion_supervisor/lib/motion_supervisor/motion_supervisor"
   "ros2 run motion_supervisor motion_supervisor"
-  "install/motion_web_bridge/lib/motion_web_bridge/motion_mapping_manager"
-  "install/motion_web_bridge/lib/motion_web_bridge/motion_run_manager"
-  "install/motion_web_bridge/lib/motion_web_bridge/midi_monitor_node"
+  "install/motion_runtime/lib/motion_runtime/motion_mapping_manager"
+  "install/motion_runtime/lib/motion_runtime/motion_run_manager"
+  "install/midi_control/lib/midi_control/midi_control_node"
   "install/motion_web_bridge/lib/motion_web_bridge/motion_web_bridge"
   "install/midi_input_bridge/lib/midi_input_bridge/midi_input_node"
-  "ros2 launch motion_web_bridge midi_monitor.launch.py"
+  "ros2 launch midi_control midi_control.launch.py"
 )
 
 for pattern in "${patterns[@]}"; do
@@ -125,8 +125,8 @@ export CONFIG_FILE
 log "starting motion_monitor.launch.py with config_file=${CONFIG_FILE}"
 sg dialout -c 'bash -lc '"'"'source /home/joonho_test/ros2_ws/install/setup.bash && ros2 launch motion_state_monitor motion_monitor.launch.py config_file:="$CONFIG_FILE" start_motor_manager:=true'"'" &
 launch_pid="$!"
-log "starting read-only MIDI monitor (motor output disabled)"
-bash -lc 'source /home/joonho_test/ros2_ws/install/setup.bash && ros2 launch motion_web_bridge midi_monitor.launch.py' &
+log "starting MIDI control monitor (robot motor output disabled)"
+bash -lc 'source /home/joonho_test/ros2_ws/install/setup.bash && ros2 launch midi_control midi_control.launch.py' &
 midi_launch_pid="$!"
 recover_ethercat_errors_after_launch &
 recovery_pid="$!"
