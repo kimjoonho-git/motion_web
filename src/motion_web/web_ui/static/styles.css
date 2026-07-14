@@ -2065,6 +2065,13 @@ body.ui-locked {
   width: 88px;
 }
 
+.midi-motion-id-input.input-invalid,
+.midi-motion-id-input:invalid {
+  border-color: #dc2626;
+  background: #fff1f2;
+  color: #991b1b;
+}
+
 .midi-live-value {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;

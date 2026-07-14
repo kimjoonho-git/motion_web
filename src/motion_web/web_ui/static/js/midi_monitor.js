@@ -42,6 +42,16 @@ function requireSuccess(payload) {
   return payload;
 }
 
+function invalidMappingItem(item) {
+  return !MOTION_ID_PATTERN.test(String(item.motion_id || '').trim())
+    || !Number.isFinite(Number(item.min_deg))
+    || !Number.isFinite(Number(item.max_deg))
+    || Math.abs(Number(item.max_deg) - Number(item.min_deg)) < 1e-9
+    || !Number.isFinite(Number(item.filter_level))
+    || Number(item.filter_level) < 0
+    || Number(item.filter_level) > 1;
+}
+
 export function createMidiMonitorController({ el }) {
   let status = null;
   let mappingDraft = Array.from({ length: CHANNEL_COUNT }, (_, channel) => defaultMapping(channel));
@@ -124,6 +134,7 @@ export function createMidiMonitorController({ el }) {
       const ratioCell = row.querySelector('[data-midi-output="ratio"]');
       const motionCell = row.querySelector('[data-midi-output="motion_deg"]');
       const touchCell = row.querySelector('[data-midi-output="touch"]');
+      const motionIdInput = row.querySelector('[data-midi-field="motion_id"]');
       if (rawCell) rawCell.textContent = Math.round(raw).toLocaleString('ko-KR');
       if (ratioCell) ratioCell.textContent = `${(rawRatio * 100).toFixed(2)}%`;
       if (motionCell) {
@@ -135,6 +146,11 @@ export function createMidiMonitorController({ el }) {
         const touched = Boolean(live?.touch);
         touchCell.textContent = touched ? '터치' : '-';
         touchCell.classList.toggle('midi-touch-active', touched);
+      }
+      if (motionIdInput) {
+        const invalid = !MOTION_ID_PATTERN.test(String(mapping.motion_id || '').trim());
+        motionIdInput.classList.toggle('input-invalid', invalid);
+        motionIdInput.setAttribute('aria-invalid', invalid ? 'true' : 'false');
       }
     });
   }
@@ -176,7 +192,11 @@ export function createMidiMonitorController({ el }) {
     if (el.addMidiBankButton) el.addMidiBankButton.disabled = loading || banks.length >= (status?.max_banks || 8);
     if (el.deleteMidiBankButton) el.deleteMidiBankButton.disabled = loading || banks.length <= 1;
     if (el.refreshMidiMonitorButton) el.refreshMidiMonitorButton.disabled = loading;
-    if (el.saveMidiMappingButton) el.saveMidiMappingButton.disabled = loading || !activeBankId;
+    if (el.saveMidiMappingButton) {
+      el.saveMidiMappingButton.disabled = loading
+        || !activeBankId
+        || mappingDraft.some(invalidMappingItem);
+    }
     renderRows();
   }
 
@@ -194,7 +214,7 @@ export function createMidiMonitorController({ el }) {
     } else {
       item[field] = target.value;
     }
-    renderRows();
+    render();
   }
 
   async function refresh() {
@@ -215,15 +235,7 @@ export function createMidiMonitorController({ el }) {
   }
 
   async function saveMapping() {
-    const invalid = mappingDraft.find((item) => (
-      !MOTION_ID_PATTERN.test(String(item.motion_id || '').trim())
-      || !Number.isFinite(Number(item.min_deg))
-      || !Number.isFinite(Number(item.max_deg))
-      || Math.abs(Number(item.max_deg) - Number(item.min_deg)) < 1e-9
-      || !Number.isFinite(Number(item.filter_level))
-      || Number(item.filter_level) < 0
-      || Number(item.filter_level) > 1
-    ));
+    const invalid = mappingDraft.find(invalidMappingItem);
     if (invalid) {
       status = {
         ...(status || {}),
