@@ -74,6 +74,11 @@ export function formatTime(epochSeconds) {
 
 export function stateLabel(state) {
   const labels = {
+    online: '정상',
+    offline: '연결 끊김',
+    bus_down: '버스 / 링크 끊김',
+    initializing: '연결 확인 중',
+    unknown: '확인 불가',
     detected: '정상',
     stale: '갱신 지연',
     disconnected: '연결 끊김',

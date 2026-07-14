@@ -46,8 +46,8 @@ drivers:
   rated_current: 1.1
   rated_power_w: 50
   rated_speed_rpm: 3000
-  lower: -27000.0
-  upper: 27000.0
+  lower: -36000
+  upper: 36000
   speed: 2000000.0
   acceleration: 180000.0
   deceleration: 180000.0

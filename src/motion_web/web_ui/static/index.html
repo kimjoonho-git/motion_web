@@ -3,87 +3,82 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Motion Monitor</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260706-motion-safety">
+    <title>Motion Control System</title>
+    <link rel="stylesheet" href="/static/styles.css?v=20260714-midi-monitor">
   </head>
   <body>
     <main class="shell">
       <header class="topbar">
         <div>
-          <h1>Motion Monitor</h1>
-          <p id="summaryText">Waiting for motion state</p>
-        </div>
-        <div class="actions">
-          <button id="monitorToggle" class="primary" type="button">Turn Monitoring OFF</button>
+          <h1>Motion Control System</h1>
         </div>
       </header>
 
-      <section class="status-strip" aria-label="status">
-        <div>
-          <span>Bridge</span>
-          <strong id="bridgeState">Connecting</strong>
-        </div>
-        <div>
-          <span>Monitoring</span>
-          <strong id="monitoringState">Unknown</strong>
-        </div>
-        <div>
-          <span>Motors Online</span>
-          <strong id="onlineMotorCount">0</strong>
-        </div>
-        <div>
-          <span>Known Motors</span>
-          <strong id="knownMotorCount">0 / 50</strong>
-        </div>
-        <div>
-          <span>Access URL</span>
-          <strong id="accessUrl">-</strong>
-        </div>
-        <div>
-          <span>Last Update</span>
-          <strong id="lastUpdate">-</strong>
-        </div>
-        <div>
-          <span>설정</span>
-          <strong id="configState">Loading</strong>
-        </div>
-      </section>
-
-      <section class="type-summary" aria-label="motor type summary">
-        <div class="section-head">
-          <strong>Motor Type Summary</strong>
-          <span>전체 / 온라인</span>
-        </div>
-        <div id="motorTypeRows" class="type-grid">
-          <div class="empty">No motor type data</div>
-        </div>
-      </section>
-
-      <section class="work-context-strip" aria-label="current work files">
-        <div>
-          <span>모터축 설정</span>
-          <strong id="workContextMotorConfig"></strong>
-        </div>
-        <div>
-          <span>모션 파일</span>
-          <strong id="workContextMotionFile"></strong>
-        </div>
-        <div>
-          <span>매핑 파일</span>
-          <strong id="workContextMappingFile"></strong>
-        </div>
-        <div>
-          <span>상태</span>
-          <strong id="workContextState">대기</strong>
-        </div>
-      </section>
-
       <nav id="workspaceTabs" class="workspace-tabs" aria-label="workspace panels">
+        <button class="workspace-tab-button" type="button" data-workspace-tab="system">시스템 정보</button>
         <button class="workspace-tab-button" type="button" data-workspace-tab="config">모터 축 설정</button>
         <button class="workspace-tab-button active" type="button" data-workspace-tab="monitoring">실시간 모니터링</button>
         <button class="workspace-tab-button" type="button" data-workspace-tab="manual">동작 테스트</button>
         <button class="workspace-tab-button" type="button" data-workspace-tab="motion">모션</button>
+        <button class="workspace-tab-button" type="button" data-workspace-tab="log">로그</button>
       </nav>
+
+      <section class="system-panel workspace-panel hidden" data-workspace-panel="system" aria-label="system information">
+        <div class="section-head">
+          <strong>시스템 정보</strong>
+          <span id="summaryText">Waiting for motion state</span>
+        </div>
+
+        <section class="status-strip" aria-label="status">
+          <div>
+            <span>Bridge</span>
+            <strong id="bridgeState">Connecting</strong>
+          </div>
+          <div>
+            <span>Monitoring</span>
+            <strong id="monitoringState">Unknown</strong>
+          </div>
+          <div>
+            <span>Motors Online</span>
+            <strong id="onlineMotorCount">0</strong>
+          </div>
+          <div>
+            <span>Known Motors</span>
+            <strong id="knownMotorCount">0 / 50</strong>
+          </div>
+          <div>
+            <span>Access URL</span>
+            <strong id="accessUrl">-</strong>
+          </div>
+          <div>
+            <span>Last Update</span>
+            <strong id="lastUpdate">-</strong>
+          </div>
+          <div>
+            <span>설정</span>
+            <strong id="configState">Loading</strong>
+          </div>
+        </section>
+
+        <section class="work-context-strip" aria-label="current work files">
+          <div>
+            <span>모터축 설정</span>
+            <strong id="workContextMotorConfig"></strong>
+          </div>
+          <div>
+            <span>모션 파일</span>
+            <strong id="workContextMotionFile"></strong>
+          </div>
+          <div>
+            <span>매핑 파일</span>
+            <strong id="workContextMappingFile"></strong>
+          </div>
+          <div>
+            <span>상태</span>
+            <strong id="workContextState">대기</strong>
+          </div>
+        </section>
+      </section>
 
       <section class="registration-panel workspace-panel hidden" data-workspace-panel="config" aria-label="motor axis settings">
         <div class="section-head">
@@ -91,20 +86,15 @@
           <span>설정 파일, 스캔 확인, 축 설정</span>
         </div>
 
-        <div class="setup-flow" aria-label="motor setup flow">
-          <div>
-            <strong>1. 설정 파일</strong>
-            <span>모터 축 기준 목록</span>
+        <section class="type-summary" aria-label="motor type summary">
+          <div class="section-head">
+            <strong>Motor Type Summary</strong>
+            <span>전체 / 온라인</span>
           </div>
-          <div>
-            <strong>2. 스캔 확인</strong>
-            <span>AC Servo / Dynamixel 연결 확인</span>
+          <div id="motorTypeRows" class="type-grid">
+            <div class="empty">No motor type data</div>
           </div>
-          <div>
-            <strong>3. 축 설정 저장</strong>
-            <span>전체 축 설정 저장 후 재시작</span>
-          </div>
-        </div>
+        </section>
 
         <details class="settings-panel" aria-label="motor config file" open>
           <summary class="section-head">
@@ -113,11 +103,12 @@
           </summary>
           <div class="registry-actions">
             <button id="reloadMotorConfigButton" type="button">설정 다시 불러오기</button>
+            <button id="applyAxisConfigButton" type="button" disabled>설정 적용/노드 재시작</button>
           </div>
         </details>
 
         <section class="axis-settings-panel" aria-label="motor axis settings table">
-          <div class="section-head">
+          <div class="section-head axis-settings-head">
             <strong>모터 축 설정</strong>
             <span id="axisSummary">설정 파일을 불러오는 중</span>
           </div>
@@ -136,7 +127,6 @@
               <button id="toggleAxisButton" type="button" disabled>축 ON/OFF</button>
               <button id="sortAxisButton" type="button" disabled>축 번호 정렬</button>
               <button id="saveAxisConfigButton" class="primary" type="button" disabled>축 설정 저장</button>
-              <button id="applyAxisConfigButton" type="button" disabled>설정 적용/노드 재시작</button>
             </div>
             <div class="matching-table-wrap">
               <table class="matching-table">
@@ -164,10 +154,22 @@
           </div>
 
           <div class="axis-settings-tab-panel hidden" data-axis-settings-panel="table">
-            <div class="registry-message">설정 파일 표는 현재 읽기 전용입니다. 수정 기능은 항목별 범위와 오류 검사를 정리한 뒤 별도로 적용합니다.</div>
+            <div class="registry-message">표에서 필요한 항목을 수정한 뒤 표 업데이트를 누르고, 확인 후 파일 저장을 누르세요.</div>
             <div id="motorConfigTablePath" class="registry-message config-file-path">설정 파일: -</div>
+            <div class="config-file-edit-row">
+              <label class="manual-field config-file-name-field">
+                <span>파일명</span>
+                <input id="motorConfigFileNameInput" type="text" autocomplete="off" spellcheck="false">
+              </label>
+              <span class="config-file-name-note">파일명을 바꾸면 config 폴더 안의 새 YAML로 저장되고 다음 적용 때 그 파일을 읽습니다.</span>
+            </div>
             <div class="registry-actions">
-              <button id="updateConfigTableButton" class="primary" type="button" disabled>읽기 전용</button>
+              <button id="updateConfigTableButton" class="primary" type="button" disabled>표 업데이트</button>
+              <button id="saveConfigTableButton" type="button" disabled>파일 저장</button>
+            </div>
+            <div class="config-profile-help">
+              <strong>Profile value 기준</strong>
+              <span>profile_position_value / profile_velocity_value / profile_effort_value는 위치, 속도, 토크 명령에 사용할 내부 인터페이스 ID입니다. AC Servo에서는 보통 Target position, Target velocity, Target effort PDO 항목과 연결됩니다.</span>
             </div>
             <div id="motorConfigTableRows" class="config-table-groups">
               <div class="empty config-table-empty">설정 파일을 불러오는 중</div>
@@ -194,7 +196,7 @@
 
         <div class="registration-tab-panel hidden" data-registration-panel="dynamixel">
           <section class="scan-panel" aria-label="dynamixel scan">
-            <button id="dynamixelScanButton" class="primary" type="button">Dynamixel Wizard Scan</button>
+            <button id="dynamixelScanButton" class="primary" type="button">Dynamixel 연결 확인</button>
             <span id="dynamixelScanResult">COM port 자동 검색, Protocol 2.0, 1,000,000bps, Broadcast Ping + ID 0-50</span>
           </section>
         </div>
@@ -219,6 +221,7 @@
             <button class="tab-button" type="button" data-monitoring-filter="unknown">Unknown</button>
           </div>
           <div class="monitoring-actions">
+            <button id="monitorToggle" class="primary" type="button">Turn Monitoring OFF</button>
             <button id="displayModeToggle" type="button">Raw 보기</button>
             <button id="refreshButton" type="button">Refresh</button>
           </div>
@@ -383,6 +386,7 @@
           <button class="tab-button active" type="button" data-motion-tab="files">모션파일 관리</button>
           <button class="tab-button" type="button" data-motion-tab="mapping">모션축 설정</button>
           <button class="tab-button" type="button" data-motion-tab="editor">모션 제작</button>
+          <button class="tab-button" type="button" data-motion-tab="midi">MIDI</button>
           <button class="tab-button" type="button" data-motion-tab="run">모션 동작</button>
         </div>
 
@@ -445,6 +449,7 @@
                     <span>motion Id별 value</span>
                   </div>
                   <canvas id="motionFileGraphCanvas" class="motion-graph" width="1040" height="280"></canvas>
+                  <div id="motionFileGraphAxisToggles" class="motion-run-graph-axis-toggles" aria-label="모션 파일 그래프 축 표시 선택"></div>
                   <div id="motionFileGraphMessage" class="registry-message">파일을 선택하세요</div>
                 </section>
               </div>
@@ -532,18 +537,6 @@
                 <strong>모션축 매칭</strong>
                 <span>Motion ID 1개와 Motor Axis 1개를 연결</span>
               </div>
-              <div class="motion-mapping-guide">
-                <div>
-                  <strong>값 기준</strong>
-                  <span>모션값, 모션 Offset, Min/Max, 초기위치: 모션데이터/출력축 기준</span>
-                  <span>기준점, 최종 목표: 모터축 기준</span>
-                </div>
-                <div>
-                  <strong>계산 흐름</strong>
-                  <span>출력축 값 = (모션값 + 모션 Offset) × Scale × 반전부호</span>
-                  <span>모터축 목표 = 기준점 + (출력축 값 × 감속비)</span>
-                </div>
-              </div>
               <div class="table-wrap motion-mapping-table-wrap">
                 <table class="motion-mapping-table">
                   <thead>
@@ -552,7 +545,6 @@
                       <th><span class="mapping-head-label">사용</span><span class="mapping-head-unit"></span></th>
                       <th><span class="mapping-head-label">Motor Axis</span><span class="mapping-head-unit"></span></th>
                       <th class="mapping-number-head"><span class="mapping-head-label">감속비</span><span class="mapping-head-unit">x</span></th>
-                      <th><span class="mapping-head-label">기준점 사용</span><span class="mapping-head-unit"></span></th>
                       <th class="mapping-number-head"><span class="mapping-head-label">기준점</span><span class="mapping-head-unit">deg</span></th>
                       <th><span class="mapping-head-label">현재 기준</span><span class="mapping-head-unit"></span></th>
                       <th class="mapping-number-head"><span class="mapping-head-label">Min</span><span class="mapping-head-unit">deg</span></th>
@@ -569,10 +561,24 @@
                   </thead>
                   <tbody id="motionMappingRows">
                     <tr>
-                      <td colspan="17" class="empty">모션 파일을 선택하고 Motion ID를 반영하세요</td>
+                      <td colspan="16" class="empty">모션 파일을 선택하고 Motion ID를 반영하세요</td>
                     </tr>
                   </tbody>
                 </table>
+              </div>
+              <div class="motion-mapping-guide motion-mapping-guide-below">
+                <div>
+                  <strong>값 기준</strong>
+                  <span>모션값·Min/Max·초기위치·Offset은 모션/출력축 deg 기준입니다.</span>
+                  <span>기준점과 최종 모터 목표는 모터축 deg 기준입니다.</span>
+                  <span>Min/Max 초과 데이터는 실행을 막지 않고 경계값으로 제한해 명령합니다.</span>
+                </div>
+                <div>
+                  <strong>계산 흐름</strong>
+                  <span>제한 모션값 = 모션값을 Min ~ Max 범위로 제한</span>
+                  <span>출력축 값 = (제한 모션값 + Offset) × Scale × 반전부호</span>
+                  <span>모터축 목표 = 기준점 + (출력축 값 × 감속비)</span>
+                </div>
               </div>
             </section>
 
@@ -625,6 +631,60 @@
           <div class="registration-placeholder">모션 제작은 향후 각 축별 포인트 기반 모션 생성 기능으로 확장합니다.</div>
         </div>
 
+        <div class="motion-tab-panel hidden" data-motion-panel="midi">
+          <div class="midi-monitor-layout">
+            <section class="motion-file-subsection" aria-label="MIDI connection test">
+              <div class="section-head compact">
+                <strong>MIDI 연결 테스트</strong>
+                <span id="midiMonitorMessage">MIDI 모니터 상태 확인 중</span>
+              </div>
+              <div class="midi-safety-notice">
+                <strong>모터 출력 비활성</strong>
+                <span>실제 모터축 제어 명령은 전송하지 않습니다. 손을 뗀 MIDI 페이더가 현재 위치에 머물도록 해당 페이더에만 유지값을 한 번 보냅니다.</span>
+              </div>
+              <div id="midiMonitorSummary" class="motion-file-summary midi-monitor-summary">
+                <div><span>연결</span><strong id="midiConnectionState">대기</strong></div>
+                <div><span>입력 범위</span><strong>14bit · 0~16383</strong></div>
+                <div><span>모션 단위</span><strong>deg</strong></div>
+                <div><span>모터 출력</span><strong id="midiMotorOutputState">사용 안 함</strong></div>
+              </div>
+              <div class="registry-actions">
+                <button id="refreshMidiMonitorButton" type="button">상태 새로고침</button>
+                <button id="saveMidiMappingButton" class="primary" type="button">변환 설정 저장</button>
+              </div>
+            </section>
+
+            <section class="motion-file-subsection" aria-label="MIDI channel values">
+              <div class="section-head compact">
+                <strong>채널값 및 모션 각도 변환</strong>
+                <span>14bit MIDI → Motion ID · deg</span>
+              </div>
+              <div class="table-wrap midi-monitor-table-wrap">
+                <table class="midi-monitor-table">
+                  <thead>
+                    <tr>
+                      <th>사용</th>
+                      <th>채널</th>
+                      <th>Motion ID</th>
+                      <th>MIDI 값</th>
+                      <th>비율</th>
+                      <th>Min (deg)</th>
+                      <th>Max (deg)</th>
+                      <th>반전</th>
+                      <th>변환값 (deg)</th>
+                      <th>터치</th>
+                    </tr>
+                  </thead>
+                  <tbody id="midiMonitorRows">
+                    <tr><td colspan="10" class="empty">MIDI 모니터 노드 상태 수신 대기</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <div id="midiMappingPath" class="registry-message">변환 설정 파일 확인 중</div>
+            </section>
+          </div>
+        </div>
+
         <div class="motion-tab-panel hidden" data-motion-panel="run">
           <div class="motion-run-layout">
             <section class="motion-file-subsection" aria-label="motion run controls">
@@ -639,14 +699,16 @@
                 <label class="compact-field">
                   <span>초기 이동 시간</span>
                   <select id="motionRunInitialMoveTime" class="compact-select">
-                    <option value="5" selected>5초</option>
-                    <option value="7">7초</option>
-                    <option value="10">10초</option>
+                    <option value="mapping">매핑 설정 사용</option>
+                    <option value="5" selected>5초 일괄 적용</option>
+                    <option value="7">7초 일괄 적용</option>
+                    <option value="10">10초 일괄 적용</option>
                   </select>
                 </label>
                 <button id="motionRunCheckButton" type="button">실행 준비 검사</button>
                 <button id="motionRunInitializeButton" type="button" disabled>초기 위치 이동</button>
-                <button id="motionRunStartButton" class="primary" type="button" disabled>모션 시작</button>
+                <button id="motionRunStartButton" class="primary" type="button" disabled>1회 모션 시작</button>
+                <button id="motionRunContinuousStartButton" class="primary" type="button" disabled>연속 모션 시작</button>
                 <button id="motionRunStopButton" class="off" type="button" disabled>정지</button>
                 <button id="motionRunRefreshButton" type="button">상태 새로고침</button>
               </div>
@@ -657,7 +719,7 @@
                 <strong>실행 상태</strong>
                 <span>motion_run_manager</span>
               </div>
-              <div id="motionRunStatus" class="motion-value-table">
+              <div id="motionRunStatus" class="motion-value-table motion-run-status-compact">
                 <div class="empty">상태 수신 대기</div>
               </div>
             </section>
@@ -678,6 +740,7 @@
                 </div>
               </div>
               <canvas id="motionRunGraphCanvas" class="motion-run-graph"></canvas>
+              <div id="motionRunGraphAxisToggles" class="motion-run-graph-axis-toggles" aria-label="그래프 축 표시 선택"></div>
             </section>
 
             <section class="motion-file-subsection" aria-label="motion run axes">
@@ -692,19 +755,60 @@
                       <th>Motion ID</th>
                       <th>Motor Axis</th>
                       <th>Type</th>
+                      <th>Min</th>
+                      <th>Max</th>
                       <th>초기 목표</th>
                       <th>모터 목표 범위</th>
+                      <th>모션 시작/종료</th>
+                      <th>연속 판정</th>
+                      <th>범위 제한</th>
                     </tr>
                   </thead>
                   <tbody id="motionRunAxisRows">
                     <tr>
-                      <td colspan="5" class="empty">실행 준비 검사를 누르면 표시됩니다</td>
+                      <td colspan="10" class="empty">실행 준비 검사를 누르면 표시됩니다</td>
                     </tr>
                   </tbody>
                 </table>
               </div>
             </section>
           </div>
+        </div>
+      </section>
+
+      <section class="event-log-panel workspace-panel hidden" data-workspace-panel="log" aria-label="motor event log">
+        <div class="section-head">
+          <strong>모터 동작 로그</strong>
+          <span id="motorEventLogSummary">로그를 불러오는 중</span>
+        </div>
+        <div class="event-log-toolbar">
+          <div id="motorEventLogFilters" class="tabbar event-log-filters" role="tablist" aria-label="motor event log filters">
+            <button class="tab-button active" type="button" data-event-log-filter="all">전체</button>
+            <button class="tab-button" type="button" data-event-log-filter="error">모터 에러</button>
+            <button class="tab-button" type="button" data-event-log-filter="initial_position">초기 위치 이동</button>
+            <button class="tab-button" type="button" data-event-log-filter="motion">모션 시작</button>
+          </div>
+          <div class="event-log-actions">
+            <button id="refreshMotorEventLogButton" type="button">로그 새로고침</button>
+            <button id="clearMotorEventLogButton" class="off" type="button">전체 로그 삭제</button>
+          </div>
+        </div>
+        <div class="table-wrap event-log-table-wrap">
+          <table class="event-log-table">
+            <thead>
+              <tr>
+                <th>시간</th>
+                <th>구분</th>
+                <th>대상</th>
+                <th>내용</th>
+              </tr>
+            </thead>
+            <tbody id="motorEventLogRows">
+              <tr>
+                <td colspan="4" class="empty">기록된 모터 동작 로그가 없습니다</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </section>
     </main>
@@ -718,17 +822,19 @@
       </div>
     </div>
 
-    <div id="motorErrorPopup" class="motor-error-popup hidden" role="alertdialog" aria-live="assertive" aria-labelledby="motorErrorTitle">
+    <div id="motorErrorPopup" class="motor-error-popup hidden" role="alertdialog" aria-live="assertive" aria-modal="true" aria-labelledby="motorErrorTitle">
       <div class="motor-error-dialog">
         <div class="motor-error-header">
           <strong id="motorErrorTitle">모터 에러 발생</strong>
-          <button id="motorErrorCloseButton" type="button" class="motor-error-close" aria-label="모터 에러 알림 닫기">×</button>
         </div>
         <p id="motorErrorMessage">동작을 멈추고 모터 상태와 드라이버 알람을 확인하세요.</p>
         <div id="motorErrorList" class="motor-error-list"></div>
+        <div class="motor-error-actions">
+          <button id="motorErrorConfirmButton" type="button" class="primary">확인</button>
+        </div>
       </div>
     </div>
 
-    <script type="module" src="/static/app.js?v=20260706-motor-error-popup"></script>
+    <script type="module" src="/static/app.js?v=20260714-midi-readonly"></script>
   </body>
 </html>

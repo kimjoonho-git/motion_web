@@ -27,6 +27,7 @@ STATE_TIMEOUT_SEC = 1.0
 AC_TARGET_TOLERANCE_DEG = 0.1
 DYNAMIXEL_TARGET_TOLERANCE_DEG = 1.0
 TARGET_SETTLE_TIMEOUT_SEC = 3.0
+CONTINUOUS_LOOP_TOLERANCE_DEG = 5.0
 INITIAL_MOVE_TIME_OPTIONS_SEC = (5.0, 7.0, 10.0)
 
 
@@ -216,7 +217,27 @@ class MotionRunManager(Node):
         self._publish_status()
 
     def _handle_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        plan = self._build_plan(payload)
+        try:
+            plan = self._build_plan(payload)
+        except Exception as exc:
+            reason = str(exc) or '실행 준비 검사 실패'
+            status = self._empty_status()
+            status.update({
+                'state': 'error',
+                'phase': 'error',
+                'message': f'실행 준비 검사 실패: {reason}',
+                'motion_file_id': str(payload.get('motion_file_id') or ''),
+                'mapping_file_id': str(payload.get('mapping_file_id') or ''),
+                'capabilities': self._unavailable_capabilities(reason),
+                'updated_at': time.time(),
+            })
+            self._set_status(status)
+            return {
+                'success': False,
+                'message': reason,
+                'status': self.status(),
+                'summary': {},
+            }
         status = self._status_from_plan('ready', '실행 준비 검사 완료', plan)
         status['phase'] = 'ready'
         status['lifecycle'] = {
@@ -272,7 +293,11 @@ class MotionRunManager(Node):
 
         return {
             'success': True,
-            'message': 'initial position move started' if mode == 'initialize' else 'motion run started',
+            'message': (
+                'initial position move started'
+                if mode == 'initialize'
+                else ('continuous motion run started' if plan.get('run_mode') == 'continuous' else 'single motion run started')
+            ),
             'status': self.status(),
             'summary': plan['summary'],
         }
@@ -323,6 +348,11 @@ class MotionRunManager(Node):
             for axis in init_axes:
                 motor_axis = int(axis['motor_axis'])
                 motor = self._motor_for_axis(motor_axis, motors)
+                motor_error = self._motor_ready_error(
+                    motor or {'controller_index': motor_axis}
+                )
+                if motor_error:
+                    raise RuntimeError(motor_error)
                 current = self._motor_position_deg(motor)
                 if current is None:
                     raise RuntimeError(f'Axis {motor_axis} current position is unavailable')
@@ -384,10 +414,13 @@ class MotionRunManager(Node):
 
     def _run_motion(self, plan: Dict[str, Any]) -> None:
         try:
+            run_mode = str(plan.get('run_mode') or 'once')
+            continuous = run_mode == 'continuous'
             motors = self._current_motors()
             self._prepare_motion_stream(motors, plan['axes'])
             motion_started_at = time.time()
-            status = self._status_from_plan('running', '모션 실행 중', plan)
+            running_message = '연속 모션 실행 중' if continuous else '모션 1회 실행 중'
+            status = self._status_from_plan('running', running_message, plan)
             status['phase'] = 'running'
             status['phase_started_at'] = motion_started_at
             status['phase_finished_at'] = None
@@ -399,25 +432,36 @@ class MotionRunManager(Node):
             self._set_status(status)
             samples = plan['samples']
             start_time = time.monotonic()
-            for index, sample in enumerate(samples):
-                if self._stop_event.is_set():
-                    status = self._status_from_plan('stopped', '모션 실행 정지', plan)
-                    status['phase'] = 'stopped'
-                    status['phase_started_at'] = motion_started_at
-                    status['phase_finished_at'] = time.time()
-                    status['lifecycle'] = self._current_lifecycle()
-                    self._set_status(status)
-                    return
-                positions = sample['positions']
-                self._publish_motion_setpoints(motors, plan['axes'], positions)
-                self._update_progress(
-                    'running',
-                    float(sample['time_sec']),
-                    float(plan['summary']['duration_sec']),
-                    index,
-                    len(positions),
-                )
-                self._sleep_until(start_time + (index + 1) * self.period_sec)
+            cycle_count = 0
+            global_sample_index = 0
+            while True:
+                for index, sample in enumerate(samples):
+                    if self._stop_event.is_set():
+                        status = self._status_from_plan('stopped', '연속 모션 정지' if continuous else '모션 실행 정지', plan)
+                        status['phase'] = 'stopped'
+                        status['phase_started_at'] = motion_started_at
+                        status['phase_finished_at'] = time.time()
+                        status['lifecycle'] = self._current_lifecycle()
+                        status['cycle_count'] = cycle_count
+                        self._set_status(status)
+                        return
+                    positions = sample['positions']
+                    self._publish_motion_setpoints(motors, plan['axes'], positions)
+                    self._update_progress(
+                        'running',
+                        float(sample['time_sec']),
+                        float(plan['summary']['duration_sec']),
+                        index,
+                        len(positions),
+                        run_mode=run_mode,
+                        cycle_count=cycle_count,
+                        current_cycle=cycle_count + 1,
+                    )
+                    global_sample_index += 1
+                    self._sleep_until(start_time + global_sample_index * self.period_sec)
+                cycle_count += 1
+                if not continuous:
+                    break
 
             final_positions = samples[-1]['positions'] if samples else {}
             if final_positions:
@@ -459,6 +503,7 @@ class MotionRunManager(Node):
                 'sample_index': len(samples),
                 'active_axis_count': len(plan.get('axes', [])),
             }
+            status['cycle_count'] = cycle_count
             self._set_status(status)
         except Exception as exc:
             self.get_logger().error(f'motion run failed\n{traceback.format_exc()}')
@@ -469,6 +514,10 @@ class MotionRunManager(Node):
             self._set_status(status)
 
     def _motion_start_guard_error(self, plan: Dict[str, Any]) -> str:
+        if plan.get('run_mode') == 'continuous':
+            capability = plan.get('capabilities', {}).get('continuous_run', {})
+            if not capability.get('available'):
+                return str(capability.get('reason') or '모션 시작값과 끝값이 달라 연속 동작할 수 없습니다')
         current = self.status()
         if current.get('state') != 'initialized':
             return '초기 위치 이동 완료 후 모션을 시작할 수 있습니다'
@@ -665,6 +714,9 @@ class MotionRunManager(Node):
         return 'completed' in message or 'did not reach target' in message
 
     def _build_plan(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        run_mode = str(payload.get('run_mode') or 'once').strip().lower()
+        if run_mode not in ('once', 'continuous'):
+            raise ValueError('run_mode must be once or continuous')
         motion_file_id = str(payload.get('motion_file_id') or '').strip()
         mapping_file_id = str(payload.get('mapping_file_id') or '').strip()
         initial_move_time_override = self._initial_move_time_override_sec(payload)
@@ -717,20 +769,35 @@ class MotionRunManager(Node):
             motion_max = max(motion_values)
             lower = self._finite_float(row.get('motion_lower_deg'))
             upper = self._finite_float(row.get('motion_upper_deg'))
+            if lower is not None and upper is not None and lower > upper:
+                errors.append(f'Motion ID {motion_id}: motion min limit must be <= max limit')
+                continue
             if lower is not None and motion_min < lower:
-                errors.append(f'Motion ID {motion_id}: motion min {motion_min:.3f} < limit {lower:.3f}')
+                warnings.append(
+                    f'Motion ID {motion_id}: {motion_min:.3f}° 이하 데이터는 {lower:.3f}°로 제한'
+                )
             if upper is not None and motion_max > upper:
-                errors.append(f'Motion ID {motion_id}: motion max {motion_max:.3f} > limit {upper:.3f}')
+                warnings.append(
+                    f'Motion ID {motion_id}: {motion_max:.3f}° 이상 데이터는 {upper:.3f}°로 제한'
+                )
 
-            target_min = self._motor_target(row, motion_min)
-            target_max = self._motor_target(row, motion_max)
+            command_motion_min = self._clamp_motion_value(motion_min, lower, upper)
+            command_motion_max = self._clamp_motion_value(motion_max, lower, upper)
+
+            target_min = self._motor_target(row, command_motion_min)
+            target_max = self._motor_target(row, command_motion_max)
             target_low = min(target_min, target_max)
             target_high = max(target_min, target_max)
             limit_error = self._target_range_limit_error(motor, target_low, target_high)
             if limit_error:
                 errors.append(f'Motion ID {motion_id}: {limit_error}')
 
-            initial_motion_value = self._initial_motion_value(row, groups[motion_id])
+            initial_motion_source_value = self._initial_motion_value(row, groups[motion_id])
+            initial_motion_value = self._clamp_motion_value(
+                initial_motion_source_value,
+                lower,
+                upper,
+            )
             row_initial_time = max(
                 self._finite_float(row.get('initial_move_time_sec')) or 0.0,
                 0.0,
@@ -746,12 +813,37 @@ class MotionRunManager(Node):
                 'motor_type': self._motor_type(motor),
                 'initial_enabled': row.get('initial_enabled') is not False,
                 'initial_move_time_sec': initial_move_time,
+                'initial_motion_source_position_deg': initial_motion_source_value,
                 'initial_motion_position_deg': initial_motion_value,
                 'initial_motor_target_deg': self._motor_target(row, initial_motion_value),
+                'motion_limit_lower_deg': lower,
+                'motion_limit_upper_deg': upper,
+                'source_motion_min_deg': motion_min,
+                'source_motion_max_deg': motion_max,
+                'command_motion_min_deg': command_motion_min,
+                'command_motion_max_deg': command_motion_max,
+                'motion_clamped': command_motion_min != motion_min or command_motion_max != motion_max,
                 'target_min_deg': target_low,
                 'target_max_deg': target_high,
+                'loop_start_motion_deg': self._clamp_motion_value(motion_values[0], lower, upper),
+                'loop_end_motion_deg': self._clamp_motion_value(motion_values[-1], lower, upper),
                 'row': row,
             }
+            axis_plan['loop_start_target_deg'] = self._motor_target(
+                row,
+                axis_plan['loop_start_motion_deg'],
+            )
+            axis_plan['loop_end_target_deg'] = self._motor_target(
+                row,
+                axis_plan['loop_end_motion_deg'],
+            )
+            axis_plan['loop_delta_deg'] = abs(
+                float(axis_plan['loop_end_motion_deg']) - float(axis_plan['loop_start_motion_deg'])
+            )
+            axis_plan['loop_motor_delta_deg'] = abs(
+                float(axis_plan['loop_end_target_deg']) - float(axis_plan['loop_start_target_deg'])
+            )
+            axis_plan['loop_tolerance_deg'] = CONTINUOUS_LOOP_TOLERANCE_DEG
             axes.append(axis_plan)
 
         if not axes:
@@ -776,6 +868,11 @@ class MotionRunManager(Node):
             positions = {}
             for axis in axes:
                 motion_value = self._interpolated_value(groups[axis['motion_id']], sample_time)
+                motion_value = self._clamp_motion_value(
+                    motion_value,
+                    axis.get('motion_limit_lower_deg'),
+                    axis.get('motion_limit_upper_deg'),
+                )
                 positions[int(axis['motor_axis'])] = self._motor_target(axis['row'], motion_value)
             samples.append({
                 'time_sec': sample_time - start_time,
@@ -783,14 +880,31 @@ class MotionRunManager(Node):
                 'positions': positions,
             })
 
+        continuous_capability = self._continuous_capability(axes)
+        capabilities = {
+            'initial_position': {
+                'available': True,
+                'reason': '모터 상태·매핑·초기 목표 검사 통과',
+            },
+            'single_run': {
+                'available': True,
+                'reason': '모터 상태·매핑 검사 통과, 모션 범위 초과값은 Min/Max로 제한',
+            },
+            'continuous_run': {
+                **continuous_capability,
+            },
+        }
+
         return {
             'motion_file_id': motion_file_id,
             'mapping_file_id': mapping_file_id,
+            'run_mode': run_mode,
             'motion_file_path': str(motion_file_path),
             'mapping_path': str(mapping_path),
             'axes': axes,
             'samples': samples,
             'warnings': warnings,
+            'capabilities': capabilities,
             'summary': {
                 'motion_file_id': motion_file_id,
                 'mapping_file_id': mapping_file_id,
@@ -799,7 +913,52 @@ class MotionRunManager(Node):
                 'period_sec': self.period_sec,
                 'sample_count': len(samples),
                 'initial_move_time_sec': initial_move_time_override,
+                'continuous_available': continuous_capability['available'],
+                'clamped_axis_count': sum(1 for axis in axes if axis.get('motion_clamped')),
             },
+        }
+
+    @staticmethod
+    def _continuous_capability(axes: List[Dict[str, Any]]) -> Dict[str, Any]:
+        mismatched = [
+            axis for axis in axes
+            if float(axis['loop_delta_deg']) > float(axis['loop_tolerance_deg'])
+        ]
+        if not mismatched:
+            return {
+                'available': True,
+                'reason': '모든 축의 모션 시작·종료값이 5° 이내입니다',
+            }
+        details = ', '.join(
+            f"Axis {axis['motor_axis']} 모션값 차이 {axis['loop_delta_deg']:.3f}° "
+            f"(허용 {axis['loop_tolerance_deg']:.3f}°)"
+            for axis in mismatched[:4]
+        )
+        return {
+            'available': False,
+            'reason': f'모션 시작·종료값 차이가 5°를 초과합니다: {details}',
+        }
+
+    @staticmethod
+    def _clamp_motion_value(
+        value: float,
+        lower: Optional[float],
+        upper: Optional[float],
+    ) -> float:
+        result = float(value)
+        if lower is not None:
+            result = max(result, float(lower))
+        if upper is not None:
+            result = min(result, float(upper))
+        return result
+
+    @staticmethod
+    def _unavailable_capabilities(reason: str) -> Dict[str, Dict[str, Any]]:
+        message = str(reason or '실행 준비 검사 실패')
+        return {
+            'initial_position': {'available': False, 'reason': message},
+            'single_run': {'available': False, 'reason': message},
+            'continuous_run': {'available': False, 'reason': message},
         }
 
     def _publish_motion_setpoints(
@@ -895,6 +1054,11 @@ class MotionRunManager(Node):
                 if motor_axis not in targets:
                     continue
                 motor = self._motor_for_axis(motor_axis, motors)
+                ready_error = self._motor_ready_error(
+                    motor or {'controller_index': motor_axis}
+                )
+                if ready_error:
+                    return False, ready_error
                 current = self._motor_position_deg(motor)
                 target = float(targets[motor_axis])
                 tolerance = self._target_tolerance_deg(axis_plan)
@@ -997,6 +1161,12 @@ class MotionRunManager(Node):
         axis = self._optional_int(motor.get('controller_index'))
         if str(motor.get('state') or '') != 'detected':
             return f'Axis {axis} is not detected'
+        errorcode = self._optional_int(motor.get('errorcode')) or 0
+        if errorcode:
+            error_hex = str(motor.get('errorcode_hex') or f'0x{errorcode & 0xFFFF:04X}')
+            error_text = str(motor.get('error_text') or '').strip()
+            detail = f' ({error_text})' if error_text else ''
+            return f'Axis {axis} motor alarm {error_hex}{detail}'
         if bool(motor.get('fault', False)):
             return f'Axis {axis} has error'
         if self._motor_type(motor) == 'ac_servo' and motor.get('servo_on') is not True:
@@ -1287,16 +1457,37 @@ class MotionRunManager(Node):
             'message': message,
             'motion_file_id': plan.get('motion_file_id', ''),
             'mapping_file_id': plan.get('mapping_file_id', ''),
+            'run_mode': plan.get('run_mode', 'once'),
+            'cycle_count': 0,
+            'current_cycle': 0,
             'summary': plan.get('summary', {}),
+            'warnings': plan.get('warnings', []),
+            'capabilities': plan.get('capabilities', {}),
             'axes': [
                 {
                     'motion_id': axis['motion_id'],
                     'motor_axis': axis['motor_axis'],
                     'motor_type': axis['motor_type'],
                     'initial_enabled': axis['initial_enabled'],
+                    'initial_motion_source_position_deg': axis['initial_motion_source_position_deg'],
+                    'initial_motion_position_deg': axis['initial_motion_position_deg'],
                     'initial_motor_target_deg': axis['initial_motor_target_deg'],
+                    'motion_limit_lower_deg': axis['motion_limit_lower_deg'],
+                    'motion_limit_upper_deg': axis['motion_limit_upper_deg'],
+                    'source_motion_min_deg': axis['source_motion_min_deg'],
+                    'source_motion_max_deg': axis['source_motion_max_deg'],
+                    'command_motion_min_deg': axis['command_motion_min_deg'],
+                    'command_motion_max_deg': axis['command_motion_max_deg'],
+                    'motion_clamped': axis['motion_clamped'],
                     'target_min_deg': axis['target_min_deg'],
                     'target_max_deg': axis['target_max_deg'],
+                    'loop_start_motion_deg': axis['loop_start_motion_deg'],
+                    'loop_end_motion_deg': axis['loop_end_motion_deg'],
+                    'loop_start_target_deg': axis['loop_start_target_deg'],
+                    'loop_end_target_deg': axis['loop_end_target_deg'],
+                    'loop_delta_deg': axis['loop_delta_deg'],
+                    'loop_motor_delta_deg': axis['loop_motor_delta_deg'],
+                    'loop_tolerance_deg': axis['loop_tolerance_deg'],
                 }
                 for axis in plan.get('axes', [])
             ],
@@ -1309,7 +1500,12 @@ class MotionRunManager(Node):
             'message': 'motion run idle',
             'motion_file_id': '',
             'mapping_file_id': '',
+            'run_mode': 'once',
+            'cycle_count': 0,
+            'current_cycle': 0,
             'summary': {},
+            'warnings': [],
+            'capabilities': {},
             'axes': [],
             'phase': 'idle',
             'phase_started_at': None,
@@ -1357,6 +1553,9 @@ class MotionRunManager(Node):
         duration_sec: float,
         sample_index: int,
         active_axis_count: int,
+        run_mode: Optional[str] = None,
+        cycle_count: Optional[int] = None,
+        current_cycle: Optional[int] = None,
     ) -> None:
         duration = max(float(duration_sec), 1e-9)
         with self._run_lock:
@@ -1372,6 +1571,12 @@ class MotionRunManager(Node):
                 },
                 'updated_at': time.time(),
             }
+            if run_mode is not None:
+                self._status['run_mode'] = run_mode
+            if cycle_count is not None:
+                self._status['cycle_count'] = int(cycle_count)
+            if current_cycle is not None:
+                self._status['current_cycle'] = int(current_cycle)
 
     def status(self) -> Dict[str, Any]:
         with self._run_lock:

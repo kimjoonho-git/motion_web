@@ -393,9 +393,23 @@ motor_config.yaml 없음
 ```text
 motor_config.yaml 로드
 → configured motors 생성
-→ /motor_status 기반 detected motors와 비교
-→ 일치/누락/불일치 상태 표시
+→ EtherCAT slave 검색 및 Dynamixel Ping으로 실제 연결 모터 검색
+→ 버스 검색 결과와 제어 런타임 피드백을 각각 증거로 기록
+→ configured motors와 검색/런타임 결과를 비교
+→ 온라인/연결 끊김/버스 끊김/확인 중 상태와 판정 근거 표시
 ```
+
+연결 상태와 노드 재시작 성공 여부는 YAML 등록 수나 버스 검색 결과만으로 판단하지 않는다.
+YAML은 목표 설정 목록이고, 버스 검색은 장치가 물리 통신망에 보였다는 별도 증거다. 실제 제어 가능한
+`online` 상태는 제어 런타임 피드백이 제한 시간 안에 정상 수신되는지를 기준으로 판정한다. 검색에서
+장치가 보여도 런타임 통신이 없으면 온라인으로 표시하지 않고, "검색 감지 / 런타임 연결 끊김"처럼
+두 증거를 구분해 알린다. 반대로 검색하지 않은 버스라도 정상 런타임 피드백이 있으면 온라인으로
+판정할 수 있다.
+
+이 판정 모델은 특정 드라이버에 종속시키지 않는다. EtherCAT AC Servo, Dynamixel, CAN 계열 모터 등
+모든 모터에 `connection_state`, `connection_reason`, `connection_source`, 마지막 피드백 시각과 경과
+시간을 같은 형식으로 제공한다. 통신 버스 전체가 내려간 경우에는 개별 모터 연결 끊김과 구분해
+`bus_down`으로 표시한다.
 
 모터 리스트를 저장하는 설정 파일은 YAML만 사용한다. JSON은 HTTP API, WebSocket, ROS2 String 메시지의 상태 전달 포맷으로만 사용하고, 모터 리스트 저장 파일로 사용하지 않는다.
 

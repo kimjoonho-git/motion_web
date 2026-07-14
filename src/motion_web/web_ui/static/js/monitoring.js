@@ -12,7 +12,10 @@ import {
   normalizeMotorTypeKey,
   stateLabel,
   statusDisplayLabels,
-} from './format.js';
+} from './format.js?v=20260714-generic-connection-state';
+
+let lastMonitoringHeaderSignature = '';
+let lastMonitoringRowsSignature = '';
 
 export function renderAccess(payload, el) {
   const url = payload && payload.web_access && payload.web_access.url
@@ -23,7 +26,7 @@ export function renderAccess(payload, el) {
 
 function statusText(motor, rawMode) {
   if (rawMode) return formatHex(motor.statusword);
-  const status = motor.status_text || stateLabel(motor.state);
+  const status = motor.status_text || stateLabel(motor.connection_state || motor.state);
   return statusDisplayLabels[status] || status;
 }
 
@@ -149,9 +152,17 @@ function ageText(motor) {
 }
 
 function stateCell(motor) {
-  const stateName = motor.state || 'unknown';
-  const stateClass = motor.fault ? 'fault' : stateName;
-  return `<span class="state ${escapeHtml(stateClass)}" title="${displayText(motor.state_detail || '')}">${displayText(stateLabel(stateName))}</span>`;
+  const stateName = motor.connection_state || motor.state || 'unknown';
+  const stateClassByName = {
+    online: 'detected',
+    offline: 'disconnected',
+    bus_down: 'ethercat_down',
+    initializing: 'stale',
+    unknown: 'stale',
+  };
+  const stateClass = motor.fault ? 'fault' : (stateClassByName[stateName] || stateName);
+  const detail = motor.connection_message || motor.state_detail || '';
+  return `<span class="state ${escapeHtml(stateClass)}" title="${displayText(detail)}">${displayText(stateLabel(stateName))}</span>`;
 }
 
 function positionHeaderText(rawMode) {
@@ -261,6 +272,9 @@ function monitoringColumnsForFilter(filter, rawMode) {
 
 function renderMonitoringHeader(columns, el) {
   if (!el.motorHeaderRows) return;
+  const signature = JSON.stringify(columns.map((column) => column.label));
+  if (signature === lastMonitoringHeaderSignature) return;
+  lastMonitoringHeaderSignature = signature;
   el.motorHeaderRows.innerHTML = `
     <tr>
       ${columns.map((column) => `<th>${displayText(column.label)}</th>`).join('')}
@@ -292,7 +306,8 @@ function renderMotorTypeSummary(state, motors, el) {
   if (!el.motorTypeRows) return;
   const knownCounts = countBy(motors, 'motor_type_label');
   const onlineCounts = countBy(
-    motors.filter((motor) => motor.state === 'detected'),
+    motors.filter((motor) => motor.connection_connected === true
+      || (!('connection_connected' in motor) && motor.state === 'detected')),
     'motor_type_label',
   );
   const catalog = Array.isArray(state.motor_type_catalog) && state.motor_type_catalog.length > 0
@@ -300,7 +315,7 @@ function renderMotorTypeSummary(state, motors, el) {
     : Object.keys(knownCounts);
   const labels = Array.from(new Set([...catalog, ...Object.keys(knownCounts), 'Unknown']));
 
-  el.motorTypeRows.innerHTML = labels.map((label) => {
+  const html = labels.map((label) => {
     const known = knownCounts[label] || 0;
     const online = onlineCounts[label] || 0;
     const activeClass = online > 0 ? 'online' : 'offline';
@@ -311,6 +326,7 @@ function renderMotorTypeSummary(state, motors, el) {
       </div>
     `;
   }).join('');
+  if (el.motorTypeRows.innerHTML !== html) el.motorTypeRows.innerHTML = html;
 }
 
 export function renderMonitoring(state, options) {
@@ -335,7 +351,11 @@ export function renderMonitoring(state, options) {
     el.monitorToggle.classList.toggle('primary', enabled);
   }
   if (el.displayModeToggle) el.displayModeToggle.textContent = rawMode ? '해석값 보기' : 'Raw 보기';
-  if (el.onlineMotorCount) el.onlineMotorCount.textContent = formatInt(state.online_motors_count || state.detected_count || 0);
+  const connectionSummary = state.connection_summary || {};
+  const onlineCount = Number.isFinite(Number(connectionSummary.online))
+    ? Number(connectionSummary.online)
+    : Number(state.online_motors_count || state.detected_count || 0);
+  if (el.onlineMotorCount) el.onlineMotorCount.textContent = formatInt(onlineCount);
   if (el.knownMotorCount) {
     el.knownMotorCount.textContent = `${formatInt(state.known_motors_count || allMotors.length)} / ${formatInt(state.max_motors || 50)}`;
   }
@@ -350,7 +370,13 @@ export function renderMonitoring(state, options) {
     ? `, 설정 외 runtime ${formatInt(registryFilteredCount)}축 숨김`
     : '';
   if (el.summaryText) {
-    el.summaryText.textContent = `runtime 수신 ${formatInt(allMotors.length)}축, 온라인 ${formatInt(state.online_motors_count || state.detected_count || 0)}축, ${registryText}${filteredText}, 모터 타입 ${formatCounts(state.motor_type_counts)}`;
+    const offlineCount = Number(connectionSummary.offline || 0);
+    const busDownCount = Number(connectionSummary.bus_down || 0);
+    const pendingCount = Number(connectionSummary.stale || 0)
+      + Number(connectionSummary.initializing || 0)
+      + Number(connectionSummary.monitoring_off || 0)
+      + Number(connectionSummary.unknown || 0);
+    el.summaryText.textContent = `연결 상태: 온라인 ${formatInt(onlineCount)}축, 연결 끊김 ${formatInt(offlineCount)}축, 버스 끊김 ${formatInt(busDownCount)}축, 확인 중 ${formatInt(pendingCount)}축 · ${registryText}${filteredText} · 모터 타입 ${formatCounts(state.motor_type_counts)}`;
   }
   if (el.monitoringViewSummary) {
     el.monitoringViewSummary.textContent = `${motorFilterLabel(activeMonitoringFilter)} · 설정 기준 ${formatInt(motors.length)}축 표시`;
@@ -363,26 +389,59 @@ export function renderMonitoring(state, options) {
     const emptyText = registryCount > 0
       ? `No configured ${motorFilterLabel(activeMonitoringFilter)} runtime state received`
       : 'No configured motor. Load motor settings first.';
-    el.rows.innerHTML = `<tr><td colspan="${columns.length}" class="empty">${displayText(emptyText)}</td></tr>`;
+    const html = `<tr><td colspan="${columns.length}" class="empty">${displayText(emptyText)}</td></tr>`;
+    if (el.rows.innerHTML !== html) el.rows.innerHTML = html;
+    lastMonitoringRowsSignature = '';
     return;
   }
 
-  el.rows.innerHTML = motors.map((motor) => {
+  const selectedForMotor = (motor) => {
     const axis = motor.controller_index;
-    const selected = axis !== null &&
+    return axis !== null &&
       axis !== undefined &&
       selectedMotionTestAxis !== null &&
       selectedMotionTestAxis !== undefined &&
       Number(axis) === Number(selectedMotionTestAxis);
-    return `
-      <tr class="monitoring-row ${selected ? 'selected-row' : ''}" data-monitoring-axis="${escapeHtml(String(axis ?? ''))}">
+  };
+  const structureSignature = JSON.stringify({
+    columns: columns.map((column) => column.label),
+    axes: motors.map((motor) => motor.controller_index),
+  });
+
+  if (structureSignature !== lastMonitoringRowsSignature) {
+    lastMonitoringRowsSignature = structureSignature;
+    el.rows.innerHTML = motors.map((motor) => {
+      const axis = motor.controller_index;
+      const selected = selectedForMotor(motor);
+      return `
+        <tr class="monitoring-row ${selected ? 'selected-row' : ''}" data-monitoring-axis="${escapeHtml(String(axis ?? ''))}">
         ${columns.map((column) => {
           const className = typeof column.className === 'function'
             ? column.className(motor)
             : column.className || '';
           return `<td class="${escapeHtml(className)}">${column.cell(motor)}</td>`;
         }).join('')}
-      </tr>
-    `;
-  }).join('');
+        </tr>
+      `;
+    }).join('');
+    return;
+  }
+
+  const rowElements = el.rows.querySelectorAll('tr.monitoring-row');
+  motors.forEach((motor, rowIndex) => {
+    const row = rowElements[rowIndex];
+    if (!row) return;
+    row.classList.toggle('selected-row', selectedForMotor(motor));
+    const cells = row.querySelectorAll('td');
+    columns.forEach((column, columnIndex) => {
+      const cell = cells[columnIndex];
+      if (!cell) return;
+      const className = typeof column.className === 'function'
+        ? column.className(motor)
+        : column.className || '';
+      if (cell.className !== className) cell.className = className;
+      const html = column.cell(motor);
+      if (cell.innerHTML !== html) cell.innerHTML = html;
+    });
+  });
 }

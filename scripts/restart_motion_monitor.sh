@@ -50,7 +50,10 @@ patterns=(
   "ros2 run motion_supervisor motion_supervisor"
   "install/motion_web_bridge/lib/motion_web_bridge/motion_mapping_manager"
   "install/motion_web_bridge/lib/motion_web_bridge/motion_run_manager"
+  "install/motion_web_bridge/lib/motion_web_bridge/midi_monitor_node"
   "install/motion_web_bridge/lib/motion_web_bridge/motion_web_bridge"
+  "install/midi_input_bridge/lib/midi_input_bridge/midi_input_node"
+  "ros2 launch motion_web_bridge midi_monitor.launch.py"
 )
 
 for pattern in "${patterns[@]}"; do
@@ -69,32 +72,68 @@ done
 
 wait_until_stopped "${KILL_WAIT_SEC:-0.5}" "${patterns[@]}" || true
 
-request_ethercat_op_recovery() {
+recover_ethercat_errors_after_launch() {
   if ! command -v ethercat >/dev/null 2>&1; then
     return 0
   fi
 
-  local attempts="${ETHERCAT_OP_RECOVERY_ATTEMPTS:-6}"
-  local interval="${ETHERCAT_OP_RECOVERY_INTERVAL_SEC:-0.5}"
-  local attempt
+  local delay="${ETHERCAT_RECOVERY_DELAY_SEC:-15}"
+  local attempts="${ETHERCAT_RECOVERY_ATTEMPTS:-2}"
+  local interval="${ETHERCAT_RECOVERY_INTERVAL_SEC:-1}"
+  local attempt position positions
+  sleep "${delay}"
+
+  if ! kill -0 "${launch_pid}" >/dev/null 2>&1; then
+    return 0
+  fi
+
   for ((attempt = 1; attempt <= attempts; attempt++)); do
-    sleep "${interval}"
-    if ! ethercat slaves >/dev/null 2>&1; then
-      continue
+    positions="$(ethercat slaves 2>/dev/null | awk '/ERROR/ {print $1}' || true)"
+    if [[ -z "${positions}" ]]; then
+      return 0
     fi
-    log "requesting EtherCAT OP state (attempt ${attempt}/${attempts})"
-    ethercat states OP || true
+
+    for position in ${positions}; do
+      log "recovering EtherCAT slave ${position} after launch (attempt ${attempt}/${attempts})"
+      ethercat states -p "${position}" INIT || true
+      sleep "${interval}"
+      ethercat states -p "${position}" PREOP || true
+      sleep "${interval}"
+      ethercat states -p "${position}" OP || true
+      sleep "${interval}"
+    done
   done
+
+  if ethercat slaves 2>/dev/null | grep -q 'ERROR'; then
+    log "EtherCAT error flag remains after post-launch recovery"
+  fi
 }
 
 cd "${WORKSPACE}"
-log "starting motion_monitor.launch.py"
-sg dialout -c 'bash -lc "source /home/joonho_test/ros2_ws/install/setup.bash && ros2 launch motion_state_monitor motion_monitor.launch.py start_motor_manager:=true"' &
+CONFIG_FILE="${MOTOR_CONFIG_FILE:-/home/joonho_test/ros2_ws/config/active_motor_config.yaml}"
+SELECTED_CONFIG_PATH_FILE="/home/joonho_test/ros2_ws/config/selected_motor_config_path.txt"
+if [[ -z "${MOTOR_CONFIG_FILE:-}" && -f "${SELECTED_CONFIG_PATH_FILE}" ]]; then
+  selected_config="$(head -n 1 "${SELECTED_CONFIG_PATH_FILE}" | tr -d '\r\n')"
+  if [[ -f "${selected_config}" ]]; then
+    CONFIG_FILE="${selected_config}"
+  else
+    log "selected motor config not found: ${selected_config}; using ${CONFIG_FILE}"
+  fi
+fi
+
+export CONFIG_FILE
+log "starting motion_monitor.launch.py with config_file=${CONFIG_FILE}"
+sg dialout -c 'bash -lc '"'"'source /home/joonho_test/ros2_ws/install/setup.bash && ros2 launch motion_state_monitor motion_monitor.launch.py config_file:="$CONFIG_FILE" start_motor_manager:=true'"'" &
 launch_pid="$!"
-request_ethercat_op_recovery &
+log "starting read-only MIDI monitor (motor output disabled)"
+bash -lc 'source /home/joonho_test/ros2_ws/install/setup.bash && ros2 launch motion_web_bridge midi_monitor.launch.py' &
+midi_launch_pid="$!"
+recover_ethercat_errors_after_launch &
 recovery_pid="$!"
 
 wait "${launch_pid}"
 launch_status="$?"
+kill "${midi_launch_pid}" 2>/dev/null || true
+wait "${midi_launch_pid}" 2>/dev/null || true
 wait "${recovery_pid}" 2>/dev/null || true
 exit "${launch_status}"

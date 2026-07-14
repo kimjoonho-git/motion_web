@@ -440,6 +440,7 @@ function detectedAcServoMotors(state) {
 
 export function createMotionTestController({ el, getLatestState }) {
   let selectedAxis = null;
+  let lastAxisOptionsSignature = '';
   let lastJogDirection = 1;
   let lastOutputCapture = null;
   let lastCommandResult = null;
@@ -509,7 +510,10 @@ export function createMotionTestController({ el, getLatestState }) {
         return `<option value="${axis}"${selected ? ' selected' : ''}>${displayText(motorLabel(motor))}</option>`;
       }),
     ];
-    el.motionTestAxisSelect.innerHTML = options.join('');
+    const html = options.join('');
+    if (html === lastAxisOptionsSignature) return;
+    lastAxisOptionsSignature = html;
+    el.motionTestAxisSelect.innerHTML = html;
   }
 
   function renderModeButtons() {

@@ -1,9 +1,11 @@
-import { fetchStatusSnapshot, setMonitoringEnabled } from './api.js?v=20260706-motion-safety';
-import { getElements } from './dom.js?v=20260706-motion-safety';
-import { createMotionDataController } from './motion_data.js?v=20260706-motion-safety';
-import { createMotionTestController } from './motion_test.js?v=20260705-action-lock';
-import { createMotorConfigController } from './motor_config.js?v=20260706-motion-run';
-import { renderAccess, renderMonitoring } from './monitoring.js?v=20260703-output-time-freeze';
+import { fetchStatusSnapshot, setMonitoringEnabled } from './api.js?v=20260714-motor-event-log-clear';
+import { getElements } from './dom.js?v=20260714-midi-monitor';
+import { createMotorEventLogController } from './event_log.js?v=20260714-motion-log-mode';
+import { createMidiMonitorController } from './midi_monitor.js?v=20260714-midi-readonly';
+import { createMotionDataController } from './motion_data.js?v=20260714-shared-graph-toggle';
+import { createMotionTestController } from './motion_test.js?v=20260714-stable-live-render';
+import { createMotorConfigController } from './motor_config.js?v=20260714-generic-connection-state';
+import { renderAccess, renderMonitoring } from './monitoring.js?v=20260714-stable-live-render';
 import { StatusSocket } from './socket.js';
 
 const el = getElements();
@@ -18,8 +20,9 @@ const appState = {
   configApplyConnectionInterrupted: false,
   motorErrorActiveKeys: new Set(),
   motorErrorDismissedKeys: new Set(),
+  motorErrorLatchedEntries: new Map(),
 };
-const RESTART_READY_STABLE_MS = 300;
+const RESTART_READY_STABLE_MS = 3500;
 
 function renderWorkspacePanel() {
   if (el.workspaceTabs) {
@@ -144,8 +147,10 @@ function motorErrorKey(motor) {
   const statusword = motor?.statusword ?? '';
   const errorCode = motor?.errorcode ?? motor?.errorcode_raw ?? '';
   const statusText = motor?.status_text ?? '';
-  const errorText = motor?.error_text ?? '';
-  return [axis, statusword, errorCode, statusText, errorText].join('|');
+  const errorIdentity = Number(errorCode) !== 0
+    ? `code:${errorCode}`
+    : (Number(statusword) & 0x0008 ? 'fault-bit' : `status:${statusText}`);
+  return [axis, errorIdentity].join('|');
 }
 
 function motorErrorTitle(motor) {
@@ -226,23 +231,22 @@ function updateMotorErrorPopup(state) {
   });
   appState.motorErrorActiveKeys = currentKeys;
 
-  if (errors.length === 0) {
-    appState.motorErrorDismissedKeys.clear();
-    setMotorErrorPopup(false);
-    return;
-  }
+  errors.forEach((entry) => {
+    if (!appState.motorErrorDismissedKeys.has(entry.key)) {
+      appState.motorErrorLatchedEntries.set(entry.key, entry);
+    }
+  });
 
-  const hasNewError = errors.some((entry) => !appState.motorErrorDismissedKeys.has(entry.key));
-  const popupVisible = el.motorErrorPopup && !el.motorErrorPopup.classList.contains('hidden');
-  if (hasNewError || popupVisible) {
-    setMotorErrorPopup(true, errors);
+  if (appState.motorErrorLatchedEntries.size > 0) {
+    setMotorErrorPopup(true, Array.from(appState.motorErrorLatchedEntries.values()));
   }
 }
 
 function dismissMotorErrorPopup() {
-  appState.motorErrorActiveKeys.forEach((key) => {
+  appState.motorErrorLatchedEntries.forEach((_entry, key) => {
     appState.motorErrorDismissedKeys.add(key);
   });
+  appState.motorErrorLatchedEntries.clear();
   setMotorErrorPopup(false);
 }
 
@@ -320,46 +324,44 @@ function restartReadyState(payload) {
     };
   }
 
-  const detectedMotors = motors.filter((motor) => String(motor.state || '') === 'detected');
-  if (detectedMotors.length === 0) {
+  const connectionState = (motor) => String(
+    motor.connection_state
+      || (motor.state === 'detected' ? 'online' : motor.state)
+      || 'unknown'
+  );
+  const pendingStates = new Set(['', 'unknown', 'monitoring_off', 'stale', 'initializing']);
+  const pendingMotors = motors.filter((motor) => pendingStates.has(connectionState(motor)));
+  if (pendingMotors.length > 0) {
     return {
       ready: false,
-      title: '연결 축 감지 대기',
-      detail: 'detected 상태인 모터 축 대기',
+      title: '모터 상태 판정 대기',
+      detail: `${axisListText(pendingMotors)} 연결 상태 확인 중`,
     };
   }
 
-  const notDetectedMotors = motors.filter((motor) => String(motor.state || '') !== 'detected');
-  if (notDetectedMotors.length > 0) {
-    return {
-      ready: false,
-      title: '전체 모터 감지 대기',
-      detail: `${axisListText(notDetectedMotors)} detected 대기`,
-    };
-  }
-
+  const connectedMotors = motors.filter((motor) => connectionState(motor) === 'online');
+  const disconnectedMotors = motors.filter((motor) => connectionState(motor) !== 'online');
   const faultMotors = motors.filter((motor) => Boolean(motor.fault));
-  if (faultMotors.length > 0) {
+  const discovery = motorConfig?.getDiscoverySummary?.() || {};
+  if (connectedMotors.length === 0) {
     return {
       ready: false,
-      title: '전체 모터 Fault 확인 대기',
-      detail: `${axisListText(faultMotors)} fault 상태`,
+      failed: true,
+      title: '모터 연결 실패',
+      detail: '모터 검색 여부와 관계없이 제어 런타임에서 통신 중인 모터가 없습니다.',
     };
   }
-
-  const servoOffMotors = motors.filter((motor) => motor.servo_on !== true);
-  if (servoOffMotors.length > 0) {
-    return {
-      ready: false,
-      title: '전체 모터 Servo/Torque ON 대기',
-      detail: `${axisListText(servoOffMotors)} servo_on=true 대기`,
-    };
-  }
-
   return {
     ready: true,
     title: '노드 재시작 완료',
-    detail: `모니터링 정상 수신, detected ${detectedMotors.length}축`,
+    detail: [
+      `런타임 온라인 ${connectedMotors.length}축`,
+      discovery.hasDirectScan ? `버스 검색 감지 ${Number(discovery.discoveredCount || 0)}축` : '',
+      discovery.ethercatScanned ? `EtherCAT ${discovery.ethercatCount}축` : '',
+      discovery.dynamixelScanned ? `Dynamixel ${discovery.dynamixelCount}축` : '',
+      `미연결 ${disconnectedMotors.length}축`,
+      `Fault ${faultMotors.length}축`,
+    ].filter(Boolean).join(' · '),
   };
 }
 
@@ -368,8 +370,22 @@ function updateRestartProgress(payload = null) {
   const state = restartReadyState(payload);
   const message = [
     'motor_manager_node, motion_state_monitor, motion_supervisor, motion_web_bridge 상태를 확인하는 중입니다.',
-    '모든 설정 모터가 detected, fault=false, servo_on=true 상태가 될 때까지 확인합니다.',
+    'YAML 등록 수가 아니라 직접 검색되거나 실제 감지된 모터를 기준으로 확인합니다.',
   ].join(' ');
+
+  if (state.failed) {
+    appState.configApplyInProgress = false;
+    appState.configApplyStartedAtMs = null;
+    appState.configApplyReadySinceMs = null;
+    appState.configApplyConnectionInterrupted = false;
+    setRestartOverlay(true, state.title, '노드는 재시작됐지만 연결된 모터를 찾지 못했습니다.', state.detail);
+    if (el.bridgeState) el.bridgeState.textContent = state.title;
+    if (el.summaryText) el.summaryText.textContent = state.detail;
+    setTimeout(() => {
+      if (!appState.configApplyInProgress) setRestartOverlay(false);
+    }, 5000);
+    return;
+  }
 
   if (!state.ready) {
     appState.configApplyReadySinceMs = null;
@@ -394,7 +410,7 @@ function updateRestartProgress(payload = null) {
   appState.configApplyStartedAtMs = null;
   appState.configApplyReadySinceMs = null;
   appState.configApplyConnectionInterrupted = false;
-  setRestartOverlay(true, state.title, '모든 모터 감지와 Servo/Torque ON 완료를 확인했습니다.', state.detail);
+  setRestartOverlay(true, state.title, '노드 재시작과 모터 상태 수신을 확인했습니다.', state.detail);
   if (el.bridgeState) el.bridgeState.textContent = 'Connected';
   if (el.summaryText) el.summaryText.textContent = '노드 재시작 완료';
   setTimeout(() => {
@@ -444,6 +460,10 @@ const motionData = createMotionDataController({
   onWorkContextChange: updateWorkContext,
 });
 
+const midiMonitor = createMidiMonitorController({ el });
+
+const motorEventLog = createMotorEventLogController({ el });
+
 async function fetchStatus() {
   if (!el.refreshButton) return;
   el.refreshButton.disabled = true;
@@ -453,6 +473,7 @@ async function fetchStatus() {
     const payload = await fetchStatusSnapshot();
     if (el.bridgeState) el.bridgeState.textContent = payload.bridge_state || 'HTTP';
     renderAccess(payload, el);
+    midiMonitor.renderSnapshot(payload.midi_monitor || {});
     renderLatestState(motionStateFromPayload(payload));
     updateRestartProgress(payload);
     el.refreshButton.textContent = `Refreshed ${new Date().toLocaleTimeString()}`;
@@ -488,7 +509,7 @@ function connectSocket() {
         setRestartOverlay(
           true,
           '웹 재연결 완료',
-          '모터 상태 수신과 모든 모터 Servo/Torque ON 상태를 확인하는 중입니다.',
+          '모터 상태 수신과 각 축의 연결 상태를 확인하는 중입니다.',
           '상태 payload 대기',
         );
         fetchStatus();
@@ -496,6 +517,7 @@ function connectSocket() {
     },
     onMessage: (payload) => {
       renderAccess(payload, el);
+      midiMonitor.renderSnapshot(payload.midi_monitor || {});
       renderLatestState(motionStateFromPayload(payload));
       updateRestartProgress(payload);
     },
@@ -538,17 +560,11 @@ if (el.refreshButton) {
   });
 }
 
-if (el.motorErrorCloseButton) {
-  el.motorErrorCloseButton.addEventListener('click', () => {
+if (el.motorErrorConfirmButton) {
+  el.motorErrorConfirmButton.addEventListener('click', () => {
     dismissMotorErrorPopup();
   });
 }
-
-document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && el.motorErrorPopup && !el.motorErrorPopup.classList.contains('hidden')) {
-    dismissMotorErrorPopup();
-  }
-});
 
 if (el.monitoringTabs) {
   el.monitoringTabs.addEventListener('click', (event) => {
@@ -583,12 +599,14 @@ if (el.workspaceTabs) {
     appState.activeWorkspacePanel = button.dataset.workspaceTab || 'monitoring';
     renderWorkspacePanel();
     renderLatestState();
+    if (appState.activeWorkspacePanel === 'log') motorEventLog.activate();
   });
 }
 
 motorConfig.bindEvents();
 motionTest.bindEvents();
 motionData.bindEvents();
+motorEventLog.bindEvents();
 motorConfig.renderRegistrationTabs();
 renderWorkspacePanel();
 updateWorkContext();

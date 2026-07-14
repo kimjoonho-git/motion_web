@@ -276,7 +276,7 @@ class MotionMappingManager(Node):
             reference_position = self._optional_float(row.get('reference_position_deg'), 0.0)
             initial_enabled = bool(row.get('initial_enabled', True))
             initial_position = self._optional_float(row.get('initial_motion_position_deg'), 0.0)
-            initial_move_time = self._optional_float(row.get('initial_move_time_sec'), 2.0)
+            initial_move_time = self._optional_float(row.get('initial_move_time_sec'), 5.0)
             if not reference_enabled:
                 reference_position = 0.0
             if not initial_enabled:

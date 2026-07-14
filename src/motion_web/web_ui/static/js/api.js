@@ -20,6 +20,20 @@ export async function fetchStatusSnapshot() {
   return readJson(response);
 }
 
+export async function fetchMotorEvents(category = 'all', limit = 300) {
+  const query = new URLSearchParams({
+    category: String(category || 'all'),
+    limit: String(limit),
+  });
+  const response = await fetch(`/api/motor-events?${query.toString()}`);
+  return readJson(response);
+}
+
+export async function clearMotorEvents() {
+  const response = await fetch('/api/motor-events', { method: 'DELETE' });
+  return readJson(response);
+}
+
 export async function setMonitoringEnabled(enabled) {
   const response = await fetch('/api/monitoring/enabled', {
     method: 'POST',
@@ -158,6 +172,20 @@ export async function startMotionRun(payload) {
 
 export async function stopMotionRun() {
   const response = await fetch('/api/motion-run/stop', { method: 'POST' });
+  return readJson(response);
+}
+
+export async function fetchMidiMonitor() {
+  const response = await fetch('/api/midi-monitor');
+  return readJson(response);
+}
+
+export async function saveMidiMapping(payload) {
+  const response = await fetch('/api/midi-monitor/mapping', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
   return readJson(response);
 }
 

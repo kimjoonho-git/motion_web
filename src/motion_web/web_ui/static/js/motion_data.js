@@ -146,7 +146,7 @@ function previewText(file, analysis) {
     .join('\n');
 }
 
-function drawGraph(canvas, messageEl, analysis) {
+function drawGraph(canvas, messageEl, analysis, hiddenIds = new Set()) {
   if (!canvas) return;
   const context = canvas.getContext('2d');
   if (!context) return;
@@ -160,12 +160,21 @@ function drawGraph(canvas, messageEl, analysis) {
   context.fillStyle = '#ffffff';
   context.fillRect(0, 0, width, height);
 
-  const series = Array.isArray(analysis?.graph_series) ? analysis.graph_series : [];
+  const allSeries = Array.isArray(analysis?.graph_series) ? analysis.graph_series : [];
+  const series = allSeries
+    .map((item, index) => ({ ...item, colorIndex: index }))
+    .filter((item) => !hiddenIds.has(String(item.motion_id)));
   const points = series.flatMap((item) => item.points || []);
-  if (!series.length || !points.length) {
+  if (!allSeries.length) {
     if (messageEl) messageEl.textContent = '그래프 데이터가 없습니다';
     context.fillStyle = '#5d6b78';
     context.fillText('No graph data', 16, 28);
+    return;
+  }
+  if (!series.length || !points.length) {
+    if (messageEl) messageEl.textContent = '표시할 축이 없습니다';
+    context.fillStyle = '#5d6b78';
+    context.fillText('축 버튼을 눌러 그래프를 표시하세요', 16, 28);
     return;
   }
 
@@ -199,7 +208,7 @@ function drawGraph(canvas, messageEl, analysis) {
   context.fillText(`${formatNumber(maxTime, 2)}s`, Math.max(padLeft, width - 68), height - 10);
 
   series.forEach((item, index) => {
-    const color = colors[index % colors.length];
+    const color = colors[item.colorIndex % colors.length];
     const itemPoints = Array.isArray(item.points) ? item.points : [];
     if (!itemPoints.length) return;
     context.strokeStyle = color;
@@ -217,7 +226,7 @@ function drawGraph(canvas, messageEl, analysis) {
   });
 
   if (messageEl) {
-    messageEl.textContent = `${formatInt(series.length)}개 motion ID 표시`;
+    messageEl.textContent = `표시 ${formatInt(series.length)}/${formatInt(allSeries.length)}`;
   }
 }
 
@@ -241,6 +250,12 @@ export function createMotionDataController({
   let motionRunLastResult = null;
   let motionRunLoading = false;
   let motionRunGraphAnimationId = null;
+  let motionFileGraphFileId = '';
+  let motionFileGraphToggleSignature = '';
+  const motionFileGraphHiddenIds = new Set();
+  let motionRunGraphFileId = '';
+  let motionRunGraphToggleSignature = '';
+  const motionRunGraphHiddenIds = new Set();
 
   function setMessage(message) {
     if (el.motionFileMessage) el.motionFileMessage.textContent = message;
@@ -369,7 +384,7 @@ export function createMotionDataController({
     if (row.initial_enabled === false) {
       return 0.0;
     }
-    return numericOr(row.initial_move_time_sec, 2.0);
+    return numericOr(row.initial_move_time_sec, 5.0);
   }
 
   function motorPositionDeg(motor) {
@@ -410,11 +425,14 @@ export function createMotionDataController({
       motion_file_id: mappingDraft.motion_file_id || selectedFileId || '',
       mapping_file_id: selectedMappingId || '',
       initial_move_time_sec: initialMoveTimeSec,
+      run_mode: 'once',
     };
   }
 
   function motionRunInitialMoveTimeSec() {
-    const value = Number(el.motionRunInitialMoveTime?.value);
+    const rawValue = String(el.motionRunInitialMoveTime?.value || 'mapping');
+    if (rawValue === 'mapping') return null;
+    const value = Number(rawValue);
     return [5, 7, 10].includes(value) ? value : 5;
   }
 
@@ -480,13 +498,19 @@ export function createMotionDataController({
 
     if (state === 'initializing') {
       const startedAt = Number(lifecycle.initial_started_at || status.phase_started_at || status.updated_at);
-      duration = motionRunInitialMoveTimeSec();
+      const overrideDuration = motionRunInitialMoveTimeSec();
+      if (overrideDuration !== null) duration = overrideDuration;
       if (Number.isFinite(startedAt) && startedAt > 0) elapsed = nowSec - startedAt;
     } else if (state === 'running') {
       const startedAt = Number(lifecycle.motion_started_at || status.phase_started_at || status.updated_at);
       const summaryDuration = Number(status?.summary?.duration_sec);
       duration = duration > 0 ? duration : (Number.isFinite(summaryDuration) ? summaryDuration : 0.0);
-      if (Number.isFinite(startedAt) && startedAt > 0) elapsed = nowSec - startedAt;
+      if (Number.isFinite(startedAt) && startedAt > 0) {
+        const runningElapsed = nowSec - startedAt;
+        elapsed = status?.run_mode === 'continuous' && duration > 0
+          ? runningElapsed % duration
+          : runningElapsed;
+      }
     } else if (state === 'verifying') {
       const summaryDuration = Number(status?.summary?.duration_sec);
       duration = duration > 0 ? duration : (Number.isFinite(summaryDuration) ? summaryDuration : 0.0);
@@ -568,7 +592,7 @@ export function createMotionDataController({
     }
   }
 
-  function drawMotionRunGraph(canvas, messageEl, file, status = {}) {
+  function drawMotionRunGraph(canvas, messageEl, file, status = {}, hiddenIds = new Set()) {
     if (!canvas) return;
     const context = canvas.getContext('2d');
     if (!context) return;
@@ -583,13 +607,23 @@ export function createMotionDataController({
     context.fillRect(0, 0, width, height);
 
     const analysis = analysisOf(file);
-    const series = Array.isArray(analysis?.graph_series) ? analysis.graph_series : [];
+    const allSeries = Array.isArray(analysis?.graph_series) ? analysis.graph_series : [];
+    const series = allSeries
+      .map((item, index) => ({ ...item, colorIndex: index }))
+      .filter((item) => !hiddenIds.has(String(item.motion_id)));
     const points = series.flatMap((item) => item.points || []);
-    if (!series.length || !points.length) {
+    if (!allSeries.length) {
       if (messageEl) messageEl.textContent = '모션 그래프 데이터가 없습니다';
       context.fillStyle = '#5d6b78';
       context.font = '13px Arial';
       context.fillText('No motion graph data', 16, 28);
+      return;
+    }
+    if (!series.length || !points.length) {
+      if (messageEl) messageEl.textContent = '표시할 축이 없습니다';
+      context.fillStyle = '#5d6b78';
+      context.font = '13px Arial';
+      context.fillText('축 버튼을 눌러 그래프를 표시하세요', 16, 28);
       return;
     }
 
@@ -623,7 +657,7 @@ export function createMotionDataController({
     context.fillText(`${formatNumber(maxTime, 2)}s`, Math.max(padLeft, width - 70), height - 10);
 
     series.forEach((item, index) => {
-      const color = colors[index % colors.length];
+      const color = colors[item.colorIndex % colors.length];
       const itemPoints = Array.isArray(item.points) ? item.points : [];
       if (!itemPoints.length) return;
       context.strokeStyle = color;
@@ -664,16 +698,17 @@ export function createMotionDataController({
     context.fillText(cursorLabel, Math.min(cursorX + 6, width - 80), padTop + graphHeight - 8);
 
     if (messageEl) {
+      const visibleText = `표시 ${series.length}/${allSeries.length}`;
       if (state === 'initializing') {
-        messageEl.textContent = `초기 위치 이동 중 ${formatNumber(effective.elapsed_sec, 2)} / ${formatNumber(effective.duration_sec, 2)} s`;
+        messageEl.textContent = `초기 위치 이동 중 ${formatNumber(effective.elapsed_sec, 2)} / ${formatNumber(effective.duration_sec, 2)} s · ${visibleText}`;
       } else if (state === 'running') {
-        messageEl.textContent = `모션 중 ${formatNumber(effective.elapsed_sec, 2)} / ${formatNumber(effective.duration_sec, 2)} s`;
+        messageEl.textContent = `모션 중 ${formatNumber(effective.elapsed_sec, 2)} / ${formatNumber(effective.duration_sec, 2)} s · ${visibleText}`;
       } else if (state === 'verifying') {
-        messageEl.textContent = '최종 위치 확인 중';
+        messageEl.textContent = `최종 위치 확인 중 · ${visibleText}`;
       } else if (state === 'completed') {
-        messageEl.textContent = `모션 완료 ${formatNumber(effective.duration_sec, 2)} s`;
+        messageEl.textContent = `모션 완료 ${formatNumber(effective.duration_sec, 2)} s · ${visibleText}`;
       } else {
-        messageEl.textContent = `${formatInt(series.length)}개 motion ID 표시`;
+        messageEl.textContent = visibleText;
       }
     }
   }
@@ -684,7 +719,45 @@ export function createMotionDataController({
       el.motionRunGraphMessage,
       motionRunSelectedMotionFile(),
       motionRunStatus || {},
+      motionRunGraphHiddenIds,
     );
+  }
+
+  function renderMotionRunGraphAxisToggles() {
+    if (!el.motionRunGraphAxisToggles) return;
+    const file = motionRunSelectedMotionFile();
+    const fileId = String(motionRunPayload().motion_file_id || file?.id || '');
+    if (fileId !== motionRunGraphFileId) {
+      motionRunGraphFileId = fileId;
+      motionRunGraphToggleSignature = '';
+      motionRunGraphHiddenIds.clear();
+    }
+    const series = Array.isArray(analysisOf(file)?.graph_series)
+      ? analysisOf(file).graph_series
+      : [];
+    if (!series.length) {
+      if (motionRunGraphToggleSignature !== `${fileId}|empty`) {
+        el.motionRunGraphAxisToggles.innerHTML = '';
+        motionRunGraphToggleSignature = `${fileId}|empty`;
+      }
+      return;
+    }
+    const allVisible = series.every((item) => !motionRunGraphHiddenIds.has(String(item.motion_id)));
+    const noneVisible = series.every((item) => motionRunGraphHiddenIds.has(String(item.motion_id)));
+    const allStateText = allVisible ? 'ON' : (noneVisible ? 'OFF' : '일부');
+    const signature = `${fileId}|${series.map((item) => {
+      const motionId = String(item.motion_id);
+      return `${motionId}:${motionRunGraphHiddenIds.has(motionId) ? '0' : '1'}`;
+    }).join(',')}`;
+    if (signature === motionRunGraphToggleSignature) return;
+    const allButton = `<button type="button" class="motion-run-graph-toggle ${allVisible ? 'active' : ''}" data-motion-run-graph-all="true" aria-pressed="${allVisible}">전체 · ${allStateText}</button>`;
+    const axisButtons = series.map((item) => {
+      const motionId = String(item.motion_id);
+      const visible = !motionRunGraphHiddenIds.has(motionId);
+      return `<button type="button" class="motion-run-graph-toggle ${visible ? 'active' : ''}" data-motion-run-graph-id="${displayText(motionId)}" aria-pressed="${visible}">${displayText(motionId)} · ${visible ? 'ON' : 'OFF'}</button>`;
+    }).join('');
+    el.motionRunGraphAxisToggles.innerHTML = `${allButton}${axisButtons}`;
+    motionRunGraphToggleSignature = signature;
   }
 
   function motionRunNeedsGraphAnimation() {
@@ -725,9 +798,20 @@ export function createMotionDataController({
       { label: '모션 파일', value: runFile?.filename || payload.motion_file_id || '-' },
       { label: '매핑 파일', value: mappingFile?.filename || payload.mapping_file_id || '-' },
       { label: '상태', value: motionRunStateText(status.state) },
-      { label: '초기 이동', value: `${formatNumber(payload.initial_move_time_sec, 0)} s` },
+      {
+        label: '초기 이동',
+        value: payload.initial_move_time_sec === null
+          ? '매핑 축별 설정'
+          : `${formatNumber(payload.initial_move_time_sec, 0)} s 일괄`,
+      },
       { label: '실행 축', value: formatInt(summary.axis_count) },
       { label: '총 시간', value: `${formatNumber(summary.duration_sec, 3)} s` },
+      {
+        label: '연속 동작',
+        value: typeof summary.continuous_available === 'boolean'
+          ? (summary.continuous_available ? '가능' : '불가')
+          : '검사 전',
+      },
       { label: '주기', value: `${formatNumber(summary.period_sec, 3)} s` },
       { label: '주의', value: mismatch ? '매핑 파일의 모션 파일 기준으로 실행' : '-' },
     ]);
@@ -737,26 +821,30 @@ export function createMotionDataController({
     if (!el.motionRunStatus) return;
     const status = motionRunStatus || {};
     const progress = motionRunEffectiveProgress(status);
-    const lifecycle = status.lifecycle || {};
+    const capabilities = status.capabilities || {};
+    const warnings = Array.isArray(status.warnings) ? status.warnings : [];
+    const capabilityText = (capability) => {
+      if (!capability || typeof capability.available !== 'boolean') return '검사 전';
+      return `${capability.available ? '가능' : '불가'} — ${capability.reason || '-'}`;
+    };
     const ratio = Number(progress.ratio);
-    const rows = [
-      ['상태', motionRunStateText(status.state)],
-      ['메시지', status.message || '-'],
-      ['진행', Number.isFinite(ratio) ? `${formatNumber(ratio * 100, 1)} %` : '-'],
-      ['경과 / 전체', `${formatNumber(progress.elapsed_sec, 3)} / ${formatNumber(progress.duration_sec, 3)} s`],
-      ['샘플', formatInt(progress.sample_index)],
-      ['명령 축', formatInt(progress.active_axis_count)],
-      ['검사 시각', timeText(lifecycle.checked_at)],
-      ['초기 시작', timeText(lifecycle.initial_started_at)],
-      ['초기 완료', timeText(lifecycle.initial_finished_at)],
-      ['모션 시작', timeText(lifecycle.motion_started_at)],
-      ['모션 종료', timeText(lifecycle.motion_finished_at)],
-      ['갱신', timeText(status.updated_at)],
-    ];
     el.motionRunStatus.innerHTML = `
-      <table class="motion-state-table">
+      <table class="motion-state-table motion-run-status-table">
         <tbody>
-          ${rows.map(([label, value]) => `<tr><th>${displayText(label)}</th><td>${displayText(value)}</td></tr>`).join('')}
+          <tr>
+            <th>상태</th><td>${displayText(motionRunStateText(status.state))}</td>
+            <th>모드 / 완료</th><td>${displayText(`${status.run_mode === 'continuous' ? '연속' : '1회'} / ${formatInt(status.cycle_count)}회`)}</td>
+          </tr>
+          <tr>
+            <th>진행</th><td>${displayText(Number.isFinite(ratio) ? `${formatNumber(ratio * 100, 1)} %` : '-')}</td>
+            <th>경과 / 전체</th><td>${displayText(`${formatNumber(progress.elapsed_sec, 2)} / ${formatNumber(progress.duration_sec, 2)} s`)}</td>
+          </tr>
+          <tr><th>초기 위치</th><td colspan="3">${displayText(capabilityText(capabilities.initial_position))}</td></tr>
+          <tr><th>1회 모션</th><td colspan="3">${displayText(capabilityText(capabilities.single_run))}</td></tr>
+          <tr><th>연속 모션</th><td colspan="3">${displayText(capabilityText(capabilities.continuous_run))}</td></tr>
+          <tr><th>범위 제한</th><td colspan="3">${displayText(warnings.length ? warnings.join(' / ') : '제한 적용 없음')}</td></tr>
+          <tr><th>메시지</th><td colspan="3">${displayText(status.message || '-')}</td></tr>
+          <tr><th>갱신</th><td colspan="3">${displayText(timeText(status.updated_at))}</td></tr>
         </tbody>
       </table>
     `;
@@ -766,7 +854,7 @@ export function createMotionDataController({
     if (!el.motionRunAxisRows) return;
     const axes = Array.isArray(motionRunStatus?.axes) ? motionRunStatus.axes : [];
     if (!axes.length) {
-      el.motionRunAxisRows.innerHTML = emptyRow(5, '실행 준비 검사를 누르면 표시됩니다');
+      el.motionRunAxisRows.innerHTML = emptyRow(10, '실행 준비 검사를 누르면 표시됩니다');
       return;
     }
     el.motionRunAxisRows.innerHTML = axes.map((axis) => (
@@ -774,8 +862,17 @@ export function createMotionDataController({
         <td class="mono">${displayText(axis.motion_id)}</td>
         <td class="mono">${formatInt(axis.motor_axis)}</td>
         <td>${displayText(axis.motor_type || '-')}</td>
+        <td>${targetText(axis.motion_limit_lower_deg)}</td>
+        <td>${targetText(axis.motion_limit_upper_deg)}</td>
         <td>${axis.initial_enabled === false ? '미사용' : targetText(axis.initial_motor_target_deg)}</td>
         <td>${targetText(axis.target_min_deg)} ~ ${targetText(axis.target_max_deg)}</td>
+        <td>${targetText(axis.loop_start_motion_deg)} / ${targetText(axis.loop_end_motion_deg)}</td>
+        <td>${Number(axis.loop_delta_deg) <= Number(axis.loop_tolerance_deg)
+          ? `가능 (차이 ${targetText(axis.loop_delta_deg)})`
+          : `불가 (차이 ${targetText(axis.loop_delta_deg)}, 허용 ${targetText(axis.loop_tolerance_deg)})`}</td>
+        <td>${axis.motion_clamped
+          ? `${targetText(axis.source_motion_min_deg)} ~ ${targetText(axis.source_motion_max_deg)} → ${targetText(axis.command_motion_min_deg)} ~ ${targetText(axis.command_motion_max_deg)}`
+          : '제한 없음'}</td>
       </tr>`
     )).join('');
   }
@@ -789,6 +886,7 @@ export function createMotionDataController({
     const startReady = state === 'initialized'
       && status.motion_file_id === payload.motion_file_id
       && status.mapping_file_id === payload.mapping_file_id;
+    const continuousAvailable = status.capabilities?.continuous_run?.available === true;
     if (el.motionRunCheckButton) {
       el.motionRunCheckButton.disabled = motionRunLoading || !hasRequiredFiles || running;
     }
@@ -797,6 +895,13 @@ export function createMotionDataController({
     }
     if (el.motionRunStartButton) {
       el.motionRunStartButton.disabled = motionRunLoading || !hasRequiredFiles || running || !startReady;
+    }
+    if (el.motionRunContinuousStartButton) {
+      el.motionRunContinuousStartButton.disabled = motionRunLoading
+        || !hasRequiredFiles || running || !startReady || !continuousAvailable;
+      el.motionRunContinuousStartButton.title = continuousAvailable
+        ? '정지 버튼을 누를 때까지 모션을 반복합니다'
+        : (status.capabilities?.continuous_run?.reason || '실행 준비 검사가 필요합니다');
     }
     if (el.motionRunStopButton) {
       el.motionRunStopButton.disabled = motionRunLoading || !running;
@@ -819,6 +924,7 @@ export function createMotionDataController({
     renderMotionRunStatus();
     renderMotionRunStages();
     renderMotionRunProgressBar();
+    renderMotionRunGraphAxisToggles();
     renderMotionRunGraph();
     updateMotionRunGraphAnimation();
     stopMotionRunGraphAnimationIfIdle();
@@ -862,6 +968,52 @@ export function createMotionDataController({
     }).join('');
   }
 
+  function renderMotionFileGraphAxisToggles(file) {
+    if (!el.motionFileGraphAxisToggles) return;
+    const fileId = String(file?.id || '');
+    if (fileId !== motionFileGraphFileId) {
+      motionFileGraphFileId = fileId;
+      motionFileGraphToggleSignature = '';
+      motionFileGraphHiddenIds.clear();
+    }
+    const series = Array.isArray(analysisOf(file)?.graph_series)
+      ? analysisOf(file).graph_series
+      : [];
+    if (!series.length) {
+      if (motionFileGraphToggleSignature !== `${fileId}|empty`) {
+        el.motionFileGraphAxisToggles.innerHTML = '';
+        motionFileGraphToggleSignature = `${fileId}|empty`;
+      }
+      return;
+    }
+    const allVisible = series.every((item) => !motionFileGraphHiddenIds.has(String(item.motion_id)));
+    const noneVisible = series.every((item) => motionFileGraphHiddenIds.has(String(item.motion_id)));
+    const allStateText = allVisible ? 'ON' : (noneVisible ? 'OFF' : '일부');
+    const signature = `${fileId}|${series.map((item) => {
+      const motionId = String(item.motion_id);
+      return `${motionId}:${motionFileGraphHiddenIds.has(motionId) ? '0' : '1'}`;
+    }).join(',')}`;
+    if (signature === motionFileGraphToggleSignature) return;
+    const allButton = `<button type="button" class="motion-run-graph-toggle ${allVisible ? 'active' : ''}" data-motion-file-graph-all="true" aria-pressed="${allVisible}">전체 · ${allStateText}</button>`;
+    const axisButtons = series.map((item) => {
+      const motionId = String(item.motion_id);
+      const visible = !motionFileGraphHiddenIds.has(motionId);
+      return `<button type="button" class="motion-run-graph-toggle ${visible ? 'active' : ''}" data-motion-file-graph-id="${displayText(motionId)}" aria-pressed="${visible}">${displayText(motionId)} · ${visible ? 'ON' : 'OFF'}</button>`;
+    }).join('');
+    el.motionFileGraphAxisToggles.innerHTML = `${allButton}${axisButtons}`;
+    motionFileGraphToggleSignature = signature;
+  }
+
+  function renderMotionFileGraph(file) {
+    renderMotionFileGraphAxisToggles(file);
+    drawGraph(
+      el.motionFileGraphCanvas,
+      el.motionFileGraphMessage,
+      analysisOf(file),
+      motionFileGraphHiddenIds,
+    );
+  }
+
   function renderSelectedFile() {
     const file = selectedFile;
     const analysis = analysisOf(file);
@@ -873,7 +1025,7 @@ export function createMotionDataController({
       if (el.motionFileValidation) el.motionFileValidation.innerHTML = '파일을 선택하세요';
       if (el.motionFileMotionIdRows) el.motionFileMotionIdRows.innerHTML = emptyRow(8, '파일을 선택하세요');
       if (el.motionFilePreviewRows) el.motionFilePreviewRows.textContent = '파일을 선택하세요';
-      drawGraph(el.motionFileGraphCanvas, el.motionFileGraphMessage, null);
+      renderMotionFileGraph(null);
       return;
     }
 
@@ -891,7 +1043,7 @@ export function createMotionDataController({
     if (el.motionFileValidation) el.motionFileValidation.innerHTML = validationHtml(analysis);
     if (el.motionFileMotionIdRows) el.motionFileMotionIdRows.innerHTML = motionIdRowsHtml(analysis);
     if (el.motionFilePreviewRows) el.motionFilePreviewRows.textContent = previewText(file, analysis);
-    drawGraph(el.motionFileGraphCanvas, el.motionFileGraphMessage, analysis);
+    renderMotionFileGraph(file);
   }
 
   function renderMappingSelect() {
@@ -975,15 +1127,18 @@ export function createMotionDataController({
     if (!el.motionMappingRows) return;
     const rows = Array.isArray(mappingDraft.mappings) ? mappingDraft.mappings : [];
     if (!rows.length) {
-      el.motionMappingRows.innerHTML = emptyRow(17, '모션 파일을 선택하고 Motion ID를 반영하세요');
+      el.motionMappingRows.innerHTML = emptyRow(16, '모션 파일을 선택하고 Motion ID를 반영하세요');
       return;
     }
     const duplicateCounts = mappingDuplicateAxisCounts();
     el.motionMappingRows.innerHTML = rows.map((row) => {
       const status = mappingValidationRowStatus(row, mappingRowStatus(row, duplicateCounts));
       const initialMode = row.initial_mode || 'first_frame';
-      const referenceDisabled = row.reference_enabled === false;
+      row.reference_enabled = true;
+      const referenceDisabled = false;
       const initialDisabled = row.initial_enabled === false;
+      const initialTimeOverridden = motionRunInitialMoveTimeSec() !== null;
+      const initialMoveTimeDisabled = initialDisabled || initialTimeOverridden;
       const firstFrameInitial = initialMode === 'first_frame';
       const initialPositionDisabled = initialDisabled || firstFrameInitial;
       const dynamixelGearFixed = isDynamixelMappingRow(row);
@@ -993,6 +1148,9 @@ export function createMotionDataController({
       const gearRatioValue = mappingGearRatioValue(row);
       const referenceDisabledAttr = referenceDisabled ? ' disabled' : '';
       const initialDisabledAttr = initialDisabled ? ' disabled' : '';
+      const initialMoveTimeDisabledAttr = initialMoveTimeDisabled
+        ? ` disabled title="${initialTimeOverridden ? '모션 동작 탭의 초기 이동 시간이 일괄 적용됩니다' : '초기 위치 이동이 비활성화되어 있습니다'}"`
+        : '';
       const initialPositionDisabledAttr = initialPositionDisabled ? ' disabled' : '';
       const gearRatioDisabledAttr = dynamixelGearFixed ? ' disabled title="Dynamixel은 감속비를 사용하지 않으며 1로 고정됩니다"' : '';
       return (
@@ -1001,7 +1159,6 @@ export function createMotionDataController({
           <td><input type="checkbox" data-motion-mapping-field="enabled" ${row.enabled ? 'checked' : ''}></td>
           <td>${motorSelectHtml(row)}</td>
           <td class="mapping-number-cell ${dynamixelGearFixed ? 'mapping-disabled-cell' : ''}"><input class="numeric-input mapping-number-input" type="number" min="0.0001" step="0.0001" data-motion-mapping-field="gear_ratio" value="${displayText(gearRatioValue)}"${gearRatioDisabledAttr}></td>
-          <td><input type="checkbox" data-motion-mapping-field="reference_enabled" ${row.reference_enabled !== false ? 'checked' : ''}></td>
           <td class="mapping-number-cell ${referenceDisabled ? 'mapping-disabled-cell' : ''}"><input class="numeric-input mapping-number-input" type="number" step="0.001" data-motion-mapping-field="reference_position_deg" value="${displayText(referencePositionValue)}"${referenceDisabledAttr}></td>
           <td class="${referenceDisabled ? 'mapping-disabled-cell' : ''}"><button class="mapping-mini-button" type="button" data-motion-mapping-action="capture_reference"${referenceDisabledAttr}>캡처</button></td>
           <td class="mapping-number-cell"><input class="numeric-input mapping-number-input" type="number" step="0.001" data-motion-mapping-field="motion_lower_deg" value="${displayText(row.motion_lower_deg)}"></td>
@@ -1014,7 +1171,7 @@ export function createMotionDataController({
             </select>
           </td>
           <td class="mapping-number-cell ${initialPositionDisabled ? 'mapping-disabled-cell' : ''}"><input class="numeric-input mapping-number-input" type="number" step="0.001" data-motion-mapping-field="initial_motion_position_deg" value="${displayText(initialPositionValue)}"${initialPositionDisabledAttr}></td>
-          <td class="mapping-number-cell ${initialDisabled ? 'mapping-disabled-cell' : ''}"><input class="numeric-input mapping-number-input" type="number" min="0.001" step="0.001" data-motion-mapping-field="initial_move_time_sec" value="${displayText(initialMoveTimeValue)}"${initialDisabledAttr}></td>
+          <td class="mapping-number-cell ${initialMoveTimeDisabled ? 'mapping-disabled-cell' : ''}"><input class="numeric-input mapping-number-input" type="number" min="0.001" step="0.001" data-motion-mapping-field="initial_move_time_sec" value="${displayText(initialMoveTimeValue)}"${initialMoveTimeDisabledAttr}></td>
           <td><input type="checkbox" data-motion-mapping-field="invert" ${row.invert ? 'checked' : ''}></td>
           <td class="mapping-number-cell"><input class="numeric-input mapping-number-input" type="number" step="0.001" data-motion-mapping-field="offset_deg" value="${displayText(row.offset_deg)}"></td>
           <td class="mapping-number-cell"><input class="numeric-input mapping-number-input" type="number" step="0.0001" data-motion-mapping-field="scale" value="${displayText(row.scale)}"></td>
@@ -1209,7 +1366,7 @@ export function createMotionDataController({
         initial_motion_position_deg: previousMode === 'first_frame'
           ? firstValue
           : numericOr(previous?.initial_motion_position_deg, firstValue),
-        initial_move_time_sec: numericOr(previous?.initial_move_time_sec, 2.0),
+        initial_move_time_sec: numericOr(previous?.initial_move_time_sec, 5.0),
         invert: previous?.invert ?? false,
         offset_deg: numericOr(previous?.offset_deg, 0.0),
         scale: numericOr(previous?.scale, 1.0),
@@ -1441,7 +1598,7 @@ export function createMotionDataController({
       }
       if (field === 'initial_enabled' && row.initial_enabled) {
         if (!Number.isFinite(Number(row.initial_move_time_sec)) || Number(row.initial_move_time_sec) <= 0) {
-          row.initial_move_time_sec = 2.0;
+          row.initial_move_time_sec = 5.0;
         }
         if ((row.initial_mode || 'first_frame') === 'first_frame') {
           const firstValue = firstMotionValueFor(row.motion_id);
@@ -1470,7 +1627,7 @@ export function createMotionDataController({
       || field === 'initial_move_time_sec'
     ) {
       const number = Number(value);
-      const fallback = field === 'scale' || field === 'gear_ratio' ? 1.0 : field === 'initial_move_time_sec' ? 2.0 : 0.0;
+      const fallback = field === 'scale' || field === 'gear_ratio' ? 1.0 : field === 'initial_move_time_sec' ? 5.0 : 0.0;
       row[field] = Number.isFinite(number) ? number : fallback;
       if (field === 'gear_ratio' && isDynamixelMappingRow(row)) {
         row.gear_ratio = 1.0;
@@ -1661,15 +1818,18 @@ export function createMotionDataController({
     }
   }
 
-  async function startCurrentMotionRun() {
-    const confirmed = window.confirm('현재 선택된 모션 파일과 매핑 파일로 모션을 시작합니다.');
+  async function startCurrentMotionRun(runMode = 'once') {
+    const continuous = runMode === 'continuous';
+    const confirmed = window.confirm(continuous
+      ? '초기 위치 이동이 완료된 상태에서 연속 모션을 시작합니다. 정지 버튼을 누를 때까지 반복합니다.'
+      : '현재 선택된 모션 파일과 매핑 파일로 모션을 1회 시작합니다.');
     if (!confirmed) return;
     motionRunLoading = true;
     setMotionRunMessage('모션 시작 요청 중');
     renderMotionRunPanel();
     try {
       await ensureMotionRunMotionFileDetail();
-      const payload = await startMotionRun(motionRunPayload());
+      const payload = await startMotionRun({ ...motionRunPayload(), run_mode: runMode });
       motionRunStatus = payload.status || motionRunStatus || null;
       motionRunLastResult = payload;
       setMotionRunMessage(payload.message || (payload.success ? '모션 실행 시작' : '모션 실행 실패'));
@@ -1714,6 +1874,28 @@ export function createMotionDataController({
         selectFile(target.dataset.motionFileId);
       });
     }
+    if (el.motionFileGraphAxisToggles) {
+      el.motionFileGraphAxisToggles.addEventListener('click', (event) => {
+        const button = event.target.closest('button');
+        if (!button) return;
+        event.preventDefault();
+        const series = Array.isArray(analysisOf(selectedFile)?.graph_series)
+          ? analysisOf(selectedFile).graph_series
+          : [];
+        if (button.dataset.motionFileGraphAll === 'true') {
+          const allVisible = series.every((item) => !motionFileGraphHiddenIds.has(String(item.motion_id)));
+          motionFileGraphHiddenIds.clear();
+          if (allVisible) {
+            series.forEach((item) => motionFileGraphHiddenIds.add(String(item.motion_id)));
+          }
+        } else if (button.dataset.motionFileGraphId !== undefined) {
+          const motionId = String(button.dataset.motionFileGraphId);
+          if (motionFileGraphHiddenIds.has(motionId)) motionFileGraphHiddenIds.delete(motionId);
+          else motionFileGraphHiddenIds.add(motionId);
+        }
+        renderMotionFileGraph(selectedFile);
+      });
+    }
     if (el.uploadMotionFileButton) {
       el.uploadMotionFileButton.addEventListener('click', uploadSelectedFile);
     }
@@ -1730,7 +1912,10 @@ export function createMotionDataController({
       el.motionRunInitializeButton.addEventListener('click', initializeCurrentMotionRun);
     }
     if (el.motionRunStartButton) {
-      el.motionRunStartButton.addEventListener('click', startCurrentMotionRun);
+      el.motionRunStartButton.addEventListener('click', () => startCurrentMotionRun('once'));
+    }
+    if (el.motionRunContinuousStartButton) {
+      el.motionRunContinuousStartButton.addEventListener('click', () => startCurrentMotionRun('continuous'));
     }
     if (el.motionRunStopButton) {
       el.motionRunStopButton.addEventListener('click', stopCurrentMotionRun);
@@ -1738,8 +1923,35 @@ export function createMotionDataController({
     if (el.motionRunRefreshButton) {
       el.motionRunRefreshButton.addEventListener('click', refreshMotionRunStatus);
     }
+    if (el.motionRunGraphAxisToggles) {
+      el.motionRunGraphAxisToggles.addEventListener('click', (event) => {
+        const button = event.target.closest('button');
+        if (!button) return;
+        event.preventDefault();
+        const file = motionRunSelectedMotionFile();
+        const series = Array.isArray(analysisOf(file)?.graph_series)
+          ? analysisOf(file).graph_series
+          : [];
+        if (button.dataset.motionRunGraphAll === 'true') {
+          const allVisible = series.every((item) => !motionRunGraphHiddenIds.has(String(item.motion_id)));
+          motionRunGraphHiddenIds.clear();
+          if (allVisible) {
+            series.forEach((item) => motionRunGraphHiddenIds.add(String(item.motion_id)));
+          }
+        } else if (button.dataset.motionRunGraphId !== undefined) {
+          const motionId = String(button.dataset.motionRunGraphId);
+          if (motionRunGraphHiddenIds.has(motionId)) motionRunGraphHiddenIds.delete(motionId);
+          else motionRunGraphHiddenIds.add(motionId);
+        }
+        renderMotionRunGraphAxisToggles();
+        renderMotionRunGraph();
+      });
+    }
     if (el.motionRunInitialMoveTime) {
-      el.motionRunInitialMoveTime.addEventListener('change', renderMotionRunPanel);
+      el.motionRunInitialMoveTime.addEventListener('change', () => {
+        renderMotionRunPanel();
+        renderMappingPanel();
+      });
     }
     if (el.motionFileInput) {
       el.motionFileInput.addEventListener('change', () => {

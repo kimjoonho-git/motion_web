@@ -1,1 +1,1 @@
-import './js/main.js?v=20260706-motor-error-popup';
+import './js/main.js?v=20260714-midi-readonly';

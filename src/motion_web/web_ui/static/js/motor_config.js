@@ -58,6 +58,7 @@ export function createMotorConfigController({
   let motorConfigRawText = '';
   let savedMotorConfigRawText = '';
   let motorConfigFilePath = '';
+  let motorConfigFileNameDraft = '';
   let configTableDrafts = new Map();
   let selectedConfigMotorId = '';
   let lastConfigTableRenderSignature = '';
@@ -94,8 +95,21 @@ export function createMotorConfigController({
     return String(savedMotorConfigRawText || '') !== String(motorConfigRawText || '');
   }
 
+  function normalizedMotorConfigFileName() {
+    return String(motorConfigFileNameDraft || '').trim();
+  }
+
+  function hasMotorConfigFileNameChanges() {
+    const draft = normalizedMotorConfigFileName();
+    return Boolean(draft) && draft !== pathBasename(motorConfigFilePath);
+  }
+
+  function hasMotorConfigTableSaveChanges() {
+    return hasMotorConfigDataChanges() || hasMotorConfigFileNameChanges();
+  }
+
   function hasAnyConfigChanges() {
-    return hasAxisChanges() || hasMotorConfigDataChanges();
+    return hasAxisChanges() || hasMotorConfigTableSaveChanges();
   }
 
   function getWorkContext() {
@@ -427,9 +441,17 @@ export function createMotorConfigController({
 
   function updateConfigTableButtonState() {
     if (el.updateConfigTableButton) {
-      el.updateConfigTableButton.disabled = true;
-      el.updateConfigTableButton.textContent = '읽기 전용';
+      el.updateConfigTableButton.disabled = !hasConfigTableDrafts();
+      el.updateConfigTableButton.textContent = '표 업데이트';
     }
+    if (el.saveConfigTableButton) {
+      el.saveConfigTableButton.disabled = hasConfigTableDrafts() || !hasMotorConfigTableSaveChanges();
+      el.saveConfigTableButton.textContent = hasConfigTableDrafts() ? '표 업데이트 필요' : '파일 저장';
+    }
+  }
+
+  function pathBasename(path) {
+    return String(path || '').split(/[\\/]/).filter(Boolean).pop() || '';
   }
 
   function yamlPathText(tokens) {
@@ -589,7 +611,50 @@ export function createMotorConfigController({
   }
 
   function configTableInput(row) {
-    return `<span class="mono config-readonly-value">${displayText(yamlDisplayValue(row.value, row.type))}</span>`;
+    const draft = configTableDrafts.get(row.path);
+    const value = draft ? draft.value : row.value;
+    if (!isEditableConfigRow(row)) {
+      return `<span class="mono config-readonly-value">${displayText(yamlDisplayValue(value, row.type))}</span>`;
+    }
+    const inputType = row.type === 'number' ? 'number' : 'text';
+    const step = configInputStep(row);
+    return `
+      <input
+        class="config-value-input ${row.type === 'number' ? 'mono' : ''}"
+        data-config-path="${escapeHtml(row.path)}"
+        type="${inputType}"
+        ${step ? `step="${step}"` : ''}
+        value="${escapeHtml(String(value ?? ''))}"
+      >
+    `;
+  }
+
+  function isEditableConfigRow(row) {
+    const item = yamlItemName(row);
+    const path = String(row?.path || '');
+    if (/^masters\[\d+\]\.slaves\[\d+\]\./.test(path)) {
+      return ['controller_index', 'name', 'position'].includes(item);
+    }
+    if (/^drivers\[\d+\]\./.test(path)) {
+      return [
+        'lower',
+        'upper',
+        'speed',
+        'acceleration',
+        'deceleration',
+        'profile_velocity',
+        'profile_acceleration',
+        'profile_deceleration',
+      ].includes(item);
+    }
+    return false;
+  }
+
+  function configInputStep(row) {
+    const item = yamlItemName(row);
+    if (['controller_index', 'position'].includes(item)) return '1';
+    if (row.type === 'number') return '0.001';
+    return null;
   }
 
   function configMotorFromYamlSlavePrefix(rows, slavePrefix, index) {
@@ -904,6 +969,9 @@ export function createMotorConfigController({
     if (el.motorConfigTablePath) {
       el.motorConfigTablePath.textContent = `설정 파일: ${motorConfigFilePath || '-'}`;
     }
+    if (el.motorConfigFileNameInput && document.activeElement !== el.motorConfigFileNameInput) {
+      el.motorConfigFileNameInput.value = motorConfigFileNameDraft || pathBasename(motorConfigFilePath);
+    }
     const rows = yamlScalarRows();
     const motors = configAxisMotors(rows);
     const globalRows = globalConfigRows(rows);
@@ -932,7 +1000,9 @@ export function createMotorConfigController({
     const renderSignature = JSON.stringify({
       raw: motorConfigRawText,
       file: motorConfigFilePath,
+      fileName: motorConfigFileNameDraft,
       selectedConfigMotorId,
+      drafts: [...configTableDrafts.entries()],
     });
 
     if (renderSignature === lastConfigTableRenderSignature) {
@@ -1004,10 +1074,13 @@ export function createMotorConfigController({
   function setConfigTableDraft(motorId, field, value) {
     if (!motorId) return;
     const row = yamlScalarRows().find((item) => item.path === motorId);
-    if (!row || row.readonly) return;
+    if (!row || !isEditableConfigRow(row)) return;
     configTableDrafts.set(motorId, {
       value,
       tokens: row.tokens,
+      lineIndex: row.lineIndex,
+      prefix: row.prefix,
+      comment: row.comment,
       originalType: row.type,
       originalValue: row.value,
     });
@@ -1033,7 +1106,7 @@ export function createMotorConfigController({
         errors.push(`${path} 값은 숫자여야 합니다.`);
         return null;
       }
-      if (Number.isInteger(draft.originalValue) && !Number.isInteger(parsed)) {
+      if (/^-?\d+$/.test(String(draft.originalValue ?? '').trim()) && !Number.isInteger(parsed)) {
         errors.push(`${path} 값은 정수여야 합니다.`);
         return null;
       }
@@ -1082,7 +1155,9 @@ export function createMotorConfigController({
     motorConfigRawText = lines.join('\n');
     configTableDrafts = new Map();
     lastAxisRenderSignature = '';
-    setAxisMessage('설정 파일 표 업데이트 완료. 저장하려면 축 설정 저장을 누르세요.');
+    lastConfigTableRenderSignature = '';
+    lastConfigRawTextRenderSignature = '';
+    setAxisMessage('설정 파일 표 업데이트 완료. 저장하려면 파일 저장을 누르세요.');
     renderAxisSettings();
   }
 
@@ -1405,6 +1480,7 @@ export function createMotorConfigController({
     motorConfigRawText = String(payload.content || '');
     savedMotorConfigRawText = motorConfigRawText;
     motorConfigFilePath = String(payload.config_file || '');
+    motorConfigFileNameDraft = pathBasename(motorConfigFilePath);
     lastConfigTableRenderSignature = '';
     lastConfigRawTextRenderSignature = '';
     if (el.motorConfigState) {
@@ -1505,10 +1581,16 @@ export function createMotorConfigController({
     setAxisMessage('축 설정 저장 중');
 
     try {
+      if (hasConfigTableDrafts()) {
+        setStatusMessage('표 업데이트 필요');
+        setAxisMessage('파일 저장 전 표 업데이트를 먼저 누르세요.');
+        return false;
+      }
+      const fileName = normalizedMotorConfigFileName() || pathBasename(motorConfigFilePath);
       const payload = await saveMotorConfig(
-        hasMotorConfigDataChanges()
-          ? { content: motorConfigRawText }
-          : { registry: saveableAxisRegistry(axisConfig) },
+        hasMotorConfigTableSaveChanges()
+          ? { content: motorConfigRawText, file_name: fileName }
+          : { registry: saveableAxisRegistry(axisConfig), file_name: fileName },
       );
       if (!payload.success) {
         const message = uiMessage(payload.message, '축 설정 저장 실패');
@@ -1785,6 +1867,35 @@ export function createMotorConfigController({
     return latestScan;
   }
 
+  function getDiscoverySummary() {
+    const ethercatScan = latestScan?.ethercat_scan;
+    const dynamixelScan = latestScan?.dynamixel_scan;
+    const ethercatScanned = Boolean(ethercatScan && !ethercatScan.skipped);
+    const dynamixelScanned = Boolean(dynamixelScan && !dynamixelScan.skipped);
+    const ethercatCount = ethercatScanned && Array.isArray(ethercatScan.slaves)
+      ? ethercatScan.slaves.length
+      : 0;
+    const dynamixelCount = dynamixelScanned && Array.isArray(dynamixelScan.devices)
+      ? dynamixelScan.devices.length
+      : 0;
+    const connectionSummary = latestScan?.connection_summary || {};
+    const connectionRows = Array.isArray(latestScan?.connection_rows)
+      ? latestScan.connection_rows
+      : [];
+    return {
+      hasDirectScan: ethercatScanned || dynamixelScanned,
+      ethercatScanned,
+      dynamixelScanned,
+      ethercatCount,
+      dynamixelCount,
+      connectedCount: Number(connectionSummary.online || 0),
+      discoveredCount: ethercatCount + dynamixelCount,
+      connectionSummary,
+      connectionRows,
+      scannedAt: Number(latestScan?.scanned_at || 0),
+    };
+  }
+
   function renderScan(scan) {
     latestScan = scan;
     renderAxisSettings();
@@ -1833,7 +1944,11 @@ export function createMotorConfigController({
       : '없음';
     const warningText = dynamixelScan.warning ? ` / ${dynamixelScan.warning}` : '';
     const errorText = dynamixelScan.error ? ` / ${dynamixelScan.error}` : '';
-    el.dynamixelScanResult.textContent = `Dynamixel Wizard scan 결과: 후보 ${formatInt(targetCount)}개 (${targetText}), 감지 ${formatInt(devices.length)}개, ${deviceText}${warningText}${errorText}`;
+    if (dynamixelScan.mode === 'runtime_topic') {
+      el.dynamixelScanResult.textContent = `Dynamixel 런타임 연결 확인: 온라인 피드백 ${formatInt(devices.length)}개, ${deviceText} / 실행 중인 제어기의 피드백 기준${warningText}${errorText}`;
+    } else {
+      el.dynamixelScanResult.textContent = `Dynamixel 직접 Ping 결과: 후보 ${formatInt(targetCount)}개 (${targetText}), 감지 ${formatInt(devices.length)}개, ${deviceText}${warningText}${errorText}`;
+    }
   }
 
   async function scanMotors() {
@@ -1863,7 +1978,7 @@ export function createMotorConfigController({
     el.dynamixelScanButton.disabled = true;
     const originalText = el.dynamixelScanButton.textContent;
     el.dynamixelScanButton.textContent = 'Scanning';
-    if (el.dynamixelScanResult) el.dynamixelScanResult.textContent = 'Dynamixel Wizard scan 중';
+    if (el.dynamixelScanResult) el.dynamixelScanResult.textContent = 'Dynamixel 연결 확인 중';
     try {
       const payload = await requestDynamixelScan();
       renderDynamixelScan(mergeDynamixelScan(payload.scan));
@@ -1871,7 +1986,7 @@ export function createMotorConfigController({
       if (payload.motion_state) renderLatestState(payload.motion_state);
       el.dynamixelScanButton.textContent = payload.success ? 'Scan Complete' : 'Scan Failed';
     } catch (error) {
-      if (el.dynamixelScanResult) el.dynamixelScanResult.textContent = 'Dynamixel Wizard scan 실패';
+      if (el.dynamixelScanResult) el.dynamixelScanResult.textContent = 'Dynamixel 연결 확인 실패';
       el.dynamixelScanButton.textContent = 'Scan Failed';
     } finally {
       setTimeout(() => {
@@ -1959,8 +2074,16 @@ export function createMotorConfigController({
     if (el.toggleAxisButton) el.toggleAxisButton.addEventListener('click', toggleSelectedAxis);
     if (el.sortAxisButton) el.sortAxisButton.addEventListener('click', sortAxisNumbers);
     if (el.saveAxisConfigButton) el.saveAxisConfigButton.addEventListener('click', saveAxisConfig);
+    if (el.saveConfigTableButton) el.saveConfigTableButton.addEventListener('click', saveAxisConfig);
     if (el.applyAxisConfigButton) el.applyAxisConfigButton.addEventListener('click', applyConfigRestart);
     if (el.updateConfigTableButton) el.updateConfigTableButton.addEventListener('click', applyConfigTableUpdates);
+    if (el.motorConfigFileNameInput) {
+      el.motorConfigFileNameInput.addEventListener('input', (event) => {
+        motorConfigFileNameDraft = event.target.value || '';
+        setAxisMessage('파일명 변경값은 파일 저장을 누르면 적용됩니다.');
+        renderAxisSettings();
+      });
+    }
     if (el.reloadMotorConfigButton) el.reloadMotorConfigButton.addEventListener('click', fetchRegistry);
     if (el.scanButton) el.scanButton.addEventListener('click', scanMotors);
     if (el.dynamixelScanButton) el.dynamixelScanButton.addEventListener('click', scanDynamixel);
@@ -1969,6 +2092,7 @@ export function createMotorConfigController({
   return {
     bindEvents,
     fetchRegistry,
+    getDiscoverySummary,
     getWorkContext,
     getRegistryCount: () => activeVisibleAxisMotors().length,
     renderAfterDisplayModeChange,

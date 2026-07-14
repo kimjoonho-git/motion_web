@@ -6,6 +6,7 @@ import socket
 import subprocess
 import threading
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -81,6 +82,18 @@ class MotionWebBridge(Node):
             'motion_run_status_topic',
             '/motion_control/motion_run_status',
         ).value
+        self.midi_monitor_state_topic = self.declare_parameter(
+            'midi_monitor_state_topic',
+            '/motion_web/midi_monitor/state',
+        ).value
+        self.midi_monitor_request_topic = self.declare_parameter(
+            'midi_monitor_request_topic',
+            '/motion_web/midi_monitor/request',
+        ).value
+        self.midi_monitor_response_topic = self.declare_parameter(
+            'midi_monitor_response_topic',
+            '/motion_web/midi_monitor/response',
+        ).value
         self.max_jog_delta_deg = float(
             self.declare_parameter('max_jog_delta_deg', 360.0).value
         )
@@ -91,6 +104,9 @@ class MotionWebBridge(Node):
         self.motor_config_file = Path(
             str(self.declare_parameter('motor_config_file', str(default_config)).value)
         ).expanduser()
+        self.motor_config_selection_file = (
+            self.motor_config_file.parent / 'selected_motor_config_path.txt'
+        )
         default_restart_script = Path('/home/joonho_test/ros2_ws/scripts/restart_motion_monitor.sh')
         self.restart_script = Path(
             str(self.declare_parameter('restart_script', str(default_restart_script)).value)
@@ -101,6 +117,19 @@ class MotionWebBridge(Node):
         ).expanduser()
         self.motion_files_dir = self.motion_data_dir / 'files'
         self.motion_files_dir.mkdir(parents=True, exist_ok=True)
+        default_event_log_dir = Path('/home/joonho_test/ros2_ws/log/motor_events')
+        self.event_log_dir = Path(
+            str(self.declare_parameter('event_log_dir', str(default_event_log_dir)).value)
+        ).expanduser()
+        self.event_log_dir.mkdir(parents=True, exist_ok=True)
+        self.event_log_retention_days = max(
+            1,
+            int(self.declare_parameter('event_log_retention_days', 30).value),
+        )
+        self.event_log_max_bytes = max(
+            1024 * 1024,
+            int(self.declare_parameter('event_log_max_bytes', 100 * 1024 * 1024).value),
+        )
         self.web_publish_hz = float(self.declare_parameter('web_publish_hz', 10.0).value)
         self._web_access = self._build_web_access_info()
 
@@ -116,6 +145,12 @@ class MotionWebBridge(Node):
         self._motion_run_lock = threading.Lock()
         self._motion_run_results: Dict[str, Dict[str, Any]] = {}
         self._motion_run_status: Dict[str, Any] = {}
+        self._midi_monitor_lock = threading.Lock()
+        self._midi_monitor_status: Dict[str, Any] = {}
+        self._midi_monitor_results: Dict[str, Dict[str, Any]] = {}
+        self._event_log_lock = threading.RLock()
+        self._active_motor_errors: Dict[str, str] = {}
+        self._last_motion_run_state: Optional[str] = None
 
         self._subscription = self.create_subscription(
             String,
@@ -137,6 +172,11 @@ class MotionWebBridge(Node):
         self._motion_run_request_publisher = self.create_publisher(
             String,
             self.motion_run_request_topic,
+            10,
+        )
+        self._midi_monitor_request_publisher = self.create_publisher(
+            String,
+            self.midi_monitor_request_topic,
             10,
         )
         self._jog_result_subscription = self.create_subscription(
@@ -167,6 +207,18 @@ class MotionWebBridge(Node):
             String,
             self.motion_run_status_topic,
             self._motion_run_status_callback,
+            10,
+        )
+        self._midi_monitor_state_subscription = self.create_subscription(
+            String,
+            self.midi_monitor_state_topic,
+            self._midi_monitor_state_callback,
+            10,
+        )
+        self._midi_monitor_response_subscription = self.create_subscription(
+            String,
+            self.midi_monitor_response_topic,
+            self._midi_monitor_response_callback,
             10,
         )
 
@@ -200,6 +252,7 @@ class MotionWebBridge(Node):
         with self._lock:
             self._motion_state = payload
             self._motion_state_received_at = time.time()
+        self._record_motor_error_transitions(payload)
 
     def _jog_result_callback(self, msg: String) -> None:
         try:
@@ -297,6 +350,8 @@ class MotionWebBridge(Node):
             ]
             for key in stale_keys:
                 self._motion_run_results.pop(key, None)
+        if isinstance(status, dict):
+            self._record_motion_run_transition(status)
 
     def _motion_run_status_callback(self, msg: String) -> None:
         try:
@@ -308,6 +363,43 @@ class MotionWebBridge(Node):
             return
         with self._motion_run_lock:
             self._motion_run_status = payload
+        self._record_motion_run_transition(payload)
+
+    def _midi_monitor_state_callback(self, msg: String) -> None:
+        try:
+            payload = json.loads(msg.data)
+        except json.JSONDecodeError:
+            self.get_logger().warn(f'Invalid {self.midi_monitor_state_topic} JSON received.')
+            return
+        if not isinstance(payload, dict):
+            return
+        payload['_bridge_received_at'] = time.time()
+        with self._midi_monitor_lock:
+            self._midi_monitor_status = payload
+
+    def _midi_monitor_response_callback(self, msg: String) -> None:
+        try:
+            payload = json.loads(msg.data)
+        except json.JSONDecodeError:
+            self.get_logger().warn(f'Invalid {self.midi_monitor_response_topic} JSON received.')
+            return
+        if not isinstance(payload, dict):
+            return
+        request_id = str(payload.get('request_id') or '')
+        if not request_id:
+            return
+        payload['_bridge_received_at'] = time.time()
+        with self._midi_monitor_lock:
+            self._midi_monitor_results[request_id] = payload
+            if payload.get('success') and isinstance(payload.get('channels'), list):
+                self._midi_monitor_status = dict(payload)
+            cutoff = time.time() - 20.0
+            stale_keys = [
+                key for key, value in self._midi_monitor_results.items()
+                if float(value.get('_bridge_received_at') or 0.0) < cutoff
+            ]
+            for key in stale_keys:
+                self._midi_monitor_results.pop(key, None)
 
     def _wait_for_jog_result(
         self,
@@ -373,12 +465,33 @@ class MotionWebBridge(Node):
         with self._motion_run_lock:
             return self._motion_run_results.pop(request_id, None)
 
+    def _wait_for_midi_monitor_result(
+        self,
+        request_id: str,
+        timeout_sec: float = 2.0,
+    ) -> Optional[Dict[str, Any]]:
+        deadline = time.time() + timeout_sec
+        while time.time() < deadline:
+            with self._midi_monitor_lock:
+                result = self._midi_monitor_results.pop(request_id, None)
+            if result is not None:
+                return result
+            time.sleep(0.01)
+        with self._midi_monitor_lock:
+            return self._midi_monitor_results.pop(request_id, None)
+
     def snapshot(self) -> Dict[str, Any]:
         with self._lock:
             motion_state = self._motion_state
             received_at = self._motion_state_received_at
         with self._motion_run_lock:
             motion_run_status = dict(self._motion_run_status) if self._motion_run_status else {}
+        with self._midi_monitor_lock:
+            midi_monitor = dict(self._midi_monitor_status) if self._midi_monitor_status else {}
+        midi_received_at = midi_monitor.pop('_bridge_received_at', None)
+        if midi_received_at is not None and time.time() - float(midi_received_at) > 1.0:
+            midi_monitor['connected'] = False
+            midi_monitor['message'] = 'MIDI 모니터 노드 상태 수신 중단'
 
         return {
             'bridge_state': 'ok',
@@ -390,7 +503,229 @@ class MotionWebBridge(Node):
             },
             'web_access': self._web_access,
             'motion_run_status': motion_run_status,
+            'midi_monitor': midi_monitor,
             'motion_state': motion_state,
+        }
+
+    def _record_motor_error_transitions(self, payload: Dict[str, Any]) -> None:
+        motors = payload.get('motors')
+        if not isinstance(motors, list):
+            return
+
+        current_errors: Dict[str, str] = {}
+        new_events: List[Dict[str, Any]] = []
+        with self._event_log_lock:
+            previous_errors = dict(self._active_motor_errors)
+            for motor in motors:
+                if not isinstance(motor, dict):
+                    continue
+                axis = self._optional_int(motor.get('controller_index'), None)
+                if axis is None:
+                    continue
+                errorcode = self._optional_int(motor.get('errorcode'), 0) or 0
+                statusword = self._optional_int(motor.get('statusword'), 0) or 0
+                fault = bool(motor.get('fault')) or errorcode != 0 or bool(statusword & 0x0008)
+                if not fault:
+                    continue
+
+                error_hex = str(motor.get('errorcode_hex') or f'0x{errorcode & 0xFFFF:04X}')
+                error_text = str(
+                    motor.get('error_text')
+                    or motor.get('status_text')
+                    or '모터 오류 상태'
+                )
+                signature = f'{error_hex}|{statusword & 0x0008}|{error_text}'
+                axis_key = str(axis)
+                current_errors[axis_key] = signature
+                if previous_errors.get(axis_key) == signature:
+                    continue
+
+                name = str(motor.get('display_name') or f'Axis {axis}')
+                new_events.append({
+                    'category': 'error',
+                    'event_type': 'motor_error',
+                    'target': f'Axis {axis} · {name}',
+                    'content': f'{error_hex} {error_text}',
+                    'details': {
+                        'axis': axis,
+                        'name': name,
+                        'motor_type': str(motor.get('motor_type_label') or motor.get('motor_type') or ''),
+                        'errorcode': errorcode,
+                        'errorcode_hex': error_hex,
+                        'error_text': error_text,
+                        'statusword': statusword,
+                    },
+                })
+            self._active_motor_errors = current_errors
+
+        for event in new_events:
+            self._append_motor_event(**event)
+
+    def _record_motion_run_transition(self, status: Dict[str, Any]) -> None:
+        state = str(status.get('state') or 'idle')
+        with self._event_log_lock:
+            previous_state = self._last_motion_run_state
+            self._last_motion_run_state = state
+        if previous_state is None or previous_state == state:
+            return
+
+        motion_file = str(status.get('motion_file_id') or '-')
+        mapping_file = str(status.get('mapping_file_id') or '-')
+        axes = status.get('axes') if isinstance(status.get('axes'), list) else []
+        target = f'{motion_file} · {len(axes)}축'
+        details = {
+            'previous_state': previous_state,
+            'state': state,
+            'motion_file_id': motion_file,
+            'mapping_file_id': mapping_file,
+            'axis_count': len(axes),
+            'run_mode': str(status.get('run_mode') or 'once'),
+        }
+
+        if state == 'initializing' and previous_state != 'initializing':
+            self._append_motor_event(
+                category='initial_position',
+                event_type='initial_position_started',
+                target=target,
+                content=f'초기 위치 이동 시작 · 매핑 {mapping_file}',
+                details=details,
+            )
+
+        if previous_state == 'initializing' and state != 'initializing':
+            completed = state in {'initialized', 'ready', 'running'}
+            self._append_motor_event(
+                category='initial_position',
+                event_type='initial_position_completed' if completed else 'initial_position_stopped',
+                target=target,
+                content='초기 위치 이동 완료' if completed else f'초기 위치 이동 종료 · 상태 {state}',
+                details=details,
+            )
+
+        if state == 'running' and previous_state != 'running':
+            continuous = details['run_mode'] == 'continuous'
+            motion_label = '연속 모션' if continuous else '1회 모션'
+            self._append_motor_event(
+                category='motion',
+                event_type='continuous_motion_started' if continuous else 'single_motion_started',
+                target=target,
+                content=f'{motion_label} 시작 · 매핑 {mapping_file}',
+                details=details,
+            )
+
+    def _append_motor_event(
+        self,
+        category: str,
+        event_type: str,
+        target: str,
+        content: str,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        now = datetime.now().astimezone()
+        record = {
+            'id': f'{time.time_ns()}',
+            'timestamp': now.timestamp(),
+            'timestamp_text': now.isoformat(timespec='milliseconds'),
+            'category': str(category),
+            'event_type': str(event_type),
+            'target': str(target),
+            'content': str(content),
+            'details': details if isinstance(details, dict) else {},
+        }
+        path = self.event_log_dir / f'{now:%Y-%m-%d}.jsonl'
+        try:
+            with self._event_log_lock:
+                self.event_log_dir.mkdir(parents=True, exist_ok=True)
+                with path.open('a', encoding='utf-8') as stream:
+                    stream.write(json.dumps(record, ensure_ascii=False, separators=(',', ':')))
+                    stream.write('\n')
+                self._prune_motor_event_logs()
+        except OSError as error:
+            self.get_logger().error(f'Failed to write motor event log {path}: {error}')
+        return record
+
+    def _prune_motor_event_logs(self) -> None:
+        cutoff = datetime.now().astimezone().date() - timedelta(
+            days=self.event_log_retention_days - 1
+        )
+        with self._event_log_lock:
+            paths = sorted(self.event_log_dir.glob('*.jsonl'))
+            for path in list(paths):
+                try:
+                    file_date = datetime.strptime(path.stem, '%Y-%m-%d').date()
+                except ValueError:
+                    continue
+                if file_date < cutoff:
+                    try:
+                        path.unlink()
+                    except OSError:
+                        continue
+                    paths.remove(path)
+
+            sizes: Dict[Path, int] = {}
+            for path in paths:
+                try:
+                    sizes[path] = path.stat().st_size
+                except OSError:
+                    sizes[path] = 0
+            total_bytes = sum(sizes.values())
+            while total_bytes > self.event_log_max_bytes and len(paths) > 1:
+                oldest = paths.pop(0)
+                try:
+                    oldest.unlink()
+                except OSError:
+                    continue
+                total_bytes -= sizes.get(oldest, 0)
+
+    def clear_motor_events(self) -> Dict[str, Any]:
+        deleted_files = 0
+        deleted_bytes = 0
+        with self._event_log_lock:
+            for path in self.event_log_dir.glob('*.jsonl'):
+                try:
+                    deleted_bytes += path.stat().st_size
+                    path.unlink()
+                    deleted_files += 1
+                except OSError:
+                    continue
+        return {
+            'success': True,
+            'message': '모터 동작 로그를 삭제했습니다.',
+            'deleted_files': deleted_files,
+            'deleted_bytes': deleted_bytes,
+        }
+
+    def motor_events(self, limit: int = 200, category: str = 'all') -> Dict[str, Any]:
+        safe_limit = max(1, min(int(limit), 1000))
+        category_filter = str(category or 'all')
+        events: List[Dict[str, Any]] = []
+        with self._event_log_lock:
+            paths = sorted(self.event_log_dir.glob('*.jsonl'), reverse=True)
+            for path in paths:
+                try:
+                    lines = path.read_text(encoding='utf-8').splitlines()
+                except OSError:
+                    continue
+                for line in reversed(lines):
+                    try:
+                        event = json.loads(line)
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+                    if not isinstance(event, dict):
+                        continue
+                    if category_filter != 'all' and event.get('category') != category_filter:
+                        continue
+                    events.append(event)
+                    if len(events) >= safe_limit:
+                        break
+                if len(events) >= safe_limit:
+                    break
+        return {
+            'success': True,
+            'category': category_filter,
+            'count': len(events),
+            'events': events,
+            'retention_days': self.event_log_retention_days,
+            'max_bytes': self.event_log_max_bytes,
         }
 
     def _build_web_access_info(self) -> Dict[str, Any]:
@@ -544,6 +879,7 @@ class MotionWebBridge(Node):
 
     def save_motor_config(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         try:
+            target_file = self._motor_config_file_from_payload(payload)
             if 'content' in payload:
                 content = str(payload.get('content') or '')
                 config = yaml.safe_load(content) or {}
@@ -560,7 +896,7 @@ class MotionWebBridge(Node):
             if not isinstance(config, dict):
                 raise ValueError('motor config YAML root must be an object')
 
-            self._write_motor_config(content)
+            self._write_motor_config(content, target_file)
         except (OSError, ValueError, yaml.YAMLError) as exc:
             return {
                 'success': False,
@@ -671,6 +1007,45 @@ class MotionWebBridge(Node):
 
     def motion_run_stop(self) -> Dict[str, Any]:
         return self._request_motion_run('stop', {}, timeout_sec=2.0)
+
+    def midi_monitor_status(self) -> Dict[str, Any]:
+        result = self._request_midi_monitor('status', {}, timeout_sec=1.0)
+        if result.get('success') is False:
+            with self._midi_monitor_lock:
+                cached = dict(self._midi_monitor_status) if self._midi_monitor_status else {}
+            cached.pop('_bridge_received_at', None)
+            if cached:
+                return cached
+        return result
+
+    def save_midi_monitor_mapping(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self._request_midi_monitor('save_mapping', payload, timeout_sec=2.0)
+
+    def _request_midi_monitor(
+        self,
+        command: str,
+        payload: Dict[str, Any],
+        timeout_sec: float = 2.0,
+    ) -> Dict[str, Any]:
+        request_id = f'midi-{time.time_ns()}'
+        msg = String()
+        msg.data = json.dumps({
+            'request_id': request_id,
+            'command': command,
+            'payload': payload if isinstance(payload, dict) else {},
+        }, ensure_ascii=False)
+        self._midi_monitor_request_publisher.publish(msg)
+        result = self._wait_for_midi_monitor_result(request_id, timeout_sec=timeout_sec)
+        if result is None:
+            return {
+                'success': False,
+                'connected': False,
+                'message': 'MIDI 모니터 노드 응답 없음',
+                'motor_output_enabled': False,
+                'channels': [],
+            }
+        result.pop('_bridge_received_at', None)
+        return result
 
     def _request_motion_run(
         self,
@@ -1726,15 +2101,39 @@ class MotionWebBridge(Node):
         config = yaml.safe_load(content) or {}
         return config if isinstance(config, dict) else self._default_motor_config()
 
-    def _write_motor_config(self, content: str) -> None:
-        self.motor_config_file.parent.mkdir(parents=True, exist_ok=True)
-        if self.motor_config_file.is_file():
+    def _motor_config_file_from_payload(self, payload: Dict[str, Any]) -> Path:
+        requested = str(payload.get('file_name') or '').strip()
+        if not requested:
+            return self.motor_config_file
+
+        name = Path(requested).name.strip()
+        if not name or name in ('.', '..'):
+            raise ValueError('motor config file name is empty')
+        if not name.lower().endswith(('.yaml', '.yml')):
+            name = f'{name}.yaml'
+
+        config_dir = self.motor_config_file.parent.resolve()
+        target = (config_dir / name).resolve()
+        try:
+            target.relative_to(config_dir)
+        except ValueError as exc:
+            raise ValueError('motor config file must stay under config directory') from exc
+        return target
+
+    def _write_motor_config_selection(self, path: Path) -> None:
+        self.motor_config_selection_file.parent.mkdir(parents=True, exist_ok=True)
+        self.motor_config_selection_file.write_text(str(path) + '\n', encoding='utf-8')
+
+    def _write_motor_config(self, content: str, target_file: Optional[Path] = None) -> None:
+        target = target_file or self.motor_config_file
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.is_file():
             timestamp = time.strftime('%Y%m%d-%H%M%S')
-            backup = self.motor_config_file.with_suffix(
-                f'{self.motor_config_file.suffix}.bak-{timestamp}'
-            )
-            backup.write_text(self.motor_config_file.read_text(encoding='utf-8'), encoding='utf-8')
-        self.motor_config_file.write_text(content.rstrip() + '\n', encoding='utf-8')
+            backup = target.with_suffix(f'{target.suffix}.bak-{timestamp}')
+            backup.write_text(target.read_text(encoding='utf-8'), encoding='utf-8')
+        target.write_text(content.rstrip() + '\n', encoding='utf-8')
+        self.motor_config_file = target
+        self._write_motor_config_selection(target)
 
     @staticmethod
     def _default_motor_config() -> Dict[str, Any]:
@@ -2331,6 +2730,14 @@ def create_app(bridge: MotionWebBridge) -> FastAPI:
     async def status():
         return bridge.snapshot()
 
+    @app.get('/api/motor-events')
+    async def motor_events(limit: int = 200, category: str = 'all'):
+        return bridge.motor_events(limit=limit, category=category)
+
+    @app.delete('/api/motor-events')
+    async def clear_motor_events():
+        return bridge.clear_motor_events()
+
     @app.post('/api/monitoring/enabled')
     async def set_monitoring(request: Request):
         body = await request.json()
@@ -2437,6 +2844,17 @@ def create_app(bridge: MotionWebBridge) -> FastAPI:
     @app.post('/api/motion-run/stop')
     async def motion_run_stop():
         return bridge.motion_run_stop()
+
+    @app.get('/api/midi-monitor')
+    async def midi_monitor_status():
+        return bridge.midi_monitor_status()
+
+    @app.put('/api/midi-monitor/mapping')
+    async def save_midi_monitor_mapping(request: Request):
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail='request body must be an object')
+        return bridge.save_midi_monitor_mapping(body)
 
     @app.post('/api/motion-test/ac-servo/jog')
     async def ac_servo_jog(request: Request):
