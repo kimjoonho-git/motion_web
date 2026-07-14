@@ -327,7 +327,12 @@ export function createMidiMonitorController({ el }) {
 
   function bindEvents() {
     el.midiMonitorRows?.addEventListener('input', (event) => updateDraftFromRow(event.target));
-    el.midiMonitorRows?.addEventListener('change', (event) => updateDraftFromRow(event.target));
+    el.midiMonitorRows?.addEventListener('change', (event) => {
+      updateDraftFromRow(event.target);
+      if (event.target?.dataset?.midiField === 'filter_level') {
+        saveMapping();
+      }
+    });
     el.refreshMidiMonitorButton?.addEventListener('click', refresh);
     el.saveMidiMappingButton?.addEventListener('click', saveMapping);
     el.midiBankSelect?.addEventListener('change', changeBank);

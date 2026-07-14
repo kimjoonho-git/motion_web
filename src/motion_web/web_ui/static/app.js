@@ -1,1 +1,1 @@
-import './js/main.js?v=20260714-midi-filter-runtime-fix';
+import './js/main.js?v=20260714-midi-filter-auto-apply';
