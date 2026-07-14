@@ -103,11 +103,12 @@ export function createMidiMonitorController({ el }) {
       <td>${channel + 1}</td>
       <td><input class="midi-motion-id-input" type="text" pattern="[1-9]\\d*-[1-9]\\d*" title="예: 1-1, 4-3" data-midi-field="motion_id" value="${escapeAttribute(item.motion_id)}"></td>
       <td class="midi-live-value" data-midi-output="raw">0</td>
+      <td class="midi-live-value" data-midi-output="filtered">0</td>
       <td class="midi-live-value" data-midi-output="ratio">0.00%</td>
       <td><input type="number" inputmode="decimal" step="0.1" data-midi-field="min_deg" value="${item.min_deg}"></td>
       <td><input type="number" inputmode="decimal" step="0.1" data-midi-field="max_deg" value="${item.max_deg}"></td>
       <td><input type="checkbox" data-midi-field="reversed" ${item.reversed ? 'checked' : ''}></td>
-      <td><input type="number" inputmode="decimal" min="0" max="1" step="0.05" data-midi-field="filter_level" value="${item.filter_level}"></td>
+      <td><input type="number" inputmode="decimal" min="0" max="100" step="1" data-midi-field="filter_percent" value="${Math.round(item.filter_level * 100)}"></td>
       <td class="midi-live-value midi-motion-value" data-midi-output="motion_deg">-</td>
       <td data-midi-output="touch">-</td>
     </tr>`;
@@ -124,19 +125,22 @@ export function createMidiMonitorController({ el }) {
       if (!row) return;
       const live = channels.find((item) => Number(item?.channel) === mapping.channel);
       const raw = Math.max(0, Math.min(MIDI_MAX, numberValue(live?.raw_value, 0)));
+      const filtered = Math.max(0, Math.min(MIDI_MAX, numberValue(live?.filtered_value, raw)));
       const confirmed = live?.value_confirmed !== false;
-      const rawRatio = raw / MIDI_MAX;
-      const ratio = mapping.reversed ? 1 - rawRatio : rawRatio;
+      const filteredRatio = filtered / MIDI_MAX;
+      const ratio = mapping.reversed ? 1 - filteredRatio : filteredRatio;
       const converted = mapping.enabled
         ? mapping.min_deg + ((mapping.max_deg - mapping.min_deg) * ratio)
         : null;
       const rawCell = row.querySelector('[data-midi-output="raw"]');
+      const filteredCell = row.querySelector('[data-midi-output="filtered"]');
       const ratioCell = row.querySelector('[data-midi-output="ratio"]');
       const motionCell = row.querySelector('[data-midi-output="motion_deg"]');
       const touchCell = row.querySelector('[data-midi-output="touch"]');
       const motionIdInput = row.querySelector('[data-midi-field="motion_id"]');
       if (rawCell) rawCell.textContent = Math.round(raw).toLocaleString('ko-KR');
-      if (ratioCell) ratioCell.textContent = `${(rawRatio * 100).toFixed(2)}%`;
+      if (filteredCell) filteredCell.textContent = Math.round(filtered).toLocaleString('ko-KR');
+      if (ratioCell) ratioCell.textContent = `${(filteredRatio * 100).toFixed(2)}%`;
       if (motionCell) {
         motionCell.textContent = !confirmed
           ? '슬라이더 이동 필요'
@@ -209,7 +213,9 @@ export function createMidiMonitorController({ el }) {
     if (!item) return;
     if (target.type === 'checkbox') {
       item[field] = target.checked;
-    } else if (field === 'min_deg' || field === 'max_deg' || field === 'filter_level') {
+    } else if (field === 'filter_percent') {
+      item.filter_level = numberValue(target.value, item.filter_level * 100) / 100;
+    } else if (field === 'min_deg' || field === 'max_deg') {
       item[field] = numberValue(target.value, item[field]);
     } else {
       item[field] = target.value;

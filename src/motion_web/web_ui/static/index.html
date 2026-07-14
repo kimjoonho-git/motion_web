@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Motion Control System</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260714-midi-id-validation">
+    <link rel="stylesheet" href="/static/styles.css?v=20260714-midi-second-order-filter">
   </head>
   <body>
     <main class="shell">
@@ -662,6 +662,7 @@
                 <div><span>연결</span><strong id="midiConnectionState">대기</strong></div>
                 <div><span>입력 범위</span><strong>14bit · 0~16383</strong></div>
                 <div><span>모션 단위</span><strong>deg</strong></div>
+                <div><span>필터</span><strong>2차 저역통과</strong></div>
                 <div><span>모터 출력</span><strong id="midiMotorOutputState">사용 안 함</strong></div>
               </div>
               <div class="registry-actions">
@@ -682,17 +683,18 @@
                       <th>채널</th>
                       <th>Motion ID (1-1)</th>
                       <th>MIDI 값</th>
+                      <th>필터 출력</th>
                       <th>비율</th>
                       <th>Min (deg)</th>
                       <th>Max (deg)</th>
                       <th>반전</th>
-                      <th>필터 (0~1)</th>
+                      <th>필터 (%)</th>
                       <th>변환값 (deg)</th>
                       <th>터치</th>
                     </tr>
                   </thead>
                   <tbody id="midiMonitorRows">
-                    <tr><td colspan="11" class="empty">MIDI 모니터 노드 상태 수신 대기</td></tr>
+                    <tr><td colspan="12" class="empty">MIDI 모니터 노드 상태 수신 대기</td></tr>
                   </tbody>
                 </table>
               </div>
@@ -851,6 +853,6 @@
       </div>
     </div>
 
-    <script type="module" src="/static/app.js?v=20260714-midi-id-validation"></script>
+    <script type="module" src="/static/app.js?v=20260714-midi-second-order-filter"></script>
   </body>
 </html>
