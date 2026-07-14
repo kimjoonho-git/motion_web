@@ -2023,12 +2023,38 @@ body.ui-locked {
   margin-bottom: 12px;
 }
 
+.midi-bank-controls {
+  display: flex;
+  gap: 10px;
+  align-items: end;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.midi-bank-controls select,
+.midi-bank-controls input {
+  min-width: 150px;
+}
+
+.midi-bank-name-field {
+  flex: 1 1 220px;
+  max-width: 360px;
+}
+
+.midi-bank-name-field input {
+  width: 100%;
+}
+
+.midi-bank-actions {
+  margin: 0;
+}
+
 .midi-monitor-table-wrap {
   max-height: 430px;
 }
 
 .midi-monitor-table {
-  min-width: 1040px;
+  min-width: 1140px;
 }
 
 .midi-monitor-table input[type="number"] {

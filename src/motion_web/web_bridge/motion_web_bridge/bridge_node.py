@@ -1019,7 +1019,31 @@ class MotionWebBridge(Node):
         return result
 
     def save_midi_monitor_mapping(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return self._request_midi_monitor('save_mapping', payload, timeout_sec=2.0)
+        return self._request_midi_monitor('update_bank', payload, timeout_sec=2.0)
+
+    def create_midi_bank(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self._request_midi_monitor('create_bank', payload, timeout_sec=2.0)
+
+    def select_midi_bank(self, bank_id: str) -> Dict[str, Any]:
+        return self._request_midi_monitor(
+            'select_bank',
+            {'bank_id': bank_id},
+            timeout_sec=2.0,
+        )
+
+    def update_midi_bank(self, bank_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self._request_midi_monitor(
+            'update_bank',
+            {**payload, 'bank_id': bank_id},
+            timeout_sec=2.0,
+        )
+
+    def delete_midi_bank(self, bank_id: str) -> Dict[str, Any]:
+        return self._request_midi_monitor(
+            'delete_bank',
+            {'bank_id': bank_id},
+            timeout_sec=2.0,
+        )
 
     def _request_midi_monitor(
         self,
@@ -2855,6 +2879,28 @@ def create_app(bridge: MotionWebBridge) -> FastAPI:
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail='request body must be an object')
         return bridge.save_midi_monitor_mapping(body)
+
+    @app.post('/api/midi-monitor/banks')
+    async def create_midi_bank(request: Request):
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail='request body must be an object')
+        return bridge.create_midi_bank(body)
+
+    @app.post('/api/midi-monitor/banks/{bank_id}/select')
+    async def select_midi_bank(bank_id: str):
+        return bridge.select_midi_bank(bank_id)
+
+    @app.put('/api/midi-monitor/banks/{bank_id}')
+    async def update_midi_bank(bank_id: str, request: Request):
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail='request body must be an object')
+        return bridge.update_midi_bank(bank_id, body)
+
+    @app.delete('/api/midi-monitor/banks/{bank_id}')
+    async def delete_midi_bank(bank_id: str):
+        return bridge.delete_midi_bank(bank_id)
 
     @app.post('/api/motion-test/ac-servo/jog')
     async def ac_servo_jog(request: Request):

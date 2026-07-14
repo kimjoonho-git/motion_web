@@ -189,6 +189,38 @@ export async function saveMidiMapping(payload) {
   return readJson(response);
 }
 
+export async function createMidiBank(payload = {}) {
+  const response = await fetch('/api/midi-monitor/banks', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return readJson(response);
+}
+
+export async function selectMidiBank(bankId) {
+  const response = await fetch(`/api/midi-monitor/banks/${encodeURIComponent(bankId)}/select`, {
+    method: 'POST',
+  });
+  return readJson(response);
+}
+
+export async function updateMidiBank(bankId, payload) {
+  const response = await fetch(`/api/midi-monitor/banks/${encodeURIComponent(bankId)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return readJson(response);
+}
+
+export async function deleteMidiBank(bankId) {
+  const response = await fetch(`/api/midi-monitor/banks/${encodeURIComponent(bankId)}`, {
+    method: 'DELETE',
+  });
+  return readJson(response);
+}
+
 export async function requestAcServoJog(payload) {
   const response = await fetch('/api/motion-test/ac-servo/jog', {
     method: 'POST',
