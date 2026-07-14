@@ -46,6 +46,7 @@ MOTOR_TYPE_CATALOG = [
 DYNAMIXEL_SCAN_BAUDRATES = (1000000,)
 DYNAMIXEL_SCAN_MAX_ID = 50
 DYNAMIXEL_SCAN_PROTOCOL = '2.0'
+COMMUNICATION_UNAVAILABLE_ERROR = 0xFFFF
 
 
 class MotionStateMonitor(Node):
@@ -74,6 +75,12 @@ class MotionStateMonitor(Node):
         self.disconnected_timeout_sec = float(
             self.declare_parameter('disconnected_timeout_sec', 2.0).value
         )
+        self.connection_loss_confirm_sec = float(
+            self.declare_parameter('connection_loss_confirm_sec', 1.0).value
+        )
+        self.connection_recovery_confirm_sec = float(
+            self.declare_parameter('connection_recovery_confirm_sec', 0.5).value
+        )
         self.dynamixel_scan_max_id = int(
             self.declare_parameter('dynamixel_scan_max_id', DYNAMIXEL_SCAN_MAX_ID).value
         )
@@ -97,11 +104,14 @@ class MotionStateMonitor(Node):
         )
 
         self._motors: Dict[int, Dict[str, Any]] = {}
+        self._last_healthy_motors: Dict[int, Dict[str, Any]] = {}
+        self._communication_health: Dict[int, Dict[str, Any]] = {}
         self._motor_metadata: Dict[int, Dict[str, Any]] = {}
         self._ethercat_status: Dict[str, Any] = {}
         self._last_motor_status_at: Optional[float] = None
         self._last_ethercat_status_at: Optional[float] = None
         self._last_disabled_publish_at = 0.0
+        self._started_at = time.time()
         self._subscription = None
 
         self._publisher = self.create_publisher(String, self.output_topic, 10)
@@ -375,6 +385,13 @@ class MotionStateMonitor(Node):
             if scan_ethercat
             else []
         )
+        connection_rows = self._build_scan_connection_rows(
+            motors,
+            ethercat_scan,
+            dynamixel_scan,
+            scan_ethercat=scan_ethercat,
+            scan_dynamixel=scan_dynamixel,
+        )
         connected_axes = [
             {
                 'controller_index': motor['controller_index'],
@@ -385,13 +402,19 @@ class MotionStateMonitor(Node):
                 'transport_label': motor.get('transport_label', 'Unknown'),
                 'state': motor.get('state', 'unknown'),
                 'state_detail': motor.get('state_detail', ''),
+                'connection_state': motor.get('connection_state', 'unknown'),
+                'connection_connected': bool(motor.get('connection_connected', False)),
+                'connection_confirmed': bool(motor.get('connection_confirmed', False)),
+                'connection_reason': motor.get('connection_reason', ''),
+                'connection_source': motor.get('connection_source', ''),
+                'connection_message': motor.get('connection_message', ''),
                 'fault': bool(motor.get('fault', False)),
                 'servo_on': bool(motor.get('servo_on', False)),
                 'last_seen_at': motor.get('last_seen_at'),
                 'age_sec': motor.get('age_sec'),
             }
             for motor in motors
-            if motor.get('state') == 'detected'
+            if motor.get('connection_connected', False)
         ]
         result = {
             'scanned_at': now,
@@ -408,6 +431,8 @@ class MotionStateMonitor(Node):
             'dynamixel_scan': dynamixel_scan,
             'matching_rows': matching_rows,
             'matching_summary': self._matching_summary(matching_rows),
+            'connection_rows': connection_rows,
+            'connection_summary': self._connection_summary(connection_rows),
             'connected_axes': connected_axes,
             'known_axes': configured_axes,
         }
@@ -486,12 +511,52 @@ class MotionStateMonitor(Node):
 
         for i in range(count):
             controller_index = int(controller_indices[i])
-            self._motors[controller_index] = self._motor_from_status(
+            motor = self._motor_from_status(
                 msg,
                 i,
                 controller_index,
                 now,
             )
+            communication_unavailable = (
+                int(motor.get('errorcode_raw') or 0) == COMMUNICATION_UNAVAILABLE_ERROR
+            )
+            self._update_communication_health(
+                controller_index,
+                communication_unavailable,
+                now,
+            )
+            if not communication_unavailable:
+                self._last_healthy_motors[controller_index] = deepcopy(motor)
+            self._motors[controller_index] = motor
+
+    def _update_communication_health(
+        self,
+        controller_index: int,
+        communication_unavailable: bool,
+        now: float,
+    ) -> Dict[str, Any]:
+        health = self._communication_health.setdefault(controller_index, {
+            'unavailable_since': None,
+            'available_since': None,
+            'confirmed_offline': False,
+        })
+        if communication_unavailable:
+            health['available_since'] = None
+            if health['unavailable_since'] is None:
+                health['unavailable_since'] = now
+            if now - float(health['unavailable_since']) >= self.connection_loss_confirm_sec:
+                health['confirmed_offline'] = True
+        else:
+            health['unavailable_since'] = None
+            if health['available_since'] is None:
+                health['available_since'] = now
+            if (
+                health['confirmed_offline']
+                and now - float(health['available_since'])
+                >= self.connection_recovery_confirm_sec
+            ):
+                health['confirmed_offline'] = False
+        return health
 
     def _motor_from_status(
         self,
@@ -507,15 +572,24 @@ class MotionStateMonitor(Node):
         effort = float(self._array_value(msg, 'effort', index, 0.0))
         raw_errorcode = int(self._array_value(msg, 'errorcode', index, 0))
         errorcode = self._normalized_errorcode(raw_errorcode, metadata)
+        communication_unavailable = raw_errorcode == COMMUNICATION_UNAVAILABLE_ERROR
         motor_type = str(metadata.get('motor_type', '')).lower()
         is_dynamixel = motor_type == 'dynamixel'
         status_text = (
-            self._dynamixel_statusword_text(statusword)
-            if is_dynamixel
-            else self._statusword_text(statusword)
+            'Communication unavailable'
+            if communication_unavailable
+            else (
+                self._dynamixel_statusword_text(statusword)
+                if is_dynamixel
+                else self._statusword_text(statusword)
+            )
         )
         servo_on = bool(statusword & 0x01) if is_dynamixel else (statusword & 0x006F) == 0x0027
-        fault = bool(errorcode) if is_dynamixel else bool(statusword & 0x0008)
+        fault = (
+            False
+            if communication_unavailable
+            else (bool(errorcode) if is_dynamixel else bool(statusword & 0x0008))
+        )
         position_raw = (
             self._calculated_dynamixel_position_raw(position, metadata)
             if is_dynamixel
@@ -529,7 +603,7 @@ class MotionStateMonitor(Node):
             'configuration_state': (
                 'configured' if controller_index in self._motor_metadata else 'unconfigured'
             ),
-            'state': 'detected',
+            'state': 'disconnected' if communication_unavailable else 'detected',
             'last_seen_at': now,
             'age_sec': 0.0,
             'controlword': int(self._array_value(msg, 'controlword', index, 0)),
@@ -538,7 +612,11 @@ class MotionStateMonitor(Node):
             'errorcode': errorcode,
             'errorcode_raw': raw_errorcode,
             'errorcode_hex': self._hex16(raw_errorcode),
-            'error_text': self._error_text(errorcode, ''),
+            'error_text': (
+                'Communication unavailable'
+                if communication_unavailable
+                else self._error_text(errorcode, '')
+            ),
             'station_alias_register': None,
             'position': position,
             'position_deg': position,
@@ -605,7 +683,10 @@ class MotionStateMonitor(Node):
             'detected_count': len([m for m in motors if m['state'] == 'detected']),
             'motor_count': len(motors),
             'known_motors_count': len(motors),
-            'online_motors_count': len([m for m in motors if m['state'] == 'detected']),
+            'online_motors_count': len(
+                [m for m in motors if m.get('connection_connected', False)]
+            ),
+            'connection_summary': self._connection_summary(motors),
             'motor_type_counts': self._count_values(motors, 'motor_type_label'),
             'transport_counts': self._count_values(motors, 'transport_label'),
             'motors': motors,
@@ -626,34 +707,244 @@ class MotionStateMonitor(Node):
         ethercat_down = ethercat_available and (
             not ethercat.get('master_active', False) or not ethercat.get('link_up', False)
         )
-        slaves_responding = int(ethercat.get('slaves_responding') or 0)
-
         for controller_index in sorted(configured_indices):
             if controller_index not in self._motors:
-                state = 'monitoring_off' if not self.monitoring_enabled else 'disconnected'
-                motors.append(self._configured_motor_placeholder(controller_index, state))
+                if not self.monitoring_enabled:
+                    state = 'monitoring_off'
+                    reason = 'monitoring_disabled'
+                    source = 'monitor'
+                elif now - self._started_at < self.disconnected_timeout_sec:
+                    state = 'initializing'
+                    reason = 'awaiting_first_feedback'
+                    source = 'runtime_topic'
+                else:
+                    state = 'disconnected'
+                    reason = 'no_runtime_feedback'
+                    source = 'runtime_topic'
+                motor = self._configured_motor_placeholder(controller_index, state)
+                self._set_connection_fields(motor, state, reason, source, now)
+                motors.append(motor)
                 continue
 
             motor = deepcopy(self._motors[controller_index])
+            health = self._communication_health.get(controller_index, {})
+            raw_communication_unavailable = (
+                int(motor.get('errorcode_raw') or 0) == COMMUNICATION_UNAVAILABLE_ERROR
+            )
+            communication_unavailable = bool(health.get('confirmed_offline', False))
+            if (
+                raw_communication_unavailable
+                and not communication_unavailable
+                and controller_index in self._last_healthy_motors
+            ):
+                motor = deepcopy(self._last_healthy_motors[controller_index])
             age = now - float(motor.get('last_seen_at', now))
             motor['age_sec'] = round(age, 3)
+            transport = str(motor.get('transport', '')).lower()
             if not self.monitoring_enabled:
                 state = 'monitoring_off'
-            elif ethercat_down:
-                state = 'ethercat_down'
-            elif ethercat_available and controller_index >= slaves_responding:
+                reason = 'monitoring_disabled'
+                source = 'monitor'
+            elif communication_unavailable:
                 state = 'disconnected'
+                reason = 'communication_unavailable'
+                source = 'runtime_error'
+            elif raw_communication_unavailable and controller_index not in self._last_healthy_motors:
+                state = 'initializing'
+                reason = 'communication_confirmation_pending'
+                source = 'runtime_error'
+            elif transport == 'ethercat' and ethercat_down:
+                state = 'ethercat_down'
+                reason = 'ethercat_bus_down'
+                source = 'bus_status'
             elif age >= self.disconnected_timeout_sec:
                 state = 'disconnected'
+                reason = 'feedback_timeout'
+                source = 'runtime_topic'
             elif age >= self.stale_timeout_sec:
                 state = 'stale'
+                reason = 'feedback_stale'
+                source = 'runtime_topic'
             else:
                 state = 'detected'
+                reason = 'runtime_feedback_fresh'
+                source = 'runtime_topic'
             motor['state'] = state
-            motor['state_detail'] = self._state_detail(state)
+            self._set_connection_fields(motor, state, reason, source, now)
             motor['configuration_state'] = 'configured'
             motors.append(motor)
         return motors
+
+    def _set_connection_fields(
+        self,
+        motor: Dict[str, Any],
+        state: str,
+        reason: str,
+        source: str,
+        checked_at: float,
+    ) -> None:
+        connection_state = {
+            'detected': 'online',
+            'disconnected': 'offline',
+            'ethercat_down': 'bus_down',
+            'stale': 'stale',
+            'monitoring_off': 'monitoring_off',
+            'initializing': 'initializing',
+        }.get(state, 'unknown')
+        message = self._connection_message(reason)
+        connected = connection_state == 'online'
+        confirmed = connection_state in {'online', 'offline', 'bus_down'}
+        evidence = {
+            'source': source,
+            'reason_code': reason,
+            'checked_at': checked_at,
+            'last_feedback_at': motor.get('last_seen_at'),
+            'feedback_age_sec': motor.get('age_sec'),
+        }
+        motor.update({
+            'connection_state': connection_state,
+            'connection_connected': connected,
+            'connection_confirmed': confirmed,
+            'connection_reason': reason,
+            'connection_source': source,
+            'connection_message': message,
+            'connection_evidence': evidence,
+            'state_detail': message,
+        })
+
+    @staticmethod
+    def _connection_message(reason: str) -> str:
+        messages = {
+            'runtime_feedback_fresh': '모터 런타임 피드백이 정상 수신 중입니다.',
+            'communication_unavailable': '제어 노드가 이 축의 통신 불가를 보고했습니다.',
+            'ethercat_bus_down': 'EtherCAT Master 또는 물리 링크가 내려가 있습니다.',
+            'feedback_timeout': '마지막 모터 피드백 이후 연결 제한 시간을 초과했습니다.',
+            'feedback_stale': '모터 피드백 갱신이 지연되고 있습니다.',
+            'monitoring_disabled': '모터 상태 모니터링이 꺼져 있습니다.',
+            'awaiting_first_feedback': '제어 노드의 첫 모터 피드백을 기다리고 있습니다.',
+            'communication_confirmation_pending': '일시적인 통신 실패인지 확인하고 있습니다.',
+            'no_runtime_feedback': '설정된 축이지만 제어 노드에서 피드백을 받지 못했습니다.',
+            'scan_detected': '통신 버스 검색에서 모터가 확인되었습니다.',
+            'scan_missing': '통신 버스 검색에서 설정된 모터를 찾지 못했습니다.',
+            'scan_failed': '통신 버스 검색에 실패하여 연결 여부를 확정할 수 없습니다.',
+        }
+        return messages.get(reason, '모터 연결 상태를 확인할 수 없습니다.')
+
+    def _build_scan_connection_rows(
+        self,
+        motors: List[Dict[str, Any]],
+        ethercat_scan: Dict[str, Any],
+        dynamixel_scan: Dict[str, Any],
+        *,
+        scan_ethercat: bool,
+        scan_dynamixel: bool,
+    ) -> List[Dict[str, Any]]:
+        ethercat_aliases = {
+            self._parse_int(slave.get('ethercat_alias'))
+            for slave in ethercat_scan.get('slaves', [])
+            if self._parse_int(slave.get('ethercat_alias')) is not None
+        }
+        dynamixel_ids = {
+            self._parse_int(device.get('id'))
+            for device in dynamixel_scan.get('devices', [])
+            if self._parse_int(device.get('id')) is not None
+        }
+        rows: List[Dict[str, Any]] = []
+        for motor in motors:
+            transport = str(motor.get('transport', '')).lower()
+            motor_type = str(motor.get('motor_type', '')).lower()
+            scanned = False
+            scan_available = False
+            found = False
+            scan_source = ''
+
+            if transport == 'ethercat' and scan_ethercat:
+                scanned = not bool(ethercat_scan.get('skipped', False))
+                scan_available = bool(ethercat_scan.get('available', False))
+                found = self._parse_int(motor.get('alias')) in ethercat_aliases
+                scan_source = 'ethercat_slave_scan'
+            elif (transport == 'serial' or motor_type == 'dynamixel') and scan_dynamixel:
+                scanned = not bool(dynamixel_scan.get('skipped', False))
+                scan_available = bool(dynamixel_scan.get('available', False))
+                raw_identity = (
+                    motor.get('bus_id')
+                    if motor.get('bus_id') is not None
+                    else motor.get('node_id')
+                )
+                identity = self._parse_int(raw_identity)
+                found = identity in dynamixel_ids
+                scan_source = (
+                    'runtime_topic'
+                    if dynamixel_scan.get('mode') == 'runtime_topic'
+                    else 'direct_ping'
+                )
+
+            row = {
+                'controller_index': motor.get('controller_index'),
+                'display_name': motor.get('display_name'),
+                'motor_type': motor.get('motor_type'),
+                'motor_type_label': motor.get('motor_type_label'),
+                'transport': motor.get('transport'),
+                'transport_label': motor.get('transport_label'),
+                'runtime_state': motor.get('connection_state', 'unknown'),
+                'runtime_reason': motor.get('connection_reason', ''),
+                'connection_state': motor.get('connection_state', 'unknown'),
+                'connection_connected': bool(motor.get('connection_connected', False)),
+                'connection_confirmed': bool(motor.get('connection_confirmed', False)),
+                'connection_reason': motor.get('connection_reason', ''),
+                'connection_source': motor.get('connection_source', 'runtime_topic'),
+                'connection_message': motor.get('connection_message', ''),
+            }
+            if scanned and scan_available:
+                row.update({
+                    'discovery_state': 'detected' if found else 'missing',
+                    'discovery_detected': found,
+                    'discovery_confirmed': True,
+                    'discovery_source': scan_source,
+                    'discovery_message': self._connection_message(
+                        'scan_detected' if found else 'scan_missing'
+                    ),
+                })
+            elif scanned and not scan_available:
+                row.update({
+                    'discovery_state': 'unknown',
+                    'discovery_detected': False,
+                    'discovery_confirmed': False,
+                    'discovery_source': scan_source or 'bus_scan',
+                    'discovery_message': self._connection_message('scan_failed'),
+                })
+            else:
+                row.update({
+                    'discovery_state': 'not_scanned',
+                    'discovery_detected': False,
+                    'discovery_confirmed': False,
+                    'discovery_source': '',
+                    'discovery_message': '이 통신 버스는 이번 검색 대상이 아닙니다.',
+                })
+            rows.append(row)
+        return rows
+
+    @staticmethod
+    def _connection_summary(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+        counts: Dict[str, int] = {}
+        for item in items:
+            state = str(item.get('connection_state') or 'unknown')
+            counts[state] = counts.get(state, 0) + 1
+        online = counts.get('online', 0)
+        confirmed = sum(1 for item in items if item.get('connection_confirmed', False))
+        return {
+            'total': len(items),
+            'online': online,
+            'offline': counts.get('offline', 0),
+            'bus_down': counts.get('bus_down', 0),
+            'stale': counts.get('stale', 0),
+            'initializing': counts.get('initializing', 0),
+            'monitoring_off': counts.get('monitoring_off', 0),
+            'unknown': counts.get('unknown', 0),
+            'confirmed': confirmed,
+            'all_online': bool(items) and online == len(items),
+            'counts': counts,
+        }
 
     def _configured_motor_placeholder(
         self,
@@ -747,6 +1038,12 @@ class MotionStateMonitor(Node):
                 'ethercat_alias': motor.get('alias'),
                 'state': motor.get('state', 'unknown'),
                 'state_detail': motor.get('state_detail', ''),
+                'connection_state': motor.get('connection_state', 'unknown'),
+                'connection_connected': bool(motor.get('connection_connected', False)),
+                'connection_confirmed': bool(motor.get('connection_confirmed', False)),
+                'connection_reason': motor.get('connection_reason', ''),
+                'connection_source': motor.get('connection_source', ''),
+                'connection_message': motor.get('connection_message', ''),
                 'fault': bool(motor.get('fault', False)),
                 'age_sec': motor.get('age_sec'),
                 'station_alias_register': motor.get('station_alias_register'),
@@ -892,6 +1189,38 @@ class MotionStateMonitor(Node):
             (time.time() - self._last_motor_status_at) <= self.disconnected_timeout_sec
         )
 
+        if runtime_active:
+            devices = [
+                {
+                    'id': device.get('id'),
+                    'controller_index': device.get('controller_index'),
+                    'packet_error': 0,
+                    'model_number': device.get('model_number'),
+                    'firmware_version': device.get('firmware_version'),
+                    'model_name': device.get('model_name') or '',
+                    'port': device.get('port'),
+                    'baudrate': device.get('baudrate'),
+                    'source': 'runtime',
+                }
+                for device in runtime_devices
+                if device.get('state') == 'detected'
+            ]
+            return {
+                'available': True,
+                'scanned_at': started_at,
+                'mode': 'runtime_topic',
+                'protocol': DYNAMIXEL_SCAN_PROTOCOL,
+                'scan_rule': 'motor_manager_node runtime feedback',
+                'error': '',
+                'warning': '',
+                'targets': targets,
+                'attempts': 0,
+                'id_fallback': False,
+                'devices_count': len(devices),
+                'devices': devices,
+                'runtime_devices': runtime_devices,
+            }
+
         if not targets:
             return {
                 'available': False,
@@ -904,18 +1233,13 @@ class MotionStateMonitor(Node):
                     '/dev/ttyUSB*, and /dev/ttyACM*.'
                 ),
                 'targets': [],
-                'devices_count': len(runtime_devices),
+                'devices_count': 0,
                 'devices': [],
                 'runtime_devices': runtime_devices,
             }
 
         devices: List[Dict[str, Any]] = []
         errors: List[str] = []
-        warnings: List[str] = []
-        if runtime_active:
-            warnings.append(
-                'motor_manager_node runtime topic is active; direct Dynamixel ping scan was still executed.'
-            )
         for target in targets:
             port = str(target.get('port') or '')
             baudrate = int(target.get('baudrate') or 0)
@@ -978,7 +1302,7 @@ class MotionStateMonitor(Node):
             'protocol': DYNAMIXEL_SCAN_PROTOCOL,
             'scan_rule': 'auto serial port, baudrate 1000000, broadcast ping plus ID 0-50',
             'error': '; '.join(errors),
-            'warning': '; '.join(warnings),
+            'warning': '',
             'targets': targets,
             'attempts': max(1, int(self.dynamixel_scan_attempts)),
             'id_fallback': bool(self.dynamixel_scan_id_fallback),
