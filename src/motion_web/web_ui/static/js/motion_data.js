@@ -363,9 +363,6 @@ export function createMotionDataController({
   }
 
   function displayInitialPosition(row) {
-    if (row.initial_enabled === false) {
-      return 0.0;
-    }
     if ((row.initial_mode || 'first_frame') !== 'first_frame') {
       return numericOr(row.initial_motion_position_deg, 0.0);
     }
@@ -381,9 +378,6 @@ export function createMotionDataController({
   }
 
   function displayInitialMoveTime(row) {
-    if (row.initial_enabled === false) {
-      return 0.0;
-    }
     return numericOr(row.initial_move_time_sec, 5.0);
   }
 
@@ -864,7 +858,7 @@ export function createMotionDataController({
         <td>${displayText(axis.motor_type || '-')}</td>
         <td>${targetText(axis.motion_limit_lower_deg)}</td>
         <td>${targetText(axis.motion_limit_upper_deg)}</td>
-        <td>${axis.initial_enabled === false ? '미사용' : targetText(axis.initial_motor_target_deg)}</td>
+        <td>${targetText(axis.initial_motor_target_deg)}</td>
         <td>${targetText(axis.target_min_deg)} ~ ${targetText(axis.target_max_deg)}</td>
         <td>${targetText(axis.loop_start_motion_deg)} / ${targetText(axis.loop_end_motion_deg)}</td>
         <td>${Number(axis.loop_delta_deg) <= Number(axis.loop_tolerance_deg)
@@ -1127,7 +1121,7 @@ export function createMotionDataController({
     if (!el.motionMappingRows) return;
     const rows = Array.isArray(mappingDraft.mappings) ? mappingDraft.mappings : [];
     if (!rows.length) {
-      el.motionMappingRows.innerHTML = emptyRow(16, '모션 파일을 선택하고 Motion ID를 반영하세요');
+      el.motionMappingRows.innerHTML = emptyRow(15, '모션 파일을 선택하고 Motion ID를 반영하세요');
       return;
     }
     const duplicateCounts = mappingDuplicateAxisCounts();
@@ -1136,20 +1130,18 @@ export function createMotionDataController({
       const initialMode = row.initial_mode || 'first_frame';
       row.reference_enabled = true;
       const referenceDisabled = false;
-      const initialDisabled = row.initial_enabled === false;
       const initialTimeOverridden = motionRunInitialMoveTimeSec() !== null;
-      const initialMoveTimeDisabled = initialDisabled || initialTimeOverridden;
+      const initialMoveTimeDisabled = initialTimeOverridden;
       const firstFrameInitial = initialMode === 'first_frame';
-      const initialPositionDisabled = initialDisabled || firstFrameInitial;
+      const initialPositionDisabled = firstFrameInitial;
       const dynamixelGearFixed = isDynamixelMappingRow(row);
       const referencePositionValue = displayReferencePosition(row);
       const initialPositionValue = displayInitialPosition(row);
       const initialMoveTimeValue = displayInitialMoveTime(row);
       const gearRatioValue = mappingGearRatioValue(row);
       const referenceDisabledAttr = referenceDisabled ? ' disabled' : '';
-      const initialDisabledAttr = initialDisabled ? ' disabled' : '';
       const initialMoveTimeDisabledAttr = initialMoveTimeDisabled
-        ? ` disabled title="${initialTimeOverridden ? '모션 동작 탭의 초기 이동 시간이 일괄 적용됩니다' : '초기 위치 이동이 비활성화되어 있습니다'}"`
+        ? ' disabled title="모션 동작 탭의 초기 이동 시간이 일괄 적용됩니다"'
         : '';
       const initialPositionDisabledAttr = initialPositionDisabled ? ' disabled' : '';
       const gearRatioDisabledAttr = dynamixelGearFixed ? ' disabled title="Dynamixel은 감속비를 사용하지 않으며 1로 고정됩니다"' : '';
@@ -1163,9 +1155,8 @@ export function createMotionDataController({
           <td class="${referenceDisabled ? 'mapping-disabled-cell' : ''}"><button class="mapping-mini-button" type="button" data-motion-mapping-action="capture_reference"${referenceDisabledAttr}>캡처</button></td>
           <td class="mapping-number-cell"><input class="numeric-input mapping-number-input" type="number" step="0.001" data-motion-mapping-field="motion_lower_deg" value="${displayText(row.motion_lower_deg)}"></td>
           <td class="mapping-number-cell"><input class="numeric-input mapping-number-input" type="number" step="0.001" data-motion-mapping-field="motion_upper_deg" value="${displayText(row.motion_upper_deg)}"></td>
-          <td><input type="checkbox" data-motion-mapping-field="initial_enabled" ${row.initial_enabled !== false ? 'checked' : ''}></td>
-          <td class="${initialDisabled ? 'mapping-disabled-cell' : ''}">
-            <select class="compact-select" data-motion-mapping-field="initial_mode"${initialDisabledAttr}>
+          <td>
+            <select class="compact-select" data-motion-mapping-field="initial_mode">
               <option value="first_frame"${initialMode === 'first_frame' ? ' selected' : ''}>첫 프레임</option>
               <option value="manual"${initialMode === 'manual' ? ' selected' : ''}>수동</option>
             </select>
@@ -1243,11 +1234,9 @@ export function createMotionDataController({
       const firstFrameText = Number.isFinite(Number(detail.first_frame_motor_target_deg))
         ? `${targetText(detail.first_frame_motion_position_deg)} -> ${targetText(detail.first_frame_output_deg)} -> ${targetText(detail.first_frame_motor_target_deg)}`
         : '첫 프레임 실행 시 계산';
-      const initialText = detail.initial_enabled === false
-        ? '미사용'
-        : row.initial_mode === 'manual'
-          ? `${targetText(detail.initial_motion_position_deg)} -> ${targetText(detail.manual_initial_output_deg)} -> ${targetText(detail.manual_initial_motor_target_deg)}`
-          : firstFrameText;
+      const initialText = row.initial_mode === 'manual'
+        ? `${targetText(detail.initial_motion_position_deg)} -> ${targetText(detail.manual_initial_output_deg)} -> ${targetText(detail.manual_initial_motor_target_deg)}`
+        : firstFrameText;
       return (
         `<tr>
           <td class="mono">${displayText(row.motion_id)}</td>
@@ -1361,7 +1350,6 @@ export function createMotionDataController({
         reference_position_deg: numericOr(previous?.reference_position_deg, 0.0),
         motion_lower_deg: numericOr(previous?.motion_lower_deg, -180.0),
         motion_upper_deg: numericOr(previous?.motion_upper_deg, 180.0),
-        initial_enabled: previous?.initial_enabled ?? true,
         initial_mode: previousMode,
         initial_motion_position_deg: previousMode === 'first_frame'
           ? firstValue
@@ -1587,23 +1575,10 @@ export function createMotionDataController({
   function updateMappingRow(motionId, field, value, checked = false) {
     const row = mappingDraft.mappings.find((item) => String(item.motion_id) === String(motionId));
     if (!row) return;
-    if (field === 'enabled' || field === 'invert' || field === 'reference_enabled' || field === 'initial_enabled') {
+    if (field === 'enabled' || field === 'invert' || field === 'reference_enabled') {
       row[field] = Boolean(checked);
       if (field === 'reference_enabled' && !row.reference_enabled) {
         row.reference_position_deg = 0.0;
-      }
-      if (field === 'initial_enabled' && !row.initial_enabled) {
-        row.initial_motion_position_deg = 0.0;
-        row.initial_move_time_sec = 0.0;
-      }
-      if (field === 'initial_enabled' && row.initial_enabled) {
-        if (!Number.isFinite(Number(row.initial_move_time_sec)) || Number(row.initial_move_time_sec) <= 0) {
-          row.initial_move_time_sec = 5.0;
-        }
-        if ((row.initial_mode || 'first_frame') === 'first_frame') {
-          const firstValue = firstMotionValueFor(row.motion_id);
-          if (firstValue !== null) row.initial_motion_position_deg = firstValue;
-        }
       }
     } else if (field === 'motor_axis') {
       row.motor_axis = value === '' ? null : Number(value);
