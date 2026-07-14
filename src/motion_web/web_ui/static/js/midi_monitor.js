@@ -8,6 +8,7 @@ import {
 
 const MIDI_MAX = 16383;
 const CHANNEL_COUNT = 8;
+const FILTER_LEVEL_MAX = 13;
 const MOTION_ID_PATTERN = /^[1-9]\d*-[1-9]\d*$/;
 
 function numberValue(value, fallback = 0) {
@@ -47,9 +48,15 @@ function invalidMappingItem(item) {
     || !Number.isFinite(Number(item.min_deg))
     || !Number.isFinite(Number(item.max_deg))
     || Math.abs(Number(item.max_deg) - Number(item.min_deg)) < 1e-9
-    || !Number.isFinite(Number(item.filter_level))
+    || !Number.isInteger(Number(item.filter_level))
     || Number(item.filter_level) < 0
-    || Number(item.filter_level) > 1;
+    || Number(item.filter_level) > FILTER_LEVEL_MAX;
+}
+
+function filterLevelOptions(selectedLevel) {
+  return Array.from({ length: FILTER_LEVEL_MAX + 1 }, (_, level) => (
+    `<option value="${level}" ${Number(selectedLevel) === level ? 'selected' : ''}>${level}단계</option>`
+  )).join('');
 }
 
 export function createMidiMonitorController({ el }) {
@@ -86,7 +93,7 @@ export function createMidiMonitorController({ el }) {
           min_deg: numberValue(item.min_deg, -180),
           max_deg: numberValue(item.max_deg, 180),
           reversed: Boolean(item.reversed),
-          filter_level: numberValue(item.filter_level, 0),
+          filter_level: Math.round(numberValue(item.filter_level, 0)),
         };
       });
       bankNameDraft = String(nextStatus?.active_bank?.name || activeBankId || 'Bank 1');
@@ -108,7 +115,7 @@ export function createMidiMonitorController({ el }) {
       <td><input type="number" inputmode="decimal" step="0.1" data-midi-field="min_deg" value="${item.min_deg}"></td>
       <td><input type="number" inputmode="decimal" step="0.1" data-midi-field="max_deg" value="${item.max_deg}"></td>
       <td><input type="checkbox" data-midi-field="reversed" ${item.reversed ? 'checked' : ''}></td>
-      <td><input type="number" inputmode="decimal" min="0" max="100" step="1" data-midi-field="filter_percent" value="${Math.round(item.filter_level * 100)}"></td>
+      <td><select data-midi-field="filter_level" aria-label="필터 단계">${filterLevelOptions(item.filter_level)}</select></td>
       <td class="midi-live-value midi-motion-value" data-midi-output="motion_deg">-</td>
       <td data-midi-output="touch">-</td>
     </tr>`;
@@ -213,8 +220,8 @@ export function createMidiMonitorController({ el }) {
     if (!item) return;
     if (target.type === 'checkbox') {
       item[field] = target.checked;
-    } else if (field === 'filter_percent') {
-      item.filter_level = numberValue(target.value, item.filter_level * 100) / 100;
+    } else if (field === 'filter_level') {
+      item.filter_level = Math.round(numberValue(target.value, item.filter_level));
     } else if (field === 'min_deg' || field === 'max_deg') {
       item[field] = numberValue(target.value, item[field]);
     } else {
@@ -245,7 +252,7 @@ export function createMidiMonitorController({ el }) {
     if (invalid) {
       status = {
         ...(status || {}),
-        message: `채널 ${invalid.channel + 1}: Motion ID는 1-1, 4-3 형식으로 입력하고 Min/Max와 필터 0~1을 확인하세요`,
+        message: `채널 ${invalid.channel + 1}: Motion ID는 1-1, 4-3 형식으로 입력하고 Min/Max와 필터 0~13단계를 확인하세요`,
       };
       render();
       return;

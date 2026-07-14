@@ -1,7 +1,7 @@
 import { fetchStatusSnapshot, setMonitoringEnabled } from './api.js?v=20260714-motor-event-log-clear';
 import { getElements } from './dom.js?v=20260714-midi-banks';
 import { createMotorEventLogController } from './event_log.js?v=20260714-motion-log-mode';
-import { createMidiMonitorController } from './midi_monitor.js?v=20260714-midi-second-order-filter';
+import { createMidiMonitorController } from './midi_monitor.js?v=20260714-midi-filter-levels';
 import { createMotionDataController } from './motion_data.js?v=20260714-shared-graph-toggle';
 import { createMotionTestController } from './motion_test.js?v=20260714-stable-live-render';
 import { createMotorConfigController } from './motor_config.js?v=20260714-generic-connection-state';
