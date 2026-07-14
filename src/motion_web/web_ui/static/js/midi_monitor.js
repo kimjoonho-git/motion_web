@@ -8,6 +8,7 @@ import {
 
 const MIDI_MAX = 16383;
 const CHANNEL_COUNT = 8;
+const MOTION_ID_PATTERN = /^[1-9]\d*-[1-9]\d*$/;
 
 function numberValue(value, fallback = 0) {
   const number = Number(value);
@@ -18,7 +19,7 @@ function defaultMapping(channel) {
   return {
     channel,
     enabled: true,
-    motion_id: String(channel + 1),
+    motion_id: `1-${channel + 1}`,
     min_deg: -180,
     max_deg: 180,
     reversed: false,
@@ -71,7 +72,7 @@ export function createMidiMonitorController({ el }) {
         return {
           channel,
           enabled: item.enabled !== false,
-          motion_id: String(item.motion_id ?? channel + 1),
+          motion_id: String(item.motion_id ?? `1-${channel + 1}`),
           min_deg: numberValue(item.min_deg, -180),
           max_deg: numberValue(item.max_deg, 180),
           reversed: Boolean(item.reversed),
@@ -90,7 +91,7 @@ export function createMidiMonitorController({ el }) {
     return `<tr data-midi-channel="${channel}">
       <td><input type="checkbox" data-midi-field="enabled" ${item.enabled ? 'checked' : ''}></td>
       <td>${channel + 1}</td>
-      <td><input class="midi-motion-id-input" type="text" data-midi-field="motion_id" value="${escapeAttribute(item.motion_id)}"></td>
+      <td><input class="midi-motion-id-input" type="text" pattern="[1-9]\\d*-[1-9]\\d*" title="예: 1-1, 4-3" data-midi-field="motion_id" value="${escapeAttribute(item.motion_id)}"></td>
       <td class="midi-live-value" data-midi-output="raw">0</td>
       <td class="midi-live-value" data-midi-output="ratio">0.00%</td>
       <td><input type="number" inputmode="decimal" step="0.1" data-midi-field="min_deg" value="${item.min_deg}"></td>
@@ -215,7 +216,7 @@ export function createMidiMonitorController({ el }) {
 
   async function saveMapping() {
     const invalid = mappingDraft.find((item) => (
-      !String(item.motion_id || '').trim()
+      !MOTION_ID_PATTERN.test(String(item.motion_id || '').trim())
       || !Number.isFinite(Number(item.min_deg))
       || !Number.isFinite(Number(item.max_deg))
       || Math.abs(Number(item.max_deg) - Number(item.min_deg)) < 1e-9
@@ -226,7 +227,7 @@ export function createMidiMonitorController({ el }) {
     if (invalid) {
       status = {
         ...(status || {}),
-        message: `채널 ${invalid.channel + 1}: Motion ID, 서로 다른 Min/Max, 필터 0~1을 확인하세요`,
+        message: `채널 ${invalid.channel + 1}: Motion ID는 1-1, 4-3 형식으로 입력하고 Min/Max와 필터 0~1을 확인하세요`,
       };
       render();
       return;

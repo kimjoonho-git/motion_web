@@ -1013,6 +1013,8 @@ MIDI 뱅크는 모션축 설정 파일과 통합하기 전까지 `midi_control` 
 - 최대 8개 뱅크
 - 뱅크별 이름과 8채널 축 설정 관리
 - 축별 `enabled`, `motion_id`, `min_deg`, `max_deg`, `reversed`, `filter_level` 관리
+- `motion_id`는 `1-1`, `4-3`과 같은 `양의 정수-양의 정수` 형식만 허용
+- MIDI 뱅크의 `motion_id`는 모션축 설정에 존재하는지 검사하지 않고 독립 데이터로 관리
 - MIDI 14-bit 실시간 값, 터치, 버튼, 다이얼 상태는 뱅크에 저장하지 않음
 - 뱅크 추가, 선택, 수정, 삭제 지원
 - JSON/YAML 파일 읽기·쓰기 없음
