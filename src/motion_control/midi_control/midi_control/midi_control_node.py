@@ -1,4 +1,5 @@
 import json
+import math
 import threading
 import time
 from typing import Any, Dict, List
@@ -14,6 +15,29 @@ from midi_control.bank_manager import MIDI_CHANNEL_COUNT, MidiBankManager
 
 MIDI_VALUE_MIN = 0
 MIDI_VALUE_MAX = 16383
+FILTER_ORDER = 2
+FILTER_MAX_TIME_CONSTANT_SEC = 0.5
+FILTER_MAX_STEP_SEC = 0.05
+
+
+def second_order_low_pass(
+    input_value: float,
+    filter_level: float,
+    dt_sec: float,
+    stage1_previous: float,
+    stage2_previous: float,
+) -> tuple[float, float, float]:
+    """Apply two cascaded first-order sections as a stable second-order LPF."""
+    level = max(0.0, min(1.0, float(filter_level)))
+    if level <= 0.0:
+        value = float(input_value)
+        return value, value, value
+    tau_sec = level * FILTER_MAX_TIME_CONSTANT_SEC
+    dt_sec = max(1e-6, min(float(dt_sec), FILTER_MAX_STEP_SEC))
+    alpha = 1.0 - math.exp(-dt_sec / tau_sec)
+    stage1 = stage1_previous + alpha * (input_value - stage1_previous)
+    stage2 = stage2_previous + alpha * (stage1 - stage2_previous)
+    return stage2, stage1, stage2
 
 
 class MidiControlNode(Node):
@@ -45,7 +69,11 @@ class MidiControlNode(Node):
         self._lock = threading.Lock()
         self._last_received_monotonic: float | None = None
         self._last_received_wall: float | None = None
-        self._channels = [0] * MIDI_CHANNEL_COUNT
+        self._raw_channels = [0] * MIDI_CHANNEL_COUNT
+        self._channels = [0.0] * MIDI_CHANNEL_COUNT
+        self._filter_stage1 = [0.0] * MIDI_CHANNEL_COUNT
+        self._filter_stage2 = [0.0] * MIDI_CHANNEL_COUNT
+        self._filter_last_at: List[float | None] = [None] * MIDI_CHANNEL_COUNT
         self._touch = [False] * MIDI_CHANNEL_COUNT
         self._dial = [0] * MIDI_CHANNEL_COUNT
         self._btn0 = [False] * MIDI_CHANNEL_COUNT
@@ -84,9 +112,14 @@ class MidiControlNode(Node):
         return values[index] if index < len(values) else fallback
 
     def _midi_callback(self, msg: Midi) -> None:
+        now = time.monotonic()
         with self._lock:
+            mappings = self._banks.active_bank()['mappings']
             for channel in range(MIDI_CHANNEL_COUNT):
-                raw = int(self._array_value(msg.channel, channel, 0))
+                raw = max(
+                    MIDI_VALUE_MIN,
+                    min(MIDI_VALUE_MAX, int(self._array_value(msg.channel, channel, 0))),
+                )
                 touched = bool(self._array_value(msg.touch, channel, False))
                 self._touch[channel] = touched
                 # Only a hand-touched fader is an actionable MIDI input.
@@ -94,16 +127,31 @@ class MidiControlNode(Node):
                 # retain the last touched value after release and ignore any
                 # untouch/motor-driven position changes.
                 if touched:
-                    self._channels[channel] = max(
-                        MIDI_VALUE_MIN, min(MIDI_VALUE_MAX, raw)
-                    )
+                    self._raw_channels[channel] = raw
+                    last_at = self._filter_last_at[channel]
+                    if last_at is None:
+                        filtered = float(raw)
+                        stage1 = filtered
+                        stage2 = filtered
+                    else:
+                        filtered, stage1, stage2 = second_order_low_pass(
+                            raw,
+                            mappings[channel]['filter_level'],
+                            now - last_at,
+                            self._filter_stage1[channel],
+                            self._filter_stage2[channel],
+                        )
+                    self._channels[channel] = filtered
+                    self._filter_stage1[channel] = stage1
+                    self._filter_stage2[channel] = stage2
+                    self._filter_last_at[channel] = now
                 self._dial[channel] = int(self._array_value(msg.dial, channel, 0))
                 self._btn0[channel] = bool(self._array_value(msg.btn0, channel, False))
                 self._btn1[channel] = bool(self._array_value(msg.btn1, channel, False))
                 self._btn2[channel] = bool(self._array_value(msg.btn2, channel, False))
                 self._btn3[channel] = bool(self._array_value(msg.btn3, channel, False))
                 self._confirmed[channel] = self._confirmed[channel] or self._btn0[channel]
-            self._last_received_monotonic = time.monotonic()
+            self._last_received_monotonic = now
             self._last_received_wall = time.time()
 
     @staticmethod
@@ -123,7 +171,8 @@ class MidiControlNode(Node):
         with self._lock:
             last_monotonic = self._last_received_monotonic
             last_wall = self._last_received_wall
-            raw_values = list(self._channels)
+            raw_values = list(self._raw_channels)
+            filtered_values = list(self._channels)
             touch = list(self._touch)
             dial = list(self._dial)
             buttons = [
@@ -138,12 +187,15 @@ class MidiControlNode(Node):
         channels = []
         for channel, mapping in enumerate(mappings):
             raw_value = raw_values[channel]
+            filtered_value = filtered_values[channel]
             channels.append({
                 **mapping,
                 'channel_number': channel + 1,
                 'raw_value': raw_value,
-                'normalized': round(raw_value / MIDI_VALUE_MAX, 6),
-                'motion_deg': self._motion_degrees(raw_value, mapping),
+                'filtered_value': round(filtered_value, 6),
+                'raw_normalized': round(raw_value / MIDI_VALUE_MAX, 6),
+                'normalized': round(filtered_value / MIDI_VALUE_MAX, 6),
+                'motion_deg': self._motion_degrees(filtered_value, mapping),
                 'value_confirmed': confirmed[channel],
                 'touch': touch[channel],
                 'dial': dial[channel],
@@ -163,6 +215,8 @@ class MidiControlNode(Node):
             'unit': 'deg',
             'motor_output_enabled': False,
             'touch_gated_input': True,
+            'filter_order': FILTER_ORDER,
+            'filter_max_time_constant_sec': FILTER_MAX_TIME_CONSTANT_SEC,
             'bank_storage': bank_state['storage'],
             'bank_persistent': bank_state['persistent'],
             'max_banks': bank_state['max_banks'],
@@ -179,6 +233,12 @@ class MidiControlNode(Node):
 
     def _publish_state(self) -> None:
         self._publish_json(self._state_publisher, self._snapshot())
+
+    def _reset_filter_state_locked(self) -> None:
+        self._filter_stage1 = [float(value) for value in self._raw_channels]
+        self._filter_stage2 = [float(value) for value in self._raw_channels]
+        self._channels = [float(value) for value in self._raw_channels]
+        self._filter_last_at = [None] * MIDI_CHANNEL_COUNT
 
     def _request_callback(self, msg: String) -> None:
         try:
@@ -200,22 +260,26 @@ class MidiControlNode(Node):
                         name=payload.get('name'),
                         mappings=payload.get('mappings'),
                     )
+                    self._reset_filter_state_locked()
                 response = self._snapshot()
                 response['message'] = 'MIDI 뱅크 설정 메모리 적용 완료'
             elif command == 'create_bank':
                 with self._lock:
                     bank = self._banks.create_bank(payload.get('name'), copy_from_active=True)
                     self._banks.select_bank(bank['bank_id'])
+                    self._reset_filter_state_locked()
                 response = self._snapshot()
                 response['message'] = 'MIDI 뱅크 추가 완료 (메모리 전용)'
             elif command == 'select_bank':
                 with self._lock:
                     self._banks.select_bank(payload.get('bank_id'))
+                    self._reset_filter_state_locked()
                 response = self._snapshot()
                 response['message'] = 'MIDI 뱅크 전환 완료'
             elif command == 'delete_bank':
                 with self._lock:
                     self._banks.delete_bank(payload.get('bank_id'))
+                    self._reset_filter_state_locked()
                 response = self._snapshot()
                 response['message'] = 'MIDI 뱅크 삭제 완료'
             elif command == 'status':
