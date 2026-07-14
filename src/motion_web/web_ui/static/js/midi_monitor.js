@@ -155,7 +155,7 @@ export function createMidiMonitorController({ el }) {
     }
     if (el.midiMappingPath) {
       const count = banks.length || 1;
-      el.midiMappingPath.textContent = `메모리 전용 뱅크 ${count}/${status?.max_banks || 32} · 노드 재시작 시 초기화 · 파일에 저장하지 않음`;
+      el.midiMappingPath.textContent = `메모리 전용 뱅크 ${count}/${status?.max_banks || 8} · 노드 재시작 시 초기화 · 파일에 저장하지 않음`;
     }
     if (el.midiBankSelect) {
       const optionsKey = banks.map((bank) => `${bank.bank_id}:${bank.name}`).join('|');
@@ -172,7 +172,7 @@ export function createMidiMonitorController({ el }) {
       el.midiBankName.value = bankNameDraft;
     }
     if (el.midiBankName) el.midiBankName.disabled = loading;
-    if (el.addMidiBankButton) el.addMidiBankButton.disabled = loading || banks.length >= (status?.max_banks || 32);
+    if (el.addMidiBankButton) el.addMidiBankButton.disabled = loading || banks.length >= (status?.max_banks || 8);
     if (el.deleteMidiBankButton) el.deleteMidiBankButton.disabled = loading || banks.length <= 1;
     if (el.refreshMidiMonitorButton) el.refreshMidiMonitorButton.disabled = loading;
     if (el.saveMidiMappingButton) el.saveMidiMappingButton.disabled = loading || !activeBankId;

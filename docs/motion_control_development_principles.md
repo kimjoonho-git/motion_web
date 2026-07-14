@@ -1010,7 +1010,7 @@ MIDI 경로는 현재 장치 연결, 터치, 실시간 값, 14-bit 값의 모션
 
 MIDI 뱅크는 모션축 설정 파일과 통합하기 전까지 `midi_control` 노드의 메모리에서만 관리한다.
 
-- 최대 32개 뱅크
+- 최대 8개 뱅크
 - 뱅크별 이름과 8채널 축 설정 관리
 - 축별 `enabled`, `motion_id`, `min_deg`, `max_deg`, `reversed`, `filter_level` 관리
 - MIDI 14-bit 실시간 값, 터치, 버튼, 다이얼 상태는 뱅크에 저장하지 않음
