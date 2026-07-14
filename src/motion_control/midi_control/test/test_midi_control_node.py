@@ -33,7 +33,7 @@ def test_mapping_rejects_equal_degree_limits():
     with pytest.raises(ValueError, match='must differ'):
         node._validated_mapping([{
             'channel': 0,
-            'motion_id': '1',
+            'motion_id': '1-1',
             'min_deg': 10.0,
             'max_deg': 10.0,
         }])
@@ -44,7 +44,7 @@ def test_mapping_rejects_filter_level_outside_zero_to_one():
     with pytest.raises(ValueError, match='filter_level must be 0..1'):
         node._validated_mapping([{
             'channel': 0,
-            'motion_id': '1',
+            'motion_id': '1-1',
             'min_deg': -10.0,
             'max_deg': 10.0,
             'filter_level': 1.1,

@@ -17,14 +17,14 @@ def test_default_bank_is_memory_only():
 def test_new_bank_copies_active_settings_and_can_be_selected():
     manager = MidiBankManager()
     mappings = manager.active_bank()['mappings']
-    mappings[0]['motion_id'] = 'arm'
+    mappings[0]['motion_id'] = '4-3'
     manager.update_bank('bank_1', mappings=mappings)
 
     created = manager.create_bank('Show B')
     manager.select_bank(created['bank_id'])
 
     assert manager.active_bank()['name'] == 'Show B'
-    assert manager.active_bank()['mappings'][0]['motion_id'] == 'arm'
+    assert manager.active_bank()['mappings'][0]['motion_id'] == '4-3'
 
 
 def test_bank_update_does_not_store_live_midi_values():
@@ -63,3 +63,24 @@ def test_bank_count_is_limited_to_eight():
     assert manager.snapshot()['max_banks'] == 8
     with pytest.raises(ValueError, match='no more than 8 banks'):
         manager.create_bank('Bank 9')
+
+
+@pytest.mark.parametrize('motion_id', ['1-1', '4-3', '12-25'])
+def test_motion_id_accepts_positive_number_pair(motion_id):
+    manager = MidiBankManager()
+    mappings = manager.active_bank()['mappings']
+    mappings[0]['motion_id'] = motion_id
+
+    updated = manager.update_bank('bank_1', mappings=mappings)
+
+    assert updated['mappings'][0]['motion_id'] == motion_id
+
+
+@pytest.mark.parametrize('motion_id', ['axis1', '1', '1-A', '0-1', '1-0', '-1-1', '01-1'])
+def test_motion_id_rejects_values_outside_positive_number_pair(motion_id):
+    manager = MidiBankManager()
+    mappings = manager.active_bank()['mappings']
+    mappings[0]['motion_id'] = motion_id
+
+    with pytest.raises(ValueError, match='motion_id must use'):
+        manager.update_bank('bank_1', mappings=mappings)

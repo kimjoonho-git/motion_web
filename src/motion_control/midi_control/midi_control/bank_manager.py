@@ -1,9 +1,11 @@
 import math
+import re
 from typing import Any, Dict, List
 
 
 MIDI_CHANNEL_COUNT = 8
 MAX_MIDI_BANKS = 8
+MOTION_ID_PATTERN = re.compile(r'^[1-9]\d*-[1-9]\d*$')
 
 
 class MidiBankManager:
@@ -21,7 +23,7 @@ class MidiBankManager:
             {
                 'channel': channel,
                 'enabled': True,
-                'motion_id': str(channel + 1),
+                'motion_id': f'1-{channel + 1}',
                 'min_deg': -180.0,
                 'max_deg': 180.0,
                 'reversed': False,
@@ -70,9 +72,11 @@ class MidiBankManager:
             filter_level = cls._finite_float(item.get('filter_level', 0.0), 'filter_level')
             if filter_level < 0.0 or filter_level > 1.0:
                 raise ValueError(f'channel {channel + 1}: filter_level must be 0..1')
-            motion_id = str(item.get('motion_id') or channel + 1).strip()
-            if not motion_id:
-                raise ValueError(f'channel {channel + 1}: motion_id is required')
+            motion_id = str(item.get('motion_id') or '').strip()
+            if not MOTION_ID_PATTERN.fullmatch(motion_id):
+                raise ValueError(
+                    f'channel {channel + 1}: motion_id must use positive-number-positive-number format'
+                )
             by_channel[channel] = {
                 'channel': channel,
                 'enabled': bool(item.get('enabled', True)),
