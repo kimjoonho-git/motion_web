@@ -133,23 +133,27 @@ class MidiControlNode(Node):
                 # untouch/motor-driven position changes.
                 if touched:
                     self._raw_channels[channel] = raw
-                    last_at = self._filter_last_at[channel]
-                    if last_at is None:
-                        filtered = float(raw)
-                        stage1 = filtered
-                        stage2 = filtered
-                    else:
-                        filtered, stage1, stage2 = second_order_low_pass(
-                            raw,
-                            mappings[channel]['filter_level'],
-                            now - last_at,
-                            self._filter_stage1[channel],
-                            self._filter_stage2[channel],
-                        )
-                    self._channels[channel] = filtered
-                    self._filter_stage1[channel] = stage1
-                    self._filter_stage2[channel] = stage2
-                    self._filter_last_at[channel] = now
+                # Keep advancing toward the last hand-touched target after
+                # release. Untouched device/motor position changes never
+                # replace that target.
+                target = self._raw_channels[channel]
+                last_at = self._filter_last_at[channel]
+                if last_at is None:
+                    filtered = float(target)
+                    stage1 = filtered
+                    stage2 = filtered
+                else:
+                    filtered, stage1, stage2 = second_order_low_pass(
+                        target,
+                        mappings[channel]['filter_level'],
+                        now - last_at,
+                        self._filter_stage1[channel],
+                        self._filter_stage2[channel],
+                    )
+                self._channels[channel] = filtered
+                self._filter_stage1[channel] = stage1
+                self._filter_stage2[channel] = stage2
+                self._filter_last_at[channel] = now
                 self._dial[channel] = int(self._array_value(msg.dial, channel, 0))
                 self._btn0[channel] = bool(self._array_value(msg.btn0, channel, False))
                 self._btn1[channel] = bool(self._array_value(msg.btn1, channel, False))

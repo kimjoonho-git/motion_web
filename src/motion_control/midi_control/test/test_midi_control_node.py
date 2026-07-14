@@ -1,5 +1,10 @@
+import threading
+import time
+from types import SimpleNamespace
+
 import pytest
 
+from midi_control.bank_manager import MIDI_CHANNEL_COUNT, MidiBankManager
 from midi_control.midi_control_node import (
     MIDI_VALUE_MAX,
     MidiControlNode,
@@ -88,3 +93,51 @@ def test_second_order_filter_converges_without_overshoot():
     assert outputs == sorted(outputs)
     assert outputs[-1] == pytest.approx(MIDI_VALUE_MAX, rel=1e-6)
     assert all(value <= MIDI_VALUE_MAX for value in outputs)
+
+
+def test_filter_keeps_converging_after_touch_release_without_accepting_untouched_raw():
+    node = MidiControlNode.__new__(MidiControlNode)
+    node._lock = threading.Lock()
+    node._banks = MidiBankManager()
+    mappings = node._banks.active_bank()['mappings']
+    mappings[0]['filter_level'] = 13
+    node._banks.update_bank('bank_1', mappings=mappings)
+    node._raw_channels = [0] * MIDI_CHANNEL_COUNT
+    node._channels = [0.0] * MIDI_CHANNEL_COUNT
+    node._filter_stage1 = [0.0] * MIDI_CHANNEL_COUNT
+    node._filter_stage2 = [0.0] * MIDI_CHANNEL_COUNT
+    node._filter_last_at = [time.monotonic() - 0.005] * MIDI_CHANNEL_COUNT
+    node._touch = [False] * MIDI_CHANNEL_COUNT
+    node._dial = [0] * MIDI_CHANNEL_COUNT
+    node._btn0 = [False] * MIDI_CHANNEL_COUNT
+    node._btn1 = [False] * MIDI_CHANNEL_COUNT
+    node._btn2 = [False] * MIDI_CHANNEL_COUNT
+    node._btn3 = [False] * MIDI_CHANNEL_COUNT
+    node._confirmed = [False] * MIDI_CHANNEL_COUNT
+
+    touched = SimpleNamespace(
+        channel=[MIDI_VALUE_MAX] + [0] * (MIDI_CHANNEL_COUNT - 1),
+        touch=[True] + [False] * (MIDI_CHANNEL_COUNT - 1),
+        dial=[0] * MIDI_CHANNEL_COUNT,
+        btn0=[False] * MIDI_CHANNEL_COUNT,
+        btn1=[False] * MIDI_CHANNEL_COUNT,
+        btn2=[False] * MIDI_CHANNEL_COUNT,
+        btn3=[False] * MIDI_CHANNEL_COUNT,
+    )
+    node._midi_callback(touched)
+    value_while_touched = node._channels[0]
+
+    node._filter_last_at[0] = time.monotonic() - 0.005
+    released_with_device_zero = SimpleNamespace(
+        channel=[0] * MIDI_CHANNEL_COUNT,
+        touch=[False] * MIDI_CHANNEL_COUNT,
+        dial=[0] * MIDI_CHANNEL_COUNT,
+        btn0=[False] * MIDI_CHANNEL_COUNT,
+        btn1=[False] * MIDI_CHANNEL_COUNT,
+        btn2=[False] * MIDI_CHANNEL_COUNT,
+        btn3=[False] * MIDI_CHANNEL_COUNT,
+    )
+    node._midi_callback(released_with_device_zero)
+
+    assert node._raw_channels[0] == MIDI_VALUE_MAX
+    assert value_while_touched < node._channels[0] < MIDI_VALUE_MAX
