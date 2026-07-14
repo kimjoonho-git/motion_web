@@ -1,0 +1,179 @@
+from motion_runtime.motion_run_manager import (
+    CONTINUOUS_LOOP_TOLERANCE_DEG,
+    MotionRunManager,
+)
+
+
+def test_continuous_capability_accepts_values_inside_axis_tolerances():
+    capability = MotionRunManager._continuous_capability([
+        {
+            'motor_axis': 0,
+            'loop_delta_deg': 4.9,
+            'loop_tolerance_deg': 5.0,
+        },
+        {
+            'motor_axis': 1,
+            'loop_delta_deg': 5.0,
+            'loop_tolerance_deg': 5.0,
+        },
+    ])
+
+    assert capability['available'] is True
+    assert '5° 이내' in capability['reason']
+
+
+def test_four_degree_motion_seam_is_allowed_even_if_motor_delta_is_large():
+    capability = MotionRunManager._continuous_capability([{
+        'motor_axis': 0,
+        'loop_delta_deg': 4.0,
+        'loop_motor_delta_deg': 400.0,
+        'loop_tolerance_deg': 5.0,
+    }])
+
+    assert capability['available'] is True
+
+
+def test_continuous_loop_tolerance_is_five_degrees():
+    assert CONTINUOUS_LOOP_TOLERANCE_DEG == 5.0
+
+
+def test_motion_value_clamps_to_mapping_min_and_max():
+    assert MotionRunManager._clamp_motion_value(-35.0, -30.0, 30.0) == -30.0
+    assert MotionRunManager._clamp_motion_value(12.0, -30.0, 30.0) == 12.0
+    assert MotionRunManager._clamp_motion_value(35.0, -30.0, 30.0) == 30.0
+
+
+def test_continuous_capability_rejects_only_continuous_mode_on_seam_mismatch():
+    capability = MotionRunManager._continuous_capability([
+        {
+            'motor_axis': 2,
+            'loop_delta_deg': 5.001,
+            'loop_tolerance_deg': 5.0,
+        },
+    ])
+
+    assert capability['available'] is False
+    assert 'Axis 2' in capability['reason']
+    assert '5.001°' in capability['reason']
+
+
+def test_failed_readiness_marks_all_actions_unavailable():
+    capabilities = MotionRunManager._unavailable_capabilities('모터 연결 끊김')
+
+    assert all(item['available'] is False for item in capabilities.values())
+    assert all(item['reason'] == '모터 연결 끊김' for item in capabilities.values())
+
+
+def test_motor_alarm_is_reported_even_when_fault_flag_is_missing():
+    manager = MotionRunManager.__new__(MotionRunManager)
+    error = manager._motor_ready_error({
+        'controller_index': 0,
+        'state': 'detected',
+        'motor_type': 'AC Servo',
+        'servo_on': True,
+        'fault': False,
+        'errorcode': 21,
+        'errorcode_hex': '0xFF15',
+        'error_text': 'Error 21.0',
+    })
+
+    assert error == 'Axis 0 motor alarm 0xFF15 (Error 21.0)'
+
+
+def test_motor_target_applies_reference_scale_direction_and_gear_ratio():
+    manager = MotionRunManager.__new__(MotionRunManager)
+    row = {
+        'reference_position_deg': 10.0,
+        'offset_deg': 2.0,
+        'scale': 1.5,
+        'invert': True,
+        'gear_ratio': 2.0,
+    }
+
+    assert manager._motor_target(row, 3.0) == -5.0
+
+
+def test_plan_keeps_single_run_available_when_continuous_seam_fails():
+    manager = MotionRunManager.__new__(MotionRunManager)
+    manager.period_sec = 0.02
+    manager._motion_file_path = lambda _file_id: None
+    manager._mapping_file_path = lambda _file_id: None
+    manager._load_motion_records = lambda _path: [
+        {'time_sec': 0.0, 'motion_id': 'joint', 'value': 0.0},
+        {'time_sec': 1.0, 'motion_id': 'joint', 'value': 6.0},
+    ]
+    manager._load_mapping = lambda _path: {
+        'motion_file_id': 'motion.json',
+        'mappings': [{
+            'motion_id': 'joint',
+            'motor_axis': 0,
+            'reference_position_deg': 10.0,
+            'initial_enabled': True,
+        }],
+    }
+    manager._current_motors = lambda: [{'axis': 0}]
+    manager._motor_for_axis = lambda _axis, motors: motors[0]
+    manager._motor_ready_error = lambda _motor: ''
+    manager._target_range_limit_error = lambda _motor, _low, _high: ''
+    manager._motor_type = lambda _motor: 'ac_servo'
+    plan = manager._build_plan({
+        'motion_file_id': 'motion.json',
+        'mapping_file_id': 'mapping.yaml',
+    })
+
+    assert plan['capabilities']['initial_position']['available'] is True
+    assert plan['capabilities']['single_run']['available'] is True
+    assert plan['capabilities']['continuous_run']['available'] is False
+    assert plan['axes'][0]['loop_start_motion_deg'] == 0.0
+    assert plan['axes'][0]['loop_end_motion_deg'] == 6.0
+    assert plan['axes'][0]['loop_start_target_deg'] == 10.0
+    assert plan['axes'][0]['loop_end_target_deg'] == 16.0
+    assert plan['axes'][0]['loop_delta_deg'] == 6.0
+    assert plan['axes'][0]['loop_motor_delta_deg'] == 6.0
+    assert plan['axes'][0]['loop_tolerance_deg'] == 5.0
+
+
+def test_plan_runs_with_out_of_range_data_and_clamps_every_command():
+    manager = MotionRunManager.__new__(MotionRunManager)
+    manager.period_sec = 0.5
+    manager._motion_file_path = lambda _file_id: None
+    manager._mapping_file_path = lambda _file_id: None
+    manager._load_motion_records = lambda _path: [
+        {'time_sec': 0.0, 'motion_id': 'joint', 'value': -35.0},
+        {'time_sec': 0.5, 'motion_id': 'joint', 'value': 0.0},
+        {'time_sec': 1.0, 'motion_id': 'joint', 'value': 35.0},
+    ]
+    manager._load_mapping = lambda _path: {
+        'motion_file_id': 'motion.json',
+        'mappings': [{
+            'motion_id': 'joint',
+            'motor_axis': 0,
+            'reference_position_deg': 0.0,
+            'motion_lower_deg': -30.0,
+            'motion_upper_deg': 30.0,
+            'initial_enabled': True,
+            'initial_mode': 'first_frame',
+        }],
+    }
+    manager._current_motors = lambda: [{'axis': 0}]
+    manager._motor_for_axis = lambda _axis, motors: motors[0]
+    manager._motor_ready_error = lambda _motor: ''
+    manager._target_range_limit_error = lambda _motor, _low, _high: ''
+    manager._motor_type = lambda _motor: 'ac_servo'
+
+    plan = manager._build_plan({
+        'motion_file_id': 'motion.json',
+        'mapping_file_id': 'mapping.yaml',
+    })
+    axis = plan['axes'][0]
+    commanded = [sample['positions'][0] for sample in plan['samples']]
+
+    assert plan['capabilities']['initial_position']['available'] is True
+    assert plan['capabilities']['single_run']['available'] is True
+    assert len(plan['warnings']) == 2
+    assert axis['motion_clamped'] is True
+    assert axis['initial_motion_source_position_deg'] == -35.0
+    assert axis['initial_motion_position_deg'] == -30.0
+    assert axis['initial_motor_target_deg'] == -30.0
+    assert min(commanded) == -30.0
+    assert max(commanded) == 30.0

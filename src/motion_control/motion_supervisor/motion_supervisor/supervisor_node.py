@@ -40,6 +40,18 @@ DYNAMIXEL_ACTION_MIN_DEG = -180.0
 DYNAMIXEL_ACTION_MAX_DEG = 180.0
 
 
+def motion_run_rejection_reason(
+    motor_state_available: bool,
+    manual_command_active: bool,
+) -> Optional[str]:
+    """Return why a runtime command cannot own the final command output."""
+    if not motor_state_available:
+        return 'motor state is unavailable or stale'
+    if manual_command_active:
+        return 'a manual command is active'
+    return None
+
+
 class MotionSupervisor(Node):
     """Final publisher for upper-level motion commands."""
 
@@ -69,6 +81,10 @@ class MotionSupervisor(Node):
         self.motor_command_topic = self.declare_parameter(
             'motor_command_topic',
             '/motion_control/motor_command',
+        ).value
+        self.motion_run_command_topic = self.declare_parameter(
+            'motion_run_command_topic',
+            '/motion_control/motion_run_command',
         ).value
         self.state_timeout_sec = float(
             self.declare_parameter('state_timeout_sec', 0.5).value
@@ -112,6 +128,12 @@ class MotionSupervisor(Node):
             self.motor_command_topic,
             qos,
         )
+        self._motion_run_command_sub = self.create_subscription(
+            MotorStatus,
+            self.motion_run_command_topic,
+            self._motion_run_command_callback,
+            qos,
+        )
         self._result_pub = self.create_publisher(String, self.jog_result_topic, 10)
         self._action_result_pub = self.create_publisher(String, self.action_result_topic, 10)
 
@@ -119,6 +141,7 @@ class MotionSupervisor(Node):
             f'motion_supervisor started: state={self.motion_state_topic}, '
             f'jog_request={self.jog_request_topic}, '
             f'action_request={self.action_request_topic}, '
+            f'motion_run_command={self.motion_run_command_topic}, '
             f'command={self.motor_command_topic}, '
             f'config_file={self.config_file}, '
             f'action_period={self.action_period_sec * 1000.0:.3f} ms'
@@ -134,6 +157,20 @@ class MotionSupervisor(Node):
         self._latest_state_at = time.time()
         self._clear_completed_jogs()
         self._clear_completed_actions()
+
+    def _motion_run_command_callback(self, msg: MotorStatus) -> None:
+        """Relay runtime commands through the sole final command publisher."""
+        reason = motion_run_rejection_reason(
+            motor_state_available=bool(self._current_motors()),
+            manual_command_active=bool(self._active_jogs or self._active_actions),
+        )
+        if reason:
+            self.get_logger().warning(
+                f'Rejected motion runtime command because {reason}.',
+                throttle_duration_sec=1.0,
+            )
+            return
+        self._command_pub.publish(msg)
 
     def _jog_request_callback(self, msg: String) -> None:
         try:

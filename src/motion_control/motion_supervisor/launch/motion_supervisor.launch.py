@@ -19,6 +19,10 @@ def generate_launch_description():
         DeclareLaunchArgument('jog_result_topic', default_value='/motion_control/manual_jog_result'),
         DeclareLaunchArgument('action_request_topic', default_value='/motion_control/manual_action_request'),
         DeclareLaunchArgument('action_result_topic', default_value='/motion_control/manual_action_result'),
+        DeclareLaunchArgument(
+            'motion_run_command_topic',
+            default_value='/motion_control/motion_run_command',
+        ),
         DeclareLaunchArgument('motor_command_topic', default_value='/motion_control/motor_command'),
         Node(
             package='motion_supervisor',
@@ -31,6 +35,7 @@ def generate_launch_description():
                 'jog_result_topic': LaunchConfiguration('jog_result_topic'),
                 'action_request_topic': LaunchConfiguration('action_request_topic'),
                 'action_result_topic': LaunchConfiguration('action_result_topic'),
+                'motion_run_command_topic': LaunchConfiguration('motion_run_command_topic'),
                 'motor_command_topic': LaunchConfiguration('motor_command_topic'),
                 'config_file': LaunchConfiguration('config_file'),
             }],

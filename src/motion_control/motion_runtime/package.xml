@@ -1,29 +1,17 @@
 <?xml version="1.0"?>
 <package format="3">
-  <name>motion_state_monitor</name>
+  <name>motion_runtime</name>
   <version>0.1.0</version>
-  <description>Upper-level read-only motor state monitor for motion_system.</description>
+  <description>Motion mapping, validation, and runtime execution orchestration.</description>
   <maintainer email="joonho_test@example.com">joonho_test</maintainer>
   <license>Apache-2.0</license>
-
   <buildtool_depend>ament_python</buildtool_depend>
-
   <depend>rclpy</depend>
   <depend>motion_control_msgs</depend>
   <depend>std_msgs</depend>
-  <depend>std_srvs</depend>
-  <exec_depend>ament_index_python</exec_depend>
-  <exec_depend>launch</exec_depend>
-  <exec_depend>launch_ros</exec_depend>
-  <exec_depend>motion_control_bridge</exec_depend>
-  <exec_depend>motion_supervisor</exec_depend>
-  <exec_depend>motion_runtime</exec_depend>
-  <exec_depend>motion_web_bridge</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
-
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
-
   <export>
     <build_type>ament_python</build_type>
   </export>
