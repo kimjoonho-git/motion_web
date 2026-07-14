@@ -21,8 +21,8 @@ function defaultMapping(channel) {
     channel,
     enabled: true,
     motion_id: `1-${channel + 1}`,
-    min_deg: -180,
-    max_deg: 180,
+    min_14bit: 0,
+    max_14bit: MIDI_MAX,
     reversed: false,
     filter_level: 0,
   };
@@ -45,9 +45,13 @@ function requireSuccess(payload) {
 
 function invalidMappingItem(item) {
   return !MOTION_ID_PATTERN.test(String(item.motion_id || '').trim())
-    || !Number.isFinite(Number(item.min_deg))
-    || !Number.isFinite(Number(item.max_deg))
-    || Math.abs(Number(item.max_deg) - Number(item.min_deg)) < 1e-9
+    || !Number.isInteger(Number(item.min_14bit))
+    || Number(item.min_14bit) < 0
+    || Number(item.min_14bit) > MIDI_MAX
+    || !Number.isInteger(Number(item.max_14bit))
+    || Number(item.max_14bit) < 0
+    || Number(item.max_14bit) > MIDI_MAX
+    || Number(item.min_14bit) >= Number(item.max_14bit)
     || !Number.isInteger(Number(item.filter_level))
     || Number(item.filter_level) < 0
     || Number(item.filter_level) > FILTER_LEVEL_MAX;
@@ -90,8 +94,8 @@ export function createMidiMonitorController({ el }) {
           channel,
           enabled: item.enabled !== false,
           motion_id: String(item.motion_id ?? `1-${channel + 1}`),
-          min_deg: numberValue(item.min_deg, -180),
-          max_deg: numberValue(item.max_deg, 180),
+          min_14bit: Math.round(numberValue(item.min_14bit, 0)),
+          max_14bit: Math.round(numberValue(item.max_14bit, MIDI_MAX)),
           reversed: Boolean(item.reversed),
           filter_level: Math.round(numberValue(item.filter_level, 0)),
         };
@@ -112,11 +116,10 @@ export function createMidiMonitorController({ el }) {
       <td class="midi-live-value" data-midi-output="raw">0</td>
       <td class="midi-live-value" data-midi-output="filtered">0</td>
       <td class="midi-live-value" data-midi-output="ratio">0.00%</td>
-      <td><input type="number" inputmode="decimal" step="0.1" data-midi-field="min_deg" value="${item.min_deg}"></td>
-      <td><input type="number" inputmode="decimal" step="0.1" data-midi-field="max_deg" value="${item.max_deg}"></td>
+      <td><input type="number" inputmode="numeric" min="0" max="${MIDI_MAX}" step="1" data-midi-field="min_14bit" value="${item.min_14bit}"></td>
+      <td><input type="number" inputmode="numeric" min="0" max="${MIDI_MAX}" step="1" data-midi-field="max_14bit" value="${item.max_14bit}"></td>
       <td><input type="checkbox" data-midi-field="reversed" ${item.reversed ? 'checked' : ''}></td>
       <td><select data-midi-field="filter_level" aria-label="필터 단계">${filterLevelOptions(item.filter_level)}</select></td>
-      <td class="midi-live-value midi-motion-value" data-midi-output="motion_deg">-</td>
       <td data-midi-output="touch">-</td>
     </tr>`;
   }
@@ -133,26 +136,15 @@ export function createMidiMonitorController({ el }) {
       const live = channels.find((item) => Number(item?.channel) === mapping.channel);
       const raw = Math.max(0, Math.min(MIDI_MAX, numberValue(live?.raw_value, 0)));
       const filtered = Math.max(0, Math.min(MIDI_MAX, numberValue(live?.filtered_value, raw)));
-      const confirmed = live?.value_confirmed !== false;
       const filteredRatio = filtered / MIDI_MAX;
-      const ratio = mapping.reversed ? 1 - filteredRatio : filteredRatio;
-      const converted = mapping.enabled
-        ? mapping.min_deg + ((mapping.max_deg - mapping.min_deg) * ratio)
-        : null;
       const rawCell = row.querySelector('[data-midi-output="raw"]');
       const filteredCell = row.querySelector('[data-midi-output="filtered"]');
       const ratioCell = row.querySelector('[data-midi-output="ratio"]');
-      const motionCell = row.querySelector('[data-midi-output="motion_deg"]');
       const touchCell = row.querySelector('[data-midi-output="touch"]');
       const motionIdInput = row.querySelector('[data-midi-field="motion_id"]');
       if (rawCell) rawCell.textContent = Math.round(raw).toLocaleString('ko-KR');
       if (filteredCell) filteredCell.textContent = Math.round(filtered).toLocaleString('ko-KR');
       if (ratioCell) ratioCell.textContent = `${(filteredRatio * 100).toFixed(2)}%`;
-      if (motionCell) {
-        motionCell.textContent = !confirmed
-          ? '슬라이더 이동 필요'
-          : converted === null ? '사용 안 함' : `${converted.toFixed(3)}°`;
-      }
       if (touchCell) {
         const touched = Boolean(live?.touch);
         touchCell.textContent = touched ? '터치' : '-';
@@ -222,8 +214,8 @@ export function createMidiMonitorController({ el }) {
       item[field] = target.checked;
     } else if (field === 'filter_level') {
       item.filter_level = Math.round(numberValue(target.value, item.filter_level));
-    } else if (field === 'min_deg' || field === 'max_deg') {
-      item[field] = numberValue(target.value, item[field]);
+    } else if (field === 'min_14bit' || field === 'max_14bit') {
+      item[field] = Math.round(numberValue(target.value, item[field]));
     } else {
       item[field] = target.value;
     }
@@ -256,7 +248,7 @@ export function createMidiMonitorController({ el }) {
     if (invalid) {
       status = {
         ...(status || {}),
-        message: `채널 ${invalid.channel + 1}: Motion ID는 1-1, 4-3 형식으로 입력하고 Min/Max와 필터 0~13단계를 확인하세요`,
+        message: `채널 ${invalid.channel + 1}: Motion ID 형식, 14bit Min/Max(0~16383), 필터 0~13단계를 확인하세요`,
       };
       render();
       return;

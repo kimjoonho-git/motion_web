@@ -660,7 +660,7 @@
               <div id="midiMonitorSummary" class="motion-file-summary midi-monitor-summary">
                 <div><span>연결</span><strong id="midiConnectionState">대기</strong></div>
                 <div><span>입력 범위</span><strong>14bit · 0~16383</strong></div>
-                <div><span>모션 단위</span><strong>deg</strong></div>
+                <div><span>출력 단위</span><strong>14bit</strong></div>
                 <div><span>필터</span><strong>2차 저역통과</strong></div>
                 <div><span>모터 출력</span><strong id="midiMotorOutputState">사용 안 함</strong></div>
               </div>
@@ -671,8 +671,8 @@
 
             <section class="motion-file-subsection" aria-label="MIDI channel values">
               <div class="section-head compact">
-                <strong>채널값 및 모션 각도 변환</strong>
-                <span>14bit MIDI → Motion ID · deg</span>
+                <strong>채널값 및 필터 출력</strong>
+                <span>14bit MIDI → 필터 → 뱅크 출력 범위</span>
               </div>
               <div class="table-wrap midi-monitor-table-wrap">
                 <table class="midi-monitor-table">
@@ -684,20 +684,19 @@
                       <th>MIDI 값</th>
                       <th>필터 출력</th>
                       <th>비율</th>
-                      <th>Min (deg)</th>
-                      <th>Max (deg)</th>
+                      <th>Min (14bit)</th>
+                      <th>Max (14bit)</th>
                       <th>반전</th>
                       <th>필터 (0~13단계)</th>
-                      <th>변환값 (deg)</th>
                       <th>터치</th>
                     </tr>
                   </thead>
                   <tbody id="midiMonitorRows">
-                    <tr><td colspan="12" class="empty">MIDI 모니터 노드 상태 수신 대기</td></tr>
+                    <tr><td colspan="11" class="empty">MIDI 모니터 노드 상태 수신 대기</td></tr>
                   </tbody>
                 </table>
               </div>
-              <div class="registry-message">Motion ID는 1-1, 4-3처럼 양의 정수-양의 정수 형식만 등록할 수 있습니다. 필터 단계는 선택 즉시 적용되고, 나머지 매핑 설정은 `뱅크 설정 적용`을 눌러야 반영됩니다.</div>
+              <div class="registry-message">Motion ID는 1-1, 4-3처럼 양의 정수-양의 정수 형식만 등록할 수 있습니다. Min/Max는 필터 후 출력할 14bit 범위이며 0~16383 안에서 설정합니다. 필터 단계는 선택 즉시 적용되고, 나머지 뱅크 설정은 `뱅크 설정 적용`을 눌러야 반영됩니다.</div>
             </section>
           </div>
         </div>
@@ -852,6 +851,6 @@
       </div>
     </div>
 
-    <script type="module" src="/static/app.js?v=20260714-mandatory-initial-position"></script>
+    <script type="module" src="/static/app.js?v=20260714-midi-14bit-output-range"></script>
   </body>
 </html>
