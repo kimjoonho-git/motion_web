@@ -276,14 +276,10 @@ class MotionMappingManager(Node):
             initial_mode = str(row.get('initial_mode') or 'first_frame').strip() or 'first_frame'
             reference_enabled = bool(row.get('reference_enabled', True))
             reference_position = self._optional_float(row.get('reference_position_deg'), 0.0)
-            initial_enabled = bool(row.get('initial_enabled', True))
             initial_position = self._optional_float(row.get('initial_motion_position_deg'), 0.0)
             initial_move_time = self._optional_float(row.get('initial_move_time_sec'), 5.0)
             if not reference_enabled:
                 reference_position = 0.0
-            if not initial_enabled:
-                initial_position = 0.0
-                initial_move_time = 0.0
             normalized_rows.append({
                 'motion_id': motion_id,
                 'enabled': bool(row.get('enabled', True)),
@@ -292,7 +288,6 @@ class MotionMappingManager(Node):
                 'reference_position_deg': reference_position,
                 'motion_lower_deg': self._optional_float(row.get('motion_lower_deg'), -180.0),
                 'motion_upper_deg': self._optional_float(row.get('motion_upper_deg'), 180.0),
-                'initial_enabled': initial_enabled,
                 'initial_mode': initial_mode,
                 'initial_motion_position_deg': initial_position,
                 'initial_move_time_sec': initial_move_time,
@@ -361,7 +356,6 @@ class MotionMappingManager(Node):
             row_errors: List[str] = []
             row_warnings: List[str] = []
             enabled = bool(row.get('enabled'))
-            initial_enabled = bool(row.get('initial_enabled', True))
             motor_axis = row.get('motor_axis')
             lower = self._finite_float(row.get('motion_lower_deg'))
             upper = self._finite_float(row.get('motion_upper_deg'))
@@ -392,15 +386,13 @@ class MotionMappingManager(Node):
                 row_errors.append('motion range must be numeric')
             elif lower > upper:
                 row_errors.append('motion_lower_deg must be <= motion_upper_deg')
-            if initial_enabled and initial_mode not in INITIAL_MODES:
+            if initial_mode not in INITIAL_MODES:
                 row_errors.append(f'initial_mode must be one of: {", ".join(INITIAL_MODES)}')
-            if initial_enabled and initial_position is None:
+            if initial_position is None:
                 row_errors.append('initial_motion_position_deg must be numeric')
-            if initial_enabled and (initial_time is None or initial_time <= 0):
+            if initial_time is None or initial_time <= 0:
                 row_errors.append('initial_move_time_sec must be > 0')
             if (
-                initial_enabled
-                and
                 initial_mode == 'manual'
                 and lower is not None
                 and upper is not None
@@ -408,13 +400,12 @@ class MotionMappingManager(Node):
                 and not (lower <= initial_position <= upper)
             ):
                 row_warnings.append('manual initial position is outside motion range')
-            if initial_enabled and initial_mode == 'first_frame' and include_motion_file and motion_id not in first_values:
+            if initial_mode == 'first_frame' and include_motion_file and motion_id not in first_values:
                 row_warnings.append('first frame value not found in selected motion file')
-            if initial_enabled and initial_mode == 'first_frame' and motion_id in first_values:
+            if initial_mode == 'first_frame' and motion_id in first_values:
                 initial_position = first_values[motion_id]
                 row['initial_motion_position_deg'] = initial_position
             effective_reference = reference if reference_enabled else 0.0
-            effective_initial_position = initial_position if initial_enabled else None
 
             preview: Dict[str, Any] = {
                 'reference_enabled': reference_enabled,
@@ -422,8 +413,7 @@ class MotionMappingManager(Node):
                 'stored_reference_position_deg': reference,
                 'motion_lower_deg': lower,
                 'motion_upper_deg': upper,
-                'initial_enabled': initial_enabled,
-                'initial_motion_position_deg': effective_initial_position,
+                'initial_motion_position_deg': initial_position,
                 'stored_initial_motion_position_deg': initial_position,
                 'motion_offset_deg': offset,
                 'scale': scale,
@@ -436,12 +426,12 @@ class MotionMappingManager(Node):
                 upper_target = self._motion_to_motor_target(row, upper)
                 manual_output = (
                     self._motion_to_output_value(row, initial_position)
-                    if initial_enabled and initial_position is not None
+                    if initial_position is not None
                     else None
                 )
                 manual_target = (
                     self._motion_to_motor_target(row, initial_position)
-                    if initial_enabled and initial_position is not None
+                    if initial_position is not None
                     else None
                 )
                 preview.update({
@@ -456,7 +446,7 @@ class MotionMappingManager(Node):
                     'manual_initial_output_deg': manual_output,
                     'manual_initial_motor_target_deg': manual_target,
                 })
-                if initial_enabled and motion_id in first_values:
+                if motion_id in first_values:
                     first_motion_value = first_values[motion_id]
                     first_output_value = self._motion_to_output_value(row, first_motion_value)
                     preview.update({

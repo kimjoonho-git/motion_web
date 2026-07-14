@@ -331,7 +331,7 @@ class MotionRunManager(Node):
 
     def _run_initialization(self, plan: Dict[str, Any]) -> None:
         try:
-            init_axes = [axis for axis in plan['axes'] if axis.get('initial_enabled')]
+            init_axes = list(plan['axes'])
             if not init_axes:
                 now = time.time()
                 status = self._status_from_plan('initialized', '초기 위치 이동 대상이 없습니다', plan)
@@ -534,7 +534,6 @@ class MotionRunManager(Node):
         initial_targets = {
             int(axis['motor_axis']): float(axis['initial_motor_target_deg'])
             for axis in plan.get('axes', [])
-            if axis.get('initial_enabled') is not False
         }
         reached, message = self._wait_for_targets(plan.get('axes', []), initial_targets, 0.0)
         if not reached:
@@ -816,7 +815,6 @@ class MotionRunManager(Node):
                 'motion_id': motion_id,
                 'motor_axis': motor_axis,
                 'motor_type': self._motor_type(motor),
-                'initial_enabled': row.get('initial_enabled') is not False,
                 'initial_move_time_sec': initial_move_time,
                 'initial_motion_source_position_deg': initial_motion_source_value,
                 'initial_motion_position_deg': initial_motion_value,
@@ -1240,8 +1238,6 @@ class MotionRunManager(Node):
         row: Dict[str, Any],
         records: List[Dict[str, Any]],
     ) -> float:
-        if row.get('initial_enabled') is False:
-            return 0.0
         if str(row.get('initial_mode') or 'first_frame') == 'manual':
             return self._finite_float(row.get('initial_motion_position_deg')) or 0.0
         return float(records[0]['value'])
@@ -1473,7 +1469,6 @@ class MotionRunManager(Node):
                     'motion_id': axis['motion_id'],
                     'motor_axis': axis['motor_axis'],
                     'motor_type': axis['motor_type'],
-                    'initial_enabled': axis['initial_enabled'],
                     'initial_motion_source_position_deg': axis['initial_motion_source_position_deg'],
                     'initial_motion_position_deg': axis['initial_motion_position_deg'],
                     'initial_motor_target_deg': axis['initial_motor_target_deg'],

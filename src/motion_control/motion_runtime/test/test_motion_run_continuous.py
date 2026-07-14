@@ -1,3 +1,4 @@
+from motion_runtime.motion_mapping_manager import MotionMappingManager
 from motion_runtime.motion_run_manager import (
     CONTINUOUS_LOOP_TOLERANCE_DEG,
     MotionRunManager,
@@ -41,6 +42,38 @@ def test_motion_value_clamps_to_mapping_min_and_max():
     assert MotionRunManager._clamp_motion_value(-35.0, -30.0, 30.0) == -30.0
     assert MotionRunManager._clamp_motion_value(12.0, -30.0, 30.0) == 12.0
     assert MotionRunManager._clamp_motion_value(35.0, -30.0, 30.0) == 30.0
+
+
+def test_legacy_initial_disabled_setting_is_ignored():
+    manager = MotionRunManager.__new__(MotionRunManager)
+
+    initial = manager._initial_motion_value({
+        'initial_enabled': False,
+        'initial_mode': 'manual',
+        'initial_motion_position_deg': 12.5,
+    }, [{'value': -3.0}])
+
+    assert initial == 12.5
+
+
+def test_legacy_initial_disabled_mapping_keeps_initial_settings_and_drops_option():
+    manager = MotionMappingManager.__new__(MotionMappingManager)
+
+    normalized = manager._normalize_mapping({
+        'name': 'legacy',
+        'mappings': [{
+            'motion_id': '1-1',
+            'initial_enabled': False,
+            'initial_mode': 'manual',
+            'initial_motion_position_deg': 12.5,
+            'initial_move_time_sec': 5.0,
+        }],
+    })
+
+    row = normalized['mappings'][0]
+    assert 'initial_enabled' not in row
+    assert row['initial_motion_position_deg'] == 12.5
+    assert row['initial_move_time_sec'] == 5.0
 
 
 def test_continuous_capability_rejects_only_continuous_mode_on_seam_mismatch():
@@ -108,7 +141,8 @@ def test_plan_keeps_single_run_available_when_continuous_seam_fails():
             'motion_id': 'joint',
             'motor_axis': 0,
             'reference_position_deg': 10.0,
-            'initial_enabled': True,
+            # A legacy false value must not bypass mandatory initialization.
+            'initial_enabled': False,
         }],
     }
     manager._current_motors = lambda: [{'axis': 0}]
