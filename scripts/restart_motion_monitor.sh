@@ -54,6 +54,12 @@ patterns=(
   "install/motion_web_bridge/lib/motion_web_bridge/motion_web_bridge"
   "install/midi_input_bridge/lib/midi_input_bridge/midi_input_node"
   "ros2 launch midi_control midi_control.launch.py"
+  # Stop legacy pre-refactor processes so they cannot publish duplicate MIDI
+  # or motion state on the current topics.
+  "install/motion_web_bridge/lib/motion_web_bridge/midi_monitor_node"
+  "install/motion_web_bridge/lib/motion_web_bridge/motion_mapping_manager"
+  "install/motion_web_bridge/lib/motion_web_bridge/motion_run_manager"
+  "ros2 launch motion_web_bridge midi_monitor.launch.py"
 )
 
 for pattern in "${patterns[@]}"; do

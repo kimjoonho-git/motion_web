@@ -227,6 +227,10 @@ export function createMidiMonitorController({ el }) {
     } else {
       item[field] = target.value;
     }
+    status = {
+      ...(status || {}),
+      message: '뱅크 설정 변경됨 · 뱅크 설정 적용을 눌러야 노드에 반영됩니다',
+    };
     render();
   }
 
