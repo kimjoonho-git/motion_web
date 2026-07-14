@@ -52,3 +52,14 @@ def test_deleting_active_bank_selects_remaining_bank():
     manager.delete_bank(second['bank_id'])
 
     assert manager.snapshot()['active_bank_id'] == 'bank_1'
+
+
+def test_bank_count_is_limited_to_eight():
+    manager = MidiBankManager()
+    for number in range(2, 9):
+        manager.create_bank(f'Bank {number}')
+
+    assert len(manager.snapshot()['banks']) == 8
+    assert manager.snapshot()['max_banks'] == 8
+    with pytest.raises(ValueError, match='no more than 8 banks'):
+        manager.create_bank('Bank 9')

@@ -3,7 +3,7 @@ from typing import Any, Dict, List
 
 
 MIDI_CHANNEL_COUNT = 8
-MAX_MIDI_BANKS = 32
+MAX_MIDI_BANKS = 8
 
 
 class MidiBankManager:
