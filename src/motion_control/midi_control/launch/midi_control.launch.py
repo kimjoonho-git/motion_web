@@ -31,7 +31,6 @@ def generate_launch_description():
                 'state_topic': '/motion_web/midi_monitor/state',
                 'request_topic': '/motion_web/midi_monitor/request',
                 'response_topic': '/motion_web/midi_monitor/response',
-                'mapping_file': '/home/joonho_test/ros2_ws/motion_data/midi_mappings/default.json',
                 'publish_hz': 10.0,
                 'stale_timeout_sec': 0.5,
             }],
