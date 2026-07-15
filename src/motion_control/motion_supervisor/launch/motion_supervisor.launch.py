@@ -24,6 +24,14 @@ def generate_launch_description():
             default_value='/motion_control/motion_run_command',
         ),
         DeclareLaunchArgument('motor_command_topic', default_value='/motion_control/motor_command'),
+        DeclareLaunchArgument(
+            'midi_position_request_topic',
+            default_value='/motion_control/midi_position_request',
+        ),
+        DeclareLaunchArgument(
+            'midi_position_result_topic',
+            default_value='/motion_control/midi_position_result',
+        ),
         Node(
             package='motion_supervisor',
             executable='motion_supervisor',
@@ -37,6 +45,8 @@ def generate_launch_description():
                 'action_result_topic': LaunchConfiguration('action_result_topic'),
                 'motion_run_command_topic': LaunchConfiguration('motion_run_command_topic'),
                 'motor_command_topic': LaunchConfiguration('motor_command_topic'),
+                'midi_position_request_topic': LaunchConfiguration('midi_position_request_topic'),
+                'midi_position_result_topic': LaunchConfiguration('midi_position_result_topic'),
                 'config_file': LaunchConfiguration('config_file'),
             }],
         ),

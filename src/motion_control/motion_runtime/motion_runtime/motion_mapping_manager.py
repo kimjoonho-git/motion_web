@@ -11,6 +11,12 @@ import yaml
 from rclpy.node import Node
 from std_msgs.msg import String
 
+from motion_runtime.midi_bank_store import (
+    atomic_write_with_backup,
+    load_midi_banks,
+    save_midi_banks,
+)
+
 
 DEFAULT_MOTION_DATA_DIR = Path('/home/joonho_test/ros2_ws/motion_data')
 INITIAL_MODES = ('first_frame', 'manual')
@@ -79,6 +85,10 @@ class MotionMappingManager(Node):
                 response = self._validate_mapping_request(payload)
             elif command == 'delete':
                 response = self._delete_mapping(payload.get('file_id'))
+            elif command == 'load_midi_banks':
+                response = self._load_midi_banks(payload.get('file_id'))
+            elif command == 'save_midi_banks':
+                response = self._save_midi_banks(payload)
             else:
                 response = {
                     'success': False,
@@ -166,10 +176,21 @@ class MotionMappingManager(Node):
         if not mapping.get('created_at'):
             mapping['created_at'] = now
 
+        source_path = None
+        if file_id:
+            try:
+                source_path = self._mapping_file_path(file_id)
+            except ValueError:
+                source_path = None
         path = self._new_or_existing_mapping_path(file_id, mapping.get('name'))
+        midi_banks = self._midi_banks_from_file(source_path or path)
+        if midi_banks is not None:
+            # MIDI owns this section. A normal motion-axis mapping save must
+            # preserve it even though it is not part of mapping validation.
+            mapping['midi_banks'] = midi_banks
         mapping['file_id'] = path.name
         content = yaml.safe_dump(mapping, sort_keys=False, allow_unicode=True)
-        path.write_text(content, encoding='utf-8')
+        backup = atomic_write_with_backup(path, content)
 
         return {
             **self._list_mappings(),
@@ -179,7 +200,49 @@ class MotionMappingManager(Node):
             'mapping': mapping,
             'content': content,
             'validation': validation,
+            'backup_file': str(backup) if backup is not None else '',
         }
+
+    def _load_midi_banks(self, file_id: Any) -> Dict[str, Any]:
+        path = self._mapping_file_path(file_id)
+        state = load_midi_banks(path)
+        if state is None:
+            raise ValueError('모션축 매칭 파일에 저장된 midi_banks가 없습니다')
+        return {
+            'success': True,
+            'message': '모션축 매칭 파일에서 MIDI 뱅크를 불러왔습니다',
+            'file': self._mapping_file_summary(path),
+            'midi_banks': state,
+        }
+
+    def _save_midi_banks(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        path = self._mapping_file_path(payload.get('file_id'))
+        state = payload.get('midi_banks')
+        if not isinstance(state, dict):
+            raise ValueError('midi_banks must be an object')
+        backup = save_midi_banks(path, state)
+        verified = load_midi_banks(path)
+        if verified != state:
+            raise ValueError('저장 후 MIDI 뱅크 파일 검증에 실패했습니다')
+        return {
+            'success': True,
+            'message': 'MIDI 뱅크를 모션축 매칭 파일에 저장하고 검증했습니다',
+            'file': self._mapping_file_summary(path),
+            'midi_banks': verified,
+            'backup_file': str(backup),
+        }
+
+    @staticmethod
+    def _midi_banks_from_file(path: Optional[Path]) -> Optional[Dict[str, Any]]:
+        if path is None or not path.is_file():
+            return None
+        try:
+            root = yaml.safe_load(path.read_text(encoding='utf-8')) or {}
+        except (OSError, yaml.YAMLError):
+            return None
+        if not isinstance(root, dict) or not isinstance(root.get('midi_banks'), dict):
+            return None
+        return root['midi_banks']
 
     def _validate_mapping_request(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         mapping_payload = payload.get('mapping')

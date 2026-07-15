@@ -1,5 +1,4 @@
 import pytest
-
 from midi_control.bank_manager import MidiBankManager
 
 
@@ -37,6 +36,22 @@ def test_bank_update_does_not_store_live_midi_values():
     saved = manager.active_bank()['mappings'][0]
     assert 'raw_value' not in saved
     assert 'touch' not in saved
+
+
+def test_bank_state_round_trip_restores_all_banks():
+    source = MidiBankManager()
+    mappings = source.active_bank()['mappings']
+    mappings[0]['motion_id'] = '4-3'
+    mappings[0]['min_percent'] = 25
+    mappings[0]['max_percent'] = 75
+    source.update_bank('bank_1', name='Main', mappings=mappings)
+    second = source.create_bank('Second')
+    source.select_bank(second['bank_id'])
+
+    restored = MidiBankManager()
+    restored.replace_state(source.export_state())
+
+    assert restored.export_state() == source.export_state()
 
 
 def test_last_bank_cannot_be_deleted():

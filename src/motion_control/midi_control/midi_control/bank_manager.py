@@ -7,6 +7,9 @@ MIDI_CHANNEL_COUNT = 8
 MAX_MIDI_BANKS = 8
 MIDI_VALUE_MIN = 0
 MIDI_VALUE_MAX = 16383
+OUTPUT_PERCENT_MIN = 0.0
+OUTPUT_PERCENT_NORMAL_MAX = 100.0
+OUTPUT_PERCENT_MAX = 200.0
 FILTER_LEVEL_MIN = 0
 FILTER_LEVEL_MAX = 13
 MOTION_ID_PATTERN = re.compile(r'^[1-9]\d*-[1-9]\d*$')
@@ -28,8 +31,8 @@ class MidiBankManager:
                 'channel': channel,
                 'enabled': True,
                 'motion_id': f'1-{channel + 1}',
-                'min_14bit': MIDI_VALUE_MIN,
-                'max_14bit': MIDI_VALUE_MAX,
+                'min_percent': OUTPUT_PERCENT_MIN,
+                'max_percent': OUTPUT_PERCENT_NORMAL_MAX,
                 'reversed': False,
                 'filter_level': 0,
             }
@@ -69,16 +72,22 @@ class MidiBankManager:
                 raise ValueError(f'mappings[{index}].channel must be an integer') from exc
             if channel < 0 or channel >= MIDI_CHANNEL_COUNT:
                 raise ValueError(f'mappings[{index}].channel must be 0..7')
-            min_value = cls._finite_float(item.get('min_14bit', MIDI_VALUE_MIN), 'min_14bit')
-            max_value = cls._finite_float(item.get('max_14bit', MIDI_VALUE_MAX), 'max_14bit')
-            min_14bit = int(min_value)
-            max_14bit = int(max_value)
-            if min_value != min_14bit or not MIDI_VALUE_MIN <= min_14bit <= MIDI_VALUE_MAX:
-                raise ValueError(f'channel {channel + 1}: min_14bit must be an integer 0..16383')
-            if max_value != max_14bit or not MIDI_VALUE_MIN <= max_14bit <= MIDI_VALUE_MAX:
-                raise ValueError(f'channel {channel + 1}: max_14bit must be an integer 0..16383')
-            if min_14bit >= max_14bit:
-                raise ValueError(f'channel {channel + 1}: min_14bit must be less than max_14bit')
+            min_percent = cls._finite_float(
+                item.get('min_percent', OUTPUT_PERCENT_MIN),
+                'min_percent',
+            )
+            max_percent = cls._finite_float(
+                item.get('max_percent', OUTPUT_PERCENT_NORMAL_MAX),
+                'max_percent',
+            )
+            if not OUTPUT_PERCENT_MIN < max_percent <= OUTPUT_PERCENT_MAX:
+                raise ValueError(f'channel {channel + 1}: max_percent must be > 0 and <= 200')
+            if max_percent > OUTPUT_PERCENT_NORMAL_MAX:
+                min_percent = OUTPUT_PERCENT_MIN
+            elif not OUTPUT_PERCENT_MIN <= min_percent < max_percent:
+                raise ValueError(
+                    f'channel {channel + 1}: min_percent must be >= 0 and less than max_percent'
+                )
             filter_value = cls._finite_float(item.get('filter_level', 0), 'filter_level')
             filter_level = int(filter_value)
             if (
@@ -90,19 +99,23 @@ class MidiBankManager:
             motion_id = str(item.get('motion_id') or '').strip()
             if not MOTION_ID_PATTERN.fullmatch(motion_id):
                 raise ValueError(
-                    f'channel {channel + 1}: motion_id must use positive-number-positive-number format'
+                    f'channel {channel + 1}: motion_id must use '
+                    'positive-number-positive-number format'
                 )
             by_channel[channel] = {
                 'channel': channel,
                 'enabled': bool(item.get('enabled', True)),
                 'motion_id': motion_id,
-                'min_14bit': min_14bit,
-                'max_14bit': max_14bit,
+                'min_percent': min_percent,
+                'max_percent': max_percent,
                 'reversed': bool(item.get('reversed', False)),
                 'filter_level': filter_level,
             }
         defaults = cls.default_mappings()
-        return [dict(by_channel.get(channel, defaults[channel])) for channel in range(MIDI_CHANNEL_COUNT)]
+        return [
+            dict(by_channel.get(channel, defaults[channel]))
+            for channel in range(MIDI_CHANNEL_COUNT)
+        ]
 
     @staticmethod
     def _copy_bank(bank: Dict[str, Any], *, include_mappings: bool = True) -> Dict[str, Any]:
@@ -138,12 +151,60 @@ class MidiBankManager:
             ],
         }
 
+    def export_state(self) -> Dict[str, Any]:
+        """Return settings only; live MIDI values are never included."""
+        return {
+            'version': 1,
+            'active_bank_id': self._active_bank_id,
+            'banks': [self._copy_bank(bank) for bank in self._banks.values()],
+        }
+
+    def replace_state(self, state: Any) -> Dict[str, Any]:
+        if not isinstance(state, dict):
+            raise ValueError('midi_banks must be an object')
+        banks = state.get('banks')
+        if not isinstance(banks, list) or not banks:
+            raise ValueError('midi_banks.banks must contain at least one bank')
+        if len(banks) > MAX_MIDI_BANKS:
+            raise ValueError(f'no more than {MAX_MIDI_BANKS} banks are allowed')
+
+        validated: Dict[str, Dict[str, Any]] = {}
+        max_bank_number = 0
+        for index, item in enumerate(banks):
+            if not isinstance(item, dict):
+                raise ValueError(f'midi_banks.banks[{index}] must be an object')
+            bank_id = str(item.get('bank_id') or '').strip()
+            if not bank_id or len(bank_id) > 64:
+                raise ValueError(f'midi_banks.banks[{index}].bank_id is invalid')
+            if bank_id in validated:
+                raise ValueError(f'duplicated MIDI bank id: {bank_id}')
+            match = re.fullmatch(r'bank_(\d+)', bank_id)
+            if match:
+                max_bank_number = max(max_bank_number, int(match.group(1)))
+            validated[bank_id] = {
+                'bank_id': bank_id,
+                'name': self._validated_name(item.get('name')),
+                'mappings': self.validate_mappings(item.get('mappings')),
+            }
+
+        active_bank_id = str(state.get('active_bank_id') or '').strip()
+        if active_bank_id not in validated:
+            raise ValueError(f'unknown active MIDI bank: {active_bank_id}')
+        self._banks = validated
+        self._active_bank_id = active_bank_id
+        self._next_bank_number = max(max_bank_number + 1, len(validated) + 1)
+        return self.snapshot()
+
     def create_bank(self, name: Any = None, *, copy_from_active: bool = True) -> Dict[str, Any]:
         if len(self._banks) >= MAX_MIDI_BANKS:
             raise ValueError(f'no more than {MAX_MIDI_BANKS} banks are allowed')
         bank_number = self._next_bank_number
         self._next_bank_number += 1
         bank_id = f'bank_{bank_number}'
+        while bank_id in self._banks:
+            bank_number = self._next_bank_number
+            self._next_bank_number += 1
+            bank_id = f'bank_{bank_number}'
         bank_name = self._validated_name(name or f'Bank {bank_number}')
         if copy_from_active and self._banks:
             mappings = self.active_bank()['mappings']

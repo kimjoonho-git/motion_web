@@ -38,17 +38,22 @@ CUBIC_SMOOTHSTEP_MAX_ACCELERATION = 6.0
 ACTION_RESULT_SETTLE_SEC = 2.0
 DYNAMIXEL_ACTION_MIN_DEG = -180.0
 DYNAMIXEL_ACTION_MAX_DEG = 180.0
+MIDI_COMMAND_OWNERSHIP_SEC = 0.15
+MOTION_RUN_ACTIVE_GRACE_SEC = 0.15
 
 
 def motion_run_rejection_reason(
     motor_state_available: bool,
     manual_command_active: bool,
+    midi_command_active: bool = False,
 ) -> Optional[str]:
     """Return why a runtime command cannot own the final command output."""
     if not motor_state_available:
         return 'motor state is unavailable or stale'
     if manual_command_active:
         return 'a manual command is active'
+    if midi_command_active:
+        return 'MIDI fader control is active'
     return None
 
 
@@ -86,6 +91,14 @@ class MotionSupervisor(Node):
             'motion_run_command_topic',
             '/motion_control/motion_run_command',
         ).value
+        self.midi_position_request_topic = self.declare_parameter(
+            'midi_position_request_topic',
+            '/motion_control/midi_position_request',
+        ).value
+        self.midi_position_result_topic = self.declare_parameter(
+            'midi_position_result_topic',
+            '/motion_control/midi_position_result',
+        ).value
         self.state_timeout_sec = float(
             self.declare_parameter('state_timeout_sec', 0.5).value
         )
@@ -104,6 +117,8 @@ class MotionSupervisor(Node):
         self._active_actions: Dict[int, Dict[str, Any]] = {}
         self._action_threads: Dict[int, threading.Thread] = {}
         self._motor_config_cache: Optional[Dict[str, Any]] = None
+        self._midi_active_until = 0.0
+        self._last_motion_run_command_at = 0.0
 
         self._state_sub = self.create_subscription(
             String,
@@ -134,14 +149,24 @@ class MotionSupervisor(Node):
             self._motion_run_command_callback,
             qos,
         )
+        self._midi_position_sub = self.create_subscription(
+            String,
+            self.midi_position_request_topic,
+            self._midi_position_request_callback,
+            10,
+        )
         self._result_pub = self.create_publisher(String, self.jog_result_topic, 10)
         self._action_result_pub = self.create_publisher(String, self.action_result_topic, 10)
+        self._midi_position_result_pub = self.create_publisher(
+            String, self.midi_position_result_topic, 10
+        )
 
         self.get_logger().info(
             f'motion_supervisor started: state={self.motion_state_topic}, '
             f'jog_request={self.jog_request_topic}, '
             f'action_request={self.action_request_topic}, '
             f'motion_run_command={self.motion_run_command_topic}, '
+            f'midi_position_request={self.midi_position_request_topic}, '
             f'command={self.motor_command_topic}, '
             f'config_file={self.config_file}, '
             f'action_period={self.action_period_sec * 1000.0:.3f} ms'
@@ -163,6 +188,7 @@ class MotionSupervisor(Node):
         reason = motion_run_rejection_reason(
             motor_state_available=bool(self._current_motors()),
             manual_command_active=bool(self._active_jogs or self._active_actions),
+            midi_command_active=time.monotonic() < self._midi_active_until,
         )
         if reason:
             self.get_logger().warning(
@@ -170,7 +196,194 @@ class MotionSupervisor(Node):
                 throttle_duration_sec=1.0,
             )
             return
+        self._last_motion_run_command_at = time.monotonic()
         self._command_pub.publish(msg)
+
+    def _midi_position_request_callback(self, msg: String) -> None:
+        try:
+            request = json.loads(msg.data)
+        except json.JSONDecodeError:
+            self._publish_midi_position_result({}, False, 'invalid MIDI position JSON')
+            return
+        if not isinstance(request, dict):
+            self._publish_midi_position_result({}, False, 'invalid MIDI position request')
+            return
+        targets = request.get('targets')
+        if isinstance(targets, list):
+            success, message, results = self._handle_midi_position_batch(targets)
+            self._publish_midi_position_result(
+                request, success, message, results=results
+            )
+        else:
+            success, message = self._handle_midi_position_request(request)
+            self._publish_midi_position_result(request, success, message)
+
+    def _handle_midi_position_batch(
+        self, targets: list[Any]
+    ) -> tuple[bool, str, list[Dict[str, Any]]]:
+        requests = [target for target in targets if isinstance(target, dict)]
+        if not requests:
+            return False, 'MIDI target batch is empty', []
+
+        now = time.monotonic()
+        global_error = ''
+        if now - self._last_motion_run_command_at < MOTION_RUN_ACTIVE_GRACE_SEC:
+            global_error = 'motion playback is active'
+        elif self._active_jogs or self._active_actions:
+            global_error = 'a manual command is active'
+
+        motors = self._current_motors()
+        if not global_error and not motors:
+            global_error = 'current motion_state is unavailable'
+        if global_error:
+            results = [self._midi_target_result(target, False, global_error) for target in requests]
+            return False, global_error, results
+
+        command = self._empty_motor_command(motors)
+        results: list[Dict[str, Any]] = []
+        commanded_axes: set[int] = set()
+        success_count = 0
+
+        for target in requests:
+            axis = self._optional_int(target.get('axis'))
+            target_position = self._optional_float(target.get('target_deg'))
+            error = ''
+            controlword = 0
+            motor = self._motor_for_axis(axis, motors) if axis is not None else None
+            if axis is None:
+                error = 'axis is required'
+            elif target_position is None:
+                error = 'target_deg is required'
+            elif axis in commanded_axes:
+                error = f'Axis {axis} is duplicated in MIDI batch'
+            elif motor is None:
+                error = f'Axis {axis} not found in current motion_state'
+            elif str(motor.get('state') or '') != 'detected':
+                error = f'Axis {axis} is not detected'
+            elif bool(motor.get('fault', False)):
+                error = f'Axis {axis} has error'
+            elif self._is_ac_servo(motor):
+                if motor.get('servo_on') is not True:
+                    error = f'Axis {axis} servo is OFF'
+                else:
+                    controlword = CW_NEW_SET_POINT_MINAS
+            elif self._is_dynamixel(motor):
+                controlword = DYNAMIXEL_TORQUE_ENABLE
+            else:
+                error = f'Axis {axis} motor type is unsupported for MIDI control'
+
+            if not error and target_position is not None and motor is not None:
+                error = self._target_position_limit_error(motor, target_position) or ''
+
+            if error:
+                results.append(self._midi_target_result(target, False, error))
+                continue
+
+            commanded_axes.add(axis)
+            command.number_of_target_interfaces[axis] = 2
+            command.target_interface_id[axis] = Int8MultiArray(
+                data=[ID_CONTROLWORD, ID_TARGET_POSITION]
+            )
+            command.controlword[axis] = int(controlword)
+            command.position[axis] = float(target_position)
+            motion_deg = self._optional_float(target.get('motion_deg'))
+            motion_text = '' if motion_deg is None else f', motion {motion_deg:.3f} deg'
+            results.append(self._midi_target_result(
+                target,
+                True,
+                f'MIDI target sent: Axis {axis}{motion_text}, motor {target_position:.3f} deg',
+            ))
+            success_count += 1
+
+        if success_count:
+            # All accepted axes are published atomically in one MotorStatus,
+            # preventing depth-1 QoS from dropping an earlier per-axis command.
+            self._command_pub.publish(command)
+            self._midi_active_until = now + MIDI_COMMAND_OWNERSHIP_SEC
+
+        all_success = success_count == len(requests)
+        message = (
+            f'MIDI batch sent: {success_count}/{len(requests)} axes'
+            if success_count
+            else 'MIDI batch rejected'
+        )
+        return all_success, message, results
+
+    @staticmethod
+    def _midi_target_result(
+        request: Dict[str, Any], success: bool, message: str
+    ) -> Dict[str, Any]:
+        return {
+            'request_id': str(request.get('request_id') or ''),
+            'channel': request.get('channel'),
+            'axis': request.get('axis'),
+            'success': success,
+            'message': message,
+        }
+
+    def _handle_midi_position_request(self, request: Dict[str, Any]) -> tuple[bool, str]:
+        axis = self._optional_int(request.get('axis'))
+        target_position = self._optional_float(request.get('target_deg'))
+        if axis is None:
+            return False, 'axis is required'
+        if target_position is None:
+            return False, 'target_deg is required'
+        now = time.monotonic()
+        if now - self._last_motion_run_command_at < MOTION_RUN_ACTIVE_GRACE_SEC:
+            return False, 'motion playback is active'
+        if self._active_jogs or self._active_actions:
+            return False, 'a manual command is active'
+
+        motors = self._current_motors()
+        motor = self._motor_for_axis(axis, motors)
+        if motor is None:
+            return False, f'Axis {axis} not found in current motion_state'
+        if str(motor.get('state') or '') != 'detected':
+            return False, f'Axis {axis} is not detected'
+        if bool(motor.get('fault', False)):
+            return False, f'Axis {axis} has error'
+
+        if self._is_ac_servo(motor):
+            if motor.get('servo_on') is not True:
+                return False, f'Axis {axis} servo is OFF'
+            controlword = CW_NEW_SET_POINT_MINAS
+        elif self._is_dynamixel(motor):
+            controlword = DYNAMIXEL_TORQUE_ENABLE
+        else:
+            return False, f'Axis {axis} motor type is unsupported for MIDI control'
+
+        success, message = self._publish_position_target(
+            motors, motor, axis, target_position, controlword
+        )
+        if success:
+            self._midi_active_until = now + MIDI_COMMAND_OWNERSHIP_SEC
+            motion_deg = self._optional_float(request.get('motion_deg'))
+            motion_text = '' if motion_deg is None else f', motion {motion_deg:.3f} deg'
+            return True, f'MIDI target sent: Axis {axis}{motion_text}, motor {target_position:.3f} deg'
+        return False, message
+
+    def _publish_midi_position_result(
+        self,
+        request: Dict[str, Any],
+        success: bool,
+        message: str,
+        results: Optional[list[Dict[str, Any]]] = None,
+    ) -> None:
+        payload = {
+            'request_id': str(request.get('request_id') or ''),
+            'channel': request.get('channel'),
+            'axis': request.get('axis'),
+            'success': success,
+            'message': message,
+            'stamp': time.time(),
+        }
+        if results is not None:
+            payload['results'] = results
+        self._midi_position_result_pub.publish(
+            String(data=json.dumps(payload, ensure_ascii=False))
+        )
+        if not success:
+            self.get_logger().warning(message, throttle_duration_sec=1.0)
 
     def _jog_request_callback(self, msg: String) -> None:
         try:

@@ -82,6 +82,8 @@ def generate_launch_description():
                 'action_result_topic': '/motion_control/manual_action_result',
                 'motion_run_command_topic': '/motion_control/motion_run_command',
                 'motor_command_topic': '/motion_control/motor_command',
+                'midi_position_request_topic': '/motion_control/midi_position_request',
+                'midi_position_result_topic': '/motion_control/midi_position_result',
                 'max_jog_delta_deg': LaunchConfiguration('max_jog_delta_deg'),
                 'config_file': LaunchConfiguration('config_file'),
             }],
