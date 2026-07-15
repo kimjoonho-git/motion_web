@@ -1444,7 +1444,12 @@ export function createMotionDataController({
         await ensureMappingMotionFileDetail(mappingDraft.motion_file_id);
       }
       normalizeDynamixelGearRatios();
-      setMappingMessage(payload.message || '매핑 파일 로드 완료');
+      const midiWarning = String(payload.midi_banks_warning || '').trim();
+      const mappingFileName = payload.file?.filename || payload.file?.id || selectedMappingId || '-';
+      const motionFileName = mappingDraft.motion_file_id || '-';
+      setMappingMessage(midiWarning
+        ? `모션축 매칭 원본: ${mappingFileName} · 모션 데이터: ${motionFileName} · MIDI 뱅크: ${midiWarning}`
+        : `모션축 매칭 원본: ${mappingFileName} · 모션 데이터: ${motionFileName} · MIDI 뱅크 적용 완료`);
     } catch (error) {
       setMappingMessage(`매핑 파일 실패: ${error?.message || error}`);
     } finally {
@@ -1519,7 +1524,9 @@ export function createMotionDataController({
       mappingDraft = payload.mapping || mappingDraft;
       selectedMappingId = payload.file?.id || mappingDraft.file_id || selectedMappingId;
       mappingRawText = payload.content || '';
-      setMappingMessage(payload.message || '매핑 저장 완료');
+      setMappingMessage(payload.midi_banks?.success
+        ? `모션축 매칭 저장 완료: ${selectedMappingId} · MIDI 뱅크는 같은 파일의 midi_banks에 유지됨`
+        : (payload.message || '매핑 저장 완료'));
     } catch (error) {
       setMappingMessage(`매핑 저장 실패: ${error?.message || error}`);
     } finally {

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Motion Control System</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260714-midi-filter-levels">
+    <link rel="stylesheet" href="/static/styles.css?v=20260715-midi-safe-range">
   </head>
   <body>
     <main class="shell">
@@ -387,6 +387,7 @@
           <button class="tab-button" type="button" data-motion-tab="mapping">모션축 설정</button>
           <button class="tab-button" type="button" data-motion-tab="editor">모션 제작</button>
           <button class="tab-button" type="button" data-motion-tab="midi">MIDI</button>
+          <button class="tab-button" type="button" data-motion-tab="recording">모션 녹화</button>
           <button class="tab-button" type="button" data-motion-tab="run">모션 동작</button>
         </div>
 
@@ -653,10 +654,11 @@
                 <div class="registry-actions midi-bank-actions">
                   <button id="addMidiBankButton" type="button">뱅크 추가</button>
                   <button id="deleteMidiBankButton" class="danger" type="button">뱅크 삭제</button>
-                  <button id="saveMidiMappingButton" class="primary" type="button">뱅크 설정 적용</button>
+                  <button id="saveMidiMappingButton" class="primary" type="button">뱅크 설정 적용/저장</button>
+                  <button id="loadMidiBanksFileButton" type="button">파일에서 불러오기</button>
                 </div>
               </div>
-              <div id="midiMappingPath" class="registry-message">메모리 전용 뱅크 · 파일에 저장하지 않음</div>
+              <div id="midiMappingPath" class="registry-message">모션축 설정 파일의 MIDI 뱅크 상태 확인 중</div>
               <div id="midiMonitorSummary" class="motion-file-summary midi-monitor-summary">
                 <div><span>연결</span><strong id="midiConnectionState">대기</strong></div>
                 <div><span>입력 범위</span><strong>14bit · 0~16383</strong></div>
@@ -665,7 +667,10 @@
                 <div><span>모터 출력</span><strong id="midiMotorOutputState">사용 안 함</strong></div>
               </div>
               <div class="registry-actions">
+                <button id="connectMidiDeviceButton" class="primary" type="button">MIDI 연결</button>
+                <button id="disconnectMidiDeviceButton" type="button">연결 해제</button>
                 <button id="refreshMidiMonitorButton" type="button">상태 새로고침</button>
+                <button id="resetMidiRuntimeButton" class="danger" type="button">실시간 값 초기화</button>
               </div>
             </section>
 
@@ -680,26 +685,31 @@
                     <tr>
                       <th>사용</th>
                       <th>채널</th>
+                      <th>셀렉트</th>
                       <th>Motion ID (1-1)</th>
                       <th>MIDI 값</th>
                       <th>필터 출력</th>
-                      <th>비율</th>
-                      <th>Min (14bit)</th>
-                      <th>Max (14bit)</th>
+                      <th>Min (%)</th>
+                      <th>Max (%)</th>
                       <th>반전</th>
                       <th>필터 (0~13단계)</th>
-                      <th>터치</th>
+                      <th>최종 출력</th>
+                      <th>최종 비율</th>
+                      <th>모션값 (deg)</th>
+                      <th>입력 상태</th>
                     </tr>
                   </thead>
                   <tbody id="midiMonitorRows">
-                    <tr><td colspan="11" class="empty">MIDI 모니터 노드 상태 수신 대기</td></tr>
+                    <tr><td colspan="14" class="empty">MIDI 모니터 노드 상태 수신 대기</td></tr>
                   </tbody>
                 </table>
               </div>
-              <div class="registry-message">Motion ID는 1-1, 4-3처럼 양의 정수-양의 정수 형식만 등록할 수 있습니다. Min/Max는 필터 후 출력할 14bit 범위이며 0~16383 안에서 설정합니다. 필터 단계는 선택 즉시 적용되고, 나머지 뱅크 설정은 `뱅크 설정 적용`을 눌러야 반영됩니다.</div>
+              <div class="registry-message">필터 출력은 2차 저역통과 필터만 적용한 값이고, 최종 출력은 반전과 Min/Max(%)까지 모두 적용한 값입니다. 모션값은 최종 출력 0~16383을 해당 Motion ID의 Min~Max 각도로 변환한 값입니다. Max가 100%를 넘으면 Min은 0%로 자동 고정되며 최종 출력은 항상 0~16383으로 제한됩니다.</div>
             </section>
           </div>
         </div>
+
+        <div class="motion-tab-panel hidden" data-motion-panel="recording"></div>
 
         <div class="motion-tab-panel hidden" data-motion-panel="run">
           <div class="motion-run-layout">
@@ -851,6 +861,6 @@
       </div>
     </div>
 
-    <script type="module" src="/static/app.js?v=20260714-midi-14bit-output-range"></script>
+    <script type="module" src="/static/app.js?v=20260715-midi-force-reconnect"></script>
   </body>
 </html>

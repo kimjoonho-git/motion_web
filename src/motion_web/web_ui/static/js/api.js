@@ -221,6 +221,26 @@ export async function deleteMidiBank(bankId) {
   return readJson(response);
 }
 
+export async function loadMidiBanksFromFile() {
+  const response = await fetch('/api/midi-monitor/banks/file/load', { method: 'POST' });
+  return readJson(response);
+}
+
+export async function resetMidiRuntimeValues() {
+  const response = await fetch('/api/midi-monitor/runtime/reset', { method: 'POST' });
+  return readJson(response);
+}
+
+export async function connectMidiDevice() {
+  const response = await fetch('/api/midi-monitor/device/connect', { method: 'POST' });
+  return readJson(response);
+}
+
+export async function disconnectMidiDevice() {
+  const response = await fetch('/api/midi-monitor/device/disconnect', { method: 'POST' });
+  return readJson(response);
+}
+
 export async function requestAcServoJog(payload) {
   const response = await fetch('/api/motion-test/ac-servo/jog', {
     method: 'POST',

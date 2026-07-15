@@ -946,10 +946,63 @@ class MotionWebBridge(Node):
         return self._request_motion_mapping('list', {})
 
     def load_motion_mapping(self, file_id: Any) -> Dict[str, Any]:
-        return self._request_motion_mapping('load', {'file_id': file_id})
+        result = self._request_motion_mapping('load', {'file_id': file_id})
+        if result.get('success') is False:
+            return result
+
+        loaded_file_id = self._motion_mapping_file_id(result) or str(file_id or '').strip()
+        if loaded_file_id:
+            midi_result = self._load_and_apply_midi_banks(loaded_file_id)
+            result['midi_banks'] = midi_result
+            if midi_result.get('success') is False:
+                result['midi_banks_warning'] = str(midi_result.get('message') or '')
+        return result
 
     def save_motion_mapping(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return self._request_motion_mapping('save', payload)
+        result = self._request_motion_mapping('save', payload)
+        if result.get('success') is False:
+            return result
+
+        saved_file_id = self._motion_mapping_file_id(result)
+        if saved_file_id:
+            # The mapping manager preserved the file-owned MIDI block. Reload
+            # that verified file state instead of asking MIDI to write YAML.
+            midi_result = self._load_and_apply_midi_banks(saved_file_id)
+            result['midi_banks'] = midi_result
+            if midi_result.get('success') is False:
+                result['success'] = False
+                result['message'] = (
+                    '모션축 매칭은 저장됐지만 MIDI 뱅크 적용에 실패했습니다: '
+                    f"{midi_result.get('message') or 'unknown error'}"
+                )
+        return result
+
+    def _load_and_apply_midi_banks(self, file_id: str) -> Dict[str, Any]:
+        loaded = self._request_motion_mapping(
+            'load_midi_banks',
+            {'file_id': file_id},
+            timeout_sec=3.0,
+        )
+        if loaded.get('success') is False:
+            return loaded
+        state = loaded.get('midi_banks')
+        applied = self._request_midi_monitor(
+            'apply_banks',
+            {'mapping_file_id': file_id, 'midi_banks': state},
+            timeout_sec=3.0,
+        )
+        if applied.get('success') is False:
+            return applied
+        applied['file'] = loaded.get('file')
+        applied['message'] = '모션축 매칭 파일의 MIDI 뱅크를 노드에 적용했습니다'
+        return applied
+
+    @staticmethod
+    def _motion_mapping_file_id(result: Dict[str, Any]) -> str:
+        file_info = result.get('file')
+        if not isinstance(file_info, dict):
+            return ''
+        return str(file_info.get('id') or file_info.get('filename') or '').strip()
 
     def validate_motion_mapping(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self._request_motion_mapping('validate', payload)
@@ -1019,7 +1072,8 @@ class MotionWebBridge(Node):
         return result
 
     def save_midi_monitor_mapping(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return self._request_midi_monitor('update_bank', payload, timeout_sec=2.0)
+        updated = self._request_midi_monitor('update_bank', payload, timeout_sec=2.0)
+        return self._persist_midi_bank_result(updated)
 
     def create_midi_bank(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self._request_midi_monitor('create_bank', payload, timeout_sec=2.0)
@@ -1032,11 +1086,12 @@ class MotionWebBridge(Node):
         )
 
     def update_midi_bank(self, bank_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return self._request_midi_monitor(
+        updated = self._request_midi_monitor(
             'update_bank',
             {**payload, 'bank_id': bank_id},
             timeout_sec=2.0,
         )
+        return self._persist_midi_bank_result(updated)
 
     def delete_midi_bank(self, bank_id: str) -> Dict[str, Any]:
         return self._request_midi_monitor(
@@ -1044,6 +1099,77 @@ class MotionWebBridge(Node):
             {'bank_id': bank_id},
             timeout_sec=2.0,
         )
+
+    def save_midi_banks_to_file(self) -> Dict[str, Any]:
+        return self._persist_midi_bank_result(self.midi_monitor_status())
+
+    def load_midi_banks_from_file(self) -> Dict[str, Any]:
+        status = self.midi_monitor_status()
+        if status.get('success') is False:
+            return status
+        file_id = self._midi_mapping_file_id(status)
+        if not file_id:
+            return {'success': False, 'message': '선택된 모션축 매칭 파일이 없습니다'}
+        return self._load_and_apply_midi_banks(file_id)
+
+    def reset_midi_runtime_values(self) -> Dict[str, Any]:
+        return self._request_midi_monitor('reset_runtime_values', {}, timeout_sec=2.0)
+
+    def connect_midi_device(self) -> Dict[str, Any]:
+        return self._request_midi_monitor('connect_device', {}, timeout_sec=2.0)
+
+    def disconnect_midi_device(self) -> Dict[str, Any]:
+        return self._request_midi_monitor('disconnect_device', {}, timeout_sec=2.0)
+
+    @staticmethod
+    def _midi_mapping_file_id(result: Dict[str, Any]) -> str:
+        file_id = str(result.get('motion_mapping_file_id') or '').strip()
+        if file_id:
+            return Path(file_id).name
+        file_path = str(result.get('bank_config_file') or '').strip()
+        return Path(file_path).name if file_path else ''
+
+    def _persist_midi_bank_result(self, updated: Dict[str, Any]) -> Dict[str, Any]:
+        if updated.get('success') is False:
+            return updated
+        file_id = self._midi_mapping_file_id(updated)
+        state = updated.get('bank_state')
+        if not file_id:
+            return {'success': False, 'message': '선택된 모션축 매칭 파일이 없습니다'}
+        if not isinstance(state, dict):
+            return {'success': False, 'message': 'MIDI 노드의 뱅크 설정 응답이 올바르지 않습니다'}
+
+        saved = self._request_motion_mapping(
+            'save_midi_banks',
+            {'file_id': file_id, 'midi_banks': state},
+            timeout_sec=3.0,
+        )
+        if saved.get('success') is False:
+            # Restore the file-owned state so a failed write never leaves an
+            # unlabelled memory-only configuration active.
+            rollback = self._load_and_apply_midi_banks(file_id)
+            return {
+                'success': False,
+                'message': f"MIDI 뱅크 파일 저장 실패: {saved.get('message') or 'unknown error'}",
+                'rollback_success': rollback.get('success') is not False,
+            }
+
+        applied = self._request_midi_monitor(
+            'apply_banks',
+            {'mapping_file_id': file_id, 'midi_banks': saved.get('midi_banks')},
+            timeout_sec=3.0,
+        )
+        if applied.get('success') is False:
+            return {
+                **applied,
+                'message': '파일 저장은 완료됐지만 MIDI 노드 적용에 실패했습니다: '
+                f"{applied.get('message') or 'unknown error'}",
+                'file_saved': True,
+            }
+        applied['backup_file'] = saved.get('backup_file')
+        applied['file'] = saved.get('file')
+        applied['message'] = 'MIDI 뱅크 설정을 모션축 매칭 파일에 저장하고 노드에 적용했습니다'
+        return applied
 
     def _request_midi_monitor(
         self,
@@ -2901,6 +3027,26 @@ def create_app(bridge: MotionWebBridge) -> FastAPI:
     @app.delete('/api/midi-monitor/banks/{bank_id}')
     async def delete_midi_bank(bank_id: str):
         return bridge.delete_midi_bank(bank_id)
+
+    @app.post('/api/midi-monitor/banks/file/save')
+    async def save_midi_banks_to_file():
+        return bridge.save_midi_banks_to_file()
+
+    @app.post('/api/midi-monitor/banks/file/load')
+    async def load_midi_banks_from_file():
+        return bridge.load_midi_banks_from_file()
+
+    @app.post('/api/midi-monitor/runtime/reset')
+    async def reset_midi_runtime_values():
+        return bridge.reset_midi_runtime_values()
+
+    @app.post('/api/midi-monitor/device/connect')
+    async def connect_midi_device():
+        return bridge.connect_midi_device()
+
+    @app.post('/api/midi-monitor/device/disconnect')
+    async def disconnect_midi_device():
+        return bridge.disconnect_midi_device()
 
     @app.post('/api/motion-test/ac-servo/jog')
     async def ac_servo_jog(request: Request):

@@ -1,0 +1,116 @@
+from motion_web_bridge.bridge_node import MotionWebBridge
+
+
+MIDI_STATE = {
+    'version': 1,
+    'active_bank_id': 'bank_1',
+    'banks': [{'bank_id': 'bank_1', 'name': 'Bank 1', 'mappings': []}],
+}
+
+
+def test_loading_motion_mapping_reads_banks_from_mapping_owner_and_applies_node(monkeypatch):
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    mapping_calls = []
+    midi_calls = []
+
+    def mapping_request(command, payload, timeout_sec=2.0):
+        mapping_calls.append((command, payload, timeout_sec))
+        if command == 'load':
+            return {'success': True, 'file': {'id': 'show.yaml'}, 'mapping': {}}
+        return {
+            'success': True,
+            'file': {'id': 'show.yaml'},
+            'midi_banks': MIDI_STATE,
+        }
+
+    monkeypatch.setattr(bridge, '_request_motion_mapping', mapping_request)
+    monkeypatch.setattr(
+        bridge,
+        '_request_midi_monitor',
+        lambda command, payload, timeout_sec: (
+            midi_calls.append((command, payload, timeout_sec))
+            or {'success': True}
+        ),
+    )
+
+    result = bridge.load_motion_mapping('show.yaml')
+
+    assert result['midi_banks']['success'] is True
+    assert mapping_calls == [
+        ('load', {'file_id': 'show.yaml'}, 2.0),
+        ('load_midi_banks', {'file_id': 'show.yaml'}, 3.0),
+    ]
+    assert midi_calls == [
+        ('apply_banks', {'mapping_file_id': 'show.yaml', 'midi_banks': MIDI_STATE}, 3.0)
+    ]
+
+
+def test_saving_motion_mapping_preserves_file_banks_then_applies_verified_state(monkeypatch):
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    mapping_calls = []
+    midi_calls = []
+
+    def mapping_request(command, payload, timeout_sec=2.0):
+        mapping_calls.append((command, payload, timeout_sec))
+        if command == 'save':
+            return {'success': True, 'file': {'id': 'show.yaml'}, 'mapping': {}}
+        return {
+            'success': True,
+            'file': {'id': 'show.yaml'},
+            'midi_banks': MIDI_STATE,
+        }
+
+    monkeypatch.setattr(bridge, '_request_motion_mapping', mapping_request)
+    monkeypatch.setattr(
+        bridge,
+        '_request_midi_monitor',
+        lambda command, payload, timeout_sec: (
+            midi_calls.append((command, payload, timeout_sec))
+            or {'success': True}
+        ),
+    )
+
+    result = bridge.save_motion_mapping({'file_id': 'show.yaml', 'mapping': {}})
+
+    assert result['midi_banks']['success'] is True
+    assert mapping_calls[0][0] == 'save'
+    assert mapping_calls[1] == ('load_midi_banks', {'file_id': 'show.yaml'}, 3.0)
+    assert midi_calls[0][0] == 'apply_banks'
+
+
+def test_updating_bank_saves_through_mapping_owner_then_applies_verified_state(monkeypatch):
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    mapping_calls = []
+    midi_calls = []
+
+    def midi_request(command, payload, timeout_sec):
+        midi_calls.append((command, payload, timeout_sec))
+        if command == 'update_bank':
+            return {
+                'success': True,
+                'motion_mapping_file_id': 'show.yaml',
+                'bank_state': MIDI_STATE,
+            }
+        return {'success': True, 'bank_state': MIDI_STATE}
+
+    def mapping_request(command, payload, timeout_sec=2.0):
+        mapping_calls.append((command, payload, timeout_sec))
+        return {
+            'success': True,
+            'file': {'id': 'show.yaml'},
+            'midi_banks': MIDI_STATE,
+            'backup_file': 'show.yaml.bak',
+        }
+
+    monkeypatch.setattr(bridge, '_request_midi_monitor', midi_request)
+    monkeypatch.setattr(bridge, '_request_motion_mapping', mapping_request)
+
+    result = bridge.update_midi_bank('bank_1', {'name': 'Bank 1', 'mappings': []})
+
+    assert result['success'] is True
+    assert mapping_calls == [(
+        'save_midi_banks',
+        {'file_id': 'show.yaml', 'midi_banks': MIDI_STATE},
+        3.0,
+    )]
+    assert [call[0] for call in midi_calls] == ['update_bank', 'apply_banks']

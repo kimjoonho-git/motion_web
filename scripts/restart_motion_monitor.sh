@@ -131,8 +131,8 @@ export CONFIG_FILE
 log "starting motion_monitor.launch.py with config_file=${CONFIG_FILE}"
 sg dialout -c 'bash -lc '"'"'source /home/joonho_test/ros2_ws/install/setup.bash && ros2 launch motion_state_monitor motion_monitor.launch.py config_file:="$CONFIG_FILE" start_motor_manager:=true'"'" &
 launch_pid="$!"
-log "starting MIDI control monitor (robot motor output disabled)"
-bash -lc 'source /home/joonho_test/ros2_ws/install/setup.bash && ros2 launch midi_control midi_control.launch.py' &
+log "starting MIDI control (motor requests routed through motion_supervisor, config_file=${CONFIG_FILE})"
+bash -lc 'source /home/joonho_test/ros2_ws/install/setup.bash && ros2 launch midi_control midi_control.launch.py motor_config_file:="$CONFIG_FILE"' &
 midi_launch_pid="$!"
 recover_ethercat_errors_after_launch &
 recovery_pid="$!"

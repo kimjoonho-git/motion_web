@@ -1,1 +1,1 @@
-import './js/main.js?v=20260714-midi-14bit-output-range';
+import './js/main.js?v=20260715-midi-force-reconnect';

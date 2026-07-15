@@ -1,10 +1,14 @@
 import {
+  connectMidiDevice,
   createMidiBank,
   deleteMidiBank,
+  disconnectMidiDevice,
   fetchMidiMonitor,
+  loadMidiBanksFromFile,
+  resetMidiRuntimeValues,
   selectMidiBank,
   updateMidiBank,
-} from './api.js?v=20260714-midi-banks';
+} from './api.js?v=20260715-midi-device-connect';
 
 const MIDI_MAX = 16383;
 const CHANNEL_COUNT = 8;
@@ -16,13 +20,17 @@ function numberValue(value, fallback = 0) {
   return Number.isFinite(number) ? number : fallback;
 }
 
+function pathBasename(value) {
+  return String(value || '').split(/[\\/]/).filter(Boolean).pop() || '모션축 설정 YAML';
+}
+
 function defaultMapping(channel) {
   return {
     channel,
     enabled: true,
     motion_id: `1-${channel + 1}`,
-    min_14bit: 0,
-    max_14bit: MIDI_MAX,
+    min_percent: 0,
+    max_percent: 100,
     reversed: false,
     filter_level: 0,
   };
@@ -45,13 +53,14 @@ function requireSuccess(payload) {
 
 function invalidMappingItem(item) {
   return !MOTION_ID_PATTERN.test(String(item.motion_id || '').trim())
-    || !Number.isInteger(Number(item.min_14bit))
-    || Number(item.min_14bit) < 0
-    || Number(item.min_14bit) > MIDI_MAX
-    || !Number.isInteger(Number(item.max_14bit))
-    || Number(item.max_14bit) < 0
-    || Number(item.max_14bit) > MIDI_MAX
-    || Number(item.min_14bit) >= Number(item.max_14bit)
+    || !Number.isFinite(Number(item.min_percent))
+    || !Number.isFinite(Number(item.max_percent))
+    || Number(item.max_percent) <= 0
+    || Number(item.max_percent) > 200
+    || (Number(item.max_percent) <= 100 && (
+      Number(item.min_percent) < 0
+      || Number(item.min_percent) >= Number(item.max_percent)
+    ))
     || !Number.isInteger(Number(item.filter_level))
     || Number(item.filter_level) < 0
     || Number(item.filter_level) > FILTER_LEVEL_MAX;
@@ -63,6 +72,15 @@ function filterLevelOptions(selectedLevel) {
   )).join('');
 }
 
+function mappedOutput14bit(filteredValue, mapping) {
+  let normalized = Math.max(0, Math.min(1, numberValue(filteredValue, 0) / MIDI_MAX));
+  if (mapping.reversed) normalized = 1 - normalized;
+  const minPercent = numberValue(mapping.min_percent, 0);
+  const maxPercent = numberValue(mapping.max_percent, 100);
+  const outputPercent = minPercent + ((maxPercent - minPercent) * normalized);
+  return MIDI_MAX * Math.max(0, Math.min(100, outputPercent)) / 100;
+}
+
 export function createMidiMonitorController({ el }) {
   let status = null;
   let mappingDraft = Array.from({ length: CHANNEL_COUNT }, (_, channel) => defaultMapping(channel));
@@ -71,6 +89,7 @@ export function createMidiMonitorController({ el }) {
   let activeBankId = '';
   let bankNameDraft = 'Bank 1';
   let banks = [];
+  const dirtyFields = new Set();
 
   function channelsOf(nextStatus = status) {
     return Array.isArray(nextStatus?.channels) ? nextStatus.channels : [];
@@ -94,15 +113,26 @@ export function createMidiMonitorController({ el }) {
           channel,
           enabled: item.enabled !== false,
           motion_id: String(item.motion_id ?? `1-${channel + 1}`),
-          min_14bit: Math.round(numberValue(item.min_14bit, 0)),
-          max_14bit: Math.round(numberValue(item.max_14bit, MIDI_MAX)),
+          min_percent: numberValue(item.min_percent, 0),
+          max_percent: numberValue(item.max_percent, 100),
           reversed: Boolean(item.reversed),
           filter_level: Math.round(numberValue(item.filter_level, 0)),
         };
       });
       bankNameDraft = String(nextStatus?.active_bank?.name || activeBankId || 'Bank 1');
       mappingLoaded = true;
+      dirtyFields.clear();
       renderRows(true);
+    } else if (activeMappings.length) {
+      // A physical encoder changes filter_level directly in the MIDI node.
+      // Keep unrelated unsaved web edits, but mirror hardware filter changes.
+      activeMappings.forEach((item) => {
+        const channel = Number(item?.channel);
+        if (!Number.isInteger(channel) || channel < 0 || channel >= CHANNEL_COUNT) return;
+        if (!dirtyFields.has(`${channel}:filter_level`)) {
+          mappingDraft[channel].filter_level = Math.round(numberValue(item.filter_level, 0));
+        }
+      });
     }
     render();
   }
@@ -112,14 +142,17 @@ export function createMidiMonitorController({ el }) {
     return `<tr data-midi-channel="${channel}">
       <td><input type="checkbox" data-midi-field="enabled" ${item.enabled ? 'checked' : ''}></td>
       <td>${channel + 1}</td>
+      <td data-midi-output="select">비활성</td>
       <td><input class="midi-motion-id-input" type="text" pattern="[1-9]\\d*-[1-9]\\d*" title="예: 1-1, 4-3" data-midi-field="motion_id" value="${escapeAttribute(item.motion_id)}"></td>
       <td class="midi-live-value" data-midi-output="raw">0</td>
       <td class="midi-live-value" data-midi-output="filtered">0</td>
-      <td class="midi-live-value" data-midi-output="ratio">0.00%</td>
-      <td><input type="number" inputmode="numeric" min="0" max="${MIDI_MAX}" step="1" data-midi-field="min_14bit" value="${item.min_14bit}"></td>
-      <td><input type="number" inputmode="numeric" min="0" max="${MIDI_MAX}" step="1" data-midi-field="max_14bit" value="${item.max_14bit}"></td>
+      <td><input type="number" inputmode="decimal" min="0" max="100" step="1" data-midi-field="min_percent" value="${item.min_percent}"></td>
+      <td><input type="number" inputmode="decimal" min="0.1" max="200" step="1" data-midi-field="max_percent" value="${item.max_percent}"></td>
       <td><input type="checkbox" data-midi-field="reversed" ${item.reversed ? 'checked' : ''}></td>
       <td><select data-midi-field="filter_level" aria-label="필터 단계">${filterLevelOptions(item.filter_level)}</select></td>
+      <td class="midi-live-value" data-midi-output="final">0</td>
+      <td class="midi-live-value" data-midi-output="ratio">0.00%</td>
+      <td class="midi-live-value" data-midi-output="motion-deg">-</td>
       <td data-midi-output="touch">-</td>
     </tr>`;
   }
@@ -136,19 +169,74 @@ export function createMidiMonitorController({ el }) {
       const live = channels.find((item) => Number(item?.channel) === mapping.channel);
       const raw = Math.max(0, Math.min(MIDI_MAX, numberValue(live?.raw_value, 0)));
       const filtered = Math.max(0, Math.min(MIDI_MAX, numberValue(live?.filtered_value, raw)));
-      const filteredRatio = filtered / MIDI_MAX;
+      const sensitivityMode = Number(mapping.max_percent) > 100;
+      if (sensitivityMode) mapping.min_percent = 0;
+      const selected = Boolean(live?.motion_axis_matched) && Boolean(live?.control_enabled);
+      const activationRejected = live?.motor_command_state === 'activation_rejected';
+      const activationMessage = String(live?.motor_command_message || '활성화할 수 없습니다');
+      const finalOutput = selected
+        ? mappedOutput14bit(filtered, mapping)
+        : Math.max(0, Math.min(MIDI_MAX, numberValue(live?.final_output_value, 0)));
+      const finalRatio = finalOutput / MIDI_MAX;
       const rawCell = row.querySelector('[data-midi-output="raw"]');
       const filteredCell = row.querySelector('[data-midi-output="filtered"]');
+      const finalCell = row.querySelector('[data-midi-output="final"]');
       const ratioCell = row.querySelector('[data-midi-output="ratio"]');
+      const motionDegCell = row.querySelector('[data-midi-output="motion-deg"]');
       const touchCell = row.querySelector('[data-midi-output="touch"]');
+      const selectCell = row.querySelector('[data-midi-output="select"]');
       const motionIdInput = row.querySelector('[data-midi-field="motion_id"]');
+      const minPercentInput = row.querySelector('[data-midi-field="min_percent"]');
+      const reversedInput = row.querySelector('[data-midi-field="reversed"]');
+      const filterLevelInput = row.querySelector('[data-midi-field="filter_level"]');
       if (rawCell) rawCell.textContent = Math.round(raw).toLocaleString('ko-KR');
       if (filteredCell) filteredCell.textContent = Math.round(filtered).toLocaleString('ko-KR');
-      if (ratioCell) ratioCell.textContent = `${(filteredRatio * 100).toFixed(2)}%`;
+      if (finalCell) finalCell.textContent = Math.round(finalOutput).toLocaleString('ko-KR');
+      if (ratioCell) ratioCell.textContent = `${(finalRatio * 100).toFixed(2)}%`;
+      if (motionDegCell) {
+        const motionDeg = Number(live?.motion_value_deg);
+        motionDegCell.textContent = Number.isFinite(motionDeg) ? motionDeg.toFixed(2) : '-';
+      }
+      if (selectCell) {
+        const matched = Boolean(live?.motion_axis_matched);
+        selectCell.textContent = activationRejected
+          ? `활성 불가 · ${activationMessage}`
+          : (selected ? '활성' : (matched ? '비활성' : '매칭 없음'));
+        selectCell.title = activationRejected ? activationMessage : '';
+        selectCell.classList.toggle('midi-select-active', selected);
+        selectCell.classList.toggle('midi-select-unmatched', !matched);
+        selectCell.classList.toggle('midi-select-rejected', activationRejected);
+      }
+      if (minPercentInput) {
+        minPercentInput.disabled = sensitivityMode;
+        minPercentInput.title = sensitivityMode ? '입력 감도 확대 시 Min은 0%로 고정됩니다' : '';
+        if (document.activeElement !== minPercentInput) {
+          minPercentInput.value = mapping.min_percent;
+        }
+      }
+      if (reversedInput) {
+        reversedInput.disabled = selected;
+        reversedInput.title = selected
+          ? '안전을 위해 셀렉트 비활성 상태에서만 반전을 변경할 수 있습니다'
+          : '';
+      }
       if (touchCell) {
-        const touched = Boolean(live?.touch);
-        touchCell.textContent = touched ? '터치' : '-';
-        touchCell.classList.toggle('midi-touch-active', touched);
+        const physicalTouch = Boolean(live?.physical_touch);
+        const faderMoving = Boolean(live?.fader_moving);
+        const faderSyncing = Boolean(live?.fader_syncing);
+        const inputValid = Boolean(live?.input_valid ?? live?.touch);
+        touchCell.textContent = physicalTouch
+          ? '물리 터치'
+          : (faderMoving ? '움직임' : (faderSyncing ? '동기화' : '-'));
+        touchCell.title = (
+          `물리 터치: ${physicalTouch ? 'ON' : 'OFF'} · `
+          + `움직임: ${faderMoving ? 'ON' : 'OFF'} · `
+          + `입력 인정: ${inputValid ? 'ON' : 'OFF'}`
+        );
+        touchCell.classList.toggle('midi-touch-active', physicalTouch || faderMoving);
+      }
+      if (filterLevelInput && document.activeElement !== filterLevelInput) {
+        filterLevelInput.value = String(mapping.filter_level);
       }
       if (motionIdInput) {
         const invalid = !MOTION_ID_PATTERN.test(String(mapping.motion_id || '').trim());
@@ -175,7 +263,15 @@ export function createMidiMonitorController({ el }) {
     }
     if (el.midiMappingPath) {
       const count = banks.length || 1;
-      el.midiMappingPath.textContent = `메모리 전용 뱅크 ${count}/${status?.max_banks || 8} · 노드 재시작 시 초기화 · 파일에 저장하지 않음`;
+      const configPath = String(status?.bank_config_file || '').trim();
+      const configName = configPath || pathBasename(status?.bank_config_file);
+      const saveState = status?.bank_persistent
+        ? '현재 노드값과 파일 일치'
+        : '현재 노드값이 파일에 저장되지 않음';
+      el.midiMappingPath.textContent = (
+        `모션축 매칭 원본: ${configName} · midi_banks · 저장된 뱅크: ${count}개`
+        + ` (최대 ${status?.max_banks || 8}개) · ${saveState}`
+      );
     }
     if (el.midiBankSelect) {
       const optionsKey = banks.map((bank) => `${bank.bank_id}:${bank.name}`).join('|');
@@ -195,6 +291,20 @@ export function createMidiMonitorController({ el }) {
     if (el.addMidiBankButton) el.addMidiBankButton.disabled = loading || banks.length >= (status?.max_banks || 8);
     if (el.deleteMidiBankButton) el.deleteMidiBankButton.disabled = loading || banks.length <= 1;
     if (el.refreshMidiMonitorButton) el.refreshMidiMonitorButton.disabled = loading;
+    if (el.connectMidiDeviceButton) {
+      // A USB power cycle can leave the old RtMidi handle looking open even
+      // though it no longer receives the re-enumerated device. Keep this
+      // action available so the user can always force a fresh port search.
+      el.connectMidiDeviceButton.disabled = loading;
+      el.connectMidiDeviceButton.textContent = status?.device_connected
+        ? 'MIDI 재연결'
+        : 'MIDI 연결';
+    }
+    if (el.disconnectMidiDeviceButton) {
+      el.disconnectMidiDeviceButton.disabled = loading || !Boolean(status?.device_connected);
+    }
+    if (el.resetMidiRuntimeButton) el.resetMidiRuntimeButton.disabled = loading;
+    if (el.loadMidiBanksFileButton) el.loadMidiBanksFileButton.disabled = loading;
     if (el.saveMidiMappingButton) {
       el.saveMidiMappingButton.disabled = loading
         || !activeBankId
@@ -210,18 +320,22 @@ export function createMidiMonitorController({ el }) {
     const channel = Number(row.dataset.midiChannel);
     const item = mappingDraft[channel];
     if (!item) return;
+    dirtyFields.add(`${channel}:${field}`);
     if (target.type === 'checkbox') {
       item[field] = target.checked;
     } else if (field === 'filter_level') {
       item.filter_level = Math.round(numberValue(target.value, item.filter_level));
-    } else if (field === 'min_14bit' || field === 'max_14bit') {
-      item[field] = Math.round(numberValue(target.value, item[field]));
+    } else if (field === 'min_percent' || field === 'max_percent') {
+      item[field] = numberValue(target.value, item[field]);
+      if (field === 'max_percent' && item.max_percent > 100) {
+        item.min_percent = 0;
+      }
     } else {
       item[field] = target.value;
     }
     status = {
       ...(status || {}),
-      message: '뱅크 설정 변경됨 · 뱅크 설정 적용을 눌러야 노드에 반영됩니다',
+      message: '뱅크 설정 변경됨 · 뱅크 설정 적용/저장을 눌러야 파일과 노드에 반영됩니다',
     };
     render();
   }
@@ -243,12 +357,24 @@ export function createMidiMonitorController({ el }) {
     }
   }
 
+  async function applySaveAndVerify() {
+    const saved = requireSuccess(await updateMidiBank(activeBankId, {
+      name: bankNameDraft,
+      mappings: mappingDraft,
+    }));
+    const verified = requireSuccess(await loadMidiBanksFromFile());
+    return {
+      ...verified,
+      message: `${saved.message || 'MIDI 뱅크 파일 저장 완료'} · 재불러오기 검증 완료`,
+    };
+  }
+
   async function saveMapping() {
     const invalid = mappingDraft.find(invalidMappingItem);
     if (invalid) {
       status = {
         ...(status || {}),
-        message: `채널 ${invalid.channel + 1}: Motion ID 형식, 14bit Min/Max(0~16383), 필터 0~13단계를 확인하세요`,
+        message: `채널 ${invalid.channel + 1}: Motion ID 형식, Min/Max 퍼센트와 필터 0~13단계를 확인하세요`,
       };
       render();
       return;
@@ -256,15 +382,13 @@ export function createMidiMonitorController({ el }) {
     loading = true;
     render();
     try {
-      const payload = requireSuccess(await updateMidiBank(activeBankId, {
-        name: bankNameDraft,
-        mappings: mappingDraft,
-      }));
+      const payload = await applySaveAndVerify();
+      dirtyFields.clear();
       setStatus(payload, { updateMapping: true });
     } catch (error) {
       status = {
         ...(status || {}),
-        message: `뱅크 설정 적용 실패: ${error?.message || error}`,
+        message: `뱅크 설정 적용/파일 저장 실패: ${error?.message || error}`,
       };
     } finally {
       loading = false;
@@ -317,15 +441,63 @@ export function createMidiMonitorController({ el }) {
     }
   }
 
+  async function loadBanksFile() {
+    if (!window.confirm('현재 메모리의 MIDI 뱅크를 파일에 저장된 내용으로 바꿀까요?')) return;
+    loading = true;
+    render();
+    try {
+      setStatus(requireSuccess(await loadMidiBanksFromFile()), { updateMapping: true });
+    } catch (error) {
+      status = { ...(status || {}), message: `MIDI 뱅크 파일 불러오기 실패: ${error?.message || error}` };
+    } finally {
+      loading = false;
+      render();
+    }
+  }
+
+  async function resetRuntimeValues() {
+    if (!window.confirm('MIDI 실시간 값과 셀렉트를 초기화하고 전동 페이더를 0으로 이동할까요? 저장 파일은 변경되지 않습니다.')) return;
+    loading = true;
+    render();
+    try {
+      setStatus(requireSuccess(await resetMidiRuntimeValues()));
+    } catch (error) {
+      status = { ...(status || {}), message: `MIDI 실시간 값 초기화 실패: ${error?.message || error}` };
+    } finally {
+      loading = false;
+      render();
+    }
+  }
+
+  async function setDeviceConnection(connect) {
+    loading = true;
+    render();
+    try {
+      const requested = requireSuccess(await (
+        connect ? connectMidiDevice() : disconnectMidiDevice()
+      ));
+      setStatus(requested);
+      // The hardware bridge responds asynchronously. A short status refresh
+      // shows the actual port-open result rather than only the request result.
+      window.setTimeout(() => refresh(), 350);
+    } catch (error) {
+      status = {
+        ...(status || {}),
+        message: `MIDI ${connect ? '연결' : '연결 해제'} 실패: ${error?.message || error}`,
+      };
+    } finally {
+      loading = false;
+      render();
+    }
+  }
+
   function bindEvents() {
     el.midiMonitorRows?.addEventListener('input', (event) => updateDraftFromRow(event.target));
-    el.midiMonitorRows?.addEventListener('change', (event) => {
-      updateDraftFromRow(event.target);
-      if (event.target?.dataset?.midiField === 'filter_level') {
-        saveMapping();
-      }
-    });
+    el.midiMonitorRows?.addEventListener('change', (event) => updateDraftFromRow(event.target));
     el.refreshMidiMonitorButton?.addEventListener('click', refresh);
+    el.connectMidiDeviceButton?.addEventListener('click', () => setDeviceConnection(true));
+    el.disconnectMidiDeviceButton?.addEventListener('click', () => setDeviceConnection(false));
+    el.resetMidiRuntimeButton?.addEventListener('click', resetRuntimeValues);
     el.saveMidiMappingButton?.addEventListener('click', saveMapping);
     el.midiBankSelect?.addEventListener('change', changeBank);
     el.midiBankName?.addEventListener('input', (event) => {
@@ -333,6 +505,7 @@ export function createMidiMonitorController({ el }) {
     });
     el.addMidiBankButton?.addEventListener('click', addBank);
     el.deleteMidiBankButton?.addEventListener('click', removeBank);
+    el.loadMidiBanksFileButton?.addEventListener('click', loadBanksFile);
   }
 
   bindEvents();

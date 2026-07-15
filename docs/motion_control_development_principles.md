@@ -597,6 +597,57 @@ ros2 launch motion_control_bridge motor_manager_node.launch.py \
 6. 실패 시 이전 YAML로 복구 가능해야 함
 ```
 
+### 10.1 운영 데이터 원본은 3종류로 제한
+
+웹과 상위 제어기가 관리하는 영구 원본은 다음 3종류이다.
+
+```text
+1. 모터 축 설정
+   /home/joonho_test/ros2_ws/config/active_motor_config.yaml
+
+2. 모션 데이터
+   /home/joonho_test/ros2_ws/motion_data/files/<motion_name>.json
+   현재 예: test2_20260706.json
+
+3. 모션축 매칭
+   /home/joonho_test/ros2_ws/motion_data/mappings/<mapping_name>.yaml
+   현재 예: test2_20260706_mapping.yaml
+```
+
+MIDI 뱅크는 별도 네 번째 설정 파일로 만들지 않는다. 선택된 모션축 매칭 YAML의
+최상위 `midi_banks` 항목에 저장한다. MIDI 원시값, 필터 출력값, 최종 출력값, 터치,
+셀렉트와 현재 페이더 위치는 실시간 상태이므로 어떤 설정 파일에도 저장하지 않는다.
+
+```text
+모션 데이터의 Motion ID
+→ 모션축 매칭의 mappings
+→ 모터 축 설정의 실제 controller axis
+
+모션축 매칭의 midi_banks
+→ MIDI 노드에 적용되는 뱅크 설정
+```
+
+파일별 단일 저장 주체 원칙:
+
+```text
+active_motor_config.yaml
+→ 모터 설정 관리자만 저장
+
+<motion_name>.json
+→ 모션 파일 관리자만 저장
+
+<mapping_name>.yaml 및 그 안의 midi_banks
+→ motion_mapping_manager만 저장
+→ midi_control_node는 YAML을 직접 저장하지 않음
+```
+
+모든 설정 작업은 `파일 불러오기 → 화면 편집 → 파일 저장 → 파일 재확인 → 노드 적용` 순서를
+따른다. 파일이 영구 원본이고 노드 메모리는 실행용 복사본이다. 웹 새로고침은 저장 파일과
+현재 노드 상태를 다시 조회할 뿐, 실시간 모터·MIDI 상태를 초기화하거나 장치를 움직이지 않는다.
+
+UI에는 현재 사용하는 파일명을 생략하지 않고 표시한다. 파일값과 노드 적용값이 다르면
+`저장 필요` 또는 `노드 적용 필요`로 구분하고, 저장과 적용 중 어느 단계가 실패했는지 정확히 알린다.
+
 ## 11. Codex 작업 전 확인 규칙
 
 Codex는 이 프로젝트에서 작업을 시작할 때 다음을 먼저 확인한다.

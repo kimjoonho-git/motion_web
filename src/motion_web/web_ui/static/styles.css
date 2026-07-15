@@ -2087,6 +2087,23 @@ body.ui-locked {
   font-weight: 700;
 }
 
+.midi-select-active {
+  color: #15803d;
+  font-weight: 700;
+}
+
+.midi-select-unmatched {
+  color: #9ca3af;
+}
+
+.midi-select-rejected {
+  min-width: 220px;
+  color: #991b1b;
+  background: #fee2e2;
+  font-weight: 700;
+  white-space: normal;
+}
+
 .status-ok {
   color: #15803d;
 }
