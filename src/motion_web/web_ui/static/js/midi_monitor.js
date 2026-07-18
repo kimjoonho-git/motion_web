@@ -269,7 +269,7 @@ export function createMidiMonitorController({ el }) {
         ? '현재 노드값과 파일 일치'
         : '현재 노드값이 파일에 저장되지 않음';
       el.midiMappingPath.textContent = (
-        `모션축 매칭 원본: ${configName} · midi_banks · 저장된 뱅크: ${count}개`
+        `모션축 설정: ${configName} · midi_banks · 저장된 뱅크: ${count}개`
         + ` (최대 ${status?.max_banks || 8}개) · ${saveState}`
       );
     }
@@ -385,6 +385,7 @@ export function createMidiMonitorController({ el }) {
       const payload = await applySaveAndVerify();
       dirtyFields.clear();
       setStatus(payload, { updateMapping: true });
+      window.dispatchEvent(new CustomEvent('motion-project-files-changed'));
     } catch (error) {
       status = {
         ...(status || {}),

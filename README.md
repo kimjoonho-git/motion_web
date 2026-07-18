@@ -26,8 +26,12 @@ ROS2 기반 상위 모션 제어 및 웹 UI 패키지입니다.
 
 ```text
 src/motion_control
+├── midi_control
+├── motion_runtime
 ├── motion_state_monitor
 └── motion_supervisor
+
+src/motion_studio
 
 src/motion_web
 ├── web_bridge
@@ -62,11 +66,15 @@ Motor drivers / EtherCAT / Dynamixel
 
 ## 설정 파일
 
-기본 모터 설정 파일은 아래 경로를 사용합니다.
+처음 실행용 빈 모터 설정은 아래 파일을 사용합니다.
 
 ```text
-config/active_motor_config.yaml
+config/bootstrap_motor_config.yaml
 ```
+
+사용자가 생성한 모터축 설정·모션축 설정·모션·레이어는 모두
+`motion_projects/<project_id>/` 아래에 프로젝트별로 분리됩니다. 실제 모터에
+적용하는 설정은 프로젝트의 `runtime/applied_motor_config.yaml`에 생성됩니다.
 
 Dynamixel 모델별 참고 설정은 아래 파일에 둡니다.
 
@@ -93,12 +101,13 @@ install/
 log/
 backups/
 *.bak-*
-motion_data/files/
-motion_data/mappings/
+motion_projects/
+motion_data/
 ```
 
-운영 중 생성되는 모션 데이터와 매핑 파일은 필요 시 별도 백업하거나,
-예제 파일만 별도 디렉터리에서 관리합니다.
+프로젝트는 Git 소스와 분리하고, 필요할 때 USB·파일 가져오기·다른
+프로젝트에서 복사 기능으로 이동합니다. `motion_data/`는 구형 데이터 보관용이며
+현재 실행 기능은 이 폴더를 읽지 않습니다.
 
 ## 주의 사항
 

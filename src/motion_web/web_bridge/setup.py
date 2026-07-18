@@ -11,6 +11,7 @@ setup(
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/launch', glob('launch/*.launch.py')),
+        ('share/' + package_name + '/deploy', glob('deploy/*')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -22,6 +23,7 @@ setup(
     entry_points={
         'console_scripts': [
             'motion_web_bridge = motion_web_bridge.bridge_node:main',
+            'motion_control_service = motion_web_bridge.service_entrypoint:main',
         ],
     },
 )

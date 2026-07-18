@@ -23,6 +23,7 @@ import {
 
 const MOTION_FILE_SIZE_LIMIT_BYTES = 10 * 1024 * 1024;
 const MOTOR_AXIS_ANGLE_ALERT_DEG = 360.0;
+const MOTION_ID_PATTERN = /^[1-9]\d*-[1-9]\d*$/;
 const MOTION_RUN_STAGES = [
   { key: 'idle', label: '모션 전' },
   { key: 'ready', label: '준비 완료' },
@@ -265,6 +266,11 @@ export function createMotionDataController({
     if (el.motionMappingMessage) el.motionMappingMessage.textContent = message;
   }
 
+  function forceMappingNameInput(value = '') {
+    if (!el.motionMappingName) return;
+    el.motionMappingName.value = String(value || '');
+  }
+
   function setMotionRunMessage(message) {
     if (el.motionRunMessage) el.motionRunMessage.textContent = message;
   }
@@ -295,7 +301,11 @@ export function createMotionDataController({
   }
 
   function motorOptionLabel(motor) {
-    return `Axis ${formatInt(motor.controller_index)} / ID ${motorIdText(motor)} / ${motor.motor_type_label || 'Unknown'} / ${motor.display_name || '-'}`;
+    const motorType = normalizeMotorTypeKey(motor?.motor_type, motor?.motor_type_label);
+    const identity = motorType === 'ac_servo'
+      ? `AC alias ${motorIdText(motor)}`
+      : (motorType === 'dynamixel' ? `Dynamixel ID ${motorIdText(motor)}` : `ID ${motorIdText(motor)}`);
+    return `${identity} / 현재 Axis ${formatInt(motor.controller_index)} / ${motor.display_name || '-'}`;
   }
 
   function motorForAxis(axis) {
@@ -303,8 +313,64 @@ export function createMotionDataController({
     return sortedRuntimeMotors().find((motor) => Number(motor.controller_index) === Number(axis)) || null;
   }
 
+  function motorRefForMotor(motor) {
+    if (!motor) return '';
+    const motorType = normalizeMotorTypeKey(motor.motor_type, motor.motor_type_label);
+    if (motorType === 'ac_servo') {
+      const alias = motor.alias ?? motor.ethercat_alias;
+      return alias === null || alias === undefined || alias === ''
+        ? ''
+        : `ac_servo:alias:${Number(alias)}`;
+    }
+    if (motorType === 'dynamixel') {
+      const busId = motor.bus_id ?? motor.node_id;
+      return busId === null || busId === undefined || busId === ''
+        ? ''
+        : `dynamixel:id:${Number(busId)}`;
+    }
+    return '';
+  }
+
+  function motorForRef(motorRef) {
+    const target = String(motorRef || '').trim().toLowerCase();
+    if (!target) return null;
+    const matches = sortedRuntimeMotors().filter((motor) => (
+      motorRefForMotor(motor).toLowerCase() === target
+    ));
+    return matches.length === 1 ? matches[0] : null;
+  }
+
+  function motorForMapping(row) {
+    const byRef = motorForRef(row?.motor_ref);
+    return byRef || (!row?.motor_ref ? motorForAxis(row?.motor_axis) : null);
+  }
+
+  function mappingTargetKey(row) {
+    const motorRef = String(row?.motor_ref || '').trim();
+    if (motorRef) return `ref:${motorRef.toLowerCase()}`;
+    if (row?.motor_axis !== null && row?.motor_axis !== undefined && row?.motor_axis !== '') {
+      return `axis:${row.motor_axis}`;
+    }
+    return '';
+  }
+
+  function upgradeLegacyMappingRefs() {
+    const rows = Array.isArray(mappingDraft.mappings) ? mappingDraft.mappings : [];
+    rows.forEach((row) => {
+      const current = motorForRef(row.motor_ref);
+      if (current) {
+        row.motor_axis = Number(current.controller_index);
+        return;
+      }
+      if (String(row.motor_ref || '').trim()) return;
+      const motor = motorForAxis(row.motor_axis);
+      const motorRef = motorRefForMotor(motor);
+      if (motorRef) row.motor_ref = motorRef;
+    });
+  }
+
   function motorLimitInfo(row, detail) {
-    const motor = motorForAxis(row?.motor_axis);
+    const motor = motorForMapping(row);
     if (!motor) {
       return { className: 'warn', rangeText: '리미트 확인 불가' };
     }
@@ -337,7 +403,7 @@ export function createMotionDataController({
   }
 
   function isDynamixelMappingRow(row) {
-    return isDynamixelMotor(motorForAxis(row?.motor_axis));
+    return isDynamixelMotor(motorForMapping(row));
   }
 
   function mappingGearRatioValue(row) {
@@ -876,7 +942,9 @@ export function createMotionDataController({
     const status = motionRunStatus || {};
     const state = String(status.state || 'idle');
     const running = state === 'running' || state === 'initializing' || state === 'verifying' || state === 'stopping';
-    const hasRequiredFiles = Boolean(payload.motion_file_id && payload.mapping_file_id);
+    const hasMappingFile = Boolean(payload.mapping_file_id);
+    const hasMotionFile = Boolean(payload.motion_file_id);
+    const hasRequiredFiles = hasMappingFile && hasMotionFile;
     const startReady = state === 'initialized'
       && status.motion_file_id === payload.motion_file_id
       && status.mapping_file_id === payload.mapping_file_id;
@@ -885,7 +953,7 @@ export function createMotionDataController({
       el.motionRunCheckButton.disabled = motionRunLoading || !hasRequiredFiles || running;
     }
     if (el.motionRunInitializeButton) {
-      el.motionRunInitializeButton.disabled = motionRunLoading || !hasRequiredFiles || running;
+      el.motionRunInitializeButton.disabled = motionRunLoading || !hasMappingFile || running;
     }
     if (el.motionRunStartButton) {
       el.motionRunStartButton.disabled = motionRunLoading || !hasRequiredFiles || running || !startReady;
@@ -909,8 +977,10 @@ export function createMotionDataController({
     if (el.motionRunMessage) {
       const message = motionRunLoading
         ? '모션 동작 요청 처리 중'
-        : !hasRequiredFiles
-          ? '모션 파일과 매핑 파일을 선택하세요'
+        : !hasMappingFile
+          ? '모션축 설정 파일을 선택하세요'
+          : !hasMotionFile
+            ? '모션 파일 없음 · 첫 프레임 축은 모션 0°로 초기 위치 이동할 수 있습니다'
           : status.message || '실행 준비 가능';
       el.motionRunMessage.textContent = message;
     }
@@ -1071,10 +1141,8 @@ export function createMotionDataController({
 
   function mappingDuplicateAxisCounts() {
     return mappingDraft.mappings.reduce((counts, row) => {
-      if (!row.enabled || row.motor_axis === null || row.motor_axis === undefined || row.motor_axis === '') {
-        return counts;
-      }
-      const key = String(row.motor_axis);
+      const key = mappingTargetKey(row);
+      if (!row.enabled || !key) return counts;
       counts[key] = (counts[key] || 0) + 1;
       return counts;
     }, {});
@@ -1082,13 +1150,14 @@ export function createMotionDataController({
 
   function mappingRowStatus(row, duplicateCounts) {
     if (!row.enabled) return { text: '비활성', className: 'warn' };
-    if (row.motor_axis === null || row.motor_axis === undefined || row.motor_axis === '') {
+    const targetKey = mappingTargetKey(row);
+    if (!targetKey) {
       return { text: '모터축 미선택', className: 'bad' };
     }
-    if ((duplicateCounts[String(row.motor_axis)] || 0) > 1) {
+    if ((duplicateCounts[targetKey] || 0) > 1) {
       return { text: '중복 매칭', className: 'bad' };
     }
-    if (!motorForAxis(row.motor_axis)) {
+    if (!motorForMapping(row)) {
       return { text: '현재 모터 없음', className: 'warn' };
     }
     return { text: '사용 가능', className: 'ok' };
@@ -1104,14 +1173,17 @@ export function createMotionDataController({
 
   function motorSelectHtml(row) {
     const motors = sortedRuntimeMotors();
-    const value = row.motor_axis === null || row.motor_axis === undefined ? '' : String(row.motor_axis);
+    const mappedMotor = motorForMapping(row);
+    const value = String(row.motor_ref || motorRefForMotor(mappedMotor) || '');
     return (
-      `<select class="wide-select" data-motion-mapping-field="motor_axis" data-motion-id="${displayText(row.motion_id)}">
+      `<select class="wide-select" data-motion-mapping-field="motor_ref" data-motion-id="${displayText(row.motion_id)}">
         <option value="">선택 안함</option>
         ${motors.map((motor) => {
-          const axis = String(motor.controller_index);
-          const selected = axis === value ? ' selected' : '';
-          return `<option value="${displayText(axis)}"${selected}>${displayText(motorOptionLabel(motor))}</option>`;
+          const motorRef = motorRefForMotor(motor);
+          const selected = motorRef === value ? ' selected' : '';
+          return motorRef
+            ? `<option value="${displayText(motorRef)}"${selected}>${displayText(motorOptionLabel(motor))}</option>`
+            : '';
         }).join('')}
       </select>`
     );
@@ -1121,11 +1193,11 @@ export function createMotionDataController({
     if (!el.motionMappingRows) return;
     const rows = Array.isArray(mappingDraft.mappings) ? mappingDraft.mappings : [];
     if (!rows.length) {
-      el.motionMappingRows.innerHTML = emptyRow(15, '모션 파일을 선택하고 Motion ID를 반영하세요');
+      el.motionMappingRows.innerHTML = emptyRow(15, 'Motion ID를 직접 추가하거나 모터축에서 자동 생성하세요');
       return;
     }
     const duplicateCounts = mappingDuplicateAxisCounts();
-    el.motionMappingRows.innerHTML = rows.map((row) => {
+    el.motionMappingRows.innerHTML = rows.map((row, index) => {
       const status = mappingValidationRowStatus(row, mappingRowStatus(row, duplicateCounts));
       const initialMode = row.initial_mode || 'first_frame';
       row.reference_enabled = true;
@@ -1146,8 +1218,8 @@ export function createMotionDataController({
       const initialPositionDisabledAttr = initialPositionDisabled ? ' disabled' : '';
       const gearRatioDisabledAttr = dynamixelGearFixed ? ' disabled title="Dynamixel은 감속비를 사용하지 않으며 1로 고정됩니다"' : '';
       return (
-        `<tr data-motion-id="${displayText(row.motion_id)}">
-          <td class="mono">${displayText(row.motion_id)}</td>
+        `<tr data-mapping-index="${index}">
+          <td><input class="motion-id-input mono" type="text" pattern="[1-9]\\d*-[1-9]\\d*" title="양의 정수-양의 정수 형식으로 입력하세요. 예: 1-1, 2-3" data-motion-mapping-field="motion_id" value="${displayText(row.motion_id)}" placeholder="예: 1-1" autocomplete="off" autocapitalize="off" spellcheck="false"></td>
           <td><input type="checkbox" data-motion-mapping-field="enabled" ${row.enabled ? 'checked' : ''}></td>
           <td>${motorSelectHtml(row)}</td>
           <td class="mapping-number-cell ${dynamixelGearFixed ? 'mapping-disabled-cell' : ''}"><input class="numeric-input mapping-number-input" type="number" min="0.0001" step="0.0001" data-motion-mapping-field="gear_ratio" value="${displayText(gearRatioValue)}"${gearRatioDisabledAttr}></td>
@@ -1166,7 +1238,7 @@ export function createMotionDataController({
           <td><input type="checkbox" data-motion-mapping-field="invert" ${row.invert ? 'checked' : ''}></td>
           <td class="mapping-number-cell"><input class="numeric-input mapping-number-input" type="number" step="0.001" data-motion-mapping-field="offset_deg" value="${displayText(row.offset_deg)}"></td>
           <td class="mapping-number-cell"><input class="numeric-input mapping-number-input" type="number" step="0.0001" data-motion-mapping-field="scale" value="${displayText(row.scale)}"></td>
-          <td><span class="motion-state-pill ${status.className}">${displayText(status.text)}</span></td>
+          <td><span class="motion-state-pill ${status.className}">${displayText(status.text)}</span> <button class="mapping-mini-button" type="button" data-motion-mapping-action="delete">삭제</button></td>
         </tr>`
       );
     }).join('');
@@ -1176,10 +1248,12 @@ export function createMotionDataController({
     if (!el.motionMappingUnusedMotorRows) return;
     const usedAxes = new Set(
       mappingDraft.mappings
-        .filter((row) => row.enabled && row.motor_axis !== null && row.motor_axis !== undefined && row.motor_axis !== '')
-        .map((row) => String(row.motor_axis)),
+        .filter((row) => row.enabled && mappingTargetKey(row))
+        .map((row) => mappingTargetKey(row)),
     );
-    const unused = sortedRuntimeMotors().filter((motor) => !usedAxes.has(String(motor.controller_index)));
+    const unused = sortedRuntimeMotors().filter((motor) => (
+      !usedAxes.has(`ref:${motorRefForMotor(motor)}`)
+    ));
     if (!unused.length) {
       el.motionMappingUnusedMotorRows.innerHTML = emptyRow(5, '미사용 모터축이 없습니다');
       return;
@@ -1345,6 +1419,7 @@ export function createMotionDataController({
       return {
         motion_id: motionId,
         enabled: previous?.enabled ?? true,
+        motor_ref: previous?.motor_ref ?? '',
         motor_axis: previous?.motor_axis ?? null,
         reference_enabled: previous?.reference_enabled ?? true,
         reference_position_deg: numericOr(previous?.reference_position_deg, 0.0),
@@ -1363,6 +1438,74 @@ export function createMotionDataController({
     });
   }
 
+  function newMotionAxisRow(motionId, motorAxis = null) {
+    return {
+      motion_id: String(motionId), enabled: motorAxis !== null,
+      motor_ref: '', motor_axis: motorAxis,
+      reference_enabled: true, reference_position_deg: 0.0,
+      motion_lower_deg: -180.0, motion_upper_deg: 180.0,
+      initial_mode: 'manual', initial_motion_position_deg: 0.0,
+      initial_move_time_sec: 5.0, invert: false, offset_deg: 0.0,
+      scale: 1.0, gear_ratio: 1.0,
+    };
+  }
+
+  function addMotionId() {
+    const motionId = String(window.prompt('추가할 Motion ID를 입력하세요', '1-1') || '').trim();
+    if (!motionId) return;
+    if (mappingDraft.mappings.some((row) => String(row.motion_id) === motionId)) {
+      setMappingMessage(`이미 존재하는 Motion ID입니다: ${motionId}`);
+      return;
+    }
+    mappingDraft.mappings.push(newMotionAxisRow(motionId));
+    mappingRawText = '';
+    mappingValidation = null;
+    setMappingMessage(`Motion ID ${motionId} 추가 완료`);
+    renderMappingPanel();
+  }
+
+  function generateMotionIdsFromMotors() {
+    const motors = sortedRuntimeMotors();
+    if (!motors.length) {
+      setMappingMessage('적용된 모터축이 없습니다. 모터축 설정을 먼저 적용하세요');
+      return;
+    }
+    const previous = new Map(mappingDraft.mappings.map((row) => [mappingTargetKey(row), row]));
+    const usedMotionIds = new Set(
+      mappingDraft.mappings
+        .map((row) => String(row.motion_id || '').trim())
+        .filter(Boolean),
+    );
+    let nextMotionNumber = 1;
+    const nextSuggestedMotionId = () => {
+      let candidate = `1-${nextMotionNumber}`;
+      while (usedMotionIds.has(candidate)) {
+        nextMotionNumber += 1;
+        candidate = `1-${nextMotionNumber}`;
+      }
+      usedMotionIds.add(candidate);
+      nextMotionNumber += 1;
+      return candidate;
+    };
+    mappingDraft.mappings = motors.map((motor, index) => {
+      const motorRef = motorRefForMotor(motor);
+      const existing = previous.get(`ref:${motorRef}`)
+        || previous.get(`axis:${motor.controller_index}`);
+      if (existing) {
+        existing.motor_ref = motorRef;
+        existing.motor_axis = Number(motor.controller_index);
+        return existing;
+      }
+      const created = newMotionAxisRow(nextSuggestedMotionId(), Number(motor.controller_index));
+      created.motor_ref = motorRef;
+      return created;
+    });
+    mappingRawText = '';
+    mappingValidation = null;
+    setMappingMessage(`${motors.length}개 모터축 행을 만들었습니다. Motion ID를 직접 확인·수정하세요`);
+    renderMappingPanel();
+  }
+
   async function ensureMappingMotionFileDetail(fileId) {
     if (!fileId) return null;
     if (mappingMotionFileDetail?.id === fileId) return mappingMotionFileDetail;
@@ -1377,15 +1520,24 @@ export function createMotionDataController({
   }
 
   function validateMappingDraft() {
+    upgradeLegacyMappingRefs();
     if (!mappingDraft.name?.trim()) return '매핑 이름이 필요합니다';
-    if (!mappingDraft.motion_file_id?.trim()) return '모션 파일 선택이 필요합니다';
     const rows = Array.isArray(mappingDraft.mappings) ? mappingDraft.mappings : [];
-    if (!rows.length) return 'Motion ID를 먼저 반영하세요';
+    if (!rows.length) return 'Motion ID를 먼저 추가하세요';
+    const invalidMotionId = rows.find((row) => !MOTION_ID_PATTERN.test(String(row.motion_id || '').trim()));
+    if (invalidMotionId) return `Motion ID는 양의 정수-양의 정수 형식이어야 합니다: ${invalidMotionId.motion_id || '(비어 있음)'}`;
+    const motionIdCounts = rows.reduce((counts, row) => {
+      const motionId = String(row.motion_id || '').trim();
+      counts[motionId] = (counts[motionId] || 0) + 1;
+      return counts;
+    }, {});
+    const duplicateMotionId = Object.entries(motionIdCounts).find(([, count]) => count > 1);
+    if (duplicateMotionId) return `Motion ID가 중복되었습니다: ${duplicateMotionId[0]}`;
     const duplicateCounts = mappingDuplicateAxisCounts();
     const duplicateAxis = Object.entries(duplicateCounts).find(([, count]) => count > 1);
-    if (duplicateAxis) return `동일한 Motor Axis가 중복 사용되었습니다: Axis ${duplicateAxis[0]}`;
-    const enabledWithoutAxis = rows.find((row) => row.enabled && (row.motor_axis === null || row.motor_axis === undefined || row.motor_axis === ''));
-    if (enabledWithoutAxis) return `활성화된 Motion ID에 Motor Axis가 없습니다: ${enabledWithoutAxis.motion_id}`;
+    if (duplicateAxis) return `동일한 모터 ID가 중복 사용되었습니다: ${duplicateAxis[0]}`;
+    const enabledWithoutMotor = rows.find((row) => row.enabled && !mappingTargetKey(row));
+    if (enabledWithoutMotor) return `활성화된 Motion ID에 모터 ID가 없습니다: ${enabledWithoutMotor.motion_id}`;
     return '';
   }
 
@@ -1436,6 +1588,7 @@ export function createMotionDataController({
       const payload = await fetchMotionMapping(selectedMappingId);
       mappingFiles = Array.isArray(payload.files) ? payload.files : mappingFiles;
       mappingDraft = payload.mapping || emptyMappingDraft();
+      upgradeLegacyMappingRefs();
       selectedMappingId = payload.file?.id || mappingDraft.file_id || selectedMappingId;
       mappingRawText = payload.content || '';
       mappingValidation = payload.validation || null;
@@ -1448,8 +1601,8 @@ export function createMotionDataController({
       const mappingFileName = payload.file?.filename || payload.file?.id || selectedMappingId || '-';
       const motionFileName = mappingDraft.motion_file_id || '-';
       setMappingMessage(midiWarning
-        ? `모션축 매칭 원본: ${mappingFileName} · 모션 데이터: ${motionFileName} · MIDI 뱅크: ${midiWarning}`
-        : `모션축 매칭 원본: ${mappingFileName} · 모션 데이터: ${motionFileName} · MIDI 뱅크 적용 완료`);
+        ? `모션축 설정: ${mappingFileName} · 모션 데이터: ${motionFileName} · MIDI 뱅크: ${midiWarning}`
+        : `모션축 설정: ${mappingFileName} · 모션 데이터: ${motionFileName} · MIDI 뱅크 적용 완료`);
     } catch (error) {
       setMappingMessage(`매핑 파일 실패: ${error?.message || error}`);
     } finally {
@@ -1459,6 +1612,20 @@ export function createMotionDataController({
   }
 
   function newMappingDraft() {
+    const enteredName = String(el.motionMappingName?.value || '').trim();
+    if (!enteredName) {
+      setMappingMessage('매핑 이름을 먼저 입력한 뒤 새 매칭 작성을 누르세요');
+      el.motionMappingName?.focus();
+      return;
+    }
+    const currentFile = selectedMappingFile();
+    const currentName = String(currentFile?.name || '').trim();
+    if (selectedMappingId && currentName && enteredName === currentName) {
+      setMappingMessage('기존 매핑과 다른 새 매핑 이름을 입력하세요');
+      el.motionMappingName?.focus();
+      el.motionMappingName?.select();
+      return;
+    }
     const baseFile = selectedFile || files[0] || null;
     selectedMappingId = null;
     mappingRawText = '';
@@ -1466,11 +1633,12 @@ export function createMotionDataController({
     mappingMotionFileDetail = baseFile;
     mappingDraft = {
       ...emptyMappingDraft(),
-      name: baseFile ? `${baseFile.filename.replace(/\.json$/i, '')}_mapping` : 'motion_mapping',
+      name: enteredName,
       motion_file_id: baseFile?.id || '',
       mappings: baseFile ? mappingRowsFromMotionFile(baseFile) : [],
     };
-    setMappingMessage('새 매핑 작성 중');
+    forceMappingNameInput(enteredName);
+    setMappingMessage(`새 매핑 작성 중: ${enteredName} · 아직 파일로 저장되지 않음`);
     renderMappingPanel();
   }
 
@@ -1508,6 +1676,7 @@ export function createMotionDataController({
     mappingLoading = true;
     setMappingMessage('매핑 저장 중');
     normalizeDynamixelGearRatios();
+    upgradeLegacyMappingRefs();
     renderMappingPanel();
     try {
       const payload = await saveMotionMapping({
@@ -1525,7 +1694,7 @@ export function createMotionDataController({
       selectedMappingId = payload.file?.id || mappingDraft.file_id || selectedMappingId;
       mappingRawText = payload.content || '';
       setMappingMessage(payload.midi_banks?.success
-        ? `모션축 매칭 저장 완료: ${selectedMappingId} · MIDI 뱅크는 같은 파일의 midi_banks에 유지됨`
+        ? `모션축 설정 저장 완료: ${selectedMappingId} · MIDI 뱅크는 같은 파일의 midi_banks에 유지됨`
         : (payload.message || '매핑 저장 완료'));
     } catch (error) {
       setMappingMessage(`매핑 저장 실패: ${error?.message || error}`);
@@ -1533,6 +1702,25 @@ export function createMotionDataController({
       mappingLoading = false;
       renderMappingPanel();
     }
+  }
+
+  async function resetCurrentMapping() {
+    const label = selectedMappingId || mappingDraft.name || '현재 모션축 설정';
+    const confirmed = window.confirm(
+      `${label}의 Motion ID 매칭과 모션 파일 연결을 모두 초기화합니다.\n`
+      + 'MIDI 뱅크 정보는 유지되며 실제 모터 설정에는 자동 적용되지 않습니다.',
+    );
+    if (!confirmed) return;
+    mappingDraft = {
+      ...mappingDraft,
+      name: mappingDraft.name || 'motion_axes',
+      motion_file_id: '',
+      mappings: [],
+    };
+    mappingMotionFileDetail = null;
+    mappingRawText = '';
+    mappingValidation = null;
+    await saveCurrentMapping();
   }
 
   async function deleteCurrentMapping() {
@@ -1562,6 +1750,7 @@ export function createMotionDataController({
     mappingLoading = true;
     setMappingMessage('매핑 설정 검증 중');
     normalizeDynamixelGearRatios();
+    upgradeLegacyMappingRefs();
     renderMappingPanel();
     try {
       const payload = await validateMotionMapping({
@@ -1579,16 +1768,20 @@ export function createMotionDataController({
     }
   }
 
-  function updateMappingRow(motionId, field, value, checked = false) {
-    const row = mappingDraft.mappings.find((item) => String(item.motion_id) === String(motionId));
+  function updateMappingRow(rowIndex, field, value, checked = false) {
+    const row = mappingDraft.mappings[Number(rowIndex)];
     if (!row) return;
-    if (field === 'enabled' || field === 'invert' || field === 'reference_enabled') {
+    if (field === 'motion_id') {
+      row.motion_id = String(value || '').trim();
+    } else if (field === 'enabled' || field === 'invert' || field === 'reference_enabled') {
       row[field] = Boolean(checked);
       if (field === 'reference_enabled' && !row.reference_enabled) {
         row.reference_position_deg = 0.0;
       }
-    } else if (field === 'motor_axis') {
-      row.motor_axis = value === '' ? null : Number(value);
+    } else if (field === 'motor_ref') {
+      row.motor_ref = String(value || '');
+      const motor = motorForRef(row.motor_ref);
+      row.motor_axis = motor ? Number(motor.controller_index) : null;
       if (isDynamixelMappingRow(row)) {
         row.gear_ratio = 1.0;
       }
@@ -1620,10 +1813,11 @@ export function createMotionDataController({
     renderMappingPanel();
   }
 
-  function captureReferencePosition(motionId) {
-    const row = mappingDraft.mappings.find((item) => String(item.motion_id) === String(motionId));
+  function captureReferencePosition(rowIndex) {
+    const row = mappingDraft.mappings[Number(rowIndex)];
     if (!row) return;
-    const motor = motorForAxis(row.motor_axis);
+    const motionId = String(row.motion_id || '');
+    const motor = motorForMapping(row);
     const position = motorPositionDeg(motor);
     if (position === null) {
       setMappingMessage(`현재 위치를 읽을 수 없습니다: Motion ID ${motionId}`);
@@ -1635,6 +1829,31 @@ export function createMotionDataController({
     mappingValidation = null;
     setMappingMessage(`Motion ID ${motionId} 기준점 캡처: ${formatNumber(position, 3)} deg`);
     renderMappingPanel();
+  }
+
+  function resetProjectState() {
+    files = [];
+    selectedFileId = null;
+    selectedFile = null;
+    mappingFiles = [];
+    selectedMappingId = null;
+    mappingDraft = emptyMappingDraft();
+    mappingRawText = '';
+    mappingValidation = null;
+    mappingMotionFileDetail = null;
+    forceMappingNameInput('');
+    motionRunStatus = null;
+    motionRunLastResult = null;
+    motionFileGraphFileId = '';
+    motionRunGraphFileId = '';
+    motionFileGraphHiddenIds.clear();
+    motionRunGraphHiddenIds.clear();
+    setMessage('현재 프로젝트 모션 파일을 불러오세요');
+    setMappingMessage('현재 프로젝트 모션축 설정을 불러오세요');
+    setMotionRunMessage('현재 프로젝트 모션을 선택하세요');
+    render();
+    renderMappingPanel();
+    renderMotionRunPanel();
   }
 
   async function loadFiles(selectFileId = selectedFileId) {
@@ -1781,7 +2000,12 @@ export function createMotionDataController({
   }
 
   async function initializeCurrentMotionRun() {
-    const confirmed = window.confirm('매핑된 축을 초기 위치로 이동합니다.');
+    const hasMotionFile = Boolean(motionRunPayload().motion_file_id);
+    const confirmed = window.confirm(
+      hasMotionFile
+        ? '매핑된 축을 초기 위치로 이동합니다.'
+        : '모션 파일이 없습니다.\n\n첫 프레임 방식 축은 모션 0°로 이동합니다.\n수동 방식 축은 설정한 초기위치로 이동합니다.\n계속할까요?',
+    );
     if (!confirmed) return;
     motionRunLoading = true;
     setMotionRunMessage('초기 위치 이동 요청 중');
@@ -1953,12 +2177,15 @@ export function createMotionDataController({
     if (el.newMotionMappingButton) {
       el.newMotionMappingButton.addEventListener('click', newMappingDraft);
     }
+    el.addMotionIdButton?.addEventListener('click', addMotionId);
+    el.generateMotionIdsButton?.addEventListener('click', generateMotionIdsFromMotors);
     if (el.validateMotionMappingButton) {
       el.validateMotionMappingButton.addEventListener('click', validateCurrentMapping);
     }
     if (el.saveMotionMappingButton) {
       el.saveMotionMappingButton.addEventListener('click', saveCurrentMapping);
     }
+    el.resetMotionMappingButton?.addEventListener('click', resetCurrentMapping);
     if (el.deleteMotionMappingButton) {
       el.deleteMotionMappingButton.addEventListener('click', deleteCurrentMapping);
     }
@@ -1986,27 +2213,42 @@ export function createMotionDataController({
       el.motionMappingRows.addEventListener('click', (event) => {
         const action = event.target?.dataset?.motionMappingAction;
         if (!action) return;
-        const row = event.target.closest('tr[data-motion-id]');
+        const row = event.target.closest('tr[data-mapping-index]');
         if (!row) return;
+        const rowIndex = Number(row.dataset.mappingIndex);
+        const mappingRow = mappingDraft.mappings[rowIndex];
+        if (!mappingRow) return;
         if (action === 'capture_reference') {
-          captureReferencePosition(row.dataset.motionId);
+          captureReferencePosition(rowIndex);
+        } else if (action === 'delete') {
+          const deletedMotionId = String(mappingRow.motion_id || '');
+          mappingDraft.mappings.splice(rowIndex, 1);
+          mappingRawText = '';
+          mappingValidation = null;
+          setMappingMessage(`Motion ID ${deletedMotionId} 삭제 완료`);
+          renderMappingPanel();
         }
       });
       el.motionMappingRows.addEventListener('change', (event) => {
         const field = event.target?.dataset?.motionMappingField;
         if (!field) return;
-        const row = event.target.closest('tr[data-motion-id]');
+        const row = event.target.closest('tr[data-mapping-index]');
         if (!row) return;
-        updateMappingRow(row.dataset.motionId, field, event.target.value, event.target.checked);
+        updateMappingRow(row.dataset.mappingIndex, field, event.target.value, event.target.checked);
       });
     }
   }
 
   return {
     bindEvents,
+    resetProjectState,
     fetchFiles: async () => {
       await loadFiles();
       await loadMappings();
+    },
+    openProjectFile: async (category, fileName) => {
+      if (category === 'motions') await loadFiles(fileName);
+      if (category === 'motion_axis_matching') await loadMappings(fileName);
     },
     getWorkContext,
     render,

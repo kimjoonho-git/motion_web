@@ -20,6 +20,33 @@ export async function fetchStatusSnapshot() {
   return readJson(response);
 }
 
+export async function restartManagedProgram() {
+  const response = await fetch('/api/system/program/restart', { method: 'POST' });
+  return readJson(response);
+}
+
+async function motionStudioRequest(path = '', method = 'GET', payload = null) {
+  const options = { method };
+  if (payload !== null) {
+    options.headers = { 'Content-Type': 'application/json' };
+    options.body = JSON.stringify(payload);
+  }
+  const response = await fetch(`/api/motion-studio${path}`, options);
+  return readJson(response);
+}
+
+export const fetchMotionStudio = () => motionStudioRequest();
+export const createMotionStudioProject = (payload) => motionStudioRequest('/projects', 'POST', payload);
+export const loadMotionStudioProject = (projectId) => motionStudioRequest('/projects/load', 'POST', { project_id: projectId });
+export const importMotionStudioFile = (payload) => motionStudioRequest('/import', 'POST', payload);
+export const saveMotionStudioProject = (payload) => motionStudioRequest('/project', 'PUT', payload);
+export const updateMotionStudioLayer = (payload) => motionStudioRequest('/layers', 'PUT', payload);
+export const resetMotionStudioLayers = () => motionStudioRequest('/layers/reset', 'POST');
+export const startMotionStudioRecord = (payload) => motionStudioRequest('/record', 'POST', payload);
+export const startMotionStudioPlayback = (payload) => motionStudioRequest('/play', 'POST', payload);
+export const stopMotionStudio = () => motionStudioRequest('/stop', 'POST');
+export const exportMotionStudio = (fileId) => motionStudioRequest('/export', 'POST', { file_id: fileId });
+
 export async function fetchMotorEvents(category = 'all', limit = 300) {
   const query = new URLSearchParams({
     category: String(category || 'all'),
@@ -75,6 +102,118 @@ export async function saveMotorConfig(payload) {
 export async function applyMotorConfig() {
   const response = await fetch('/api/motor-config/apply', { method: 'POST' });
   return readJson(response);
+}
+
+export async function fetchProjects() {
+  const response = await fetch('/api/projects');
+  return readJson(response);
+}
+
+export async function createProject(payload) {
+  const response = await fetch('/api/projects', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return readJson(response);
+}
+
+export async function deleteProject(projectId) {
+  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}`, {
+    method: 'DELETE',
+  });
+  return readJson(response);
+}
+
+export async function copyProjectFile(projectId, payload) {
+  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/copy-file`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return readJson(response);
+}
+
+export async function fetchProject(projectId) {
+  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}`);
+  return readJson(response);
+}
+
+export async function selectProject(projectId) {
+  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/select`, {
+    method: 'POST',
+  });
+  return readJson(response);
+}
+
+export async function saveProjectMemo(projectId, memo) {
+  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ memo }),
+  });
+  return readJson(response);
+}
+
+function projectFileUrl(projectId, category, fileName) {
+  return `/api/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(category)}/${encodeURIComponent(fileName)}`;
+}
+
+export async function importProjectFile(projectId, payload) {
+  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/files`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return readJson(response);
+}
+
+export async function fetchProjectFile(projectId, category, fileName) {
+  const response = await fetch(projectFileUrl(projectId, category, fileName));
+  return readJson(response);
+}
+
+export async function saveProjectFile(projectId, category, fileName, content) {
+  const response = await fetch(projectFileUrl(projectId, category, fileName), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+  });
+  return readJson(response);
+}
+
+export async function renameProjectFile(projectId, category, fileName, newName) {
+  const response = await fetch(`${projectFileUrl(projectId, category, fileName)}/rename`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ new_name: newName }),
+  });
+  return readJson(response);
+}
+
+export async function activateProjectFile(projectId, category, fileName) {
+  const response = await fetch(`${projectFileUrl(projectId, category, fileName)}/active`, {
+    method: 'POST',
+  });
+  return readJson(response);
+}
+
+export async function openProjectFileEditor(projectId, category, fileName) {
+  const response = await fetch(`${projectFileUrl(projectId, category, fileName)}/open-editor`, {
+    method: 'POST',
+  });
+  return readJson(response);
+}
+
+export async function deleteProjectFile(projectId, category, fileName) {
+  const response = await fetch(projectFileUrl(projectId, category, fileName), {
+    method: 'DELETE',
+  });
+  return readJson(response);
+}
+
+export function projectFileDownloadUrl(projectId, category, fileName) {
+  return `${projectFileUrl(projectId, category, fileName)}/download`;
 }
 
 export async function fetchMotionFiles() {

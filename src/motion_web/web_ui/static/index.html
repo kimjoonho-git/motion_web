@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Motion Control System</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260715-midi-safe-range">
+    <link rel="stylesheet" href="/static/styles.css?v=20260718-project-memo">
   </head>
   <body>
     <main class="shell">
@@ -20,62 +20,145 @@
         <button class="workspace-tab-button active" type="button" data-workspace-tab="monitoring">실시간 모니터링</button>
         <button class="workspace-tab-button" type="button" data-workspace-tab="manual">동작 테스트</button>
         <button class="workspace-tab-button" type="button" data-workspace-tab="motion">모션</button>
+        <button class="workspace-tab-button" type="button" data-workspace-tab="studio">모션 스튜디오</button>
         <button class="workspace-tab-button" type="button" data-workspace-tab="log">로그</button>
       </nav>
 
+      <div class="workspace-layout">
+        <aside class="project-sidebar" aria-label="현재 프로젝트 파일">
+          <div class="project-sidebar-head">
+            <div>
+              <strong>현재 프로젝트</strong>
+              <span id="projectExplorerMessage">변경은 시스템 정보에서만 가능합니다</span>
+            </div>
+            <button id="projectExplorerRefreshButton" class="icon-button" type="button" title="새로고침" aria-label="프로젝트 새로고침">↻</button>
+          </div>
+          <div id="projectExplorerCurrentName" class="project-current-display">선택된 프로젝트 없음</div>
+          <aside id="projectExplorerTree" class="project-explorer-tree" aria-label="프로젝트 파일">
+            <div class="empty">프로젝트를 만들거나 선택하세요</div>
+          </aside>
+          <section id="projectSetupProgress" class="project-setup-progress" aria-label="최초 설정 진행 상태"></section>
+          <div class="project-sidebar-help">＋ 레이어 추가&nbsp;&nbsp;·&nbsp;&nbsp;⋮ 파일 관리</div>
+        </aside>
+
+        <div class="workspace-content">
+
       <section class="system-panel workspace-panel hidden" data-workspace-panel="system" aria-label="system information">
-        <div class="section-head">
-          <strong>시스템 정보</strong>
+        <div class="section-head system-page-head">
+          <div><strong>시스템 정보</strong><small>현재 프로젝트, 실행 상태, 적용 파일을 한곳에서 확인합니다</small></div>
           <span id="summaryText">Waiting for motion state</span>
         </div>
 
-        <section class="status-strip" aria-label="status">
-          <div>
-            <span>Bridge</span>
-            <strong id="bridgeState">Connecting</strong>
+        <section class="system-overview-card" aria-label="시스템 운영 상태">
+          <div class="section-head compact">
+            <strong>운영 상태</strong>
+            <span>실시간 연결·모터·설정 요약</span>
           </div>
-          <div>
-            <span>Monitoring</span>
-            <strong id="monitoringState">Unknown</strong>
+          <div class="status-strip system-status-primary" aria-label="핵심 상태">
+            <div><span>프로그램 실행</span><strong id="serviceMode">확인 중</strong></div>
+            <div><span>웹 브릿지</span><strong id="bridgeState">Connecting</strong></div>
+            <div><span>모니터링</span><strong id="monitoringState">Unknown</strong></div>
+            <div><span>온라인 모터</span><strong id="onlineMotorCount">0</strong></div>
           </div>
-          <div>
-            <span>Motors Online</span>
-            <strong id="onlineMotorCount">0</strong>
-          </div>
-          <div>
-            <span>Known Motors</span>
-            <strong id="knownMotorCount">0 / 50</strong>
-          </div>
-          <div>
-            <span>Access URL</span>
-            <strong id="accessUrl">-</strong>
-          </div>
-          <div>
-            <span>Last Update</span>
-            <strong id="lastUpdate">-</strong>
-          </div>
-          <div>
-            <span>설정</span>
-            <strong id="configState">Loading</strong>
+          <div class="status-strip system-status-secondary" aria-label="세부 상태">
+            <div><span>등록 모터</span><strong id="knownMotorCount">0 / 50</strong></div>
+            <div><span>실행 설정</span><strong id="configState">Loading</strong></div>
+            <div><span>접속 주소</span><strong id="accessUrl">-</strong></div>
+            <div><span>마지막 갱신</span><strong id="lastUpdate">-</strong></div>
           </div>
         </section>
 
-        <section class="work-context-strip" aria-label="current work files">
-          <div>
-            <span>모터축 설정</span>
-            <strong id="workContextMotorConfig"></strong>
+        <div class="system-dashboard-grid">
+          <section class="project-system-manager system-project-card" aria-label="현재 프로젝트 선택">
+            <div class="section-head compact">
+              <strong>현재 프로젝트</strong>
+              <span>프로젝트 변경은 이 화면에서만 가능</span>
+            </div>
+            <select id="projectExplorerSelect" class="wide-select" aria-label="현재 프로젝트">
+              <option value="">프로젝트 선택</option>
+            </select>
+            <div class="project-context-compare">
+              <div><span>화면에서 선택</span><strong id="projectSelectedStatus">선택 없음</strong></div>
+              <div><span>모터에 적용·실행 중</span><strong id="projectRuntimeStatus">적용 정보 없음</strong></div>
+            </div>
+          </section>
+
+          <section class="project-system-manager system-program-card" aria-label="프로그램 상태 및 재시작">
+            <div class="section-head compact">
+              <strong>프로그램 상태 및 복구</strong>
+              <span id="programHealthDetail">웹 연결과 자동실행 상태를 확인합니다</span>
+            </div>
+            <div class="registry-actions system-program-actions">
+              <button id="programStatusRefreshButton" type="button">상태 다시 확인</button>
+              <button id="programPageReloadButton" type="button">화면 갱신</button>
+              <button id="programRestartButton" class="danger" type="button" disabled>전체 프로그램 재시작</button>
+            </div>
+            <div class="registry-message axis-apply-warning system-restart-warning">화면 갱신은 모터에 영향이 없습니다. 전체 재시작은 장비가 안전할 때만 사용하세요.</div>
+          </section>
+        </div>
+
+        <section class="project-system-manager system-project-memo" aria-label="프로젝트 메모">
+          <div class="section-head compact">
+            <div>
+              <strong>프로젝트 메모</strong>
+              <span>장비 구성, 작업 목적, 확인 사항 등을 자유롭게 기록합니다</span>
+            </div>
+            <span id="projectMemoCount">0 / 4000</span>
           </div>
-          <div>
-            <span>모션 파일</span>
-            <strong id="workContextMotionFile"></strong>
+          <textarea id="projectMemoInput" maxlength="4000" rows="6" placeholder="현재 프로젝트에 남길 정보를 입력하세요" disabled></textarea>
+          <div class="system-project-memo-footer">
+            <span id="projectMemoStatus">프로젝트를 선택하면 메모를 입력할 수 있습니다</span>
+            <button id="projectMemoSaveButton" class="primary" type="button" disabled>메모 저장</button>
           </div>
-          <div>
-            <span>매핑 파일</span>
-            <strong id="workContextMappingFile"></strong>
+        </section>
+
+        <details class="project-system-manager system-project-tools" aria-label="프로젝트 생성 및 파일 관리">
+          <summary class="section-head compact"><strong>프로젝트 관리 도구</strong><span>생성·가져오기·복사·삭제</span></summary>
+          <div class="system-project-tools-body">
+            <div class="project-sidebar-actions">
+              <button id="projectCreateButton" type="button">새 프로젝트</button>
+              <button id="projectUsbRescanButton" type="button">USB 프로젝트 검색</button>
+              <button id="projectDeleteButton" class="danger" type="button" disabled>현재 프로젝트 삭제</button>
+            </div>
+            <div id="projectUsbHelp" class="project-usb-help">USB의 프로젝트 폴더를 motion_projects에 복사한 뒤 검색하세요.</div>
+            <div class="project-import-row">
+              <select id="projectImportCategory" class="compact-select" aria-label="가져올 파일 종류">
+                <option value="motor_axes">모터축 설정</option><option value="motion_axis_matching">모션축 설정</option><option value="motions">모션 파일</option><option value="layers">레이어</option>
+              </select>
+              <button id="projectImportFileButton" type="button" disabled>파일 가져오기</button>
+              <input id="projectImportFileInput" type="file" class="hidden" accept=".yaml,.yml,.json">
+            </div>
+            <div class="project-copy-box">
+              <strong>다른 프로젝트에서 복사</strong>
+              <select id="projectCopySourceProject" class="wide-select" aria-label="원본 프로젝트"><option value="">원본 프로젝트 선택</option></select>
+              <select id="projectCopySourceFile" class="wide-select" aria-label="복사할 파일" disabled><option value="">파일 선택</option></select>
+              <button id="projectCopyFileButton" type="button" disabled>현재 프로젝트로 복사</button>
+            </div>
           </div>
-          <div>
-            <span>상태</span>
-            <strong id="workContextState">대기</strong>
+        </details>
+
+        <section id="projectFileManager" class="project-explorer-panel" aria-label="선택한 프로젝트 파일 관리">
+          <div class="section-head compact">
+            <strong>선택한 파일 관리</strong>
+            <span>왼쪽 프로젝트 파일의 ⋮ 버튼으로 엽니다</span>
+          </div>
+          <div class="project-file-manager-layout">
+            <section class="project-file-editor-panel">
+              <div class="section-head compact">
+                <strong id="projectFileEditorTitle">파일을 선택하세요</strong>
+                <span id="projectFileInfo">프로젝트 파일은 편집해도 실제 장비에 자동 적용되지 않습니다.</span>
+              </div>
+              <textarea id="projectFileEditor" class="project-file-editor" spellcheck="false" disabled></textarea>
+              <div class="registry-actions">
+                <button id="projectFileSaveButton" class="primary" type="button" disabled>파일 저장</button>
+                <button id="projectFileOpenEditorButton" type="button" disabled>기능 탭에서 열기</button>
+                <button id="projectFileRenameButton" type="button" disabled>이름 변경</button>
+                <button id="projectFileActivateButton" type="button" disabled>현재 파일로 선택</button>
+                <button id="projectFileExportButton" type="button" disabled>외부로 내보내기</button>
+                <button id="projectFileDeleteButton" class="off" type="button" disabled>삭제</button>
+              </div>
+              <div class="registry-message">프로젝트에서 파일을 선택하는 동작과 실제 모터 시스템에 설정을 적용하는 동작은 분리되어 있습니다.</div>
+            </section>
           </div>
         </section>
       </section>
@@ -88,8 +171,8 @@
 
         <section class="type-summary" aria-label="motor type summary">
           <div class="section-head">
-            <strong>Motor Type Summary</strong>
-            <span>전체 / 온라인</span>
+            <strong>현재 실행 장비 상태</strong>
+            <span>프로젝트 파일과 별도 · 전체 / 온라인</span>
           </div>
           <div id="motorTypeRows" class="type-grid">
             <div class="empty">No motor type data</div>
@@ -98,35 +181,46 @@
 
         <details class="settings-panel" aria-label="motor config file" open>
           <summary class="section-head">
-            <strong>설정 파일</strong>
+            <strong>현재 프로젝트 모터축 설정</strong>
             <span id="motorConfigState">Not loaded</span>
           </summary>
           <div class="registry-actions">
             <button id="reloadMotorConfigButton" type="button">설정 다시 불러오기</button>
-            <button id="applyAxisConfigButton" type="button" disabled>설정 적용/노드 재시작</button>
           </div>
         </details>
 
+        <section class="axis-setup-step" aria-label="all motor scan">
+          <div class="section-head axis-settings-head">
+            <strong>1. 장비 검색</strong>
+            <span>연결된 모터를 한 번에 검색합니다</span>
+          </div>
+          <div class="scan-panel axis-primary-scan">
+            <button id="scanAllButton" class="primary" type="button">전체 모터 검색</button>
+            <span id="scanAllResult">검색 전 · 새로 발견된 축은 자동으로 선택됩니다</span>
+          </div>
+        </section>
+
         <section class="axis-settings-panel" aria-label="motor axis settings table">
           <div class="section-head axis-settings-head">
-            <strong>모터 축 설정</strong>
+            <strong>2. 프로젝트 축 목록</strong>
             <span id="axisSummary">설정 파일을 불러오는 중</span>
           </div>
 
           <div id="axisSettingsTabs" class="tabbar axis-settings-tabs" role="tablist" aria-label="motor axis setting tabs">
-            <button class="tab-button active" type="button" data-axis-settings-tab="current">축 설정</button>
-            <button class="tab-button" type="button" data-axis-settings-tab="table">설정 파일 표</button>
-            <button class="tab-button" type="button" data-axis-settings-tab="raw">원본 텍스트</button>
+            <button class="tab-button active" type="button" data-axis-settings-tab="current">축 목록 편집</button>
+            <button class="tab-button" type="button" data-axis-settings-tab="table">고급 설정 표</button>
+            <button class="tab-button" type="button" data-axis-settings-tab="raw">고급 원본 보기</button>
           </div>
 
           <div class="axis-settings-tab-panel" data-axis-settings-panel="current">
-            <div id="axisActionMessage" class="registry-message">축을 선택하세요</div>
+            <div id="axisActionMessage" class="registry-message">전체 모터 검색을 실행하면 신규 축이 자동 선택됩니다</div>
             <div class="registry-actions">
-              <button id="addAxisButton" type="button" disabled>축 추가</button>
+              <button id="addAxisButton" class="primary" type="button" disabled>선택 축 등록 및 저장</button>
               <button id="deleteAxisButton" type="button" disabled>축 삭제</button>
               <button id="toggleAxisButton" type="button" disabled>축 ON/OFF</button>
               <button id="sortAxisButton" type="button" disabled>축 번호 정렬</button>
-              <button id="saveAxisConfigButton" class="primary" type="button" disabled>축 설정 저장</button>
+              <button id="saveAxisConfigButton" type="button" disabled>변경 내용 저장</button>
+              <button id="resetAxisConfigButton" class="danger" type="button">전체 초기화</button>
             </div>
             <div class="matching-table-wrap">
               <table class="matching-table">
@@ -156,13 +250,7 @@
           <div class="axis-settings-tab-panel hidden" data-axis-settings-panel="table">
             <div class="registry-message">표에서 필요한 항목을 수정한 뒤 표 업데이트를 누르고, 확인 후 파일 저장을 누르세요.</div>
             <div id="motorConfigTablePath" class="registry-message config-file-path">설정 파일: -</div>
-            <div class="config-file-edit-row">
-              <label class="manual-field config-file-name-field">
-                <span>파일명</span>
-                <input id="motorConfigFileNameInput" type="text" autocomplete="off" spellcheck="false">
-              </label>
-              <span class="config-file-name-note">파일명을 바꾸면 config 폴더 안의 새 YAML로 저장되고 다음 적용 때 그 파일을 읽습니다.</span>
-            </div>
+            <div class="registry-message">파일 이름 변경·가져오기·내보내기·삭제는 왼쪽 프로젝트 파일의 ⋮ 버튼에서 관리합니다.</div>
             <div class="registry-actions">
               <button id="updateConfigTableButton" class="primary" type="button" disabled>표 업데이트</button>
               <button id="saveConfigTableButton" type="button" disabled>파일 저장</button>
@@ -181,29 +269,46 @@
           </div>
         </section>
 
-        <div id="registrationTabs" class="tabbar" role="tablist" aria-label="motor scan tabs">
-          <button class="tab-button active" type="button" data-registration-tab="ac_servo">AC Servo</button>
-          <button class="tab-button" type="button" data-registration-tab="dynamixel">Dynamixel</button>
-          <button class="tab-button" type="button" data-registration-tab="cubemars">CubeMars</button>
-        </div>
+        <details class="settings-panel axis-advanced-panel" aria-label="individual motor scan">
+          <summary class="section-head">
+            <strong>고급: 종류별 개별 검색</strong>
+            <span>필요한 경우에만 사용</span>
+          </summary>
+          <div id="registrationTabs" class="tabbar" role="tablist" aria-label="motor scan tabs">
+            <button class="tab-button active" type="button" data-registration-tab="ac_servo">AC Servo</button>
+            <button class="tab-button" type="button" data-registration-tab="dynamixel">Dynamixel</button>
+            <button class="tab-button" type="button" data-registration-tab="cubemars">CubeMars</button>
+          </div>
 
-        <div class="registration-tab-panel" data-registration-panel="ac_servo">
-          <section class="scan-panel" aria-label="ac servo scan">
-            <button id="scanButton" class="primary" type="button">Scan AC Servo</button>
-            <span id="scanResult">AC Servo EtherCAT 연결 확인</span>
-          </section>
-        </div>
+          <div class="registration-tab-panel" data-registration-panel="ac_servo">
+            <section class="scan-panel" aria-label="ac servo scan">
+              <button id="scanButton" type="button">AC Servo만 검색</button>
+              <span id="scanResult">AC Servo EtherCAT 연결 확인</span>
+            </section>
+          </div>
 
-        <div class="registration-tab-panel hidden" data-registration-panel="dynamixel">
-          <section class="scan-panel" aria-label="dynamixel scan">
-            <button id="dynamixelScanButton" class="primary" type="button">Dynamixel 연결 확인</button>
-            <span id="dynamixelScanResult">COM port 자동 검색, Protocol 2.0, 1,000,000bps, Broadcast Ping + ID 0-50</span>
-          </section>
-        </div>
+          <div class="registration-tab-panel hidden" data-registration-panel="dynamixel">
+            <section class="scan-panel" aria-label="dynamixel scan">
+              <button id="dynamixelScanButton" type="button">Dynamixel만 검색</button>
+              <span id="dynamixelScanResult">COM port 자동 검색, Protocol 2.0, 1,000,000bps, Broadcast Ping + ID 0-50</span>
+            </section>
+          </div>
 
-        <div class="registration-tab-panel hidden" data-registration-panel="cubemars">
-          <div class="registration-placeholder">CubeMars 자동 scan은 아직 적용하지 않습니다.</div>
-        </div>
+          <div class="registration-tab-panel hidden" data-registration-panel="cubemars">
+            <div class="registration-placeholder">CubeMars 자동 scan은 아직 적용하지 않습니다.</div>
+          </div>
+        </details>
+
+        <section class="axis-setup-step axis-apply-step" aria-label="apply motor config">
+          <div class="section-head axis-settings-head">
+            <strong>3. 실제 시스템 적용</strong>
+            <span>등록·편집·저장과 별도 동작</span>
+          </div>
+          <div class="registry-message axis-apply-warning">주의: 이 버튼을 누를 때만 제어 노드가 재시작됩니다. 검색이나 파일 저장만으로는 서보 상태를 변경하지 않습니다.</div>
+          <div class="registry-actions">
+            <button id="applyAxisConfigButton" class="danger" type="button" disabled>현재 프로젝트 설정 적용 및 전체 재시작</button>
+          </div>
+        </section>
       </section>
 
       <section class="monitoring-panel workspace-panel" data-workspace-panel="monitoring" aria-label="realtime motor monitoring">
@@ -383,11 +488,10 @@
         </div>
 
         <div id="motionTabs" class="tabbar motion-tabs" role="tablist" aria-label="motion tabs">
-          <button class="tab-button active" type="button" data-motion-tab="files">모션파일 관리</button>
+          <button class="tab-button active" type="button" data-motion-tab="files">모션 파일</button>
           <button class="tab-button" type="button" data-motion-tab="mapping">모션축 설정</button>
           <button class="tab-button" type="button" data-motion-tab="editor">모션 제작</button>
           <button class="tab-button" type="button" data-motion-tab="midi">MIDI</button>
-          <button class="tab-button" type="button" data-motion-tab="recording">모션 녹화</button>
           <button class="tab-button" type="button" data-motion-tab="run">모션 동작</button>
         </div>
 
@@ -395,16 +499,14 @@
           <div class="motion-file-layout">
             <section class="motion-file-column" aria-label="motion file list">
               <div class="section-head compact">
-                <strong>파일 관리</strong>
-                <span id="motionFileMessage">저장된 파일 확인 중</span>
+                <strong>현재 프로젝트 모션 파일</strong>
+                <span id="motionFileMessage">현재 파일 확인 중</span>
               </div>
               <div class="motion-file-upload">
-                <input id="motionFileInput" type="file" accept=".json,application/json">
                 <div class="registry-actions">
-                  <button id="uploadMotionFileButton" class="primary" type="button">업로드</button>
                   <button id="refreshMotionFilesButton" type="button">목록 새로고침</button>
-                  <button id="deleteMotionFileButton" class="off" type="button" disabled>선택 파일 삭제</button>
                 </div>
+                <div class="registry-message">파일 가져오기·내보내기·이름 변경·삭제는 왼쪽 프로젝트 파일에서 관리합니다.</div>
               </div>
               <div class="table-wrap motion-file-table-wrap">
                 <table class="motion-file-table">
@@ -498,28 +600,30 @@
           <div class="motion-mapping-layout">
             <section class="motion-file-subsection" aria-label="motion mapping file">
               <div class="section-head compact">
-                <strong>매핑 파일</strong>
-                <span id="motionMappingMessage">매핑 파일 확인 중</span>
+                <strong>현재 프로젝트 모션축 설정</strong>
+                <span id="motionMappingMessage">현재 매칭 확인 중</span>
               </div>
               <div class="motion-mapping-toolbar">
                 <label class="manual-field">
-                  <span>저장된 매핑</span>
+                  <span>편집할 매칭</span>
                   <select id="motionMappingSelect">
                     <option value="">매핑 파일 없음</option>
                   </select>
                 </label>
                 <div class="registry-actions">
                   <button id="refreshMotionMappingsButton" type="button">목록 새로고침</button>
-                  <button id="newMotionMappingButton" type="button">새 매핑</button>
+                  <button id="newMotionMappingButton" type="button">새 매칭 작성</button>
+                  <button id="addMotionIdButton" type="button">Motion ID 추가</button>
+                  <button id="generateMotionIdsButton" type="button">모터축 행 자동 생성</button>
                   <button id="validateMotionMappingButton" type="button">설정 검증</button>
-                  <button id="saveMotionMappingButton" class="primary" type="button">매핑 저장</button>
-                  <button id="deleteMotionMappingButton" class="off" type="button" disabled>매핑 삭제</button>
+                  <button id="saveMotionMappingButton" class="primary" type="button">현재 파일 저장</button>
+                  <button id="resetMotionMappingButton" class="danger" type="button">전체 초기화</button>
                 </div>
               </div>
               <div class="motion-mapping-form">
                 <label class="manual-field">
                   <span>매핑 이름</span>
-                  <input id="motionMappingName" type="text" value="" placeholder="예: face_test_mapping">
+                  <input id="motionMappingName" type="text" value="" placeholder="예: face_test_mapping" autocomplete="off" autocapitalize="off" spellcheck="false">
                 </label>
                 <label class="manual-field">
                   <span>모션 파일</span>
@@ -535,8 +639,8 @@
 
             <section class="motion-file-subsection" aria-label="motion axis mapping table">
               <div class="section-head compact">
-                <strong>모션축 매칭</strong>
-                <span>Motion ID 1개와 Motor Axis 1개를 연결</span>
+                <strong>모션축 설정</strong>
+                <span>Motion ID는 직접 입력하고 AC alias 또는 Dynamixel ID에 연결</span>
               </div>
               <div class="table-wrap motion-mapping-table-wrap">
                 <table class="motion-mapping-table">
@@ -544,7 +648,7 @@
                     <tr>
                       <th><span class="mapping-head-label">Motion ID</span><span class="mapping-head-unit"></span></th>
                       <th><span class="mapping-head-label">사용</span><span class="mapping-head-unit"></span></th>
-                      <th><span class="mapping-head-label">Motor Axis</span><span class="mapping-head-unit"></span></th>
+                      <th><span class="mapping-head-label">모터 ID</span><span class="mapping-head-unit">현재 Axis 자동 해석</span></th>
                       <th class="mapping-number-head"><span class="mapping-head-label">감속비</span><span class="mapping-head-unit">x</span></th>
                       <th class="mapping-number-head"><span class="mapping-head-label">기준점</span><span class="mapping-head-unit">deg</span></th>
                       <th><span class="mapping-head-label">현재 기준</span><span class="mapping-head-unit"></span></th>
@@ -569,6 +673,7 @@
               <div class="motion-mapping-guide motion-mapping-guide-below">
                 <div>
                   <strong>값 기준</strong>
+                  <span>Motion ID는 사용자가 정하는 모션축 번호입니다. 양의 정수-양의 정수 형식으로 입력합니다(예: 1-1, 2-3).</span>
                   <span>모션값·Min/Max·초기위치·Offset은 모션/출력축 deg 기준입니다.</span>
                   <span>기준점과 최종 모터 목표는 모터축 deg 기준입니다.</span>
                   <span>Min/Max 초과 데이터는 실행을 막지 않고 경계값으로 제한해 명령합니다.</span>
@@ -709,8 +814,6 @@
           </div>
         </div>
 
-        <div class="motion-tab-panel hidden" data-motion-panel="recording"></div>
-
         <div class="motion-tab-panel hidden" data-motion-panel="run">
           <div class="motion-run-layout">
             <section class="motion-file-subsection" aria-label="motion run controls">
@@ -802,6 +905,80 @@
         </div>
       </section>
 
+      <section class="motion-studio-panel workspace-panel hidden" data-workspace-panel="studio" aria-label="motion studio">
+        <div class="section-head">
+          <strong>모션 스튜디오</strong>
+          <span id="studioMessage">프로젝트 상태 확인 중</span>
+        </div>
+
+        <div class="studio-grid">
+          <section class="motion-file-subsection studio-project-panel">
+            <div class="section-head compact">
+              <strong>현재 통합 프로젝트</strong>
+              <span>왼쪽 프로젝트에서 파일 확인</span>
+            </div>
+            <div class="studio-workspace-summary">
+              <strong id="studioWorkspaceName">통합 프로젝트 미선택</strong>
+              <span id="studioWorkspaceFiles">왼쪽에서 프로젝트와 현재 파일을 선택하세요</span>
+            </div>
+            <div id="studioMappingInfo" class="registry-message">현재 프로젝트의 모션축 설정 파일을 확인하세요</div>
+            <div class="registry-message">기존 모션은 왼쪽 <strong>모션 파일</strong>의 ＋ 버튼을 누르면 레이어로 추가됩니다.</div>
+          </section>
+
+          <section class="motion-file-subsection studio-transport-panel">
+            <div class="section-head compact">
+              <strong>녹화 / 재생</strong>
+              <span id="studioState">대기</span>
+            </div>
+            <div class="registry-actions">
+              <label class="compact-field"><span>녹화 방식</span>
+                <select id="studioRecordMode" class="compact-select">
+                  <option value="record">모션 녹화</option>
+                  <option value="overdub">오버더빙 녹화</option>
+                  <option value="append">이어 녹화</option>
+                </select>
+              </label>
+              <label class="compact-field"><span>초기 이동</span>
+                <select id="studioInitialMoveTime" class="compact-select">
+                  <option value="5">5초</option><option value="7">7초</option><option value="10">10초</option>
+                </select>
+              </label>
+              <button id="studioRecordButton" class="primary" type="button" disabled>● 녹화</button>
+              <button id="studioPlayButton" type="button" disabled>▶ 합성 미리보기</button>
+              <button id="studioStopButton" class="off" type="button" disabled>■ 정지</button>
+            </div>
+            <div class="studio-time"><strong id="studioElapsed">00:00.000</strong><span id="studioFrameCount">0 frames · 20ms</span></div>
+            <div class="registry-actions">
+              <input id="studioExportName" type="text" placeholder="내보낼 모션 파일명">
+              <button id="studioExportButton" type="button" disabled>모션 파일 내보내기</button>
+            </div>
+          </section>
+
+          <section class="motion-file-subsection studio-axis-panel">
+            <div class="section-head compact">
+              <strong>녹화 가능 Motion ID</strong>
+              <span>초기화 완료 후 MIDI SELECT로 움직이는 축을 자동 기록</span>
+            </div>
+            <div class="table-wrap">
+              <table><thead><tr><th>Motion ID</th><th>Motor Axis</th><th>MIDI SELECT</th><th>모션값</th></tr></thead>
+                <tbody id="studioAxisRows"><tr><td colspan="4" class="empty">프로젝트를 불러오세요</td></tr></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="motion-file-subsection studio-layer-panel">
+            <div class="section-head compact"><strong>레이어</strong><span>아래 레이어부터 위 레이어 순서로 합성</span></div>
+            <div id="studioConflictInfo" class="registry-message">다중 레이어 축·시간 충돌 없음</div>
+            <div class="registry-actions"><button id="studioResetButton" class="danger" type="button" disabled>레이어 전체 초기화</button></div>
+            <div class="table-wrap">
+              <table><thead><tr><th>사용</th><th>잠금</th><th>레이어</th><th>프레임</th><th>길이</th></tr></thead>
+                <tbody id="studioLayerRows"><tr><td colspan="5" class="empty">녹화 레이어가 없습니다</td></tr></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </section>
+
       <section class="event-log-panel workspace-panel hidden" data-workspace-panel="log" aria-label="motor event log">
         <div class="section-head">
           <strong>모터 동작 로그</strong>
@@ -837,6 +1014,8 @@
           </table>
         </div>
       </section>
+        </div>
+      </div>
     </main>
 
     <div id="restartOverlay" class="restart-overlay hidden" role="status" aria-live="polite" aria-modal="true">
@@ -861,6 +1040,6 @@
       </div>
     </div>
 
-    <script type="module" src="/static/app.js?v=20260715-midi-force-reconnect"></script>
+    <script type="module" src="/static/app.js?v=20260718-ac-raw-view"></script>
   </body>
 </html>

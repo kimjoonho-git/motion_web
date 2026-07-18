@@ -597,22 +597,23 @@ ros2 launch motion_control_bridge motor_manager_node.launch.py \
 6. 실패 시 이전 YAML로 복구 가능해야 함
 ```
 
-### 10.1 운영 데이터 원본은 3종류로 제한
+### 10.1 운영 데이터는 통합 프로젝트 단위로 격리
 
-웹과 상위 제어기가 관리하는 영구 원본은 다음 3종류이다.
+웹과 상위 제어기가 관리하는 영구 원본은 다음 프로젝트 하위에만 둔다.
 
 ```text
-1. 모터 축 설정
-   /home/joonho_test/ros2_ws/config/active_motor_config.yaml
-
-2. 모션 데이터
-   /home/joonho_test/ros2_ws/motion_data/files/<motion_name>.json
-   현재 예: test2_20260706.json
-
-3. 모션축 매칭
-   /home/joonho_test/ros2_ws/motion_data/mappings/<mapping_name>.yaml
-   현재 예: test2_20260706_mapping.yaml
+motion_projects/<project_id>/
+├── project.json
+├── motor_axes/             # 모터축 설정
+├── motion_axis_matching/   # 모션축 설정 + MIDI 뱅크
+├── motions/                # 모션 파일
+├── layers/                 # 스튜디오 레이어
+├── runtime/                # 적용 스냅샷·편집 상태·백업 이력
+└── trash/                  # 프로젝트 내 소프트 삭제
 ```
+
+기능 노드는 요청의 `project_id`를 검증하고 위 폴더 밖의 설정·모션
+파일을 자동으로 읽지 않는다. `motion_data/`는 구형 보관 영역으로만 남긴다.
 
 MIDI 뱅크는 별도 네 번째 설정 파일로 만들지 않는다. 선택된 모션축 매칭 YAML의
 최상위 `midi_banks` 항목에 저장한다. MIDI 원시값, 필터 출력값, 최종 출력값, 터치,
@@ -630,7 +631,7 @@ MIDI 뱅크는 별도 네 번째 설정 파일로 만들지 않는다. 선택된
 파일별 단일 저장 주체 원칙:
 
 ```text
-active_motor_config.yaml
+<project_id>/motor_axes/<motor_config>.yaml
 → 모터 설정 관리자만 저장
 
 <motion_name>.json

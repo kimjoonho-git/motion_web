@@ -1,3 +1,6 @@
+import os
+from pathlib import Path
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
@@ -5,6 +8,7 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
+    workspace = Path(os.environ.get('MOTION_WORKSPACE', Path.cwd())).expanduser()
     return LaunchDescription([
         DeclareLaunchArgument('motion_state_topic', default_value='/motion_control/motion_state'),
         DeclareLaunchArgument('monitoring_service', default_value='/set_monitoring'),
@@ -16,7 +20,11 @@ def generate_launch_description():
         DeclareLaunchArgument('web_publish_hz', default_value='10.0'),
         DeclareLaunchArgument(
             'motor_config_file',
-            default_value='/home/joonho_test/ros2_ws/config/active_motor_config.yaml',
+            default_value=str(workspace / 'config/bootstrap_motor_config.yaml'),
+        ),
+        DeclareLaunchArgument(
+            'motion_projects_dir',
+            default_value=str(workspace / 'motion_projects'),
         ),
         Node(
             package='motion_web_bridge',
@@ -33,6 +41,7 @@ def generate_launch_description():
                 'port': LaunchConfiguration('port'),
                 'web_publish_hz': LaunchConfiguration('web_publish_hz'),
                 'motor_config_file': LaunchConfiguration('motor_config_file'),
+                'motion_projects_dir': LaunchConfiguration('motion_projects_dir'),
             }],
         ),
     ])

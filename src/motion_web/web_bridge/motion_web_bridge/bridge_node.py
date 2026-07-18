@@ -1,7 +1,9 @@
 import asyncio
 import ast
+import copy
 import json
 import math
+import os
 import socket
 import subprocess
 import threading
@@ -20,10 +22,39 @@ from rclpy.node import Node
 from std_msgs.msg import String
 from std_srvs.srv import SetBool, Trigger
 
+from .project_repository import ProjectRepository
+
 
 DYNAMIXEL_BAUDRATE = 1000000
 MOTION_DATA_PERIOD_SEC = 0.02
 MOTION_FILE_SIZE_LIMIT_BYTES = 10 * 1024 * 1024
+
+
+def _workspace_root() -> Path:
+    configured = str(os.environ.get('MOTION_WORKSPACE') or '').strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
+
+    candidates = [Path.cwd(), Path(__file__).resolve()]
+    try:
+        candidates.insert(0, Path(get_package_share_directory('motion_web_bridge')).resolve())
+    except Exception:
+        pass
+    for candidate in candidates:
+        for parent in (candidate, *candidate.parents):
+            if parent.name == 'install':
+                return parent.parent
+            if (parent / 'src').is_dir() and (parent / 'scripts').is_dir():
+                return parent
+    return Path.cwd().resolve()
+
+
+def _safe_project_publish_stem(value: Any) -> str:
+    text = ''.join(
+        character if character.isalnum() or character in '._-' else '_'
+        for character in str(value or '')
+    ).strip('._-')
+    return text[:80] or 'project_file'
 
 
 class MotionWebBridge(Node):
@@ -94,30 +125,43 @@ class MotionWebBridge(Node):
             'midi_monitor_response_topic',
             '/motion_web/midi_monitor/response',
         ).value
+        self.motion_studio_request_topic = self.declare_parameter(
+            'motion_studio_request_topic', '/motion_studio/request'
+        ).value
+        self.motion_studio_response_topic = self.declare_parameter(
+            'motion_studio_response_topic', '/motion_studio/response'
+        ).value
+        self.motion_studio_status_topic = self.declare_parameter(
+            'motion_studio_status_topic', '/motion_studio/status'
+        ).value
         self.max_jog_delta_deg = float(
             self.declare_parameter('max_jog_delta_deg', 360.0).value
         )
         self.host = self.declare_parameter('host', '0.0.0.0').value
         self.port = int(self.declare_parameter('port', 8000).value)
         self.access_host = str(self.declare_parameter('access_host', '').value)
-        default_config = Path('/home/joonho_test/ros2_ws/config/active_motor_config.yaml')
+        self.workspace_root = _workspace_root()
+        default_config = self.workspace_root / 'config' / 'bootstrap_motor_config.yaml'
         self.motor_config_file = Path(
             str(self.declare_parameter('motor_config_file', str(default_config)).value)
         ).expanduser()
-        self.motor_config_selection_file = (
-            self.motor_config_file.parent / 'selected_motor_config_path.txt'
-        )
-        default_restart_script = Path('/home/joonho_test/ros2_ws/scripts/restart_motion_monitor.sh')
+        # Keep the launch-time file separate from the editable file of the
+        # currently selected project. It represents the configuration used by
+        # the running motor stack until an explicit apply/restart occurs.
+        self.applied_motor_config_file = self.motor_config_file.resolve()
+        default_restart_script = self.workspace_root / 'scripts' / 'restart_motion_monitor.sh'
         self.restart_script = Path(
             str(self.declare_parameter('restart_script', str(default_restart_script)).value)
         ).expanduser()
-        default_motion_data_dir = Path('/home/joonho_test/ros2_ws/motion_data')
-        self.motion_data_dir = Path(
-            str(self.declare_parameter('motion_data_dir', str(default_motion_data_dir)).value)
+        default_motion_projects_dir = self.workspace_root / 'motion_projects'
+        self.motion_projects_dir = Path(
+            str(self.declare_parameter(
+                'motion_projects_dir', str(default_motion_projects_dir)
+            ).value)
         ).expanduser()
-        self.motion_files_dir = self.motion_data_dir / 'files'
-        self.motion_files_dir.mkdir(parents=True, exist_ok=True)
-        default_event_log_dir = Path('/home/joonho_test/ros2_ws/log/motor_events')
+        self.project_repository = ProjectRepository(self.motion_projects_dir)
+        self._bind_selected_project_sources()
+        default_event_log_dir = self.workspace_root / 'log' / 'motor_events'
         self.event_log_dir = Path(
             str(self.declare_parameter('event_log_dir', str(default_event_log_dir)).value)
         ).expanduser()
@@ -148,6 +192,9 @@ class MotionWebBridge(Node):
         self._midi_monitor_lock = threading.Lock()
         self._midi_monitor_status: Dict[str, Any] = {}
         self._midi_monitor_results: Dict[str, Dict[str, Any]] = {}
+        self._motion_studio_lock = threading.Lock()
+        self._motion_studio_status: Dict[str, Any] = {}
+        self._motion_studio_results: Dict[str, Dict[str, Any]] = {}
         self._event_log_lock = threading.RLock()
         self._active_motor_errors: Dict[str, str] = {}
         self._last_motion_run_state: Optional[str] = None
@@ -178,6 +225,9 @@ class MotionWebBridge(Node):
             String,
             self.midi_monitor_request_topic,
             10,
+        )
+        self._motion_studio_request_publisher = self.create_publisher(
+            String, self.motion_studio_request_topic, 10
         )
         self._jog_result_subscription = self.create_subscription(
             String,
@@ -221,6 +271,21 @@ class MotionWebBridge(Node):
             self._midi_monitor_response_callback,
             10,
         )
+        self._motion_studio_response_subscription = self.create_subscription(
+            String,
+            self.motion_studio_response_topic,
+            self._motion_studio_response_callback,
+            10,
+        )
+        self._motion_studio_status_subscription = self.create_subscription(
+            String,
+            self.motion_studio_status_topic,
+            self._motion_studio_status_callback,
+            10,
+        )
+        self._startup_project_context_timer = self.create_timer(
+            1.0, self._initialize_selected_project_context
+        )
 
         self.get_logger().info(
             f'motion_web_bridge started: topic={self.motion_state_topic}, '
@@ -237,7 +302,7 @@ class MotionWebBridge(Node):
             f'motion_run_response_topic={self.motion_run_response_topic}, '
             f'max_jog_delta_deg={self.max_jog_delta_deg:g}, '
             f'motor_config_file={self.motor_config_file}, '
-            f'motion_data_dir={self.motion_data_dir}, '
+            f'motion_projects_dir={self.motion_projects_dir}, '
             f'restart_script={self.restart_script}, '
             f'url={self._web_access["url"]}'
         )
@@ -401,6 +466,29 @@ class MotionWebBridge(Node):
             for key in stale_keys:
                 self._midi_monitor_results.pop(key, None)
 
+    def _motion_studio_status_callback(self, msg: String) -> None:
+        try:
+            payload = json.loads(msg.data)
+        except json.JSONDecodeError:
+            self.get_logger().warn(f'Invalid {self.motion_studio_status_topic} JSON received.')
+            return
+        if isinstance(payload, dict):
+            with self._motion_studio_lock:
+                self._motion_studio_status = payload
+
+    def _motion_studio_response_callback(self, msg: String) -> None:
+        try:
+            payload = json.loads(msg.data)
+        except json.JSONDecodeError:
+            self.get_logger().warn(f'Invalid {self.motion_studio_response_topic} JSON received.')
+            return
+        if not isinstance(payload, dict):
+            return
+        request_id = str(payload.get('request_id') or '')
+        if request_id:
+            with self._motion_studio_lock:
+                self._motion_studio_results[request_id] = payload
+
     def _wait_for_jog_result(
         self,
         request_id: str,
@@ -480,6 +568,21 @@ class MotionWebBridge(Node):
         with self._midi_monitor_lock:
             return self._midi_monitor_results.pop(request_id, None)
 
+    def _wait_for_motion_studio_result(
+        self,
+        request_id: str,
+        timeout_sec: float = 3.0,
+    ) -> Optional[Dict[str, Any]]:
+        deadline = time.time() + timeout_sec
+        while time.time() < deadline:
+            with self._motion_studio_lock:
+                result = self._motion_studio_results.pop(request_id, None)
+            if result is not None:
+                return result
+            time.sleep(0.01)
+        with self._motion_studio_lock:
+            return self._motion_studio_results.pop(request_id, None)
+
     def snapshot(self) -> Dict[str, Any]:
         with self._lock:
             motion_state = self._motion_state
@@ -488,6 +591,8 @@ class MotionWebBridge(Node):
             motion_run_status = dict(self._motion_run_status) if self._motion_run_status else {}
         with self._midi_monitor_lock:
             midi_monitor = dict(self._midi_monitor_status) if self._midi_monitor_status else {}
+        with self._motion_studio_lock:
+            motion_studio = dict(self._motion_studio_status) if self._motion_studio_status else {}
         midi_received_at = midi_monitor.pop('_bridge_received_at', None)
         if midi_received_at is not None and time.time() - float(midi_received_at) > 1.0:
             midi_monitor['connected'] = False
@@ -495,6 +600,11 @@ class MotionWebBridge(Node):
 
         return {
             'bridge_state': 'ok',
+            'service_management': {
+                'managed': bool(os.environ.get('MOTION_CONTROL_SERVICE_UNIT')),
+                'mode': 'automatic' if os.environ.get('MOTION_CONTROL_SERVICE_UNIT') else 'manual',
+                'unit': str(os.environ.get('MOTION_CONTROL_SERVICE_UNIT') or ''),
+            },
             'motion_state_topic': self.motion_state_topic,
             'motion_state_received_at': received_at,
             'motion_state_age_sec': None if received_at is None else round(time.time() - received_at, 3),
@@ -504,6 +614,7 @@ class MotionWebBridge(Node):
             'web_access': self._web_access,
             'motion_run_status': motion_run_status,
             'midi_monitor': midi_monitor,
+            'motion_studio': motion_studio,
             'motion_state': motion_state,
         }
 
@@ -847,7 +958,287 @@ class MotionWebBridge(Node):
             **self.snapshot(),
         }
 
+    def list_motion_projects(self) -> Dict[str, Any]:
+        result = self.project_repository.list_projects()
+        runtime_project_id = self._runtime_project_id()
+        result['runtime_project_id'] = runtime_project_id
+        for project in result.get('projects') or []:
+            project['runtime_active'] = project.get('project_id') == runtime_project_id
+        return result
+
+    def _runtime_project_id(self) -> str:
+        try:
+            relative = self.applied_motor_config_file.relative_to(
+                self.motion_projects_dir.resolve()
+            )
+        except (AttributeError, ValueError):
+            return ''
+        parts = relative.parts
+        if len(parts) < 2:
+            return ''
+        project_id = str(parts[0])
+        try:
+            self.project_repository.get_project(project_id)
+        except (OSError, ValueError, json.JSONDecodeError):
+            return ''
+        return project_id
+
+    def _project_change_blocker(self) -> str:
+        run_lock = getattr(self, '_motion_run_lock', None)
+        if run_lock is None:
+            run_status = getattr(self, '_motion_run_status', {})
+        else:
+            with run_lock:
+                run_status = dict(getattr(self, '_motion_run_status', {}) or {})
+        studio_lock = getattr(self, '_motion_studio_lock', None)
+        if studio_lock is None:
+            studio_status = getattr(self, '_motion_studio_status', {})
+        else:
+            with studio_lock:
+                studio_status = dict(getattr(self, '_motion_studio_status', {}) or {})
+        run_state = str((run_status or {}).get('state') or 'idle')
+        studio_state = str((studio_status or {}).get('state') or 'idle')
+        if run_state in {'initializing', 'initialized', 'running', 'verifying', 'stopping'}:
+            return f'모션 동작 상태가 {run_state}이므로 프로젝트를 변경할 수 없습니다'
+        if studio_state in {'initializing', 'countdown', 'recording', 'playing', 'stopping'}:
+            return f'모션 스튜디오 상태가 {studio_state}이므로 프로젝트를 변경할 수 없습니다'
+        return ''
+
+    def _ensure_project_change_allowed(self) -> None:
+        blocker = self._project_change_blocker()
+        if blocker:
+            raise ValueError(blocker)
+
+    def _ensure_project_mutation_allowed(self, project_id: Any) -> None:
+        self._ensure_selected_project(project_id)
+        self._ensure_project_change_allowed()
+
+    def _ensure_selected_project(self, project_id: Any) -> None:
+        if str(project_id or '') != self.project_repository.selected_project_id():
+            raise ValueError('현재 선택한 프로젝트 파일만 사용할 수 있습니다')
+
+    def create_motion_project(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        self._ensure_project_change_allowed()
+        created = self.project_repository.create_project(payload.get('name'))
+        return self.select_motion_project(created['project']['project_id'])
+
+    def delete_motion_project(self, project_id: Any) -> Dict[str, Any]:
+        self._ensure_project_mutation_allowed(project_id)
+        if str(project_id or '') == self._runtime_project_id():
+            raise ValueError(
+                '현재 모터에 적용된 프로젝트는 삭제할 수 없습니다. '
+                '다른 프로젝트를 적용한 뒤 삭제하세요'
+            )
+        result = self.project_repository.delete_project(project_id)
+        if not self.project_repository.selected_project_id():
+            self.motor_config_file = Path()
+        return result
+
+    def update_motion_project(self, project_id: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
+        self._ensure_selected_project(project_id)
+        return self.project_repository.update_project_memo(project_id, payload.get('memo'))
+
+    def copy_motion_project_file(
+        self, project_id: Any, payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        self._ensure_project_mutation_allowed(project_id)
+        return self.project_repository.copy_file_from_project(
+            project_id,
+            payload.get('source_project_id'),
+            payload.get('category'),
+            payload.get('file_name'),
+            payload.get('new_name'),
+        )
+
+    def _bind_selected_project_sources(self) -> None:
+        project_id = self.project_repository.selected_project_id()
+        if not project_id:
+            return
+        try:
+            detail = self.project_repository.get_project(project_id)
+            active = detail.get('project', {}).get('active_files') or {}
+            motor_name = str(active.get('motor_axes') or '')
+            if motor_name:
+                self.motor_config_file = self.project_repository.export_path(
+                    project_id, 'motor_axes', motor_name
+                )
+        except (OSError, ValueError, json.JSONDecodeError):
+            return
+
+    def _initialize_selected_project_context(self) -> None:
+        self._startup_project_context_timer.cancel()
+        project_id = self.project_repository.selected_project_id()
+        if not project_id:
+            return
+        try:
+            detail = self.project_repository.get_project(project_id)
+            active = detail.get('project', {}).get('active_files') or {}
+            self._request_midi_monitor(
+                'select_project',
+                {'mapping_file_id': str(active.get('motion_axis_matching') or '')},
+                timeout_sec=3.0,
+            )
+        except (OSError, ValueError, json.JSONDecodeError):
+            return
+
+    def load_motion_project(self, project_id: Any) -> Dict[str, Any]:
+        return self.project_repository.get_project(project_id)
+
+    def select_motion_project(self, project_id: Any) -> Dict[str, Any]:
+        if str(project_id or '') != self.project_repository.selected_project_id():
+            self._ensure_project_change_allowed()
+        result = self.project_repository.select_project(project_id)
+        active = result.get('project', {}).get('active_files') or {}
+        motor_name = str(active.get('motor_axes') or '')
+        if motor_name:
+            self.motor_config_file = self.project_repository.export_path(
+                project_id, 'motor_axes', motor_name
+            )
+        midi_context = self._request_midi_monitor(
+            'select_project',
+            {'mapping_file_id': str(active.get('motion_axis_matching') or '')},
+            timeout_sec=3.0,
+        )
+        if midi_context.get('success') is False:
+            result['midi_context_warning'] = str(midi_context.get('message') or '')
+        return result
+
+    def import_motion_project_file(
+        self, project_id: Any, payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        self._ensure_project_mutation_allowed(project_id)
+        return self.project_repository.import_text(
+            project_id,
+            payload.get('category'),
+            payload.get('file_name'),
+            payload.get('content'),
+        )
+
+    def load_motion_project_file(
+        self, project_id: Any, category: Any, file_name: Any
+    ) -> Dict[str, Any]:
+        self._ensure_selected_project(project_id)
+        return self.project_repository.read_file(project_id, category, file_name)
+
+    def download_motion_project_file(
+        self, project_id: Any, category: Any, file_name: Any
+    ) -> Path:
+        self._ensure_selected_project(project_id)
+        return self.project_repository.export_path(project_id, category, file_name)
+
+    def save_motion_project_file(
+        self, project_id: Any, category: Any, file_name: Any, payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        self._ensure_project_mutation_allowed(project_id)
+        return self.project_repository.save_file(
+            project_id, category, file_name, payload.get('content')
+        )
+
+    def rename_motion_project_file(
+        self, project_id: Any, category: Any, file_name: Any, payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        self._ensure_project_mutation_allowed(project_id)
+        return self.project_repository.rename_file(
+            project_id, category, file_name, payload.get('new_name')
+        )
+
+    def delete_motion_project_file(
+        self, project_id: Any, category: Any, file_name: Any
+    ) -> Dict[str, Any]:
+        self._ensure_project_mutation_allowed(project_id)
+        result = self.project_repository.delete_file(project_id, category, file_name)
+        if self.project_repository.selected_project_id() == str(project_id):
+            replacement = str(result.get('replacement_active_file') or '')
+            if replacement and str(category) == 'motor_axes':
+                self.open_motion_project_file_for_editing(
+                    project_id, category, replacement
+                )
+        return result
+
+    def activate_motion_project_file(
+        self, project_id: Any, category: Any, file_name: Any
+    ) -> Dict[str, Any]:
+        self._ensure_project_mutation_allowed(project_id)
+        # This only selects a file in project metadata.  It does not apply a
+        # motor configuration or publish a motion command.
+        result = self.project_repository.set_active(project_id, category, file_name)
+        if str(category) in {'motor_axes', 'motion_axis_matching', 'motions'}:
+            result['editor_link'] = self.open_motion_project_file_for_editing(
+                project_id, category, file_name
+            )
+        return result
+
+    def _selected_project_published_names(self, category: str) -> set[str]:
+        project_id = self.project_repository.selected_project_id()
+        if not project_id:
+            return set()
+        detail = self.project_repository.get_project(project_id)
+        names = set()
+        for folder in detail.get('tree') or []:
+            if folder.get('category') != category:
+                continue
+            for file_info in folder.get('children') or []:
+                names.add(str(file_info.get('name') or ''))
+        return names
+
+    def open_motion_project_file_for_editing(
+        self, project_id: Any, category: Any, file_name: Any
+    ) -> Dict[str, Any]:
+        self._ensure_project_mutation_allowed(project_id)
+        path = self.project_repository.export_path(project_id, category, file_name)
+        category_text = str(category)
+        if category_text == 'motor_axes':
+            self.motor_config_file = path
+            return {
+                'success': True,
+                'workspace': 'config',
+                'category': category_text,
+                'file_name': path.name,
+                'message': '모터축 설정 편집기에 연결했습니다 · 설정 적용은 실행하지 않았습니다',
+            }
+        if category_text in {'motion_axis_matching', 'motions'}:
+            return {
+                'success': True,
+                'workspace': 'project',
+                'category': category_text,
+                'motion_tab': 'mapping' if category_text == 'motion_axis_matching' else 'files',
+                'file_name': path.name,
+                'path': str(path),
+                'message': '현재 프로젝트 파일을 기능 탭에서 직접 사용합니다 · 모션 실행은 시작하지 않았습니다',
+            }
+        return {
+            'success': True,
+            'workspace': 'studio',
+            'category': category_text,
+            'file_name': path.name,
+            'message': '레이어는 왼쪽 프로젝트 파일에서 관리하고 모션 스튜디오에서 합성합니다',
+        }
+
+    def _sync_project_file(
+        self, result: Dict[str, Any], category: str, path: Path
+    ) -> Dict[str, Any]:
+        repository = getattr(self, 'project_repository', None)
+        if repository is None:
+            return result
+        try:
+            sync = repository.sync_project_file(category, path)
+        except (OSError, UnicodeDecodeError, ValueError, yaml.YAMLError) as exc:
+            result['project_sync_warning'] = str(exc)
+            return result
+        result['project_sync'] = sync
+        return result
+
     def load_motor_config(self) -> Dict[str, Any]:
+        try:
+            self.motor_config_file = self._selected_motor_config_path()
+        except ValueError as exc:
+            return {
+                'success': False,
+                'message': str(exc),
+                'config_file': '',
+                'content': '',
+                'registry': self._empty_motor_registry(),
+            }
         if not self.motor_config_file.is_file():
             return {
                 'success': False,
@@ -869,20 +1260,29 @@ class MotionWebBridge(Node):
                 'registry': self._empty_motor_registry(),
             }
 
+        axis_config = self._expand_shared_driver_profiles(config)
+        if axis_config != config:
+            content = yaml.safe_dump(axis_config, sort_keys=False, allow_unicode=True)
+
         return {
             'success': True,
             'message': 'motor config YAML loaded',
             'config_file': str(self.motor_config_file),
             'content': content,
-            'registry': self._registry_from_motor_config(config),
+            'registry': self._registry_from_motor_config(axis_config),
         }
 
     def save_motor_config(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         try:
+            self._ensure_project_mutation_allowed(
+                self.project_repository.selected_project_id()
+            )
             target_file = self._motor_config_file_from_payload(payload)
             if 'content' in payload:
                 content = str(payload.get('content') or '')
                 config = yaml.safe_load(content) or {}
+                config = self._expand_shared_driver_profiles(config)
+                content = yaml.safe_dump(config, sort_keys=False, allow_unicode=True)
             else:
                 registry = payload.get('registry', payload)
                 if not isinstance(registry, dict):
@@ -908,7 +1308,7 @@ class MotionWebBridge(Node):
 
         result = self.load_motor_config()
         result['message'] = 'motor config YAML saved; restart motor_manager_node to apply'
-        return result
+        return self._sync_project_file(result, 'motor_axes', self.motor_config_file)
 
     def apply_motor_config(self) -> Dict[str, Any]:
         if not self.restart_script.is_file():
@@ -919,10 +1319,80 @@ class MotionWebBridge(Node):
                 **self.snapshot(),
             }
 
+        project_id = self.project_repository.selected_project_id()
+        if not project_id:
+            return {
+                'success': False,
+                'message': '적용할 프로젝트를 먼저 선택하세요',
+                **self.snapshot(),
+            }
+        try:
+            prepared = self.project_repository.prepare_runtime_motor_config(project_id)
+            self.project_repository.mark_runtime_motor_config_applied(project_id)
+            managed_service = str(
+                os.environ.get('MOTION_CONTROL_SERVICE_UNIT') or ''
+            ).strip()
+            if managed_service and managed_service != 'motion-control.service':
+                raise ValueError('허용되지 않은 자동실행 서비스 이름입니다')
+            if managed_service:
+                subprocess.Popen(
+                    [
+                        '/usr/bin/systemctl', '--user', 'restart', '--no-block',
+                        managed_service,
+                    ],
+                    start_new_session=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                restart_mode = 'managed_service'
+            else:
+                environment = dict(os.environ)
+                environment['MOTOR_CONFIG_FILE'] = str(prepared['runtime_file'])
+                environment['MOTION_WORKSPACE'] = str(self.workspace_root)
+                subprocess.Popen(
+                    ['/bin/bash', str(self.restart_script)],
+                    cwd=str(self.restart_script.parent.parent),
+                    env=environment,
+                    start_new_session=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                restart_mode = 'legacy_script'
+        except (OSError, ValueError, yaml.YAMLError) as exc:
+            return {
+                'success': False,
+                'message': f'프로젝트 설정을 적용할 수 없습니다: {exc}',
+                'restart_script': str(self.restart_script),
+                **self.snapshot(),
+            }
+
+        return {
+            'success': True,
+            'message': '프로젝트 설정 적용을 시작했습니다. 웹이 잠시 후 다시 연결됩니다',
+            'restart_script': str(self.restart_script),
+            'restart_mode': restart_mode,
+            'runtime_config': prepared,
+            **self.snapshot(),
+        }
+
+    def restart_managed_program(self) -> Dict[str, Any]:
+        """Restart the installed program service only after an explicit web action."""
+        managed_service = str(
+            os.environ.get('MOTION_CONTROL_SERVICE_UNIT') or ''
+        ).strip()
+        if managed_service != 'motion-control.service':
+            return {
+                'success': False,
+                'message': '자동실행 서비스가 설치되지 않았습니다. 최초 설치를 먼저 완료하세요',
+                **self.snapshot(),
+            }
+        self._ensure_project_change_allowed()
         try:
             subprocess.Popen(
-                ['/bin/bash', str(self.restart_script)],
-                cwd=str(self.restart_script.parent.parent),
+                [
+                    '/usr/bin/systemctl', '--user', 'restart', '--no-block',
+                    managed_service,
+                ],
                 start_new_session=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -930,20 +1400,23 @@ class MotionWebBridge(Node):
         except OSError as exc:
             return {
                 'success': False,
-                'message': f'failed to start restart script: {exc}',
-                'restart_script': str(self.restart_script),
+                'message': f'프로그램 재시작 요청에 실패했습니다: {exc}',
                 **self.snapshot(),
             }
-
         return {
             'success': True,
-            'message': 'YAML apply restart started; web will reconnect shortly',
-            'restart_script': str(self.restart_script),
+            'message': '전체 프로그램 재시작을 시작했습니다. 웹이 자동으로 다시 연결됩니다',
+            'restart_mode': 'managed_service',
             **self.snapshot(),
         }
 
     def list_motion_mappings(self) -> Dict[str, Any]:
-        return self._request_motion_mapping('list', {})
+        result = self._request_motion_mapping('list', {})
+        if not self.project_repository.selected_project_id():
+            result['message'] = '통합 프로젝트를 먼저 선택하세요'
+        else:
+            result['message'] = '현재 프로젝트 모션축 설정을 불러왔습니다'
+        return result
 
     def load_motion_mapping(self, file_id: Any) -> Dict[str, Any]:
         result = self._request_motion_mapping('load', {'file_id': file_id})
@@ -959,6 +1432,9 @@ class MotionWebBridge(Node):
         return result
 
     def save_motion_mapping(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        blocker = self._project_change_blocker()
+        if blocker:
+            return {'success': False, 'message': blocker, 'files': []}
         result = self._request_motion_mapping('save', payload)
         if result.get('success') is False:
             return result
@@ -970,11 +1446,31 @@ class MotionWebBridge(Node):
             midi_result = self._load_and_apply_midi_banks(saved_file_id)
             result['midi_banks'] = midi_result
             if midi_result.get('success') is False:
-                result['success'] = False
-                result['message'] = (
-                    '모션축 매칭은 저장됐지만 MIDI 뱅크 적용에 실패했습니다: '
-                    f"{midi_result.get('message') or 'unknown error'}"
-                )
+                if midi_result.get('missing'):
+                    # A new mapping legitimately has no file-owned bank block
+                    # until the user performs the first MIDI bank save.
+                    result['midi_banks_warning'] = str(
+                        midi_result.get('message') or ''
+                    )
+                    result['message'] = (
+                        '모션축 설정을 저장했습니다. '
+                        'MIDI 뱅크는 MIDI 탭에서 처음 저장하세요'
+                    )
+                else:
+                    result['success'] = False
+                    result['message'] = (
+                        '모션축 설정은 저장됐지만 MIDI 뱅크 적용에 실패했습니다: '
+                        f"{midi_result.get('message') or 'unknown error'}"
+                    )
+        if saved_file_id and getattr(self, 'project_repository', None) is not None:
+            project_id = self.project_repository.selected_project_id()
+            return self._sync_project_file(
+                result,
+                'motion_axis_matching',
+                self.project_repository.export_path(
+                    project_id, 'motion_axis_matching', saved_file_id
+                ),
+            )
         return result
 
     def _load_and_apply_midi_banks(self, file_id: str) -> Dict[str, Any]:
@@ -994,7 +1490,7 @@ class MotionWebBridge(Node):
         if applied.get('success') is False:
             return applied
         applied['file'] = loaded.get('file')
-        applied['message'] = '모션축 매칭 파일의 MIDI 뱅크를 노드에 적용했습니다'
+        applied['message'] = '모션축 설정 파일의 MIDI 뱅크를 노드에 적용했습니다'
         return applied
 
     @staticmethod
@@ -1008,7 +1504,22 @@ class MotionWebBridge(Node):
         return self._request_motion_mapping('validate', payload)
 
     def delete_motion_mapping(self, file_id: Any) -> Dict[str, Any]:
-        return self._request_motion_mapping('delete', {'file_id': file_id})
+        project_id = self.project_repository.selected_project_id()
+        if not project_id:
+            return {'success': False, 'message': '통합 프로젝트를 먼저 선택하세요', 'files': []}
+        blocker = self._project_change_blocker()
+        if blocker:
+            return {'success': False, 'message': blocker, 'files': []}
+        try:
+            deleted = self.project_repository.delete_file(
+                project_id, 'motion_axis_matching', file_id
+            )
+        except (OSError, ValueError) as exc:
+            return {'success': False, 'message': str(exc), 'files': []}
+        result = self.list_motion_mappings()
+        result['message'] = '모션축 설정 파일을 프로젝트 휴지통으로 이동했습니다'
+        result['project'] = deleted.get('project')
+        return result
 
     def _request_motion_mapping(
         self,
@@ -1018,10 +1529,12 @@ class MotionWebBridge(Node):
     ) -> Dict[str, Any]:
         request_id = f'mapping-{time.time_ns()}'
         msg = String()
+        request_payload = dict(payload) if isinstance(payload, dict) else {}
+        request_payload['project_id'] = self.project_repository.selected_project_id()
         msg.data = json.dumps({
             'request_id': request_id,
             'command': command,
-            'payload': payload if isinstance(payload, dict) else {},
+            'payload': request_payload,
         }, ensure_ascii=False)
         self._motion_mapping_request_publisher.publish(msg)
         result = self._wait_for_motion_mapping_result(request_id, timeout_sec=timeout_sec)
@@ -1072,13 +1585,22 @@ class MotionWebBridge(Node):
         return result
 
     def save_midi_monitor_mapping(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        blocker = self._project_change_blocker()
+        if blocker:
+            return {'success': False, 'message': blocker}
         updated = self._request_midi_monitor('update_bank', payload, timeout_sec=2.0)
         return self._persist_midi_bank_result(updated)
 
     def create_midi_bank(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        blocker = self._project_change_blocker()
+        if blocker:
+            return {'success': False, 'message': blocker}
         return self._request_midi_monitor('create_bank', payload, timeout_sec=2.0)
 
     def select_midi_bank(self, bank_id: str) -> Dict[str, Any]:
+        blocker = self._project_change_blocker()
+        if blocker:
+            return {'success': False, 'message': blocker}
         return self._request_midi_monitor(
             'select_bank',
             {'bank_id': bank_id},
@@ -1086,6 +1608,9 @@ class MotionWebBridge(Node):
         )
 
     def update_midi_bank(self, bank_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        blocker = self._project_change_blocker()
+        if blocker:
+            return {'success': False, 'message': blocker}
         updated = self._request_midi_monitor(
             'update_bank',
             {**payload, 'bank_id': bank_id},
@@ -1094,6 +1619,9 @@ class MotionWebBridge(Node):
         return self._persist_midi_bank_result(updated)
 
     def delete_midi_bank(self, bank_id: str) -> Dict[str, Any]:
+        blocker = self._project_change_blocker()
+        if blocker:
+            return {'success': False, 'message': blocker}
         return self._request_midi_monitor(
             'delete_bank',
             {'bank_id': bank_id},
@@ -1101,6 +1629,9 @@ class MotionWebBridge(Node):
         )
 
     def save_midi_banks_to_file(self) -> Dict[str, Any]:
+        blocker = self._project_change_blocker()
+        if blocker:
+            return {'success': False, 'message': blocker}
         return self._persist_midi_bank_result(self.midi_monitor_status())
 
     def load_midi_banks_from_file(self) -> Dict[str, Any]:
@@ -1109,7 +1640,7 @@ class MotionWebBridge(Node):
             return status
         file_id = self._midi_mapping_file_id(status)
         if not file_id:
-            return {'success': False, 'message': '선택된 모션축 매칭 파일이 없습니다'}
+            return {'success': False, 'message': '선택된 모션축 설정 파일이 없습니다'}
         return self._load_and_apply_midi_banks(file_id)
 
     def reset_midi_runtime_values(self) -> Dict[str, Any]:
@@ -1135,7 +1666,7 @@ class MotionWebBridge(Node):
         file_id = self._midi_mapping_file_id(updated)
         state = updated.get('bank_state')
         if not file_id:
-            return {'success': False, 'message': '선택된 모션축 매칭 파일이 없습니다'}
+            return {'success': False, 'message': '선택된 모션축 설정 파일이 없습니다'}
         if not isinstance(state, dict):
             return {'success': False, 'message': 'MIDI 노드의 뱅크 설정 응답이 올바르지 않습니다'}
 
@@ -1168,7 +1699,7 @@ class MotionWebBridge(Node):
             }
         applied['backup_file'] = saved.get('backup_file')
         applied['file'] = saved.get('file')
-        applied['message'] = 'MIDI 뱅크 설정을 모션축 매칭 파일에 저장하고 노드에 적용했습니다'
+        applied['message'] = 'MIDI 뱅크 설정을 모션축 설정 파일에 저장하고 노드에 적용했습니다'
         return applied
 
     def _request_midi_monitor(
@@ -1179,10 +1710,12 @@ class MotionWebBridge(Node):
     ) -> Dict[str, Any]:
         request_id = f'midi-{time.time_ns()}'
         msg = String()
+        request_payload = dict(payload) if isinstance(payload, dict) else {}
+        request_payload['project_id'] = self.project_repository.selected_project_id()
         msg.data = json.dumps({
             'request_id': request_id,
             'command': command,
-            'payload': payload if isinstance(payload, dict) else {},
+            'payload': request_payload,
         }, ensure_ascii=False)
         self._midi_monitor_request_publisher.publish(msg)
         result = self._wait_for_midi_monitor_result(request_id, timeout_sec=timeout_sec)
@@ -1205,10 +1738,12 @@ class MotionWebBridge(Node):
     ) -> Dict[str, Any]:
         request_id = f'run-{time.time_ns()}'
         msg = String()
+        request_payload = dict(payload) if isinstance(payload, dict) else {}
+        request_payload['project_id'] = self.project_repository.selected_project_id()
         msg.data = json.dumps({
             'request_id': request_id,
             'command': command,
-            'payload': payload if isinstance(payload, dict) else {},
+            'payload': request_payload,
         }, ensure_ascii=False)
         self._motion_run_request_publisher.publish(msg)
         result = self._wait_for_motion_run_result(request_id, timeout_sec=timeout_sec)
@@ -1221,13 +1756,161 @@ class MotionWebBridge(Node):
         result.pop('_received_at', None)
         return result
 
+    def request_motion_studio(
+        self,
+        command: str,
+        payload: Optional[Dict[str, Any]] = None,
+        timeout_sec: float = 4.0,
+    ) -> Dict[str, Any]:
+        request_id = f'studio-{time.time_ns()}'
+        msg = String()
+        request_payload = dict(payload) if isinstance(payload, dict) else {}
+        request_payload['project_id'] = self.project_repository.selected_project_id()
+        msg.data = json.dumps({
+            'request_id': request_id,
+            'command': command,
+            'payload': request_payload,
+        }, ensure_ascii=False)
+        self._motion_studio_request_publisher.publish(msg)
+        result = self._wait_for_motion_studio_result(request_id, timeout_sec=timeout_sec)
+        if result is None:
+            with self._motion_studio_lock:
+                cached = dict(self._motion_studio_status)
+            return {
+                'success': False,
+                'message': 'motion_studio_node 응답 시간 초과',
+                'status': cached,
+            }
+        return result
+
+    def sync_motion_studio_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        repository = getattr(self, 'project_repository', None)
+        if repository is None:
+            return result
+        try:
+            sync = repository.sync_studio_layers(result.get('project'))
+        except (OSError, UnicodeDecodeError, ValueError) as exc:
+            result['project_sync_warning'] = str(exc)
+            return result
+        result['project_sync'] = sync
+        return result
+
+    def export_motion_studio(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        result = self.request_motion_studio('export', payload)
+        file_id = str(result.get('file_id') or '').strip()
+        if result.get('success') is not False and file_id:
+            project_id = self.project_repository.selected_project_id()
+            return self._sync_project_file(
+                result,
+                'motions',
+                self.project_repository.export_path(project_id, 'motions', file_id),
+            )
+        return result
+
+    def prepare_unified_motion_studio(self) -> Dict[str, Any]:
+        repository = self.project_repository
+        project_id = repository.selected_project_id()
+        if not project_id:
+            return {
+                'success': False,
+                'message': '왼쪽에서 통합 프로젝트를 먼저 선택하세요',
+                'unified_project': True,
+                'workspace_project': None,
+                'projects': [],
+                'project': None,
+                'mappings': [],
+                'motion_files': [],
+                'status': {'state': 'idle', 'message': '통합 프로젝트 미선택'},
+            }
+        detail = repository.get_project(project_id)
+        workspace = detail['project']
+        active = workspace.get('active_files') or {}
+        mapping_name = str(active.get('motion_axis_matching') or '')
+        if not mapping_name:
+            return {
+                'success': False,
+                'message': '현재 프로젝트의 모션축 설정 파일을 선택하세요',
+                'unified_project': True,
+                'workspace_project': workspace,
+                'projects': [],
+                'project': None,
+                'mappings': [],
+                'motion_files': [],
+                'status': {'state': 'idle', 'message': '모션축 설정 미선택'},
+            }
+        published_motion_names = []
+        for folder in detail.get('tree') or []:
+            if folder.get('category') != 'motions':
+                continue
+            for file_info in folder.get('children') or []:
+                published_motion_names.append(str(file_info.get('name') or ''))
+        layers_by_id: Dict[str, Dict[str, Any]] = {}
+        for folder in detail.get('tree') or []:
+            if folder.get('category') != 'layers':
+                continue
+            for file_info in folder.get('children') or []:
+                loaded = repository.read_file(project_id, 'layers', file_info.get('name'))
+                layer = json.loads(loaded['content'])
+                if not isinstance(layer, dict):
+                    continue
+                layer_id = str(layer.get('layer_id') or file_info.get('name'))
+                layers_by_id[layer_id] = layer
+        result = self.request_motion_studio(
+            'open_workspace',
+            {
+                'workspace_project_id': project_id,
+                'name': workspace.get('name'),
+                'mapping_file_id': mapping_name,
+                'layers': list(layers_by_id.values()),
+            },
+            timeout_sec=8.0,
+        )
+        result['unified_project'] = True
+        result['workspace_project'] = workspace
+        result['mappings'] = [
+            item for item in result.get('mappings') or []
+            if item.get('file_id') == mapping_name
+        ]
+        result['motion_files'] = [
+            item for item in result.get('motion_files') or []
+            if item.get('file_id') in published_motion_names
+        ]
+        return result
+
+    def import_motion_studio_layer(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        prepared = self.prepare_unified_motion_studio()
+        if prepared.get('success') is False:
+            return prepared
+        result = self.request_motion_studio(
+            'import_motion_layer',
+            {'motion_file_id': payload.get('motion_file_id')},
+            timeout_sec=8.0,
+        )
+        result['unified_project'] = True
+        result['workspace_project'] = prepared.get('workspace_project')
+        return self.sync_motion_studio_result(result)
+
     def list_motion_files(self) -> Dict[str, Any]:
-        self._ensure_motion_file_dir()
+        project_id = self.project_repository.selected_project_id()
+        if not project_id:
+            return {
+                'success': True,
+                'message': '통합 프로젝트를 먼저 선택하세요',
+                'project_dir': '',
+                'files_dir': '',
+                'files': [],
+            }
+        files_dir = self.motion_projects_dir / project_id / 'motions'
+        files_dir.mkdir(parents=True, exist_ok=True)
         files = []
         for path in sorted(
             (
-                item for item in self.motion_files_dir.iterdir()
-                if item.is_file() and item.suffix.lower() == '.json'
+                item for item in files_dir.iterdir()
+                if (
+                    item.is_file()
+                    and item.suffix.lower() == '.json'
+                    and not item.name.startswith('__studio_')
+                )
             ),
             key=lambda item: item.stat().st_mtime if item.exists() else 0.0,
             reverse=True,
@@ -1235,13 +1918,20 @@ class MotionWebBridge(Node):
             files.append(self._motion_file_entry(path, include_detail=False))
         return {
             'success': True,
-            'message': 'motion files loaded',
-            'motion_data_dir': str(self.motion_data_dir),
-            'files_dir': str(self.motion_files_dir),
+            'message': (
+                '현재 프로젝트 모션 파일을 불러왔습니다'
+                if self.project_repository.selected_project_id()
+                else '통합 프로젝트를 먼저 선택하세요'
+            ),
+            'project_dir': str(self.motion_projects_dir / project_id),
+            'files_dir': str(files_dir),
             'files': files,
         }
 
     def upload_motion_file(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        blocker = self._project_change_blocker()
+        if blocker:
+            return {**self.list_motion_files(), 'success': False, 'message': blocker}
         filename = str(payload.get('filename') or '').strip()
         content = payload.get('content')
         if not filename:
@@ -1272,8 +1962,12 @@ class MotionWebBridge(Node):
                 'analysis': analysis,
             }
 
-        self._ensure_motion_file_dir()
-        target = self._new_motion_file_path(filename)
+        project_id = self.project_repository.selected_project_id()
+        if not project_id:
+            return {**self.list_motion_files(), 'success': False, 'message': '통합 프로젝트를 먼저 선택하세요'}
+        files_dir = self.motion_projects_dir / project_id / 'motions'
+        files_dir.mkdir(parents=True, exist_ok=True)
+        target = self._new_motion_file_path(filename, files_dir)
         try:
             target.write_text(content, encoding='utf-8')
         except OSError as exc:
@@ -1284,7 +1978,7 @@ class MotionWebBridge(Node):
             }
 
         analysis_valid = bool(analysis.get('valid'))
-        return {
+        result = {
             **self.list_motion_files(),
             'success': True,
             'message': (
@@ -1295,10 +1989,11 @@ class MotionWebBridge(Node):
             'validation_success': analysis_valid,
             'file': self._motion_file_entry(target, include_detail=True),
         }
+        return self._sync_project_file(result, 'motions', target)
 
     def load_motion_file(self, file_id: Any) -> Dict[str, Any]:
         try:
-            path = self._motion_file_path(file_id)
+            path = self._motion_file_path(file_id, self._selected_motion_files_dir())
         except ValueError as exc:
             return {
                 **self.list_motion_files(),
@@ -1314,8 +2009,13 @@ class MotionWebBridge(Node):
 
     def delete_motion_file(self, file_id: Any) -> Dict[str, Any]:
         try:
-            path = self._motion_file_path(file_id)
-            path.unlink()
+            project_id = self.project_repository.selected_project_id()
+            if not project_id:
+                raise ValueError('통합 프로젝트를 먼저 선택하세요')
+            self._ensure_project_mutation_allowed(project_id)
+            result = self.project_repository.delete_file(
+                project_id, 'motions', file_id
+            )
         except (OSError, ValueError) as exc:
             return {
                 **self.list_motion_files(),
@@ -1326,10 +2026,8 @@ class MotionWebBridge(Node):
             **self.list_motion_files(),
             'success': True,
             'message': 'motion file deleted',
+            'project': result.get('project'),
         }
-
-    def _ensure_motion_file_dir(self) -> None:
-        self.motion_files_dir.mkdir(parents=True, exist_ok=True)
 
     def _motion_file_entry(self, path: Path, *, include_detail: bool) -> Dict[str, Any]:
         stat = path.stat()
@@ -1357,28 +2055,35 @@ class MotionWebBridge(Node):
             entry['content_preview'] = content[:12000]
         return entry
 
-    def _motion_file_path(self, file_id: Any) -> Path:
+    def _selected_motion_files_dir(self) -> Path:
+        project_id = self.project_repository.selected_project_id()
+        if not project_id:
+            raise ValueError('통합 프로젝트를 먼저 선택하세요')
+        return self.motion_projects_dir / project_id / 'motions'
+
+    def _motion_file_path(self, file_id: Any, directory: Path) -> Path:
         name = str(file_id or '').strip()
         if not name:
             raise ValueError('file_id is required')
         if name != Path(name).name or '/' in name or '\\' in name:
             raise ValueError('invalid motion file id')
-        path = self.motion_files_dir / name
+        path = directory / name
         if not path.is_file():
             raise ValueError(f'motion file not found: {name}')
         return path
 
-    def _new_motion_file_path(self, filename: str) -> Path:
+    def _new_motion_file_path(self, filename: str, directory: Path) -> Path:
         safe = self._safe_motion_filename(filename)
         date_text = time.strftime('%Y%m%d')
         source = Path(safe)
         stem = source.stem or 'motion'
         suffix = source.suffix or '.json'
-        target = self.motion_files_dir / f'{stem}_{date_text}{suffix}'
+        files_dir = directory
+        target = files_dir / f'{stem}_{date_text}{suffix}'
         counter = 1
         while target.exists():
             counter += 1
-            target = self.motion_files_dir / f'{stem}_{date_text}_{counter}{suffix}'
+            target = files_dir / f'{stem}_{date_text}_{counter}{suffix}'
         return target
 
     @staticmethod
@@ -1883,8 +2588,11 @@ class MotionWebBridge(Node):
                 **self.snapshot(),
             }
 
+        success = bool(result.get('success'))
+        if success:
+            self.project_repository.mark_jog_verified()
         return {
-            'success': bool(result.get('success')),
+            'success': success,
             'message': str(result.get('message') or 'motion_supervisor returned empty result'),
             'request_id': request_id,
             'supervisor_result': result,
@@ -1956,8 +2664,11 @@ class MotionWebBridge(Node):
                 **self.snapshot(),
             }
 
+        success = bool(result.get('success'))
+        if success:
+            self.project_repository.mark_jog_verified()
         return {
-            'success': bool(result.get('success')),
+            'success': success,
             'message': str(result.get('message') or 'motion_supervisor returned empty result'),
             'request_id': request_id,
             'supervisor_result': result,
@@ -2245,6 +2956,10 @@ class MotionWebBridge(Node):
         }
 
     def _read_current_motor_config(self) -> Dict[str, Any]:
+        try:
+            self.motor_config_file = self._selected_motor_config_path()
+        except ValueError:
+            return self._default_motor_config()
         if not self.motor_config_file.is_file():
             return self._default_motor_config()
         content = self.motor_config_file.read_text(encoding='utf-8')
@@ -2252,9 +2967,11 @@ class MotionWebBridge(Node):
         return config if isinstance(config, dict) else self._default_motor_config()
 
     def _motor_config_file_from_payload(self, payload: Dict[str, Any]) -> Path:
+        active_path = self._selected_motor_config_path()
+        self.motor_config_file = active_path
         requested = str(payload.get('file_name') or '').strip()
         if not requested:
-            return self.motor_config_file
+            return active_path
 
         name = Path(requested).name.strip()
         if not name or name in ('.', '..'):
@@ -2262,7 +2979,7 @@ class MotionWebBridge(Node):
         if not name.lower().endswith(('.yaml', '.yml')):
             name = f'{name}.yaml'
 
-        config_dir = self.motor_config_file.parent.resolve()
+        config_dir = active_path.parent.resolve()
         target = (config_dir / name).resolve()
         try:
             target.relative_to(config_dir)
@@ -2270,23 +2987,46 @@ class MotionWebBridge(Node):
             raise ValueError('motor config file must stay under config directory') from exc
         return target
 
+    def _selected_motor_config_path(self) -> Path:
+        project_id = self.project_repository.selected_project_id()
+        if not project_id:
+            raise ValueError('통합 프로젝트를 먼저 선택하세요')
+        detail = self.project_repository.get_project(project_id)
+        active = detail.get('project', {}).get('active_files') or {}
+        file_name = str(active.get('motor_axes') or '').strip()
+        if not file_name:
+            raise ValueError('현재 프로젝트에 모터축 설정 파일이 없습니다')
+        return self.project_repository.export_path(
+            project_id, 'motor_axes', file_name
+        )
+
     def _write_motor_config_selection(self, path: Path) -> None:
-        self.motor_config_selection_file.parent.mkdir(parents=True, exist_ok=True)
-        self.motor_config_selection_file.write_text(str(path) + '\n', encoding='utf-8')
+        project_id = self.project_repository.selected_project_id()
+        if not project_id:
+            raise ValueError('통합 프로젝트를 먼저 선택하세요')
+        project = self.project_repository.get_project(project_id)['project']
+        selection_file = Path(project['path']) / 'runtime' / 'selected_motor_config_path.txt'
+        selection_file.parent.mkdir(parents=True, exist_ok=True)
+        selection_file.write_text(str(path) + '\n', encoding='utf-8')
 
     def _write_motor_config(self, content: str, target_file: Optional[Path] = None) -> None:
         target = target_file or self.motor_config_file
         target.parent.mkdir(parents=True, exist_ok=True)
         if target.is_file():
             timestamp = time.strftime('%Y%m%d-%H%M%S')
-            backup = target.with_suffix(f'{target.suffix}.bak-{timestamp}')
+            history_dir = target.parent.parent / 'runtime' / 'history' / 'motor_axes'
+            history_dir.mkdir(parents=True, exist_ok=True)
+            backup = history_dir / f'{timestamp}-{target.name}'
+            counter = 2
+            while backup.exists():
+                backup = history_dir / f'{timestamp}-{counter}-{target.name}'
+                counter += 1
             backup.write_text(target.read_text(encoding='utf-8'), encoding='utf-8')
         target.write_text(content.rstrip() + '\n', encoding='utf-8')
         self.motor_config_file = target
         self._write_motor_config_selection(target)
 
-    @staticmethod
-    def _default_motor_config() -> Dict[str, Any]:
+    def _default_motor_config(self) -> Dict[str, Any]:
         return {
             'period': 1000000,
             'masters': [
@@ -2308,19 +3048,22 @@ class MotionWebBridge(Node):
                     'rated_current': 1.1,
                     'rated_power_w': 50,
                     'rated_speed_rpm': 3000,
-                    'lower': -27000.0,
-                    'upper': 27000.0,
+                    'lower': -36000.0,
+                    'upper': 36000.0,
                     'speed': 2000000.0,
-                    'acceleration': 0.37450702829239285,
-                    'deceleration': 0.37450702829239285,
-                    'profile_velocity': 0.037450702829239284,
-                    'profile_acceleration': 0.37450702829239285,
-                    'profile_deceleration': 0.37450702829239285,
+                    'acceleration': 180000.0,
+                    'deceleration': 180000.0,
+                    'profile_velocity': 18000.0,
+                    'profile_acceleration': 180000.0,
+                    'profile_deceleration': 180000.0,
                     'profile_position_value': 1,
                     'profile_velocity_value': 3,
                     'profile_effort_value': 4,
                     'type': 'minas',
-                    'param_file': '/home/joonho_test/ros2_ws/src/motion_system/ros2/motion_system_ros2/motion_control_bridge/param',
+                    'param_file': str(
+                        self.workspace_root
+                        / 'src/motion_system/ros2/motion_system_ros2/motion_control_bridge/param'
+                    ),
                 },
             ],
         }
@@ -2404,6 +3147,62 @@ class MotionWebBridge(Node):
             'motors': motors,
         }
 
+    @staticmethod
+    def _expand_shared_driver_profiles(config: Dict[str, Any]) -> Dict[str, Any]:
+        """Give every configured axis an independent driver profile.
+
+        The runtime schema stores limits on driver entries. Reusing one driver ID
+        therefore makes lower/upper and velocity settings change for every axis
+        that references it. Cloning only repeated references preserves the schema
+        while making axis editing independent for AC Servo and Dynamixel alike.
+        """
+        if not isinstance(config, dict):
+            return config
+
+        expanded = copy.deepcopy(config)
+        drivers = expanded.get('drivers')
+        masters = expanded.get('masters')
+        if not isinstance(drivers, list) or not isinstance(masters, list):
+            return expanded
+
+        drivers_by_id = {
+            MotionWebBridge._optional_int(driver.get('id'), None): driver
+            for driver in drivers
+            if isinstance(driver, dict)
+            and MotionWebBridge._optional_int(driver.get('id'), None) is not None
+        }
+        used_ids = set(drivers_by_id)
+        next_id = max(used_ids | {-1}) + 1
+        reference_counts: Dict[int, int] = {}
+
+        for master in masters:
+            if not isinstance(master, dict):
+                continue
+            slaves = master.get('slaves')
+            if not isinstance(slaves, list):
+                continue
+            for slave in slaves:
+                if not isinstance(slave, dict):
+                    continue
+                driver_id = MotionWebBridge._optional_int(slave.get('driver_id'), None)
+                if driver_id is None or driver_id not in drivers_by_id:
+                    continue
+                count = reference_counts.get(driver_id, 0)
+                reference_counts[driver_id] = count + 1
+                if count == 0:
+                    continue
+
+                while next_id in used_ids:
+                    next_id += 1
+                cloned_driver = copy.deepcopy(drivers_by_id[driver_id])
+                cloned_driver['id'] = next_id
+                drivers.append(cloned_driver)
+                slave['driver_id'] = next_id
+                used_ids.add(next_id)
+                next_id += 1
+
+        return expanded
+
     def _motor_config_from_registry(
         self,
         registry: Dict[str, Any],
@@ -2471,7 +3270,7 @@ class MotionWebBridge(Node):
             self._normalize_driver_configs(drivers),
             masters,
         )
-        return config
+        return self._expand_shared_driver_profiles(config)
 
     def _normalize_driver_configs(self, drivers: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         normalized = []
@@ -2487,12 +3286,11 @@ class MotionWebBridge(Node):
             normalized.append(item)
         return normalized
 
-    @staticmethod
-    def _dynamixel_param_file_for_model(driver_model: str) -> str:
+    def _dynamixel_param_file_for_model(self, driver_model: str) -> str:
         model = driver_model.lower().replace('_', '-')
         if 'xm540-w150' in model:
-            return '/home/joonho_test/ros2_ws/config/dynamixel_xm540_w150.yaml'
-        return '/home/joonho_test/ros2_ws/config/dynamixel_xm540_w270.yaml'
+            return str(self.workspace_root / 'config/dynamixel_xm540_w150.yaml')
+        return str(self.workspace_root / 'config/dynamixel_xm540_w270.yaml')
 
     def _prune_unused_drivers(
         self,
@@ -2659,17 +3457,21 @@ class MotionWebBridge(Node):
         driver_model: str,
         drivers: List[Dict[str, Any]],
     ) -> int:
-        template = next(
-            (
-                dict(driver)
-                for driver in drivers
-                if isinstance(driver, dict) and str(driver.get('type') or '') == driver_type
-            ),
-            None,
-        )
-        if template is None and driver_type == 'dynamixel':
-            template = self._default_dynamixel_driver()
-        elif template is None and driver_type == 'minas':
+        if driver_type == 'dynamixel':
+            # Dynamixel values are model-specific.  Do not clone the first
+            # registered Dynamixel profile and merely rename it, because scan
+            # order would then give W150 values to W270 (or vice versa).
+            template = self._default_dynamixel_driver(driver_model)
+        else:
+            template = next(
+                (
+                    dict(driver)
+                    for driver in drivers
+                    if isinstance(driver, dict) and str(driver.get('type') or '') == driver_type
+                ),
+                None,
+            )
+        if template is None and driver_type == 'minas':
             template = dict(self._default_motor_config()['drivers'][0])
         elif template is None:
             template = {
@@ -2688,7 +3490,7 @@ class MotionWebBridge(Node):
 
         template['id'] = next_driver_id
         template['type'] = driver_type
-        if driver_model:
+        if driver_model and driver_type != 'dynamixel':
             template['driver_model'] = driver_model
         elif not template.get('driver_model'):
             template['driver_model'] = driver_type
@@ -2699,28 +3501,41 @@ class MotionWebBridge(Node):
         drivers.append(template)
         return next_driver_id
 
-    @staticmethod
-    def _default_dynamixel_driver() -> Dict[str, Any]:
+    def _default_dynamixel_driver(self, driver_model: str = '') -> Dict[str, Any]:
+        model = str(driver_model or '').strip().upper().replace('_', '-')
+        if 'XM540-W150' in model:
+            canonical_model = 'XM540-W150'
+            rated_speed_rpm = 66
+            velocity = 396.0
+        elif 'XM540-W270' in model:
+            canonical_model = 'XM540-W270-R'
+            rated_speed_rpm = 37
+            velocity = 222.0
+        else:
+            canonical_model = str(driver_model or 'Dynamixel').strip() or 'Dynamixel'
+            rated_speed_rpm = 30
+            velocity = 100.0
+
         return {
-            'driver_model': 'Dynamixel',
+            'driver_model': canonical_model,
             'pulse_per_revolution': 4096,
             'rated_effort': 1.0,
             'unit_effort': 0.00269,
             'rated_current': 1.0,
-            'rated_speed_rpm': 30,
+            'rated_speed_rpm': rated_speed_rpm,
             'lower': -180.0,
             'upper': 180.0,
-            'speed': 100.0,
-            'acceleration': 100.0,
-            'deceleration': 100.0,
-            'profile_velocity': 100.0,
-            'profile_acceleration': 100.0,
-            'profile_deceleration': 100.0,
+            'speed': velocity,
+            'acceleration': 703104.5,
+            'deceleration': 703104.5,
+            'profile_velocity': velocity,
+            'profile_acceleration': 703104.5,
+            'profile_deceleration': 703104.5,
             'profile_position_value': 3,
             'profile_velocity_value': 1,
             'profile_effort_value': 0,
             'type': 'dynamixel',
-            'param_file': '/home/joonho_test/ros2_ws/config/dynamixel_xm540_w270.yaml',
+            'param_file': self._dynamixel_param_file_for_model(canonical_model),
         }
 
     @staticmethod
@@ -2862,6 +3677,13 @@ class MotionWebBridge(Node):
 def create_app(bridge: MotionWebBridge) -> FastAPI:
     app = FastAPI(title='Motion Web Bridge')
     ui_share = Path(get_package_share_directory('motion_web_ui')) / 'static'
+
+    def project_call(method, *args):
+        try:
+            return method(*args)
+        except (OSError, UnicodeDecodeError, ValueError, yaml.YAMLError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.get('/')
     async def index():
         return FileResponse(str(ui_share / 'index.html'))
@@ -2879,6 +3701,125 @@ def create_app(bridge: MotionWebBridge) -> FastAPI:
     @app.get('/api/status')
     async def status():
         return bridge.snapshot()
+
+    @app.get('/api/projects')
+    async def motion_projects():
+        return project_call(bridge.list_motion_projects)
+
+    @app.post('/api/projects')
+    async def create_motion_project(request: Request):
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail='request body must be an object')
+        return project_call(bridge.create_motion_project, body)
+
+    @app.get('/api/projects/{project_id}')
+    async def motion_project(project_id: str):
+        return project_call(bridge.load_motion_project, project_id)
+
+    @app.patch('/api/projects/{project_id}')
+    async def update_motion_project(project_id: str, request: Request):
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail='request body must be an object')
+        return project_call(bridge.update_motion_project, project_id, body)
+
+    @app.post('/api/projects/{project_id}/select')
+    async def select_motion_project(project_id: str):
+        return project_call(bridge.select_motion_project, project_id)
+
+    @app.delete('/api/projects/{project_id}')
+    async def delete_motion_project(project_id: str):
+        return project_call(bridge.delete_motion_project, project_id)
+
+    @app.post('/api/projects/{project_id}/copy-file')
+    async def copy_motion_project_file(project_id: str, request: Request):
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail='request body must be an object')
+        return project_call(bridge.copy_motion_project_file, project_id, body)
+
+    @app.post('/api/projects/{project_id}/files')
+    async def import_motion_project_file(project_id: str, request: Request):
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail='request body must be an object')
+        return project_call(bridge.import_motion_project_file, project_id, body)
+
+    @app.get('/api/projects/{project_id}/files/{category}/{file_name}/download')
+    async def download_motion_project_file(
+        project_id: str, category: str, file_name: str
+    ):
+        path = project_call(
+            bridge.download_motion_project_file, project_id, category, file_name
+        )
+        return FileResponse(str(path), filename=path.name)
+
+    @app.get('/api/projects/{project_id}/files/{category}/{file_name}')
+    async def motion_project_file(project_id: str, category: str, file_name: str):
+        return project_call(
+            bridge.load_motion_project_file, project_id, category, file_name
+        )
+
+    @app.put('/api/projects/{project_id}/files/{category}/{file_name}')
+    async def save_motion_project_file(
+        project_id: str, category: str, file_name: str, request: Request
+    ):
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail='request body must be an object')
+        return project_call(
+            bridge.save_motion_project_file,
+            project_id,
+            category,
+            file_name,
+            body,
+        )
+
+    @app.post('/api/projects/{project_id}/files/{category}/{file_name}/rename')
+    async def rename_motion_project_file(
+        project_id: str, category: str, file_name: str, request: Request
+    ):
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail='request body must be an object')
+        return project_call(
+            bridge.rename_motion_project_file,
+            project_id,
+            category,
+            file_name,
+            body,
+        )
+
+    @app.post('/api/projects/{project_id}/files/{category}/{file_name}/active')
+    async def activate_motion_project_file(
+        project_id: str, category: str, file_name: str
+    ):
+        return project_call(
+            bridge.activate_motion_project_file,
+            project_id,
+            category,
+            file_name,
+        )
+
+    @app.post('/api/projects/{project_id}/files/{category}/{file_name}/open-editor')
+    async def open_motion_project_file_for_editing(
+        project_id: str, category: str, file_name: str
+    ):
+        return project_call(
+            bridge.open_motion_project_file_for_editing,
+            project_id,
+            category,
+            file_name,
+        )
+
+    @app.delete('/api/projects/{project_id}/files/{category}/{file_name}')
+    async def delete_motion_project_file(
+        project_id: str, category: str, file_name: str
+    ):
+        return project_call(
+            bridge.delete_motion_project_file, project_id, category, file_name
+        )
 
     @app.get('/api/motor-events')
     async def motor_events(limit: int = 200, category: str = 'all'):
@@ -2920,6 +3861,10 @@ def create_app(bridge: MotionWebBridge) -> FastAPI:
     @app.post('/api/motor-config/apply')
     async def apply_motor_config():
         return bridge.apply_motor_config()
+
+    @app.post('/api/system/program/restart')
+    async def restart_managed_program():
+        return project_call(bridge.restart_managed_program)
 
     @app.get('/api/motion-files')
     async def motion_files():
@@ -2994,6 +3939,72 @@ def create_app(bridge: MotionWebBridge) -> FastAPI:
     @app.post('/api/motion-run/stop')
     async def motion_run_stop():
         return bridge.motion_run_stop()
+
+    @app.get('/api/motion-studio')
+    async def motion_studio():
+        return project_call(bridge.prepare_unified_motion_studio)
+
+    @app.post('/api/motion-studio/projects')
+    async def motion_studio_create(request: Request):
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail='request body must be an object')
+        return bridge.sync_motion_studio_result(
+            bridge.request_motion_studio('create', body)
+        )
+
+    @app.post('/api/motion-studio/projects/load')
+    async def motion_studio_load(request: Request):
+        body = await request.json()
+        return bridge.request_motion_studio('load', body)
+
+    @app.post('/api/motion-studio/import')
+    async def motion_studio_import(request: Request):
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail='request body must be an object')
+        return project_call(bridge.import_motion_studio_layer, body)
+
+    @app.put('/api/motion-studio/project')
+    async def motion_studio_save(request: Request):
+        body = await request.json()
+        return bridge.sync_motion_studio_result(
+            bridge.request_motion_studio('save', body)
+        )
+
+    @app.put('/api/motion-studio/layers')
+    async def motion_studio_layer(request: Request):
+        body = await request.json()
+        return bridge.sync_motion_studio_result(
+            bridge.request_motion_studio('update_layer', body)
+        )
+
+    @app.post('/api/motion-studio/layers/reset')
+    async def motion_studio_layers_reset():
+        return bridge.sync_motion_studio_result(
+            bridge.request_motion_studio('clear_layers')
+        )
+
+    @app.post('/api/motion-studio/record')
+    async def motion_studio_record(request: Request):
+        body = await request.json()
+        return bridge.request_motion_studio('record', body)
+
+    @app.post('/api/motion-studio/play')
+    async def motion_studio_play(request: Request):
+        body = await request.json()
+        return bridge.request_motion_studio('play', body)
+
+    @app.post('/api/motion-studio/stop')
+    async def motion_studio_stop():
+        return bridge.sync_motion_studio_result(
+            bridge.request_motion_studio('stop')
+        )
+
+    @app.post('/api/motion-studio/export')
+    async def motion_studio_export(request: Request):
+        body = await request.json()
+        return bridge.export_motion_studio(body)
 
     @app.get('/api/midi-monitor')
     async def midi_monitor_status():

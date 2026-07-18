@@ -1,0 +1,19 @@
+[Unit]
+Description=Motion Control Web and Project Services
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@WORKSPACE@
+Environment="MOTION_WORKSPACE=@WORKSPACE@"
+Environment="MOTION_CONTROL_SERVICE_UNIT=motion-control.service"
+ExecStart=/bin/bash @SERVICE_RUNNER@
+Restart=always
+RestartSec=3
+KillMode=control-group
+KillSignal=SIGINT
+TimeoutStopSec=15
+
+[Install]
+WantedBy=default.target

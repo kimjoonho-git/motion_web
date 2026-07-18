@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-WORKSPACE="/home/joonho_test/ros2_ws"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORKSPACE="${MOTION_WORKSPACE:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
 LOG_DIR="${WORKSPACE}/log/web_apply_restart"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 
@@ -44,12 +45,14 @@ sleep "${RESTART_DELAY_SEC:-0.2}"
 
 patterns=(
   "ros2 launch motion_state_monitor motion_monitor.launch.py"
+  "ros2 launch motion_state_monitor project_services.launch.py"
   "install/motion_control_bridge/lib/motion_control_bridge/motor_manager_node"
   "install/motion_state_monitor/lib/motion_state_monitor/motion_state_monitor"
   "install/motion_supervisor/lib/motion_supervisor/motion_supervisor"
   "ros2 run motion_supervisor motion_supervisor"
   "install/motion_runtime/lib/motion_runtime/motion_mapping_manager"
   "install/motion_runtime/lib/motion_runtime/motion_run_manager"
+  "install/motion_studio/lib/motion_studio/motion_studio_node"
   "install/midi_control/lib/midi_control/midi_control_node"
   "install/motion_web_bridge/lib/motion_web_bridge/motion_web_bridge"
   "install/midi_input_bridge/lib/midi_input_bridge/midi_input_node"
@@ -116,23 +119,20 @@ recover_ethercat_errors_after_launch() {
 }
 
 cd "${WORKSPACE}"
-CONFIG_FILE="${MOTOR_CONFIG_FILE:-/home/joonho_test/ros2_ws/config/active_motor_config.yaml}"
-SELECTED_CONFIG_PATH_FILE="/home/joonho_test/ros2_ws/config/selected_motor_config_path.txt"
-if [[ -z "${MOTOR_CONFIG_FILE:-}" && -f "${SELECTED_CONFIG_PATH_FILE}" ]]; then
-  selected_config="$(head -n 1 "${SELECTED_CONFIG_PATH_FILE}" | tr -d '\r\n')"
-  if [[ -f "${selected_config}" ]]; then
-    CONFIG_FILE="${selected_config}"
-  else
-    log "selected motor config not found: ${selected_config}; using ${CONFIG_FILE}"
-  fi
+CONFIG_FILE="${MOTOR_CONFIG_FILE:-${WORKSPACE}/config/bootstrap_motor_config.yaml}"
+START_MOTOR_MANAGER="false"
+if [[ -n "${MOTOR_CONFIG_FILE:-}" ]]; then
+  START_MOTOR_MANAGER="true"
 fi
 
 export CONFIG_FILE
+export START_MOTOR_MANAGER
+export WORKSPACE
 log "starting motion_monitor.launch.py with config_file=${CONFIG_FILE}"
-sg dialout -c 'bash -lc '"'"'source /home/joonho_test/ros2_ws/install/setup.bash && ros2 launch motion_state_monitor motion_monitor.launch.py config_file:="$CONFIG_FILE" start_motor_manager:=true'"'" &
+sg dialout -c 'bash -lc '"'"'source "$WORKSPACE/install/setup.bash" && ros2 launch motion_state_monitor motion_monitor.launch.py config_file:="$CONFIG_FILE" motion_projects_dir:="$WORKSPACE/motion_projects" start_motor_manager:="$START_MOTOR_MANAGER"'"'" &
 launch_pid="$!"
 log "starting MIDI control (motor requests routed through motion_supervisor, config_file=${CONFIG_FILE})"
-bash -lc 'source /home/joonho_test/ros2_ws/install/setup.bash && ros2 launch midi_control midi_control.launch.py motor_config_file:="$CONFIG_FILE"' &
+bash -lc 'source "$WORKSPACE/install/setup.bash" && ros2 launch midi_control midi_control.launch.py motor_config_file:="$CONFIG_FILE" motion_projects_dir:="$WORKSPACE/motion_projects"' &
 midi_launch_pid="$!"
 recover_ethercat_errors_after_launch &
 recovery_pid="$!"

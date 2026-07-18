@@ -78,6 +78,28 @@ def test_saving_motion_mapping_preserves_file_banks_then_applies_verified_state(
     assert midi_calls[0][0] == 'apply_banks'
 
 
+def test_first_mapping_save_succeeds_before_first_midi_bank_save(monkeypatch):
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+
+    def mapping_request(command, payload, timeout_sec=2.0):
+        if command == 'save':
+            return {'success': True, 'file': {'id': 'new.yaml'}, 'mapping': {}}
+        return {
+            'success': False,
+            'missing': True,
+            'message': '아직 저장된 MIDI 뱅크가 없습니다',
+        }
+
+    monkeypatch.setattr(bridge, '_request_motion_mapping', mapping_request)
+    monkeypatch.setattr(bridge, 'project_repository', None, raising=False)
+
+    result = bridge.save_motion_mapping({'mapping': {'name': 'new'}})
+
+    assert result['success'] is True
+    assert result['midi_banks']['missing'] is True
+    assert '처음 저장' in result['message']
+
+
 def test_updating_bank_saves_through_mapping_owner_then_applies_verified_state(monkeypatch):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     mapping_calls = []

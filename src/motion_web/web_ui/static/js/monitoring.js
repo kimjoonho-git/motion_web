@@ -100,10 +100,24 @@ function portText(motor) {
   return displayText(motor.port || motor.serial_port || motor.can_interface || '-');
 }
 
+function calculatedAcServoRaw(motor, engineeringValue) {
+  if (motorFilterKey(motor) !== 'ac_servo') return null;
+  const value = Number(engineeringValue);
+  const pulsePerRevolution = Number(motor.pulse_per_revolution);
+  if (!Number.isFinite(value)
+    || !Number.isFinite(pulsePerRevolution)
+    || pulsePerRevolution <= 0) return null;
+  return Math.round((value / 360.0) * pulsePerRevolution);
+}
+
 function positionText(motor, rawMode) {
   if (rawMode) {
-    return motor.position_raw !== null && motor.position_raw !== undefined
-      ? formatInt(motor.position_raw)
+    const raw = motor.position_raw ?? calculatedAcServoRaw(
+      motor,
+      motor.position_deg ?? motor.position,
+    );
+    return raw !== null && raw !== undefined
+      ? formatInt(raw)
       : '-';
   }
   return motor.position_deg !== null && motor.position_deg !== undefined
@@ -113,8 +127,12 @@ function positionText(motor, rawMode) {
 
 function velocityText(motor, rawMode) {
   if (rawMode) {
-    return motor.velocity_raw !== null && motor.velocity_raw !== undefined
-      ? formatInt(motor.velocity_raw)
+    const raw = motor.velocity_raw ?? calculatedAcServoRaw(
+      motor,
+      motor.velocity_deg_s ?? motor.velocity,
+    );
+    return raw !== null && raw !== undefined
+      ? formatInt(raw)
       : '-';
   }
   return motor.velocity_deg_s !== null && motor.velocity_deg_s !== undefined
@@ -217,8 +235,8 @@ function monitoringColumnsForFilter(filter, rawMode) {
     { label: 'State', cell: (motor) => stateCell(motor) },
     { label: rawMode ? 'Statusword' : 'Status', className: (motor) => statusClass(motor), cell: (motor) => displayText(statusText(motor, rawMode)) },
     { label: rawMode ? 'Error Code' : 'Error', className: (motor) => errorClass(motor), cell: (motor) => displayText(errorText(motor, rawMode)) },
-    { label: positionHeaderText(rawMode), className: 'mono', cell: (motor) => displayText(positionText(motor, rawMode)) },
-    { label: velocityHeaderText(rawMode), className: 'mono', cell: (motor) => displayText(velocityText(motor, rawMode)) },
+    { label: rawMode ? 'Position Raw (cnt·역산)' : positionHeaderText(false), className: 'mono', cell: (motor) => displayText(positionText(motor, rawMode)) },
+    { label: rawMode ? 'Velocity Raw (cnt/s·역산)' : velocityHeaderText(false), className: 'mono', cell: (motor) => displayText(velocityText(motor, rawMode)) },
     { label: torqueHeaderText(rawMode), className: 'mono', cell: (motor) => displayText(torqueText(motor, rawMode)) },
     { label: currentHeaderText(rawMode), className: 'mono', cell: (motor) => displayText(currentText(motor, rawMode)) },
     { label: 'Age (ms)', className: 'mono', cell: (motor) => displayText(ageText(motor)) },
