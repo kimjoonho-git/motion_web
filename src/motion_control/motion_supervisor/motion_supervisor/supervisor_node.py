@@ -1,5 +1,6 @@
 import json
 import math
+import os
 import threading
 import time
 from pathlib import Path
@@ -29,7 +30,11 @@ JOG_ACTIVE_TIMEOUT_SEC = 120.0
 DYNAMIXEL_TARGET_TOLERANCE_RAW_COUNTS = 2.0
 DYNAMIXEL_DONE_VELOCITY_DEG_SEC = 2.0
 DYNAMIXEL_JOG_ACTIVE_TIMEOUT_SEC = 8.0
-DEFAULT_CONFIG_FILE = '/home/joonho_test/ros2_ws/config/active_motor_config.yaml'
+DEFAULT_CONFIG_FILE = str(
+    Path(os.environ.get('MOTION_WORKSPACE', Path.cwd())).expanduser()
+    / 'config'
+    / 'bootstrap_motor_config.yaml'
+)
 DEFAULT_ACTION_PERIOD_SEC = 0.02
 DEFAULT_ACTION_DURATION_SEC = 1.0
 MIN_ACTION_DURATION_SEC = 0.02

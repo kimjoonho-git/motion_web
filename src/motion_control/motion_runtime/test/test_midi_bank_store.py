@@ -53,3 +53,20 @@ def test_unmarked_midi_section_is_replaced_without_changing_mapping_prefix():
     assert rendered.endswith('motion_file_id: show.json\n')
     assert parsed['midi_banks'] == STATE
     assert rendered.count('midi_banks:') == 1
+
+
+def test_repeated_saves_in_same_second_keep_distinct_history_files(tmp_path, monkeypatch):
+    mapping_file = tmp_path / 'show_mapping.yaml'
+    history_dir = tmp_path / 'history'
+    mapping_file.write_text('mappings: []\n', encoding='utf-8')
+    monkeypatch.setattr(
+        'motion_runtime.midi_bank_store.time.strftime',
+        lambda _format: '20260716-200000',
+    )
+
+    first = save_midi_banks(mapping_file, STATE, history_dir)
+    second = save_midi_banks(mapping_file, STATE, history_dir)
+
+    assert first != second
+    assert first.is_file()
+    assert second.is_file()

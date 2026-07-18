@@ -1,3 +1,6 @@
+import os
+from pathlib import Path
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
@@ -5,13 +8,14 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
+    workspace = Path(os.environ.get('MOTION_WORKSPACE', Path.cwd())).expanduser()
     return LaunchDescription([
         DeclareLaunchArgument('input_topic', default_value='/motion_control/motor_status'),
         DeclareLaunchArgument('input_type', default_value='motor_status'),
         DeclareLaunchArgument('ethercat_status_topic', default_value='/ethercat_status'),
         DeclareLaunchArgument(
             'motor_config_file',
-            default_value='/home/joonho_test/ros2_ws/config/active_motor_config.yaml',
+            default_value=str(workspace / 'config/bootstrap_motor_config.yaml'),
         ),
         DeclareLaunchArgument('output_topic', default_value='/motion_control/motion_state'),
         DeclareLaunchArgument('publish_hz', default_value='10.0'),

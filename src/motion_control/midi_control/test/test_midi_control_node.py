@@ -26,6 +26,8 @@ class CapturePublisher:
 
 
 def add_motor_control_state(node):
+    node._studio_select_locked = False
+    node._studio_zero_fader_targets = [0] * MIDI_CHANNEL_COUNT
     node._physical_touch = [False] * MIDI_CHANNEL_COUNT
     node._fader_moving = [False] * MIDI_CHANNEL_COUNT
     node._bridge_fader_syncing = [False] * MIDI_CHANNEL_COUNT
@@ -133,6 +135,75 @@ def test_select_fader_inverse_rejects_position_outside_line_range():
 
     with pytest.raises(ValueError, match='활성화 불가.*제어 범위'):
         raw_fader_for_motion(-10, row, mapping)
+
+
+def test_studio_recording_prepare_clears_select_and_parks_at_physical_zero():
+    mappings = [{
+        'channel': channel,
+        'motion_id': '1-1' if channel == 0 else f'9-{channel + 1}',
+        'enabled': channel == 0,
+        'min_percent': 0.0,
+        'max_percent': 100.0,
+        'reversed': False,
+        'filter_level': 0,
+    } for channel in range(MIDI_CHANNEL_COUNT)]
+
+    class Banks:
+        @staticmethod
+        def snapshot():
+            return {'active_bank': {'mappings': mappings}}
+
+    class Registry:
+        @staticmethod
+        def refresh(_preferred=None, _motion_state=None):
+            return None
+
+        @staticmethod
+        def mapping(motion_id):
+            return (
+                {'motion_lower_deg': -20.0, 'motion_upper_deg': 20.0}
+                if motion_id == '1-1' else None
+            )
+
+        @staticmethod
+        def motor_axis(motion_id):
+            return 0 if motion_id == '1-1' else None
+
+    node = MidiControlNode.__new__(MidiControlNode)
+    node._banks = Banks()
+    node._axis_registry = Registry()
+    node._preferred_mapping_file_id = ''
+    node._last_axis_registry_refresh = 0.0
+    node._control_enabled = [True] * MIDI_CHANNEL_COUNT
+    node._studio_select_locked = False
+    node._studio_zero_fader_targets = [0] * MIDI_CHANNEL_COUNT
+    node._raw_channels = [100] * MIDI_CHANNEL_COUNT
+    node._channels = [100.0] * MIDI_CHANNEL_COUNT
+    node._filter_stage1 = [100.0] * MIDI_CHANNEL_COUNT
+    node._filter_stage2 = [100.0] * MIDI_CHANNEL_COUNT
+    node._filter_last_at = [None] * MIDI_CHANNEL_COUNT
+    node._pending_fader_positions = [None] * MIDI_CHANNEL_COUNT
+    node._fader_sync_targets = [None] * MIDI_CHANNEL_COUNT
+    node._awaiting_fader_sync = [False] * MIDI_CHANNEL_COUNT
+    node._fader_sync_not_before = [0.0] * MIDI_CHANNEL_COUNT
+    node._last_motor_target = [1.0] * MIDI_CHANNEL_COUNT
+    node._pending_motor_requests = {0: {'target': 1.0}}
+    node._motor_follow_active = [True] * MIDI_CHANNEL_COUNT
+    node._motor_command_state = ['commanding'] * MIDI_CHANNEL_COUNT
+    node._motor_command_message = ['moving'] * MIDI_CHANNEL_COUNT
+    node._last_feedback = [('old',)] * MIDI_CHANNEL_COUNT
+    node._btn3 = [False] * MIDI_CHANNEL_COUNT
+    node._previous_btn3 = [True] * MIDI_CHANNEL_COUNT
+
+    result = node._prepare_studio_recording_locked()
+
+    assert result['errors'] == []
+    assert node._studio_select_locked is True
+    assert node._control_enabled == [False] * MIDI_CHANNEL_COUNT
+    assert node._pending_motor_requests == {}
+    assert node._pending_fader_positions == [0] * MIDI_CHANNEL_COUNT
+    assert node._studio_zero_fader_targets == [0] * MIDI_CHANNEL_COUNT
+    assert node._raw_channels == [0] * MIDI_CHANNEL_COUNT
 
 
 def test_zero_to_two_hundred_percent_reaches_full_output_at_half_fader():
@@ -524,7 +595,6 @@ def test_selected_mapping_context_is_used_when_no_run_mapping_is_active(tmp_path
     ))
     assert node._preferred_mapping_file_id == 'selected.yaml'
     assert node._bank_config_file == selected
-
 
     node._motion_run_status_callback(SimpleNamespace(
         data='{"mapping_file_id": "running.yaml"}'

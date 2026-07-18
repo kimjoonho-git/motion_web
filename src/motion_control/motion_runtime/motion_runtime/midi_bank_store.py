@@ -69,12 +69,20 @@ def render_with_midi_banks(existing: str, state: Dict[str, Any]) -> str:
     return f'{existing.rstrip()}\n\n{block}\n'
 
 
-def atomic_write_with_backup(path: Path, updated: str) -> Optional[Path]:
+def atomic_write_with_backup(
+    path: Path, updated: str, backup_dir: Optional[Path] = None
+) -> Optional[Path]:
     existing = path.read_text(encoding='utf-8') if path.is_file() else None
     backup = None
     if existing is not None:
         timestamp = time.strftime('%Y%m%d-%H%M%S')
-        backup = path.with_suffix(f'{path.suffix}.bak-{timestamp}')
+        backup_root = Path(backup_dir) if backup_dir is not None else path.parent
+        backup_root.mkdir(parents=True, exist_ok=True)
+        backup = backup_root / f'{timestamp}-{path.name}'
+        counter = 2
+        while backup.exists():
+            backup = backup_root / f'{timestamp}-{counter}-{path.name}'
+            counter += 1
         backup.write_text(existing, encoding='utf-8')
     fd, temporary_name = tempfile.mkstemp(
         prefix=f'.{path.name}.',
@@ -96,10 +104,12 @@ def atomic_write_with_backup(path: Path, updated: str) -> Optional[Path]:
     return backup
 
 
-def save_midi_banks(mapping_file: Path, state: Dict[str, Any]) -> Path:
+def save_midi_banks(
+    mapping_file: Path, state: Dict[str, Any], backup_dir: Optional[Path] = None
+) -> Path:
     existing = mapping_file.read_text(encoding='utf-8')
     updated = render_with_midi_banks(existing, state)
-    backup = atomic_write_with_backup(mapping_file, updated)
+    backup = atomic_write_with_backup(mapping_file, updated, backup_dir)
     if backup is None:  # save_midi_banks always requires an existing mapping.
         raise ValueError(f'motion-axis mapping YAML not found: {mapping_file}')
     return backup

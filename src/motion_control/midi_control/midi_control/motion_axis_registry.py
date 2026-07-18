@@ -20,7 +20,11 @@ class MotionAxisRegistry:
         self.axes: Dict[str, int] = {}
         self.rows: Dict[str, Dict[str, Any]] = {}
 
-    def refresh(self, preferred_file_id: Any = '') -> Dict[str, int]:
+    def refresh(
+        self,
+        preferred_file_id: Any = '',
+        motion_state: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, int]:
         path = self._mapping_path(preferred_file_id)
         if path is None:
             self.file_id = ''
@@ -42,17 +46,62 @@ class MotionAxisRegistry:
                 if not isinstance(row, dict) or row.get('enabled') is False:
                     continue
                 motion_id = str(row.get('motion_id') or '').strip()
-                try:
-                    motor_axis = int(row.get('motor_axis'))
-                except (TypeError, ValueError):
-                    continue
-                if motion_id and motor_axis >= 0:
+                motor_ref = str(row.get('motor_ref') or '').strip()
+                motor_axis = self._axis_for_ref(motor_ref, motion_state)
+                if motor_axis is None and not motor_ref:
+                    try:
+                        motor_axis = int(row.get('motor_axis'))
+                    except (TypeError, ValueError):
+                        continue
+                if motion_id and motor_axis is not None and motor_axis >= 0:
                     axes[motion_id] = motor_axis
                     mapped_rows[motion_id] = dict(row)
         self.file_id = path.name
         self.axes = axes
         self.rows = mapped_rows
         return dict(axes)
+
+    @classmethod
+    def _axis_for_ref(
+        cls,
+        motor_ref: str,
+        motion_state: Optional[Dict[str, Any]],
+    ) -> Optional[int]:
+        if not motor_ref or not isinstance(motion_state, dict):
+            return None
+        motors = motion_state.get('motors')
+        if not isinstance(motors, list):
+            return None
+        matches = [
+            motor for motor in motors
+            if isinstance(motor, dict)
+            and cls._motor_ref(motor).lower() == motor_ref.lower()
+        ]
+        if len(matches) != 1:
+            return None
+        try:
+            return int(matches[0].get('controller_index'))
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _motor_ref(motor: Dict[str, Any]) -> str:
+        text = ' '.join(str(motor.get(key) or '').lower() for key in (
+            'motor_type', 'motor_type_label', 'driver_model', 'transport'
+        ))
+        if 'dynamixel' in text:
+            value = motor.get('bus_id', motor.get('node_id'))
+            try:
+                return f'dynamixel:id:{int(value)}'
+            except (TypeError, ValueError):
+                return ''
+        if 'minas' in text or 'ac servo' in text or 'ac_servo' in text:
+            value = motor.get('alias', motor.get('ethercat_alias'))
+            try:
+                return f'ac_servo:alias:{int(value)}'
+            except (TypeError, ValueError):
+                return ''
+        return ''
 
     def motor_axis(self, motion_id: Any) -> Optional[int]:
         return self.axes.get(str(motion_id or '').strip())

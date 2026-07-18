@@ -1,10 +1,17 @@
+import os
+from pathlib import Path
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
-DEFAULT_CONFIG = '/home/joonho_test/ros2_ws/config/active_motor_config.yaml'
+DEFAULT_CONFIG = str(
+    Path(os.environ.get('MOTION_WORKSPACE', Path.cwd())).expanduser()
+    / 'config'
+    / 'bootstrap_motor_config.yaml'
+)
 
 
 def generate_launch_description():

@@ -1,14 +1,23 @@
+import os
+from pathlib import Path
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
 def generate_launch_description():
+    workspace = Path(os.environ.get('MOTION_WORKSPACE', Path.cwd())).expanduser()
     return LaunchDescription([
         DeclareLaunchArgument(
             'motor_config_file',
-            default_value='/home/joonho_test/ros2_ws/config/active_motor_config.yaml',
+            default_value=str(workspace / 'config/bootstrap_motor_config.yaml'),
             description='Legacy compatibility argument; MIDI banks use the selected mapping YAML.',
+        ),
+        DeclareLaunchArgument(
+            'motion_projects_dir',
+            default_value=str(workspace / 'motion_projects'),
         ),
         Node(
             package='midi_input_bridge',
@@ -49,8 +58,8 @@ def generate_launch_description():
                 'motion_mapping_response_topic': '/motion_control/motion_mapping_response',
                 'motor_request_topic': '/motion_control/midi_position_request',
                 'motor_result_topic': '/motion_control/midi_position_result',
-                'motion_data_dir': '/home/joonho_test/ros2_ws/motion_data',
-                'publish_hz': 20.0,
+                'motion_projects_dir': LaunchConfiguration('motion_projects_dir'),
+                'publish_hz': 50.0,
                 'stale_timeout_sec': 0.5,
             }],
         ),

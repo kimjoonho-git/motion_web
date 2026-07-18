@@ -1,5 +1,6 @@
 import json
 import math
+import os
 import threading
 import time
 from pathlib import Path
@@ -189,14 +190,17 @@ class MidiControlNode(Node):
                 'motor_result_topic', '/motion_control/midi_position_result'
             ).value
         )
-        motion_data_dir = Path(
-            str(
-                self.declare_parameter(
-                    'motion_data_dir', '/home/joonho_test/ros2_ws/motion_data'
-                ).value
-            )
-        ).expanduser()
-        self._mappings_dir = motion_data_dir / 'mappings'
+        self._motion_projects_dir = Path(
+            str(self.declare_parameter(
+                'motion_projects_dir',
+                str(
+                    Path(os.environ.get('MOTION_WORKSPACE', Path.cwd())).expanduser()
+                    / 'motion_projects'
+                ),
+            ).value)
+        ).expanduser().resolve()
+        self._project_id = ''
+        self._mappings_dir = self._motion_projects_dir
         self.publish_hz = max(1.0, float(self.declare_parameter('publish_hz', 10.0).value))
         self.stale_timeout_sec = max(
             0.1,
@@ -227,6 +231,8 @@ class MidiControlNode(Node):
         self._previous_dial = [0] * MIDI_CHANNEL_COUNT
         self._confirmed = [False] * MIDI_CHANNEL_COUNT
         self._control_enabled = [False] * MIDI_CHANNEL_COUNT
+        self._studio_select_locked = False
+        self._studio_zero_fader_targets = [0] * MIDI_CHANNEL_COUNT
         self._final_output_values = [0.0] * MIDI_CHANNEL_COUNT
         # Runtime always starts with SELECT OFF, so park all physical faders.
         self._pending_fader_positions: List[int | None] = [0] * MIDI_CHANNEL_COUNT
@@ -341,6 +347,16 @@ class MidiControlNode(Node):
                 )
                 input_valid = bool(self._array_value(msg.touch, channel, False))
                 self._touch[channel] = input_valid
+                if self._studio_select_locked:
+                    zero_target = self._studio_zero_fader_targets[channel]
+                    input_valid = False
+                    self._touch[channel] = False
+                    self._raw_channels[channel] = zero_target
+                    self._channels[channel] = float(zero_target)
+                    self._filter_stage1[channel] = float(zero_target)
+                    self._filter_stage2[channel] = float(zero_target)
+                    self._pending_fader_positions[channel] = zero_target
+                    self._last_feedback[channel] = None
                 bridge_syncing = self._bridge_fader_syncing[channel]
                 if (
                     self._awaiting_fader_sync[channel]
@@ -390,7 +406,7 @@ class MidiControlNode(Node):
                     now - self._last_select_toggle_at[channel]
                     >= SELECT_TOGGLE_DEBOUNCE_SEC
                 )
-                if select_rising and select_allowed:
+                if select_rising and select_allowed and not self._studio_select_locked:
                     self._last_select_toggle_at[channel] = now
                     motion_id = mappings[channel]['motion_id']
                     row = self._axis_registry.mapping(motion_id)
@@ -460,7 +476,11 @@ class MidiControlNode(Node):
                 self._previous_btn3[channel] = select_pressed
 
                 rec_pressed = self._btn0[channel]
-                if rec_pressed and not self._previous_btn0[channel]:
+                if (
+                    rec_pressed
+                    and not self._previous_btn0[channel]
+                    and not self._studio_select_locked
+                ):
                     motion_id = mappings[channel]['motion_id']
                     if self._axis_registry.motor_axis(motion_id) is not None:
                         self._motor_angle_mode[channel] = not self._motor_angle_mode[channel]
@@ -716,6 +736,23 @@ class MidiControlNode(Node):
             raise ValueError('현재 선택된 모션축 매칭 파일이 없습니다')
         return path
 
+    def _select_project_mapping_dir(self, payload: Dict[str, Any]) -> None:
+        project_id = str(payload.get('project_id') or '').strip()
+        if (
+            not project_id
+            or project_id != Path(project_id).name
+            or project_id.startswith('.')
+            or '/' in project_id
+            or '\\' in project_id
+        ):
+            raise ValueError('유효한 통합 프로젝트 ID가 필요합니다')
+        root = self._motion_projects_dir.resolve()
+        project_dir = (root / project_id).resolve()
+        if project_dir.parent != root or not (project_dir / 'project.json').is_file():
+            raise ValueError(f'통합 프로젝트를 찾을 수 없습니다: {project_id}')
+        self._project_id = project_id
+        self._mappings_dir = project_dir / 'motion_axis_matching'
+
     @staticmethod
     def _motor_for_axis(
         state: Dict[str, Any], motor_axis: int
@@ -756,7 +793,10 @@ class MidiControlNode(Node):
     def _refresh_axis_registry_locked(self, now: float) -> None:
         if now - self._last_axis_registry_refresh < 1.0:
             return
-        self._axis_registry.refresh(self._preferred_mapping_file_id)
+        self._axis_registry.refresh(
+            self._preferred_mapping_file_id,
+            getattr(self, '_latest_motion_state', {}),
+        )
         self._last_axis_registry_refresh = now
 
     @staticmethod
@@ -923,6 +963,11 @@ class MidiControlNode(Node):
             'unit': '14bit',
             'motor_output_enabled': True,
             'motor_output_path': 'motion_supervisor',
+            'select_locked': self._studio_select_locked,
+            'select_lock_reason': (
+                '모션 녹화 초기화 중'
+                if self._studio_select_locked else ''
+            ),
             'motion_mapping_file_id': mapping_file_id,
             'touch_gated_input': True,
             'filter_order': FILTER_ORDER,
@@ -1012,6 +1057,101 @@ class MidiControlNode(Node):
         self._previous_dial = list(self._dial)
         self._reset_runtime_controls_locked()
 
+    def _resync_controlled_faders_locked(self) -> Dict[str, Any]:
+        """Re-pickup every SELECT-owned fader from current motor feedback."""
+        now = time.monotonic()
+        self._last_axis_registry_refresh = 0.0
+        self._refresh_axis_registry_locked(now)
+        mappings = self._banks.snapshot()['active_bank']['mappings']
+        synced = []
+        errors = []
+        for channel, mapping in enumerate(mappings):
+            if not self._control_enabled[channel]:
+                continue
+            motion_id = str(mapping.get('motion_id') or '')
+            row = self._axis_registry.mapping(motion_id)
+            motor_axis = self._axis_registry.motor_axis(motion_id)
+            motor_position = (
+                self._position_for_axis(self._latest_motion_state, motor_axis)
+                if motor_axis is not None else None
+            )
+            try:
+                if row is None or motor_axis is None or motor_position is None:
+                    raise ValueError('현재 모터 위치 또는 모션축 설정을 확인할 수 없습니다')
+                motion_value = motion_value_from_motor(motor_position, row)
+                fader_target = raw_fader_for_motion(motion_value, row, mapping)
+            except ValueError as exc:
+                self._deactivate_control_channel_locked(channel)
+                self._motor_command_state[channel] = 'activation_rejected'
+                self._motor_command_message[channel] = f'재동기화 실패: {exc}'
+                errors.append({'channel': channel + 1, 'motion_id': motion_id, 'message': str(exc)})
+                continue
+            self._pending_motor_requests.pop(channel, None)
+            self._raw_channels[channel] = fader_target
+            self._channels[channel] = float(fader_target)
+            self._filter_stage1[channel] = float(fader_target)
+            self._filter_stage2[channel] = float(fader_target)
+            self._pending_fader_positions[channel] = fader_target
+            self._fader_sync_targets[channel] = fader_target
+            self._awaiting_fader_sync[channel] = True
+            self._fader_sync_not_before[channel] = now + FADER_SYNC_MIN_DURATION_SEC
+            self._motor_command_state[channel] = 'syncing_fader'
+            self._motor_command_message[channel] = '초기 위치 기준으로 페이더 재동기화 중'
+            self._last_motor_target[channel] = motor_position
+            self._motor_follow_active[channel] = False
+            synced.append({'channel': channel + 1, 'motion_id': motion_id, 'raw_target': fader_target})
+        return {'synced': synced, 'errors': errors}
+
+    def _prepare_studio_recording_locked(self) -> Dict[str, Any]:
+        """Disable SELECT and park every motorized fader at physical zero."""
+        now = time.monotonic()
+        self._last_axis_registry_refresh = 0.0
+        self._refresh_axis_registry_locked(now)
+        mappings = self._banks.snapshot()['active_bank']['mappings']
+        targets = []
+        errors = []
+        self._studio_select_locked = True
+        self._pending_motor_requests.clear()
+        for channel, mapping in enumerate(mappings):
+            self._deactivate_control_channel_locked(channel)
+            motion_id = str(mapping.get('motion_id') or '')
+            row = self._axis_registry.mapping(motion_id)
+            motor_axis = self._axis_registry.motor_axis(motion_id)
+            fader_target = 0
+            self._studio_zero_fader_targets[channel] = fader_target
+            self._raw_channels[channel] = fader_target
+            self._channels[channel] = float(fader_target)
+            self._filter_stage1[channel] = float(fader_target)
+            self._filter_stage2[channel] = float(fader_target)
+            self._filter_last_at[channel] = now
+            self._pending_fader_positions[channel] = fader_target
+            self._fader_sync_targets[channel] = fader_target
+            self._awaiting_fader_sync[channel] = True
+            self._fader_sync_not_before[channel] = now + FADER_SYNC_MIN_DURATION_SEC
+            self._motor_command_state[channel] = 'studio_initializing'
+            self._motor_command_message[channel] = (
+                '녹화 초기화 중 · SELECT 잠금 · 페이더 물리 0 이동'
+            )
+            self._last_feedback[channel] = None
+            targets.append({
+                'channel': channel + 1,
+                'motion_id': motion_id,
+                'raw_target': fader_target,
+                'mapped': row is not None and motor_axis is not None,
+            })
+        self._previous_btn3 = list(self._btn3)
+        return {'targets': targets, 'errors': errors}
+
+    def _finish_studio_recording_initialization_locked(self) -> None:
+        self._studio_select_locked = False
+        self._previous_btn3 = list(self._btn3)
+        for channel in range(MIDI_CHANNEL_COUNT):
+            self._control_enabled[channel] = False
+            self._pending_motor_requests.pop(channel, None)
+            self._motor_follow_active[channel] = False
+            self._motor_command_state[channel] = 'inactive'
+            self._motor_command_message[channel] = 'SELECT를 눌러 녹화할 축을 선택하세요'
+
     def _request_callback(self, msg: String) -> None:
         try:
             request = json.loads(msg.data)
@@ -1024,7 +1164,28 @@ class MidiControlNode(Node):
         payload = request.get('payload') if isinstance(request.get('payload'), dict) else {}
         response: Dict[str, Any]
         try:
-            if command in {'save_mapping', 'update_bank'}:
+            if command == 'select_project':
+                self._select_project_mapping_dir(payload)
+                preferred = str(payload.get('mapping_file_id') or '').strip()
+                registry = MotionAxisRegistry(self._mappings_dir)
+                registry.refresh(preferred, self._latest_motion_state)
+                mapping_file = self._mapping_file_path_or_none(registry.file_id)
+                stored_banks = load_midi_banks(mapping_file) if mapping_file else None
+                with self._lock:
+                    self._axis_registry = registry
+                    self._selected_mapping_file_id = registry.file_id
+                    self._preferred_mapping_file_id = registry.file_id
+                    self._bank_config_file = mapping_file
+                    self._banks = MidiBankManager()
+                    if stored_banks is not None:
+                        self._banks.replace_state(stored_banks)
+                    self._reset_filter_state_locked()
+                    self._reset_runtime_controls_locked()
+                    self._bank_file_loaded = stored_banks is not None
+                    self._bank_file_dirty = False
+                response = self._snapshot()
+                response['message'] = '현재 프로젝트 MIDI·모션축 컨텍스트로 전환했습니다'
+            elif command in {'save_mapping', 'update_bank'}:
                 bank_id = payload.get('bank_id') or self._banks.snapshot()['active_bank_id']
                 with self._lock:
                     self._banks.update_bank(
@@ -1068,6 +1229,7 @@ class MidiControlNode(Node):
                     'message': '파일 저장은 motion_mapping_manager만 수행할 수 있습니다',
                 }
             elif command in {'apply_banks', 'load_banks_from_file'}:
+                self._select_project_mapping_dir(payload)
                 mapping_file = self._requested_mapping_file(payload)
                 stored_banks = payload.get('midi_banks')
                 if stored_banks is None:
@@ -1075,6 +1237,12 @@ class MidiControlNode(Node):
                 if stored_banks is None:
                     raise ValueError('모션축 설정 파일에 저장된 midi_banks가 없습니다')
                 with self._lock:
+                    self._axis_registry = MotionAxisRegistry(self._mappings_dir)
+                    self._axis_registry.refresh(
+                        mapping_file.name, self._latest_motion_state
+                    )
+                    self._selected_mapping_file_id = mapping_file.name
+                    self._preferred_mapping_file_id = mapping_file.name
                     self._banks.replace_state(stored_banks)
                     self._bank_config_file = mapping_file
                     self._reset_filter_state_locked()
@@ -1088,6 +1256,33 @@ class MidiControlNode(Node):
                     self._reset_live_values_locked()
                 response = self._snapshot()
                 response['message'] = 'MIDI 실시간 값 초기화 완료 · 저장 파일은 변경하지 않았습니다'
+            elif command == 'resync_selected_faders':
+                with self._lock:
+                    sync_result = self._resync_controlled_faders_locked()
+                response = self._snapshot()
+                response.update(sync_result)
+                response['success'] = not sync_result['errors']
+                response['message'] = (
+                    f'SELECT 페이더 {len(sync_result["synced"])}개 재동기화 시작'
+                    if not sync_result['errors']
+                    else '일부 SELECT 페이더 재동기화 실패'
+                )
+            elif command == 'studio_recording_prepare':
+                with self._lock:
+                    prepare_result = self._prepare_studio_recording_locked()
+                response = self._snapshot()
+                response.update(prepare_result)
+                response['success'] = not prepare_result['errors']
+                response['message'] = (
+                    '모든 SELECT 해제 · SELECT 잠금 · 모든 페이더 물리 0 이동 시작'
+                    if not prepare_result['errors']
+                    else '일부 MIDI 채널을 물리 0 위치로 이동할 수 없습니다'
+                )
+            elif command == 'studio_recording_ready':
+                with self._lock:
+                    self._finish_studio_recording_initialization_locked()
+                response = self._snapshot()
+                response['message'] = 'MIDI SELECT 잠금 해제 · 녹화할 축을 선택하세요'
             elif command in {'connect_device', 'disconnect_device'}:
                 with self._lock:
                     self._reset_runtime_controls_locked()

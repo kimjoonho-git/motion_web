@@ -44,3 +44,37 @@ def test_registry_falls_back_to_newest_mapping(tmp_path):
 
     assert registry.file_id == 'newer.yaml'
     assert registry.motor_axis('2-1') == 4
+
+
+def test_registry_resolves_stable_motor_ref_after_controller_index_changes(tmp_path):
+    write_mapping(
+        tmp_path / 'stable.yaml',
+        '- motion_id: 1-1\n'
+        '  enabled: true\n'
+        '  motor_ref: ac_servo:alias:101\n'
+        '  motor_axis: 0\n'
+        '- motion_id: 1-2\n'
+        '  enabled: true\n'
+        '  motor_ref: dynamixel:id:3\n'
+        '  motor_axis: 2\n',
+    )
+    state = {
+        'motors': [
+            {
+                'controller_index': 4,
+                'motor_type': 'ac_servo',
+                'alias': 101,
+            },
+            {
+                'controller_index': 1,
+                'motor_type': 'dynamixel',
+                'bus_id': 3,
+            },
+        ],
+    }
+
+    registry = MotionAxisRegistry(tmp_path)
+    registry.refresh('stable.yaml', state)
+
+    assert registry.motor_axis('1-1') == 4
+    assert registry.motor_axis('1-2') == 1

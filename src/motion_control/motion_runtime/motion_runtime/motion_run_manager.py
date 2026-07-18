@@ -3,6 +3,7 @@
 import ast
 import json
 import math
+import os
 import threading
 import time
 import traceback
@@ -22,8 +23,10 @@ ID_TARGET_POSITION = 1
 CW_ENABLE_OPERATION_MINAS = 0x000F
 CW_NEW_SET_POINT_MINAS = 0x003F
 DYNAMIXEL_TORQUE_ENABLE = 1
-DEFAULT_CONFIG_FILE = '/home/joonho_test/ros2_ws/config/active_motor_config.yaml'
-DEFAULT_MOTION_DATA_DIR = Path('/home/joonho_test/ros2_ws/motion_data')
+DEFAULT_MOTION_PROJECTS_DIR = (
+    Path(os.environ.get('MOTION_WORKSPACE', Path.cwd())).expanduser()
+    / 'motion_projects'
+)
 DEFAULT_PERIOD_SEC = 0.02
 STATE_TIMEOUT_SEC = 1.0
 AC_TARGET_TOLERANCE_DEG = 0.1
@@ -83,15 +86,14 @@ class MotionRunManager(Node):
                 '/motion_control/manual_action_result',
             ).value
         )
-        self.motion_data_dir = Path(
-            str(self.declare_parameter('motion_data_dir', str(DEFAULT_MOTION_DATA_DIR)).value)
-        ).expanduser()
-        self.config_file = Path(
-            str(self.declare_parameter('config_file', DEFAULT_CONFIG_FILE).value)
-        ).expanduser()
+        self.motion_projects_dir = Path(
+            str(self.declare_parameter(
+                'motion_projects_dir', str(DEFAULT_MOTION_PROJECTS_DIR)
+            ).value)
+        ).expanduser().resolve()
         self.period_sec = self._load_period_sec()
-        self.motion_files_dir = self.motion_data_dir / 'files'
-        self.mappings_dir = self.motion_data_dir / 'mappings'
+        self.motion_files_dir = self.motion_projects_dir
+        self.mappings_dir = self.motion_projects_dir
 
         qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
         self._state_lock = threading.Lock()
@@ -149,7 +151,8 @@ class MotionRunManager(Node):
             f'motion_run_manager started: state={self.motion_state_topic}, '
             f'command={self.motor_command_topic}, request={self.request_topic}, '
             f'action_request={self.action_request_topic}, '
-            f'period={self.period_sec * 1000.0:.3f} ms, motion_data_dir={self.motion_data_dir}'
+            f'period={self.period_sec * 1000.0:.3f} ms, '
+            f'motion_projects_dir={self.motion_projects_dir}'
         )
 
     def _motion_state_callback(self, msg: String) -> None:
@@ -231,6 +234,7 @@ class MotionRunManager(Node):
                 'state': 'error',
                 'phase': 'error',
                 'message': f'실행 준비 검사 실패: {reason}',
+                'project_id': str(payload.get('project_id') or ''),
                 'motion_file_id': str(payload.get('motion_file_id') or ''),
                 'mapping_file_id': str(payload.get('mapping_file_id') or ''),
                 'capabilities': self._unavailable_capabilities(reason),
@@ -269,7 +273,10 @@ class MotionRunManager(Node):
                     'message': 'previous motion run task is still running',
                     'status': self.status(),
                 }
-            plan = self._build_plan(payload)
+            plan = self._build_plan(
+                payload,
+                initialization_only=(mode == 'initialize'),
+            )
             if mode == 'run':
                 guard_error = self._motion_start_guard_error(plan)
                 if guard_error:
@@ -530,6 +537,8 @@ class MotionRunManager(Node):
             return '초기 위치 완료 후 모션 파일이 변경되었습니다'
         if current.get('mapping_file_id') != plan.get('mapping_file_id'):
             return '초기 위치 완료 후 매핑 파일이 변경되었습니다'
+        if current.get('project_id') != plan.get('project_id'):
+            return '초기 위치 완료 후 통합 프로젝트가 변경되었습니다'
 
         initial_targets = {
             int(axis['motor_axis']): float(axis['initial_motor_target_deg'])
@@ -717,25 +726,69 @@ class MotionRunManager(Node):
         message = str(payload.get('message') or '').lower()
         return 'completed' in message or 'did not reach target' in message
 
-    def _build_plan(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def _build_plan(
+        self,
+        payload: Dict[str, Any],
+        *,
+        initialization_only: bool = False,
+    ) -> Dict[str, Any]:
         run_mode = str(payload.get('run_mode') or 'once').strip().lower()
         if run_mode not in ('once', 'continuous'):
             raise ValueError('run_mode must be once or continuous')
         motion_file_id = str(payload.get('motion_file_id') or '').strip()
         mapping_file_id = str(payload.get('mapping_file_id') or '').strip()
+        request_source = str(payload.get('request_source') or 'motion_run').strip()
+        studio_request = request_source == 'motion_studio'
+        requested_motion_ids = {
+            str(value or '').strip()
+            for value in (payload.get('active_motion_ids') or [])
+            if str(value or '').strip()
+        }
         initial_move_time_override = self._initial_move_time_override_sec(payload)
-        motion_file_path = self._motion_file_path(motion_file_id)
-        mapping_path = self._mapping_file_path(mapping_file_id)
-        motion_records = self._load_motion_records(motion_file_path)
+        if hasattr(self, 'motion_projects_dir'):
+            project_id, motion_files_dir, mappings_dir = self._project_asset_dirs(payload)
+            motion_directory = motion_files_dir
+            if studio_request and motion_file_id.startswith('__studio_'):
+                motion_directory = motion_files_dir.parent / 'runtime' / 'studio_runtime'
+            motion_file_path = (
+                self._motion_file_path(motion_file_id, motion_directory)
+                if motion_file_id
+                else None
+            )
+            mapping_path = self._mapping_file_path(mapping_file_id, mappings_dir)
+        else:
+            # Compatibility for isolated unit tests that replace the path
+            # helpers without constructing a ROS node.
+            project_id = ''
+            motion_file_path = (
+                self._motion_file_path(motion_file_id)
+                if motion_file_id
+                else None
+            )
+            mapping_path = self._mapping_file_path(mapping_file_id)
+        if not motion_file_id and not initialization_only:
+            raise ValueError('motion file_id is required')
+        motion_records = (
+            self._load_motion_records(motion_file_path)
+            if motion_file_id
+            else []
+        )
+        source_motion_data_available = bool(motion_records)
         mapping = self._load_mapping(mapping_path)
 
         mapping_motion_file_id = str(mapping.get('motion_file_id') or '').strip()
-        if mapping_motion_file_id and mapping_motion_file_id != motion_file_id:
+        if (
+            mapping_motion_file_id
+            and mapping_motion_file_id != motion_file_id
+            and not studio_request
+            and not (initialization_only and not motion_file_id)
+        ):
             raise ValueError(
                 f'mapping file expects motion file {mapping_motion_file_id}, not {motion_file_id}'
             )
 
         groups = self._motion_groups(motion_records)
+        initialization_fallback_used = False
         motors = self._current_motors()
         if not motors:
             raise ValueError('current motion_state is unavailable')
@@ -750,17 +803,59 @@ class MotionRunManager(Node):
             if not isinstance(row, dict) or row.get('enabled') is False:
                 continue
             motion_id = str(row.get('motion_id') or '').strip()
-            motor_axis = self._optional_int(row.get('motor_axis'))
+            if requested_motion_ids and motion_id not in requested_motion_ids:
+                continue
             if not motion_id:
                 errors.append('enabled mapping row without motion_id')
                 continue
+            motor_ref = str(row.get('motor_ref') or '').strip()
+            motor_axis = self._optional_int(row.get('motor_axis'))
+            motor = None
+            if motor_ref:
+                matches = self._motors_for_ref(motor_ref, motors)
+                if len(matches) == 0:
+                    errors.append(f'Motion ID {motion_id}: Motor {motor_ref} not found')
+                    continue
+                if len(matches) > 1:
+                    errors.append(f'Motion ID {motion_id}: Motor {motor_ref} is duplicated')
+                    continue
+                motor = matches[0]
+                motor_axis = self._optional_int(motor.get('controller_index'))
+            elif motor_axis is not None:
+                # Backward compatibility for mapping files saved before motor_ref.
+                motor = self._motor_for_axis(motor_axis, motors)
             if motor_axis is None:
-                errors.append(f'Motion ID {motion_id}: motor_axis is required')
+                errors.append(f'Motion ID {motion_id}: motor_ref is required')
                 continue
-            if motion_id not in groups:
-                errors.append(f'Motion ID {motion_id}: motion file data not found')
-                continue
-            motor = self._motor_for_axis(motor_axis, motors)
+            missing_motion_data = motion_id not in groups
+            if missing_motion_data:
+                if not initialization_only:
+                    errors.append(f'Motion ID {motion_id}: motion file data not found')
+                    continue
+                initial_mode = str(row.get('initial_mode') or 'first_frame')
+                fallback_value = (
+                    self._finite_float(row.get('initial_motion_position_deg')) or 0.0
+                    if initial_mode == 'manual'
+                    else 0.0
+                )
+                fallback_record = {
+                    'frame': 0,
+                    'time_sec': 0.0,
+                    'motion_id': motion_id,
+                    'value': float(fallback_value),
+                    'row_index': len(motion_records),
+                }
+                motion_records.append(fallback_record)
+                groups[motion_id] = [fallback_record]
+                initialization_fallback_used = True
+                warnings.append(
+                    f'Motion ID {motion_id}: '
+                    + (
+                        f'모션 데이터가 없어 수동 초기위치 {fallback_value:.3f}°를 사용'
+                        if initial_mode == 'manual'
+                        else '첫 프레임 데이터가 없어 모션 0°를 초기위치로 사용'
+                    )
+                )
             if motor is None:
                 errors.append(f'Motion ID {motion_id}: Axis {motor_axis} not found')
                 continue
@@ -775,6 +870,15 @@ class MotionRunManager(Node):
             upper = self._finite_float(row.get('motion_upper_deg'))
             if lower is not None and upper is not None and lower > upper:
                 errors.append(f'Motion ID {motion_id}: motion min limit must be <= max limit')
+                continue
+            if missing_motion_data and (
+                (lower is not None and motion_values[0] < lower)
+                or (upper is not None and motion_values[0] > upper)
+            ):
+                errors.append(
+                    f'Motion ID {motion_id}: 초기 모션값 {motion_values[0]:.3f}°가 '
+                    '모션 설정 범위 밖입니다'
+                )
                 continue
             if lower is not None and motion_min < lower:
                 warnings.append(
@@ -813,6 +917,7 @@ class MotionRunManager(Node):
             )
             axis_plan = {
                 'motion_id': motion_id,
+                'motor_ref': motor_ref,
                 'motor_axis': motor_axis,
                 'motor_type': self._motor_type(motor),
                 'initial_move_time_sec': initial_move_time,
@@ -851,6 +956,14 @@ class MotionRunManager(Node):
 
         if not axes:
             errors.append('enabled motion mappings not found')
+        if requested_motion_ids:
+            planned_motion_ids = {str(axis['motion_id']) for axis in axes}
+            missing_requested = sorted(requested_motion_ids - planned_motion_ids)
+            if missing_requested:
+                errors.append(
+                    'requested Motion ID is unavailable: '
+                    + ', '.join(missing_requested)
+                )
         duplicate_axes = self._duplicate_axis_text(axes)
         if duplicate_axes:
             errors.append(f'duplicate motor axis in enabled mappings: {duplicate_axes}')
@@ -883,15 +996,29 @@ class MotionRunManager(Node):
                 'positions': positions,
             })
 
-        continuous_capability = self._continuous_capability(axes)
+        complete_motion_data_available = (
+            source_motion_data_available and not initialization_fallback_used
+        )
+        continuous_capability = (
+            self._continuous_capability(axes)
+            if complete_motion_data_available
+            else {
+                'available': False,
+                'reason': '실제 모션 데이터가 없어 초기 위치 이동만 가능합니다',
+            }
+        )
         capabilities = {
             'initial_position': {
                 'available': True,
                 'reason': '모터 상태·매핑·초기 목표 검사 통과',
             },
             'single_run': {
-                'available': True,
-                'reason': '모터 상태·매핑 검사 통과, 모션 범위 초과값은 Min/Max로 제한',
+                'available': complete_motion_data_available,
+                'reason': (
+                    '모터 상태·매핑 검사 통과, 모션 범위 초과값은 Min/Max로 제한'
+                    if complete_motion_data_available
+                    else '실제 모션 데이터가 없어 재생할 수 없습니다'
+                ),
             },
             'continuous_run': {
                 **continuous_capability,
@@ -899,16 +1026,19 @@ class MotionRunManager(Node):
         }
 
         return {
+            'project_id': project_id,
+            'request_source': request_source,
             'motion_file_id': motion_file_id,
             'mapping_file_id': mapping_file_id,
             'run_mode': run_mode,
-            'motion_file_path': str(motion_file_path),
+            'motion_file_path': str(motion_file_path) if motion_file_path else '',
             'mapping_path': str(mapping_path),
             'axes': axes,
             'samples': samples,
             'warnings': warnings,
             'capabilities': capabilities,
             'summary': {
+                'request_source': request_source,
                 'motion_file_id': motion_file_id,
                 'mapping_file_id': mapping_file_id,
                 'axis_count': len(axes),
@@ -1159,6 +1289,33 @@ class MotionRunManager(Node):
             if self._optional_int(motor.get('controller_index')) == axis:
                 return motor
         return None
+
+    def _motor_ref_for_motor(self, motor: Dict[str, Any]) -> str:
+        motor_type = self._motor_type(motor)
+        if motor_type == 'ac_servo':
+            alias = self._optional_int(
+                motor.get('alias', motor.get('ethercat_alias'))
+            )
+            return f'ac_servo:alias:{alias}' if alias is not None else ''
+        if motor_type == 'dynamixel':
+            bus_id = self._optional_int(
+                motor.get('bus_id', motor.get('node_id'))
+            )
+            return f'dynamixel:id:{bus_id}' if bus_id is not None else ''
+        return ''
+
+    def _motors_for_ref(
+        self,
+        motor_ref: Any,
+        motors: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        target = str(motor_ref or '').strip().lower()
+        if not target:
+            return []
+        return [
+            motor for motor in motors
+            if self._motor_ref_for_motor(motor).lower() == target
+        ]
 
     def _motor_ready_error(self, motor: Dict[str, Any]) -> str:
         axis = self._optional_int(motor.get('controller_index'))
@@ -1427,7 +1584,23 @@ class MotionRunManager(Node):
                 return float(before['value']) + ((float(after['value']) - float(before['value'])) * ratio)
         return float(records[-1]['value'])
 
-    def _mapping_file_path(self, file_id: Any) -> Path:
+    def _project_asset_dirs(self, payload: Dict[str, Any]) -> tuple[str, Path, Path]:
+        project_id = str(payload.get('project_id') or '').strip()
+        if (
+            not project_id
+            or project_id != Path(project_id).name
+            or project_id.startswith('.')
+            or '/' in project_id
+            or '\\' in project_id
+        ):
+            raise ValueError('유효한 통합 프로젝트 ID가 필요합니다')
+        root = self.motion_projects_dir.resolve()
+        project_dir = (root / project_id).resolve()
+        if project_dir.parent != root or not (project_dir / 'project.json').is_file():
+            raise ValueError(f'통합 프로젝트를 찾을 수 없습니다: {project_id}')
+        return project_id, project_dir / 'motions', project_dir / 'motion_axis_matching'
+
+    def _mapping_file_path(self, file_id: Any, directory: Optional[Path] = None) -> Path:
         name = str(file_id or '').strip()
         if not name:
             raise ValueError('mapping file_id is required')
@@ -1435,18 +1608,18 @@ class MotionRunManager(Node):
             raise ValueError('invalid mapping file id')
         if not name.lower().endswith(('.yaml', '.yml')):
             name = f'{name}.yaml'
-        path = self.mappings_dir / name
+        path = (directory or self.mappings_dir) / name
         if not path.is_file():
             raise ValueError(f'motion mapping not found: {name}')
         return path
 
-    def _motion_file_path(self, file_id: Any) -> Path:
+    def _motion_file_path(self, file_id: Any, directory: Optional[Path] = None) -> Path:
         name = str(file_id or '').strip()
         if not name:
             raise ValueError('motion file_id is required')
         if name != Path(name).name or '/' in name or '\\' in name:
             raise ValueError('invalid motion file id')
-        path = self.motion_files_dir / name
+        path = (directory or self.motion_files_dir) / name
         if not path.is_file():
             raise ValueError(f'motion file not found: {name}')
         return path
@@ -1456,9 +1629,11 @@ class MotionRunManager(Node):
             **self._empty_status(),
             'state': state,
             'message': message,
+            'project_id': plan.get('project_id', ''),
             'motion_file_id': plan.get('motion_file_id', ''),
             'mapping_file_id': plan.get('mapping_file_id', ''),
             'run_mode': plan.get('run_mode', 'once'),
+            'request_source': plan.get('request_source', 'motion_run'),
             'cycle_count': 0,
             'current_cycle': 0,
             'summary': plan.get('summary', {}),
@@ -1498,9 +1673,11 @@ class MotionRunManager(Node):
         return {
             'state': 'idle',
             'message': 'motion run idle',
+            'project_id': '',
             'motion_file_id': '',
             'mapping_file_id': '',
             'run_mode': 'once',
+            'request_source': 'motion_run',
             'cycle_count': 0,
             'current_cycle': 0,
             'summary': {},

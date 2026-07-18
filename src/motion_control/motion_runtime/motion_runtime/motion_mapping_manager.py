@@ -2,6 +2,7 @@
 
 import json
 import math
+import os
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -18,18 +19,25 @@ from motion_runtime.midi_bank_store import (
 )
 
 
-DEFAULT_MOTION_DATA_DIR = Path('/home/joonho_test/ros2_ws/motion_data')
+DEFAULT_MOTION_PROJECTS_DIR = (
+    Path(os.environ.get('MOTION_WORKSPACE', Path.cwd())).expanduser()
+    / 'motion_projects'
+)
 INITIAL_MODES = ('first_frame', 'manual')
 
 
 class MotionMappingManager(Node):
     def __init__(self) -> None:
         super().__init__('motion_mapping_manager')
-        self.motion_data_dir = Path(
-            str(self.declare_parameter('motion_data_dir', str(DEFAULT_MOTION_DATA_DIR)).value)
-        ).expanduser()
-        self.mappings_dir = self.motion_data_dir / 'mappings'
-        self.motion_files_dir = self.motion_data_dir / 'files'
+        self.motion_projects_dir = Path(
+            str(self.declare_parameter(
+                'motion_projects_dir', str(DEFAULT_MOTION_PROJECTS_DIR)
+            ).value)
+        ).expanduser().resolve()
+        # These are assigned to a selected project for each request.  The
+        # legacy motion_data directory is never used as a project workspace.
+        self.mappings_dir = self.motion_projects_dir
+        self.motion_files_dir = self.motion_projects_dir
         self.request_topic = str(
             self.declare_parameter(
                 'request_topic',
@@ -43,7 +51,6 @@ class MotionMappingManager(Node):
             ).value
         )
 
-        self.mappings_dir.mkdir(parents=True, exist_ok=True)
         self._response_publisher = self.create_publisher(String, self.response_topic, 10)
         self._request_subscription = self.create_subscription(
             String,
@@ -75,6 +82,7 @@ class MotionMappingManager(Node):
             payload = {}
 
         try:
+            self._select_project(payload)
             if command == 'list':
                 response = self._list_mappings()
             elif command == 'load':
@@ -95,7 +103,12 @@ class MotionMappingManager(Node):
                     'message': f'unknown mapping command: {command}',
                 }
         except Exception as exc:  # Defensive boundary for the web bridge.
-            self.get_logger().exception(f'motion mapping command failed: {command}')
+            # RcutilsLogger does not implement logging.Logger.exception().
+            # Keep the manager alive so one invalid/missing file request does
+            # not disable every later mapping and MIDI-bank operation.
+            self.get_logger().error(
+                f'motion mapping command failed: {command}: {exc}'
+            )
             response = {
                 'success': False,
                 'message': f'motion mapping command failed: {exc}',
@@ -103,6 +116,25 @@ class MotionMappingManager(Node):
 
         response['request_id'] = request_id
         self._publish(response)
+
+    def _select_project(self, payload: Dict[str, Any]) -> str:
+        project_id = str(payload.get('project_id') or '').strip()
+        if (
+            not project_id
+            or project_id != Path(project_id).name
+            or project_id.startswith('.')
+            or '/' in project_id
+            or '\\' in project_id
+        ):
+            raise ValueError('유효한 통합 프로젝트 ID가 필요합니다')
+        project_dir = (self.motion_projects_dir / project_id).resolve()
+        if project_dir.parent != self.motion_projects_dir or not (project_dir / 'project.json').is_file():
+            raise ValueError(f'통합 프로젝트를 찾을 수 없습니다: {project_id}')
+        self.mappings_dir = project_dir / 'motion_axis_matching'
+        self.motion_files_dir = project_dir / 'motions'
+        self.mappings_dir.mkdir(parents=True, exist_ok=True)
+        self.motion_files_dir.mkdir(parents=True, exist_ok=True)
+        return project_id
 
     def _publish_response(self, request_id: str, success: bool, message: str) -> None:
         self._publish({
@@ -132,7 +164,7 @@ class MotionMappingManager(Node):
         return {
             'success': True,
             'message': 'motion mapping files loaded',
-            'motion_data_dir': str(self.motion_data_dir),
+            'project_dir': str(self.mappings_dir.parent),
             'mappings_dir': str(self.mappings_dir),
             'files': files,
         }
@@ -190,7 +222,11 @@ class MotionMappingManager(Node):
             mapping['midi_banks'] = midi_banks
         mapping['file_id'] = path.name
         content = yaml.safe_dump(mapping, sort_keys=False, allow_unicode=True)
-        backup = atomic_write_with_backup(path, content)
+        backup = atomic_write_with_backup(
+            path,
+            content,
+            self.mappings_dir.parent / 'runtime' / 'history' / 'motion_axis_matching',
+        )
 
         return {
             **self._list_mappings(),
@@ -207,7 +243,16 @@ class MotionMappingManager(Node):
         path = self._mapping_file_path(file_id)
         state = load_midi_banks(path)
         if state is None:
-            raise ValueError('모션축 매칭 파일에 저장된 midi_banks가 없습니다')
+            return {
+                'success': False,
+                'missing': True,
+                'message': (
+                    '아직 저장된 MIDI 뱅크가 없습니다. '
+                    'MIDI 탭에서 뱅크 설정 적용/저장을 누르세요'
+                ),
+                'file': self._mapping_file_summary(path),
+                'midi_banks': None,
+            }
         return {
             'success': True,
             'message': '모션축 매칭 파일에서 MIDI 뱅크를 불러왔습니다',
@@ -220,7 +265,11 @@ class MotionMappingManager(Node):
         state = payload.get('midi_banks')
         if not isinstance(state, dict):
             raise ValueError('midi_banks must be an object')
-        backup = save_midi_banks(path, state)
+        backup = save_midi_banks(
+            path,
+            state,
+            self.mappings_dir.parent / 'runtime' / 'history' / 'motion_axis_matching',
+        )
         verified = load_midi_banks(path)
         if verified != state:
             raise ValueError('저장 후 MIDI 뱅크 파일 검증에 실패했습니다')
@@ -299,7 +348,8 @@ class MotionMappingManager(Node):
         mapped_count = sum(
             1
             for item in mappings
-            if isinstance(item, dict) and item.get('motor_axis') is not None
+            if isinstance(item, dict)
+            and (item.get('motor_ref') or item.get('motor_axis') is not None)
         )
 
         return {
@@ -346,6 +396,7 @@ class MotionMappingManager(Node):
             normalized_rows.append({
                 'motion_id': motion_id,
                 'enabled': bool(row.get('enabled', True)),
+                'motor_ref': str(row.get('motor_ref') or '').strip().lower(),
                 'motor_axis': self._optional_int(row.get('motor_axis'), None),
                 'reference_enabled': reference_enabled,
                 'reference_position_deg': reference_position,
@@ -384,10 +435,8 @@ class MotionMappingManager(Node):
         rows = mapping.get('mappings') if isinstance(mapping.get('mappings'), list) else []
         if not name:
             errors.append('mapping name is required')
-        if not motion_file_id:
-            errors.append('motion_file_id is required')
         if not rows:
-            errors.append('at least one motion axis mapping is required')
+            warnings.append('motion axis mapping is empty')
 
         first_values: Dict[str, float] = {}
         first_value_message = ''
@@ -397,16 +446,21 @@ class MotionMappingManager(Node):
                 warnings.append(first_value_message)
 
         motion_id_counts: Dict[str, int] = {}
-        axis_counts: Dict[str, int] = {}
+        target_counts: Dict[str, int] = {}
         for row in rows:
             if not isinstance(row, dict):
                 continue
             motion_id = str(row.get('motion_id') or '').strip()
             if motion_id:
                 motion_id_counts[motion_id] = motion_id_counts.get(motion_id, 0) + 1
-            if row.get('enabled') and row.get('motor_axis') is not None:
-                axis_key = str(row.get('motor_axis'))
-                axis_counts[axis_key] = axis_counts.get(axis_key, 0) + 1
+            if row.get('enabled'):
+                motor_ref = str(row.get('motor_ref') or '').strip()
+                motor_axis = row.get('motor_axis')
+                target_key = f'ref:{motor_ref}' if motor_ref else (
+                    f'axis:{motor_axis}' if motor_axis is not None else ''
+                )
+                if target_key:
+                    target_counts[target_key] = target_counts.get(target_key, 0) + 1
 
         for row in rows:
             if not isinstance(row, dict):
@@ -419,6 +473,7 @@ class MotionMappingManager(Node):
             row_errors: List[str] = []
             row_warnings: List[str] = []
             enabled = bool(row.get('enabled'))
+            motor_ref = str(row.get('motor_ref') or '').strip()
             motor_axis = row.get('motor_axis')
             lower = self._finite_float(row.get('motion_lower_deg'))
             upper = self._finite_float(row.get('motion_upper_deg'))
@@ -433,10 +488,15 @@ class MotionMappingManager(Node):
 
             if motion_id_counts.get(motion_id, 0) > 1:
                 row_errors.append('duplicated motion_id')
-            if enabled and motor_axis is None:
-                row_errors.append('enabled row requires motor_axis')
-            if enabled and motor_axis is not None and axis_counts.get(str(motor_axis), 0) > 1:
-                row_errors.append(f'duplicated motor_axis: {motor_axis}')
+            if enabled and not motor_ref and motor_axis is None:
+                row_errors.append('enabled row requires motor_ref')
+            if motor_ref and not self._valid_motor_ref(motor_ref):
+                row_errors.append(f'invalid motor_ref: {motor_ref}')
+            target_key = f'ref:{motor_ref}' if motor_ref else (
+                f'axis:{motor_axis}' if motor_axis is not None else ''
+            )
+            if enabled and target_key and target_counts.get(target_key, 0) > 1:
+                row_errors.append(f'duplicated motor target: {motor_ref or motor_axis}')
             if scale is None or math.isclose(scale, 0.0, abs_tol=1e-12):
                 row_errors.append('scale must be a non-zero number')
             if gear_ratio is None or gear_ratio <= 0:
@@ -537,6 +597,23 @@ class MotionMappingManager(Node):
             'warnings': warnings,
             'rows': rows_result,
         }
+
+    @staticmethod
+    def _valid_motor_ref(value: Any) -> bool:
+        text = str(value or '').strip().lower()
+        parts = text.split(':')
+        if len(parts) != 3:
+            return False
+        family, key, raw_value = parts
+        if (family, key) not in {
+            ('ac_servo', 'alias'),
+            ('dynamixel', 'id'),
+        }:
+            return False
+        try:
+            return int(raw_value, 0) >= 0
+        except (TypeError, ValueError):
+            return False
 
     def _motion_to_output_value(self, row: Dict[str, Any], motion_value_deg: Optional[float]) -> float:
         motion_value = self._finite_float(motion_value_deg)

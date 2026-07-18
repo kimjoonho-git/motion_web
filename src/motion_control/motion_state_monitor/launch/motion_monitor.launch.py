@@ -1,11 +1,16 @@
+import os
+from pathlib import Path
+
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
-DEFAULT_CONFIG = '/home/joonho_test/ros2_ws/config/active_motor_config.yaml'
+WORKSPACE = Path(os.environ.get('MOTION_WORKSPACE', Path.cwd())).expanduser()
+DEFAULT_CONFIG = str(WORKSPACE / 'config/bootstrap_motor_config.yaml')
 
 
 def generate_launch_description():
@@ -38,9 +43,9 @@ def generate_launch_description():
         DeclareLaunchArgument('host', default_value='0.0.0.0'),
         DeclareLaunchArgument('port', default_value='8000'),
         DeclareLaunchArgument(
-            'motion_data_dir',
-            default_value='/home/joonho_test/ros2_ws/motion_data',
-            description='Directory for uploaded motion files and motion axis mapping YAML files.',
+            'motion_projects_dir',
+            default_value=str(WORKSPACE / 'motion_projects'),
+            description='Root containing isolated integrated projects.',
         ),
         Node(
             package='motion_control_bridge',
@@ -88,58 +93,21 @@ def generate_launch_description():
                 'config_file': LaunchConfiguration('config_file'),
             }],
         ),
-        Node(
-            package='motion_runtime',
-            executable='motion_mapping_manager',
-            name='motion_mapping_manager',
-            output='screen',
-            parameters=[{
-                'motion_data_dir': LaunchConfiguration('motion_data_dir'),
-                'request_topic': '/motion_control/motion_mapping_request',
-                'response_topic': '/motion_control/motion_mapping_response',
-            }],
-        ),
-        Node(
-            package='motion_runtime',
-            executable='motion_run_manager',
-            name='motion_run_manager',
-            output='screen',
-            parameters=[{
-                'motion_state_topic': LaunchConfiguration('motion_state_topic'),
-                'motor_command_topic': '/motion_control/motion_run_command',
-                'motion_data_dir': LaunchConfiguration('motion_data_dir'),
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(
+                str(Path(__file__).with_name('project_services.launch.py'))
+            ),
+            launch_arguments={
                 'config_file': LaunchConfiguration('config_file'),
-                'request_topic': '/motion_control/motion_run_request',
-                'response_topic': '/motion_control/motion_run_response',
-                'status_topic': '/motion_control/motion_run_status',
-            }],
-        ),
-        Node(
-            package='motion_web_bridge',
-            executable='motion_web_bridge',
-            name='motion_web_bridge',
-            output='screen',
-            parameters=[{
+                'motion_projects_dir': LaunchConfiguration('motion_projects_dir'),
                 'motion_state_topic': LaunchConfiguration('motion_state_topic'),
-                'monitoring_service': '/set_monitoring',
-                'scan_service': '/scan_motors',
-                'scan_ac_servo_service': '/scan_ac_servo_motors',
-                'scan_dynamixel_service': '/scan_dynamixel_motors',
-                'jog_request_topic': '/motion_control/manual_jog_request',
-                'jog_result_topic': '/motion_control/manual_jog_result',
-                'action_request_topic': '/motion_control/manual_action_request',
-                'action_result_topic': '/motion_control/manual_action_result',
+                'publish_hz': LaunchConfiguration('publish_hz'),
                 'max_jog_delta_deg': LaunchConfiguration('max_jog_delta_deg'),
                 'host': LaunchConfiguration('host'),
                 'port': LaunchConfiguration('port'),
-                'web_publish_hz': LaunchConfiguration('publish_hz'),
-                'motor_config_file': LaunchConfiguration('config_file'),
-                'motion_data_dir': LaunchConfiguration('motion_data_dir'),
-                'motion_mapping_request_topic': '/motion_control/motion_mapping_request',
-                'motion_mapping_response_topic': '/motion_control/motion_mapping_response',
-                'motion_run_request_topic': '/motion_control/motion_run_request',
-                'motion_run_response_topic': '/motion_control/motion_run_response',
-                'motion_run_status_topic': '/motion_control/motion_run_status',
-            }],
+                # The normal restart script launches midi_control.launch.py so
+                # the physical MIDI input bridge and controller start together.
+                'start_midi_control': 'false',
+            }.items(),
         ),
     ])
