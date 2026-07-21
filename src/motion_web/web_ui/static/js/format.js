@@ -1,21 +1,21 @@
 export const motorTypeFilters = [
-  { key: 'all', label: 'All' },
-  { key: 'ac_servo', label: 'AC Servo' },
-  { key: 'dynamixel', label: 'Dynamixel' },
-  { key: 'cubemars', label: 'CubeMars' },
-  { key: 'unknown', label: 'Unknown' },
+  { key: 'all', label: '전체' },
+  { key: 'ac_servo', label: 'AC 서보' },
+  { key: 'dynamixel', label: '다이나믹셀' },
+  { key: 'cubemars', label: '큐브마스' },
+  { key: 'unknown', label: '확인 불가' },
 ];
 
 export const statusDisplayLabels = {
-  'Not ready to switch on': 'Not Ready',
-  'Switch on disabled': 'Servo OFF',
-  'Ready to switch on': 'Ready',
-  'Switched on': 'Power ON',
-  'Operation enabled': 'Servo ON',
-  'Quick stop active': 'Quick Stop',
-  'Fault reaction active': 'Error',
-  Fault: 'Error',
-  'Unknown status': 'Unknown',
+  'Not ready to switch on': '서보 준비 전',
+  'Switch on disabled': '서보 꺼짐',
+  'Ready to switch on': '서보 준비',
+  'Switched on': '전원 켜짐',
+  'Operation enabled': '서보 켜짐',
+  'Quick stop active': '비상 정지',
+  'Fault reaction active': '오류',
+  Fault: '오류',
+  'Unknown status': '상태 확인 불가',
 };
 
 export function formatNumber(value, digits = 4) {
@@ -82,14 +82,14 @@ export function stateLabel(state) {
     detected: '정상',
     stale: '갱신 지연',
     disconnected: '연결 끊김',
-    monitoring_off: '모니터링 OFF',
-    ethercat_down: '전원 OFF / 통신 끊김',
+    monitoring_off: '모니터링 꺼짐',
+    ethercat_down: '전원 꺼짐 / 통신 끊김',
   };
-  return labels[state] || state || 'Unknown';
+  return labels[state] || state || '확인 불가';
 }
 
 export function formatCounts(counts) {
-  if (!counts || Object.keys(counts).length === 0) return 'Unknown';
+  if (!counts || Object.keys(counts).length === 0) return '확인 불가';
   return Object.entries(counts)
     .map(([name, count]) => `${name} ${formatInt(count)}`)
     .join(', ');
@@ -97,7 +97,7 @@ export function formatCounts(counts) {
 
 export function countBy(items, key) {
   return items.reduce((counts, item) => {
-    const value = item[key] || 'Unknown';
+    const value = item[key] || '확인 불가';
     counts[value] = (counts[value] || 0) + 1;
     return counts;
   }, {});
@@ -121,7 +121,7 @@ export function normalizeMotorTypeKey(type, label) {
 
 export function motorFilterLabel(key) {
   const item = motorTypeFilters.find((filter) => filter.key === key);
-  return item ? item.label : 'Unknown';
+  return item ? item.label : '확인 불가';
 }
 
 export function escapeHtml(value) {

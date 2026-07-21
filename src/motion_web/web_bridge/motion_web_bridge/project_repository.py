@@ -182,6 +182,7 @@ class ProjectRepository:
         project_dir.mkdir()
         for category in PROJECT_CATEGORIES:
             (project_dir / category).mkdir()
+        (project_dir / 'logs').mkdir()
         (project_dir / 'runtime').mkdir()
         (project_dir / 'trash').mkdir()
         manifest = {
@@ -243,6 +244,12 @@ class ProjectRepository:
         )
         return self.get_project(project_dir.name)
 
+    def project_logs_dir(self, project_id: Any) -> Path:
+        project_dir = self._project_dir(project_id)
+        logs_dir = project_dir / 'logs'
+        logs_dir.mkdir(exist_ok=True)
+        return logs_dir
+
     def _read_selection(self) -> Dict[str, Any]:
         try:
             payload = json.loads(self.selection_file.read_text(encoding='utf-8'))
@@ -254,6 +261,65 @@ class ProjectRepository:
         payload = self._read_selection()
         project_id = str(payload.get('project_id') or '').strip()
         return project_id if project_id == Path(project_id).name else ''
+
+    def execution_context(self, project_id: Any) -> Dict[str, Any]:
+        """Return one immutable identity for the project's active runtime files."""
+        project_dir = self._project_dir(project_id)
+        manifest = self._read_manifest(project_dir)
+        active = manifest.get('active_files') or {}
+        files: Dict[str, Dict[str, Any]] = {}
+        missing = []
+        for category in PROJECT_CATEGORIES:
+            name = str(active.get(category) or '').strip()
+            item = {'name': name, 'sha256': '', 'exists': False}
+            if name:
+                try:
+                    path = self._asset_path(project_dir.name, category, name)
+                    content = path.read_bytes()
+                    item.update({
+                        'sha256': _sha256(content),
+                        'exists': True,
+                        'size': len(content),
+                    })
+                except (OSError, ValueError):
+                    pass
+            files[category] = item
+            if category in {'motor_axes', 'motion_axis_matching'} and not item['exists']:
+                missing.append(category)
+
+        identity = {
+            'version': 1,
+            'project_id': project_dir.name,
+            'files': {
+                category: {
+                    'name': item['name'],
+                    'sha256': item['sha256'],
+                }
+                for category, item in files.items()
+            },
+        }
+        encoded = json.dumps(
+            identity, ensure_ascii=False, sort_keys=True, separators=(',', ':')
+        ).encode('utf-8')
+        selection = self._read_selection()
+        motor_name = files['motor_axes']['name']
+        motor_source = (
+            project_dir / 'motor_axes' / motor_name if motor_name else None
+        )
+        motor_applied = bool(
+            motor_source is not None
+            and selection.get('applied_project_id') == project_dir.name
+            and self._motor_runtime_matches(project_dir, motor_source)
+        )
+        return {
+            **identity,
+            'context_id': _sha256(encoded),
+            'files': files,
+            'missing': missing,
+            'configuration_complete': not missing,
+            'motor_applied': motor_applied,
+            'created_at': time.time(),
+        }
 
     def mark_runtime_motor_config_applied(self, project_id: Any) -> Path:
         """Remember only which project runtime file the managed service must run."""
@@ -399,6 +465,48 @@ class ProjectRepository:
             'sha256': _sha256(content.encode('utf-8')),
         }
 
+    def read_read_only_file(self, project_id: Any, relative_path: Any) -> Dict[str, Any]:
+        """Read protected project metadata/runtime files without exposing writes."""
+        project_dir = self._project_dir(project_id)
+        raw_path = str(relative_path or '').strip().replace('\\', '/')
+        requested = Path(raw_path)
+        if (
+            not raw_path
+            or requested.is_absolute()
+            or '..' in requested.parts
+            or any(part.startswith('.') for part in requested.parts)
+        ):
+            raise ValueError('올바르지 않은 읽기 전용 파일 경로입니다')
+        if raw_path != 'project.json' and requested.parts[0] not in {'runtime', 'trash'}:
+            raise ValueError('읽기 전용 프로젝트 파일만 열 수 있습니다')
+        candidate = project_dir / requested
+        path = candidate.resolve()
+        try:
+            path.relative_to(project_dir)
+        except ValueError as exc:
+            raise ValueError('프로젝트 외부 파일은 열 수 없습니다') from exc
+        if candidate.is_symlink() or not path.is_file():
+            raise ValueError(f'프로젝트 파일을 찾을 수 없습니다: {raw_path}')
+        content_bytes = path.read_bytes()
+        if len(content_bytes) > MAX_TEXT_BYTES:
+            raise ValueError('파일이 10MB 제한을 초과하여 원문을 표시할 수 없습니다')
+        try:
+            content = content_bytes.decode('utf-8')
+        except UnicodeDecodeError as exc:
+            raise ValueError('텍스트 형식이 아닌 파일은 원문을 표시할 수 없습니다') from exc
+        return {
+            'success': True,
+            'project_id': project_dir.name,
+            'category': 'read_only',
+            'file_name': path.name,
+            'relative_path': requested.as_posix(),
+            'content': content,
+            'size': len(content_bytes),
+            'sha256': _sha256(content_bytes),
+            'read_only': True,
+            'internal': True,
+        }
+
     def save_file(
         self, project_id: Any, category: Any, file_name: Any, content: Any
     ) -> Dict[str, Any]:
@@ -495,6 +603,18 @@ class ProjectRepository:
         payload = yaml.safe_load(content) or {}
         if not isinstance(payload, dict):
             raise ValueError('모터축 설정 YAML 최상위 값은 객체여야 합니다')
+        # Validate with web identity metadata still present.  Only the final
+        # disposable runtime file removes those web-only fields.
+        payload = dict(payload)
+        payload['masters'] = [
+            master
+            for master in payload.get('masters') or []
+            if not (
+                isinstance(master, dict)
+                and master.get('type') == 'ethercat'
+                and not (master.get('slaves') or [])
+            )
+        ]
         motor_count = sum(
             len(master.get('slaves') or [])
             for master in payload.get('masters') or []
@@ -503,7 +623,7 @@ class ProjectRepository:
         if motor_count < 1:
             raise ValueError('등록된 모터축이 없어 설정을 적용할 수 없습니다')
         self._validate_runtime_motor_profiles(payload)
-        runtime_payload = self._relocate_workspace_paths(payload)
+        runtime_payload = self._runtime_motor_payload(payload)
         runtime_content = yaml.safe_dump(
             runtime_payload, sort_keys=False, allow_unicode=True
         )
@@ -521,6 +641,41 @@ class ProjectRepository:
             'runtime_file': str(runtime),
             'sha256': checksum,
         }
+
+    def _runtime_motor_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Return only the configuration that changes motor-node execution."""
+        runtime_payload = dict(payload)
+        # A serial-only project may retain an inert empty EtherCAT master.
+        runtime_payload['masters'] = [
+            master
+            for master in runtime_payload.get('masters') or []
+            if not (
+                isinstance(master, dict)
+                and master.get('type') == 'ethercat'
+                and not (master.get('slaves') or [])
+            )
+        ]
+        runtime_payload = self._relocate_workspace_paths(runtime_payload)
+        # Physical scan identities are validated by the web workflow but are
+        # deliberately not consumed by the established motor runtime schema.
+        runtime_payload.pop('web_axis_identities', None)
+        return runtime_payload
+
+    def _motor_runtime_matches(self, project_dir: Path, source: Path) -> bool:
+        """Compare effective motor settings, excluding web-only metadata."""
+        runtime = project_dir / 'runtime' / 'applied_motor_config.yaml'
+        try:
+            payload = yaml.safe_load(source.read_text(encoding='utf-8')) or {}
+            if not isinstance(payload, dict):
+                return False
+            expected = yaml.safe_dump(
+                self._runtime_motor_payload(payload),
+                sort_keys=False,
+                allow_unicode=True,
+            ).encode('utf-8')
+            return runtime.is_file() and _sha256(runtime.read_bytes()) == _sha256(expected)
+        except (OSError, yaml.YAMLError, AttributeError):
+            return False
 
     @staticmethod
     def _validate_runtime_motor_profiles(payload: Dict[str, Any]) -> None:
@@ -541,6 +696,14 @@ class ProjectRepository:
             'profile_acceleration',
             'profile_deceleration',
         )
+        used_controller_indices = set()
+        used_nonzero_aliases = set()
+        used_zero_alias_positions = set()
+        identity_by_axis = {
+            item.get('controller_index'): item
+            for item in payload.get('web_axis_identities') or []
+            if isinstance(item, dict) and item.get('controller_index') is not None
+        }
         for master in payload.get('masters') or []:
             if not isinstance(master, dict):
                 continue
@@ -548,6 +711,50 @@ class ProjectRepository:
                 if not isinstance(slave, dict):
                     continue
                 axis = slave.get('controller_index', '?')
+                if axis in used_controller_indices:
+                    raise ValueError(f'Control Index {axis} 값이 중복되어 있습니다')
+                used_controller_indices.add(axis)
+                if str(master.get('type') or '') == 'ethercat':
+                    try:
+                        alias = int(slave.get('alias') or 0)
+                        position = int(slave.get('position') or 0)
+                    except (TypeError, ValueError) as exc:
+                        raise ValueError(
+                            f'Axis {axis}의 EEPROM Alias 또는 Position 값이 올바르지 않습니다'
+                        ) from exc
+                    identity = identity_by_axis.get(axis)
+                    if isinstance(identity, dict):
+                        try:
+                            identity_alias = int(identity.get('eeprom_alias'))
+                            identity_position = int(identity.get('slave_position'))
+                        except (TypeError, ValueError) as exc:
+                            raise ValueError(
+                                f'Axis {axis}의 물리 식별 정보가 완전하지 않습니다'
+                            ) from exc
+                        if alias != identity_alias:
+                            raise ValueError(
+                                f'Axis {axis}의 EEPROM Alias가 실행 설정({alias})과 '
+                                f'물리 식별 정보({identity_alias})에서 다릅니다. '
+                                '모터축 설정에서 확인 후 변경 내용 저장을 누르세요'
+                            )
+                        if position != identity_position:
+                            raise ValueError(
+                                f'Axis {axis}의 Slave Position이 실행 설정({position})과 '
+                                f'물리 식별 정보({identity_position})에서 다릅니다. '
+                                '모터축 설정에서 확인 후 변경 내용 저장을 누르세요'
+                            )
+                    if alias != 0:
+                        if alias in used_nonzero_aliases:
+                            raise ValueError(
+                                f'EEPROM Alias {alias} 값이 중복되어 있습니다'
+                            )
+                        used_nonzero_aliases.add(alias)
+                    else:
+                        if position in used_zero_alias_positions:
+                            raise ValueError(
+                                f'EEPROM Alias 0의 Slave Position {position} 값이 중복되어 있습니다'
+                            )
+                        used_zero_alias_positions.add(position)
                 driver_id = slave.get('driver_id')
                 driver = drivers.get(driver_id)
                 if not isinstance(driver, dict):
@@ -629,13 +836,7 @@ class ProjectRepository:
         project_dir = self._project_dir(project_id)
         studio_id = _safe_stem(studio_project.get('project_id'), 'studio')
         manifest = self._read_manifest(project_dir)
-        for previous in manifest.get('studio_managed_layers') or []:
-            if not isinstance(previous, str) or previous != Path(previous).name:
-                continue
-            path = project_dir / 'layers' / previous
-            if path.is_file() and not path.is_symlink():
-                path.unlink()
-        synced = []
+        prepared = []
         for index, layer in enumerate(studio_project.get('layers') or []):
             if not isinstance(layer, dict):
                 continue
@@ -643,8 +844,20 @@ class ProjectRepository:
             name = f'{studio_id}__{layer_id}.json'
             content = json.dumps(layer, ensure_ascii=False, indent=2) + '\n'
             self._validate_content('layers', name, content)
+            prepared.append((name, content))
+        synced = [name for name, _content in prepared]
+        for name, content in prepared:
             self._atomic_write(project_dir / 'layers' / name, content)
-            synced.append(name)
+        for previous in manifest.get('studio_managed_layers') or []:
+            if (
+                not isinstance(previous, str)
+                or previous != Path(previous).name
+                or previous in synced
+            ):
+                continue
+            path = project_dir / 'layers' / previous
+            if path.is_file() and not path.is_symlink():
+                path.unlink()
         manifest['studio_managed_layers'] = synced
         active_layer = manifest['active_files'].get('layers')
         if synced and not active_layer:
@@ -661,6 +874,24 @@ class ProjectRepository:
 
     def _tree(self, project_dir: Path, manifest: Dict[str, Any]) -> list[Dict[str, Any]]:
         tree = []
+        manifest_path = project_dir / 'project.json'
+        manifest_content = manifest_path.read_bytes()
+        tree.append({
+            'category': 'project_root',
+            'name': '프로젝트 정보',
+            'read_only': True,
+            'children': [{
+                'node_type': 'file',
+                'name': manifest_path.name,
+                'relative_path': manifest_path.name,
+                'category': 'project_root',
+                'size': len(manifest_content),
+                'sha256': _sha256(manifest_content),
+                'active': False,
+                'read_only': True,
+                'internal': True,
+            }],
+        })
         active = manifest.get('active_files') or {}
         for category in PROJECT_CATEGORIES:
             children = []
@@ -688,7 +919,95 @@ class ProjectRepository:
                 'name': DISPLAY_NAMES[category],
                 'children': children,
             })
+        logs_dir = project_dir / 'logs'
+        logs_dir.mkdir(exist_ok=True)
+        log_children = []
+        for path in sorted(logs_dir.glob('*.jsonl'), reverse=True):
+            if not path.is_file() or path.is_symlink():
+                continue
+            try:
+                size = path.stat().st_size
+                record_count = sum(
+                    1 for line in path.read_text(encoding='utf-8').splitlines() if line.strip()
+                )
+            except OSError:
+                continue
+            log_children.append({
+                'name': path.name,
+                'category': 'logs',
+                'size': size,
+                'record_count': record_count,
+                'active': False,
+            })
+        tree.append({
+            'category': 'logs',
+            'name': '로그',
+            'children': log_children,
+        })
+        for category, label in (
+            ('runtime', 'runtime · 실행용'),
+            ('trash', 'trash · 휴지통'),
+        ):
+            directory = project_dir / category
+            directory.mkdir(exist_ok=True)
+            tree.append({
+                'category': category,
+                'name': label,
+                'read_only': True,
+                'children': self._read_only_directory_tree(directory, project_dir, category),
+            })
         return tree
+
+    def _read_only_directory_tree(
+        self,
+        directory: Path,
+        project_dir: Path,
+        category: str,
+    ) -> list[Dict[str, Any]]:
+        """Return the real on-disk subtree without exposing mutation APIs."""
+        nodes: list[Dict[str, Any]] = []
+        try:
+            entries = sorted(
+                directory.iterdir(),
+                key=lambda item: (not item.is_dir(), item.name.lower()),
+            )
+        except OSError:
+            return nodes
+        for path in entries:
+            if path.is_symlink() or path.name.startswith('.'):
+                continue
+            try:
+                relative_path = path.relative_to(project_dir).as_posix()
+                if path.is_dir():
+                    nodes.append({
+                        'node_type': 'folder',
+                        'name': path.name,
+                        'relative_path': relative_path,
+                        'category': category,
+                        'read_only': True,
+                        'internal': True,
+                        'children': self._read_only_directory_tree(
+                            path, project_dir, category
+                        ),
+                    })
+                    continue
+                if not path.is_file():
+                    continue
+                content = path.read_bytes()
+            except OSError:
+                continue
+            nodes.append({
+                'node_type': 'file',
+                'name': path.name,
+                'relative_path': relative_path,
+                'category': category,
+                'size': len(content),
+                'sha256': _sha256(content),
+                'active': False,
+                'read_only': True,
+                'internal': True,
+            })
+        return nodes
 
     @staticmethod
     def _midi_bank_tree_info(path: Path) -> Dict[str, Any]:
@@ -765,7 +1084,10 @@ class ProjectRepository:
         except (OSError, yaml.YAMLError, AttributeError):
             pass
         runtime_state = manifest.get('runtime_state') or {}
-        applied = bool(motor_sha and runtime_state.get('applied_motor_sha256') == motor_sha)
+        applied = bool(
+            motor_sha
+            and self._motor_runtime_matches(project_dir, motor_path)
+        )
         return {
             'project_created': True,
             'motor_count': motor_count,
@@ -803,6 +1125,7 @@ class ProjectRepository:
         payload['memo'] = str(payload.get('memo') or '')
         for category in PROJECT_CATEGORIES:
             (project_dir / category).mkdir(exist_ok=True)
+        (project_dir / 'logs').mkdir(exist_ok=True)
         (project_dir / 'runtime').mkdir(exist_ok=True)
         (project_dir / 'trash').mkdir(exist_ok=True)
         return payload

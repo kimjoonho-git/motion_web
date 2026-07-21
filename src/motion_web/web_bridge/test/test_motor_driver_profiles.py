@@ -114,3 +114,119 @@ def test_dynamixel_defaults_do_not_depend_on_scan_order(tmp_path):
     assert by_id[w150_id]['driver_model'] == 'XM540-W150'
     assert by_id[w270_id]['speed'] == 222.0
     assert by_id[w270_id]['driver_model'] == 'XM540-W270-R'
+
+
+def _registry_motor(axis, *, transport):
+    if transport == 'ethercat':
+        return {
+            'enabled': True,
+            'deleted': False,
+            'transport': 'ethercat',
+            'motor_type': 'ac_servo',
+            'driver_family': 'minas',
+            'name': f'AC {axis}',
+            'axis': axis,
+            'identity': {'driver_model': 'MADLN05BE'},
+            'config': {
+                'controller_index': axis,
+                'driver_id': 0,
+                'alias': 100 + axis,
+                'position': 0,
+                'vendor_id': 1647,
+                'product_id': 1614282756,
+                'profile_mode': 0,
+            },
+        }
+    return {
+        'enabled': True,
+        'deleted': False,
+        'transport': 'serial',
+        'motor_type': 'dynamixel',
+        'driver_family': 'dynamixel',
+        'name': f'Dynamixel {axis}',
+        'axis': axis,
+        'identity': {
+            'driver_model': 'XM540-W150',
+            'bus_id': axis + 1,
+            'serial_port': '/dev/test-dynamixel',
+            'serial_baudrate': 1000000,
+        },
+        'config': {
+            'controller_index': axis,
+            'driver_id': 1,
+            'bus_id': axis + 1,
+            'serial_port': '/dev/test-dynamixel',
+            'serial_baudrate': 1000000,
+            'profile_mode': 0,
+        },
+    }
+
+
+def test_dynamixel_only_config_does_not_keep_empty_ethercat_master(tmp_path):
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge.workspace_root = tmp_path
+    registry = {'motors': [_registry_motor(axis, transport='serial') for axis in range(30)]}
+
+    config = bridge._motor_config_from_registry(registry, bridge._default_motor_config())
+
+    assert [(master['type'], master['number_of_slaves']) for master in config['masters']] == [
+        ('serial', 30),
+    ]
+    assert len(config['drivers']) == 30
+
+
+def test_ac_and_mixed_configs_keep_ethercat_only_when_needed(tmp_path):
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge.workspace_root = tmp_path
+
+    ac_config = bridge._motor_config_from_registry(
+        {'motors': [_registry_motor(axis, transport='ethercat') for axis in range(30)]},
+        bridge._default_motor_config(),
+    )
+    assert [(master['type'], master['number_of_slaves']) for master in ac_config['masters']] == [
+        ('ethercat', 30),
+    ]
+
+    mixed_config = bridge._motor_config_from_registry(
+        {
+            'motors': [
+                *[_registry_motor(axis, transport='ethercat') for axis in range(15)],
+                *[_registry_motor(axis, transport='serial') for axis in range(15, 30)],
+            ],
+        },
+        bridge._default_motor_config(),
+    )
+    assert [(master['type'], master['number_of_slaves']) for master in mixed_config['masters']] == [
+        ('ethercat', 15),
+        ('serial', 15),
+    ]
+
+
+def test_ac_identity_metadata_round_trips_in_project_config(tmp_path):
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge.workspace_root = tmp_path
+    motor = _registry_motor(0, transport='ethercat')
+    motor['identity'].update({
+        'ethercat_alias': 403,
+        'rotary_alias': 3,
+        'slave_position': 1,
+    })
+
+    config = bridge._motor_config_from_registry(
+        {'motors': [motor]}, bridge._default_motor_config()
+    )
+    restored = bridge._registry_from_motor_config(config)['motors'][0]
+
+    assert config['masters'][0]['slaves'][0]['alias'] == 403
+    assert config['masters'][0]['slaves'][0]['position'] == 1
+    assert config['web_axis_identities'] == [{
+        'controller_index': 0,
+        'eeprom_alias': 403,
+        'rotary_alias': 3,
+        'slave_position': 1,
+        'vendor_id': 1647,
+        'product_id': 1614282756,
+    }]
+    assert restored['identity']['ethercat_alias'] == 403
+    assert restored['identity']['rotary_alias'] == 3
+    assert restored['identity']['slave_position'] == 1

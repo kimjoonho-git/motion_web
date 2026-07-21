@@ -40,17 +40,25 @@ export const createMotionStudioProject = (payload) => motionStudioRequest('/proj
 export const loadMotionStudioProject = (projectId) => motionStudioRequest('/projects/load', 'POST', { project_id: projectId });
 export const importMotionStudioFile = (payload) => motionStudioRequest('/import', 'POST', payload);
 export const saveMotionStudioProject = (payload) => motionStudioRequest('/project', 'PUT', payload);
+export const createMotionStudioLayer = (payload = {}) => motionStudioRequest('/layers', 'POST', payload);
 export const updateMotionStudioLayer = (payload) => motionStudioRequest('/layers', 'PUT', payload);
-export const resetMotionStudioLayers = () => motionStudioRequest('/layers/reset', 'POST');
+export const saveMotionStudioLayerData = (payload) => motionStudioRequest('/layers/data', 'PUT', payload);
+export const deleteMotionStudioLayer = (layerId) => motionStudioRequest(`/layers/${encodeURIComponent(layerId)}`, 'DELETE');
+export const duplicateMotionStudioLayer = (layerId) => motionStudioRequest(`/layers/${encodeURIComponent(layerId)}/duplicate`, 'POST');
+export const editMotionStudioLayer = (payload) => motionStudioRequest('/editor/transform', 'POST', payload);
+export const previewMotionStudioMerge = (payload) => motionStudioRequest('/editor/merge-preview', 'POST', payload);
+export const commitMotionStudioMerge = (payload) => motionStudioRequest('/layers/merge', 'POST', payload);
 export const startMotionStudioRecord = (payload) => motionStudioRequest('/record', 'POST', payload);
+export const startMotionStudioInitialization = (payload) => motionStudioRequest('/initialize', 'POST', payload);
 export const startMotionStudioPlayback = (payload) => motionStudioRequest('/play', 'POST', payload);
 export const stopMotionStudio = () => motionStudioRequest('/stop', 'POST');
 export const exportMotionStudio = (fileId) => motionStudioRequest('/export', 'POST', { file_id: fileId });
 
-export async function fetchMotorEvents(category = 'all', limit = 300) {
+export async function fetchMotorEvents(category = 'all', limit = 300, fileName = 'all') {
   const query = new URLSearchParams({
     category: String(category || 'all'),
     limit: String(limit),
+    file_name: String(fileName || 'all'),
   });
   const response = await fetch(`/api/motor-events?${query.toString()}`);
   return readJson(response);
@@ -58,6 +66,14 @@ export async function fetchMotorEvents(category = 'all', limit = 300) {
 
 export async function clearMotorEvents() {
   const response = await fetch('/api/motor-events', { method: 'DELETE' });
+  return readJson(response);
+}
+
+export async function deleteMotorEventLogFile(fileName) {
+  const response = await fetch(
+    `/api/motor-events/files/${encodeURIComponent(fileName)}`,
+    { method: 'DELETE' },
+  );
   return readJson(response);
 }
 
@@ -82,6 +98,15 @@ export async function requestAcServoScan() {
 
 export async function requestDynamixelScan() {
   const response = await fetch('/api/motors/scan/dynamixel', { method: 'POST' });
+  return readJson(response);
+}
+
+export async function writeEthercatAlias(payload) {
+  const response = await fetch('/api/motors/ethercat-alias', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
   return readJson(response);
 }
 
@@ -170,6 +195,14 @@ export async function importProjectFile(projectId, payload) {
 
 export async function fetchProjectFile(projectId, category, fileName) {
   const response = await fetch(projectFileUrl(projectId, category, fileName));
+  return readJson(response);
+}
+
+export async function fetchReadOnlyProjectFile(projectId, relativePath) {
+  const query = new URLSearchParams({ relative_path: relativePath });
+  const response = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/tree-file?${query.toString()}`,
+  );
   return readJson(response);
 }
 
@@ -311,6 +344,16 @@ export async function startMotionRun(payload) {
 
 export async function stopMotionRun() {
   const response = await fetch('/api/motion-run/stop', { method: 'POST' });
+  return readJson(response);
+}
+
+export async function requestMotionSafetyStop() {
+  const response = await fetch('/api/safety/motion-stop', { method: 'POST' });
+  return readJson(response);
+}
+
+export async function requestEmergencySafetyStop() {
+  const response = await fetch('/api/safety/emergency-stop', { method: 'POST' });
   return readJson(response);
 }
 

@@ -64,8 +64,8 @@ export function hasRegistryChanges(registry, currentRegistry) {
 export function registryMotorLabel(motor) {
   if (!motor) return '-';
   if (motor.name) return motor.name;
-  if (motor.axis !== null && motor.axis !== undefined) return `Axis ${motor.axis}`;
-  return motor.id || 'Motor';
+  if (motor.axis !== null && motor.axis !== undefined) return `축 ${motor.axis}`;
+  return motor.id || '모터';
 }
 
 export function activeRegistryMotors(registry) {

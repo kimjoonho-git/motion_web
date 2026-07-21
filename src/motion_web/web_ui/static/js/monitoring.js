@@ -12,10 +12,11 @@ import {
   normalizeMotorTypeKey,
   stateLabel,
   statusDisplayLabels,
-} from './format.js?v=20260714-generic-connection-state';
+} from './format.js?v=20260718-korean-ui';
 
 let lastMonitoringHeaderSignature = '';
 let lastMonitoringRowsSignature = '';
+let lastMonitoringDetailSignature = '';
 
 export function renderAccess(payload, el) {
   const url = payload && payload.web_access && payload.web_access.url
@@ -27,14 +28,26 @@ export function renderAccess(payload, el) {
 function statusText(motor, rawMode) {
   if (rawMode) return formatHex(motor.statusword);
   const status = motor.status_text || stateLabel(motor.connection_state || motor.state);
-  return statusDisplayLabels[status] || status;
+  const labels = {
+    'Torque enabled': '토크 켜짐',
+    'Torque disabled': '토크 꺼짐',
+    'Communication unavailable': '통신 불가',
+    'No runtime state': '실행 상태 없음',
+  };
+  return statusDisplayLabels[status] || labels[status] || status;
 }
 
 function errorText(motor, rawMode) {
   const rawError = motor.errorcode_raw ?? motor.errorcode;
+  const provided = String(motor.error_text || '');
+  const localized = provided === 'No error'
+    ? '오류 없음'
+    : provided === 'Communication unavailable'
+      ? '통신 불가'
+      : provided.replace(/^Error\s+/i, '오류 ');
   return rawMode
     ? formatHex(rawError)
-    : (motor.error_text || (Number(motor.errorcode) === 0 ? 'No error' : `Error ${formatNumber(motor.errorcode, 1)}`));
+    : (localized || (Number(motor.errorcode) === 0 ? '오류 없음' : `오류 ${formatNumber(motor.errorcode, 1)}`));
 }
 
 function statusClass(motor) {
@@ -63,7 +76,10 @@ function displayNameText(motor) {
 }
 
 function displayMotorTypeText(motor) {
-  return displayText(motor.motor_type_label || 'Unknown');
+  const key = motorFilterKey(motor);
+  return displayText(key === 'unknown'
+    ? (motor.motor_type_label || '확인 불가')
+    : motorFilterLabel(key));
 }
 
 function powerText(motor) {
@@ -125,6 +141,19 @@ function positionText(motor, rawMode) {
     : formatNumber(motor.position, 3);
 }
 
+function positionTurnText(motor) {
+  const positionDeg = Number(motor.position_deg ?? motor.position);
+  if (Number.isFinite(positionDeg)) return formatNumber(positionDeg / 360.0, 2);
+  const positionRaw = Number(motor.position_raw);
+  const pulsePerRevolution = Number(motor.pulse_per_revolution);
+  if (Number.isFinite(positionRaw)
+    && Number.isFinite(pulsePerRevolution)
+    && pulsePerRevolution > 0) {
+    return formatNumber(positionRaw / pulsePerRevolution, 2);
+  }
+  return '-';
+}
+
 function velocityText(motor, rawMode) {
   if (rawMode) {
     const raw = motor.velocity_raw ?? calculatedAcServoRaw(
@@ -162,6 +191,16 @@ function currentText(motor, rawMode) {
     : '-';
 }
 
+function effortText(motor, rawMode) {
+  const type = motorFilterKey(motor);
+  if (type === 'dynamixel') {
+    const value = currentText(motor, rawMode);
+    return value === '-' || rawMode ? value : `${value} A`;
+  }
+  const value = torqueText(motor, rawMode);
+  return value === '-' || rawMode ? value : `${value} Nm`;
+}
+
 function ageText(motor) {
   if (motor.age_sec === null || motor.age_sec === undefined || Number.isNaN(Number(motor.age_sec))) {
     return '-';
@@ -184,19 +223,19 @@ function stateCell(motor) {
 }
 
 function positionHeaderText(rawMode) {
-  return rawMode ? 'Position (cnt)' : 'Position (deg)';
+  return rawMode ? '원시 위치 (cnt)' : '위치 (deg)';
 }
 
 function velocityHeaderText(rawMode) {
-  return rawMode ? 'Velocity (cnt/s)' : 'Velocity (deg/s)';
+  return rawMode ? '원시 속도 (cnt/s)' : '속도 (deg/s)';
 }
 
 function torqueHeaderText(rawMode) {
-  return rawMode ? 'Torque (raw)' : 'Torque (Nm)';
+  return rawMode ? '원시 토크' : '토크 (Nm)';
 }
 
 function currentHeaderText(rawMode) {
-  return rawMode ? 'Current (raw)' : 'Current (A)';
+  return rawMode ? '원시 전류' : '전류 (A)';
 }
 
 export function motorFilterKey(motor) {
@@ -213,79 +252,24 @@ export function motorFilterKey(motor) {
 
 function monitoringColumnsForFilter(filter, rawMode) {
   const identity = [
-    { label: 'Axis', className: 'mono', cell: (motor) => axisText(motor) },
+    { label: '축 번호', className: 'mono', cell: (motor) => axisText(motor) },
     { label: 'ID', className: 'mono', cell: (motor) => commonIdText(motor) },
-    { label: 'Motor Type', cell: (motor) => displayMotorTypeText(motor) },
-    { label: 'Name', cell: (motor) => displayNameText(motor) },
+    { label: '모터 종류', cell: (motor) => displayMotorTypeText(motor) },
+    { label: '이름', cell: (motor) => displayNameText(motor) },
   ];
 
   const common = [
     ...identity,
-    { label: 'State', cell: (motor) => stateCell(motor) },
-    { label: 'Status', className: (motor) => statusClass(motor), cell: (motor) => displayText(statusText(motor, rawMode)) },
-    { label: 'Error', className: (motor) => errorClass(motor), cell: (motor) => displayText(errorText(motor, rawMode)) },
+    { label: '연결 상태', cell: (motor) => stateCell(motor) },
+    { label: '서보 상태', className: (motor) => statusClass(motor), cell: (motor) => displayText(statusText(motor, rawMode)) },
+    { label: '오류', className: (motor) => errorClass(motor), cell: (motor) => displayText(errorText(motor, rawMode)) },
     { label: positionHeaderText(rawMode), className: 'mono', cell: (motor) => displayText(positionText(motor, rawMode)) },
+    { label: '회전수 (turn)', className: 'mono', cell: (motor) => displayText(positionTurnText(motor)) },
     { label: velocityHeaderText(rawMode), className: 'mono', cell: (motor) => displayText(velocityText(motor, rawMode)) },
-    { label: 'Age (ms)', className: 'mono', cell: (motor) => displayText(ageText(motor)) },
+    { label: rawMode ? '원시 토크/전류' : '토크/전류', className: 'mono', cell: (motor) => displayText(effortText(motor, rawMode)) },
+    { label: '갱신 지연 (ms)', className: 'mono', cell: (motor) => displayText(ageText(motor)) },
   ];
-
-  const acServo = [
-    ...identity,
-    { label: 'Driver', cell: (motor) => driverText(motor, rawMode) },
-    { label: 'State', cell: (motor) => stateCell(motor) },
-    { label: rawMode ? 'Statusword' : 'Status', className: (motor) => statusClass(motor), cell: (motor) => displayText(statusText(motor, rawMode)) },
-    { label: rawMode ? 'Error Code' : 'Error', className: (motor) => errorClass(motor), cell: (motor) => displayText(errorText(motor, rawMode)) },
-    { label: rawMode ? 'Position Raw (cnt·역산)' : positionHeaderText(false), className: 'mono', cell: (motor) => displayText(positionText(motor, rawMode)) },
-    { label: rawMode ? 'Velocity Raw (cnt/s·역산)' : velocityHeaderText(false), className: 'mono', cell: (motor) => displayText(velocityText(motor, rawMode)) },
-    { label: torqueHeaderText(rawMode), className: 'mono', cell: (motor) => displayText(torqueText(motor, rawMode)) },
-    { label: currentHeaderText(rawMode), className: 'mono', cell: (motor) => displayText(currentText(motor, rawMode)) },
-    { label: 'Age (ms)', className: 'mono', cell: (motor) => displayText(ageText(motor)) },
-  ];
-
-  const dynamixel = [
-    ...identity,
-    { label: 'Port', cell: (motor) => portText(motor) },
-    { label: 'Model', cell: (motor) => driverText(motor, rawMode) },
-    { label: 'State', cell: (motor) => stateCell(motor) },
-    { label: 'Error', className: (motor) => errorClass(motor), cell: (motor) => displayText(errorText(motor, rawMode)) },
-    { label: positionHeaderText(rawMode), className: 'mono', cell: (motor) => displayText(positionText(motor, rawMode)) },
-    { label: velocityHeaderText(rawMode), className: 'mono', cell: (motor) => displayText(velocityText(motor, rawMode)) },
-    { label: currentHeaderText(rawMode), className: 'mono', cell: (motor) => displayText(currentText(motor, rawMode)) },
-    { label: 'Voltage', className: 'mono', cell: () => '-' },
-    { label: 'Temperature', className: 'mono', cell: () => '-' },
-    { label: 'Age (ms)', className: 'mono', cell: (motor) => displayText(ageText(motor)) },
-  ];
-
-  const cubemars = [
-    ...identity,
-    { label: 'CAN Bus', cell: (motor) => portText(motor) },
-    { label: 'Mode', cell: () => '-' },
-    { label: 'State', cell: (motor) => stateCell(motor) },
-    { label: 'Error', className: (motor) => errorClass(motor), cell: (motor) => displayText(errorText(motor, rawMode)) },
-    { label: positionHeaderText(rawMode), className: 'mono', cell: (motor) => displayText(positionText(motor, rawMode)) },
-    { label: velocityHeaderText(rawMode), className: 'mono', cell: (motor) => displayText(velocityText(motor, rawMode)) },
-    { label: torqueHeaderText(rawMode), className: 'mono', cell: (motor) => displayText(torqueText(motor, rawMode)) },
-    { label: 'Temperature', className: 'mono', cell: () => '-' },
-    { label: 'Age (ms)', className: 'mono', cell: (motor) => displayText(ageText(motor)) },
-  ];
-
-  const unknown = [
-    ...identity,
-    { label: 'Transport', cell: (motor) => displayText(motor.transport_label || motor.transport || '-') },
-    { label: 'State', cell: (motor) => stateCell(motor) },
-    { label: 'Status', className: (motor) => statusClass(motor), cell: (motor) => displayText(statusText(motor, rawMode)) },
-    { label: 'Error', className: (motor) => errorClass(motor), cell: (motor) => displayText(errorText(motor, rawMode)) },
-    { label: 'Age (ms)', className: 'mono', cell: (motor) => displayText(ageText(motor)) },
-  ];
-
-  const sets = {
-    all: common,
-    ac_servo: acServo,
-    dynamixel,
-    cubemars,
-    unknown,
-  };
-  return sets[filter] || common;
+  return common;
 }
 
 function renderMonitoringHeader(columns, el) {
@@ -339,12 +323,214 @@ function renderMotorTypeSummary(state, motors, el) {
     const activeClass = online > 0 ? 'online' : 'offline';
     return `
       <div class="type-row ${activeClass}">
-        <span>${label}</span>
+        <span>${motorFilterLabel(normalizeMotorTypeKey(label, label))}</span>
         <strong>${formatInt(known)} / ${formatInt(online)}</strong>
       </div>
     `;
   }).join('');
   if (el.motorTypeRows.innerHTML !== html) el.motorTypeRows.innerHTML = html;
+}
+
+function motorIdValue(motor) {
+  const type = motorFilterKey(motor);
+  const value = type === 'ac_servo'
+    ? motor.alias
+    : (motor.bus_id ?? motor.node_id ?? motor.id ?? motor.device_id);
+  return value === null || value === undefined ? '-' : formatInt(value);
+}
+
+function motorTypeValue(motor) {
+  const key = motorFilterKey(motor);
+  return key === 'unknown'
+    ? (motor.motor_type_label || '확인 불가')
+    : motorFilterLabel(key);
+}
+
+function transportValue(motor) {
+  const value = String(motor.transport_label || motor.transport || '').toLowerCase();
+  const labels = {
+    ethercat: 'EtherCAT',
+    serial: '시리얼',
+    canopen: 'CANopen',
+    socketcan: 'SocketCAN',
+    unknown: '확인 불가',
+  };
+  return labels[value] || motor.transport_label || motor.transport || '-';
+}
+
+function configurationValue(motor) {
+  const labels = {
+    configured: '프로젝트에 등록됨',
+    unconfigured: '프로젝트에 등록되지 않음',
+  };
+  return labels[motor.configuration_state] || motor.configuration_state || '-';
+}
+
+function dateTimeValue(epochSeconds) {
+  const value = Number(epochSeconds);
+  if (!Number.isFinite(value) || value <= 0) return '-';
+  return new Date(value * 1000).toLocaleString('ko-KR');
+}
+
+function numberUnit(value, digits, unit) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return '-';
+  return `${formatNumber(value, digits)}${unit ? ` ${unit}` : ''}`;
+}
+
+function integerUnit(value, unit) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return '-';
+  return `${formatInt(value)}${unit ? ` ${unit}` : ''}`;
+}
+
+function ageMillisecondsValue(motor) {
+  if (motor.age_sec === null
+    || motor.age_sec === undefined
+    || Number.isNaN(Number(motor.age_sec))) return '-';
+  return numberUnit(Number(motor.age_sec) * 1000, 0, 'ms');
+}
+
+function yesNoUnknown(value, yesText = '예', noText = '아니요') {
+  if (value === null || value === undefined) return '확인 불가';
+  return value ? yesText : noText;
+}
+
+function detailRowsHtml(rows) {
+  return `
+    <dl class="monitoring-detail-values">
+      ${rows.map(([label, value, tone = '']) => `
+        <div class="${escapeHtml(tone)}">
+          <dt>${displayText(label)}</dt>
+          <dd>${displayText(value)}</dd>
+        </div>
+      `).join('')}
+    </dl>
+  `;
+}
+
+function detailRowsForTab(motor, tab, rawMode) {
+  const type = motorFilterKey(motor);
+  const isDynamixel = type === 'dynamixel';
+  if (tab === 'connection') {
+    return [
+      ['연결 상태', stateLabel(motor.connection_state || motor.state)],
+      ['통신 방식', transportValue(motor)],
+      ['마스터 ID', motor.master_id ?? '-'],
+      ['통신 포트', motor.serial_port || motor.can_interface || '-'],
+      ['통신 속도', integerUnit(motor.serial_baudrate, motor.serial_baudrate ? 'bps' : '')],
+      ['마지막 수신 시각', dateTimeValue(motor.last_seen_at)],
+      ['갱신 지연', ageMillisecondsValue(motor)],
+      ['상태 판단 출처', motor.connection_source || '-'],
+      ['상태 설명', motor.connection_message || motor.state_detail || '-'],
+    ];
+  }
+  if (tab === 'operation') {
+    const hasError = Boolean(motor.fault) || Number(motor.errorcode || 0) !== 0;
+    return [
+      ['서보 상태', yesNoUnknown(motor.servo_on, '켜짐', '꺼짐')],
+      ['운전 상태', statusText(motor, false)],
+      ['목표 도달', yesNoUnknown(motor.target_reached, '도달', '미도달')],
+      ['상태워드', formatHex(motor.statusword)],
+      ['오류 여부', hasError ? '오류 있음' : '오류 없음', hasError ? 'danger' : 'ok'],
+      ['오류 코드', motor.errorcode_hex || formatHex(motor.errorcode_raw ?? motor.errorcode)],
+      ['원본 오류 코드', formatHex(motor.errorcode_raw ?? motor.errorcode)],
+      ['오류 설명', errorText(motor, false), hasError ? 'danger' : ''],
+    ];
+  }
+  if (tab === 'realtime') {
+    const positionRaw = motor.position_raw ?? calculatedAcServoRaw(
+      motor, motor.position_deg ?? motor.position,
+    );
+    const velocityRaw = motor.velocity_raw ?? calculatedAcServoRaw(
+      motor, motor.velocity_deg_s ?? motor.velocity,
+    );
+    const positionTurn = positionTurnText(motor);
+    return [
+      ['표시 방식', rawMode ? '원시값' : '해석값'],
+      ['현재 위치', rawMode ? integerUnit(positionRaw, 'count') : numberUnit(motor.position_deg ?? motor.position, 3, 'deg')],
+      ['현재 회전수', positionTurn === '-' ? '-' : `${positionTurn} turn`],
+      ['현재 속도', rawMode ? integerUnit(velocityRaw, 'count/s') : numberUnit(motor.velocity_deg_s ?? motor.velocity, 3, 'deg/s')],
+      [isDynamixel ? '현재 전류' : '현재 토크', rawMode
+        ? integerUnit(isDynamixel ? motor.current_raw : motor.torque_raw, 'raw')
+        : numberUnit(isDynamixel ? motor.current : motor.torque, 4, isDynamixel ? 'A' : 'Nm')],
+      ['측정 시각', dateTimeValue(motor.last_seen_at)],
+      ['측정값 갱신 지연', ageMillisecondsValue(motor)],
+    ];
+  }
+  if (tab === 'specification') {
+    return [
+      ['최소 위치', numberUnit(motor.lower, 3, 'deg')],
+      ['최대 위치', numberUnit(motor.upper, 3, 'deg')],
+      ['속도 설정값', numberUnit(motor.speed, 3, '')],
+      ['가속도', numberUnit(motor.acceleration, 3, 'deg/s²')],
+      ['감속도', numberUnit(motor.deceleration, 3, 'deg/s²')],
+      ['프로파일 속도', numberUnit(motor.profile_velocity, 3, 'deg/s')],
+      ['프로파일 가속도', numberUnit(motor.profile_acceleration, 3, 'deg/s²')],
+      ['프로파일 감속도', numberUnit(motor.profile_deceleration, 3, 'deg/s²')],
+      ['정격 토크', numberUnit(motor.rated_torque_nm, 4, 'Nm')],
+      ['정격 전류', numberUnit(motor.rated_current_a, 4, 'A')],
+      ['정격 출력', numberUnit(motor.rated_power_w, 0, 'W')],
+      ['정격 속도', numberUnit(motor.rated_speed_rpm, 0, 'rpm')],
+      ['회전당 펄스', integerUnit(motor.pulse_per_revolution, 'count/rev')],
+    ];
+  }
+  return [
+    ['축 번호', formatInt(motor.controller_index)],
+    ['모터 ID', motorIdValue(motor)],
+    ['축 이름', motor.display_name || '-'],
+    ['모터 종류', motorTypeValue(motor)],
+    ['드라이버 모델', motor.driver_model || motor.driver_name || '-'],
+    ['드라이버 ID', motor.driver_id ?? '-'],
+    ['설정 상태', configurationValue(motor)],
+  ];
+}
+
+function renderMonitoringSummary(motors, el) {
+  const online = motors.filter((motor) => motor.connection_connected === true
+    || motor.connection_state === 'online').length;
+  const faults = motors.filter((motor) => Boolean(motor.fault)
+    || Number(motor.errorcode || 0) !== 0).length;
+  const stale = motors.filter((motor) => motor.connection_state === 'stale').length;
+  if (el.monitoringTotalCount) el.monitoringTotalCount.textContent = `${formatInt(motors.length)}축`;
+  if (el.monitoringOnlineCount) el.monitoringOnlineCount.textContent = `${formatInt(online)}축`;
+  if (el.monitoringFaultCount) {
+    el.monitoringFaultCount.textContent = `${formatInt(faults)}축`;
+    el.monitoringFaultCount.parentElement?.classList.toggle('alert', faults > 0);
+  }
+  if (el.monitoringStaleCount) {
+    el.monitoringStaleCount.textContent = `${formatInt(stale)}축`;
+    el.monitoringStaleCount.parentElement?.classList.toggle('warning', stale > 0);
+  }
+}
+
+function renderMonitoringDetail(motors, selectedAxis, activeTab, rawMode, el) {
+  const selected = motors.find((motor) => (
+    selectedAxis !== null
+    && selectedAxis !== undefined
+    && Number(motor.controller_index) === Number(selectedAxis)
+  )) || null;
+  el.monitoringDetailTabs?.querySelectorAll('[data-monitoring-detail-tab]').forEach((button) => {
+    const active = button.dataset.monitoringDetailTab === activeTab;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-selected', active ? 'true' : 'false');
+    button.disabled = !selected;
+  });
+  if (el.monitoringDetailTitle) {
+    el.monitoringDetailTitle.textContent = selected
+      ? `축 ${formatInt(selected.controller_index)} · ${selected.display_name || '이름 없음'}`
+      : '모터를 선택하세요';
+  }
+  if (el.monitoringDetailSubtitle) {
+    el.monitoringDetailSubtitle.textContent = selected
+      ? `${motorTypeValue(selected)} · ID ${motorIdValue(selected)} · ${stateLabel(selected.connection_state || selected.state)}`
+      : '위 표의 모터 행을 누르면 상세 정보가 표시됩니다';
+  }
+  if (!el.monitoringDetailContent) return;
+  const signature = JSON.stringify({ selected, activeTab, rawMode });
+  if (signature === lastMonitoringDetailSignature) return;
+  lastMonitoringDetailSignature = signature;
+  el.monitoringDetailContent.innerHTML = selected
+    ? detailRowsHtml(detailRowsForTab(selected, activeTab, rawMode))
+    : '<div class="empty">모터를 선택하면 상세 정보가 표시됩니다</div>';
 }
 
 export function renderMonitoring(state, options) {
@@ -355,6 +541,7 @@ export function renderMonitoring(state, options) {
     shouldShowMonitoringMotor,
     registryCount,
     selectedMotionTestAxis,
+    activeMonitoringDetailTab,
   } = options;
   const allMotors = Array.isArray(state.motors) ? state.motors : [];
   const registryFilteredMotors = allMotors.filter((motor) => shouldShowMonitoringMotor(motor));
@@ -362,13 +549,22 @@ export function renderMonitoring(state, options) {
   const columns = monitoringColumnsForFilter(activeMonitoringFilter, rawMode);
   const enabled = Boolean(state.monitoring_enabled);
 
-  if (el.monitoringState) el.monitoringState.textContent = enabled ? 'ON' : 'OFF';
+  renderMonitoringSummary(registryFilteredMotors, el);
+  renderMonitoringDetail(
+    registryFilteredMotors,
+    selectedMotionTestAxis,
+    activeMonitoringDetailTab || 'basic',
+    rawMode,
+    el,
+  );
+
+  if (el.monitoringState) el.monitoringState.textContent = enabled ? '켜짐' : '꺼짐';
   if (el.monitorToggle) {
-    el.monitorToggle.textContent = enabled ? 'Turn Monitoring OFF' : 'Turn Monitoring ON';
+    el.monitorToggle.textContent = enabled ? '모니터링 끄기' : '모니터링 켜기';
     el.monitorToggle.classList.toggle('off', !enabled);
     el.monitorToggle.classList.toggle('primary', enabled);
   }
-  if (el.displayModeToggle) el.displayModeToggle.textContent = rawMode ? '해석값 보기' : 'Raw 보기';
+  if (el.displayModeToggle) el.displayModeToggle.textContent = rawMode ? '해석값 보기' : '원시값 보기';
   const connectionSummary = state.connection_summary || {};
   const onlineCount = Number.isFinite(Number(connectionSummary.online))
     ? Number(connectionSummary.online)
@@ -405,8 +601,8 @@ export function renderMonitoring(state, options) {
   if (!el.rows) return;
   if (motors.length === 0) {
     const emptyText = registryCount > 0
-      ? `No configured ${motorFilterLabel(activeMonitoringFilter)} runtime state received`
-      : 'No configured motor. Load motor settings first.';
+      ? `설정된 ${motorFilterLabel(activeMonitoringFilter)} 실행 상태를 아직 수신하지 못했습니다`
+      : '설정된 모터가 없습니다. 모터 축 설정을 먼저 불러오세요.';
     const html = `<tr><td colspan="${columns.length}" class="empty">${displayText(emptyText)}</td></tr>`;
     if (el.rows.innerHTML !== html) el.rows.innerHTML = html;
     lastMonitoringRowsSignature = '';

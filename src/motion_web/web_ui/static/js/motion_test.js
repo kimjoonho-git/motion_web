@@ -3,13 +3,14 @@ import {
   formatInt,
   formatNumber,
   normalizeMotorTypeKey,
-} from './format.js';
+} from './format.js?v=20260718-korean-ui';
 import {
   requestAcServoAction,
   requestAcServoControl,
   requestAcServoJog,
   requestDynamixelAction,
   requestDynamixelJog,
+  requestMotionSafetyStop,
 } from './api.js?v=20260705-dynamixel-action';
 
 const DEFAULT_MAX_JOG_DELTA_DEG = 360.0;
@@ -65,7 +66,12 @@ function motorIdText(motor) {
 
 function motorLabel(motor) {
   if (!motor) return '-';
-  return `Axis ${formatInt(motor.controller_index)} / ID ${motorIdText(motor)} / ${motor.motor_type_label || 'Unknown'} / ${motor.display_name || '-'}`;
+  const typeLabels = {
+    ac_servo: 'AC 서보',
+    dynamixel: '다이나믹셀',
+    cubemars: '큐브마스',
+  };
+  return `축 ${formatInt(motor.controller_index)} / ID ${motorIdText(motor)} / ${typeLabels[motorTypeKey(motor)] || '확인 불가'} / ${motor.display_name || '-'}`;
 }
 
 function positionDeg(motor) {
@@ -337,8 +343,8 @@ function motorReadyRows(motor) {
     const servoOn = motor?.servo_on === true;
     return [
       {
-        label: '서보 ON',
-        value: servoOn ? 'ON' : 'OFF',
+        label: '서보 상태',
+        value: servoOn ? '켜짐' : '꺼짐',
         state: servoOn ? 'ok' : 'warn',
       },
       errorRow,
@@ -359,7 +365,7 @@ function isDynamixelMotor(motor) {
 }
 
 function actionMotorLabel(motor) {
-  return isDynamixelMotor(motor) ? 'Dynamixel' : 'AC Servo';
+  return isDynamixelMotor(motor) ? '다이나믹셀' : 'AC 서보';
 }
 
 function actionGearRatio(el, motor) {
@@ -368,9 +374,9 @@ function actionGearRatio(el, motor) {
 
 function acServoReadyBlockReason(motor, actionText) {
   if (!motor) return '축을 선택하세요';
-  if (!isAcServoMotor(motor)) return `AC Servo 축만 ${actionText} 가능합니다`;
+  if (!isAcServoMotor(motor)) return `AC 서보 축만 ${actionText} 가능합니다`;
   if (String(motor.state || '') !== 'detected') return '선택 축이 감지되지 않았습니다';
-  if (motor.servo_on !== true) return '서보 ON 상태가 아닙니다';
+  if (motor.servo_on !== true) return '서보가 켜진 상태가 아닙니다';
   if (Boolean(motor.fault)) return '선택 축에 에러가 있습니다';
   return '';
 }
@@ -387,7 +393,7 @@ function jogBlockReason(motor) {
     if (Boolean(motor.fault)) return '선택 축에 에러가 있습니다';
     return '';
   }
-  return 'AC Servo 또는 Dynamixel 축만 조그 동작 가능합니다';
+  return 'AC 서보 또는 다이나믹셀 축만 조그 동작 가능합니다';
 }
 
 function acServoActionBlockReason(motor) {
@@ -402,7 +408,7 @@ function actionBlockReason(motor) {
     if (Boolean(motor.fault)) return '선택 축에 에러가 있습니다';
     return '';
   }
-  return 'AC Servo 또는 Dynamixel 축만 절대 위치 동작 가능합니다';
+  return 'AC 서보 또는 다이나믹셀 축만 절대 위치 동작 가능합니다';
 }
 
 function positionLimitBlockReason(plan) {
@@ -446,6 +452,7 @@ export function createMotionTestController({ el, getLatestState }) {
   let lastCommandResult = null;
   let jogRequestInFlight = false;
   let servoControlInFlight = false;
+  let motionStopInFlight = false;
 
   function selectedMotor() {
     return motorByAxis(getLatestState(), selectedAxis);
@@ -572,7 +579,7 @@ export function createMotionTestController({ el, getLatestState }) {
       lines.push(`조그 방향: ${directionText}`);
     } else {
       const gearText = isDynamixelMotor(plan.motor)
-        ? `${formatNumber(plan.gearRatio, 3)}:1 (Dynamixel 고정)`
+        ? `${formatNumber(plan.gearRatio, 3)}:1 (다이나믹셀 고정)`
         : `${formatNumber(plan.gearRatio, 3)}:1`;
       lines.push(`감속비: ${gearText}`);
       lines.push(`모터 명령 절대값: ${positionPairText(plan.targetMotorDeg, plan.targetRaw)}`);
@@ -599,7 +606,7 @@ export function createMotionTestController({ el, getLatestState }) {
     const upper = limitSnapshot(motor, gearRatio, 'upper', mode);
 
     el.motionTestCommandPositionSummary.innerHTML = valueTableHtml(
-      ['구분', '출력축 각도', '모터축 각도', 'Raw'],
+      ['구분', '출력축 각도', '모터축 각도', '원시값'],
       [
         [
           '현재 위치',
@@ -634,7 +641,7 @@ export function createMotionTestController({ el, getLatestState }) {
     if (isDynamixelMotor(motor)) {
       el.motionTestPosition.min = String(DYNAMIXEL_ACTION_MIN_DEG);
       el.motionTestPosition.max = String(DYNAMIXEL_ACTION_MAX_DEG);
-      el.motionTestPosition.title = 'Dynamixel 동작 모드 목표 위치는 -180~180 deg로 제한됩니다';
+      el.motionTestPosition.title = '다이나믹셀 동작 모드 목표 위치는 -180~180도로 제한됩니다';
       if (isActionMode) {
         const value = numericValue(el.motionTestPosition.value, null);
         if (value !== null && value < DYNAMIXEL_ACTION_MIN_DEG) {
@@ -681,7 +688,7 @@ export function createMotionTestController({ el, getLatestState }) {
 
     el.motionTestOutputState.textContent = lastOutputCapture.mode === 'jog' ? '조그 모드 결과' : '동작 모드 결과';
     el.motionTestOutputText.innerHTML = valueTableHtml(
-      ['구분', '출력축 각도', '모터축 각도', 'Raw', '동작 시간'],
+      ['구분', '출력축 각도', '모터축 각도', '원시값', '동작 시간'],
       [
         [
           '시작점(명령 전)',
@@ -798,7 +805,7 @@ export function createMotionTestController({ el, getLatestState }) {
       return;
     }
     const motor = selectedMotor();
-    const jogMotorText = isDynamixelMotor(motor) ? 'Dynamixel' : 'AC Servo';
+    const jogMotorText = isDynamixelMotor(motor) ? '다이나믹셀' : 'AC 서보';
     el.motionTestActualState.textContent = '명령 전';
     el.motionTestActualText.textContent = [
       `${jogMotorText} 조그 명령 전입니다.`,
@@ -815,7 +822,7 @@ export function createMotionTestController({ el, getLatestState }) {
       if (isDynamixelSelected) {
         el.motionTestGearRatio.value = '1';
         el.motionTestGearRatio.disabled = true;
-        el.motionTestGearRatio.title = 'Dynamixel 동작 모드는 감속비를 사용하지 않으며 1로 고정됩니다';
+        el.motionTestGearRatio.title = '다이나믹셀 동작 모드는 감속비를 사용하지 않으며 1로 고정됩니다';
       } else {
         el.motionTestGearRatio.disabled = false;
         el.motionTestGearRatio.title = '';
@@ -829,7 +836,7 @@ export function createMotionTestController({ el, getLatestState }) {
       const currentOutputDeg = currentMotorDeg === null ? null : currentMotorDeg / gearRatio;
       el.motionTestCurrentPosition.innerHTML = motor
         ? valueTableHtml(
-          ['기준', '각도', 'Raw'],
+          ['기준', '각도', '원시값'],
           [
             ['출력축', degText(currentOutputDeg), '-'],
             ['모터축', degText(currentMotorDeg), rawText(currentRaw)],
@@ -857,6 +864,7 @@ export function createMotionTestController({ el, getLatestState }) {
       || !motor
       || Boolean(jogBlockReason(motor))
       || jogRequestInFlight
+      || motionStopInFlight
       || motionCommandActive
     );
     const negativeJogDisabled = (
@@ -871,9 +879,29 @@ export function createMotionTestController({ el, getLatestState }) {
     );
     if (el.motionTestJogNegativeButton) {
       el.motionTestJogNegativeButton.disabled = negativeJogDisabled;
+      const reason = (
+        el.motionTestMode?.value !== 'jog' ? '조그 모드를 선택하세요'
+          : jogRequestInFlight ? '동작 명령을 처리하고 있습니다'
+            : motionStopInFlight ? '모터 정지 요청을 처리하고 있습니다'
+              : motionCommandActive ? '현재 동작이 완료될 때까지 기다리거나 동작 정지를 누르세요'
+                : jogBlockReason(motor)
+                  || (negativeJogPlan === null ? '조그 이동량과 현재 위치를 확인하세요' : '')
+                  || positionLimitBlockReason(negativeJogPlan)
+      );
+      el.motionTestJogNegativeButton.title = negativeJogDisabled ? reason : '- 방향으로 조그 이동';
     }
     if (el.motionTestJogPositiveButton) {
       el.motionTestJogPositiveButton.disabled = positiveJogDisabled;
+      const reason = (
+        el.motionTestMode?.value !== 'jog' ? '조그 모드를 선택하세요'
+          : jogRequestInFlight ? '동작 명령을 처리하고 있습니다'
+            : motionStopInFlight ? '모터 정지 요청을 처리하고 있습니다'
+              : motionCommandActive ? '현재 동작이 완료될 때까지 기다리거나 동작 정지를 누르세요'
+                : jogBlockReason(motor)
+                  || (positiveJogPlan === null ? '조그 이동량과 현재 위치를 확인하세요' : '')
+                  || positionLimitBlockReason(positiveJogPlan)
+      );
+      el.motionTestJogPositiveButton.title = positiveJogDisabled ? reason : '+ 방향으로 조그 이동';
     }
     const actionDisabled = (
       !isActionMode
@@ -882,13 +910,69 @@ export function createMotionTestController({ el, getLatestState }) {
       || Boolean(actionBlockReason(motor))
       || Boolean(positionLimitBlockReason(plan))
       || jogRequestInFlight
+      || motionStopInFlight
       || motionCommandActive
     );
     if (el.motionTestRunButton) {
       el.motionTestRunButton.disabled = actionDisabled;
+      const reason = (
+        !isActionMode ? '동작 모드를 선택하세요'
+          : jogRequestInFlight ? '동작 명령을 처리하고 있습니다'
+            : motionStopInFlight ? '모터 정지 요청을 처리하고 있습니다'
+              : motionCommandActive ? '현재 동작이 완료될 때까지 기다리거나 동작 정지를 누르세요'
+                : actionBlockReason(motor)
+                  || (plan === null ? '목표 위치, 감속비, 동작 시간을 확인하세요' : '')
+                  || positionLimitBlockReason(plan)
+      );
+      el.motionTestRunButton.title = actionDisabled ? reason : '설정한 목표 위치로 동작';
     }
     if (el.motionTestStopButton) {
-      el.motionTestStopButton.disabled = true;
+      el.motionTestStopButton.disabled = (
+        motionStopInFlight
+        || document.body.classList.contains('emergency-latched')
+      );
+      el.motionTestStopButton.textContent = motionStopInFlight
+        ? '정지 요청 중'
+        : '모터 동작 정지';
+      el.motionTestStopButton.title = motionStopInFlight
+        ? '모터 정지 요청을 처리하고 있습니다'
+        : '진행 중인 동작 테스트 명령을 취소하고 현재 위치를 유지합니다';
+    }
+    if (el.motionTestActionGuide) {
+      let guideState = 'warning';
+      let guideText = '다음 단계: 시험할 축을 선택하세요';
+      if (motionStopInFlight) {
+        guideState = 'active';
+        guideText = '모터 동작 정지 요청을 처리하고 있습니다';
+      } else if (jogRequestInFlight || motionCommandActive) {
+        guideState = 'active';
+        guideText = '현재 동작 중입니다 · 완료를 기다리거나 모터 동작 정지를 누르세요';
+      } else if (motor && !isActionMode) {
+        if (!negativeJogDisabled || !positiveJogDisabled) {
+          guideState = 'ready';
+          guideText = negativeJogDisabled || positiveJogDisabled
+            ? '조그 준비 완료 · 위치 제한 안에서 활성화된 방향을 사용하세요'
+            : '조그 준비 완료 · 이동량을 확인하고 방향 버튼을 누르세요';
+        } else {
+          const reason = jogBlockReason(motor)
+            || positionLimitBlockReason(negativeJogPlan)
+            || positionLimitBlockReason(positiveJogPlan)
+            || '조그 이동량과 현재 위치를 확인하세요';
+          guideText = `동작 불가: ${reason}`;
+        }
+      } else if (motor && isActionMode) {
+        if (!actionDisabled) {
+          guideState = 'ready';
+          guideText = '동작 준비 완료 · 목표 위치와 동작 시간을 확인하고 실행하세요';
+        } else {
+          const reason = actionBlockReason(motor)
+            || positionLimitBlockReason(plan)
+            || '목표 위치, 감속비, 동작 시간을 확인하세요';
+          guideText = `동작 불가: ${reason}`;
+        }
+      }
+      el.motionTestActionGuide.dataset.state = guideState;
+      el.motionTestActionGuide.textContent = guideText;
     }
     const selectedAcServoReady = (
       motor
@@ -935,7 +1019,7 @@ export function createMotionTestController({ el, getLatestState }) {
     const plan = commandPlan({ jogDirection: direction });
     const motor = plan?.motor;
     const isDynamixel = isDynamixelMotor(motor);
-    const motorLabelText = isDynamixel ? 'Dynamixel' : 'AC Servo';
+    const motorLabelText = isDynamixel ? '다이나믹셀' : 'AC 서보';
     const jogValue = numericValue(el.motionTestJogDistance?.value, null);
     const maxJog = maxJogDeltaDeg(getLatestState());
     const jogLimitReason = (
@@ -1044,26 +1128,26 @@ export function createMotionTestController({ el, getLatestState }) {
     const motor = selectedMotor();
     if (scope === 'selected' && (!motor || !isAcServoMotor(motor))) {
       if (el.acServoControlMessage) {
-        el.acServoControlMessage.textContent = '선택 축이 AC Servo가 아닙니다';
+        el.acServoControlMessage.textContent = '선택 축이 AC 서보가 아닙니다';
       }
       renderCurrentState();
       return;
     }
     if (scope === 'all' && detectedAcServoMotors(getLatestState()).length === 0) {
       if (el.acServoControlMessage) {
-        el.acServoControlMessage.textContent = '감지된 AC Servo 축이 없습니다';
+        el.acServoControlMessage.textContent = '감지된 AC 서보 축이 없습니다';
       }
       renderCurrentState();
       return;
     }
     if (action === 'servo_off') {
-      const targetText = scope === 'all' ? '전체 AC Servo' : '선택 축 AC Servo';
+      const targetText = scope === 'all' ? '전체 AC 서보' : '선택 축 AC 서보';
       const confirmed = window.confirm(
-        `${targetText} Servo OFF 명령을 보냅니다.\n서보가 꺼지면 부하가 풀릴 수 있습니다. 계속할까요?`,
+        `${targetText} 서보 끄기 명령을 보냅니다.\n서보가 꺼지면 부하가 풀릴 수 있습니다. 계속할까요?`,
       );
       if (!confirmed) {
         if (el.acServoControlMessage) {
-          el.acServoControlMessage.textContent = 'Servo OFF 취소';
+          el.acServoControlMessage.textContent = '서보 끄기 취소';
         }
         return;
       }
@@ -1072,9 +1156,9 @@ export function createMotionTestController({ el, getLatestState }) {
     servoControlInFlight = true;
     if (el.acServoControlMessage) {
       const label = {
-        servo_on: 'Servo ON',
-        servo_off: 'Servo OFF',
-        fault_reset: 'Fault Reset',
+        servo_on: '서보 켜기',
+        servo_off: '서보 끄기',
+        fault_reset: '오류 초기화',
       }[action] || action;
       el.acServoControlMessage.textContent = `${label} 요청 전송 중`;
     }
@@ -1087,14 +1171,53 @@ export function createMotionTestController({ el, getLatestState }) {
         axis: selectedAxis,
       });
       if (el.acServoControlMessage) {
-        el.acServoControlMessage.textContent = response?.message || 'AC Servo 제어 응답 없음';
+        el.acServoControlMessage.textContent = response?.message || 'AC 서보 제어 응답 없음';
       }
     } catch (error) {
       if (el.acServoControlMessage) {
-        el.acServoControlMessage.textContent = `AC Servo 제어 요청 실패: ${error?.message || error}`;
+        el.acServoControlMessage.textContent = `AC 서보 제어 요청 실패: ${error?.message || error}`;
       }
     } finally {
       servoControlInFlight = false;
+      renderCurrentState();
+    }
+  }
+
+  async function stopMotorMotion() {
+    if (motionStopInFlight) return;
+    motionStopInFlight = true;
+    lastCommandResult = {
+      success: true,
+      message: '모터 동작 정지 요청 전송 중',
+    };
+    renderCurrentState();
+
+    try {
+      const response = await requestMotionSafetyStop();
+      if (response?.success === false) {
+        throw new Error(response.message || '모터 동작 정지 요청 실패');
+      }
+      const captureMotor = lastOutputCapture
+        ? motorByAxis(getLatestState(), lastOutputCapture.axis)
+        : null;
+      if (lastOutputCapture && captureMotor) {
+        lastOutputCapture.completedAtMs = Date.now();
+        lastOutputCapture.completedResult = positionSnapshot(
+          captureMotor,
+          lastOutputCapture.gearRatio,
+        );
+      }
+      lastCommandResult = {
+        success: true,
+        message: response?.message || '모터 동작을 정지했습니다. 서보 ON 상태는 유지됩니다.',
+      };
+    } catch (error) {
+      lastCommandResult = {
+        success: false,
+        message: `모터 동작 정지 실패: ${error?.message || error}`,
+      };
+    } finally {
+      motionStopInFlight = false;
       renderCurrentState();
     }
   }
@@ -1136,6 +1259,9 @@ export function createMotionTestController({ el, getLatestState }) {
     }
     if (el.motionTestRunButton) {
       el.motionTestRunButton.addEventListener('click', sendAction);
+    }
+    if (el.motionTestStopButton) {
+      el.motionTestStopButton.addEventListener('click', stopMotorMotion);
     }
     if (el.selectedAcServoOnButton) {
       el.selectedAcServoOnButton.addEventListener('click', () => {

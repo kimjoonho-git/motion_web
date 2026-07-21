@@ -8,12 +8,13 @@ Type=simple
 WorkingDirectory=@WORKSPACE@
 Environment="MOTION_WORKSPACE=@WORKSPACE@"
 Environment="MOTION_CONTROL_SERVICE_UNIT=motion-control.service"
+Environment="ROS_LOCALHOST_ONLY=1"
 ExecStart=/bin/bash @SERVICE_RUNNER@
 Restart=always
 RestartSec=3
 KillMode=control-group
 KillSignal=SIGINT
-TimeoutStopSec=15
+TimeoutStopSec=8
 
 [Install]
 WantedBy=default.target

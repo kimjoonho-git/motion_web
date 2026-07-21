@@ -24,11 +24,18 @@ function pathBasename(value) {
   return String(value || '').split(/[\\/]/).filter(Boolean).pop() || '모션축 설정 YAML';
 }
 
+function linkedMotionIdDraft(values) {
+  const result = Array.isArray(values) ? values.slice(0, 2).map((value) => String(value || '')) : [];
+  while (result.length < 2) result.push('');
+  return result;
+}
+
 function defaultMapping(channel) {
   return {
     channel,
     enabled: true,
     motion_id: `1-${channel + 1}`,
+    linked_motion_ids: ['', ''],
     min_percent: 0,
     max_percent: 100,
     reversed: false,
@@ -52,7 +59,13 @@ function requireSuccess(payload) {
 }
 
 function invalidMappingItem(item) {
-  return !MOTION_ID_PATTERN.test(String(item.motion_id || '').trim())
+  const motionIds = [item.motion_id, ...(Array.isArray(item.linked_motion_ids) ? item.linked_motion_ids : [])]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+  return motionIds.length < 1
+    || motionIds.length > 3
+    || motionIds.some((motionId) => !MOTION_ID_PATTERN.test(motionId))
+    || new Set(motionIds).size !== motionIds.length
     || !Number.isFinite(Number(item.min_percent))
     || !Number.isFinite(Number(item.max_percent))
     || Number(item.max_percent) <= 0
@@ -90,6 +103,8 @@ export function createMidiMonitorController({ el }) {
   let bankNameDraft = 'Bank 1';
   let banks = [];
   const dirtyFields = new Set();
+  let editSafetyResetTimer = null;
+  let editSafetyResetRunning = false;
 
   function channelsOf(nextStatus = status) {
     return Array.isArray(nextStatus?.channels) ? nextStatus.channels : [];
@@ -113,6 +128,7 @@ export function createMidiMonitorController({ el }) {
           channel,
           enabled: item.enabled !== false,
           motion_id: String(item.motion_id ?? `1-${channel + 1}`),
+          linked_motion_ids: linkedMotionIdDraft(item.linked_motion_ids),
           min_percent: numberValue(item.min_percent, 0),
           max_percent: numberValue(item.max_percent, 100),
           reversed: Boolean(item.reversed),
@@ -139,11 +155,16 @@ export function createMidiMonitorController({ el }) {
 
   function rowHtml(item) {
     const channel = item.channel;
+    const linked = Array.isArray(item.linked_motion_ids) ? item.linked_motion_ids : [];
     return `<tr data-midi-channel="${channel}">
       <td><input type="checkbox" data-midi-field="enabled" ${item.enabled ? 'checked' : ''}></td>
       <td>${channel + 1}</td>
       <td data-midi-output="select">비활성</td>
-      <td><input class="midi-motion-id-input" type="text" pattern="[1-9]\\d*-[1-9]\\d*" title="예: 1-1, 4-3" data-midi-field="motion_id" value="${escapeAttribute(item.motion_id)}"></td>
+      <td><div class="midi-motion-id-group">
+        <input class="midi-motion-id-input" type="text" pattern="[1-9]\\d*-[1-9]\\d*" title="기본 Motion ID · 예: 1-1" aria-label="기본 Motion ID" data-midi-field="motion_id" value="${escapeAttribute(item.motion_id)}">
+        <input class="midi-motion-id-input" type="text" pattern="[1-9]\\d*-[1-9]\\d*" title="연동 Motion ID 2 · 비워둘 수 있음" aria-label="연동 Motion ID 2" data-midi-field="linked_motion_id_0" value="${escapeAttribute(linked[0] || '')}" placeholder="연동 2">
+        <input class="midi-motion-id-input" type="text" pattern="[1-9]\\d*-[1-9]\\d*" title="연동 Motion ID 3 · 비워둘 수 있음" aria-label="연동 Motion ID 3" data-midi-field="linked_motion_id_1" value="${escapeAttribute(linked[1] || '')}" placeholder="연동 3">
+      </div></td>
       <td class="midi-live-value" data-midi-output="raw">0</td>
       <td class="midi-live-value" data-midi-output="filtered">0</td>
       <td><input type="number" inputmode="decimal" min="0" max="100" step="1" data-midi-field="min_percent" value="${item.min_percent}"></td>
@@ -171,9 +192,15 @@ export function createMidiMonitorController({ el }) {
       const filtered = Math.max(0, Math.min(MIDI_MAX, numberValue(live?.filtered_value, raw)));
       const sensitivityMode = Number(mapping.max_percent) > 100;
       if (sensitivityMode) mapping.min_percent = 0;
-      const selected = Boolean(live?.motion_axis_matched) && Boolean(live?.control_enabled);
+      const groupValid = live?.motion_group_valid !== false;
+      const faderParking = Boolean(live?.fader_parking);
+      const selected = Boolean(live?.motion_axis_matched) && groupValid && Boolean(live?.control_enabled);
       const activationRejected = live?.motor_command_state === 'activation_rejected';
-      const activationMessage = String(live?.motor_command_message || '활성화할 수 없습니다');
+      const activationMessage = String(
+        live?.motor_command_message
+        || live?.motion_group_message
+        || '활성화할 수 없습니다'
+      );
       const finalOutput = selected
         ? mappedOutput14bit(filtered, mapping)
         : Math.max(0, Math.min(MIDI_MAX, numberValue(live?.final_output_value, 0)));
@@ -185,7 +212,7 @@ export function createMidiMonitorController({ el }) {
       const motionDegCell = row.querySelector('[data-midi-output="motion-deg"]');
       const touchCell = row.querySelector('[data-midi-output="touch"]');
       const selectCell = row.querySelector('[data-midi-output="select"]');
-      const motionIdInput = row.querySelector('[data-midi-field="motion_id"]');
+      const motionIdInputs = row.querySelectorAll('.midi-motion-id-input');
       const minPercentInput = row.querySelector('[data-midi-field="min_percent"]');
       const reversedInput = row.querySelector('[data-midi-field="reversed"]');
       const filterLevelInput = row.querySelector('[data-midi-field="filter_level"]');
@@ -199,13 +226,17 @@ export function createMidiMonitorController({ el }) {
       }
       if (selectCell) {
         const matched = Boolean(live?.motion_axis_matched);
-        selectCell.textContent = activationRejected
-          ? `활성 불가 · ${activationMessage}`
-          : (selected ? '활성' : (matched ? '비활성' : '매칭 없음'));
-        selectCell.title = activationRejected ? activationMessage : '';
+        selectCell.textContent = faderParking
+          ? '0 복귀 중 · SELECT 대기'
+          : (!matched
+          ? '매칭 없음'
+          : (!groupValid || activationRejected
+            ? `활성 불가 · ${activationMessage}`
+            : (selected ? '활성' : '비활성')));
+        selectCell.title = matched && (!groupValid || activationRejected) ? activationMessage : '';
         selectCell.classList.toggle('midi-select-active', selected);
         selectCell.classList.toggle('midi-select-unmatched', !matched);
-        selectCell.classList.toggle('midi-select-rejected', activationRejected);
+        selectCell.classList.toggle('midi-select-rejected', matched && (!groupValid || activationRejected));
       }
       if (minPercentInput) {
         minPercentInput.disabled = sensitivityMode;
@@ -224,25 +255,34 @@ export function createMidiMonitorController({ el }) {
         const physicalTouch = Boolean(live?.physical_touch);
         const faderMoving = Boolean(live?.fader_moving);
         const faderSyncing = Boolean(live?.fader_syncing);
+        const faderParking = Boolean(live?.fader_parking);
         const inputValid = Boolean(live?.input_valid ?? live?.touch);
-        touchCell.textContent = physicalTouch
+        touchCell.textContent = faderParking
+          ? '0 복귀 중'
+          : physicalTouch
           ? '물리 터치'
           : (faderMoving ? '움직임' : (faderSyncing ? '동기화' : '-'));
         touchCell.title = (
-          `물리 터치: ${physicalTouch ? 'ON' : 'OFF'} · `
-          + `움직임: ${faderMoving ? 'ON' : 'OFF'} · `
-          + `입력 인정: ${inputValid ? 'ON' : 'OFF'}`
+          `물리 터치: ${physicalTouch ? '감지' : '없음'} · `
+          + `움직임: ${faderMoving ? '감지' : '없음'} · `
+          + `입력 인정: ${inputValid ? '사용' : '미사용'}`
         );
         touchCell.classList.toggle('midi-touch-active', physicalTouch || faderMoving);
       }
       if (filterLevelInput && document.activeElement !== filterLevelInput) {
         filterLevelInput.value = String(mapping.filter_level);
       }
-      if (motionIdInput) {
-        const invalid = !MOTION_ID_PATTERN.test(String(mapping.motion_id || '').trim());
+      motionIdInputs.forEach((motionIdInput, index) => {
+        const value = String(motionIdInput.value || '').trim();
+        const duplicate = Boolean(value) && Array.from(motionIdInputs).filter(
+          (input) => String(input.value || '').trim() === value
+        ).length > 1;
+        const invalid = (index === 0 && !value)
+          || (Boolean(value) && !MOTION_ID_PATTERN.test(value))
+          || duplicate;
         motionIdInput.classList.toggle('input-invalid', invalid);
         motionIdInput.setAttribute('aria-invalid', invalid ? 'true' : 'false');
-      }
+      });
     });
   }
 
@@ -323,6 +363,13 @@ export function createMidiMonitorController({ el }) {
     dirtyFields.add(`${channel}:${field}`);
     if (target.type === 'checkbox') {
       item[field] = target.checked;
+    } else if (field.startsWith('linked_motion_id_')) {
+      const index = Number(field.slice(-1));
+      const linked = Array.isArray(item.linked_motion_ids)
+        ? [...item.linked_motion_ids]
+        : ['', ''];
+      linked[index] = target.value;
+      item.linked_motion_ids = linkedMotionIdDraft(linked);
     } else if (field === 'filter_level') {
       item.filter_level = Math.round(numberValue(target.value, item.filter_level));
     } else if (field === 'min_percent' || field === 'max_percent') {
@@ -337,7 +384,32 @@ export function createMidiMonitorController({ el }) {
       ...(status || {}),
       message: '뱅크 설정 변경됨 · 뱅크 설정 적용/저장을 눌러야 파일과 노드에 반영됩니다',
     };
+    if (field !== 'filter_level') scheduleEditSafetyReset();
     render();
+  }
+
+  function scheduleEditSafetyReset() {
+    if (editSafetyResetTimer !== null) window.clearTimeout(editSafetyResetTimer);
+    editSafetyResetTimer = window.setTimeout(async () => {
+      editSafetyResetTimer = null;
+      if (editSafetyResetRunning) return;
+      editSafetyResetRunning = true;
+      try {
+        const payload = requireSuccess(await resetMidiRuntimeValues());
+        setStatus({
+          ...payload,
+          message: 'MIDI 설정 편집 중 · SELECT 전체 해제 · 페이더 0 이동 · 저장 필요',
+        });
+      } catch (error) {
+        status = {
+          ...(status || {}),
+          message: `MIDI 설정 편집 안전 초기화 실패: ${error?.message || error}`,
+        };
+        render();
+      } finally {
+        editSafetyResetRunning = false;
+      }
+    }, 80);
   }
 
   async function refresh() {
@@ -360,7 +432,12 @@ export function createMidiMonitorController({ el }) {
   async function applySaveAndVerify() {
     const saved = requireSuccess(await updateMidiBank(activeBankId, {
       name: bankNameDraft,
-      mappings: mappingDraft,
+      mappings: mappingDraft.map((mapping) => ({
+        ...mapping,
+        linked_motion_ids: linkedMotionIdDraft(mapping.linked_motion_ids)
+          .map((value) => value.trim())
+          .filter(Boolean),
+      })),
     }));
     const verified = requireSuccess(await loadMidiBanksFromFile());
     return {
@@ -374,7 +451,7 @@ export function createMidiMonitorController({ el }) {
     if (invalid) {
       status = {
         ...(status || {}),
-        message: `채널 ${invalid.channel + 1}: Motion ID 형식, Min/Max 퍼센트와 필터 0~13단계를 확인하세요`,
+        message: `채널 ${invalid.channel + 1}: 모션 ID 형식, 최솟값/최댓값 퍼센트와 필터 0~13단계를 확인하세요`,
       };
       render();
       return;

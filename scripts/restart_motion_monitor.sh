@@ -13,6 +13,11 @@ log() {
   echo "[$(date +%Y%m%d-%H%M%S.%3N)] $*"
 }
 
+# Until the multi-PC namespace/synchronization layer is implemented, every PC
+# must keep its low-level motor topics local. The web UI is still reachable
+# from another PC because this setting affects ROS DDS only, not HTTP.
+export ROS_LOCALHOST_ONLY="${ROS_LOCALHOST_ONLY:-1}"
+
 any_running() {
   for pattern in "$@"; do
     if pgrep -f "${pattern}" >/dev/null 2>&1; then
@@ -53,6 +58,7 @@ patterns=(
   "install/motion_runtime/lib/motion_runtime/motion_mapping_manager"
   "install/motion_runtime/lib/motion_runtime/motion_run_manager"
   "install/motion_studio/lib/motion_studio/motion_studio_node"
+  "install/motion_studio/lib/motion_studio/motion_studio_editor_node"
   "install/midi_control/lib/midi_control/midi_control_node"
   "install/motion_web_bridge/lib/motion_web_bridge/motion_web_bridge"
   "install/midi_input_bridge/lib/midi_input_bridge/midi_input_node"
@@ -81,41 +87,46 @@ done
 
 wait_until_stopped "${KILL_WAIT_SEC:-0.5}" "${patterns[@]}" || true
 
-recover_ethercat_errors_after_launch() {
+ethercat_error_positions() {
+  ethercat slaves 2>/dev/null \
+    | awk '$3 ~ /ERROR/ || $4 == "E" {print $1}' \
+    || true
+}
+
+recover_ethercat_errors_before_launch() {
   if ! command -v ethercat >/dev/null 2>&1; then
     return 0
   fi
 
-  local delay="${ETHERCAT_RECOVERY_DELAY_SEC:-15}"
   local attempts="${ETHERCAT_RECOVERY_ATTEMPTS:-2}"
-  local interval="${ETHERCAT_RECOVERY_INTERVAL_SEC:-1}"
+  local interval="${ETHERCAT_RECOVERY_INTERVAL_SEC:-0.5}"
+  local command_timeout="${ETHERCAT_STATE_TIMEOUT_SEC:-3}"
   local attempt position positions
-  sleep "${delay}"
-
-  if ! kill -0 "${launch_pid}" >/dev/null 2>&1; then
-    return 0
-  fi
 
   for ((attempt = 1; attempt <= attempts; attempt++)); do
-    positions="$(ethercat slaves 2>/dev/null | awk '/ERROR/ {print $1}' || true)"
+    positions="$(ethercat_error_positions)"
     if [[ -z "${positions}" ]]; then
       return 0
     fi
 
     for position in ${positions}; do
-      log "recovering EtherCAT slave ${position} after launch (attempt ${attempt}/${attempts})"
-      ethercat states -p "${position}" INIT || true
+      log "acknowledging EtherCAT slave ${position} before motor node start (attempt ${attempt}/${attempts})"
+      # AL Control 0x11 = request INIT + acknowledge the slave error flag.
+      # This never enables the servo or sends a position command.
+      timeout "${command_timeout}" \
+        ethercat reg_write -p "${position}" -t uint16 0x0120 0x0011 || true
       sleep "${interval}"
-      ethercat states -p "${position}" PREOP || true
-      sleep "${interval}"
-      ethercat states -p "${position}" OP || true
+      timeout "${command_timeout}" ethercat states -p "${position}" PREOP || true
       sleep "${interval}"
     done
   done
 
-  if ethercat slaves 2>/dev/null | grep -q 'ERROR'; then
-    log "EtherCAT error flag remains after post-launch recovery"
+  positions="$(ethercat_error_positions)"
+  if [[ -n "${positions}" ]]; then
+    log "EtherCAT error flag remains on slave(s): ${positions}"
+    return 1
   fi
+  return 0
 }
 
 cd "${WORKSPACE}"
@@ -125,21 +136,27 @@ if [[ -n "${MOTOR_CONFIG_FILE:-}" ]]; then
   START_MOTOR_MANAGER="true"
 fi
 
+MOTOR_START_BLOCK_REASON=""
+if [[ "${START_MOTOR_MANAGER}" == "true" ]] \
+  && ! recover_ethercat_errors_before_launch; then
+  START_MOTOR_MANAGER="false"
+  MOTOR_START_BLOCK_REASON="EtherCAT 오류 플래그를 해제하지 못해 모터 관리 노드 시작을 차단했습니다"
+  log "${MOTOR_START_BLOCK_REASON}"
+fi
+
 export CONFIG_FILE
 export START_MOTOR_MANAGER
+export MOTOR_START_BLOCK_REASON
 export WORKSPACE
-log "starting motion_monitor.launch.py with config_file=${CONFIG_FILE}"
+log "ROS DDS isolation: ROS_LOCALHOST_ONLY=${ROS_LOCALHOST_ONLY}"
+log "starting motion_monitor.launch.py with config_file=${CONFIG_FILE}, start_motor_manager=${START_MOTOR_MANAGER}"
 sg dialout -c 'bash -lc '"'"'source "$WORKSPACE/install/setup.bash" && ros2 launch motion_state_monitor motion_monitor.launch.py config_file:="$CONFIG_FILE" motion_projects_dir:="$WORKSPACE/motion_projects" start_motor_manager:="$START_MOTOR_MANAGER"'"'" &
 launch_pid="$!"
 log "starting MIDI control (motor requests routed through motion_supervisor, config_file=${CONFIG_FILE})"
 bash -lc 'source "$WORKSPACE/install/setup.bash" && ros2 launch midi_control midi_control.launch.py motor_config_file:="$CONFIG_FILE" motion_projects_dir:="$WORKSPACE/motion_projects"' &
 midi_launch_pid="$!"
-recover_ethercat_errors_after_launch &
-recovery_pid="$!"
-
 wait "${launch_pid}"
 launch_status="$?"
 kill "${midi_launch_pid}" 2>/dev/null || true
 wait "${midi_launch_pid}" 2>/dev/null || true
-wait "${recovery_pid}" 2>/dev/null || true
 exit "${launch_status}"

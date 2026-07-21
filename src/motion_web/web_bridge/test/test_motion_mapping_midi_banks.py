@@ -8,6 +8,38 @@ MIDI_STATE = {
 }
 
 
+class StartupTimer:
+    def __init__(self):
+        self.cancelled = False
+
+    def cancel(self):
+        self.cancelled = True
+
+
+class SelectedProjectRepository:
+    @staticmethod
+    def selected_project_id():
+        return 'project-1'
+
+    @staticmethod
+    def get_project(_project_id):
+        return {
+            'project': {
+                'active_files': {'motion_axis_matching': 'mapping.yaml'}
+            }
+        }
+
+
+def test_startup_project_context_delegates_to_central_reconciler():
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    calls = []
+    bridge._reconcile_execution_context = lambda: calls.append(True)
+
+    bridge._initialize_selected_project_context()
+
+    assert calls == [True]
+
+
 def test_loading_motion_mapping_reads_banks_from_mapping_owner_and_applies_node(monkeypatch):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     mapping_calls = []
@@ -102,6 +134,8 @@ def test_first_mapping_save_succeeds_before_first_midi_bank_save(monkeypatch):
 
 def test_updating_bank_saves_through_mapping_owner_then_applies_verified_state(monkeypatch):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_run_status = {'state': 'running'}
+    bridge._motion_studio_status = {'state': 'recording'}
     mapping_calls = []
     midi_calls = []
 

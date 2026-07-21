@@ -2,6 +2,7 @@ import threading
 from pathlib import Path
 
 from motion_web_bridge.bridge_node import MotionWebBridge
+from motion_web_bridge.project_repository import ProjectRepository
 
 
 def event_log_bridge(tmp_path: Path) -> MotionWebBridge:
@@ -12,6 +13,8 @@ def event_log_bridge(tmp_path: Path) -> MotionWebBridge:
     bridge._last_motion_run_state = None
     bridge.event_log_retention_days = 30
     bridge.event_log_max_bytes = 100 * 1024 * 1024
+    bridge.event_log_max_records = 5000
+    bridge.event_log_max_files = 30
     return bridge
 
 
@@ -91,3 +94,47 @@ def test_clear_motor_events_removes_log_files(tmp_path):
     assert result['success'] is True
     assert result['deleted_files'] == 1
     assert bridge.motor_events()['events'] == []
+
+
+def test_project_logs_are_stored_in_runtime_project(tmp_path):
+    bridge = event_log_bridge(tmp_path / 'legacy_logs')
+    bridge.workspace_root = tmp_path
+    bridge.project_repository = ProjectRepository(tmp_path / 'motion_projects')
+    runtime_id = bridge.project_repository.create_project('runtime')['project']['project_id']
+    selected_id = bridge.project_repository.create_project('selected')['project']['project_id']
+    bridge._runtime_project_id = lambda: runtime_id
+
+    bridge._append_motor_event('motion', 'motion_started', 'sample.json', '모션 시작')
+
+    assert bridge.motor_events()['project_id'] == selected_id
+    assert bridge.motor_events()['events'] == []
+    bridge.project_repository.select_project(runtime_id)
+    result = bridge.motor_events()
+    assert result['project_id'] == runtime_id
+    assert len(result['events']) == 1
+    assert list((tmp_path / 'motion_projects' / runtime_id / 'logs').glob('*.jsonl'))
+
+
+def test_event_log_record_limit_keeps_latest_records(tmp_path):
+    bridge = event_log_bridge(tmp_path)
+    bridge.event_log_max_records = 3
+    for index in range(5):
+        bridge._append_motor_event('motion', 'motion_started', str(index), f'기록 {index}')
+
+    result = bridge.motor_events(limit=10)
+
+    assert result['max_records'] == 3
+    assert [event['content'] for event in reversed(result['events'])] == [
+        '기록 2', '기록 3', '기록 4',
+    ]
+
+
+def test_delete_single_event_log_file(tmp_path):
+    bridge = event_log_bridge(tmp_path)
+    bridge._append_motor_event('motion', 'motion_started', 'sample.json', '모션 시작')
+    file_name = bridge.motor_events()['files'][0]['name']
+
+    result = bridge.delete_motor_event_file(file_name)
+
+    assert result['deleted_file'] == file_name
+    assert bridge.motor_events()['files'] == []

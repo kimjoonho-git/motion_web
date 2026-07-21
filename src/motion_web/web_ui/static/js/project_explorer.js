@@ -6,6 +6,7 @@ import {
   deleteProjectFile,
   fetchProject,
   fetchProjectFile,
+  fetchReadOnlyProjectFile,
   fetchProjects,
   importProjectFile,
   openProjectFileEditor,
@@ -14,7 +15,7 @@ import {
   saveProjectFile,
   saveProjectMemo,
   selectProject,
-} from './api.js?v=20260718-project-memo';
+} from './api.js?v=20260720-readonly-viewer';
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (character) => ({
@@ -30,11 +31,19 @@ function formatBytes(value) {
 }
 
 const CATEGORY_VIEW = {
+  project_root: { icon: 'ⓘ' },
   motor_axes: { icon: '⚙' },
   motion_axis_matching: { icon: '⇄' },
   motions: { icon: '▶' },
   layers: { icon: '▤' },
+  logs: { icon: '≡' },
+  runtime: { icon: '◇' },
+  trash: { icon: '⌫' },
 };
+
+const MANAGED_FILE_CATEGORIES = new Set([
+  'motor_axes', 'motion_axis_matching', 'motions', 'layers',
+]);
 
 export function createProjectExplorerController({
   el,
@@ -72,6 +81,11 @@ export function createProjectExplorerController({
       el.projectExplorerCurrentName.textContent = state.project?.name || '선택된 프로젝트 없음';
       el.projectExplorerCurrentName.classList.toggle('empty', !state.project);
       el.projectExplorerCurrentName.title = state.project?.project_id || '';
+    }
+    if (el.headerProjectName) {
+      el.headerProjectName.textContent = state.project?.name || '프로젝트 없음';
+      el.headerProjectName.title = state.project?.name || '현재 프로젝트 없음';
+      el.headerProjectName.classList.toggle('empty', !state.project);
     }
     const runtimeProject = state.projects.find(
       (project) => project.project_id === state.runtimeProjectId,
@@ -112,7 +126,9 @@ export function createProjectExplorerController({
     }
     if (el.projectCopySourceFile) {
       const previous = el.projectCopySourceFile.value;
-      const options = state.copySourceTree.flatMap((folder) => (
+      const options = state.copySourceTree.filter((folder) => (
+        MANAGED_FILE_CATEGORIES.has(folder.category)
+      )).flatMap((folder) => (
         (folder.children || []).map((file) => ({
           value: JSON.stringify([folder.category, file.name]),
           label: `${folder.name} / ${file.name}`,
@@ -125,22 +141,61 @@ export function createProjectExplorerController({
     }
   }
 
+  function treeFileCount(nodes) {
+    return (nodes || []).reduce((sum, node) => (
+      sum + (node.node_type === 'folder' ? treeFileCount(node.children) : 1)
+    ), 0);
+  }
+
+  function renderReadOnlyNodes(nodes, depth = 0) {
+    if (!Array.isArray(nodes) || nodes.length === 0) {
+      return '<div class="project-tree-empty">파일 없음</div>';
+    }
+    return nodes.map((node, index) => {
+      const last = index === nodes.length - 1;
+      if (node.node_type === 'folder') {
+        const count = treeFileCount(node.children);
+        return `<details class="project-tree-internal-folder" ${depth === 0 ? 'open' : ''}>`
+          + `<summary><span class="project-tree-branch">${last ? '└' : '├'}</span>`
+          + `<span class="project-tree-internal-folder-icon">▸</span>`
+          + `<strong>${escapeHtml(node.name)}</strong><small>${count}</small></summary>`
+          + `<div class="project-tree-internal-children">${renderReadOnlyNodes(node.children, depth + 1)}</div>`
+          + '</details>';
+      }
+      const selected = state.selectedFile?.read_only
+        && state.selectedFile?.relative_path === node.relative_path;
+      return `<button type="button" class="project-tree-readonly-file${selected ? ' selected' : ''}" `
+        + `data-project-readonly-open data-project-path="${escapeHtml(node.relative_path || '')}" `
+        + `title="${escapeHtml(node.relative_path || node.name)} · 원문 보기(읽기 전용)">`
+        + `<span class="project-tree-branch">${last ? '└' : '├'}</span>`
+        + '<span class="project-tree-readonly-icon">·</span>'
+        + `<span class="project-tree-name">${escapeHtml(node.name)}</span>`
+        + `<small>${formatBytes(node.size)}</small>`
+        + '<span class="project-tree-readonly-badge">읽기 전용</span></button>';
+    }).join('');
+  }
+
   function renderTree() {
     if (!el.projectExplorerTree) return;
     if (!state.project) {
       el.projectExplorerTree.innerHTML = '<div class="empty">프로젝트를 만들거나 선택하세요</div>';
       return;
     }
-    const totalFiles = state.tree.reduce((sum, folder) => sum + folder.children.length, 0);
+    const totalFiles = state.tree.reduce((sum, folder) => sum + treeFileCount(folder.children), 0);
     const folders = state.tree.map((folder) => {
       const view = CATEGORY_VIEW[folder.category] || { icon: '□' };
-      const children = folder.children.map((file, fileIndex) => {
+      const readOnly = Boolean(folder.read_only);
+      const children = readOnly ? renderReadOnlyNodes(folder.children) : folder.children.map((file, fileIndex) => {
+        const isLogFile = file.category === 'logs';
         const selected = state.selectedFile?.category === file.category
           && state.selectedFile?.file_name === file.name;
         const addButton = file.category === 'motions'
           ? `<button type="button" class="project-tree-action project-tree-add" data-project-add-layer title="스튜디오 레이어로 추가" aria-label="${escapeHtml(file.name)} 레이어로 추가">＋</button>`
           : '';
         const bankInfo = file.category === 'motion_axis_matching' ? file.midi_banks : null;
+        const fileBadge = isLogFile
+          ? `<span class="project-tree-log-count">${Number(file.record_count) || 0}건</span>`
+          : (file.active ? '<span class="project-tree-active">현재</span>' : '');
         const bankTree = bankInfo ? (() => {
           if (!bankInfo.stored) {
             return '<div class="project-tree-midi project-tree-midi-missing">'
@@ -160,18 +215,20 @@ export function createProjectExplorerController({
         })() : '';
         return `<div class="project-tree-file-entry"><div class="project-tree-file-row${selected ? ' selected' : ''}" `
           + `data-project-category="${escapeHtml(file.category)}" data-project-file="${escapeHtml(file.name)}">`
-          + `<button type="button" class="project-tree-file" data-project-open title="${escapeHtml(file.name)} · 기능에서 열기">`
+          + `<button type="button" class="project-tree-file" ${isLogFile ? 'data-project-log-open' : 'data-project-open'} title="${escapeHtml(file.name)} · ${isLogFile ? '로그 탭에서 보기' : '기능에서 열기'}">`
           + `<span class="project-tree-branch">${fileIndex === folder.children.length - 1 ? '└' : '├'}</span>`
           + `<span class="project-tree-name">${escapeHtml(file.name)}</span>`
-          + `${file.active ? '<span class="project-tree-active">현재</span>' : ''}</button>`
+          + `${fileBadge}</button>`
           + addButton
-          + `<button type="button" class="project-tree-action" data-project-manage title="파일 관리" aria-label="${escapeHtml(file.name)} 관리">⋮</button>`
+          + `${isLogFile ? '' : `<button type="button" class="project-tree-action" data-project-manage title="파일 관리" aria-label="${escapeHtml(file.name)} 관리">⋮</button>`}`
           + `</div>${bankTree}</div>`;
       }).join('') || '<div class="project-tree-empty">파일 없음</div>';
-      return `<details class="project-tree-folder project-tree-folder-${escapeHtml(folder.category)}" open>`
+      const childCount = readOnly ? treeFileCount(folder.children) : folder.children.length;
+      const defaultOpen = folder.category === 'runtime' || folder.category === 'trash' ? '' : 'open';
+      return `<details class="project-tree-folder project-tree-folder-${escapeHtml(folder.category)}" ${defaultOpen}>`
         + `<summary><span class="project-folder-icon">${view.icon}</span>`
         + `<strong>${escapeHtml(folder.name)}</strong>`
-        + `<span class="project-folder-count">${folder.children.length}</span></summary>`
+        + `<span class="project-folder-count">${childCount}</span></summary>`
         + `<div class="project-tree-children">${children}</div></details>`;
     }).join('');
     el.projectExplorerTree.innerHTML = `<div class="project-tree-root">`
@@ -182,19 +239,23 @@ export function createProjectExplorerController({
 
   function renderEditor() {
     const file = state.selectedFile;
+    const readOnly = Boolean(file?.read_only);
     if (el.projectFileEditorTitle) {
-      el.projectFileEditorTitle.textContent = file ? `${file.category} / ${file.file_name}` : '파일을 선택하세요';
+      el.projectFileEditorTitle.textContent = file
+        ? (file.relative_path || `${file.category} / ${file.file_name}`)
+        : '파일을 선택하세요';
     }
     if (el.projectFileEditor) {
       el.projectFileEditor.value = file?.content || '';
       el.projectFileEditor.disabled = !file || state.busy;
+      el.projectFileEditor.readOnly = readOnly;
     }
     if (el.projectFileInfo) {
       el.projectFileInfo.textContent = file
-        ? `${formatBytes(file.size)} · SHA-256 ${String(file.sha256 || '').slice(0, 12)}…`
+        ? `${readOnly ? '읽기 전용 · ' : ''}${formatBytes(file.size)} · SHA-256 ${String(file.sha256 || '').slice(0, 12)}…`
         : '프로젝트 파일은 편집해도 실제 장비에 자동 적용되지 않습니다.';
     }
-    const disabled = !file || state.busy;
+    const disabled = !file || state.busy || readOnly;
     for (const button of [
       el.projectFileSaveButton,
       el.projectFileOpenEditorButton,
@@ -364,6 +425,24 @@ export function createProjectExplorerController({
     }
   }
 
+  async function openReadOnlyFile(relativePath) {
+    if (!state.project || state.busy || !relativePath) return;
+    state.busy = true;
+    renderControls();
+    try {
+      state.selectedFile = await fetchReadOnlyProjectFile(
+        state.project.project_id, relativePath,
+      );
+      setMessage(`${relativePath} 원문 열기 완료 · 읽기 전용`);
+      onManageFile(state.selectedFile);
+    } catch (error) {
+      setMessage(error.message, true);
+    } finally {
+      state.busy = false;
+      render();
+    }
+  }
+
   async function openInFeature(category, fileName) {
     if (!state.project || state.busy) return;
     await openFile(category, fileName);
@@ -515,10 +594,19 @@ export function createProjectExplorerController({
       el.projectImportFileInput.value = '';
     });
     el.projectExplorerTree?.addEventListener('click', async (event) => {
+      const readOnlyButton = event.target.closest('[data-project-readonly-open]');
+      if (readOnlyButton) {
+        await openReadOnlyFile(readOnlyButton.dataset.projectPath);
+        return;
+      }
       const row = event.target.closest('[data-project-file]');
       if (!row) return;
       const category = row.dataset.projectCategory;
       const fileName = row.dataset.projectFile;
+      if (category === 'logs') {
+        onNavigate('log');
+        return;
+      }
       if (event.target.closest('[data-project-add-layer]')) {
         if (!state.project || state.busy) return;
         state.busy = true;

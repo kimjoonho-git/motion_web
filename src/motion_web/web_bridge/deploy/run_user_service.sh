@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 
 WORKSPACE="${MOTION_WORKSPACE:?MOTION_WORKSPACE is required}"
+export ROS_LOCALHOST_ONLY="${ROS_LOCALHOST_ONLY:-1}"
 ROS_SETUP="/opt/ros/humble/setup.bash"
 WORKSPACE_SETUP="${WORKSPACE}/install/setup.bash"
 SERVICE_EXECUTABLE="${WORKSPACE}/install/motion_web_bridge/lib/motion_web_bridge/motion_control_service"

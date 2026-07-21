@@ -12,45 +12,46 @@ export function detectedScanRow(row) {
 }
 
 export function motorIdFromScan(row) {
-  if (row.rotary_alias !== null && row.rotary_alias !== undefined) {
-    return `ac_servo_ethercat_rotary_${row.rotary_alias}`;
-  }
   if (row.ethercat_alias !== null && row.ethercat_alias !== undefined) {
     return `ac_servo_ethercat_alias_${row.ethercat_alias}`;
+  }
+  if (row.rotary_alias !== null && row.rotary_alias !== undefined) {
+    return `ac_servo_ethercat_rotary_${row.rotary_alias}`;
   }
   return `ac_servo_ethercat_slave_${row.slave_position}`;
 }
 
 export function scanKey(row) {
   if (!row) return '';
-  if (row.rotary_alias !== null && row.rotary_alias !== undefined) {
-    return `rotary:${row.rotary_alias}`;
-  }
-  if (row.ethercat_alias !== null && row.ethercat_alias !== undefined) {
-    return `ethercat:${row.ethercat_alias}`;
-  }
-  return `slave:${row.slave_position}`;
+  return `master:${row.master_index ?? 0}:slave:${row.slave_position ?? '-'}`;
 }
 
 export function scanRowMatchesRegistryMotor(row, motor) {
   const identity = motor.identity || {};
+  const configuredAlias = motor.config?.alias ?? identity.ethercat_alias;
   if (
-    row.rotary_alias !== null &&
-    row.rotary_alias !== undefined &&
-    identity.rotary_alias !== null &&
-    identity.rotary_alias !== undefined &&
-    Number(row.rotary_alias) === Number(identity.rotary_alias)
+    configuredAlias !== null && configuredAlias !== undefined &&
+    row.ethercat_alias !== null && row.ethercat_alias !== undefined
   ) {
-    return true;
+    if (Number(configuredAlias) === 0 && Number(row.ethercat_alias) === 0) {
+      const configuredPosition = identity.slave_position ?? motor.config?.position;
+      return configuredPosition !== null && configuredPosition !== undefined &&
+        row.slave_position !== null && row.slave_position !== undefined &&
+        Number(configuredPosition) === Number(row.slave_position);
+    }
+    return Number(row.ethercat_alias) === Number(configuredAlias);
   }
   if (
-    row.ethercat_alias !== null &&
-    row.ethercat_alias !== undefined &&
-    identity.ethercat_alias !== null &&
-    identity.ethercat_alias !== undefined &&
-    Number(row.ethercat_alias) === Number(identity.ethercat_alias)
+    identity.rotary_alias !== null && identity.rotary_alias !== undefined &&
+    row.rotary_alias !== null && row.rotary_alias !== undefined
   ) {
-    return true;
+    return Number(row.rotary_alias) === Number(identity.rotary_alias);
+  }
+  if (
+    identity.slave_position !== null && identity.slave_position !== undefined &&
+    row.slave_position !== null && row.slave_position !== undefined
+  ) {
+    return Number(row.slave_position) === Number(identity.slave_position);
   }
   const controllerIndex = motor.config?.controller_index ?? motor.axis;
   return controllerIndex !== null &&
@@ -62,14 +63,14 @@ export function scanRowMatchesRegistryMotor(row, motor) {
 
 export function scanRowMatchesRuntimeMotor(row, motor) {
   if (!row || !motor) return false;
-  if (
-    row.ethercat_alias !== null &&
-    row.ethercat_alias !== undefined &&
-    motor.alias !== null &&
-    motor.alias !== undefined &&
-    Number(row.ethercat_alias) === Number(motor.alias)
-  ) {
-    return true;
+  if (motor.alias !== null && motor.alias !== undefined &&
+      row.ethercat_alias !== null && row.ethercat_alias !== undefined) {
+    if (Number(motor.alias) === 0 && Number(row.ethercat_alias) === 0) {
+      return row.controller_index !== null && row.controller_index !== undefined &&
+        motor.controller_index !== null && motor.controller_index !== undefined &&
+        Number(row.controller_index) === Number(motor.controller_index);
+    }
+    return Number(row.ethercat_alias) === Number(motor.alias);
   }
   return row.controller_index !== null &&
     row.controller_index !== undefined &&
@@ -100,6 +101,9 @@ export function scanRowToMotor(row, nextAvailableAxis) {
     ? nextAvailableAxis()
     : Number(row.controller_index);
   const ethercatAlias = row.ethercat_alias ?? null;
+  const position = Number(ethercatAlias) === 0
+    ? Number(row.slave_position ?? 0)
+    : 0;
   const name = ethercatAlias !== null && ethercatAlias !== undefined
     ? `alias ${ethercatAlias}`
     : `slave ${row.slave_position ?? '-'}`;
@@ -123,7 +127,7 @@ export function scanRowToMotor(row, nextAvailableAxis) {
       controller_index: axis,
       driver_id: 0,
       alias: ethercatAlias,
-      position: 0,
+      position,
       vendor_id: row.vendor_id ?? null,
       product_id: row.product_code ?? null,
       profile_mode: 0,
@@ -140,6 +144,7 @@ export function datasetNumber(value, fallback = null) {
 export function scanRowButtonAttrs(row) {
   if (!row) return '';
   return [
+    `data-scan-master-index="${escapeHtml(String(row.master_index ?? 0))}"`,
     `data-scan-controller-index="${escapeHtml(String(row.controller_index ?? ''))}"`,
     `data-scan-ethercat-alias="${escapeHtml(String(row.ethercat_alias ?? ''))}"`,
     `data-scan-rotary-alias="${escapeHtml(String(row.rotary_alias ?? ''))}"`,
@@ -154,6 +159,7 @@ export function scanRowButtonAttrs(row) {
 export function scanRowFromButton(button) {
   if (!button || button.dataset.scanSlavePosition === undefined) return null;
   return {
+    master_index: datasetNumber(button.dataset.scanMasterIndex, 0),
     controller_index: datasetNumber(button.dataset.scanControllerIndex),
     ethercat_alias: datasetNumber(button.dataset.scanEthercatAlias),
     rotary_alias: datasetNumber(button.dataset.scanRotaryAlias),

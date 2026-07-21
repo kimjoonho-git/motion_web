@@ -28,6 +28,9 @@ def resolve_applied_motor_config(workspace: Path) -> Optional[Path]:
         candidate.relative_to(projects_root)
     except ValueError:
         return None
+    # A full-program restart restores only the last configuration which the
+    # user explicitly applied. Unapplied project edits remain separate and
+    # must never replace this runtime file implicitly.
     return candidate if candidate.is_file() else None
 
 
@@ -46,6 +49,7 @@ def main() -> None:
 
     environment = dict(os.environ)
     environment['MOTION_WORKSPACE'] = str(workspace)
+    environment.setdefault('ROS_LOCALHOST_ONLY', '1')
     if runtime_config:
         environment['MOTOR_CONFIG_FILE'] = str(runtime_config)
     else:
