@@ -1,6 +1,7 @@
 """Validate and execute motion plans independently from the web API process."""
 
 import ast
+import hashlib
 import json
 import math
 import os
@@ -120,6 +121,8 @@ class MotionRunManager(Node):
             0.0,
         )
         self._status: Dict[str, Any] = self._empty_status()
+        self._execution_context: Dict[str, Any] = {}
+        self._execution_context_ready = False
         self._action_result_lock = threading.Lock()
         self._action_results: Dict[str, List[Dict[str, Any]]] = {}
 
@@ -202,13 +205,23 @@ class MotionRunManager(Node):
             payload = {}
 
         try:
-            if command == 'status':
+            if command == 'apply_context':
+                response = self._apply_execution_context(payload)
+            elif command == 'confirm_context':
+                response = self._confirm_execution_context(payload)
+            elif command == 'invalidate_context':
+                self._execution_context_ready = False
+                response = {'success': True, 'message': '모션 실행 컨텍스트 사용 중지'}
+            elif command == 'status':
                 response = {'success': True, 'message': 'motion run status', 'status': self.status()}
             elif command == 'check':
+                self._require_execution_context(payload)
                 response = self._handle_check(payload)
             elif command == 'initialize':
+                self._require_execution_context(payload)
                 response = self._start_thread('initialize', payload)
             elif command == 'start':
+                self._require_execution_context(payload)
                 response = self._start_thread('run', payload)
             elif command == 'stop':
                 response = self._handle_stop()
@@ -223,6 +236,69 @@ class MotionRunManager(Node):
         response['request_id'] = request_id
         self._publish_response(response)
         self._publish_status()
+
+    def _apply_execution_context(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        project_id, _, mappings_dir = self._project_asset_dirs(payload)
+        context_id = str(payload.get('context_id') or '').strip()
+        mapping_file_id = str(payload.get('mapping_file_id') or '').strip()
+        mapping_sha256 = str(payload.get('mapping_sha256') or '').strip()
+        if not context_id or not mapping_file_id or not mapping_sha256:
+            raise ValueError('실행 컨텍스트 ID와 모션축 설정 버전이 필요합니다')
+        mapping_path = self._mapping_file_path(mapping_file_id, mappings_dir)
+        actual_sha = hashlib.sha256(mapping_path.read_bytes()).hexdigest()
+        if actual_sha != mapping_sha256:
+            raise ValueError('모션축 설정 파일 버전이 실행 컨텍스트와 다릅니다')
+        with self._run_lock:
+            if self._run_thread is not None and self._run_thread.is_alive():
+                raise ValueError('모션 동작 중에는 실행 컨텍스트를 변경할 수 없습니다')
+            next_context = {
+                'context_id': context_id,
+                'project_id': project_id,
+                'mapping_file_id': mapping_path.name,
+                'mapping_sha256': actual_sha,
+            }
+            same_context = self._execution_context == next_context
+            self._execution_context = next_context
+            if not same_context:
+                self._execution_context_ready = False
+        return {
+            'success': True,
+            'message': '모션 실행 컨텍스트 적용 확인 완료',
+            **self._execution_context,
+        }
+
+    def _confirm_execution_context(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        context_id = str(payload.get('context_id') or '').strip()
+        with self._run_lock:
+            if not context_id or context_id != self._execution_context.get('context_id'):
+                raise ValueError('확인하려는 실행 컨텍스트가 적용된 설정과 다릅니다')
+            self._execution_context_ready = True
+        return {
+            'success': True,
+            'message': '모션 실행 허용',
+            **self._execution_context,
+        }
+
+    def _require_execution_context(self, payload: Dict[str, Any]) -> None:
+        context_id = str(payload.get('context_id') or '').strip()
+        project_id = str(payload.get('project_id') or '').strip()
+        with self._run_lock:
+            applied = dict(self._execution_context)
+            ready = self._execution_context_ready
+        if (
+            not ready
+            or not context_id
+            or context_id != applied.get('context_id')
+            or project_id != applied.get('project_id')
+        ):
+            raise ValueError('현재 프로젝트 실행 컨텍스트 적용 대기 중입니다')
+        _, _, mappings_dir = self._project_asset_dirs(payload)
+        mapping_path = self._mapping_file_path(applied.get('mapping_file_id'), mappings_dir)
+        actual_sha = hashlib.sha256(mapping_path.read_bytes()).hexdigest()
+        if actual_sha != applied.get('mapping_sha256'):
+            with self._run_lock:
+                self._execution_context_ready = False
+            raise ValueError('모션축 설정 파일이 변경되어 실행 컨텍스트 재적용이 필요합니다')
 
     def _handle_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         try:
@@ -1757,7 +1833,12 @@ class MotionRunManager(Node):
 
     def status(self) -> Dict[str, Any]:
         with self._run_lock:
-            return json.loads(json.dumps(self._status, ensure_ascii=False))
+            result = json.loads(json.dumps(self._status, ensure_ascii=False))
+            result['execution_context'] = {
+                **self._execution_context,
+                'ready': self._execution_context_ready,
+            }
+            return result
 
     def _publish_response(self, payload: Dict[str, Any]) -> None:
         msg = String()

@@ -42,6 +42,21 @@ def _finite_float(value: Any, default: float = 0.0) -> float:
     return number if math.isfinite(number) else default
 
 
+def _transition_safety_level(value: Any) -> int:
+    try:
+        level = int(value)
+    except (TypeError, ValueError):
+        level = 4
+    return max(1, min(10, level))
+
+
+def _nonnegative_int(value: Any) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _mapping_rows(root: Any) -> List[Dict[str, Any]]:
     rows = root.get('mappings') if isinstance(root, dict) else None
     if not isinstance(rows, list):
@@ -254,6 +269,7 @@ class ProjectStore:
             'mapping_file_id': mapping['file_id'],
             'mapping_sha256': mapping['sha256'],
             'period_sec': DEFAULT_PERIOD_SEC,
+            'transition_safety_level': 4,
             'created_at': now,
             'updated_at': now,
             'layers': [],
@@ -322,6 +338,10 @@ class ProjectStore:
                 'motor_axis': motor_axis,
                 'motion_lower_deg': _finite_float(row.get('motion_lower_deg'), -180.0),
                 'motion_upper_deg': _finite_float(row.get('motion_upper_deg'), 180.0),
+                'initial_mode': str(row.get('initial_mode') or 'first_frame'),
+                'initial_motion_position_deg': _finite_float(
+                    row.get('initial_motion_position_deg'), 0.0
+                ),
             })
         return {
             'file_id': path.name,
@@ -376,6 +396,9 @@ class ProjectStore:
             'mapping_file_id': mapping_file_id,
             'mapping_sha256': str(project.get('mapping_sha256') or ''),
             'period_sec': DEFAULT_PERIOD_SEC,
+            'transition_safety_level': _transition_safety_level(
+                project.get('transition_safety_level', 4)
+            ),
             'created_at': _finite_float(project.get('created_at'), time.time()),
             'updated_at': _finite_float(project.get('updated_at'), time.time()),
             'layers': layers,
@@ -459,13 +482,68 @@ def normalize_layer(layer: Any, index: int = 0) -> Dict[str, Any]:
             'values': values,
         })
     frames.sort(key=lambda item: (item['time_sec'], item['frame']))
+    point_curves = []
+    seen_curve_ids = set()
+    for curve_index, curve in enumerate(layer.get('point_curves') or []):
+        if not isinstance(curve, dict):
+            continue
+        curve_id = _safe_name(curve.get('curve_id'), f'curve_{curve_index + 1}')
+        if curve_id in seen_curve_ids:
+            raise ValueError(f'duplicated point curve id: {curve_id}')
+        seen_curve_ids.add(curve_id)
+        motion_id = str(curve.get('motion_id') or '').strip()
+        if not MOTION_ID_PATTERN.match(motion_id):
+            raise ValueError(f'invalid Motion ID in point curve: {motion_id}')
+        points = []
+        seen_point_ids = set()
+        for point_index, point in enumerate(curve.get('points') or []):
+            if not isinstance(point, dict):
+                continue
+            point_id = _safe_name(point.get('point_id'), f'point_{point_index + 1}')
+            if point_id in seen_point_ids:
+                raise ValueError(f'duplicated point id in curve: {point_id}')
+            seen_point_ids.add(point_id)
+            tangent_mode = str(point.get('tangent_mode') or 'auto')
+            if tangent_mode not in {'auto', 'smooth', 'broken', 'linear'}:
+                raise ValueError(f'invalid tangent mode: {tangent_mode}')
+            in_handle = point.get('in_handle') if isinstance(point.get('in_handle'), dict) else {}
+            out_handle = point.get('out_handle') if isinstance(point.get('out_handle'), dict) else {}
+            points.append({
+                'point_id': point_id,
+                'time_sec': round(_finite_float(point.get('time_sec'), 0.0), 9),
+                'value_deg': _finite_float(point.get('value_deg'), 0.0),
+                'tangent_mode': tangent_mode,
+                'in_handle': {
+                    'dt_sec': _finite_float(in_handle.get('dt_sec'), 0.0),
+                    'dv_deg': _finite_float(in_handle.get('dv_deg'), 0.0),
+                },
+                'out_handle': {
+                    'dt_sec': _finite_float(out_handle.get('dt_sec'), 0.0),
+                    'dv_deg': _finite_float(out_handle.get('dv_deg'), 0.0),
+                },
+            })
+        points.sort(key=lambda item: (item['time_sec'], item['point_id']))
+        if len(points) < 2:
+            raise ValueError('point curve requires at least two points')
+        point_curves.append({
+            'curve_id': curve_id,
+            'motion_id': motion_id,
+            'points': points,
+        })
     return {
         'layer_id': _safe_name(layer.get('layer_id'), f'layer_{index + 1}'),
-        'name': str(layer.get('name') or f'레이어 {index + 1}'),
+        'name': str(layer.get('name') or f'레이어 {index + 1}').strip()[:40]
+        or f'레이어 {index + 1}',
         'enabled': layer.get('enabled') is not False,
         'locked': bool(layer.get('locked', False)),
         'created_at': _finite_float(layer.get('created_at'), time.time()),
         'source_motion_file_id': str(layer.get('source_motion_file_id') or ''),
+        'source_layer_ids': [
+            str(value) for value in layer.get('source_layer_ids') or [] if str(value)
+        ],
+        'copied_from_layer_id': str(layer.get('copied_from_layer_id') or ''),
+        'edit_revision': _nonnegative_int(layer.get('edit_revision')),
+        'point_curves': point_curves,
         'frames': frames,
     }
 

@@ -5,9 +5,22 @@ from __future__ import annotations
 import bisect
 import json
 import math
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Mapping, Sequence
 
-from .project_store import DEFAULT_PERIOD_SEC, project_duration, unique_motion_ids
+from .project_store import DEFAULT_PERIOD_SEC, unique_motion_ids
+
+
+DEFAULT_LAYER_TRANSITION_SAFETY_LEVEL = 4
+
+
+def transition_safety_level(project: Dict[str, Any]) -> int:
+    try:
+        level = int(project.get(
+            'transition_safety_level', DEFAULT_LAYER_TRANSITION_SAFETY_LEVEL
+        ))
+    except (TypeError, ValueError):
+        level = DEFAULT_LAYER_TRANSITION_SAFETY_LEVEL
+    return max(1, min(10, level))
 
 
 def recording_values(
@@ -24,6 +37,29 @@ def recording_values(
 
 
 Segment = List[tuple[float, float]]
+
+
+def _enabled_layers(project: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Return only layers that participate in preview and export."""
+    return [
+        layer
+        for layer in project.get('layers') or []
+        if isinstance(layer, dict) and layer.get('enabled') is not False
+    ]
+
+
+def _composition_duration(project: Dict[str, Any]) -> float:
+    """Return the duration of enabled layers, excluding disabled data."""
+    maximum = 0.0
+    for layer in _enabled_layers(project):
+        for frame in layer.get('frames') or []:
+            try:
+                time_sec = float(frame.get('time_sec') or 0.0)
+            except (AttributeError, TypeError, ValueError):
+                continue
+            if math.isfinite(time_sec):
+                maximum = max(maximum, time_sec)
+    return round(maximum, 9)
 
 
 def _layer_series(layer: Dict[str, Any]) -> Dict[str, List[tuple[float, float]]]:
@@ -67,8 +103,7 @@ def _sample(points: Segment, time_sec: float) -> float | None:
         return None
     if time_sec < points[0][0] - 1e-9 or time_sec > points[-1][0] + 1e-9:
         return None
-    times = [item[0] for item in points]
-    index = bisect.bisect_left(times, time_sec)
+    index = bisect.bisect_left(points, (time_sec, -math.inf))
     if index <= 0:
         return points[0][1] if time_sec >= points[0][0] else None
     if index >= len(points):
@@ -126,6 +161,115 @@ def layer_conflicts(project: Dict[str, Any]) -> List[Dict[str, Any]]:
     return conflicts
 
 
+def layer_transition_warnings(
+    project: Dict[str, Any],
+    motion_ranges_deg: Mapping[str, Sequence[float]] | None = None,
+    initial_motion_values_deg: Mapping[str, float] | None = None,
+) -> List[Dict[str, Any]]:
+    """Return every unsafe step that the composed 20 ms motion would output."""
+    period = float(project.get('period_sec') or DEFAULT_PERIOD_SEC)
+    safety_level = transition_safety_level(project)
+    ranges = motion_ranges_deg or {}
+    manual_initial_values = initial_motion_values_deg or {}
+    tracks: Dict[str, List[Dict[str, Any]]] = {}
+    for index, layer in enumerate(project.get('layers') or []):
+        if not isinstance(layer, dict) or layer.get('enabled') is False:
+            continue
+        layer_id = str(layer.get('layer_id') or '')
+        layer_name = str(layer.get('name') or f'레이어 {index + 1}')
+        for motion_id, segments in _layer_segments(layer, period).items():
+            for segment in segments:
+                if not segment:
+                    continue
+                tracks.setdefault(motion_id, []).append({
+                    'layer_id': layer_id,
+                    'layer_name': layer_name,
+                    'start_sec': float(segment[0][0]),
+                    'end_sec': float(segment[-1][0]),
+                    'start_value_deg': float(segment[0][1]),
+                    'end_value_deg': float(segment[-1][1]),
+                    'points': segment,
+                })
+
+    warnings: List[Dict[str, Any]] = []
+    def append_warning(
+        motion_id: str,
+        kind: str,
+        previous: Dict[str, Any] | None,
+        following: Dict[str, Any] | None,
+        from_time_sec: float,
+        to_time_sec: float,
+        from_value_deg: float,
+        to_value_deg: float,
+    ) -> None:
+        axis_range = ranges.get(motion_id)
+        range_deg = 0.0
+        if axis_range is not None and len(axis_range) >= 2:
+            try:
+                lower = float(axis_range[0])
+                upper = float(axis_range[1])
+                if math.isfinite(lower) and math.isfinite(upper):
+                    range_deg = abs(upper - lower)
+            except (TypeError, ValueError):
+                range_deg = 0.0
+        degree_limit = float(safety_level)
+        range_percent_limit = range_deg * (float(safety_level) / 100.0)
+        allowed_jump = max(degree_limit, range_percent_limit)
+        jump_deg = abs(float(to_value_deg) - float(from_value_deg))
+        if jump_deg <= allowed_jump + 1e-9:
+            return
+        warnings.append({
+            'kind': kind,
+            'motion_id': motion_id,
+            'first_layer_id': str((previous or {}).get('layer_id') or ''),
+            'first_layer_name': str((previous or {}).get('layer_name') or '모션 0'),
+            'second_layer_id': str((following or {}).get('layer_id') or ''),
+            'second_layer_name': str((following or {}).get('layer_name') or '모션 0'),
+            'first_time_sec': round(float(from_time_sec), 9),
+            'second_time_sec': round(float(to_time_sec), 9),
+            'from_value_deg': round(float(from_value_deg), 6),
+            'to_value_deg': round(float(to_value_deg), 6),
+            'gap_sec': round(max(0.0, float(to_time_sec) - float(from_time_sec)), 9),
+            'jump_deg': round(jump_deg, 6),
+            'safety_level': safety_level,
+            'motion_range_deg': round(range_deg, 6),
+            'degree_limit_deg': degree_limit,
+            'range_percent_limit_deg': round(range_percent_limit, 6),
+            'limit_deg': round(allowed_jump, 6),
+        })
+
+    for motion_id, segments in tracks.items():
+        ordered = sorted(segments, key=lambda item: (item['start_sec'], item['end_sec']))
+        first = ordered[0]
+        manual_initial = manual_initial_values.get(motion_id)
+        if manual_initial is not None:
+            append_warning(
+                motion_id,
+                'manual_initial' if first['start_sec'] <= period + 1e-9 else 'late_start',
+                None, first,
+                0.0 if first['start_sec'] <= period + 1e-9 else first['start_sec'] - period,
+                max(period, first['start_sec']),
+                float(manual_initial), first['start_value_deg'],
+            )
+
+        for segment in ordered:
+            for before, after in zip(segment['points'], segment['points'][1:]):
+                append_warning(
+                    motion_id, 'frame_step', segment, segment,
+                    before[0], after[0], before[1], after[1],
+                )
+
+        for previous, following in zip(ordered, ordered[1:]):
+            if following['start_sec'] <= previous['end_sec'] + 1e-9:
+                continue
+            append_warning(
+                motion_id, 'segment_transition', previous, following,
+                previous['end_sec'], following['start_sec'],
+                previous['end_value_deg'], following['start_value_deg'],
+            )
+    return warnings
+
+
 def require_conflict_free_layers(project: Dict[str, Any]) -> None:
     conflicts = layer_conflicts(project)
     if not conflicts:
@@ -140,10 +284,34 @@ def require_conflict_free_layers(project: Dict[str, Any]) -> None:
     )
 
 
+def require_safe_layer_transitions(
+    project: Dict[str, Any],
+    motion_ranges_deg: Mapping[str, Sequence[float]] | None = None,
+    initial_motion_values_deg: Mapping[str, float] | None = None,
+) -> None:
+    warnings = layer_transition_warnings(
+        project, motion_ranges_deg, initial_motion_values_deg
+    )
+    if not warnings:
+        return
+    first = warnings[0]
+    raise ValueError(
+        '합성 모션값 급변: '
+        f"{first['motion_id']} · {first['first_layer_name']} / "
+        f"{first['second_layer_name']} · "
+        f"{first['from_value_deg']:.3f}° → {first['to_value_deg']:.3f}° "
+        f"(위험 변화량 {first['jump_deg']:.3f}°, "
+        f"{first['safety_level']}단계 허용 {first['limit_deg']:.3f}°). "
+        '레이어 사용을 해제하거나 전환 모션값을 가깝게 수정하세요'
+    )
+
+
 def render_project(
     project: Dict[str, Any],
     *,
     motion_ids: Iterable[Any] | None = None,
+    motion_ranges_deg: Mapping[str, Sequence[float]] | None = None,
+    initial_motion_values_deg: Mapping[str, float] | None = None,
     ensure_zero_frame: bool = True,
 ) -> List[Dict[str, Any]]:
     selected = unique_motion_ids(motion_ids or project_motion_ids(project))
@@ -153,13 +321,27 @@ def render_project(
     if not math.isclose(period, DEFAULT_PERIOD_SEC, abs_tol=1e-9):
         raise ValueError('only 0.02 second motion projects are supported')
     require_conflict_free_layers(project)
-    layers = [
-        _layer_segments(layer, period)
-        for layer in project.get('layers') or []
-        if isinstance(layer, dict) and layer.get('enabled') is not False
-    ]
-    duration = project_duration(project)
+    require_safe_layer_transitions(
+        project, motion_ranges_deg, initial_motion_values_deg
+    )
+    layers = [_layer_segments(layer, period) for layer in _enabled_layers(project)]
+    duration = _composition_duration(project)
     sample_count = max(1, int(math.ceil(duration / period)))
+    first_points: Dict[str, tuple[float, float]] = {}
+    for layer in layers:
+        for motion_id, segments in layer.items():
+            for segment in segments:
+                if not segment:
+                    continue
+                candidate = segment[0]
+                current = first_points.get(motion_id)
+                if current is None or candidate[0] < current[0]:
+                    first_points[motion_id] = candidate
+    manual_initial_values = initial_motion_values_deg or {}
+    pre_start_values = {
+        motion_id: float(manual_initial_values.get(motion_id, point[1]))
+        for motion_id, point in first_points.items()
+    }
     frames = []
     last_values = {motion_id: 0.0 for motion_id in selected}
     for index in range(1, sample_count + 1):
@@ -174,8 +356,15 @@ def render_project(
                 candidate = _sample_segments(layer.get(motion_id, []), time_sec)
                 if candidate is not None:
                     value = candidate
+            first_point = first_points.get(motion_id)
+            if (
+                value is None
+                and first_point is not None
+                and time_sec < first_point[0] - 1e-9
+            ):
+                value = pre_start_values[motion_id]
             if value is None:
-                value = last_values[motion_id] if not ensure_zero_frame else 0.0
+                value = last_values[motion_id]
             last_values[motion_id] = float(value)
             values[motion_id] = float(value)
         frames.append({'frame': index, 'time_sec': time_sec, 'values': values})
@@ -184,7 +373,7 @@ def render_project(
 
 def project_motion_ids(project: Dict[str, Any]) -> List[str]:
     values = []
-    for layer in project.get('layers') or []:
+    for layer in _enabled_layers(project):
         for frame in layer.get('frames') or []:
             values.extend((frame.get('values') or {}).keys())
     return unique_motion_ids(values)

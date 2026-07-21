@@ -24,6 +24,7 @@ def generate_launch_description():
         DeclareLaunchArgument('motion_state_topic', default_value='/motion_control/motion_state'),
         DeclareLaunchArgument('jog_request_topic', default_value='/motion_control/manual_jog_request'),
         DeclareLaunchArgument('jog_result_topic', default_value='/motion_control/manual_jog_result'),
+        DeclareLaunchArgument('safety_request_topic', default_value='/motion_control/safety_request'),
         DeclareLaunchArgument('action_request_topic', default_value='/motion_control/manual_action_request'),
         DeclareLaunchArgument('action_result_topic', default_value='/motion_control/manual_action_result'),
         DeclareLaunchArgument(
@@ -48,6 +49,7 @@ def generate_launch_description():
                 'motion_state_topic': LaunchConfiguration('motion_state_topic'),
                 'jog_request_topic': LaunchConfiguration('jog_request_topic'),
                 'jog_result_topic': LaunchConfiguration('jog_result_topic'),
+                'safety_request_topic': LaunchConfiguration('safety_request_topic'),
                 'action_request_topic': LaunchConfiguration('action_request_topic'),
                 'action_result_topic': LaunchConfiguration('action_result_topic'),
                 'motion_run_command_topic': LaunchConfiguration('motion_run_command_topic'),

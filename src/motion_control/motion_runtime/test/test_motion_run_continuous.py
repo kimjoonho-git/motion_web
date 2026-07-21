@@ -1,4 +1,5 @@
 import json
+import threading
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,25 @@ from motion_runtime.motion_run_manager import (
     CONTINUOUS_LOOP_TOLERANCE_DEG,
     MotionRunManager,
 )
+
+
+def test_motion_run_confirmation_returns_standard_context_acknowledgement():
+    manager = MotionRunManager.__new__(MotionRunManager)
+    manager._run_lock = threading.RLock()
+    manager._execution_context_ready = False
+    manager._execution_context = {
+        'context_id': 'context-1',
+        'project_id': 'project-1',
+        'mapping_file_id': 'mapping.yaml',
+        'mapping_sha256': 'mapping-sha',
+    }
+
+    result = manager._confirm_execution_context({'context_id': 'context-1'})
+
+    assert result['success'] is True
+    assert result['context_id'] == 'context-1'
+    assert result['project_id'] == 'project-1'
+    assert manager._execution_context_ready is True
 
 
 def test_continuous_capability_accepts_values_inside_axis_tolerances():

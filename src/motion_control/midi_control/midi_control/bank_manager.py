@@ -5,6 +5,7 @@ from typing import Any, Dict, List
 
 MIDI_CHANNEL_COUNT = 8
 MAX_MIDI_BANKS = 8
+MAX_LINKED_MOTION_IDS = 3
 MIDI_VALUE_MIN = 0
 MIDI_VALUE_MAX = 16383
 OUTPUT_PERCENT_MIN = 0.0
@@ -13,6 +14,20 @@ OUTPUT_PERCENT_MAX = 200.0
 FILTER_LEVEL_MIN = 0
 FILTER_LEVEL_MAX = 13
 MOTION_ID_PATTERN = re.compile(r'^[1-9]\d*-[1-9]\d*$')
+
+
+def mapping_motion_ids(mapping: Dict[str, Any]) -> List[str]:
+    """Return the primary and linked Motion IDs in stable order."""
+    values = [mapping.get('motion_id')]
+    linked = mapping.get('linked_motion_ids')
+    if isinstance(linked, list):
+        values.extend(linked)
+    result = []
+    for value in values:
+        motion_id = str(value or '').strip()
+        if motion_id and motion_id not in result:
+            result.append(motion_id)
+    return result[:MAX_LINKED_MOTION_IDS]
 
 
 class MidiBankManager:
@@ -31,6 +46,7 @@ class MidiBankManager:
                 'channel': channel,
                 'enabled': True,
                 'motion_id': f'1-{channel + 1}',
+                'linked_motion_ids': [],
                 'min_percent': OUTPUT_PERCENT_MIN,
                 'max_percent': OUTPUT_PERCENT_NORMAL_MAX,
                 'reversed': False,
@@ -102,10 +118,35 @@ class MidiBankManager:
                     f'channel {channel + 1}: motion_id must use '
                     'positive-number-positive-number format'
                 )
+            linked_value = item.get('linked_motion_ids', [])
+            if linked_value is None:
+                linked_value = []
+            if not isinstance(linked_value, list):
+                raise ValueError(
+                    f'channel {channel + 1}: linked_motion_ids must be an array'
+                )
+            linked_motion_ids = [str(value or '').strip() for value in linked_value]
+            if len(linked_motion_ids) > MAX_LINKED_MOTION_IDS - 1:
+                raise ValueError(
+                    f'channel {channel + 1}: no more than '
+                    f'{MAX_LINKED_MOTION_IDS} motion IDs may be linked'
+                )
+            for linked_motion_id in linked_motion_ids:
+                if not MOTION_ID_PATTERN.fullmatch(linked_motion_id):
+                    raise ValueError(
+                        f'channel {channel + 1}: linked motion IDs must use '
+                        'positive-number-positive-number format'
+                    )
+            all_motion_ids = [motion_id, *linked_motion_ids]
+            if len(set(all_motion_ids)) != len(all_motion_ids):
+                raise ValueError(
+                    f'channel {channel + 1}: linked motion IDs must not be duplicated'
+                )
             by_channel[channel] = {
                 'channel': channel,
                 'enabled': bool(item.get('enabled', True)),
                 'motion_id': motion_id,
+                'linked_motion_ids': linked_motion_ids,
                 'min_percent': min_percent,
                 'max_percent': max_percent,
                 'reversed': bool(item.get('reversed', False)),

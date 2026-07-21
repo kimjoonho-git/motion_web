@@ -33,6 +33,7 @@ def test_project_references_mapping_without_modifying_it(tmp_path):
     saved = store.save_project(project)
 
     assert saved['mapping_file_id'] == 'face.yaml'
+    assert saved['transition_safety_level'] == 4
     assert store.mapping_check(saved)['matches_project'] is True
     assert 'armed_motion_ids' not in saved
     assert mapping_path.read_bytes() == original
@@ -42,9 +43,23 @@ def test_project_layers_round_trip(tmp_path):
     write_mapping(tmp_path)
     store = ProjectStore(tmp_path)
     project = store.create_project('test', 'face.yaml')
+    project['transition_safety_level'] = 7
     project['layers'] = [{
         'layer_id': 'take_1',
         'name': '첫 녹화',
+        'source_layer_ids': ['source_a', 'source_b'],
+        'edit_revision': 3,
+        'point_curves': [{
+            'curve_id': 'curve_1', 'motion_id': '1-1',
+            'points': [
+                {'point_id': 'point_1', 'time_sec': 0.02, 'value_deg': 0.0,
+                 'tangent_mode': 'auto'},
+                {'point_id': 'point_2', 'time_sec': 0.04, 'value_deg': 1.5,
+                 'tangent_mode': 'broken',
+                 'in_handle': {'dt_sec': -0.01, 'dv_deg': -0.5},
+                 'out_handle': {'dt_sec': 0.0, 'dv_deg': 0.0}},
+            ],
+        }],
         'frames': [
             {'frame': 1, 'time_sec': 0.02, 'values': {'1-1': 0.0}},
             {'frame': 2, 'time_sec': 0.04, 'values': {'1-1': 1.5}},
@@ -53,6 +68,11 @@ def test_project_layers_round_trip(tmp_path):
     saved = store.save_project(project)
 
     loaded = store.load_project(saved['project_id'])
+    assert loaded['transition_safety_level'] == 7
+    assert loaded['layers'][0]['source_layer_ids'] == ['source_a', 'source_b']
+    assert loaded['layers'][0]['edit_revision'] == 3
+    assert loaded['layers'][0]['point_curves'][0]['points'][1]['tangent_mode'] == 'broken'
+    assert loaded['layers'][0]['point_curves'][0]['points'][1]['in_handle']['dv_deg'] == -0.5
     assert loaded['layers'][0]['frames'][1]['values']['1-1'] == 1.5
     assert json.loads(
         (tmp_path / 'runtime' / 'studio_projects' / f"{saved['project_id']}.json").read_text()

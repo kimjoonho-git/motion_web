@@ -69,6 +69,9 @@ public:
   {
     last_select_led_.fill(-1);
     last_rec_led_.fill(-1);
+    last_dial_led_.fill(-1);
+    last_display_top_.fill("\x01");
+    last_display_bottom_.fill("\x01");
     const auto topic = declare_parameter<std::string>("midi_topic", "/xtouch/midi");
     const auto feedback_topic =
       declare_parameter<std::string>("feedback_topic", "/xtouch/feedback");
@@ -177,6 +180,9 @@ private:
       connection_message_ = "X-Touch connected";
       last_select_led_.fill(-1);
       last_rec_led_.fill(-1);
+      last_dial_led_.fill(-1);
+      last_display_top_.fill("\x01");
+      last_display_bottom_.fill("\x01");
       publish_connection_state();
       return true;
     } catch (const std::exception & error) {
@@ -394,6 +400,12 @@ private:
       const bool motor_angle_mode = std::stoi(fields[2]) != 0;
       const int filter_level = std::clamp(std::stoi(fields[3]), 0, 13);
       const int fader_position = std::stoi(fields[6]);
+      // A motorized-fader target is time-critical during recording prepare.
+      // Send it before cosmetic LED/LCD feedback so display traffic cannot
+      // delay or starve the physical zero command.
+      if (fader_position >= 0) {
+        send_fader_position(channel, fader_position);
+      }
       if (last_select_led_[channel] != static_cast<int32_t>(selected)) {
         send_button_led(kSelectNoteStart + channel, selected);
         last_select_led_[channel] = static_cast<int32_t>(selected);
@@ -402,13 +414,22 @@ private:
         send_button_led(kRecNoteStart + channel, motor_angle_mode);
         last_rec_led_[channel] = static_cast<int32_t>(motor_angle_mode);
       }
-      send_dial_led(channel, selected ? filter_level : 0);
-      send_display_text(channel * kDisplayCharsPerChannel, display_text(fields[4]));
-      send_display_text(
-        kDisplayBottomRowOffset + channel * kDisplayCharsPerChannel,
-        display_text(fields[5]));
-      if (fader_position >= 0) {
-        send_fader_position(channel, fader_position);
+      const int dial_level = selected ? filter_level : 0;
+      if (last_dial_led_[channel] != dial_level) {
+        send_dial_led(channel, dial_level);
+        last_dial_led_[channel] = dial_level;
+      }
+      const std::string display_top = display_text(fields[4]);
+      if (last_display_top_[channel] != display_top) {
+        send_display_text(channel * kDisplayCharsPerChannel, display_top);
+        last_display_top_[channel] = display_top;
+      }
+      const std::string display_bottom = display_text(fields[5]);
+      if (last_display_bottom_[channel] != display_bottom) {
+        send_display_text(
+          kDisplayBottomRowOffset + channel * kDisplayCharsPerChannel,
+          display_bottom);
+        last_display_bottom_[channel] = display_bottom;
       }
     } catch (const std::exception &) {
       RCLCPP_WARN_THROTTLE(
@@ -491,12 +512,16 @@ private:
       // Suppress only the motor-driven path to this target. A physical touch,
       // motion outside that path, reaching the target, or the safety timeout
       // immediately returns ownership to the user.
-      fader_sync_start_[channel] = fader_[channel];
-      fader_sync_target_[channel] = value;
-      fader_sync_active_[channel] =
-        std::abs(fader_sync_start_[channel] - value) > kFaderSyncTolerance;
-      fader_sync_deadline_[channel] =
-        std::chrono::steady_clock::now() + std::chrono::milliseconds(1500);
+      const bool retrying_same_target =
+        fader_sync_active_[channel] && fader_sync_target_[channel] == value;
+      if (!retrying_same_target) {
+        fader_sync_start_[channel] = fader_[channel];
+        fader_sync_target_[channel] = value;
+        fader_sync_active_[channel] =
+          std::abs(fader_sync_start_[channel] - value) > kFaderSyncTolerance;
+        fader_sync_deadline_[channel] =
+          std::chrono::steady_clock::now() + std::chrono::milliseconds(1500);
+      }
     }
     std::vector<unsigned char> bytes = {
       static_cast<unsigned char>(0xE0 | (channel & 0x0F)),
@@ -615,6 +640,9 @@ private:
   std::array<bool, kChannelCount> rec_led_expected_{};
   std::array<int32_t, kChannelCount> last_select_led_{};
   std::array<int32_t, kChannelCount> last_rec_led_{};
+  std::array<int32_t, kChannelCount> last_dial_led_{};
+  std::array<std::string, kChannelCount> last_display_top_{};
+  std::array<std::string, kChannelCount> last_display_bottom_{};
   std::chrono::milliseconds movement_release_delay_{300};
   std::chrono::steady_clock::time_point next_input_state_publish_{};
   uint8_t display_device_id_{0x15};

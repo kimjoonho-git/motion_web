@@ -1,4 +1,5 @@
 import json
+import hashlib
 import math
 import os
 import threading
@@ -10,7 +11,7 @@ import rclpy
 import yaml
 from midi_msgs.msg import Midi
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 
 from midi_control.bank_manager import (
@@ -19,6 +20,7 @@ from midi_control.bank_manager import (
     MIDI_VALUE_MAX,
     MIDI_VALUE_MIN,
     MidiBankManager,
+    mapping_motion_ids,
 )
 from midi_control.config_store import load_midi_banks
 from midi_control.motion_axis_registry import MotionAxisRegistry
@@ -30,8 +32,12 @@ FILTER_MAX_STEP_SEC = 0.05
 MIDI_COMMAND_PERIOD_SEC = 0.02
 MIDI_COMMAND_DEADBAND_DEG = 0.01
 FADER_SYNC_MIN_DURATION_SEC = 0.10
+FADER_PARK_RETRY_SEC = 0.15
+FADER_PARK_TOLERANCE_RAW = 16
 SELECT_TOGGLE_DEBOUNCE_SEC = 0.08
 SELECT_RANGE_TOLERANCE_PERCENT = 0.25
+LINKED_RANGE_TOLERANCE_DEG = 1e-6
+LINKED_POSITION_TOLERANCE_DEG = 1.0
 
 
 def second_order_low_pass(
@@ -63,10 +69,16 @@ def _finite_float(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
-def motion_value_from_output(output_14bit: float, row: Dict[str, Any]) -> float:
+def motion_value_from_output(
+    output_14bit: float,
+    row: Dict[str, Any],
+    motion_range: tuple[float, float] | None = None,
+) -> float:
     """Convert the final 14-bit MIDI output into motion-space degrees."""
     lower = _finite_float(row.get('motion_lower_deg'))
     upper = _finite_float(row.get('motion_upper_deg'))
+    if motion_range is not None:
+        lower, upper = motion_range
     if lower is None or upper is None or upper <= lower:
         raise ValueError('motion-axis Min/Max angle is invalid')
     normalized = max(0.0, min(1.0, float(output_14bit) / MIDI_VALUE_MAX))
@@ -104,10 +116,13 @@ def raw_fader_for_motion(
     motion_value: float,
     row: Dict[str, Any],
     bank_mapping: Dict[str, Any],
+    motion_range: tuple[float, float] | None = None,
 ) -> int:
     """Invert motion range and bank Min/Max/reverse into a physical fader value."""
     lower = _finite_float(row.get('motion_lower_deg'))
     upper = _finite_float(row.get('motion_upper_deg'))
+    if motion_range is not None:
+        lower, upper = motion_range
     if lower is None or upper is None or upper <= lower:
         raise ValueError('motion-axis Min/Max angle is invalid')
     output_percent = 100.0 * ((motion_value - lower) / (upper - lower))
@@ -133,6 +148,122 @@ def raw_fader_for_motion(
     if bank_mapping['reversed']:
         normalized = 1.0 - normalized
     return int(round(MIDI_VALUE_MAX * normalized))
+
+
+def require_same_motion_ranges(rows: List[Dict[str, Any]]) -> tuple[float, float]:
+    """Return the shared range, rejecting linked axes with different ranges."""
+    if not rows:
+        raise ValueError('모션축 설정을 확인할 수 없습니다')
+    ranges = []
+    for row in rows:
+        lower = _finite_float(row.get('motion_lower_deg'))
+        upper = _finite_float(row.get('motion_upper_deg'))
+        if lower is None or upper is None or upper <= lower:
+            raise ValueError('모션축 Min/Max 각도를 확인하세요')
+        ranges.append((lower, upper))
+    first_lower, first_upper = ranges[0]
+    if any(
+        abs(lower - first_lower) > LINKED_RANGE_TOLERANCE_DEG
+        or abs(upper - first_upper) > LINKED_RANGE_TOLERANCE_DEG
+        for lower, upper in ranges[1:]
+    ):
+        raise ValueError('연동 Motion ID의 모션 범위가 서로 다릅니다')
+    return first_lower, first_upper
+
+
+def safe_motion_range_for_motor(
+    row: Dict[str, Any],
+    motor: Dict[str, Any],
+) -> tuple[float, float]:
+    """Return the configured motion range intersected with motor limits."""
+    motion_lower = _finite_float(row.get('motion_lower_deg'))
+    motion_upper = _finite_float(row.get('motion_upper_deg'))
+    if (
+        motion_lower is None
+        or motion_upper is None
+        or motion_upper <= motion_lower
+    ):
+        raise ValueError('모션축 Min/Max 각도를 확인하세요')
+
+    motor_lower = _finite_float(motor.get('lower'))
+    motor_upper = _finite_float(motor.get('upper'))
+    if motor_lower is None or motor_upper is None:
+        raise ValueError('모터축 Lower/Upper 제한을 확인할 수 없습니다')
+    if motor_upper < motor_lower:
+        raise ValueError('모터축 Lower/Upper 설정을 확인하세요')
+
+    safe_from_motor = sorted((
+        motion_value_from_motor(motor_lower, row),
+        motion_value_from_motor(motor_upper, row),
+    ))
+    safe_lower = max(motion_lower, safe_from_motor[0])
+    safe_upper = min(motion_upper, safe_from_motor[1])
+    if safe_upper < safe_lower:
+        raise ValueError(
+            f'모션범위 {motion_lower:.3f}°~{motion_upper:.3f}°와 '
+            f'모터범위 {motor_lower:.3f}°~{motor_upper:.3f}°가 겹치지 않습니다'
+        )
+    return safe_lower, safe_upper
+
+
+def require_motion_value_within_limits(
+    motion_id: Any,
+    motion_value: float,
+    row: Dict[str, Any],
+    motor: Dict[str, Any],
+) -> float:
+    """Return a motor target only when one motion command passes both limits."""
+    motion_lower = _finite_float(row.get('motion_lower_deg'))
+    motion_upper = _finite_float(row.get('motion_upper_deg'))
+    if motion_lower is None or motion_upper is None:
+        raise ValueError('모션축 Min/Max 각도를 확인하세요')
+    tolerance = 1e-6
+    value = float(motion_value)
+    if value < motion_lower - tolerance or value > motion_upper + tolerance:
+        raise ValueError(
+            f'{motion_id}: 모션 명령 {value:.3f}°가 모션범위 '
+            f'{motion_lower:.3f}°~{motion_upper:.3f}°를 벗어납니다'
+        )
+    target = motor_target_from_motion(value, row)
+    motor_lower = _finite_float(motor.get('lower'))
+    motor_upper = _finite_float(motor.get('upper'))
+    if motor_lower is not None and target < motor_lower - tolerance:
+        raise ValueError(
+            f'{motion_id}: 모터 목표 {target:.3f}°가 Lower '
+            f'{motor_lower:.3f}°보다 작습니다'
+        )
+    if motor_upper is not None and target > motor_upper + tolerance:
+        axis = motor.get('controller_index')
+        raise ValueError(
+            f'{motion_id}: 모터축 {axis} 목표 {target:.3f}°가 Upper '
+            f'{motor_upper:.3f}°보다 큽니다'
+        )
+    return target
+
+
+def safe_motion_range_for_group(
+    group: List[Dict[str, Any]],
+) -> tuple[float, float]:
+    """Return one shared MIDI range safe for every linked motor axis."""
+    safe_ranges = []
+    for item in group:
+        row = item['row']
+        motor = item.get('motor')
+        if isinstance(motor, dict):
+            safe_ranges.append(safe_motion_range_for_motor(row, motor))
+        else:
+            lower = _finite_float(row.get('motion_lower_deg'))
+            upper = _finite_float(row.get('motion_upper_deg'))
+            if lower is None or upper is None:
+                raise ValueError('모션축 Min/Max 각도를 확인하세요')
+            safe_ranges.append((lower, upper))
+    if not safe_ranges:
+        raise ValueError('안전범위를 계산할 모션축이 없습니다')
+    safe_lower = max(item[0] for item in safe_ranges)
+    safe_upper = min(item[1] for item in safe_ranges)
+    if safe_upper <= safe_lower:
+        raise ValueError('연동 축이 함께 사용할 수 있는 안전 모션범위가 없습니다')
+    return safe_lower, safe_upper
 
 
 class MidiControlNode(Node):
@@ -200,6 +331,8 @@ class MidiControlNode(Node):
             ).value)
         ).expanduser().resolve()
         self._project_id = ''
+        self._execution_context: Dict[str, Any] = {}
+        self._execution_context_ready = False
         self._mappings_dir = self._motion_projects_dir
         self.publish_hz = max(1.0, float(self.declare_parameter('publish_hz', 10.0).value))
         self.stale_timeout_sec = max(
@@ -239,10 +372,22 @@ class MidiControlNode(Node):
         self._fader_sync_targets: List[int | None] = [None] * MIDI_CHANNEL_COUNT
         self._awaiting_fader_sync = [False] * MIDI_CHANNEL_COUNT
         self._fader_sync_not_before = [0.0] * MIDI_CHANNEL_COUNT
+        self._fader_parking = [False] * MIDI_CHANNEL_COUNT
+        self._fader_park_last_command_at = [0.0] * MIDI_CHANNEL_COUNT
         self._last_select_toggle_at = [0.0] * MIDI_CHANNEL_COUNT
         self._last_motor_command_at = [0.0] * MIDI_CHANNEL_COUNT
         self._last_motor_target: List[float | None] = [None] * MIDI_CHANNEL_COUNT
-        self._pending_motor_requests: Dict[int, Dict[str, Any]] = {}
+        self._last_group_motor_targets: List[Dict[int, float]] = [
+            {} for _ in range(MIDI_CHANNEL_COUNT)
+        ]
+        self._approved_motion_values: List[Dict[str, float]] = [
+            {} for _ in range(MIDI_CHANNEL_COUNT)
+        ]
+        self._approved_motor_targets: List[Dict[int, float]] = [
+            {} for _ in range(MIDI_CHANNEL_COUNT)
+        ]
+        self._approved_command_stamp = [0.0] * MIDI_CHANNEL_COUNT
+        self._pending_motor_requests: Dict[Any, Dict[str, Any]] = {}
         self._motor_follow_active = [False] * MIDI_CHANNEL_COUNT
         self._motor_command_state = ['inactive'] * MIDI_CHANNEL_COUNT
         self._motor_command_message = [''] * MIDI_CHANNEL_COUNT
@@ -294,8 +439,16 @@ class MidiControlNode(Node):
         self._input_state_subscription = self.create_subscription(
             String, self.input_state_topic, self._input_state_callback, 10
         )
+        connection_state_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
         self._connection_state_subscription = self.create_subscription(
-            String, self.connection_state_topic, self._connection_state_callback, 10
+            String,
+            self.connection_state_topic,
+            self._connection_state_callback,
+            connection_state_qos,
         )
         self._request_subscription = self.create_subscription(
             String,
@@ -336,6 +489,132 @@ class MidiControlNode(Node):
     def _array_value(values: Any, index: int, fallback: Any) -> Any:
         return values[index] if index < len(values) else fallback
 
+    def _mapping_group_locked(
+        self,
+        mapping: Dict[str, Any],
+        *,
+        require_positions: bool = False,
+    ) -> List[Dict[str, Any]]:
+        self._ensure_linked_runtime_state_locked()
+        group = []
+        for motion_id in mapping_motion_ids(mapping):
+            row = self._axis_registry.mapping(motion_id)
+            motor_axis = self._axis_registry.motor_axis(motion_id)
+            if row is None or motor_axis is None:
+                raise ValueError(f'{motion_id}: 모션축 설정에 매칭되지 않았습니다')
+            motion_state = getattr(self, '_latest_motion_state', {})
+            motor_position = self._position_for_axis(
+                motion_state, motor_axis
+            )
+            motor = self._motor_for_axis(motion_state, motor_axis)
+            if motor is None:
+                raise ValueError(f'{motion_id}: 현재 모터 정보를 확인할 수 없습니다')
+            if require_positions and motor_position is None:
+                raise ValueError(f'{motion_id}: 현재 모터 위치를 확인할 수 없습니다')
+            group.append({
+                'motion_id': motion_id,
+                'row': row,
+                'axis': motor_axis,
+                'motor': motor,
+                'motor_position': motor_position,
+            })
+        if not group:
+            raise ValueError('연결할 Motion ID가 없습니다')
+        axes = [int(item['axis']) for item in group]
+        if len(set(axes)) != len(axes):
+            raise ValueError('연동 Motion ID가 같은 모터축을 중복으로 가리킵니다')
+        require_same_motion_ranges([item['row'] for item in group])
+        safe_motion_range_for_group(group)
+        return group
+
+    def _ensure_linked_runtime_state_locked(self) -> None:
+        if not hasattr(self, '_last_group_motor_targets'):
+            self._last_group_motor_targets = [
+                {} for _ in range(MIDI_CHANNEL_COUNT)
+            ]
+
+    def _ensure_fader_parking_state_locked(self) -> None:
+        if not hasattr(self, '_fader_parking'):
+            self._fader_parking = [False] * MIDI_CHANNEL_COUNT
+        if not hasattr(self, '_fader_park_last_command_at'):
+            self._fader_park_last_command_at = [0.0] * MIDI_CHANNEL_COUNT
+
+    def _start_fader_parking_locked(self, channel: int, now: float) -> None:
+        self._ensure_fader_parking_state_locked()
+        if not hasattr(self, '_last_feedback'):
+            self._last_feedback = [None] * MIDI_CHANNEL_COUNT
+        self._fader_parking[channel] = True
+        self._fader_park_last_command_at[channel] = now
+        self._pending_fader_positions[channel] = 0
+        self._fader_sync_targets[channel] = 0
+        self._awaiting_fader_sync[channel] = True
+        self._fader_sync_not_before[channel] = now + FADER_SYNC_MIN_DURATION_SEC
+        self._last_feedback[channel] = None
+        self._motor_command_state[channel] = 'parking_fader'
+        self._motor_command_message[channel] = 'SELECT 해제 · 페이더 0 복귀 중'
+
+    def _update_fader_parking_locked(
+        self, channel: int, raw: int, now: float
+    ) -> bool:
+        """Advance one mandatory SELECT-off park and return its prior state."""
+        self._ensure_fader_parking_state_locked()
+        was_parking = self._fader_parking[channel]
+        if not was_parking:
+            return False
+        self._raw_channels[channel] = raw
+        self._channels[channel] = float(raw)
+        self._filter_stage1[channel] = float(raw)
+        self._filter_stage2[channel] = float(raw)
+        physically_busy = (
+            self._physical_touch[channel]
+            or self._fader_moving[channel]
+            or self._bridge_fader_syncing[channel]
+        )
+        if raw <= FADER_PARK_TOLERANCE_RAW and not physically_busy:
+            self._fader_parking[channel] = False
+            self._fader_park_last_command_at[channel] = 0.0
+            self._fader_sync_targets[channel] = None
+            self._awaiting_fader_sync[channel] = False
+            self._fader_sync_not_before[channel] = 0.0
+            self._raw_channels[channel] = 0
+            self._channels[channel] = 0.0
+            self._filter_stage1[channel] = 0.0
+            self._filter_stage2[channel] = 0.0
+            self._motor_command_state[channel] = 'inactive'
+            self._motor_command_message[channel] = 'SELECT 사용 가능'
+            return True
+        if (
+            not self._physical_touch[channel]
+            and not self._fader_moving[channel]
+            and now - self._fader_park_last_command_at[channel]
+            >= FADER_PARK_RETRY_SEC
+        ):
+            self._pending_fader_positions[channel] = 0
+            self._fader_sync_targets[channel] = 0
+            self._awaiting_fader_sync[channel] = True
+            self._fader_sync_not_before[channel] = now + FADER_SYNC_MIN_DURATION_SEC
+            self._fader_park_last_command_at[channel] = now
+            self._last_feedback[channel] = None
+        return True
+
+    def _request_motor_hold_locked(self, channel: int, axes: List[int]) -> None:
+        publisher = getattr(self, '_motor_request_publisher', None)
+        if publisher is None or not axes:
+            return
+        self._request_sequence = int(getattr(self, '_request_sequence', 0)) + 1
+        self._publish_json(publisher, {
+            'request_id': f'midi-hold-{channel}-{self._request_sequence}',
+            'channel': channel,
+            'hold_axes': sorted(set(int(axis) for axis in axes)),
+        })
+
+    def _clear_pending_channel_locked(self, channel: int) -> None:
+        self._pending_motor_requests = {
+            key: target
+            for key, target in self._pending_motor_requests.items()
+            if int(target.get('channel', -1)) != channel
+        }
+
     def _midi_callback(self, msg: Midi) -> None:
         now = time.monotonic()
         with self._lock:
@@ -348,17 +627,34 @@ class MidiControlNode(Node):
                 input_valid = bool(self._array_value(msg.touch, channel, False))
                 self._touch[channel] = input_valid
                 if self._studio_select_locked:
-                    zero_target = self._studio_zero_fader_targets[channel]
                     input_valid = False
                     self._touch[channel] = False
-                    self._raw_channels[channel] = zero_target
-                    self._channels[channel] = float(zero_target)
-                    self._filter_stage1[channel] = float(zero_target)
-                    self._filter_stage2[channel] = float(zero_target)
-                    self._pending_fader_positions[channel] = zero_target
-                    self._last_feedback[channel] = None
+                    # The initial prepare call owns the zero command and the
+                    # parking state owns retries. Re-queueing zero on every
+                    # MIDI position echo makes an already-arrived fader look
+                    # as if it started moving again, so initialization can
+                    # wait forever.
+                    if (
+                        not self._fader_parking[channel]
+                        and raw > FADER_PARK_TOLERANCE_RAW
+                    ):
+                        self._start_fader_parking_locked(channel, now)
+                was_parking = self._update_fader_parking_locked(channel, raw, now)
+                if self._studio_select_locked and not was_parking:
+                    # Even a channel that was already parked must reflect its
+                    # latest physical position. Otherwise a stale pre-lock raw
+                    # value can keep the all-channel zero check blocked.
+                    self._raw_channels[channel] = raw
+                    self._channels[channel] = float(raw)
+                    self._filter_stage1[channel] = float(raw)
+                    self._filter_stage2[channel] = float(raw)
+                if was_parking:
+                    input_valid = False
+                    self._touch[channel] = False
                 bridge_syncing = self._bridge_fader_syncing[channel]
                 if (
+                    not self._fader_parking[channel]
+                    and
                     self._awaiting_fader_sync[channel]
                     and now >= self._fader_sync_not_before[channel]
                     and not bridge_syncing
@@ -406,28 +702,17 @@ class MidiControlNode(Node):
                     now - self._last_select_toggle_at[channel]
                     >= SELECT_TOGGLE_DEBOUNCE_SEC
                 )
-                if select_rising and select_allowed and not self._studio_select_locked:
+                if (
+                    select_rising
+                    and select_allowed
+                    and not self._studio_select_locked
+                    and self._execution_context_ready
+                    and not was_parking
+                ):
                     self._last_select_toggle_at[channel] = now
-                    motion_id = mappings[channel]['motion_id']
-                    row = self._axis_registry.mapping(motion_id)
-                    motor_axis = self._axis_registry.motor_axis(motion_id)
-                    motor_position = (
-                        self._position_for_axis(self._latest_motion_state, motor_axis)
-                        if motor_axis is not None else None
-                    )
                     currently_enabled = self._control_enabled[channel]
                     if currently_enabled:
                         self._deactivate_control_channel_locked(channel)
-                    elif row is None or motor_axis is None:
-                        self._motor_command_state[channel] = 'activation_rejected'
-                        self._motor_command_message[channel] = (
-                            '활성화 불가: 모션축 설정에 일치하는 모션 ID가 없습니다'
-                        )
-                    elif motor_position is None:
-                        self._motor_command_state[channel] = 'activation_rejected'
-                        self._motor_command_message[channel] = (
-                            '활성화 불가: 현재 모터 위치를 확인할 수 없습니다'
-                        )
                     elif mappings[channel].get('enabled') is False:
                         self._motor_command_state[channel] = 'activation_rejected'
                         self._motor_command_message[channel] = (
@@ -438,25 +723,52 @@ class MidiControlNode(Node):
                         # another line which currently owns the same motor axis.
                         # A failed handover must leave the old owner untouched.
                         try:
-                            motion_value = motion_value_from_motor(motor_position, row)
+                            group = self._mapping_group_locked(
+                                mappings[channel], require_positions=True
+                            )
+                            motion_values = [
+                                motion_value_from_motor(
+                                    float(item['motor_position']), item['row']
+                                )
+                                for item in group
+                            ]
+                            if (
+                                max(motion_values) - min(motion_values)
+                                > LINKED_POSITION_TOLERANCE_DEG
+                            ):
+                                raise ValueError(
+                                    '연동 축의 현재 모션값이 서로 다릅니다. '
+                                    '초기 위치 이동 후 다시 SELECT 하세요'
+                                )
+                            motion_value = sum(motion_values) / len(motion_values)
+                            safe_range = safe_motion_range_for_group(group)
                             fader_target = raw_fader_for_motion(
-                                motion_value, row, mappings[channel]
+                                motion_value,
+                                group[0]['row'],
+                                mappings[channel],
+                                safe_range,
                             )
                         except ValueError as exc:
                             self._control_enabled[channel] = False
                             self._motor_command_state[channel] = 'activation_rejected'
-                            self._motor_command_message[channel] = str(exc)
-                            self._pending_motor_requests.pop(channel, None)
+                            self._motor_command_message[channel] = f'활성화 불가: {exc}'
+                            self._clear_pending_channel_locked(channel)
                             self._motor_follow_active[channel] = False
                         else:
-                            # Multiple MIDI lines may map to the same motion axis,
+                            selected_axes = {int(item['axis']) for item in group}
+                            # Multiple MIDI lines may include the same motor axis,
                             # but only one line may own that motor at runtime.
                             for other_channel, other_mapping in enumerate(mappings):
                                 if other_channel == channel:
                                     continue
-                                if self._axis_registry.motor_axis(
-                                    other_mapping['motion_id']
-                                ) == motor_axis:
+                                other_axes = {
+                                    self._axis_registry.motor_axis(motion_id)
+                                    for motion_id in mapping_motion_ids(other_mapping)
+                                }
+                                if (
+                                    self._control_enabled[other_channel]
+                                    and selected_axes.intersection(other_axes)
+                                ):
                                     self._deactivate_control_channel_locked(other_channel)
                             self._control_enabled[channel] = True
                             self._raw_channels[channel] = fader_target
@@ -470,9 +782,32 @@ class MidiControlNode(Node):
                                 now + FADER_SYNC_MIN_DURATION_SEC
                             )
                             self._motor_command_state[channel] = 'syncing_fader'
-                            self._motor_command_message[channel] = '현재 모터 위치로 페이더 동기화 중'
-                            self._last_motor_target[channel] = motor_position
+                            self._motor_command_message[channel] = (
+                                f'{len(group)}개 연동 축 현재 위치로 페이더 동기화 중'
+                            )
+                            self._last_group_motor_targets[channel] = {
+                                int(item['axis']): float(item['motor_position'])
+                                for item in group
+                            }
+                            self._last_motor_target[channel] = float(
+                                group[0]['motor_position']
+                            )
                             self._motor_follow_active[channel] = False
+                elif select_rising and self._studio_select_locked:
+                    self._motor_command_state[channel] = 'studio_initializing'
+                    self._motor_command_message[channel] = (
+                        '녹화 초기화 중 · SELECT 입력 무시됨'
+                    )
+                elif select_rising and not self._execution_context_ready:
+                    self._motor_command_state[channel] = 'context_waiting'
+                    self._motor_command_message[channel] = (
+                        '현재 프로젝트 실행 컨텍스트 적용 대기 중'
+                    )
+                elif select_rising and was_parking:
+                    self._motor_command_state[channel] = 'parking_fader'
+                    self._motor_command_message[channel] = (
+                        '페이더 0 복귀 완료 후 SELECT를 다시 누르세요'
+                    )
                 self._previous_btn3[channel] = select_pressed
 
                 rec_pressed = self._btn0[channel]
@@ -511,52 +846,72 @@ class MidiControlNode(Node):
                     and self._control_enabled[channel]
                     and not self._awaiting_fader_sync[channel]
                 ):
-                    row = self._axis_registry.mapping(mappings[channel]['motion_id'])
-                    motor_axis = self._axis_registry.motor_axis(mappings[channel]['motion_id'])
-                    if row is not None and motor_axis is not None:
-                        final_output = self._filtered_output_14bit(
-                            self._channels[channel], mappings[channel]
+                    final_output = self._filtered_output_14bit(
+                        self._channels[channel], mappings[channel]
+                    )
+                    try:
+                        group = self._mapping_group_locked(mappings[channel])
+                        safe_range = safe_motion_range_for_group(group)
+                        motion_value = motion_value_from_output(
+                            final_output, group[0]['row'], safe_range
                         )
-                        try:
-                            motion_value = motion_value_from_output(final_output, row)
-                            desired_motor_target = motor_target_from_motion(motion_value, row)
-                        except ValueError as exc:
-                            self._motor_command_state[channel] = 'rejected'
-                            self._motor_command_message[channel] = str(exc)
-                        else:
-                            last_target = self._last_motor_target[channel]
-                            motor_target = desired_motor_target
-
+                        desired_targets = {
+                            int(item['axis']): (
+                                require_motion_value_within_limits(
+                                    item['motion_id'],
+                                    motion_value,
+                                    item['row'],
+                                    item['motor'],
+                                )
+                                if isinstance(item.get('motor'), dict)
+                                else motor_target_from_motion(motion_value, item['row'])
+                            )
+                            for item in group
+                        }
+                    except ValueError as exc:
+                        self._clear_pending_channel_locked(channel)
+                        self._motor_command_state[channel] = 'rejected'
+                        self._motor_command_message[channel] = str(exc)
+                    else:
+                        previous_targets = self._last_group_motor_targets[channel]
+                        unchanged = previous_targets and all(
+                            axis in previous_targets
+                            and abs(target - previous_targets[axis])
+                            < MIDI_COMMAND_DEADBAND_DEG
+                            for axis, target in desired_targets.items()
+                        )
+                        if unchanged:
                             if (
-                                last_target is not None
-                                and abs(motor_target - last_target)
-                                < MIDI_COMMAND_DEADBAND_DEG
+                                not input_valid
+                                and abs(
+                                    self._channels[channel]
+                                    - self._raw_channels[channel]
+                                ) < 0.5
                             ):
-                                if (
-                                    not input_valid
-                                    and abs(desired_motor_target - motor_target)
-                                    < MIDI_COMMAND_DEADBAND_DEG
-                                    and abs(
-                                        self._channels[channel]
-                                        - self._raw_channels[channel]
-                                    ) < 0.5
-                                ):
-                                    self._motor_follow_active[channel] = False
-                                    self._pending_motor_requests.pop(channel, None)
-                                continue
+                                self._motor_follow_active[channel] = False
+                                self._clear_pending_channel_locked(channel)
+                            continue
+                        self._clear_pending_channel_locked(channel)
+                        for item in group:
+                            axis = int(item['axis'])
                             self._request_sequence += 1
-                            self._pending_motor_requests[channel] = {
+                            self._pending_motor_requests[(channel, axis)] = {
                                 'request_id': f'midi-{channel}-{self._request_sequence}',
                                 'channel': channel,
-                                'motion_id': mappings[channel]['motion_id'],
+                                'motion_id': item['motion_id'],
                                 'mapping_file_id': self._axis_registry.file_id,
-                                'axis': motor_axis,
+                                'axis': axis,
                                 'motion_deg': motion_value,
-                                'target_deg': motor_target,
+                                'target_deg': desired_targets[axis],
                             }
-                            self._last_motor_target[channel] = motor_target
-                            self._motor_command_state[channel] = 'commanding'
-                            self._motor_command_message[channel] = '모터 위치 명령 전달 대기'
+                        self._last_group_motor_targets[channel] = desired_targets
+                        self._last_motor_target[channel] = desired_targets[
+                            int(group[0]['axis'])
+                        ]
+                        self._motor_command_state[channel] = 'commanding'
+                        self._motor_command_message[channel] = (
+                            f'{len(group)}개 연동 축 위치 명령 전달 대기'
+                        )
             self._last_received_monotonic = now
             self._last_received_wall = time.time()
 
@@ -573,23 +928,36 @@ class MidiControlNode(Node):
                 self._motor_command_message[channel] = '다축 모터 위치 명령 전달 중'
             self._request_sequence += 1
             request_id = f'midi-batch-{self._request_sequence}'
+            counts: Dict[int, int] = {}
+            for target in targets:
+                channel = int(target['channel'])
+                counts[channel] = counts.get(channel, 0) + 1
         self._publish_json(self._motor_request_publisher, {
             'request_id': request_id,
             'targets': targets,
+            'atomic_channels': [
+                channel for channel, count in counts.items() if count > 1
+            ],
         })
 
-    def _deactivate_control_channel_locked(self, channel: int) -> None:
+    def _deactivate_control_channel_locked(
+        self, channel: int, *, request_motor_hold: bool = True
+    ) -> None:
         """Release one MIDI line and park its motorized fader at zero."""
+        self._ensure_linked_runtime_state_locked()
+        axes = list(self._last_group_motor_targets[channel])
+        if request_motor_hold:
+            self._request_motor_hold_locked(channel, axes)
         self._control_enabled[channel] = False
-        self._pending_fader_positions[channel] = 0
-        self._fader_sync_targets[channel] = None
-        self._awaiting_fader_sync[channel] = False
-        self._fader_sync_not_before[channel] = 0.0
         self._last_motor_target[channel] = None
-        self._pending_motor_requests.pop(channel, None)
+        self._last_group_motor_targets[channel] = {}
+        self._ensure_approved_command_state_locked()
+        self._approved_motion_values[channel] = {}
+        self._approved_motor_targets[channel] = {}
+        self._approved_command_stamp[channel] = 0.0
+        self._clear_pending_channel_locked(channel)
         self._motor_follow_active[channel] = False
-        self._motor_command_state[channel] = 'inactive'
-        self._motor_command_message[channel] = ''
+        self._start_fader_parking_locked(channel, time.monotonic())
 
     def _input_state_callback(self, msg: String) -> None:
         try:
@@ -645,24 +1013,96 @@ class MidiControlNode(Node):
             return
         results = payload.get('results') if isinstance(payload, dict) else None
         if isinstance(results, list):
-            for result in results:
-                if isinstance(result, dict):
-                    self._apply_motor_result(result)
+            self._apply_motor_results(
+                [result for result in results if isinstance(result, dict)],
+                _finite_float(payload.get('stamp')) or time.time(),
+            )
             return
         if isinstance(payload, dict):
-            self._apply_motor_result(payload)
+            self._apply_motor_results(
+                [payload], _finite_float(payload.get('stamp')) or time.time()
+            )
 
-    def _apply_motor_result(self, payload: Dict[str, Any]) -> None:
-        try:
-            channel = int(payload.get('channel'))
-        except (TypeError, ValueError):
-            return
-        if channel < 0 or channel >= MIDI_CHANNEL_COUNT:
-            return
+    def _ensure_approved_command_state_locked(self) -> None:
+        if not hasattr(self, '_approved_motion_values'):
+            self._approved_motion_values = [
+                {} for _ in range(MIDI_CHANNEL_COUNT)
+            ]
+        if not hasattr(self, '_approved_motor_targets'):
+            self._approved_motor_targets = [
+                {} for _ in range(MIDI_CHANNEL_COUNT)
+            ]
+        if not hasattr(self, '_approved_command_stamp'):
+            self._approved_command_stamp = [0.0] * MIDI_CHANNEL_COUNT
+
+    def _apply_motor_results(
+        self,
+        results: List[Dict[str, Any]],
+        stamp: float,
+    ) -> None:
+        by_channel: Dict[int, List[Dict[str, Any]]] = {}
+        for result in results:
+            try:
+                channel = int(result.get('channel'))
+            except (TypeError, ValueError):
+                continue
+            if 0 <= channel < MIDI_CHANNEL_COUNT:
+                by_channel.setdefault(channel, []).append(result)
         with self._lock:
-            success = payload.get('success') is True
-            self._motor_command_state[channel] = 'commanding' if success else 'rejected'
-            self._motor_command_message[channel] = str(payload.get('message') or '')
+            self._ensure_approved_command_state_locked()
+            mappings = self._banks.snapshot()['active_bank']['mappings']
+            for channel, channel_results in by_channel.items():
+                if stamp < self._approved_command_stamp[channel]:
+                    continue
+                self._approved_command_stamp[channel] = stamp
+                if all(item.get('operation') == 'hold' for item in channel_results):
+                    self._approved_motion_values[channel] = {}
+                    self._approved_motor_targets[channel] = {}
+                    if self._fader_parking[channel]:
+                        self._motor_command_state[channel] = 'parking_fader'
+                        hold_message = str(channel_results[-1].get('message') or '')
+                        self._motor_command_message[channel] = (
+                            f'모터 현재 위치 유지 · 페이더 0 복귀 중 · {hold_message}'
+                            if hold_message else '모터 현재 위치 유지 · 페이더 0 복귀 중'
+                        )
+                    continue
+
+                success = all(item.get('success') is True for item in channel_results)
+                approved_motion: Dict[str, float] = {}
+                approved_targets: Dict[int, float] = {}
+                if success:
+                    for item in channel_results:
+                        motion_id = str(item.get('motion_id') or '').strip()
+                        motion_value = _finite_float(item.get('motion_deg'))
+                        target_value = _finite_float(item.get('target_deg'))
+                        try:
+                            axis = int(item.get('axis'))
+                        except (TypeError, ValueError):
+                            axis = -1
+                        if not motion_id or motion_value is None or target_value is None or axis < 0:
+                            success = False
+                            break
+                        approved_motion[motion_id] = motion_value
+                        approved_targets[axis] = target_value
+                expected_ids = set(mapping_motion_ids(mappings[channel]))
+                if success and set(approved_motion) != expected_ids:
+                    success = False
+                if success and any(
+                    str(item.get('mapping_file_id') or '')
+                    != str(self._axis_registry.file_id or '')
+                    for item in channel_results
+                ):
+                    success = False
+                if success:
+                    self._approved_motion_values[channel] = approved_motion
+                    self._approved_motor_targets[channel] = approved_targets
+                else:
+                    self._approved_motion_values[channel] = {}
+                    self._approved_motor_targets[channel] = {}
+                self._motor_command_state[channel] = 'commanding' if success else 'rejected'
+                self._motor_command_message[channel] = str(
+                    channel_results[-1].get('message') or ''
+                )
 
     def _motion_state_callback(self, msg: String) -> None:
         try:
@@ -813,7 +1253,19 @@ class MidiControlNode(Node):
     def _snapshot(self) -> Dict[str, Any]:
         now_monotonic = time.monotonic()
         with self._lock:
+            self._ensure_fader_parking_state_locked()
             self._refresh_axis_registry_locked(now_monotonic)
+            if self._execution_context_ready and self._bank_config_file is not None:
+                expected_sha = str(self._execution_context.get('mapping_sha256') or '')
+                try:
+                    actual_sha = hashlib.sha256(
+                        self._bank_config_file.read_bytes()
+                    ).hexdigest()
+                except OSError:
+                    actual_sha = ''
+                if not expected_sha or actual_sha != expected_sha:
+                    self._execution_context_ready = False
+                    self._reset_bank_change_state_locked()
             last_monotonic = self._last_received_monotonic
             last_wall = self._last_received_wall
             device_connected = self._device_connected
@@ -836,40 +1288,89 @@ class MidiControlNode(Node):
             bank_state = self._banks.snapshot()
             bank_export = self._banks.export_state()
             mappings = bank_state['active_bank']['mappings']
-            matched_axes = [
-                self._axis_registry.motor_axis(mapping['motion_id']) for mapping in mappings
+            motion_id_groups = [mapping_motion_ids(mapping) for mapping in mappings]
+            matched_axis_groups = [
+                [self._axis_registry.motor_axis(motion_id) for motion_id in motion_ids]
+                for motion_ids in motion_id_groups
             ]
-            matched_rows = [
-                self._axis_registry.mapping(mapping['motion_id']) for mapping in mappings
+            matched_row_groups = [
+                [self._axis_registry.mapping(motion_id) for motion_id in motion_ids]
+                for motion_ids in motion_id_groups
             ]
+            axis_groups_matched = []
+            group_valid = []
+            group_messages = []
+            group_safe_ranges: List[tuple[float, float] | None] = []
+            for mapping, motion_ids, axes, rows in zip(
+                mappings, motion_id_groups, matched_axis_groups, matched_row_groups
+            ):
+                matched = bool(axes) and all(axis is not None for axis in axes)
+                matched = matched and all(row is not None for row in rows)
+                valid = matched
+                message = ''
+                if not matched:
+                    missing = [
+                        motion_id for motion_id, axis, row in zip(motion_ids, axes, rows)
+                        if axis is None or row is None
+                    ]
+                    message = '모션축 매칭 없음: ' + ', '.join(missing)
+                if matched:
+                    try:
+                        group = self._mapping_group_locked(mapping)
+                        safe_range = safe_motion_range_for_group(group)
+                    except ValueError as exc:
+                        valid = False
+                        message = str(exc)
+                        safe_range = None
+                else:
+                    safe_range = None
+                axis_groups_matched.append(matched)
+                group_valid.append(valid)
+                group_messages.append(message)
+                group_safe_ranges.append(safe_range)
+            matched_axes = [axes[0] if axes else None for axes in matched_axis_groups]
+            matched_rows = [rows[0] if rows else None for rows in matched_row_groups]
             # An activation error is a live condition. If the motor later moves
             # into this line's representable range (or the mapping is repaired),
             # clear the stale red/error state without requiring another SELECT.
             for channel, mapping in enumerate(mappings):
                 if self._motor_command_state[channel] != 'activation_rejected':
                     continue
-                row = matched_rows[channel]
-                motor_axis = matched_axes[channel]
-                motor_position = (
-                    self._position_for_axis(motion_state, motor_axis)
-                    if motor_axis is not None else None
-                )
                 if (
                     mapping.get('enabled') is False
-                    or row is None
-                    or motor_axis is None
-                    or motor_position is None
+                    or not group_valid[channel]
                 ):
+                    # A missing/disabled mapping is the current condition.
+                    # Do not keep a historical SELECT rejection that makes
+                    # duplicate Motion IDs display different states.
+                    self._motor_command_state[channel] = 'inactive'
+                    self._motor_command_message[channel] = ''
                     continue
                 try:
-                    motion_value = motion_value_from_motor(motor_position, row)
-                    raw_fader_for_motion(motion_value, row, mapping)
+                    group = self._mapping_group_locked(mapping, require_positions=True)
+                    motion_values = [
+                        motion_value_from_motor(
+                            float(item['motor_position']), item['row']
+                        )
+                        for item in group
+                    ]
+                    if (
+                        max(motion_values) - min(motion_values)
+                        > LINKED_POSITION_TOLERANCE_DEG
+                    ):
+                        raise ValueError('linked positions differ')
+                    raw_fader_for_motion(
+                        sum(motion_values) / len(motion_values),
+                        group[0]['row'],
+                        mapping,
+                        safe_motion_range_for_group(group),
+                    )
                 except ValueError:
                     continue
                 self._motor_command_state[channel] = 'inactive'
                 self._motor_command_message[channel] = ''
-            for channel, motor_axis in enumerate(matched_axes):
-                if motor_axis is None:
+            for channel, valid in enumerate(group_valid):
+                if not valid:
                     self._control_enabled[channel] = False
                     self._motor_angle_mode[channel] = False
                     control_enabled[channel] = False
@@ -883,6 +1384,14 @@ class MidiControlNode(Node):
             motor_command_states = list(self._motor_command_state)
             motor_command_messages = list(self._motor_command_message)
             awaiting_fader_sync = list(self._awaiting_fader_sync)
+            fader_parking = list(self._fader_parking)
+            self._ensure_approved_command_state_locked()
+            approved_motion_values = [
+                dict(values) for values in self._approved_motion_values
+            ]
+            approved_motor_targets = [
+                dict(values) for values in self._approved_motor_targets
+            ]
             mapping_file_id = self._axis_registry.file_id
         age_sec = None if last_monotonic is None else max(0.0, now_monotonic - last_monotonic)
         connected = (
@@ -901,18 +1410,30 @@ class MidiControlNode(Node):
                 if motor_axis is not None else None
             )
             row = matched_rows[channel]
+            safe_range = group_safe_ranges[channel]
+            motion_ids = motion_id_groups[channel]
+            group_axes = matched_axis_groups[channel]
             try:
-                motion_value = (
-                    motion_value_from_output(final_output_value, row)
-                    if row is not None else None
-                )
-                motor_target = (
-                    motor_target_from_motion(motion_value, row)
-                    if row is not None and motion_value is not None else None
+                requested_motion_value = (
+                    motion_value_from_output(final_output_value, row, safe_range)
+                    if row is not None and safe_range is not None else None
                 )
             except ValueError:
-                motion_value = None
-                motor_target = None
+                requested_motion_value = None
+            approved_values = approved_motion_values[channel]
+            approved_targets = approved_motor_targets[channel]
+            approved_complete = bool(motion_ids) and all(
+                motion_id in approved_values for motion_id in motion_ids
+            )
+            motion_value = (
+                sum(approved_values[motion_id] for motion_id in motion_ids)
+                / len(motion_ids)
+                if approved_complete else None
+            )
+            motor_target = (
+                approved_targets.get(int(motor_axis))
+                if motor_axis is not None else None
+            )
             channels.append({
                 **mapping,
                 'channel_number': channel + 1,
@@ -930,21 +1451,57 @@ class MidiControlNode(Node):
                 'dial': dial[channel],
                 'buttons': buttons[channel],
                 'control_enabled': control_enabled[channel],
-                'motion_axis_matched': motor_axis is not None,
+                'motion_ids': motion_ids,
+                'motion_axis_matched': axis_groups_matched[channel],
+                'motion_group_valid': group_valid[channel],
+                'motion_group_message': group_messages[channel],
                 'matched_motor_axis': motor_axis,
+                'matched_motor_axes': group_axes,
                 'display_motor_angle': motor_angle_mode[channel],
                 'motor_angle_deg': None if motor_angle is None else round(motor_angle, 6),
                 'motion_value_deg': None if motion_value is None else round(motion_value, 6),
+                'requested_motion_value_deg': (
+                    None
+                    if requested_motion_value is None
+                    else round(requested_motion_value, 6)
+                ),
+                'safe_motion_lower_deg': (
+                    None if safe_range is None else round(safe_range[0], 6)
+                ),
+                'safe_motion_upper_deg': (
+                    None if safe_range is None else round(safe_range[1], 6)
+                ),
+                'motion_command_valid': bool(
+                    control_enabled[channel]
+                    and group_valid[channel]
+                    and approved_complete
+                    and motor_command_states[channel] not in {
+                        'rejected', 'activation_rejected'
+                    }
+                ),
+                'motion_values_deg': {
+                    motion_id: round(approved_values[motion_id], 6)
+                    for motion_id in motion_ids
+                    if motion_id in approved_values
+                },
                 'motor_target_deg': None if motor_target is None else round(motor_target, 6),
                 'fader_syncing': (
-                    awaiting_fader_sync[channel] or bridge_fader_syncing[channel]
+                    awaiting_fader_sync[channel]
+                    or bridge_fader_syncing[channel]
+                    or fader_parking[channel]
                 ),
+                'fader_parking': fader_parking[channel],
                 'motor_command_state': motor_command_states[channel],
                 'motor_command_message': motor_command_messages[channel],
             })
         return {
             'success': True,
             'node_state': 'ok',
+            'project_id': self._project_id,
+            'execution_context': {
+                **self._execution_context,
+                'ready': self._execution_context_ready,
+            },
             'connected': connected,
             'device_connected': device_connected,
             'device_connection_message': device_connection_message,
@@ -961,7 +1518,7 @@ class MidiControlNode(Node):
             'value_min': MIDI_VALUE_MIN,
             'value_max': MIDI_VALUE_MAX,
             'unit': '14bit',
-            'motor_output_enabled': True,
+            'motor_output_enabled': self._execution_context_ready,
             'motor_output_path': 'motion_supervisor',
             'select_locked': self._studio_select_locked,
             'select_lock_reason': (
@@ -1012,10 +1569,13 @@ class MidiControlNode(Node):
             with self._lock:
                 fader_position = self._pending_fader_positions[index]
                 self._pending_fader_positions[index] = None
-            hardware_feedback = (*feedback, -1 if fader_position is None else fader_position)
-            if self._last_feedback[index] == hardware_feedback:
+            # A consumed one-shot fader target must not make the following
+            # cycle look like a UI-state change. Otherwise every retry emits
+            # a second LED/LCD-only packet immediately after the fader packet.
+            if self._last_feedback[index] == feedback and fader_position is None:
                 continue
-            self._last_feedback[index] = hardware_feedback
+            self._last_feedback[index] = feedback
+            hardware_feedback = (*feedback, -1 if fader_position is None else fader_position)
             msg = String()
             msg.data = '\t'.join((str(index), *(str(value) for value in hardware_feedback)))
             self._feedback_publisher.publish(msg)
@@ -1027,15 +1587,72 @@ class MidiControlNode(Node):
         self._fader_sync_targets = [None] * MIDI_CHANNEL_COUNT
         self._awaiting_fader_sync = [False] * MIDI_CHANNEL_COUNT
         self._fader_sync_not_before = [0.0] * MIDI_CHANNEL_COUNT
+        self._fader_parking = [False] * MIDI_CHANNEL_COUNT
+        self._fader_park_last_command_at = [0.0] * MIDI_CHANNEL_COUNT
         self._last_select_toggle_at = [0.0] * MIDI_CHANNEL_COUNT
         self._last_motor_command_at = [0.0] * MIDI_CHANNEL_COUNT
         self._last_motor_target = [None] * MIDI_CHANNEL_COUNT
+        self._last_group_motor_targets = [
+            {} for _ in range(MIDI_CHANNEL_COUNT)
+        ]
+        self._approved_motion_values = [
+            {} for _ in range(MIDI_CHANNEL_COUNT)
+        ]
+        self._approved_motor_targets = [
+            {} for _ in range(MIDI_CHANNEL_COUNT)
+        ]
+        self._approved_command_stamp = [0.0] * MIDI_CHANNEL_COUNT
         self._pending_motor_requests = {}
         self._motor_follow_active = [False] * MIDI_CHANNEL_COUNT
         self._motor_command_state = ['inactive'] * MIDI_CHANNEL_COUNT
         self._motor_command_message = [''] * MIDI_CHANNEL_COUNT
         self._motor_angle_mode = [False] * MIDI_CHANNEL_COUNT
         self._last_feedback = [None] * MIDI_CHANNEL_COUNT
+
+    def _reset_bank_change_state_locked(self) -> None:
+        """Release every SELECT line and park all motorized faders at zero."""
+        self._reset_live_values_locked()
+        now = time.monotonic()
+        for channel in range(MIDI_CHANNEL_COUNT):
+            self._start_fader_parking_locked(channel, now)
+        self._previous_btn3 = list(self._btn3)
+
+    @staticmethod
+    def _active_bank_control_signature(state: Dict[str, Any]) -> tuple:
+        active = state.get('active_bank') if isinstance(state, dict) else None
+        if not isinstance(active, dict):
+            return ()
+        mappings = active.get('mappings')
+        if not isinstance(mappings, list):
+            mappings = []
+        return (
+            str(state.get('active_bank_id') or ''),
+            tuple(
+                (
+                    int(item.get('channel', index)),
+                    bool(item.get('enabled', True)),
+                    str(item.get('motion_id') or ''),
+                    tuple(str(value or '') for value in item.get('linked_motion_ids') or []),
+                    float(item.get('min_percent', 0.0)),
+                    float(item.get('max_percent', 100.0)),
+                    bool(item.get('reversed', False)),
+                )
+                for index, item in enumerate(mappings)
+                if isinstance(item, dict)
+            ),
+        )
+
+    def _finish_bank_settings_change_locked(self, previous_state: Dict[str, Any]) -> bool:
+        """Reset ownership unless the active bank changed only filter levels."""
+        reset_select = (
+            self._active_bank_control_signature(previous_state)
+            != self._active_bank_control_signature(self._banks.snapshot())
+        )
+        if reset_select:
+            self._reset_bank_change_state_locked()
+        else:
+            self._reset_filter_state_locked()
+        return reset_select
 
     def _reset_filter_state_locked(self) -> None:
         self._filter_stage1 = [float(value) for value in self._raw_channels]
@@ -1068,25 +1685,36 @@ class MidiControlNode(Node):
         for channel, mapping in enumerate(mappings):
             if not self._control_enabled[channel]:
                 continue
-            motion_id = str(mapping.get('motion_id') or '')
-            row = self._axis_registry.mapping(motion_id)
-            motor_axis = self._axis_registry.motor_axis(motion_id)
-            motor_position = (
-                self._position_for_axis(self._latest_motion_state, motor_axis)
-                if motor_axis is not None else None
-            )
+            motion_ids = mapping_motion_ids(mapping)
             try:
-                if row is None or motor_axis is None or motor_position is None:
-                    raise ValueError('현재 모터 위치 또는 모션축 설정을 확인할 수 없습니다')
-                motion_value = motion_value_from_motor(motor_position, row)
-                fader_target = raw_fader_for_motion(motion_value, row, mapping)
+                group = self._mapping_group_locked(mapping, require_positions=True)
+                motion_values = [
+                    motion_value_from_motor(float(item['motor_position']), item['row'])
+                    for item in group
+                ]
+                if (
+                    max(motion_values) - min(motion_values)
+                    > LINKED_POSITION_TOLERANCE_DEG
+                ):
+                    raise ValueError('연동 축의 현재 모션값이 서로 다릅니다')
+                motion_value = sum(motion_values) / len(motion_values)
+                fader_target = raw_fader_for_motion(
+                    motion_value,
+                    group[0]['row'],
+                    mapping,
+                    safe_motion_range_for_group(group),
+                )
             except ValueError as exc:
                 self._deactivate_control_channel_locked(channel)
                 self._motor_command_state[channel] = 'activation_rejected'
                 self._motor_command_message[channel] = f'재동기화 실패: {exc}'
-                errors.append({'channel': channel + 1, 'motion_id': motion_id, 'message': str(exc)})
+                errors.append({
+                    'channel': channel + 1,
+                    'motion_ids': motion_ids,
+                    'message': str(exc),
+                })
                 continue
-            self._pending_motor_requests.pop(channel, None)
+            self._clear_pending_channel_locked(channel)
             self._raw_channels[channel] = fader_target
             self._channels[channel] = float(fader_target)
             self._filter_stage1[channel] = float(fader_target)
@@ -1097,9 +1725,16 @@ class MidiControlNode(Node):
             self._fader_sync_not_before[channel] = now + FADER_SYNC_MIN_DURATION_SEC
             self._motor_command_state[channel] = 'syncing_fader'
             self._motor_command_message[channel] = '초기 위치 기준으로 페이더 재동기화 중'
-            self._last_motor_target[channel] = motor_position
+            self._last_group_motor_targets[channel] = {
+                int(item['axis']): float(item['motor_position']) for item in group
+            }
+            self._last_motor_target[channel] = float(group[0]['motor_position'])
             self._motor_follow_active[channel] = False
-            synced.append({'channel': channel + 1, 'motion_id': motion_id, 'raw_target': fader_target})
+            synced.append({
+                'channel': channel + 1,
+                'motion_ids': motion_ids,
+                'raw_target': fader_target,
+            })
         return {'synced': synced, 'errors': errors}
 
     def _prepare_studio_recording_locked(self) -> Dict[str, Any]:
@@ -1110,13 +1745,44 @@ class MidiControlNode(Node):
         mappings = self._banks.snapshot()['active_bank']['mappings']
         targets = []
         errors = []
+        validated_groups = set()
+        for mapping in mappings:
+            if mapping.get('enabled') is False:
+                continue
+            motion_ids = mapping_motion_ids(mapping)
+            mapped = all(
+                self._axis_registry.mapping(motion_id) is not None
+                and self._axis_registry.motor_axis(motion_id) is not None
+                for motion_id in motion_ids
+            )
+            if not mapped:
+                continue
+            signature = tuple(motion_ids)
+            if signature in validated_groups:
+                continue
+            validated_groups.add(signature)
+            try:
+                self._mapping_group_locked(mapping)
+            except ValueError as exc:
+                errors.append(str(exc))
+        if errors:
+            return {'targets': targets, 'errors': errors}
+
         self._studio_select_locked = True
         self._pending_motor_requests.clear()
         for channel, mapping in enumerate(mappings):
-            self._deactivate_control_channel_locked(channel)
-            motion_id = str(mapping.get('motion_id') or '')
-            row = self._axis_registry.mapping(motion_id)
-            motor_axis = self._axis_registry.motor_axis(motion_id)
+            # Recording initialization immediately hands motor ownership to the
+            # motion run manager.  Do not insert a separate MIDI hold command
+            # between SELECT release and that ownership transfer.
+            self._deactivate_control_channel_locked(
+                channel, request_motor_hold=False
+            )
+            motion_ids = mapping_motion_ids(mapping)
+            mapped = all(
+                self._axis_registry.mapping(motion_id) is not None
+                and self._axis_registry.motor_axis(motion_id) is not None
+                for motion_id in motion_ids
+            )
             fader_target = 0
             self._studio_zero_fader_targets[channel] = fader_target
             self._raw_channels[channel] = fader_target
@@ -1135,22 +1801,55 @@ class MidiControlNode(Node):
             self._last_feedback[channel] = None
             targets.append({
                 'channel': channel + 1,
-                'motion_id': motion_id,
+                'motion_ids': motion_ids,
                 'raw_target': fader_target,
-                'mapped': row is not None and motor_axis is not None,
+                'mapped': mapped,
             })
         self._previous_btn3 = list(self._btn3)
         return {'targets': targets, 'errors': errors}
+
+    def _studio_recording_zero_status_locked(self) -> Dict[str, Any]:
+        """Report whether every physical MIDI fader has finished parking at zero."""
+        self._ensure_fader_parking_state_locked()
+        pending = []
+        for channel in range(MIDI_CHANNEL_COUNT):
+            raw = int(self._raw_channels[channel])
+            busy = bool(
+                self._physical_touch[channel]
+                or self._fader_moving[channel]
+                or self._bridge_fader_syncing[channel]
+            )
+            if self._fader_parking[channel] or raw > FADER_PARK_TOLERANCE_RAW or busy:
+                pending.append({
+                    'channel': channel + 1,
+                    'raw': raw,
+                    'parking': bool(self._fader_parking[channel]),
+                    'busy': busy,
+                    'physical_touch': bool(self._physical_touch[channel]),
+                    'fader_moving': bool(self._fader_moving[channel]),
+                    'fader_syncing': bool(self._bridge_fader_syncing[channel]),
+                })
+        connected = bool(getattr(self, '_device_connected', True))
+        ready = connected and not pending
+        return {
+            'ready': ready,
+            'pending_channels': pending,
+            'device_connected': connected,
+        }
 
     def _finish_studio_recording_initialization_locked(self) -> None:
         self._studio_select_locked = False
         self._previous_btn3 = list(self._btn3)
         for channel in range(MIDI_CHANNEL_COUNT):
             self._control_enabled[channel] = False
-            self._pending_motor_requests.pop(channel, None)
+            self._clear_pending_channel_locked(channel)
             self._motor_follow_active[channel] = False
-            self._motor_command_state[channel] = 'inactive'
-            self._motor_command_message[channel] = 'SELECT를 눌러 녹화할 축을 선택하세요'
+            if self._fader_parking[channel]:
+                self._motor_command_state[channel] = 'parking_fader'
+                self._motor_command_message[channel] = '페이더 0 복귀 확인 중'
+            else:
+                self._motor_command_state[channel] = 'inactive'
+                self._motor_command_message[channel] = 'SELECT를 눌러 녹화할 축을 선택하세요'
 
     def _request_callback(self, msg: String) -> None:
         try:
@@ -1165,64 +1864,130 @@ class MidiControlNode(Node):
         response: Dict[str, Any]
         try:
             if command == 'select_project':
+                previous_project_id = self._project_id
                 self._select_project_mapping_dir(payload)
                 preferred = str(payload.get('mapping_file_id') or '').strip()
                 registry = MotionAxisRegistry(self._mappings_dir)
                 registry.refresh(preferred, self._latest_motion_state)
                 mapping_file = self._mapping_file_path_or_none(registry.file_id)
                 stored_banks = load_midi_banks(mapping_file) if mapping_file else None
+                context_id = str(payload.get('context_id') or '').strip()
+                expected_mapping_sha = str(payload.get('mapping_sha256') or '').strip()
+                actual_mapping_sha = (
+                    hashlib.sha256(mapping_file.read_bytes()).hexdigest()
+                    if mapping_file is not None else ''
+                )
+                if expected_mapping_sha and actual_mapping_sha != expected_mapping_sha:
+                    raise ValueError('모션축 설정 파일 버전이 실행 컨텍스트와 다릅니다')
+                incoming_banks = MidiBankManager()
+                if stored_banks is not None:
+                    incoming_banks.replace_state(stored_banks)
                 with self._lock:
+                    same_context = (
+                        previous_project_id == self._project_id
+                        and self._selected_mapping_file_id == registry.file_id
+                        and self._banks.export_state() == incoming_banks.export_state()
+                        and self._execution_context.get('context_id') == context_id
+                    )
                     self._axis_registry = registry
                     self._selected_mapping_file_id = registry.file_id
                     self._preferred_mapping_file_id = registry.file_id
                     self._bank_config_file = mapping_file
-                    self._banks = MidiBankManager()
-                    if stored_banks is not None:
-                        self._banks.replace_state(stored_banks)
-                    self._reset_filter_state_locked()
-                    self._reset_runtime_controls_locked()
+                    if not same_context:
+                        self._banks = incoming_banks
+                        self._reset_bank_change_state_locked()
+                        self._execution_context_ready = False
+                    self._execution_context = {
+                        'context_id': context_id,
+                        'project_id': self._project_id,
+                        'mapping_file_id': registry.file_id,
+                        'mapping_sha256': actual_mapping_sha,
+                    }
                     self._bank_file_loaded = stored_banks is not None
                     self._bank_file_dirty = False
                 response = self._snapshot()
-                response['message'] = '현재 프로젝트 MIDI·모션축 컨텍스트로 전환했습니다'
+                # The project coordinator validates every node with the same
+                # top-level acknowledgement contract.  `_snapshot()` keeps
+                # these values nested for the UI, so expose them here as well.
+                response.update({
+                    'context_id': context_id,
+                    'project_id': self._project_id,
+                    'mapping_file_id': registry.file_id,
+                    'mapping_sha256': actual_mapping_sha,
+                })
+                response['context_changed'] = not same_context
+                response['message'] = (
+                    '현재 프로젝트 MIDI·모션축 컨텍스트로 전환했습니다'
+                    if not same_context else
+                    '현재 프로젝트 MIDI·모션축 컨텍스트가 이미 적용되어 있습니다'
+                )
+            elif command == 'confirm_context':
+                context_id = str(payload.get('context_id') or '').strip()
+                with self._lock:
+                    if (
+                        not context_id
+                        or context_id != self._execution_context.get('context_id')
+                    ):
+                        raise ValueError('확인하려는 실행 컨텍스트가 적용된 설정과 다릅니다')
+                    self._execution_context_ready = True
+                response = self._snapshot()
+                response.update({
+                    'context_id': context_id,
+                    'project_id': self._project_id,
+                    'mapping_file_id': self._execution_context.get('mapping_file_id', ''),
+                    'mapping_sha256': self._execution_context.get('mapping_sha256', ''),
+                })
+                response['message'] = '현재 프로젝트 MIDI 제어 허용'
+            elif command == 'invalidate_context':
+                with self._lock:
+                    was_ready = self._execution_context_ready
+                    self._execution_context_ready = False
+                    if was_ready or any(self._control_enabled):
+                        self._reset_bank_change_state_locked()
+                response = self._snapshot()
+                response['message'] = '현재 프로젝트 MIDI 제어 차단'
             elif command in {'save_mapping', 'update_bank'}:
                 bank_id = payload.get('bank_id') or self._banks.snapshot()['active_bank_id']
                 with self._lock:
+                    previous_bank_state = self._banks.snapshot()
                     self._banks.update_bank(
                         bank_id,
                         name=payload.get('name'),
                         mappings=payload.get('mappings'),
                     )
-                    self._reset_filter_state_locked()
-                    self._reset_runtime_controls_locked()
+                    reset_select = self._finish_bank_settings_change_locked(previous_bank_state)
                     self._bank_file_dirty = True
                 response = self._snapshot()
-                response['message'] = 'MIDI 뱅크 설정을 노드에 임시 적용했습니다'
+                response['select_reset'] = reset_select
+                response['message'] = (
+                    'MIDI 뱅크 설정 임시 적용 · SELECT 전체 해제 · 페이더 0 이동'
+                    if reset_select else
+                    'MIDI 필터 설정 임시 적용 · SELECT 상태 유지'
+                )
             elif command == 'create_bank':
                 with self._lock:
                     bank = self._banks.create_bank(payload.get('name'), copy_from_active=True)
                     self._banks.select_bank(bank['bank_id'])
-                    self._reset_filter_state_locked()
-                    self._reset_runtime_controls_locked()
+                    self._reset_bank_change_state_locked()
                     self._bank_file_dirty = True
                 response = self._snapshot()
-                response['message'] = 'MIDI 뱅크 추가 완료 (메모리 전용)'
+                response['message'] = (
+                    'MIDI 뱅크 추가 완료 (메모리 전용) · SELECT 전체 해제 · 페이더 0 이동'
+                )
             elif command == 'select_bank':
                 with self._lock:
                     self._banks.select_bank(payload.get('bank_id'))
-                    self._reset_filter_state_locked()
-                    self._reset_runtime_controls_locked()
+                    self._reset_bank_change_state_locked()
                     self._bank_file_dirty = True
                 response = self._snapshot()
-                response['message'] = 'MIDI 뱅크 전환 완료'
+                response['message'] = 'MIDI 뱅크 전환 완료 · SELECT 전체 해제 · 페이더 0 이동'
             elif command == 'delete_bank':
                 with self._lock:
                     self._banks.delete_bank(payload.get('bank_id'))
-                    self._reset_filter_state_locked()
-                    self._reset_runtime_controls_locked()
+                    self._reset_bank_change_state_locked()
                     self._bank_file_dirty = True
                 response = self._snapshot()
-                response['message'] = 'MIDI 뱅크 삭제 완료'
+                response['message'] = 'MIDI 뱅크 삭제 완료 · SELECT 전체 해제 · 페이더 0 이동'
             elif command == 'save_banks_to_file':
                 response = {
                     'success': False,
@@ -1237,6 +2002,7 @@ class MidiControlNode(Node):
                 if stored_banks is None:
                     raise ValueError('모션축 설정 파일에 저장된 midi_banks가 없습니다')
                 with self._lock:
+                    previous_bank_state = self._banks.snapshot()
                     self._axis_registry = MotionAxisRegistry(self._mappings_dir)
                     self._axis_registry.refresh(
                         mapping_file.name, self._latest_motion_state
@@ -1245,12 +2011,16 @@ class MidiControlNode(Node):
                     self._preferred_mapping_file_id = mapping_file.name
                     self._banks.replace_state(stored_banks)
                     self._bank_config_file = mapping_file
-                    self._reset_filter_state_locked()
-                    self._reset_runtime_controls_locked()
+                    reset_select = self._finish_bank_settings_change_locked(previous_bank_state)
                     self._bank_file_loaded = True
                     self._bank_file_dirty = False
                 response = self._snapshot()
-                response['message'] = '파일에서 검증된 MIDI 뱅크를 노드에 적용했습니다'
+                response['select_reset'] = reset_select
+                response['message'] = (
+                    '파일의 MIDI 뱅크 적용 완료 · SELECT 전체 해제 · 페이더 0 이동'
+                    if reset_select else
+                    '파일의 MIDI 필터 설정 적용 완료 · SELECT 상태 유지'
+                )
             elif command == 'reset_runtime_values':
                 with self._lock:
                     self._reset_live_values_locked()
@@ -1276,8 +2046,24 @@ class MidiControlNode(Node):
                 response['message'] = (
                     '모든 SELECT 해제 · SELECT 잠금 · 모든 페이더 물리 0 이동 시작'
                     if not prepare_result['errors']
-                    else '일부 MIDI 채널을 물리 0 위치로 이동할 수 없습니다'
+                    else prepare_result['errors'][0]
                 )
+            elif command == 'studio_recording_zero_status':
+                with self._lock:
+                    zero_status = self._studio_recording_zero_status_locked()
+                response = self._snapshot()
+                response.update(zero_status)
+                response['success'] = True
+                if not zero_status['device_connected']:
+                    response['message'] = 'MIDI 장치가 연결되지 않았습니다'
+                elif zero_status['ready']:
+                    response['message'] = '모든 MIDI 페이더의 물리 0 복귀 확인 완료'
+                else:
+                    channels = ', '.join(
+                        f'{item["channel"]}(raw {item["raw"]})'
+                        for item in zero_status['pending_channels']
+                    )
+                    response['message'] = f'MIDI 페이더 0 복귀 대기: 채널 {channels}'
             elif command == 'studio_recording_ready':
                 with self._lock:
                     self._finish_studio_recording_initialization_locked()

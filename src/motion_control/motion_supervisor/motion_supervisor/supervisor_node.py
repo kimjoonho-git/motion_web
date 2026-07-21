@@ -9,8 +9,10 @@ from typing import Any, Dict, Optional
 import rclpy
 import yaml
 from motion_control_msgs.msg import MotorStatus
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Int8MultiArray, String
 
 
@@ -51,8 +53,11 @@ def motion_run_rejection_reason(
     motor_state_available: bool,
     manual_command_active: bool,
     midi_command_active: bool = False,
+    emergency_latched: bool = False,
 ) -> Optional[str]:
     """Return why a runtime command cannot own the final command output."""
+    if emergency_latched:
+        return 'emergency stop is latched; restart the full program'
     if not motor_state_available:
         return 'motor state is unavailable or stale'
     if manual_command_active:
@@ -80,6 +85,10 @@ class MotionSupervisor(Node):
             'jog_result_topic',
             '/motion_control/manual_jog_result',
         ).value
+        self.safety_request_topic = self.declare_parameter(
+            'safety_request_topic',
+            '/motion_control/safety_request',
+        ).value
         self.action_request_topic = self.declare_parameter(
             'action_request_topic',
             '/motion_control/manual_action_request',
@@ -104,6 +113,10 @@ class MotionSupervisor(Node):
             'midi_position_result_topic',
             '/motion_control/midi_position_result',
         ).value
+        self.safety_status_topic = self.declare_parameter(
+            'safety_status_topic',
+            '/motion_control/safety_status',
+        ).value
         self.state_timeout_sec = float(
             self.declare_parameter('state_timeout_sec', 0.5).value
         )
@@ -124,6 +137,10 @@ class MotionSupervisor(Node):
         self._motor_config_cache: Optional[Dict[str, Any]] = None
         self._midi_active_until = 0.0
         self._last_motion_run_command_at = 0.0
+        self._emergency_latched = False
+        self._motion_stop_block_until = 0.0
+        self._command_lock = threading.RLock()
+        self._safety_callback_group = MutuallyExclusiveCallbackGroup()
 
         self._state_sub = self.create_subscription(
             String,
@@ -136,6 +153,13 @@ class MotionSupervisor(Node):
             self.jog_request_topic,
             self._jog_request_callback,
             10,
+        )
+        self._safety_sub = self.create_subscription(
+            String,
+            self.safety_request_topic,
+            self._safety_request_callback,
+            10,
+            callback_group=self._safety_callback_group,
         )
         self._action_sub = self.create_subscription(
             String,
@@ -165,6 +189,16 @@ class MotionSupervisor(Node):
         self._midi_position_result_pub = self.create_publisher(
             String, self.midi_position_result_topic, 10
         )
+        safety_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        self._safety_status_pub = self.create_publisher(
+            String, self.safety_status_topic, safety_qos
+        )
+        self._safety_status_timer = self.create_timer(0.5, self._publish_safety_status)
+        self._publish_safety_status()
 
         self.get_logger().info(
             f'motion_supervisor started: state={self.motion_state_topic}, '
@@ -172,6 +206,7 @@ class MotionSupervisor(Node):
             f'action_request={self.action_request_topic}, '
             f'motion_run_command={self.motion_run_command_topic}, '
             f'midi_position_request={self.midi_position_request_topic}, '
+            f'safety_status={self.safety_status_topic}, '
             f'command={self.motor_command_topic}, '
             f'config_file={self.config_file}, '
             f'action_period={self.action_period_sec * 1000.0:.3f} ms'
@@ -190,19 +225,32 @@ class MotionSupervisor(Node):
 
     def _motion_run_command_callback(self, msg: MotorStatus) -> None:
         """Relay runtime commands through the sole final command publisher."""
+        shape_error = self._motor_command_shape_error(msg)
+        if shape_error:
+            self.get_logger().error(
+                f'Rejected malformed motion runtime command: {shape_error}.',
+                throttle_duration_sec=1.0,
+            )
+            return
         reason = motion_run_rejection_reason(
             motor_state_available=bool(self._current_motors()),
             manual_command_active=bool(self._active_jogs or self._active_actions),
             midi_command_active=time.monotonic() < self._midi_active_until,
+            emergency_latched=self._emergency_latched,
         )
+        if reason is None and time.monotonic() < self._motion_stop_block_until:
+            reason = 'motion stop is settling'
         if reason:
             self.get_logger().warning(
                 f'Rejected motion runtime command because {reason}.',
                 throttle_duration_sec=1.0,
             )
             return
-        self._last_motion_run_command_at = time.monotonic()
-        self._command_pub.publish(msg)
+        with self._command_lock:
+            if self._emergency_latched or time.monotonic() < self._motion_stop_block_until:
+                return
+            self._last_motion_run_command_at = time.monotonic()
+            self._command_pub.publish(msg)
 
     def _midi_position_request_callback(self, msg: String) -> None:
         try:
@@ -213,9 +261,33 @@ class MotionSupervisor(Node):
         if not isinstance(request, dict):
             self._publish_midi_position_result({}, False, 'invalid MIDI position request')
             return
+        if self._emergency_latched:
+            self._publish_midi_position_result(
+                request, False, 'emergency stop is latched; restart the full program'
+            )
+            return
+        if time.monotonic() < self._motion_stop_block_until:
+            self._publish_midi_position_result(request, False, 'motion stop is settling')
+            return
+        hold_axes = request.get('hold_axes')
+        if isinstance(hold_axes, list):
+            success, message, results = self._handle_midi_hold_axes(
+                hold_axes, self._optional_int(request.get('channel'))
+            )
+            self._publish_midi_position_result(
+                request, success, message, results=results
+            )
+            return
         targets = request.get('targets')
         if isinstance(targets, list):
-            success, message, results = self._handle_midi_position_batch(targets)
+            atomic_channels = {
+                channel
+                for value in request.get('atomic_channels') or []
+                if (channel := self._optional_int(value)) is not None
+            }
+            success, message, results = self._handle_midi_position_batch(
+                targets, atomic_channels=atomic_channels
+            )
             self._publish_midi_position_result(
                 request, success, message, results=results
             )
@@ -223,8 +295,51 @@ class MotionSupervisor(Node):
             success, message = self._handle_midi_position_request(request)
             self._publish_midi_position_result(request, success, message)
 
+    def _handle_midi_hold_axes(
+        self, axes: list[Any], channel: Optional[int]
+    ) -> tuple[bool, str, list[Dict[str, Any]]]:
+        unique_axes = []
+        for value in axes:
+            axis = self._optional_int(value)
+            if axis is not None and axis not in unique_axes:
+                unique_axes.append(axis)
+        if not unique_axes:
+            return False, 'MIDI hold axis list is empty', []
+        motors = self._current_motors()
+        targets = []
+        for axis in unique_axes:
+            motor = self._motor_for_axis(axis, motors)
+            position = self._optional_float(
+                motor.get('position_deg', motor.get('position'))
+            ) if motor is not None else None
+            if position is None:
+                results = [
+                    self._midi_target_result({
+                        'request_id': f'midi-hold-{candidate}',
+                        'channel': channel,
+                        'axis': candidate,
+                        'operation': 'hold',
+                    }, False, f'연동 축 전체 정지 실패: Axis {axis} 현재 위치 확인 불가')
+                    for candidate in unique_axes
+                ]
+                return False, results[0]['message'], results
+            targets.append({
+                'request_id': f'midi-hold-{axis}',
+                'channel': channel,
+                'axis': axis,
+                'target_deg': position,
+                'operation': 'hold',
+            })
+        atomic_channels = {channel} if channel is not None else set()
+        return self._handle_midi_position_batch(
+            targets, atomic_channels=atomic_channels
+        )
+
     def _handle_midi_position_batch(
-        self, targets: list[Any]
+        self,
+        targets: list[Any],
+        *,
+        atomic_channels: set[int] | None = None,
     ) -> tuple[bool, str, list[Dict[str, Any]]]:
         requests = [target for target in targets if isinstance(target, dict)]
         if not requests:
@@ -248,6 +363,7 @@ class MotionSupervisor(Node):
         results: list[Dict[str, Any]] = []
         commanded_axes: set[int] = set()
         success_count = 0
+        atomic_channels = atomic_channels or set()
 
         for target in requests:
             axis = self._optional_int(target.get('axis'))
@@ -277,7 +393,12 @@ class MotionSupervisor(Node):
             else:
                 error = f'Axis {axis} motor type is unsupported for MIDI control'
 
-            if not error and target_position is not None and motor is not None:
+            if (
+                not error
+                and target_position is not None
+                and motor is not None
+                and target.get('operation') != 'hold'
+            ):
                 error = self._target_position_limit_error(motor, target_position) or ''
 
             if error:
@@ -300,11 +421,58 @@ class MotionSupervisor(Node):
             ))
             success_count += 1
 
+        for channel in atomic_channels:
+            indexes = [
+                index for index, target in enumerate(requests)
+                if self._optional_int(target.get('channel')) == channel
+            ]
+            if not indexes or all(results[index]['success'] for index in indexes):
+                continue
+            first_error = next(
+                results[index]['message']
+                for index in indexes if not results[index]['success']
+            )
+            group_message = f'연동 축 전체 차단: {first_error}'
+            for index in indexes:
+                if not results[index]['success']:
+                    results[index]['message'] = group_message
+                    continue
+                axis = self._optional_int(requests[index].get('axis'))
+                if axis is not None:
+                    command.number_of_target_interfaces[axis] = 0
+                    command.target_interface_id[axis] = Int8MultiArray(data=[])
+                    command.controlword[axis] = 0
+                    command.position[axis] = 0.0
+                    commanded_axes.discard(axis)
+                results[index] = self._midi_target_result(
+                    requests[index], False, group_message
+                )
+                success_count -= 1
+
         if success_count:
+            shape_error = self._motor_command_shape_error(command)
+            if shape_error:
+                message = f'invalid motor command blocked: {shape_error}'
+                return False, message, [
+                    self._midi_target_result(target, False, message)
+                    for target in requests
+                ]
             # All accepted axes are published atomically in one MotorStatus,
             # preventing depth-1 QoS from dropping an earlier per-axis command.
-            self._command_pub.publish(command)
-            self._midi_active_until = now + MIDI_COMMAND_OWNERSHIP_SEC
+            with self._command_lock:
+                if self._emergency_latched or time.monotonic() < self._motion_stop_block_until:
+                    message = 'motor command blocked by safety stop'
+                    return False, message, [
+                        self._midi_target_result(target, False, message)
+                        for target in requests
+                    ]
+                self._command_pub.publish(command)
+            # A SELECT-off hold releases MIDI ownership. The initialization
+            # command which follows must be allowed through immediately.
+            if any(target.get('operation') != 'hold' for target in requests):
+                self._midi_active_until = now + MIDI_COMMAND_OWNERSHIP_SEC
+            else:
+                self._midi_active_until = 0.0
 
         all_success = success_count == len(requests)
         message = (
@@ -322,6 +490,11 @@ class MotionSupervisor(Node):
             'request_id': str(request.get('request_id') or ''),
             'channel': request.get('channel'),
             'axis': request.get('axis'),
+            'operation': request.get('operation'),
+            'motion_id': request.get('motion_id'),
+            'mapping_file_id': request.get('mapping_file_id'),
+            'motion_deg': request.get('motion_deg'),
+            'target_deg': request.get('target_deg'),
             'success': success,
             'message': message,
         }
@@ -378,6 +551,10 @@ class MotionSupervisor(Node):
             'request_id': str(request.get('request_id') or ''),
             'channel': request.get('channel'),
             'axis': request.get('axis'),
+            'motion_id': request.get('motion_id'),
+            'mapping_file_id': request.get('mapping_file_id'),
+            'motion_deg': request.get('motion_deg'),
+            'target_deg': request.get('target_deg'),
             'success': success,
             'message': message,
             'stamp': time.time(),
@@ -399,7 +576,15 @@ class MotionSupervisor(Node):
 
         request_id = str(request.get('request_id') or '')
         command = str(request.get('command') or 'ac_servo_jog')
-        if command == 'ac_servo_control':
+        if command == 'safety_emergency_stop':
+            success, message = self._handle_safety_stop(emergency=True)
+        elif command == 'safety_motion_stop' and not self._emergency_latched:
+            success, message = self._handle_safety_stop(emergency=False)
+        elif self._emergency_latched:
+            success, message = False, 'emergency stop is latched; restart the full program'
+        elif time.monotonic() < self._motion_stop_block_until:
+            success, message = False, 'motion stop is settling'
+        elif command == 'ac_servo_control':
             success, message = self._handle_ac_servo_control(request)
         elif command == 'ac_servo_jog':
             success, message = self._handle_ac_servo_jog(request)
@@ -407,6 +592,28 @@ class MotionSupervisor(Node):
             success, message = self._handle_dynamixel_jog(request)
         else:
             success, message = False, f'unknown manual command: {command}'
+        self._publish_result(request_id, success, message)
+
+    def _safety_request_callback(self, msg: String) -> None:
+        """Handle safety commands on a callback group independent of normal control."""
+        try:
+            request = json.loads(msg.data)
+        except json.JSONDecodeError:
+            self._publish_result('', False, 'invalid safety request JSON')
+            return
+        if not isinstance(request, dict):
+            self._publish_result('', False, 'invalid safety request')
+            return
+        request_id = str(request.get('request_id') or '')
+        command = str(request.get('command') or '')
+        if command == 'safety_emergency_stop':
+            success, message = self._handle_safety_stop(emergency=True)
+        elif command == 'safety_motion_stop' and not self._emergency_latched:
+            success, message = self._handle_safety_stop(emergency=False)
+        elif self._emergency_latched:
+            success, message = False, 'emergency stop is latched; restart the full program'
+        else:
+            success, message = False, f'unknown safety command: {command}'
         self._publish_result(request_id, success, message)
 
     def _action_request_callback(self, msg: String) -> None:
@@ -418,7 +625,11 @@ class MotionSupervisor(Node):
 
         request_id = str(request.get('request_id') or '')
         command = str(request.get('command') or 'ac_servo_absolute_move')
-        if command == 'ac_servo_absolute_move':
+        if self._emergency_latched:
+            success, message = False, 'emergency stop is latched; restart the full program'
+        elif time.monotonic() < self._motion_stop_block_until:
+            success, message = False, 'motion stop is settling'
+        elif command == 'ac_servo_absolute_move':
             success, message = self._handle_ac_servo_absolute_move(request)
         elif command == 'dynamixel_absolute_move':
             success, message = self._handle_dynamixel_absolute_move(request)
@@ -1219,7 +1430,12 @@ class MotionSupervisor(Node):
         )
         command.controlword[axis] = int(controlword)
         command.position[axis] = float(target_position)
-        self._command_pub.publish(command)
+        with self._command_lock:
+            if self._emergency_latched:
+                return False, 'emergency stop is latched; restart the full program'
+            if time.monotonic() < self._motion_stop_block_until:
+                return False, 'motion stop is settling'
+            self._command_pub.publish(command)
         return True, 'position target command sent'
 
     def _publish_ac_servo_action_setpoint(
@@ -1341,12 +1557,130 @@ class MotionSupervisor(Node):
             command.number_of_target_interfaces[axis] = 1
             command.target_interface_id[axis] = Int8MultiArray(data=[ID_CONTROLWORD])
             command.controlword[axis] = int(controlword)
-        self._command_pub.publish(command)
+        with self._command_lock:
+            if self._emergency_latched:
+                return
+            if time.monotonic() < self._motion_stop_block_until:
+                return
+            self._command_pub.publish(command)
+
+    def _handle_safety_stop(self, emergency: bool) -> tuple[bool, str]:
+        """Cancel every upper-level command and publish one final safe command."""
+        if self._emergency_latched and not emergency:
+            return False, 'emergency stop is latched; restart the full program'
+        cancelled_actions = []
+        with self._command_lock:
+            if emergency:
+                self._emergency_latched = True
+            self._motion_stop_block_until = (
+                float('inf') if emergency else time.monotonic() + 0.5
+            )
+            cancelled_actions = [
+                str(item.get('request_id') or '')
+                for item in self._active_actions.values()
+                if isinstance(item, dict) and item.get('request_id')
+            ]
+            self._active_jogs.clear()
+            self._active_actions.clear()
+            self._midi_active_until = 0.0
+            self._last_motion_run_command_at = 0.0
+
+            current_motors = self._current_motors()
+            motors = current_motors
+            if emergency and not motors:
+                motors = self._last_known_motors()
+            current_axes = {
+                axis for axis in (
+                    self._optional_int(motor.get('controller_index'))
+                    for motor in current_motors
+                )
+                if axis is not None
+            }
+            command = self._empty_motor_command(motors)
+            affected_axes = []
+            for motor in motors:
+                if str(motor.get('state') or '') != 'detected':
+                    continue
+                axis = self._optional_int(motor.get('controller_index'))
+                if axis is None or axis < 0 or axis >= len(command.number_of_target_interfaces):
+                    continue
+                position = self._optional_float(
+                    motor.get('position_deg', motor.get('position'))
+                )
+                if self._is_ac_servo(motor) and emergency:
+                    command.number_of_target_interfaces[axis] = 1
+                    command.target_interface_id[axis] = Int8MultiArray(data=[ID_CONTROLWORD])
+                    command.controlword[axis] = CW_DISABLE_OPERATION_MINAS
+                    affected_axes.append(axis)
+                    continue
+                if axis not in current_axes:
+                    # Never command a stale position merely to make a software stop.
+                    continue
+                if position is None:
+                    continue
+                command.number_of_target_interfaces[axis] = 2
+                command.target_interface_id[axis] = Int8MultiArray(
+                    data=[ID_CONTROLWORD, ID_TARGET_POSITION]
+                )
+                command.controlword[axis] = (
+                    CW_NEW_SET_POINT_MINAS
+                    if self._is_ac_servo(motor)
+                    else DYNAMIXEL_TORQUE_ENABLE
+                )
+                command.position[axis] = float(position)
+                affected_axes.append(axis)
+            if affected_axes:
+                # Safety command is intentionally the final command and may bypass
+                # the latch/block that was set immediately above.
+                self._command_pub.publish(command)
+
+        for request_id in cancelled_actions:
+            self._publish_action_result(
+                request_id,
+                False,
+                'trajectory cancelled by emergency stop' if emergency
+                else 'trajectory cancelled by motion stop',
+            )
+        self._publish_safety_status()
+        mode = 'Emergency stop latched' if emergency else 'Motion stopped; servo remains enabled'
+        axes_text = self._axis_list_text(sorted(set(affected_axes))) or 'none'
+        return True, f'{mode}: axes {axes_text}'
+
+    def _publish_safety_status(self) -> None:
+        publisher = getattr(self, '_safety_status_pub', None)
+        if publisher is None:
+            return
+        settling = (
+            not self._emergency_latched
+            and time.monotonic() < self._motion_stop_block_until
+        )
+        payload = {
+            'emergency_latched': bool(self._emergency_latched),
+            'motion_stop_settling': settling,
+            'commands_blocked': bool(self._emergency_latched or settling),
+            'message': (
+                '긴급정지 잠김 · 전체 프로그램 재시작 필요'
+                if self._emergency_latched
+                else '전체 동작 정지 처리 중'
+                if settling
+                else '동작 가능'
+            ),
+            'stamp': time.time(),
+        }
+        publisher.publish(String(data=json.dumps(payload, ensure_ascii=False)))
 
     def _current_motors(self) -> list[Dict[str, Any]]:
         if self._latest_state is None or self._latest_state_at is None:
             return []
         if time.time() - self._latest_state_at > self.state_timeout_sec:
+            return []
+        motors = self._latest_state.get('motors', [])
+        if not isinstance(motors, list):
+            return []
+        return [motor for motor in motors if isinstance(motor, dict)]
+
+    def _last_known_motors(self) -> list[Dict[str, Any]]:
+        if self._latest_state is None:
             return []
         motors = self._latest_state.get('motors', [])
         if not isinstance(motors, list):
@@ -1378,7 +1712,7 @@ class MotionSupervisor(Node):
 
         command = MotorStatus()
         command.number_of_target_interfaces = [0] * size
-        command.target_interface_id = [Int8MultiArray(data=[0] * size) for _ in range(size)]
+        command.target_interface_id = [Int8MultiArray(data=[]) for _ in range(size)]
         command.controller_index = list(range(size))
         command.controlword = [0] * size
         command.statusword = [0] * size
@@ -1387,6 +1721,40 @@ class MotionSupervisor(Node):
         command.velocity = [0.0] * size
         command.effort = [0.0] * size
         return command
+
+    @staticmethod
+    def _motor_command_shape_error(command: MotorStatus) -> Optional[str]:
+        """Validate arrays before the C++ motor bridge indexes the message."""
+        size = len(command.controller_index)
+        parallel_fields = (
+            'number_of_target_interfaces',
+            'target_interface_id',
+            'controlword',
+            'statusword',
+            'errorcode',
+            'position',
+            'velocity',
+            'effort',
+        )
+        for field in parallel_fields:
+            values = getattr(command, field, None)
+            if values is None or len(values) < size:
+                actual = 0 if values is None else len(values)
+                return f'{field} length {actual} is smaller than {size}'
+        indexes = [int(value) for value in command.controller_index]
+        if len(set(indexes)) != len(indexes):
+            return 'controller_index contains duplicates'
+        if any(index < 0 for index in indexes):
+            return 'controller_index contains a negative value'
+        for slot in range(size):
+            interface_count = int(command.number_of_target_interfaces[slot])
+            interface_ids = command.target_interface_id[slot].data
+            if len(interface_ids) < interface_count:
+                return (
+                    f'axis slot {slot} interface data length {len(interface_ids)} '
+                    f'is smaller than {interface_count}'
+                )
+        return None
 
     @staticmethod
     def _is_ac_servo(motor: Dict[str, Any]) -> bool:
@@ -1465,11 +1833,14 @@ class MotionSupervisor(Node):
 def main(args=None) -> None:
     rclpy.init(args=args)
     node = MotionSupervisor()
+    executor = MultiThreadedExecutor(num_threads=2)
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
+        executor.shutdown()
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

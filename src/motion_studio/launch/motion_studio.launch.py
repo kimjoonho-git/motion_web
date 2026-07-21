@@ -23,4 +23,10 @@ def generate_launch_description():
                 'motion_projects_dir': LaunchConfiguration('motion_projects_dir'),
             }],
         ),
+        Node(
+            package='motion_studio',
+            executable='motion_studio_editor_node',
+            name='motion_studio_editor_node',
+            output='screen',
+        ),
     ])

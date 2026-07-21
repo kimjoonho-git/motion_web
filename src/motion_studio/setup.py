@@ -24,6 +24,7 @@ setup(
     entry_points={
         'console_scripts': [
             'motion_studio_node = motion_studio.studio_node:main',
+            'motion_studio_editor_node = motion_studio.editor_node:main',
         ],
     },
 )

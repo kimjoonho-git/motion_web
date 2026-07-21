@@ -4,6 +4,7 @@ import pytest
 
 from motion_studio.timeline import (
     layer_conflicts,
+    layer_transition_warnings,
     motion_file_text,
     recording_values,
     render_project,
@@ -53,24 +54,178 @@ def test_same_motion_id_time_overlap_is_reported_and_rejected():
         render_project(payload)
 
 
-def test_same_motion_id_in_non_overlapping_time_ranges_is_allowed():
+def test_same_motion_id_in_non_overlapping_time_ranges_with_safe_transition_is_allowed():
     payload = project()
     payload['layers'][0]['frames'] = [
         {'frame': 1, 'time_sec': 0.02, 'values': {'1-1': 1.0}},
         {'frame': 2, 'time_sec': 0.04, 'values': {'1-1': 2.0}},
     ]
     payload['layers'][1]['frames'] = [
-        {'frame': 3, 'time_sec': 0.06, 'values': {'1-1': 20.0}},
-        {'frame': 4, 'time_sec': 0.08, 'values': {'1-1': 30.0}},
+        {'frame': 3, 'time_sec': 0.06, 'values': {'1-1': 5.0}},
+        {'frame': 4, 'time_sec': 0.08, 'values': {'1-1': 7.0}},
     ]
 
     frames = render_project(payload)
 
     assert layer_conflicts(payload) == []
-    assert [frame['values']['1-1'] for frame in frames] == [1.0, 2.0, 20.0, 30.0]
+    assert layer_transition_warnings(payload) == []
+    assert [frame['values']['1-1'] for frame in frames] == [1.0, 2.0, 5.0, 7.0]
 
 
-def test_recording_gap_ends_layer_ownership_instead_of_holding_last_value():
+def test_large_value_jump_between_non_overlapping_layers_is_rejected():
+    payload = project()
+    payload['layers'][0]['name'] = '앞 구간'
+    payload['layers'][0]['frames'] = [
+        {'frame': 1, 'time_sec': 0.02, 'values': {'1-1': 1.0}},
+        {'frame': 2, 'time_sec': 0.04, 'values': {'1-1': 2.0}},
+    ]
+    payload['layers'][1]['name'] = '뒤 구간'
+    payload['layers'][1]['frames'] = [
+        {'frame': 3, 'time_sec': 0.06, 'values': {'1-1': 20.0}},
+        {'frame': 4, 'time_sec': 0.08, 'values': {'1-1': 22.0}},
+    ]
+
+    warnings = layer_transition_warnings(payload)
+
+    assert len(warnings) == 1
+    assert warnings[0]['motion_id'] == '1-1'
+    assert warnings[0]['first_layer_name'] == '앞 구간'
+    assert warnings[0]['second_layer_name'] == '뒤 구간'
+    assert warnings[0]['jump_deg'] == 18.0
+    assert warnings[0]['safety_level'] == 4
+    assert warnings[0]['limit_deg'] == 4.0
+    with pytest.raises(ValueError, match='합성 모션값 급변.*1-1'):
+        render_project(payload)
+
+
+def test_empty_time_gap_holds_last_value_and_checks_next_transition():
+    payload = project()
+    payload['layers'][0]['frames'] = [
+        {'frame': 1, 'time_sec': 0.02, 'values': {'1-1': 30.0}},
+        {'frame': 2, 'time_sec': 0.04, 'values': {'1-1': 31.0}},
+    ]
+    payload['layers'][1]['frames'] = [
+        {'frame': 5, 'time_sec': 0.10, 'values': {'1-1': 50.0}},
+    ]
+
+    warnings = layer_transition_warnings(payload)
+
+    assert len(warnings) == 1
+    assert warnings[0]['kind'] == 'segment_transition'
+    assert warnings[0]['jump_deg'] == 19.0
+
+
+def test_late_first_frame_value_is_held_from_playback_start():
+    payload = project()
+    payload['layers'] = [{
+        'layer_id': 'late',
+        'name': '늦은 시작',
+        'enabled': True,
+        'frames': [
+            {'frame': 150, 'time_sec': 3.0, 'values': {'1-1': 25.0}},
+            {'frame': 151, 'time_sec': 3.02, 'values': {'1-1': 26.0}},
+        ],
+    }]
+
+    warnings = layer_transition_warnings(payload)
+    frames = render_project(payload)
+
+    assert warnings == []
+    assert frames[0]['values']['1-1'] == 25.0
+    assert frames[148]['values']['1-1'] == 25.0
+    assert frames[149]['values']['1-1'] == 25.0
+    assert frames[150]['values']['1-1'] == 26.0
+
+
+def test_late_manual_initial_value_is_held_and_transition_is_checked():
+    payload = project()
+    payload['layers'] = [{
+        'layer_id': 'late',
+        'name': '늦은 수동 시작',
+        'enabled': True,
+        'frames': [
+            {'frame': 150, 'time_sec': 3.0, 'values': {'1-1': 30.0}},
+            {'frame': 151, 'time_sec': 3.02, 'values': {'1-1': 31.0}},
+        ],
+    }]
+
+    warnings = layer_transition_warnings(payload, initial_motion_values_deg={'1-1': 10.0})
+
+    assert len(warnings) == 1
+    assert warnings[0]['kind'] == 'late_start'
+    assert warnings[0]['from_value_deg'] == 10.0
+    assert warnings[0]['to_value_deg'] == 30.0
+    with pytest.raises(ValueError, match='합성 모션값 급변.*1-1'):
+        render_project(payload, initial_motion_values_deg={'1-1': 10.0})
+
+    safe_frames = render_project(payload, initial_motion_values_deg={'1-1': 30.0})
+    assert safe_frames[0]['values']['1-1'] == 30.0
+    assert safe_frames[148]['values']['1-1'] == 30.0
+
+
+def test_large_step_inside_one_layer_is_rejected():
+    payload = project()
+    payload['layers'] = [{
+        'layer_id': 'take',
+        'name': '단일 레이어',
+        'enabled': True,
+        'frames': [
+            {'frame': 1, 'time_sec': 0.02, 'values': {'1-1': 1.0}},
+            {'frame': 2, 'time_sec': 0.04, 'values': {'1-1': 20.0}},
+        ],
+    }]
+
+    warnings = layer_transition_warnings(payload)
+
+    assert len(warnings) == 1
+    assert warnings[0]['kind'] == 'frame_step'
+    assert warnings[0]['jump_deg'] == 19.0
+
+
+def test_manual_initial_position_to_first_frame_jump_is_rejected():
+    payload = project()
+    payload['layers'] = [{
+        'layer_id': 'take',
+        'enabled': True,
+        'frames': [
+            {'frame': 1, 'time_sec': 0.02, 'values': {'1-1': 20.0}},
+        ],
+    }]
+
+    warnings = layer_transition_warnings(
+        payload,
+        {'1-1': (-180.0, 180.0)},
+        {'1-1': 0.0},
+    )
+
+    assert len(warnings) == 1
+    assert warnings[0]['kind'] == 'manual_initial'
+    assert warnings[0]['from_value_deg'] == 0.0
+    assert warnings[0]['to_value_deg'] == 20.0
+
+
+def test_safety_level_uses_larger_of_degrees_or_axis_range_percent():
+    payload = project()
+    payload['transition_safety_level'] = 4
+    payload['layers'][0]['frames'] = [
+        {'frame': 1, 'time_sec': 0.02, 'values': {'1-1': 1.0}},
+        {'frame': 2, 'time_sec': 0.04, 'values': {'1-1': 2.0}},
+    ]
+    payload['layers'][1]['frames'] = [
+        {'frame': 3, 'time_sec': 0.06, 'values': {'1-1': 14.0}},
+    ]
+
+    warnings = layer_transition_warnings(payload, {'1-1': (-180.0, 180.0)})
+
+    assert warnings == []
+    payload['layers'][1]['frames'][0]['values']['1-1'] = 20.0
+    warnings = layer_transition_warnings(payload, {'1-1': (-180.0, 180.0)})
+    assert len(warnings) == 1
+    assert warnings[0]['range_percent_limit_deg'] == 14.4
+    assert warnings[0]['limit_deg'] == 14.4
+
+
+def test_recording_gap_holds_last_output_value():
     payload = project()
     payload['layers'] = [{
         'layer_id': 'take',
@@ -79,13 +234,13 @@ def test_recording_gap_ends_layer_ownership_instead_of_holding_last_value():
             {'frame': 1, 'time_sec': 0.02, 'values': {'1-1': 1.0}},
             {'frame': 2, 'time_sec': 0.04, 'values': {'1-1': 2.0}},
             {'frame': 3, 'time_sec': 0.06, 'values': {}},
-            {'frame': 4, 'time_sec': 0.08, 'values': {'1-1': 8.0}},
+            {'frame': 4, 'time_sec': 0.08, 'values': {'1-1': 3.0}},
         ],
     }]
 
     frames = render_project(payload)
 
-    assert [frame['values']['1-1'] for frame in frames] == [1.0, 2.0, 0.0, 8.0]
+    assert [frame['values']['1-1'] for frame in frames] == [1.0, 2.0, 2.0, 3.0]
 
 
 def test_export_matches_header_plus_pair_row_format():
@@ -106,6 +261,43 @@ def test_empty_project_has_no_artificial_recording_tracks():
     empty = {**project(), 'layers': []}
 
     assert render_project(empty) == []
+
+
+def test_disabled_layers_do_not_extend_composition_or_add_motion_ids():
+    payload = {
+        'project_id': 'disabled-layer-isolation',
+        'period_sec': 0.02,
+        'layers': [
+            {
+                'layer_id': 'enabled',
+                'enabled': True,
+                'frames': [
+                    {'frame': 1, 'time_sec': 0.02, 'values': {'1-1': 1.0}},
+                ],
+            },
+            {
+                'layer_id': 'disabled',
+                'enabled': False,
+                'frames': [
+                    {'frame': 5, 'time_sec': 0.10, 'values': {'1-2': 50.0}},
+                ],
+            },
+        ],
+    }
+
+    frames = render_project(payload)
+
+    assert len(frames) == 1
+    assert frames[0]['values'] == {'1-1': 1.0}
+    assert layer_transition_warnings(payload) == []
+
+
+def test_all_disabled_layers_render_as_empty_project():
+    payload = project()
+    for layer in payload['layers']:
+        layer['enabled'] = False
+
+    assert render_project(payload) == []
 
 
 def test_recording_keeps_any_selected_axis_in_mapping_without_arm_list():

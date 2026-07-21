@@ -26,6 +26,10 @@ def generate_launch_description():
         DeclareLaunchArgument('host', default_value='0.0.0.0'),
         DeclareLaunchArgument('port', default_value='8000'),
         DeclareLaunchArgument('motion_state_topic', default_value='/motion_control/motion_state'),
+        DeclareLaunchArgument(
+            'safety_request_topic',
+            default_value='/motion_control/safety_request',
+        ),
         DeclareLaunchArgument('publish_hz', default_value='10.0'),
         DeclareLaunchArgument('max_jog_delta_deg', default_value='360.0'),
         DeclareLaunchArgument('start_midi_control', default_value='true'),
@@ -56,6 +60,12 @@ def generate_launch_description():
             parameters=[{
                 'motion_projects_dir': LaunchConfiguration('motion_projects_dir'),
             }],
+        ),
+        Node(
+            package='motion_studio',
+            executable='motion_studio_editor_node',
+            name='motion_studio_editor_node',
+            output='screen',
         ),
         Node(
             package='midi_control',
@@ -89,6 +99,7 @@ def generate_launch_description():
             output='screen',
             parameters=[{
                 'motion_state_topic': LaunchConfiguration('motion_state_topic'),
+                'safety_request_topic': LaunchConfiguration('safety_request_topic'),
                 'max_jog_delta_deg': LaunchConfiguration('max_jog_delta_deg'),
                 'host': LaunchConfiguration('host'),
                 'port': LaunchConfiguration('port'),

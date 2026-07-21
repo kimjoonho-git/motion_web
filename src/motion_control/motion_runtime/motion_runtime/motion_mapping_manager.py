@@ -1,6 +1,7 @@
 """Own motion-axis mapping files and validation outside the web layer."""
 
 import json
+import hashlib
 import math
 import os
 import time
@@ -38,6 +39,7 @@ class MotionMappingManager(Node):
         # legacy motion_data directory is never used as a project workspace.
         self.mappings_dir = self.motion_projects_dir
         self.motion_files_dir = self.motion_projects_dir
+        self._execution_context: Dict[str, Any] = {}
         self.request_topic = str(
             self.declare_parameter(
                 'request_topic',
@@ -83,7 +85,9 @@ class MotionMappingManager(Node):
 
         try:
             self._select_project(payload)
-            if command == 'list':
+            if command == 'apply_context':
+                response = self._apply_context(payload)
+            elif command == 'list':
                 response = self._list_mappings()
             elif command == 'load':
                 response = self._load_mapping(payload.get('file_id'))
@@ -135,6 +139,35 @@ class MotionMappingManager(Node):
         self.mappings_dir.mkdir(parents=True, exist_ok=True)
         self.motion_files_dir.mkdir(parents=True, exist_ok=True)
         return project_id
+
+    def _apply_context(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        context_id = str(payload.get('context_id') or '').strip()
+        file_id = str(payload.get('mapping_file_id') or '').strip()
+        expected_sha = str(payload.get('mapping_sha256') or '').strip()
+        if not context_id or not file_id or not expected_sha:
+            raise ValueError('실행 컨텍스트 ID와 모션축 설정 버전이 필요합니다')
+        path = self._mapping_file_path(file_id)
+        actual_sha = hashlib.sha256(path.read_bytes()).hexdigest()
+        if actual_sha != expected_sha:
+            raise ValueError('모션축 설정 파일 버전이 실행 컨텍스트와 다릅니다')
+        mapping = self._normalize_mapping(
+            yaml.safe_load(path.read_text(encoding='utf-8')) or {},
+            fallback_name=path.stem,
+        )
+        validation = self._validate_mapping(mapping)
+        if not validation.get('valid'):
+            raise ValueError('모션축 설정 검증에 실패했습니다')
+        self._execution_context = {
+            'context_id': context_id,
+            'project_id': str(payload.get('project_id') or ''),
+            'mapping_file_id': path.name,
+            'mapping_sha256': actual_sha,
+        }
+        return {
+            'success': True,
+            'message': '모션축 설정 실행 컨텍스트 적용 완료',
+            **self._execution_context,
+        }
 
     def _publish_response(self, request_id: str, success: bool, message: str) -> None:
         self._publish({

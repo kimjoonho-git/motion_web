@@ -110,3 +110,29 @@ def test_motion_id_rejects_values_outside_positive_number_pair(motion_id):
 
     with pytest.raises(ValueError, match='motion_id must use'):
         manager.update_bank('bank_1', mappings=mappings)
+
+
+def test_one_midi_channel_accepts_up_to_three_unique_motion_ids():
+    manager = MidiBankManager()
+    mappings = manager.active_bank()['mappings']
+    mappings[0]['motion_id'] = '1-1'
+    mappings[0]['linked_motion_ids'] = ['1-2', '3-1']
+
+    updated = manager.update_bank('bank_1', mappings=mappings)
+
+    assert updated['mappings'][0]['linked_motion_ids'] == ['1-2', '3-1']
+    assert manager.export_state()['banks'][0]['mappings'][0]['linked_motion_ids'] == [
+        '1-2', '3-1'
+    ]
+
+
+def test_linked_motion_ids_reject_duplicates_and_more_than_three():
+    manager = MidiBankManager()
+    mappings = manager.active_bank()['mappings']
+    mappings[0]['linked_motion_ids'] = ['1-1']
+    with pytest.raises(ValueError, match='must not be duplicated'):
+        manager.update_bank('bank_1', mappings=mappings)
+
+    mappings[0]['linked_motion_ids'] = ['1-2', '1-3', '1-4']
+    with pytest.raises(ValueError, match='no more than 3'):
+        manager.update_bank('bank_1', mappings=mappings)
