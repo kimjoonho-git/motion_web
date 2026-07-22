@@ -1,6 +1,10 @@
+import asyncio
 import threading
+import json
 
-from motion_web_bridge.bridge_node import MotionWebBridge
+from std_msgs.msg import String
+
+from motion_web_bridge.bridge_node import MotionWebBridge, create_app
 
 
 class ContextRepository:
@@ -31,11 +35,34 @@ def make_bridge():
     bridge.project_repository = ContextRepository()
     bridge._execution_context_lock = threading.RLock()
     bridge._execution_context_apply_lock = threading.Lock()
+    bridge._project_generation_lock = threading.Lock()
+    bridge._project_generation = 1
     bridge._execution_context_status = {
         'state': 'starting', 'ready': False, 'context_id': '', 'nodes': {},
     }
     bridge._lock = threading.Lock()
+    bridge._event_log_lock = threading.RLock()
+    bridge._jog_result_lock = threading.Lock()
+    bridge._action_result_lock = threading.Lock()
+    bridge._motion_mapping_lock = threading.Lock()
+    bridge._motion_run_lock = threading.Lock()
+    bridge._midi_monitor_lock = threading.Lock()
+    bridge._motion_studio_lock = threading.Lock()
+    bridge._motion_studio_editor_lock = threading.Lock()
     bridge._motion_state = {'generated_at': 1.0, 'last_motor_status_at': 1.0, 'motors': []}
+    bridge._motion_state_received_at = 1.0
+    bridge._active_motor_errors = {}
+    bridge._last_motion_run_state = None
+    bridge._jog_results = {}
+    bridge._action_results = {}
+    bridge._motion_mapping_results = {}
+    bridge._motion_run_results = {}
+    bridge._motion_run_status = {}
+    bridge._midi_monitor_results = {}
+    bridge._midi_monitor_status = {}
+    bridge._motion_studio_results = {}
+    bridge._motion_studio_status = {}
+    bridge._motion_studio_editor_results = {}
     bridge._runtime_project_id = lambda: 'project-1'
     bridge._runtime_service_status = lambda _state: {
         'phase': 'ready', 'message': 'motor runtime ready',
@@ -46,6 +73,7 @@ def make_bridge():
             'success': True,
             'project_id': 'project-1',
             'context_id': payload.get('context_id'),
+            'project_generation': 1,
         }
 
     bridge._request_motion_mapping = response
@@ -69,6 +97,138 @@ def test_coordinator_allows_control_only_after_all_nodes_confirm_context():
         'motor_runtime',
         'midi_control_confirm', 'motion_run_confirm', 'motion_studio_confirm',
     }
+
+
+def test_coordinator_establishes_persisted_generation_after_program_restart():
+    bridge = make_bridge()
+    bridge._supervisor_project_generation = 0
+    published = []
+    bridge._action_request_publisher = type('Publisher', (), {
+        'publish': lambda _self, message: published.append(json.loads(message.data)),
+    })()
+    bridge._wait_for_action_result = lambda request_id, **_kwargs: {
+        'success': True,
+        'request_id': request_id,
+        'project_generation': 1,
+    }
+
+    result = bridge._reconcile_execution_context()
+
+    assert result['state'] == 'ready'
+    assert published == [{
+        'request_id': published[0]['request_id'],
+        'project_generation': 1,
+        'command': 'project_generation_boundary',
+    }]
+    assert bridge._supervisor_project_generation == 1
+
+
+def test_coordinator_does_not_enable_context_without_supervisor_generation_ack():
+    bridge = make_bridge()
+    bridge._supervisor_project_generation = 0
+    bridge._action_request_publisher = type('Publisher', (), {
+        'publish': lambda _self, _message: None,
+    })()
+    bridge._wait_for_action_result = lambda *_args, **_kwargs: None
+
+    result = bridge._reconcile_execution_context()
+
+    assert result['state'] == 'waiting_motor_runtime'
+    assert result['ready'] is False
+    assert 'motor_runtime' in result['failures']
+
+
+def test_frequent_status_read_does_not_rehash_project_files():
+    bridge = make_bridge()
+    calls = []
+    original = bridge.project_repository.execution_context
+
+    def counted(project_id):
+        calls.append(project_id)
+        return original(project_id)
+
+    bridge.project_repository.execution_context = counted
+    bridge._execution_context_status = {
+        'state': 'ready',
+        'ready': True,
+        'project_id': 'project-1',
+        'context_id': 'context-sha',
+        'context': original('project-1'),
+        'nodes': {},
+    }
+    calls.clear()
+
+    status = bridge.execution_context_status(validate_files=False)
+
+    assert status['ready'] is True
+    assert calls == []
+
+
+def test_high_frequency_runtime_owner_check_does_not_load_project(tmp_path):
+    bridge = make_bridge()
+    bridge.motion_projects_dir = tmp_path
+    bridge.applied_motor_config_file = (
+        tmp_path / 'project-1' / 'runtime' / 'applied_motor_config.yaml'
+    )
+    bridge.project_repository.get_project = lambda _project_id: (_ for _ in ()).throw(
+        AssertionError('high-frequency status path must not parse project files')
+    )
+
+    assert bridge._runtime_project_id_from_path('project-1') == 'project-1'
+    assert bridge._runtime_project_id_from_path('project-2') == ''
+
+
+def test_status_websocket_reads_disconnect_and_finishes():
+    class FakeBridge:
+        web_publish_hz = 10.0
+
+        @staticmethod
+        def snapshot():
+            return {'bridge_state': 'ok'}
+
+    class FakeWebSocket:
+        accepted = False
+        sent = []
+
+        async def accept(self):
+            self.accepted = True
+
+        async def send_json(self, payload):
+            self.sent.append(payload)
+
+        @staticmethod
+        async def receive():
+            return {'type': 'websocket.disconnect'}
+
+    app = create_app(FakeBridge())
+    endpoint = next(
+        route.endpoint for route in app.routes
+        if getattr(route, 'path', '') == '/ws/status'
+    )
+    websocket = FakeWebSocket()
+
+    asyncio.run(endpoint(websocket))
+
+    assert websocket.accepted is True
+    assert websocket.sent == [{'bridge_state': 'ok'}]
+
+
+def test_web_ui_files_are_not_served_from_stale_browser_cache():
+    app = create_app(make_bridge())
+    index_endpoint = next(
+        route.endpoint for route in app.routes
+        if getattr(route, 'path', '') == '/'
+    )
+    static_endpoint = next(
+        route.endpoint for route in app.routes
+        if getattr(route, 'path', '') == '/static/{asset_path:path}'
+    )
+
+    index_response = asyncio.run(index_endpoint())
+    script_response = asyncio.run(static_endpoint('app.js'))
+
+    assert index_response.headers['cache-control'] == 'no-store'
+    assert script_response.headers['cache-control'] == 'no-store'
 
 
 def test_coordinator_keeps_control_blocked_when_one_node_does_not_confirm():
@@ -98,6 +258,7 @@ def test_coordinator_accepts_midi_snapshot_with_nested_context_acknowledgement()
             response['execution_context'] = {
                 'context_id': payload['context_id'],
                 'project_id': 'project-1',
+                'project_generation': 1,
             }
         return response
 
@@ -122,6 +283,7 @@ def test_coordinator_accepts_studio_status_with_nested_context_acknowledgement()
                 'execution_context': {
                     'context_id': payload['context_id'],
                     'project_id': 'project-1',
+                    'project_generation': 1,
                     'ready': True,
                 },
             }
@@ -157,12 +319,25 @@ def test_coordinator_blocks_after_node_apply_until_motor_config_is_applied():
     context = bridge.project_repository.execution_context('project-1')
     context['motor_applied'] = False
     bridge.project_repository.execution_context = lambda _project_id: context
+    invalidations = []
+    midi_commands = []
+    default_midi_response = bridge._request_midi_monitor
+    bridge._invalidate_execution_nodes = lambda context_id='': invalidations.append(context_id)
+
+    def midi_response(command, payload, **kwargs):
+        midi_commands.append(command)
+        return default_midi_response(command, payload, **kwargs)
+
+    bridge._request_midi_monitor = midi_response
 
     result = bridge._reconcile_execution_context()
 
     assert result['state'] == 'motor_apply_required'
     assert result['ready'] is False
     assert result['failures'] == {}
+    assert midi_commands == ['select_project']
+    assert invalidations == []
+    assert result['nodes']['midi_control']['project_id'] == 'project-1'
 
 
 def test_coordinator_waits_for_current_project_motor_runtime():
@@ -177,6 +352,156 @@ def test_coordinator_waits_for_current_project_motor_runtime():
     assert result['state'] == 'waiting_motor_runtime'
     assert result['ready'] is False
     assert result['failures'] == {'motor_runtime': 'motor state waiting'}
+
+
+def test_project_change_deletes_previous_project_values_from_bridge_memory():
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._lock = threading.Lock()
+    bridge._event_log_lock = threading.RLock()
+    bridge._jog_result_lock = threading.Lock()
+    bridge._action_result_lock = threading.Lock()
+    bridge._motion_mapping_lock = threading.Lock()
+    bridge._motion_run_lock = threading.Lock()
+    bridge._midi_monitor_lock = threading.Lock()
+    bridge._motion_studio_lock = threading.Lock()
+    bridge._motion_studio_editor_lock = threading.Lock()
+    bridge._motion_state = {'motors': [{'alias': 403}]}
+    bridge._motion_state_received_at = 1.0
+    bridge._active_motor_errors = {'0': 'old-error'}
+    bridge._last_motion_run_state = 'running'
+    bridge._jog_results = {'old': {'success': True}}
+    bridge._action_results = {'old': {'success': True}}
+    bridge._motion_mapping_results = {'old': {'project_id': 'old-project'}}
+    bridge._motion_run_results = {'old': {'project_id': 'old-project'}}
+    bridge._motion_run_status = {'project_id': 'old-project', 'axes': [1]}
+    bridge._midi_monitor_results = {'old': {'project_id': 'old-project'}}
+    bridge._midi_monitor_status = {'project_id': 'old-project', 'banks': [1]}
+    bridge._motion_studio_results = {'old': {'project_id': 'old-project'}}
+    bridge._motion_studio_status = {'project_id': 'old-project', 'project': {}}
+    bridge._motion_studio_editor_results = {'old': {'project_id': 'old-project'}}
+
+    bridge._clear_project_scoped_memory()
+
+    assert bridge._motion_state is None
+    assert bridge._motion_state_received_at is None
+    assert bridge._active_motor_errors == {}
+    assert bridge._last_motion_run_state is None
+    assert bridge._jog_results == {}
+    assert bridge._action_results == {}
+    assert bridge._motion_mapping_results == {}
+    assert bridge._motion_run_results == {}
+    assert bridge._motion_run_status == {}
+    assert bridge._midi_monitor_results == {}
+    assert bridge._midi_monitor_status == {}
+    assert bridge._motion_studio_results == {}
+    assert bridge._motion_studio_status == {}
+    assert bridge._motion_studio_editor_results == {}
+
+
+def test_previous_runtime_motor_state_is_not_cached_after_project_change():
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._lock = threading.Lock()
+    bridge._motion_state = None
+    bridge._motion_state_received_at = None
+    bridge.project_repository = type('Repository', (), {
+        'selected_project_id': lambda _self: 'new-project',
+    })()
+    bridge._selected_project_owns_runtime = lambda: True
+    bridge._record_motor_error_transitions = lambda _payload: None
+
+    bridge._motion_state_callback(String(data=json.dumps({
+        'project_id': 'old-project',
+        'motors': [{'controller_index': 0, 'alias': 403}],
+    })))
+
+    assert bridge._motion_state is None
+    assert bridge._motion_state_received_at is None
+
+
+def test_scan_result_is_discarded_if_project_changes_while_scanning():
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    selected = {'project_id': 'project-a'}
+    bridge.project_repository = type('Repository', (), {
+        'selected_project_id': lambda _self: selected['project_id'],
+    })()
+    bridge.snapshot = lambda: {}
+    bridge.get_logger = lambda: type('Logger', (), {'warn': lambda *_args: None})()
+
+    class Future:
+        def done(self):
+            return True
+
+        def result(self):
+            selected['project_id'] = 'project-b'
+            return type('Response', (), {
+                'success': True,
+                'message': '{"slaves": [{"position": 0}]}',
+            })()
+
+    client = type('Client', (), {
+        'wait_for_service': lambda _self, **_kwargs: True,
+        'call_async': lambda _self, _request: Future(),
+    })()
+
+    result = bridge._call_scan_service(client, '/scan', 1.0)
+
+    assert result['success'] is False
+    assert result['scan'] is None
+    assert result['project_id'] == 'project-b'
+
+
+def test_scan_result_is_discarded_after_a_to_b_to_a_project_switch():
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._project_generation_lock = threading.Lock()
+    bridge._project_generation = 7
+    bridge.project_repository = type('Repository', (), {
+        'selected_project_id': lambda _self: 'project-a',
+    })()
+    bridge.snapshot = lambda: {}
+    bridge.get_logger = lambda: type('Logger', (), {'warn': lambda *_args: None})()
+
+    class Future:
+        def done(self):
+            return True
+
+        def result(self):
+            # The visible project ID returned to A, but two boundaries passed.
+            bridge._project_generation = 9
+            return type('Response', (), {
+                'success': True,
+                'message': '{"slaves": [{"position": 0}]}',
+            })()
+
+    client = type('Client', (), {
+        'wait_for_service': lambda _self, **_kwargs: True,
+        'call_async': lambda _self, _request: Future(),
+    })()
+
+    result = bridge._call_scan_service(client, '/scan', 1.0)
+
+    assert result['success'] is False
+    assert result['scan'] is None
+    assert result['project_generation'] == 9
+
+
+def test_late_ros_response_from_previous_generation_is_never_cached():
+    bridge = make_bridge()
+
+    bridge._motion_mapping_response_callback(String(data=json.dumps({
+        'request_id': 'mapping-g1-100',
+        'project_generation': 1,
+        'success': True,
+    })))
+    assert 'mapping-g1-100' in bridge._motion_mapping_results
+
+    bridge._project_generation = 2
+    bridge._motion_mapping_response_callback(String(data=json.dumps({
+        'request_id': 'mapping-g1-200',
+        'project_generation': 1,
+        'success': True,
+    })))
+
+    assert 'mapping-g1-200' not in bridge._motion_mapping_results
 
 
 def test_coordinator_rejects_successful_confirmation_for_wrong_context():

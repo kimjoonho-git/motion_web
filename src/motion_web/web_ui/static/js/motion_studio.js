@@ -15,7 +15,9 @@ import {
   startMotionStudioRecord,
   stopMotionStudio,
   updateMotionStudioLayer,
-} from './api.js?v=20260721-layer-merge';
+} from './api.js?v=20260722-motor-config-delete';
+
+const MOTION_ID_PATTERN = /^[1-9]\d*-[1-9]\d*$/;
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"]/g, (character) => ({
@@ -33,6 +35,81 @@ function timeText(seconds) {
 function editorId(prefix) {
   if (globalThis.crypto?.randomUUID) return `${prefix}_${globalThis.crypto.randomUUID().slice(0, 8)}`;
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+}
+
+export function motionStudioLayerDuration(layer) {
+  return Math.max(
+    0,
+    ...(layer?.frames || [])
+      .map((frame) => Number(frame.time_sec))
+      .filter((timeSec) => Number.isFinite(timeSec) && timeSec >= 0),
+  );
+}
+
+export function motionStudioEditorValueBounds(minimum, maximum, scale = 1) {
+  let minValue = Number.isFinite(Number(minimum)) ? Number(minimum) : -1;
+  let maxValue = Number.isFinite(Number(maximum)) ? Number(maximum) : 1;
+  if (maxValue < minValue) [minValue, maxValue] = [maxValue, minValue];
+  if (Math.abs(maxValue - minValue) < 1e-9) {
+    minValue -= 1;
+    maxValue += 1;
+  }
+  const numericScale = Number(scale);
+  const valueScale = Number.isFinite(numericScale) && numericScale > 0 ? numericScale : 1;
+  const center = (minValue + maxValue) / 2;
+  const halfSpan = ((maxValue - minValue) / 2) * valueScale;
+  return { minValue: center - halfSpan, maxValue: center + halfSpan };
+}
+
+export function motionStudioEditorNextValueScale(currentScale, factor) {
+  const current = Number.isFinite(Number(currentScale)) && Number(currentScale) > 0
+    ? Number(currentScale) : 1;
+  const multiplier = Number(factor);
+  if (!Number.isFinite(multiplier) || multiplier <= 0) return current;
+  const next = current * multiplier;
+  return Number.isFinite(next) && next > 0 ? next : current;
+}
+
+export function synchronizeMotionStudioEditorTimeline(editor, layer, previousLayer = null) {
+  if (!editor) return false;
+  const duration = motionStudioLayerDuration(layer);
+  const previousDuration = previousLayer === null
+    ? Number.NaN
+    : motionStudioLayerDuration(previousLayer);
+  if (Number.isFinite(previousDuration) && Math.abs(duration - previousDuration) <= 1e-9) {
+    return false;
+  }
+  editor.viewStart = 0;
+  editor.viewEnd = Math.max(0.02, duration);
+  editor.selectionStage = 0;
+  editor.selectionAnchor = null;
+  return true;
+}
+
+export function motionStudioLayerDataEqual(first, second) {
+  return JSON.stringify({
+    frames: first?.frames || [],
+    point_curves: first?.point_curves || [],
+  }) === JSON.stringify({
+    frames: second?.frames || [],
+    point_curves: second?.point_curves || [],
+  });
+}
+
+export function motionStudioLayerMotionIds(layer) {
+  return [...new Set((layer?.frames || []).flatMap(
+    (frame) => Object.keys(frame?.values || {}),
+  ))];
+}
+
+export function resolveMotionStudioSelectedLayerId(layers, selectedLayerId = '') {
+  const available = Array.isArray(layers) ? layers : [];
+  if (available.some((layer) => layer.layer_id === selectedLayerId)) return selectedLayerId;
+  return String(available[0]?.layer_id || '');
+}
+
+export function motionStudioShouldEditPoint(operation, pointTarget) {
+  return operation === 'point_curve' && Boolean(pointTarget);
 }
 
 export function createMotionStudioController({ el, getMotorActionBlockReason = () => '' }) {
@@ -55,6 +132,9 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
 
   function setProject(project) {
     state.project = project || null;
+    state.selectedLayerId = resolveMotionStudioSelectedLayerId(
+      state.project?.layers || [], state.selectedLayerId,
+    );
   }
 
   function selectedMidi() {
@@ -565,7 +645,7 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
   }
 
   function editorMotionIds(layer) {
-    return [...layerTracks(layer).keys()];
+    return motionStudioLayerMotionIds(layer);
   }
 
   function editorPointCurves(layer) {
@@ -582,8 +662,18 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     const editor = state.editor;
     if (!editor || !curve) return;
     editor.pointDraft = clone(curve);
+    if (![1, 3, 5].includes(Number(editor.pointDraft.interpolation_order))) {
+      editor.pointDraft.interpolation_order = (editor.pointDraft.points || []).every(
+        (point) => point.tangent_mode === 'linear',
+      ) ? 1 : 3;
+    }
+    editor.pointCurveOrder = Number(editor.pointDraft.interpolation_order);
+    (editor.pointDraft.points || []).forEach((point) => {
+      if (point.tangent_mode === 'linear') point.tangent_mode = 'auto';
+    });
     editor.selectedPointId = pointId || curve.points?.[0]?.point_id || '';
     editor.draggingHandle = null;
+    editor.draggingPoint = null;
   }
 
   function selectOnlyEditorAxis(motionId) {
@@ -614,6 +704,14 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     if (el.studioEditorCurveDeleteButton) {
       el.studioEditorCurveDeleteButton.disabled = !pointMode || !editor?.pointDraft?.curve_id;
     }
+    if (el.studioEditorPointCurveOrder) {
+      el.studioEditorPointCurveOrder.disabled = !pointMode;
+      if (document.activeElement !== el.studioEditorPointCurveOrder) {
+        el.studioEditorPointCurveOrder.value = String(
+          editor?.pointDraft?.interpolation_order || editor?.pointCurveOrder || 3,
+        );
+      }
+    }
     if (!point) {
       if (el.studioEditorPointTime) el.studioEditorPointTime.value = '';
       if (el.studioEditorPointValue) el.studioEditorPointValue.value = '';
@@ -633,16 +731,6 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       .map((input) => input.value);
   }
 
-  function editorAxisInitialValue(row) {
-    const lower = Number(row?.motion_lower_deg);
-    const upper = Number(row?.motion_upper_deg);
-    const configured = Number(row?.initial_motion_position_deg);
-    let value = Number.isFinite(configured) ? configured : 0;
-    if (Number.isFinite(lower)) value = Math.max(lower, value);
-    if (Number.isFinite(upper)) value = Math.min(upper, value);
-    return value;
-  }
-
   function refreshEditorAxisControls(preferredSelection = null, layerOverride = null) {
     const editor = state.editor;
     if (!editor) return;
@@ -657,30 +745,25 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       )).join('');
     }
 
-    const existing = new Set(ids);
-    const rowsById = new Map();
-    for (const row of activeMapping()?.rows || []) {
-      const motionId = String(row?.motion_id || '').trim();
-      if (motionId && !rowsById.has(motionId)) rowsById.set(motionId, row);
-    }
-    const available = [...rowsById.entries()]
-      .filter(([motionId]) => !existing.has(motionId))
-      .sort(([first], [second]) => first.localeCompare(second, undefined, { numeric: true }));
-    if (el.studioEditorAddAxisSelect) {
-      el.studioEditorAddAxisSelect.innerHTML = available.length
-        ? available.map(([motionId, row]) => (
-          `<option value="${escapeHtml(motionId)}" data-initial-value="${
-            editorAxisInitialValue(row)
-          }">${escapeHtml(motionId)}</option>`
-        )).join('')
-        : '<option value="">추가 가능한 축 없음</option>';
-      const selectedOption = el.studioEditorAddAxisSelect.selectedOptions?.[0];
-      if (el.studioEditorAddAxisValue) {
-        el.studioEditorAddAxisValue.value = selectedOption?.dataset.initialValue || '0';
-      }
-    }
     if (el.studioEditorAddAxisButton) {
-      el.studioEditorAddAxisButton.disabled = !available.length || Boolean(editor.preview);
+      el.studioEditorAddAxisButton.disabled = !el.studioEditorAddAxisSelect?.value.trim()
+        || Boolean(editor.preview);
+    }
+    if (el.studioEditorCopyAxisSource) {
+      const previousSource = el.studioEditorCopyAxisSource.value;
+      el.studioEditorCopyAxisSource.innerHTML = ids.length
+        ? ids.map((motionId) => `<option value="${escapeHtml(motionId)}">${escapeHtml(motionId)}</option>`).join('')
+        : '<option value="">원본 축 없음</option>';
+      if (ids.includes(previousSource)) el.studioEditorCopyAxisSource.value = previousSource;
+    }
+    if (el.studioEditorCopyAxisTarget) {
+      const targetId = el.studioEditorCopyAxisTarget.value.trim();
+      if (targetId && ids.includes(targetId)) el.studioEditorCopyAxisTarget.value = '';
+    }
+    if (el.studioEditorCopyAxisButton) {
+      el.studioEditorCopyAxisButton.disabled = !ids.length
+        || !el.studioEditorCopyAxisTarget?.value.trim()
+        || Boolean(editor.preview);
     }
   }
 
@@ -691,7 +774,7 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
   }
 
   function editorDuration(layer) {
-    return Math.max(0, ...(layer?.frames || []).map((frame) => Number(frame.time_sec || 0)));
+    return motionStudioLayerDuration(layer);
   }
 
   function editorTimeBounds(layer) {
@@ -716,21 +799,26 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       undo: [], redo: [],
       viewStart: 0,
       viewEnd: Math.max(0.02, duration),
+      valueScale: 1,
       selectionStage: 0,
       selectionAnchor: null,
       lastGraphClick: null,
       cursor: null,
       graphMetrics: null,
       pointDraft: null,
+      pointCurveOrder: 3,
       selectedPointId: '',
       pointHitTargets: [],
       handleHitTargets: [],
       draggingHandle: null,
+      draggingPoint: null,
+      panningGraph: null,
+      operationReport: null,
       validation: { conflicts: [], transition_warnings: [], playable: true },
     };
     if (el.studioEditorTitle) el.studioEditorTitle.textContent = `레이어 편집 · ${layer.name}`;
     if (el.studioEditorSubtitle) el.studioEditorSubtitle.textContent = '작업본 업데이트 0회 · 아직 저장되지 않음';
-    refreshEditorAxisControls();
+    refreshEditorAxisControls(new Set(editorMotionIds(layer)), layer);
     if (el.studioEditorStart) el.studioEditorStart.value = '';
     if (el.studioEditorEnd) el.studioEditorEnd.value = '';
     el.studioLayerEditorModal?.classList.remove('hidden');
@@ -767,6 +855,11 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       el.studioEditorAddAxisButton.disabled = !el.studioEditorAddAxisSelect?.value
         || Boolean(editor?.preview);
     }
+    if (el.studioEditorCopyAxisButton) {
+      el.studioEditorCopyAxisButton.disabled = !el.studioEditorCopyAxisSource?.value
+        || !el.studioEditorCopyAxisTarget?.value
+        || Boolean(editor?.preview);
+    }
     const operation = el.studioEditorOperation?.value || 'value_offset';
     document.querySelectorAll('[data-studio-editor-value]').forEach((field) => {
       const kind = field.dataset.studioEditorValue;
@@ -774,6 +867,7 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
         (operation === 'value_offset' && kind === 'offset')
         || ((operation === 'value_scale' || operation === 'time_scale') && kind === 'factor')
         || (operation === 'time_shift' && kind === 'delta')
+        || (operation === 'repair_spikes' && kind === 'spike')
         || (operation === 'interpolate' && kind === 'curve')
         || (operation === 'point_curve' && kind === 'points')
       ));
@@ -789,10 +883,39 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
         value_scale: '시작점의 모션값을 기준으로 선택 구간의 변화량을 조절합니다. 0.90배는 10% 축소, 1.10배는 10% 확대합니다.',
         time_shift: '선택 구간 전체를 입력한 시간만큼 이동합니다. 예: -300ms는 선택 구간을 300ms 앞으로 이동합니다.',
         value_offset: '선택 구간 전체를 입력한 각도만큼 위아래로 이동합니다. 예: -10°는 모든 모션값에서 10°를 뺍니다.',
+        repair_spikes: '선택 구간의 20ms 프레임 중 주변 흐름에서 혼자 벗어난 한 프레임만 보정합니다. 연속 튀임·최대 보정량 초과·포인트 곡선은 변경하지 않습니다.',
         interpolate: '선택한 실제 시작점과 끝점 사이를 20ms 간격으로 다시 채웁니다. 1차·3차·5차 결과를 적용으로 비교한 뒤 업데이트하세요.',
-        point_curve: '선택한 Motion ID 하나에서 그래프를 클릭해 포인트를 만듭니다. 저장된 포인트를 클릭하면 탄젠트 핸들이 나타나며 핸들을 드래그할 수 있습니다.',
+        point_curve: '구간 곡선(직선·3차·5차)과 포인트 탄젠트(자동·부드럽게·분리)를 조합합니다. 포인트는 상하·좌우로, 그래프 배경은 좌우로 드래그할 수 있습니다.',
       };
       el.studioEditorOperationHelp.textContent = help[operation] || '';
+    }
+    if (el.studioEditorSpikeReport) {
+      const report = operation === 'repair_spikes' ? editor?.operationReport : null;
+      el.studioEditorSpikeReport.classList.toggle('hidden', !report);
+      if (report) {
+        const changed = report.changed || [];
+        const excluded = report.excluded || [];
+        const rows = [
+          ...changed.map((item) => ({ ...item, status: '보정' })),
+          ...excluded.map((item) => ({
+            ...item,
+            status: `제외 · ${item.reason_text || '기준 미충족'}`,
+          })),
+        ];
+        const detail = rows.slice(0, 20).map((item) => (
+          `<div>${escapeHtml(item.motion_id)} · ${Number(item.time_sec).toFixed(3)}초 · `
+          + `${Number(item.before_deg).toFixed(3)}° → ${Number(item.after_deg).toFixed(3)}° · `
+          + `${escapeHtml(item.status)}</div>`
+        )).join('');
+        el.studioEditorSpikeReport.innerHTML = (
+          `<strong>보정 ${changed.length}개 · 제외 ${excluded.length}개 · `
+          + `최대 변경 ${Number(report.maximum_applied_correction_deg || 0).toFixed(3)}°</strong>`
+          + detail
+          + (rows.length > 20 ? `<div>외 ${rows.length - 20}개</div>` : '')
+        );
+      } else {
+        el.studioEditorSpikeReport.textContent = '';
+      }
     }
     syncPointControls();
   }
@@ -826,9 +949,15 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     const valueSource = visiblePoints.length ? visiblePoints : ids.flatMap((id) => [
       ...(workingTracks.get(id) || []), ...(originalTracks.get(id) || []),
     ]);
-    let minValue = valueSource.length ? Math.min(...valueSource.map((point) => point.value)) : -1;
-    let maxValue = valueSource.length ? Math.max(...valueSource.map((point) => point.value)) : 1;
-    if (Math.abs(maxValue - minValue) < 1e-9) { minValue -= 1; maxValue += 1; }
+    const automaticMinValue = valueSource.length
+      ? Math.min(...valueSource.map((point) => point.value)) : -1;
+    const automaticMaxValue = valueSource.length
+      ? Math.max(...valueSource.map((point) => point.value)) : 1;
+    const { minValue, maxValue } = motionStudioEditorValueBounds(
+      automaticMinValue,
+      automaticMaxValue,
+      editor.valueScale,
+    );
     const xFor = (timeSec) => padding.left + (((timeSec - viewStart) / (viewEnd - viewStart)) * plotWidth);
     const yFor = (value) => padding.top + (((maxValue - value) / (maxValue - minValue)) * plotHeight);
     const timeFor = (x) => viewStart + (((x - padding.left) / plotWidth) * (viewEnd - viewStart));
@@ -884,6 +1013,23 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     };
     drawTracks(originalTracks, true, 0.4); drawTracks(workingTracks, false, 1);
     context.globalAlpha = 1; context.setLineDash([]);
+    if (editor.operationReport?.operation === 'repair_spikes') {
+      (editor.operationReport.changed || []).forEach((item) => {
+        const timeSec = Number(item.time_sec); const value = Number(item.after_deg);
+        if (timeSec < viewStart || timeSec > viewEnd) return;
+        context.beginPath(); context.fillStyle = '#d33b3b'; context.strokeStyle = '#fff';
+        context.lineWidth = 1.5; context.arc(xFor(timeSec), yFor(value), 5, 0, Math.PI * 2);
+        context.fill(); context.stroke();
+      });
+      (editor.operationReport.excluded || []).forEach((item) => {
+        const timeSec = Number(item.time_sec); const value = Number(item.before_deg);
+        if (timeSec < viewStart || timeSec > viewEnd) return;
+        const x = xFor(timeSec); const y = yFor(value);
+        context.strokeStyle = '#d97706'; context.lineWidth = 2;
+        context.beginPath(); context.moveTo(x - 4, y - 4); context.lineTo(x + 4, y + 4);
+        context.moveTo(x + 4, y - 4); context.lineTo(x - 4, y + 4); context.stroke();
+      });
+    }
     let displayedCurves = editorPointCurves(displayedLayer).map((curve) => clone(curve));
     if (editor.pointDraft) {
       displayedCurves = displayedCurves.filter(
@@ -966,11 +1112,30 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     drawEditorGraph();
   }
 
+  function refreshEditorTimeline(layer, previousLayer = null) {
+    const editor = state.editor;
+    if (!synchronizeMotionStudioEditorTimeline(editor, layer, previousLayer)) return false;
+    const bounds = editorTimeBounds(layer);
+    if (el.studioEditorStart) el.studioEditorStart.value = bounds.start.toFixed(2);
+    if (el.studioEditorEnd) el.studioEditorEnd.value = bounds.end.toFixed(2);
+    return true;
+  }
+
   function discardEditorPreview(message = '') {
     const editor = state.editor;
-    if (!editor?.preview) return false;
+    if (!editor) return false;
+    if (!editor.preview) {
+      if (!editor.operationReport) return false;
+      editor.operationReport = null;
+      if (message) setEditorMessage(message);
+      renderEditor();
+      return true;
+    }
+    const preview = editor.preview;
     editor.preview = null;
     editor.previewValidation = null;
+    editor.operationReport = null;
+    refreshEditorTimeline(editor.working, preview);
     refreshEditorAxisControls(null, editor.working);
     if (el.studioEditorSubtitle) {
       el.studioEditorSubtitle.textContent = `작업본 업데이트 ${editor.undo.length}회 · 아직 저장되지 않음`;
@@ -986,6 +1151,19 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       setEditorMessage('먼저 적용 버튼으로 편집 결과를 미리 확인하세요.', true);
       return;
     }
+    if (editor.operationReport?.operation === 'repair_spikes') {
+      const conflicts = editor.previewValidation?.conflicts?.length || 0;
+      const warnings = editor.previewValidation?.transition_warnings?.length || 0;
+      if (conflicts || warnings) {
+        setEditorMessage('보정 결과에 충돌 또는 20ms 급변이 남아 업데이트를 차단했습니다.', true);
+        return;
+      }
+      const count = Number(editor.operationReport.changed_count || 0);
+      const maximum = Number(editor.operationReport.maximum_applied_correction_deg || 0);
+      if (!window.confirm(
+        `튀는 점 ${count}개를 보정합니다. 최대 변경량 ${maximum.toFixed(3)}°입니다. 업데이트할까요?`,
+      )) return;
+    }
     const previousIds = new Set(editorMotionIds(editor.working));
     const selectedIds = new Set(editorSelectedMotionIds());
     const previewIds = editorMotionIds(editor.preview);
@@ -1000,6 +1178,7 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     );
     editor.preview = null;
     editor.previewValidation = null;
+    editor.operationReport = null;
     refreshEditorAxisControls(selectedIds, editor.working);
     if (el.studioEditorSubtitle) {
       el.studioEditorSubtitle.textContent = `작업본 업데이트 ${editor.undo.length}회 · 아직 저장되지 않음`;
@@ -1018,7 +1197,11 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     const motionId = String(el.studioEditorAddAxisSelect?.value || '').trim();
     const initialValue = Number(el.studioEditorAddAxisValue?.value);
     if (!motionId) {
-      setEditorMessage('추가할 Motion ID를 선택하세요.', true);
+      setEditorMessage('추가할 Motion ID를 입력하세요.', true);
+      return;
+    }
+    if (!MOTION_ID_PATTERN.test(motionId)) {
+      setEditorMessage('Motion ID는 양의 정수-양의 정수 형식으로 입력하세요. 예: 1-2', true);
       return;
     }
     if (!Number.isFinite(initialValue)) {
@@ -1037,6 +1220,7 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       });
       if (result.success === false) throw new Error(result.message || '축 추가 실패');
       editor.preview = clone(result.layer);
+      refreshEditorTimeline(editor.preview, editor.working);
       editor.previewValidation = result.validation
         || { conflicts: [], transition_warnings: [], playable: true };
       refreshEditorAxisControls(new Set([motionId]), editor.preview);
@@ -1045,6 +1229,53 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       }
       setEditorMessage(
         `${motionId} 축 추가 미리보기 완료 · 초기값 ${initialValue.toFixed(3)}° · 확인 후 업데이트하세요.`,
+      );
+      renderEditor();
+    } catch (error) {
+      setEditorMessage(error.message || String(error), true);
+    } finally {
+      renderEditorControls();
+    }
+  }
+
+  async function previewEditorAxisCopy() {
+    const editor = state.editor;
+    if (!editor) return;
+    if (editor.preview) {
+      setEditorMessage('현재 적용 미리보기를 먼저 업데이트하거나 취소하세요.', true);
+      return;
+    }
+    const sourceMotionId = String(el.studioEditorCopyAxisSource?.value || '').trim();
+    const targetMotionId = String(el.studioEditorCopyAxisTarget?.value || '').trim();
+    if (!sourceMotionId || !targetMotionId) {
+      setEditorMessage('복사할 원본 축을 선택하고 대상 Motion ID를 입력하세요.', true);
+      return;
+    }
+    if (!MOTION_ID_PATTERN.test(targetMotionId)) {
+      setEditorMessage('대상 Motion ID는 양의 정수-양의 정수 형식으로 입력하세요. 예: 1-2', true);
+      return;
+    }
+    el.studioEditorCopyAxisButton.disabled = true;
+    try {
+      const result = await editMotionStudioLayer({
+        layer: editor.working,
+        project: state.project,
+        operation: 'copy_axis',
+        source_motion_id: sourceMotionId,
+        motion_ids: [targetMotionId],
+        mapping_rows: activeMapping()?.rows || [],
+      });
+      if (result.success === false) throw new Error(result.message || '축 복사 실패');
+      editor.preview = clone(result.layer);
+      refreshEditorTimeline(editor.preview, editor.working);
+      editor.previewValidation = result.validation
+        || { conflicts: [], transition_warnings: [], playable: true };
+      refreshEditorAxisControls(new Set([targetMotionId]), editor.preview);
+      if (el.studioEditorSubtitle) {
+        el.studioEditorSubtitle.textContent = '축 복사 미리보기 · 업데이트 전';
+      }
+      setEditorMessage(
+        `${sourceMotionId} → ${targetMotionId} 축 복사 미리보기 완료 · 확인 후 업데이트하세요.`,
       );
       renderEditor();
     } catch (error) {
@@ -1092,9 +1323,11 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       offset_deg: Number(el.studioEditorOffset?.value || 0),
       factor: Number(el.studioEditorFactor?.value || 1),
       delta_sec: Number(el.studioEditorDelta?.value || 0) / 1000,
-      interpolation_order: Number(
-        el.studioEditorInterpolationChoices?.querySelector('input:checked')?.value || 1,
-      ),
+      spike_detection_threshold_deg: Number(el.studioEditorSpikeThreshold?.value || 0.1),
+      spike_maximum_correction_deg: Number(el.studioEditorSpikeMaximum?.value || 1.0),
+      interpolation_order: operation === 'point_curve'
+        ? Number(editor.pointDraft?.interpolation_order || el.studioEditorPointCurveOrder?.value || 3)
+        : Number(el.studioEditorInterpolationChoices?.querySelector('input:checked')?.value || 1),
       curve_id: editor.pointDraft?.curve_id || '',
       points: operation === 'point_curve' ? clone(editor.pointDraft?.points || []) : [],
       mapping_rows: activeMapping()?.rows || [],
@@ -1110,7 +1343,20 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     try {
       const result = await editMotionStudioLayer(payload);
       if (result.success === false) throw new Error(result.message || '편집 실패');
+      editor.operationReport = result.operation_report || null;
+      if (operation === 'repair_spikes' && !editor.operationReport?.changed_count) {
+        editor.preview = null;
+        editor.previewValidation = result.validation
+          || { conflicts: [], transition_warnings: [], playable: true };
+        const excluded = Number(editor.operationReport?.excluded_count || 0);
+        setEditorMessage(excluded
+          ? `보정할 점은 없고 ${excluded}개는 연속 튀짐 또는 최대 보정량 초과로 제외했습니다.`
+          : '선택 구간에서 검출 기준을 넘는 고립된 튀는 점을 찾지 못했습니다.');
+        renderEditor();
+        return;
+      }
       editor.preview = clone(result.layer);
+      refreshEditorTimeline(editor.preview, editor.working);
       if (operation === 'point_curve' && editor.pointDraft) {
         const calculated = editorPointCurves(editor.preview).find(
           (curve) => curve.curve_id === editor.pointDraft.curve_id,
@@ -1123,15 +1369,24 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       }
       editor.previewValidation = result.validation
         || { conflicts: [], transition_warnings: [], playable: true };
-      editor.viewEnd = Math.max(editor.viewEnd, editorDuration(editor.preview));
       if (el.studioEditorSubtitle) {
         el.studioEditorSubtitle.textContent = '적용 미리보기 · 업데이트 전';
       }
       const issueCount = (editor.previewValidation.conflicts?.length || 0)
         + (editor.previewValidation.transition_warnings?.length || 0);
-      setEditorMessage(issueCount
-        ? `적용 미리보기 · 충돌 또는 급변 ${issueCount}건 · 확인 후 값을 바꾸거나 업데이트하세요`
-        : '적용 미리보기 완료 · 결과가 맞으면 업데이트를 누르세요.', issueCount > 0);
+      if (operation === 'repair_spikes') {
+        const report = editor.operationReport;
+        setEditorMessage(
+          `튀는 점 ${report.changed_count}개 보정 미리보기 · `
+          + `최대 ${Number(report.maximum_applied_correction_deg).toFixed(3)}° 변경 · `
+          + `제외 ${report.excluded_count}개`,
+          issueCount > 0,
+        );
+      } else {
+        setEditorMessage(issueCount
+          ? `적용 미리보기 · 충돌 또는 급변 ${issueCount}건 · 확인 후 값을 바꾸거나 업데이트하세요`
+          : '적용 미리보기 완료 · 결과가 맞으면 업데이트를 누르세요.', issueCount > 0);
+      }
       renderEditor();
     } catch (error) {
       setEditorMessage(error.message || String(error), true);
@@ -1206,26 +1461,38 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     const runtimeState = String(state.status?.state || 'idle');
     const running = ['initializing', 'recording', 'playing', 'stopping'].includes(runtimeState);
     const blocked = state.busy || running;
+    const unavailableReason = !layer
+      ? '선택할 레이어가 없습니다'
+      : state.busy
+        ? '요청 처리 중입니다'
+        : running
+          ? '초기 이동·녹화·재생·정지 처리 중에는 변경할 수 없습니다'
+          : layer.locked
+            ? '잠금을 해제한 뒤 사용할 수 있습니다'
+            : '';
     if (el.studioSelectedLayerDetailButton) {
       el.studioSelectedLayerDetailButton.disabled = !layer;
     }
     if (el.studioSelectedLayerCopyButton) {
       el.studioSelectedLayerCopyButton.disabled = blocked || !layer;
+      el.studioSelectedLayerCopyButton.textContent = state.busy
+        ? '레이어 복사 처리 중…' : '선택 레이어 복사';
+      el.studioSelectedLayerCopyButton.title = unavailableReason;
     }
     if (el.studioSelectedLayerEditButton) {
       el.studioSelectedLayerEditButton.disabled = blocked || !layer || Boolean(layer?.locked);
-      el.studioSelectedLayerEditButton.title = layer?.locked ? '잠금을 해제한 뒤 편집할 수 있습니다' : '';
+      el.studioSelectedLayerEditButton.title = unavailableReason;
     }
     if (el.studioSelectedLayerLockButton) {
       el.studioSelectedLayerLockButton.disabled = blocked || !layer;
       el.studioSelectedLayerLockButton.textContent = layer?.locked ? '잠금 해제' : '잠금';
       el.studioSelectedLayerLockButton.title = layer?.locked
         ? '이름·재생 선택 상태·편집·삭제를 다시 허용합니다'
-        : '이름·재생 선택 상태·편집·삭제를 막아 레이어를 보호합니다';
+        : (unavailableReason || '이름·재생 선택 상태·편집·삭제를 막아 레이어를 보호합니다');
     }
     if (el.studioSelectedLayerDeleteButton) {
       el.studioSelectedLayerDeleteButton.disabled = blocked || !layer || Boolean(layer?.locked);
-      el.studioSelectedLayerDeleteButton.title = layer?.locked ? '잠금을 해제한 뒤 삭제할 수 있습니다' : '';
+      el.studioSelectedLayerDeleteButton.title = unavailableReason;
     }
   }
 
@@ -1537,6 +1804,8 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     }
     if (el.studioCreateLayerButton) {
       el.studioCreateLayerButton.disabled = state.busy || running || !hasProject;
+      el.studioCreateLayerButton.textContent = state.busy
+        ? '레이어 생성 처리 중…' : '새 레이어 생성';
     }
     if (el.studioLayerManagerOpenButton) {
       el.studioLayerManagerOpenButton.disabled = state.busy || running || !hasProject;
@@ -1552,6 +1821,7 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
 
   async function run(action) {
     setBusy(true);
+    setMessage('요청 처리 중입니다…');
     try {
       const result = await action();
       if (result.success === false) throw new Error(result.message || '요청 실패');
@@ -1682,6 +1952,7 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     el.studioLayerRows?.addEventListener('change', (event) => {
       const row = event.target.closest('tr[data-studio-layer-id]');
       if (!row) return;
+      state.selectedLayerId = row.dataset.studioLayerId;
       if (event.target.matches('[data-layer-enabled]')) {
         run(() => updateMotionStudioLayer({
           layer_id: row.dataset.studioLayerId,
@@ -1690,7 +1961,6 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
         return;
       }
       if (event.target.matches('[data-layer-main-name]')) {
-        state.selectedLayerId = row.dataset.studioLayerId;
         run(() => updateMotionStudioLayer({
           layer_id: row.dataset.studioLayerId,
           name: event.target.value,
@@ -1778,10 +2048,32 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
         locked: !layer.locked,
       }));
     });
-    el.studioSelectedLayerDeleteButton?.addEventListener('click', () => {
+    el.studioSelectedLayerDeleteButton?.addEventListener('click', async () => {
       const layer = selectedLayer();
       if (!layer || !window.confirm(`레이어 '${layer.name}'을 삭제할까요?`)) return;
-      run(() => deleteMotionStudioLayer(layer.layer_id));
+      let failureMessage = '';
+      const result = await run(async () => {
+        try {
+          const response = await deleteMotionStudioLayer(layer.layer_id);
+          if (response.success === false) {
+            throw new Error(response.message || '레이어 삭제 실패');
+          }
+          return response;
+        } catch (error) {
+          failureMessage = error.message || String(error);
+          throw error;
+        }
+      });
+      if (!result) {
+        window.alert(`레이어 삭제 실패\n\n${failureMessage || '삭제 응답을 확인하지 못했습니다.'}`);
+        return;
+      }
+      state.selectedLayerId = resolveMotionStudioSelectedLayerId(
+        result.project?.layers || [], state.selectedLayerId,
+      );
+      state.layerDetailMode = 'composition';
+      setMessage(`레이어 '${layer.name}'을 삭제했습니다.`);
+      render();
     });
     el.studioPlaybackGraphButton?.addEventListener('click', () => {
       showLayerGraph({ composition: true });
@@ -1853,14 +2145,11 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     };
     el.studioEditorSelectAllButton?.addEventListener('click', () => selectEditorAxes(true));
     el.studioEditorSelectNoneButton?.addEventListener('click', () => selectEditorAxes(false));
-    el.studioEditorAddAxisSelect?.addEventListener('change', () => {
-      const selectedOption = el.studioEditorAddAxisSelect.selectedOptions?.[0];
-      if (el.studioEditorAddAxisValue) {
-        el.studioEditorAddAxisValue.value = selectedOption?.dataset.initialValue || '0';
-      }
-      renderEditorControls();
-    });
+    el.studioEditorAddAxisSelect?.addEventListener('input', renderEditorControls);
     el.studioEditorAddAxisButton?.addEventListener('click', previewEditorAxisAddition);
+    el.studioEditorCopyAxisSource?.addEventListener('change', renderEditorControls);
+    el.studioEditorCopyAxisTarget?.addEventListener('input', renderEditorControls);
+    el.studioEditorCopyAxisButton?.addEventListener('click', previewEditorAxisCopy);
     el.studioEditorAxisList?.addEventListener('change', () => {
       if (!discardEditorPreview('축 선택이 바뀌어 적용 미리보기를 취소했습니다.')) renderEditor();
     });
@@ -1885,6 +2174,16 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     el.studioEditorPointTime?.addEventListener('change', updateSelectedPointFromControls);
     el.studioEditorPointValue?.addEventListener('change', updateSelectedPointFromControls);
     el.studioEditorPointMode?.addEventListener('change', updateSelectedPointFromControls);
+    el.studioEditorPointCurveOrder?.addEventListener('change', () => {
+      const editor = state.editor;
+      if (!editor) return;
+      const interpolationOrder = Number(el.studioEditorPointCurveOrder?.value || 3);
+      editor.pointCurveOrder = interpolationOrder;
+      if (editor.pointDraft) editor.pointDraft.interpolation_order = interpolationOrder;
+      discardEditorPreview('구간 곡선 방식이 바뀌어 적용 미리보기를 취소했습니다.');
+      setEditorMessage(`${interpolationOrder === 1 ? '직선' : `${interpolationOrder}차 곡선`} 선택 · 적용을 눌러 다시 계산하세요.`);
+      renderEditor();
+    });
     el.studioEditorPointDeleteButton?.addEventListener('click', () => {
       const editor = state.editor; const point = selectedDraftPoint(editor);
       if (!editor?.pointDraft || !point) return;
@@ -1960,8 +2259,10 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       discardEditorPreview();
       editor.redo.push({ layer: clone(editor.working), validation: clone(editor.validation) });
       const previous = editor.undo.pop();
+      const replacedLayer = editor.working;
       editor.working = previous.layer;
       editor.validation = previous.validation;
+      refreshEditorTimeline(editor.working, replacedLayer);
       refreshEditorAxisControls(null, editor.working);
       if (el.studioEditorSubtitle) {
         el.studioEditorSubtitle.textContent = `작업본 업데이트 ${editor.undo.length}회 · 아직 저장되지 않음`;
@@ -1974,8 +2275,10 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       discardEditorPreview();
       editor.undo.push({ layer: clone(editor.working), validation: clone(editor.validation) });
       const following = editor.redo.pop();
+      const replacedLayer = editor.working;
       editor.working = following.layer;
       editor.validation = following.validation;
+      refreshEditorTimeline(editor.working, replacedLayer);
       refreshEditorAxisControls(null, editor.working);
       if (el.studioEditorSubtitle) {
         el.studioEditorSubtitle.textContent = `작업본 업데이트 ${editor.undo.length}회 · 아직 저장되지 않음`;
@@ -1994,28 +2297,61 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
         original_revision: Number(editor.original.edit_revision || 0),
         layer: editor.working,
       }));
-      if (result) closeLayerEditor();
+      if (result) {
+        closeLayerEditor();
+        return;
+      }
+      const currentLayer = state.project?.layers?.find(
+        (layer) => layer.layer_id === editor.layerId,
+      );
+      const originalRevision = Number(editor.original.edit_revision || 0);
+      const currentRevision = Number(currentLayer?.edit_revision || 0);
+      if (
+        currentLayer
+        && currentRevision !== originalRevision
+        && motionStudioLayerDataEqual(currentLayer, editor.working)
+      ) {
+        closeLayerEditor();
+        setMessage('같은 편집 결과가 이미 저장되어 편집 창을 닫았습니다.');
+        return;
+      }
+      if (currentLayer && currentRevision !== originalRevision) {
+        setEditorMessage(
+          '저장 중 원본 레이어가 변경되었습니다. 현재 작업은 저장되지 않았습니다. '
+          + '편집 창을 닫고 최신 레이어를 다시 열어 작업하세요.',
+          true,
+        );
+        return;
+      }
+      setEditorMessage('레이어 저장에 실패했습니다. 화면 상단 오류 내용을 확인하세요.', true);
     });
     const setEditorView = (start, end) => {
       const editor = state.editor;
       if (!editor) return;
-      const duration = Math.max(0.02, editorDuration(editor.preview || editor.working));
       const span = Math.max(0.04, end - start);
-      editor.viewStart = Math.max(0, Math.min(start, Math.max(0, duration - span)));
-      editor.viewEnd = Math.min(duration, editor.viewStart + span);
-      if (editor.viewEnd - editor.viewStart < 0.04) editor.viewEnd = editor.viewStart + 0.04;
+      editor.viewStart = Math.max(0, start);
+      editor.viewEnd = editor.viewStart + span;
       drawEditorGraph();
+    };
+    const scaleEditorValues = (factor) => {
+      const editor = state.editor;
+      if (!editor) return;
+      // No user-visible maximum: retain the last finite value only at the
+      // JavaScript numeric overflow boundary.
+      editor.valueScale = motionStudioEditorNextValueScale(editor.valueScale, factor);
     };
     el.studioEditorZoomInButton?.addEventListener('click', () => {
       const editor = state.editor; if (!editor) return;
       const center = (editor.viewStart + editor.viewEnd) / 2;
       const span = (editor.viewEnd - editor.viewStart) * 0.6;
+      scaleEditorValues(0.6);
       setEditorView(center - span / 2, center + span / 2);
     });
     el.studioEditorZoomOutButton?.addEventListener('click', () => {
       const editor = state.editor; if (!editor) return;
       const center = (editor.viewStart + editor.viewEnd) / 2;
       const span = (editor.viewEnd - editor.viewStart) * 1.7;
+      scaleEditorValues(1.7);
       setEditorView(center - span / 2, center + span / 2);
     });
     el.studioEditorInterpolationButton?.addEventListener('click', () => {
@@ -2026,6 +2362,7 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     });
     el.studioEditorFitAllButton?.addEventListener('click', () => {
       const editor = state.editor; if (!editor) return;
+      editor.valueScale = 1;
       setEditorView(0, Math.max(0.04, editorDuration(editor.working)));
     });
     el.studioEditorFitSelectionButton?.addEventListener('click', () => {
@@ -2035,6 +2372,7 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       }
       const start = Number(el.studioEditorStart?.value || 0);
       const end = Number(el.studioEditorEnd?.value || start + 0.04);
+      if (state.editor) state.editor.valueScale = 1;
       setEditorView(Math.min(start, end), Math.max(start, end));
     });
     el.studioEditorGraph?.addEventListener('mousemove', (event) => {
@@ -2042,6 +2380,39 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       if (!editor || !metrics) return;
       const rect = el.studioEditorGraph.getBoundingClientRect();
       const x = event.clientX - rect.left; const y = event.clientY - rect.top;
+      if (editor.draggingPoint) {
+        const point = selectedDraftPoint(editor);
+        if (!point) return;
+        const snappedTime = Math.max(
+          0,
+          Math.round(metrics.timeFor(x) / 0.02) * 0.02,
+        );
+        const collides = (editor.pointDraft?.points || []).some(
+          (candidate) => candidate.point_id !== point.point_id
+            && Math.abs(Number(candidate.time_sec) - snappedTime) < 0.02 - 1e-9,
+        );
+        if (!collides) point.time_sec = Number(snappedTime.toFixed(2));
+        point.value_deg = Number(metrics.valueFor(y).toFixed(6));
+        editor.pointDraft.points.sort((first, second) => first.time_sec - second.time_sec);
+        editor.draggingPoint.moved = true;
+        editor.suppressGraphClick = true;
+        syncPointControls();
+        drawEditorGraph();
+        return;
+      }
+      if (editor.panningGraph) {
+        const pixelDelta = event.clientX - editor.panningGraph.startClientX;
+        if (Math.abs(pixelDelta) >= 3) editor.panningGraph.moved = true;
+        if (editor.panningGraph.moved) {
+          const timeDelta = -(pixelDelta / metrics.plotWidth) * editor.panningGraph.span;
+          editor.suppressGraphClick = true;
+          setEditorView(
+            editor.panningGraph.startViewStart + timeDelta,
+            editor.panningGraph.startViewEnd + timeDelta,
+          );
+        }
+        return;
+      }
       if (editor.draggingHandle) {
         const point = selectedDraftPoint(editor);
         if (!point) return;
@@ -2051,7 +2422,7 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
         else dtSec = Math.max(0.001, dtSec);
         const dvDeg = metrics.valueFor(y) - Number(point.value_deg);
         point[`${side}_handle`] = { dt_sec: dtSec, dv_deg: dvDeg };
-        if ((point.tangent_mode || 'auto') !== 'smooth') point.tangent_mode = 'broken';
+        if ((point.tangent_mode || 'auto') !== 'smooth') point.tangent_mode = 'smooth';
         if (point.tangent_mode === 'smooth') {
           const opposite = side === 'in' ? 'out' : 'in';
           const oppositeHandle = point[`${opposite}_handle`] || {};
@@ -2123,7 +2494,7 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       const pointTarget = (editor.pointHitTargets || []).find(
         (target) => Math.hypot(target.x - clickPoint.x, target.y - clickPoint.y) <= 10,
       );
-      if (pointTarget) {
+      if (motionStudioShouldEditPoint(el.studioEditorOperation?.value, pointTarget)) {
         setPointCurveMode(pointTarget.curve, pointTarget.point.point_id);
         setEditorMessage(
           `${pointTarget.curve.motion_id} 사용자 포인트 선택 · 탄젠트 핸들을 드래그하거나 값을 수정하세요.`,
@@ -2139,7 +2510,9 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
         const motionId = selectedIds[0];
         if (!editor.pointDraft || editor.pointDraft.motion_id !== motionId) {
           editor.pointDraft = {
-            curve_id: editorId('curve'), motion_id: motionId, points: [],
+            curve_id: editorId('curve'), motion_id: motionId,
+            interpolation_order: Number(editor.pointCurveOrder || 3),
+            points: [],
           };
         }
         const timeSec = Math.max(0, Math.round(metrics.timeFor(clickPoint.x) / 0.02) * 0.02);
@@ -2201,24 +2574,78 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     });
     el.studioEditorGraph?.addEventListener('mousedown', (event) => {
       const editor = state.editor;
-      if (!editor || event.button !== 0) return;
+      const metrics = editor?.graphMetrics;
+      if (!editor || !metrics || event.button !== 0) return;
       const rect = el.studioEditorGraph.getBoundingClientRect();
       const x = event.clientX - rect.left; const y = event.clientY - rect.top;
       const handle = (editor.handleHitTargets || []).find(
         (target) => Math.hypot(target.x - x, target.y - y) <= 9,
       );
-      if (!handle) return;
-      event.preventDefault();
-      editor.draggingHandle = { side: handle.side };
-      editor.suppressGraphClick = true;
-      setEditorMessage('탄젠트 핸들 조절 중 · 놓은 뒤 적용하여 곡선을 계산하세요.');
+      if (handle) {
+        event.preventDefault();
+        editor.draggingHandle = { side: handle.side };
+        editor.suppressGraphClick = true;
+        discardEditorPreview('탄젠트를 바꾸어 적용 미리보기를 취소했습니다.');
+        setEditorMessage('탄젠트 핸들 조절 중 · 놓은 뒤 적용하여 곡선을 계산하세요.');
+        return;
+      }
+      const pointTarget = (editor.pointHitTargets || []).find(
+        (target) => Math.hypot(target.x - x, target.y - y) <= 10,
+      );
+      if (motionStudioShouldEditPoint(el.studioEditorOperation?.value, pointTarget)) {
+        event.preventDefault();
+        if (editor.pointDraft?.curve_id !== pointTarget.curve.curve_id) {
+          selectOnlyEditorAxis(pointTarget.curve.motion_id);
+          loadPointDraft(pointTarget.curve, pointTarget.point.point_id);
+        } else {
+          editor.selectedPointId = pointTarget.point.point_id;
+        }
+        discardEditorPreview('포인트를 이동해 적용 미리보기를 취소했습니다.');
+        editor.draggingPoint = { pointId: pointTarget.point.point_id, moved: false };
+        editor.suppressGraphClick = true;
+        setEditorMessage('포인트 이동 중 · 좌우는 시간, 상하는 모션값을 바꿉니다.');
+        return;
+      }
+      const { padding } = metrics;
+      if (
+        x >= padding.left && x <= padding.left + metrics.plotWidth
+        && y >= padding.top && y <= padding.top + metrics.plotHeight
+      ) {
+        editor.panningGraph = {
+          startClientX: event.clientX,
+          startViewStart: editor.viewStart,
+          startViewEnd: editor.viewEnd,
+          span: editor.viewEnd - editor.viewStart,
+          moved: false,
+        };
+      }
     });
     window.addEventListener('mouseup', () => {
       const editor = state.editor;
-      if (!editor?.draggingHandle) return;
-      editor.draggingHandle = null;
-      setEditorMessage('탄젠트 핸들 변경 완료 · 적용을 눌러 20ms 곡선을 계산하세요.');
-      renderEditor();
+      if (!editor) return;
+      if (editor.draggingHandle) {
+        editor.draggingHandle = null;
+        setEditorMessage('탄젠트 핸들 변경 완료 · 적용을 눌러 20ms 곡선을 계산하세요.');
+        renderEditor();
+        return;
+      }
+      if (editor.draggingPoint) {
+        const moved = editor.draggingPoint.moved;
+        editor.draggingPoint = null;
+        if (moved) {
+          setEditorMessage('포인트 이동 완료 · 적용을 눌러 곡선을 다시 계산하세요.');
+          renderEditor();
+        }
+        return;
+      }
+      if (editor.panningGraph) {
+        const moved = editor.panningGraph.moved;
+        editor.panningGraph = null;
+        if (moved) {
+          setEditorMessage('시간축 표시 구간을 좌우로 이동했습니다.');
+          drawEditorGraph();
+        }
+      }
     });
     el.studioEditorGraph?.addEventListener('wheel', (event) => {
       const editor = state.editor;
@@ -2231,8 +2658,10 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
         return;
       }
       const center = editor.cursor?.timeSec ?? ((editor.viewStart + editor.viewEnd) / 2);
-      const newSpan = span * (event.deltaY < 0 ? 0.8 : 1.25);
+      const zoomFactor = event.deltaY < 0 ? 0.8 : 1.25;
+      const newSpan = span * zoomFactor;
       const ratio = (center - editor.viewStart) / span;
+      scaleEditorValues(zoomFactor);
       setEditorView(center - (newSpan * ratio), center + (newSpan * (1 - ratio)));
     }, { passive: false });
   }

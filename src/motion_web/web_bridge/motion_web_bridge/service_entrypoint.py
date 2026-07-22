@@ -1,4 +1,4 @@
-"""Start the managed motion-control stack from the last explicitly applied project."""
+"""Start the managed stack only from the currently selected project."""
 
 from __future__ import annotations
 
@@ -18,7 +18,10 @@ def resolve_applied_motor_config(workspace: Path) -> Optional[Path]:
         return None
     if not isinstance(payload, dict):
         return None
+    selected_project_id = str(payload.get('project_id') or '').strip()
     project_id = str(payload.get('applied_project_id') or '').strip()
+    if project_id != selected_project_id:
+        return None
     if not project_id or project_id != Path(project_id).name:
         return None
     candidate = (
@@ -28,10 +31,20 @@ def resolve_applied_motor_config(workspace: Path) -> Optional[Path]:
         candidate.relative_to(projects_root)
     except ValueError:
         return None
-    # A full-program restart restores only the last configuration which the
-    # user explicitly applied. Unapplied project edits remain separate and
-    # must never replace this runtime file implicitly.
+    # A full-program restart may restore only the selected project's explicit
+    # runtime. A previous project's runtime must never cross this boundary.
     return candidate if candidate.is_file() else None
+
+
+def resolve_project_generation(workspace: Path) -> int:
+    """Return the persisted generation owned by the selected project runtime."""
+    selection_file = workspace.resolve() / 'motion_projects' / '.selected_project.json'
+    try:
+        payload = json.loads(selection_file.read_text(encoding='utf-8'))
+        generation = int(payload.get('project_generation'))
+    except (AttributeError, OSError, TypeError, ValueError, json.JSONDecodeError):
+        return 0
+    return generation if generation > 0 else 0
 
 
 def main() -> None:
@@ -50,6 +63,9 @@ def main() -> None:
     environment = dict(os.environ)
     environment['MOTION_WORKSPACE'] = str(workspace)
     environment.setdefault('ROS_LOCALHOST_ONLY', '1')
+    environment['MOTION_PROJECT_GENERATION'] = str(
+        resolve_project_generation(workspace)
+    )
     if runtime_config:
         environment['MOTOR_CONFIG_FILE'] = str(runtime_config)
     else:

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>모션 녹화 시스템 0.5.0</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260721-layer-manager-quick">
+    <link rel="stylesheet" href="/static/styles.css?v=20260722-motion-axis-audit">
   </head>
   <body>
     <main class="shell">
@@ -205,6 +205,7 @@
           </summary>
           <div class="registry-actions">
             <button id="reloadMotorConfigButton" type="button">설정 다시 불러오기</button>
+            <button id="deleteMotorConfigButton" class="danger" type="button" disabled>현재 설정 파일 휴지통으로 이동</button>
           </div>
         </details>
 
@@ -244,15 +245,15 @@
                 <strong>기본 작업</strong>
                 <div class="registry-actions">
                   <button id="addAxisButton" class="primary" type="button" disabled>선택 축 추가</button>
-                  <button id="updateAxisIdentityButton" type="button" disabled>선택 축 연결정보 반영</button>
+                  <button id="updateAxisIdentityButton" type="button" disabled>선택 축 연결정보 변경</button>
                   <button id="saveAxisConfigButton" class="primary" type="button" disabled>변경 내용 저장</button>
                 </div>
               </div>
               <div class="axis-action-group">
                 <strong>축 편집</strong>
                 <div class="registry-actions">
-                  <button id="deleteAxisButton" type="button" disabled>축 삭제</button>
-                  <button id="toggleAxisButton" type="button" disabled>축 사용/미사용</button>
+                  <button id="deleteAxisButton" type="button" disabled>선택 축 삭제</button>
+                  <button id="toggleAxisButton" type="button" disabled>선택 축 사용상태 변경</button>
                   <button id="sortAxisButton" type="button" disabled>축 번호 정렬</button>
                 </div>
               </div>
@@ -262,7 +263,6 @@
               <p>실제 서보 드라이버 또는 프로젝트 전체 설정을 변경합니다. 필요한 경우에만 사용하세요.</p>
               <div class="registry-actions">
                 <button id="writeEthercatAliasButton" type="button" disabled>EEPROM Alias 변경</button>
-                <button id="resetAxisConfigButton" class="danger" type="button">모터축 설정 전체 초기화</button>
               </div>
             </details>
             <div class="matching-table-wrap">
@@ -272,7 +272,8 @@
                     <th>선택</th>
                     <th title="프로그램에서 명령을 보내는 고유 논리 축 번호">Control Index</th>
                     <th>ID</th>
-                    <th title="실제 EtherCAT 서보를 찾는 주 연결값">EEPROM Alias</th>
+                    <th title="현재 프로젝트 파일에 저장된 값">프로젝트 Alias</th>
+                    <th title="이번 검색에서 서보드라이버 SII EEPROM으로부터 직접 읽은 값">직접 스캔 Alias</th>
                     <th title="ESC 레지스터 0x0012에서 읽은 현재 적용 주소">Station Alias</th>
                     <th title="현재 EtherCAT 배선 순서에서 검색된 위치">Slave Position</th>
                     <th>모터 종류</th>
@@ -286,7 +287,7 @@
                 </thead>
                 <tbody id="axisRows">
                   <tr>
-                    <td colspan="13" class="empty">설정 파일을 불러오거나 모터 스캔을 실행하세요</td>
+                    <td colspan="14" class="empty">설정 파일을 불러오거나 모터 스캔을 실행하세요</td>
                   </tr>
                 </tbody>
               </table>
@@ -298,7 +299,7 @@
             <div id="motorConfigTablePath" class="registry-message config-file-path">설정 파일: -</div>
             <div class="registry-message">파일 이름 변경·가져오기·내보내기·삭제는 왼쪽 프로젝트 파일의 ⋮ 버튼에서 관리합니다.</div>
             <div class="registry-actions">
-              <button id="updateConfigTableButton" class="primary" type="button" disabled>표 업데이트</button>
+              <button id="updateConfigTableButton" class="primary" type="button" disabled>표 변경값 반영 초안</button>
               <button id="saveConfigTableButton" type="button" disabled>파일 저장</button>
             </div>
             <div class="config-profile-help">
@@ -336,7 +337,7 @@
           <div class="registration-tab-panel hidden" data-registration-panel="dynamixel">
             <section class="scan-panel" aria-label="다이나믹셀 검색">
               <button id="dynamixelScanButton" type="button">다이나믹셀만 검색</button>
-              <span id="dynamixelScanResult">통신 포트 자동 검색, 프로토콜 2.0, 1,000,000bps, 전체 ID 검색(0~50)</span>
+              <span id="dynamixelScanResult">통신 포트 자동 검색, 프로토콜 2.0, 1,000,000bps, 전체 ID 검색(0~252)</span>
             </section>
           </div>
 
@@ -733,7 +734,8 @@
                   <button id="generateMotionIdsButton" type="button">모터축 행 자동 생성</button>
                   <button id="validateMotionMappingButton" type="button">설정 검증</button>
                   <button id="saveMotionMappingButton" class="primary" type="button">현재 파일 저장</button>
-                  <button id="resetMotionMappingButton" class="danger" type="button">전체 초기화</button>
+                  <button id="resetMotionMappingButton" type="button">저장된 내용으로 되돌리기</button>
+                  <button id="deleteMotionMappingButton" class="danger" type="button" disabled>현재 설정 파일 삭제</button>
                 </div>
               </div>
               <div class="motion-mapping-form">
@@ -756,7 +758,7 @@
             <section class="motion-file-subsection" aria-label="모션축 설정 표">
               <div class="section-head compact">
                 <strong>모션축 설정</strong>
-                <span>모션 ID는 직접 입력하고 AC 별칭(alias) 또는 다이나믹셀 ID에 연결</span>
+                <span>모션 ID를 현재 프로젝트의 AC 서보 축 또는 다이나믹셀 ID에 연결</span>
               </div>
               <div class="table-wrap motion-mapping-table-wrap">
                 <table class="motion-mapping-table">
@@ -767,7 +769,7 @@
                       <th><span class="mapping-head-label">모터 ID</span><span class="mapping-head-unit">현재 축 번호 자동 해석</span></th>
                       <th class="mapping-number-head"><span class="mapping-head-label">감속비</span><span class="mapping-head-unit">x</span></th>
                       <th class="mapping-number-head"><span class="mapping-head-label">기준점</span><span class="mapping-head-unit">deg</span></th>
-                      <th><span class="mapping-head-label">현재 기준</span><span class="mapping-head-unit"></span></th>
+                      <th><span class="mapping-head-label">기준 사용·캡처</span><span class="mapping-head-unit"></span></th>
                       <th class="mapping-number-head"><span class="mapping-head-label">최솟값</span><span class="mapping-head-unit">deg</span></th>
                       <th class="mapping-number-head"><span class="mapping-head-label">최댓값</span><span class="mapping-head-unit">deg</span></th>
                       <th><span class="mapping-head-label">초기 방식</span><span class="mapping-head-unit"></span></th>
@@ -792,6 +794,7 @@
                   <span>모션 ID는 사용자가 정하는 모션축 번호입니다. 양의 정수-양의 정수 형식으로 입력합니다(예: 1-1, 2-3).</span>
                   <span>모션값·최솟값/최댓값·초기 위치·보정값은 모션/출력축 deg 기준입니다.</span>
                   <span>기준점과 최종 모터 목표는 모터축 deg 기준입니다.</span>
+                  <span>기준점 사용을 해제하면 계산 기준점은 0 deg가 됩니다.</span>
                   <span>최솟값/최댓값 초과 데이터는 실행을 막지 않고 경계값으로 제한해 명령합니다.</span>
                 </div>
                 <div>
@@ -882,6 +885,7 @@
               <div id="midiMappingPath" class="registry-message">모션축 설정 파일의 MIDI 뱅크 상태 확인 중</div>
               <div id="midiMonitorSummary" class="motion-file-summary midi-monitor-summary">
                 <div><span>연결</span><strong id="midiConnectionState">대기</strong></div>
+                <div><span>MIDI 입력</span><strong id="midiInputState">입력 대기</strong></div>
                 <div><span>입력 범위</span><strong>14bit · 0~16383</strong></div>
                 <div><span>출력 단위</span><strong>14bit</strong></div>
                 <div><span>필터</span><strong>2차 저역통과</strong></div>
@@ -1232,11 +1236,18 @@
               <div class="registry-actions"><button id="studioEditorSelectAllButton" type="button">전체 선택</button><button id="studioEditorSelectNoneButton" type="button">전체 해제</button></div>
               <div id="studioEditorAxisList" class="studio-editor-axis-list"></div>
               <div class="studio-editor-add-axis">
-                <strong>축 추가</strong>
-                <select id="studioEditorAddAxisSelect" aria-label="추가할 Motion ID"><option value="">추가 가능한 축 없음</option></select>
-                <label class="compact-field studio-editor-range-field"><span>초기값</span><input id="studioEditorAddAxisValue" type="number" step="0.1" value="0"></label>
-                <button id="studioEditorAddAxisButton" type="button">선택 축 추가</button>
-                <small>모션축 설정은 변경하지 않고 레이어 전체 구간에 축 데이터를 추가합니다.</small>
+                <strong>축 만들기</strong>
+                <div class="studio-editor-axis-create-row">
+                  <input id="studioEditorAddAxisSelect" type="text" inputmode="text" placeholder="새 ID (예: 1-2)" aria-label="추가할 Motion ID">
+                  <input id="studioEditorAddAxisValue" type="number" step="0.1" value="0" aria-label="새 축 초기값">
+                  <button id="studioEditorAddAxisButton" type="button">추가</button>
+                </div>
+                <div class="studio-editor-axis-create-row">
+                  <select id="studioEditorCopyAxisSource" aria-label="복사할 원본 Motion ID"><option value="">원본 축 없음</option></select>
+                  <input id="studioEditorCopyAxisTarget" type="text" inputmode="text" placeholder="대상 ID (예: 1-2)" aria-label="복사 대상 Motion ID">
+                  <button id="studioEditorCopyAxisButton" type="button">복사</button>
+                </div>
+                <small>추가: ID·초기값 입력 · 복사: 원본 선택 후 새 대상 ID 입력</small>
               </div>
               <strong>편집 구간</strong>
               <label class="compact-field studio-editor-range-field"><span>시작(초)</span><input id="studioEditorStart" type="number" min="0" step="0.02" placeholder="선택" value=""></label>
@@ -1265,12 +1276,17 @@
                     <option value="value_scale">모션값 배율</option>
                     <option value="time_shift">시간 이동</option>
                     <option value="value_offset">모션값 이동</option>
+                    <option value="repair_spikes">튀는 점만 보정</option>
                     <option value="interpolate">선택 구간 재보간 (1·3·5차)</option>
                     <option value="point_curve">포인트 곡선</option>
                   </select></label>
                   <label class="compact-field hidden" data-studio-editor-value="offset"><span>이동값(°)</span><input id="studioEditorOffset" type="number" step="0.1" value="0"></label>
                   <label class="compact-field" data-studio-editor-value="factor"><span id="studioEditorFactorLabel">시간 배율</span><input id="studioEditorFactor" type="number" min="0.01" max="100" step="0.01" value="1.00"></label>
                   <label class="compact-field hidden" data-studio-editor-value="delta"><span>이동값(ms)</span><input id="studioEditorDelta" type="number" step="20" value="0"></label>
+                  <div class="studio-editor-spike-controls hidden" data-studio-editor-value="spike">
+                    <label class="compact-field"><span>검출 기준(°)</span><input id="studioEditorSpikeThreshold" type="number" min="0.000001" step="0.01" value="0.10"></label>
+                    <label class="compact-field"><span>최대 보정량(°)</span><input id="studioEditorSpikeMaximum" type="number" min="0.000001" step="0.1" value="1.00"></label>
+                  </div>
                   <div id="studioEditorInterpolationChoices" class="studio-interpolation-choices hidden" data-studio-editor-value="curve" role="radiogroup" aria-label="보간 그래프 선택">
                     <span>보간 그래프</span>
                     <label title="시작점과 끝점을 직선으로 연결합니다"><input type="radio" name="studioInterpolationOrder" value="1" checked><svg viewBox="0 0 72 30" aria-hidden="true"><path d="M2 28 L70 2"></path></svg><b>1차</b></label>
@@ -1278,11 +1294,14 @@
                     <label title="시작과 끝의 속도와 가속도가 더 부드러운 S자 곡선입니다"><input type="radio" name="studioInterpolationOrder" value="5"><svg viewBox="0 0 72 30" aria-hidden="true"><path d="M2 28 C24 28 21 15 36 15 C51 15 48 2 70 2"></path></svg><b>5차</b></label>
                   </div>
                   <div id="studioEditorPointControls" class="studio-editor-point-controls hidden" data-studio-editor-value="points">
-                    <span>그래프를 클릭해 포인트 추가</span>
+                    <span>포인트 추가·드래그 / 배경 드래그로 시간축 이동</span>
+                    <label class="compact-field"><span>구간 곡선</span><select id="studioEditorPointCurveOrder">
+                      <option value="1">직선</option><option value="3" selected>3차 곡선</option><option value="5">5차 곡선</option>
+                    </select></label>
                     <label class="compact-field"><span>시간(초)</span><input id="studioEditorPointTime" type="number" min="0" step="0.02" disabled></label>
                     <label class="compact-field"><span>모션값(°)</span><input id="studioEditorPointValue" type="number" step="0.01" disabled></label>
                     <label class="compact-field"><span>탄젠트</span><select id="studioEditorPointMode" disabled>
-                      <option value="auto">자동</option><option value="smooth">부드럽게</option><option value="broken">분리</option><option value="linear">직선</option>
+                      <option value="auto">자동</option><option value="smooth">부드럽게</option><option value="broken">분리</option>
                     </select></label>
                     <button id="studioEditorPointDeleteButton" class="off" type="button" disabled>포인트 삭제</button>
                     <button id="studioEditorCurveDeleteButton" class="off" type="button" disabled>곡선 삭제</button>
@@ -1291,6 +1310,7 @@
                   <button id="studioEditorUpdateButton" class="primary" type="button" disabled>업데이트</button>
                 </div>
                 <div id="studioEditorOperationHelp" class="studio-editor-operation-help">시작점을 기준으로 선택 구간의 시간을 배율만큼 줄이거나 늘립니다.</div>
+                <div id="studioEditorSpikeReport" class="studio-editor-operation-help hidden"></div>
               </section>
               <div id="studioEditorMessage" class="registry-message">적용으로 미리 본 뒤 업데이트하여 작업본에 누적하세요. 마지막에 최종 저장합니다.</div>
               <div class="studio-editor-footer">
@@ -1377,6 +1397,20 @@
       </div>
     </div>
 
-    <script type="module" src="/static/app.js?v=20260721-layer-manager-quick"></script>
+    <div id="motorScanProgressModal" class="motor-scan-progress-overlay hidden" role="dialog" aria-live="polite" aria-modal="true" aria-labelledby="motorScanProgressTitle">
+      <section class="motor-scan-progress-dialog">
+        <div class="motor-scan-progress-header">
+          <strong id="motorScanProgressTitle">모터 직접 스캔</strong>
+          <span id="motorScanProgressState" data-state="running">스캔 준비 중</span>
+        </div>
+        <div id="motorScanProgressList" class="motor-scan-progress-list" aria-label="실시간 모터 스캔 내용"></div>
+        <div class="motor-scan-progress-actions">
+          <button id="motorScanProgressClearButton" type="button">내용 지우기</button>
+          <button id="motorScanProgressCloseButton" type="button" class="primary">닫기</button>
+        </div>
+      </section>
+    </div>
+
+    <script type="module" src="/static/app.js?v=20260722-spike-repair"></script>
   </body>
 </html>

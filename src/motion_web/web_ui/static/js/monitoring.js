@@ -154,6 +154,22 @@ function positionTurnText(motor) {
   return '-';
 }
 
+export function motionValueText(motor) {
+  const value = Number(motor.motion_value_deg);
+  if (motor.motion_value_status === 'received' && Number.isFinite(value)) {
+    return formatNumber(value, 3);
+  }
+  const labels = {
+    unmapped: '미설정',
+    missing: '모션값 미수신',
+  };
+  return labels[motor.motion_value_status] || '-';
+}
+
+function motionValueClass() {
+  return 'mono';
+}
+
 function velocityText(motor, rawMode) {
   if (rawMode) {
     const raw = motor.velocity_raw ?? calculatedAcServoRaw(
@@ -264,6 +280,7 @@ function monitoringColumnsForFilter(filter, rawMode) {
     { label: '서보 상태', className: (motor) => statusClass(motor), cell: (motor) => displayText(statusText(motor, rawMode)) },
     { label: '오류', className: (motor) => errorClass(motor), cell: (motor) => displayText(errorText(motor, rawMode)) },
     { label: positionHeaderText(rawMode), className: 'mono', cell: (motor) => displayText(positionText(motor, rawMode)) },
+    { label: '모션값 (deg)', className: (motor) => motionValueClass(motor), cell: (motor) => displayText(motionValueText(motor)) },
     { label: '회전수 (turn)', className: 'mono', cell: (motor) => displayText(positionTurnText(motor)) },
     { label: velocityHeaderText(rawMode), className: 'mono', cell: (motor) => displayText(velocityText(motor, rawMode)) },
     { label: rawMode ? '원시 토크/전류' : '토크/전류', className: 'mono', cell: (motor) => displayText(effortText(motor, rawMode)) },
@@ -444,9 +461,14 @@ function detailRowsForTab(motor, tab, rawMode) {
       motor, motor.velocity_deg_s ?? motor.velocity,
     );
     const positionTurn = positionTurnText(motor);
+    const motionValue = motionValueText(motor);
     return [
       ['표시 방식', rawMode ? '원시값' : '해석값'],
       ['현재 위치', rawMode ? integerUnit(positionRaw, 'count') : numberUnit(motor.position_deg ?? motor.position, 3, 'deg')],
+      ['현재 모션값', motionValue === '-' || motionValue === '미설정' || motionValue === '모션값 미수신'
+        ? motionValue : `${motionValue} deg`],
+      ['모션 ID', motor.motion_id || '미설정'],
+      ['모션값 상태', motor.motion_value_message || '-'],
       ['현재 회전수', positionTurn === '-' ? '-' : `${positionTurn} turn`],
       ['현재 속도', rawMode ? integerUnit(velocityRaw, 'count/s') : numberUnit(motor.velocity_deg_s ?? motor.velocity, 3, 'deg/s')],
       [isDynamixel ? '현재 전류' : '현재 토크', rawMode

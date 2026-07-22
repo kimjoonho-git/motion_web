@@ -12,13 +12,19 @@ export function detectedScanRow(row) {
 }
 
 export function motorIdFromScan(row) {
-  if (row.ethercat_alias !== null && row.ethercat_alias !== undefined) {
+  if (isAssignedAlias(row.ethercat_alias)) {
     return `ac_servo_ethercat_alias_${row.ethercat_alias}`;
   }
-  if (row.rotary_alias !== null && row.rotary_alias !== undefined) {
+  if (isAssignedAlias(row.rotary_alias)) {
     return `ac_servo_ethercat_rotary_${row.rotary_alias}`;
   }
-  return `ac_servo_ethercat_slave_${row.slave_position}`;
+  return `ac_servo_ethercat_master_${row.master_index ?? 0}_slave_${row.slave_position}`;
+}
+
+function isAssignedAlias(value) {
+  if (value === null || value === undefined || value === '') return false;
+  const alias = Number(value);
+  return Number.isInteger(alias) && alias > 0;
 }
 
 export function scanKey(row) {
@@ -29,22 +35,30 @@ export function scanKey(row) {
 export function scanRowMatchesRegistryMotor(row, motor) {
   const identity = motor.identity || {};
   const configuredAlias = motor.config?.alias ?? identity.ethercat_alias;
+  const configuredSerial = motor.config?.serial_number ?? identity.serial_number;
   if (
-    configuredAlias !== null && configuredAlias !== undefined &&
-    row.ethercat_alias !== null && row.ethercat_alias !== undefined
-  ) {
-    if (Number(configuredAlias) === 0 && Number(row.ethercat_alias) === 0) {
-      const configuredPosition = identity.slave_position ?? motor.config?.position;
-      return configuredPosition !== null && configuredPosition !== undefined &&
-        row.slave_position !== null && row.slave_position !== undefined &&
-        Number(configuredPosition) === Number(row.slave_position);
-    }
+    configuredSerial !== null && configuredSerial !== undefined &&
+    row.serial_number !== null && row.serial_number !== undefined &&
+    Number(configuredSerial) !== Number(row.serial_number)
+  ) return false;
+  if (isAssignedAlias(configuredAlias) &&
+      row.ethercat_alias !== null && row.ethercat_alias !== undefined) {
     return Number(row.ethercat_alias) === Number(configuredAlias);
   }
-  if (
-    identity.rotary_alias !== null && identity.rotary_alias !== undefined &&
-    row.rotary_alias !== null && row.rotary_alias !== undefined
-  ) {
+  // Alias 0 is an unconfigured value, not a physical identity requirement.
+  // In that mode the EtherCAT chain position is the stable key used by the
+  // current runtime configuration, even if the drive EEPROM contains a
+  // non-zero alias left by a previous installation.
+  if (!isAssignedAlias(configuredAlias)) {
+    const configuredPosition = identity.slave_position ?? motor.config?.position;
+    if (
+      configuredPosition !== null && configuredPosition !== undefined &&
+      row.slave_position !== null && row.slave_position !== undefined
+    ) {
+      return Number(configuredPosition) === Number(row.slave_position);
+    }
+  }
+  if (isAssignedAlias(identity.rotary_alias) && isAssignedAlias(row.rotary_alias)) {
     return Number(row.rotary_alias) === Number(identity.rotary_alias);
   }
   if (
@@ -77,6 +91,31 @@ export function scanRowMatchesRuntimeMotor(row, motor) {
     motor.controller_index !== null &&
     motor.controller_index !== undefined &&
     Number(row.controller_index) === Number(motor.controller_index);
+}
+
+export function runtimeMotorConfirmsRegistryMotor(motor, runtime) {
+  if (!motor || !runtime) return false;
+  const configuredAxis = motor.config?.controller_index ?? motor.axis;
+  if (configuredAxis === null || configuredAxis === undefined ||
+      runtime.controller_index === null || runtime.controller_index === undefined ||
+      Number(configuredAxis) !== Number(runtime.controller_index)) return false;
+
+  const configuredPosition = motor.identity?.slave_position ?? motor.config?.position;
+  if (configuredPosition === null || configuredPosition === undefined ||
+      runtime.slave_position === null || runtime.slave_position === undefined ||
+      Number(configuredPosition) !== Number(runtime.slave_position)) return false;
+
+  const configuredAlias = motor.config?.alias ?? motor.identity?.ethercat_alias;
+  if (isAssignedAlias(configuredAlias) &&
+      runtime.alias !== null && runtime.alias !== undefined &&
+      Number(configuredAlias) !== Number(runtime.alias)) return false;
+
+  const configuredModel = String(motor.identity?.driver_model || '').trim();
+  const runtimeModel = String(runtime.driver_model || '').trim();
+  if (configuredModel && runtimeModel && configuredModel !== runtimeModel) return false;
+
+  return String(runtime.connection_state || '') === 'online' &&
+    runtime.connection_confirmed === true;
 }
 
 export function runtimeIsAcServo(motor) {
@@ -122,6 +161,7 @@ export function scanRowToMotor(row, nextAvailableAxis) {
       ethercat_alias: ethercatAlias,
       slave_position: row.slave_position ?? null,
       driver_model: row.driver_model || '',
+      serial_number: row.serial_number ?? null,
     },
     config: {
       controller_index: axis,
@@ -130,6 +170,8 @@ export function scanRowToMotor(row, nextAvailableAxis) {
       position,
       vendor_id: row.vendor_id ?? null,
       product_id: row.product_code ?? null,
+      revision_number: row.revision_number ?? null,
+      serial_number: row.serial_number ?? null,
       profile_mode: 0,
     },
   });

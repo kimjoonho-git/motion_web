@@ -148,8 +148,10 @@ export CONFIG_FILE
 export START_MOTOR_MANAGER
 export MOTOR_START_BLOCK_REASON
 export WORKSPACE
+PROJECT_GENERATION="${MOTION_PROJECT_GENERATION:-0}"
+export PROJECT_GENERATION
 log "ROS DDS isolation: ROS_LOCALHOST_ONLY=${ROS_LOCALHOST_ONLY}"
-log "starting motion_monitor.launch.py with config_file=${CONFIG_FILE}, start_motor_manager=${START_MOTOR_MANAGER}"
+log "starting motion_monitor.launch.py with config_file=${CONFIG_FILE}, project_generation=${PROJECT_GENERATION}, start_motor_manager=${START_MOTOR_MANAGER}"
 sg dialout -c 'bash -lc '"'"'source "$WORKSPACE/install/setup.bash" && ros2 launch motion_state_monitor motion_monitor.launch.py config_file:="$CONFIG_FILE" motion_projects_dir:="$WORKSPACE/motion_projects" start_motor_manager:="$START_MOTOR_MANAGER"'"'" &
 launch_pid="$!"
 log "starting MIDI control (motor requests routed through motion_supervisor, config_file=${CONFIG_FILE})"

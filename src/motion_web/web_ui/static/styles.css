@@ -2580,6 +2580,19 @@ button[aria-disabled="true"] {
   line-height: 1.35;
 }
 
+.studio-editor-axis-create-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(64px, 0.8fr) auto;
+  gap: 5px;
+  align-items: center;
+}
+
+.studio-editor-axis-create-row button {
+  width: auto;
+  min-width: 48px;
+  white-space: nowrap;
+}
+
 .studio-editor-toolbar,
 .studio-editor-operations,
 .studio-editor-footer {
@@ -2616,6 +2629,12 @@ button[aria-disabled="true"] {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+.studio-editor-spike-controls {
+  display: flex;
+  align-items: end;
+  gap: 8px;
 }
 
 .studio-interpolation-choices > span {
@@ -4162,6 +4181,11 @@ th {
   background: #f3f6f9;
 }
 
+.motion-mapping-table.mapping-loading tbody {
+  pointer-events: none;
+  opacity: 0.65;
+}
+
 .motion-mapping-table input:disabled,
 .motion-mapping-table select:disabled,
 .motion-mapping-table button:disabled {
@@ -4184,6 +4208,14 @@ th {
   min-width: 58px;
   padding: 6px 8px;
   border-radius: 6px;
+}
+
+.motion-mapping-table .mapping-reference-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 6px;
+  white-space: nowrap;
 }
 
 .motion-mapping-validation-summary {
@@ -4476,6 +4508,104 @@ th {
   border-top-color: var(--blue);
   border-radius: 50%;
   animation: spin 0.9s linear infinite;
+}
+
+.motor-scan-progress-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1250;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(12, 19, 28, 0.58);
+}
+
+.motor-scan-progress-dialog {
+  width: min(720px, 100%);
+  max-height: min(760px, calc(100vh - 40px));
+  display: grid;
+  grid-template-rows: auto minmax(220px, 1fr) auto;
+  overflow: hidden;
+  border: 1px solid #b8c7d8;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.24);
+}
+
+.motor-scan-progress-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px;
+  border-bottom: 1px solid #dce5ef;
+  background: #f6f9fc;
+}
+
+.motor-scan-progress-header strong { font-size: 19px; }
+
+.motor-scan-progress-header span {
+  color: var(--blue);
+  font-weight: 700;
+}
+
+.motor-scan-progress-header span[data-state="failed"] { color: #b42318; }
+.motor-scan-progress-header span[data-state="done"] { color: #157347; }
+.motor-scan-progress-header span[data-state="warning"] { color: #9a6200; }
+
+.motor-scan-progress-list {
+  min-height: 260px;
+  max-height: min(560px, 65vh);
+  overflow: auto;
+  padding: 14px 18px;
+  background: #ffffff;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.motor-scan-progress-line {
+  margin-bottom: 8px;
+  padding: 9px 12px 9px 30px;
+  border: 1px solid #dce5ef;
+  border-left: 4px solid #79aee3;
+  border-radius: 6px;
+  background: #f8fbfe;
+  overflow-wrap: anywhere;
+}
+
+.motor-scan-progress-line::before {
+  content: '•';
+  float: left;
+  margin-left: -17px;
+  color: var(--blue);
+}
+
+.motor-scan-progress-line.is-done {
+  border-left-color: #2f8f5b;
+  background: #f2fbf6;
+  color: #17663d;
+}
+
+.motor-scan-progress-line.is-failed {
+  border-left-color: #cf2e2e;
+  background: #fff6f6;
+  color: #9f1d1d;
+}
+
+.motor-scan-progress-line.is-warning {
+  border-left-color: #d58a16;
+  background: #fffaf0;
+  color: #805400;
+}
+
+.motor-scan-progress-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 12px 18px;
+  border-top: 1px solid #dce5ef;
+  background: #f6f9fc;
 }
 
 .motor-error-popup {

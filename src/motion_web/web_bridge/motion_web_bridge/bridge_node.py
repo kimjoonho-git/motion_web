@@ -1,6 +1,7 @@
 import asyncio
 import ast
 import copy
+import hashlib
 import json
 import math
 import os
@@ -18,8 +19,9 @@ import uvicorn
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 from std_srvs.srv import SetBool, Trigger
 
@@ -30,6 +32,120 @@ from .project_repository import ProjectRepository
 DYNAMIXEL_BAUDRATE = 1000000
 MOTION_DATA_PERIOD_SEC = 0.02
 MOTION_FILE_SIZE_LIMIT_BYTES = 10 * 1024 * 1024
+
+
+def _monitoring_finite_float(value: Any) -> Optional[float]:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _monitoring_motor_ref(motor: Dict[str, Any]) -> str:
+    text = ' '.join(str(motor.get(key) or '').lower() for key in (
+        'motor_type', 'motor_type_label', 'driver_model', 'transport'
+    ))
+    if 'dynamixel' in text:
+        value = motor.get('bus_id', motor.get('node_id'))
+        try:
+            return f'dynamixel:id:{int(value)}'
+        except (TypeError, ValueError):
+            return ''
+    if 'minas' in text or 'ac servo' in text or 'ac_servo' in text:
+        value = motor.get('alias', motor.get('ethercat_alias'))
+        try:
+            return f'ac_servo:alias:{int(value)}'
+        except (TypeError, ValueError):
+            return ''
+    return ''
+
+
+def add_monitoring_motion_values(
+    motion_state: Dict[str, Any],
+    mapping_rows: List[Dict[str, Any]],
+    motion_value_state: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Attach control-layer motion values without deriving them from feedback."""
+    motors = motion_state.get('motors')
+    if not isinstance(motors, list):
+        return
+    value_state = motion_value_state if isinstance(motion_value_state, dict) else {}
+    received_values = value_state.get('values')
+    if not isinstance(received_values, dict):
+        received_values = {}
+    value_sources = value_state.get('sources')
+    if not isinstance(value_sources, dict):
+        value_sources = {}
+    valid_motors = [motor for motor in motors if isinstance(motor, dict)]
+    rows_by_axis: Dict[int, List[Dict[str, Any]]] = {}
+    for row in mapping_rows:
+        if not isinstance(row, dict) or row.get('enabled') is False:
+            continue
+        motor_ref = str(row.get('motor_ref') or '').strip()
+        axis: Optional[int] = None
+        if motor_ref:
+            matches = [
+                motor for motor in valid_motors
+                if _monitoring_motor_ref(motor).lower() == motor_ref.lower()
+            ]
+            if len(matches) == 1:
+                try:
+                    axis = int(matches[0].get('controller_index'))
+                except (TypeError, ValueError):
+                    axis = None
+        else:
+            try:
+                axis = int(row.get('motor_axis'))
+            except (TypeError, ValueError):
+                axis = None
+        if axis is not None and axis >= 0:
+            rows_by_axis.setdefault(axis, []).append(row)
+
+    for motor in valid_motors:
+        motor.update({
+            'motion_axis_configured': False,
+            'motion_id': None,
+            'motion_value_deg': None,
+            'motion_value_status': 'unmapped',
+            'motion_value_message': '모션축 미설정',
+            'motion_value_source': None,
+        })
+        try:
+            axis = int(motor.get('controller_index'))
+        except (TypeError, ValueError):
+            continue
+        rows = rows_by_axis.get(axis, [])
+        if not rows:
+            continue
+        motor['motion_axis_configured'] = True
+        if len(rows) != 1:
+            motor.update({
+                'motion_value_status': 'missing',
+                'motion_value_message': '활성 모션축 중복 설정으로 모션값을 연결할 수 없음',
+            })
+            continue
+
+        row = rows[0]
+        motion_id = str(row.get('motion_id') or '').strip()
+        motor['motion_id'] = motion_id or None
+        motion_value = _monitoring_finite_float(received_values.get(motion_id))
+        if not motion_id or motion_value is None:
+            motor.update({
+                'motion_value_status': 'missing',
+                'motion_value_message': '모션값 토픽 미수신',
+            })
+            continue
+        source = str(value_sources.get(motion_id) or '')
+        source_label = {'midi': 'MIDI', 'motion_run': '모션 실행'}.get(source, source)
+        motor.update({
+            'motion_value_deg': round(motion_value, 6),
+            'motion_value_status': 'received',
+            'motion_value_message': (
+                f'{source_label} 제어 모션값 수신' if source_label else '제어 모션값 수신'
+            ),
+            'motion_value_source': source or None,
+        })
 
 
 def _workspace_root() -> Path:
@@ -67,6 +183,10 @@ class MotionWebBridge(Node):
             'motion_state_topic',
             '/motion_control/motion_state',
         ).value
+        self.motion_value_topic = self.declare_parameter(
+            'motion_value_topic',
+            '/motion_control/motion_value_state',
+        ).value
         self.monitoring_service = self.declare_parameter(
             'monitoring_service',
             '/set_monitoring',
@@ -79,6 +199,10 @@ class MotionWebBridge(Node):
         self.scan_dynamixel_service = self.declare_parameter(
             'scan_dynamixel_service',
             '/scan_dynamixel_motors',
+        ).value
+        self.scan_progress_topic = self.declare_parameter(
+            'scan_progress_topic',
+            '/motion_control/motor_scan_progress',
         ).value
         self.jog_request_topic = self.declare_parameter(
             'jog_request_topic',
@@ -204,6 +328,14 @@ class MotionWebBridge(Node):
         self._lock = threading.Lock()
         self._motion_state: Optional[Dict[str, Any]] = None
         self._motion_state_received_at: Optional[float] = None
+        self._motion_value_lock = threading.Lock()
+        self._motion_value_state: Dict[str, Any] = {
+            'project_id': '',
+            'project_generation': 0,
+            'values': {},
+            'sources': {},
+            'stamps': {},
+        }
         self._jog_result_lock = threading.Lock()
         self._jog_results: Dict[str, Dict[str, Any]] = {}
         self._action_result_lock = threading.Lock()
@@ -225,6 +357,14 @@ class MotionWebBridge(Node):
         self._safety_status: Dict[str, Any] = {}
         self._execution_context_lock = threading.RLock()
         self._execution_context_apply_lock = threading.Lock()
+        self._monitoring_motion_mapping_lock = threading.Lock()
+        self._monitoring_motion_mapping_context_id = ''
+        self._monitoring_motion_mapping_rows: List[Dict[str, Any]] = []
+        self._project_generation_lock = threading.Lock()
+        self._project_generation = self.project_repository.project_generation()
+        self._supervisor_project_generation = 0
+        self._bridge_instance_id = f'{os.getpid()}-{time.time_ns()}'
+        self._bridge_started_at = time.time()
         self._execution_context_status: Dict[str, Any] = {
             'state': 'starting',
             'ready': False,
@@ -235,6 +375,13 @@ class MotionWebBridge(Node):
             'updated_at': time.time(),
         }
         self._event_log_lock = threading.RLock()
+        self._scan_progress_lock = threading.RLock()
+        self._scan_progress: Dict[str, Any] = {
+            'scan_id': '',
+            'events': [],
+            'running': False,
+            'updated_at': None,
+        }
         self._active_motor_errors: Dict[str, str] = {}
         self._last_motion_run_state: Optional[str] = None
 
@@ -243,6 +390,23 @@ class MotionWebBridge(Node):
             self.motion_state_topic,
             self._motion_state_callback,
             10,
+        )
+        motion_value_qos = QoSProfile(
+            depth=10,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        self._motion_value_subscription = self.create_subscription(
+            String,
+            self.motion_value_topic,
+            self._motion_value_callback,
+            motion_value_qos,
+        )
+        self._scan_progress_subscription = self.create_subscription(
+            String,
+            self.scan_progress_topic,
+            self._scan_progress_callback,
+            20,
         )
         self._monitoring_client = self.create_client(SetBool, self.monitoring_service)
         self._scan_client = self.create_client(Trigger, self.scan_service)
@@ -371,10 +535,114 @@ class MotionWebBridge(Node):
             self.get_logger().warn(f'Invalid {self.motion_state_topic} JSON received.')
             return
 
+        if (
+            not self._selected_project_owns_runtime()
+            or not self._payload_matches_selected_project(
+                payload, require_generation=False
+            )
+        ):
+            return
         with self._lock:
             self._motion_state = payload
             self._motion_state_received_at = time.time()
         self._record_motor_error_transitions(payload)
+
+    def _motion_value_callback(self, msg: String) -> None:
+        try:
+            payload = json.loads(msg.data)
+        except json.JSONDecodeError:
+            self.get_logger().warn(f'Invalid {self.motion_value_topic} JSON received.')
+            return
+        if not isinstance(payload, dict):
+            return
+        project_id = str(payload.get('project_id') or '')
+        try:
+            generation = int(payload.get('project_generation'))
+        except (TypeError, ValueError):
+            return
+        if (
+            project_id != self.project_repository.selected_project_id()
+            or generation != self._current_project_generation()
+        ):
+            return
+        raw_values = payload.get('values')
+        if not isinstance(raw_values, dict):
+            return
+        source = str(payload.get('source') or '')
+        stamp = _monitoring_finite_float(payload.get('stamp')) or time.time()
+        updates = {}
+        for motion_id, value in raw_values.items():
+            key = str(motion_id or '').strip()
+            number = _monitoring_finite_float(value)
+            if key and number is not None:
+                updates[key] = number
+        if not updates:
+            return
+        with self._motion_value_lock:
+            if (
+                self._motion_value_state.get('project_id') != project_id
+                or self._motion_value_state.get('project_generation') != generation
+            ):
+                self._motion_value_state = {
+                    'project_id': project_id,
+                    'project_generation': generation,
+                    'values': {},
+                    'sources': {},
+                    'stamps': {},
+                }
+            values = self._motion_value_state['values']
+            sources = self._motion_value_state['sources']
+            stamps = self._motion_value_state['stamps']
+            for motion_id, value in updates.items():
+                if stamp < float(stamps.get(motion_id) or 0.0):
+                    continue
+                values[motion_id] = value
+                sources[motion_id] = source
+                stamps[motion_id] = stamp
+
+    def _scan_progress_callback(self, msg: String) -> None:
+        try:
+            event = json.loads(msg.data)
+        except json.JSONDecodeError:
+            self.get_logger().warn(f'Invalid {self.scan_progress_topic} JSON received.')
+            return
+        if not isinstance(event, dict) or not str(event.get('scan_id') or ''):
+            return
+        now = time.time()
+        with self._scan_progress_lock:
+            scan_id = str(event['scan_id'])
+            if scan_id != self._scan_progress.get('scan_id'):
+                self._scan_progress = {
+                    'scan_id': scan_id,
+                    'events': [],
+                    'running': True,
+                    'started_at': event.get('timestamp') or now,
+                    'updated_at': now,
+                    'project_id': self.project_repository.selected_project_id(),
+                    'project_generation': self._current_project_generation(),
+                }
+            events = self._scan_progress.setdefault('events', [])
+            recorded = dict(event)
+            recorded['index'] = len(events)
+            events.append(recorded)
+            if len(events) > 300:
+                del events[:-300]
+                for index, item in enumerate(events):
+                    item['index'] = index
+            self._scan_progress['updated_at'] = now
+            if event.get('phase') in {'complete', 'completed', 'partial', 'failed'}:
+                self._scan_progress['running'] = False
+                self._scan_progress['completed_at'] = now
+
+    def motor_scan_progress(self) -> Dict[str, Any]:
+        with self._scan_progress_lock:
+            progress = copy.deepcopy(self._scan_progress)
+        return {
+            'success': True,
+            'progress': progress,
+            'project_id': self.project_repository.selected_project_id(),
+            'project_generation': self._current_project_generation(),
+        }
 
     def _jog_result_callback(self, msg: String) -> None:
         try:
@@ -386,7 +654,7 @@ class MotionWebBridge(Node):
             return
 
         request_id = str(payload.get('request_id') or '')
-        if not request_id:
+        if not request_id or not self._request_matches_current_generation(request_id):
             return
 
         with self._jog_result_lock:
@@ -409,7 +677,7 @@ class MotionWebBridge(Node):
             return
 
         request_id = str(payload.get('request_id') or '')
-        if not request_id:
+        if not request_id or not self._request_matches_current_generation(request_id):
             return
 
         with self._action_result_lock:
@@ -432,7 +700,7 @@ class MotionWebBridge(Node):
             return
 
         request_id = str(payload.get('request_id') or '')
-        if not request_id:
+        if not request_id or not self._response_matches_current_generation(payload):
             return
 
         payload['_received_at'] = time.time()
@@ -456,14 +724,14 @@ class MotionWebBridge(Node):
             return
 
         request_id = str(payload.get('request_id') or '')
-        if not request_id:
+        if not request_id or not self._response_matches_current_generation(payload):
             return
 
         payload['_received_at'] = time.time()
         with self._motion_run_lock:
             self._motion_run_results[request_id] = payload
             status = payload.get('status')
-            if isinstance(status, dict):
+            if isinstance(status, dict) and self._payload_matches_selected_project(status):
                 self._motion_run_status = status
             cutoff = time.time() - 20.0
             stale_keys = [
@@ -472,7 +740,7 @@ class MotionWebBridge(Node):
             ]
             for key in stale_keys:
                 self._motion_run_results.pop(key, None)
-        if isinstance(status, dict):
+        if isinstance(status, dict) and self._payload_matches_selected_project(status):
             self._record_motion_run_transition(status)
 
     def _motion_run_status_callback(self, msg: String) -> None:
@@ -482,6 +750,8 @@ class MotionWebBridge(Node):
             self.get_logger().warn(f'Invalid {self.motion_run_status_topic} JSON received.')
             return
         if not isinstance(payload, dict):
+            return
+        if not self._payload_matches_selected_project(payload):
             return
         with self._motion_run_lock:
             self._motion_run_status = payload
@@ -494,6 +764,8 @@ class MotionWebBridge(Node):
             self.get_logger().warn(f'Invalid {self.midi_monitor_state_topic} JSON received.')
             return
         if not isinstance(payload, dict):
+            return
+        if not self._payload_matches_selected_project(payload):
             return
         payload['_bridge_received_at'] = time.time()
         with self._midi_monitor_lock:
@@ -508,12 +780,16 @@ class MotionWebBridge(Node):
         if not isinstance(payload, dict):
             return
         request_id = str(payload.get('request_id') or '')
-        if not request_id:
+        if not request_id or not self._response_matches_current_generation(payload):
             return
         payload['_bridge_received_at'] = time.time()
         with self._midi_monitor_lock:
             self._midi_monitor_results[request_id] = payload
-            if payload.get('success') and isinstance(payload.get('channels'), list):
+            if (
+                payload.get('success')
+                and isinstance(payload.get('channels'), list)
+                and self._payload_matches_selected_project(payload)
+            ):
                 self._midi_monitor_status = dict(payload)
             cutoff = time.time() - 20.0
             stale_keys = [
@@ -529,7 +805,7 @@ class MotionWebBridge(Node):
         except json.JSONDecodeError:
             self.get_logger().warn(f'Invalid {self.motion_studio_status_topic} JSON received.')
             return
-        if isinstance(payload, dict):
+        if isinstance(payload, dict) and self._payload_matches_selected_project(payload):
             with self._motion_studio_lock:
                 self._motion_studio_status = payload
 
@@ -552,7 +828,7 @@ class MotionWebBridge(Node):
         if not isinstance(payload, dict):
             return
         request_id = str(payload.get('request_id') or '')
-        if request_id:
+        if request_id and self._response_matches_current_generation(payload):
             with self._motion_studio_lock:
                 self._motion_studio_results[request_id] = payload
 
@@ -567,7 +843,7 @@ class MotionWebBridge(Node):
         if not isinstance(payload, dict):
             return
         request_id = str(payload.get('request_id') or '')
-        if request_id:
+        if request_id and self._response_matches_current_generation(payload):
             with self._motion_studio_editor_lock:
                 self._motion_studio_editor_results[request_id] = payload
 
@@ -680,8 +956,10 @@ class MotionWebBridge(Node):
 
     def snapshot(self) -> Dict[str, Any]:
         with self._lock:
-            motion_state = self._motion_state
+            motion_state = copy.deepcopy(self._motion_state)
             received_at = self._motion_state_received_at
+        with self._motion_value_lock:
+            motion_value_state = copy.deepcopy(self._motion_value_state)
         with self._motion_run_lock:
             motion_run_status = dict(self._motion_run_status) if self._motion_run_status else {}
         with self._midi_monitor_lock:
@@ -699,9 +977,55 @@ class MotionWebBridge(Node):
         )
 
         runtime_status = self._runtime_service_status(motion_state)
+        # Websocket status is published frequently. The stored execution
+        # project service).  The stored execution context hashes every active
+        # project file, so validating it for every websocket frame makes page
+        # and API responses contend with continuous disk reads and hashing.
+        # The coordinator and explicit context endpoints still perform the
+        # full validation; a status frame only reports that validated result.
+        execution_context = self.execution_context_status(validate_files=False)
+        selected_project_id = self.project_repository.selected_project_id()
+        runtime_project_id = self._runtime_project_id_from_path(selected_project_id)
+        stored_context = execution_context.get('context')
+        motor_config_applied = bool(
+            isinstance(stored_context, dict)
+            and stored_context.get('project_id') == selected_project_id
+            and stored_context.get('motor_applied')
+        )
+        project_scope = {
+            'selected_project_id': selected_project_id,
+            'runtime_project_id': runtime_project_id,
+            'runtime_matches_selected': bool(
+                selected_project_id
+                and runtime_project_id
+                and selected_project_id == runtime_project_id
+            ),
+            'motor_config_applied': motor_config_applied,
+        }
+        if isinstance(motion_state, dict):
+            mapping_rows = self._monitoring_mapping_rows_for_context(
+                execution_context,
+                selected_project_id,
+            )
+            current_generation = self._current_project_generation()
+            if (
+                motion_value_state.get('project_id') != selected_project_id
+                or motion_value_state.get('project_generation') != current_generation
+            ):
+                motion_value_state = {}
+            add_monitoring_motion_values(
+                motion_state,
+                mapping_rows,
+                motion_value_state,
+            )
+            motion_state['project_scope'] = project_scope
+            motion_state['project_generation'] = current_generation
 
         return {
             'bridge_state': 'ok',
+            'bridge_instance_id': str(getattr(self, '_bridge_instance_id', '')),
+            'bridge_started_at': getattr(self, '_bridge_started_at', None),
+            'project_generation': self._current_project_generation(),
             'service_management': {
                 'managed': bool(os.environ.get('MOTION_CONTROL_SERVICE_UNIT')),
                 'mode': 'automatic' if os.environ.get('MOTION_CONTROL_SERVICE_UNIT') else 'manual',
@@ -719,15 +1043,69 @@ class MotionWebBridge(Node):
             'midi_monitor': midi_monitor,
             'motion_studio': motion_studio,
             'safety_status': safety_status,
-            'execution_context': self.execution_context_status(),
+            'execution_context': execution_context,
+            'project_scope': project_scope,
             'motion_state': motion_state,
         }
 
-    def execution_context_status(self) -> Dict[str, Any]:
+    def _monitoring_mapping_rows_for_context(
+        self,
+        execution_context: Dict[str, Any],
+        project_id: str,
+    ) -> List[Dict[str, Any]]:
+        """Load the applied mapping once per immutable execution context."""
+        context_id = str(execution_context.get('context_id') or '')
+        context = execution_context.get('context')
+        if (
+            not execution_context.get('ready')
+            or not context_id
+            or not project_id
+            or not isinstance(context, dict)
+            or str(context.get('project_id') or '') != project_id
+        ):
+            return []
+        files = context.get('files')
+        mapping_info = (
+            files.get('motion_axis_matching')
+            if isinstance(files, dict) else None
+        )
+        if not isinstance(mapping_info, dict):
+            return []
+        mapping_name = str(mapping_info.get('name') or '').strip()
+        expected_sha = str(mapping_info.get('sha256') or '').strip()
+        if not mapping_name or not expected_sha:
+            return []
+
+        if not hasattr(self, '_monitoring_motion_mapping_lock'):
+            self._monitoring_motion_mapping_lock = threading.Lock()
+            self._monitoring_motion_mapping_context_id = ''
+            self._monitoring_motion_mapping_rows = []
+        with self._monitoring_motion_mapping_lock:
+            if self._monitoring_motion_mapping_context_id == context_id:
+                return copy.deepcopy(self._monitoring_motion_mapping_rows)
+            rows: List[Dict[str, Any]] = []
+            try:
+                result = self.project_repository.read_file(
+                    project_id,
+                    'motion_axis_matching',
+                    mapping_name,
+                )
+                if str(result.get('sha256') or '') == expected_sha:
+                    payload = yaml.safe_load(str(result.get('content') or '')) or {}
+                    raw_rows = payload.get('mappings') if isinstance(payload, dict) else None
+                    if isinstance(raw_rows, list):
+                        rows = [dict(row) for row in raw_rows if isinstance(row, dict)]
+            except (AttributeError, OSError, ValueError, yaml.YAMLError):
+                rows = []
+            self._monitoring_motion_mapping_context_id = context_id
+            self._monitoring_motion_mapping_rows = rows
+            return copy.deepcopy(rows)
+
+    def execution_context_status(self, *, validate_files: bool = True) -> Dict[str, Any]:
         with self._execution_context_lock:
             status = copy.deepcopy(self._execution_context_status)
         project_id = self.project_repository.selected_project_id()
-        if project_id and status.get('ready'):
+        if validate_files and project_id and status.get('ready'):
             try:
                 current = self.project_repository.execution_context(project_id)
             except (OSError, ValueError, json.JSONDecodeError):
@@ -752,15 +1130,51 @@ class MotionWebBridge(Node):
         status = self.execution_context_status()
         return str(status.get('context_id') or '') if status.get('ready') else ''
 
+    def _establish_project_generation_boundary(self, *, force: bool = False) -> None:
+        """Synchronize the persistent project generation with the command owner.
+
+        The supervisor is recreated by a full program restart and therefore
+        starts at generation zero, while the bridge restores the persisted
+        generation.  Establish the boundary before any project consumer can
+        become ready so valid MIDI commands are not rejected after restart.
+        """
+        generation = self._current_project_generation()
+        if (
+            not force
+            and int(getattr(self, '_supervisor_project_generation', 0) or 0)
+            == generation
+        ):
+            return
+        boundary_id = self._new_project_request_id('project-boundary')
+        boundary = String()
+        boundary.data = json.dumps({
+            'request_id': boundary_id,
+            'project_generation': generation,
+            'command': 'project_generation_boundary',
+        }, ensure_ascii=False)
+        publisher = getattr(self, '_action_request_publisher', None)
+        if publisher is not None:
+            publisher.publish(boundary)
+            acknowledged = self._wait_for_action_result(boundary_id, timeout_sec=1.0)
+            if not isinstance(acknowledged, dict) or acknowledged.get('success') is not True:
+                raise ValueError(
+                    '최종 모터 명령 노드가 프로젝트 세대 전환을 확인하지 않았습니다'
+                )
+        self._supervisor_project_generation = generation
+
     def _invalidate_execution_nodes(self, context_id: str = '') -> None:
         payload = {'context_id': context_id}
+        # A forced boundary also stops any command that belonged to the
+        # invalidated context, even when the numeric generation is unchanged.
+        self._establish_project_generation_boundary(force=True)
+        self._request_motion_mapping('invalidate_context', payload, timeout_sec=0.5)
         self._request_midi_monitor('invalidate_context', payload, timeout_sec=0.5)
         self._request_motion_run('invalidate_context', payload, timeout_sec=0.5)
         self.request_motion_studio('invalidate_context', payload, timeout_sec=0.5)
+        self._clear_project_scoped_memory()
 
-    @staticmethod
     def _execution_context_ack_matches(
-        result: Dict[str, Any], context_id: str, project_id: str
+        self, result: Dict[str, Any], context_id: str, project_id: str
     ) -> bool:
         """Accept the common acknowledgement fields, including UI snapshots.
 
@@ -791,10 +1205,22 @@ class MotionWebBridge(Node):
             or status_context.get('project_id')
             or ''
         )
+        acknowledged_generation = result.get('project_generation')
+        if acknowledged_generation is None:
+            acknowledged_generation = nested.get('project_generation')
+        if acknowledged_generation is None:
+            acknowledged_generation = status_context.get('project_generation')
+        try:
+            generation_matches = (
+                int(acknowledged_generation) == self._current_project_generation()
+            )
+        except (TypeError, ValueError):
+            generation_matches = False
         return (
             result.get('success') is True
             and acknowledged_context == context_id
             and acknowledged_project == project_id
+            and generation_matches
         )
 
     def _schedule_execution_context_reconcile(self) -> None:
@@ -834,6 +1260,16 @@ class MotionWebBridge(Node):
             context_id = str(context.get('context_id') or '')
             with self._execution_context_lock:
                 previous = dict(self._execution_context_status)
+            try:
+                self._establish_project_generation_boundary()
+            except ValueError as exc:
+                self._set_execution_context_status(
+                    state='waiting_motor_runtime', ready=False,
+                    project_id=project_id, context_id=context_id,
+                    message=str(exc), nodes={},
+                    failures={'motor_runtime': str(exc)}, context=context,
+                )
+                return self.execution_context_status()
             if context.get('missing'):
                 if previous.get('state') != 'configuration_required' or previous.get('context_id') != context_id:
                     self._invalidate_execution_nodes(context_id)
@@ -853,6 +1289,7 @@ class MotionWebBridge(Node):
                 return self.execution_context_status()
             payload = {
                 'context_id': context_id,
+                'project_generation': self._current_project_generation(),
                 'mapping_file_id': mapping['name'],
                 'mapping_sha256': mapping['sha256'],
             }
@@ -903,7 +1340,12 @@ class MotionWebBridge(Node):
                 return self.execution_context_status()
 
             if not context.get('motor_applied'):
-                self._invalidate_execution_nodes(context_id)
+                # The project files were accepted by every consumer above.
+                # Keep that project-scoped mapping and MIDI bank loaded while
+                # motor control remains blocked.  Invalidating here used to
+                # erase the MIDI node's project_id and restore its default
+                # Bank 1 once per reconciliation cycle, even though the saved
+                # project data itself was valid.
                 self._set_execution_context_status(
                     state='motor_apply_required', ready=False,
                     project_id=project_id, context_id=context_id,
@@ -1497,11 +1939,23 @@ class MotionWebBridge(Node):
         service_name: str,
         timeout_sec: float,
     ) -> Dict[str, Any]:
+        scan_project_id = self.project_repository.selected_project_id()
+        scan_generation = self._current_project_generation()
+        if not scan_project_id:
+            return {
+                'success': False,
+                'message': '먼저 프로젝트를 선택한 후 모터를 검색하세요',
+                'scan': None,
+                'project_id': '',
+                'project_generation': scan_generation,
+                **self.snapshot(),
+            }
         if not client.wait_for_service(timeout_sec=0.2):
             return {
                 'success': False,
                 'message': f'scan service unavailable: {service_name}',
                 'scan': None,
+                'project_generation': scan_generation,
                 **self.snapshot(),
             }
 
@@ -1515,10 +1969,23 @@ class MotionWebBridge(Node):
                 'success': False,
                 'message': 'scan service timeout',
                 'scan': None,
+                'project_generation': scan_generation,
                 **self.snapshot(),
             }
 
         response = future.result()
+        if (
+            self.project_repository.selected_project_id() != scan_project_id
+            or self._current_project_generation() != scan_generation
+        ):
+            return {
+                'success': False,
+                'message': '프로젝트가 변경되어 이전 프로젝트의 검색 결과를 폐기했습니다',
+                'scan': None,
+                'project_id': self.project_repository.selected_project_id(),
+                'project_generation': self._current_project_generation(),
+                **self.snapshot(),
+            }
         scan = None
         try:
             scan = json.loads(response.message)
@@ -1529,11 +1996,14 @@ class MotionWebBridge(Node):
             'success': bool(response.success),
             'message': response.message,
             'scan': scan,
+            'project_id': scan_project_id,
+            'project_generation': scan_generation,
             **self.snapshot(),
         }
 
     def list_motion_projects(self) -> Dict[str, Any]:
         result = self.project_repository.list_projects()
+        result['project_generation'] = self._current_project_generation()
         runtime_project_id = self._runtime_project_id()
         result['runtime_project_id'] = runtime_project_id
         for project in result.get('projects') or []:
@@ -1541,6 +2011,23 @@ class MotionWebBridge(Node):
         return result
 
     def _runtime_project_id(self) -> str:
+        selected_project_id = self.project_repository.selected_project_id()
+        project_id = self._runtime_project_id_from_path(selected_project_id)
+        if not project_id:
+            return ''
+        try:
+            self.project_repository.get_project(project_id)
+        except (OSError, ValueError, json.JSONDecodeError):
+            return ''
+        return project_id
+
+    def _runtime_project_id_from_path(self, selected_project_id: str) -> str:
+        """Compare selected/runtime ownership without parsing project YAML.
+
+        This helper is used only on high-frequency, read-only status paths.
+        Project mutation and execution-context paths continue to call
+        ``_runtime_project_id`` and perform the full repository validation.
+        """
         try:
             relative = self.applied_motor_config_file.relative_to(
                 self.motion_projects_dir.resolve()
@@ -1551,11 +2038,117 @@ class MotionWebBridge(Node):
         if len(parts) < 2:
             return ''
         project_id = str(parts[0])
-        try:
-            self.project_repository.get_project(project_id)
-        except (OSError, ValueError, json.JSONDecodeError):
+        if project_id != str(selected_project_id or ''):
             return ''
         return project_id
+
+    def _selected_project_owns_runtime(self) -> bool:
+        selected = self.project_repository.selected_project_id()
+        return bool(
+            selected
+            and selected == self._runtime_project_id_from_path(selected)
+        )
+
+    def _current_project_generation(self) -> int:
+        lock = getattr(self, '_project_generation_lock', None)
+        if lock is None:
+            return int(getattr(self, '_project_generation', 1))
+        with lock:
+            return int(self._project_generation)
+
+    def _advance_project_generation(self) -> int:
+        with self._project_generation_lock:
+            next_generation = self._project_generation + 1
+            self.project_repository.set_project_generation(next_generation)
+            self._project_generation = next_generation
+            return int(self._project_generation)
+
+    def _new_project_request_id(self, prefix: str) -> str:
+        return f'{prefix}-g{self._current_project_generation()}-{time.time_ns()}'
+
+    def _request_matches_current_generation(self, request_id: Any) -> bool:
+        marker = f'-g{self._current_project_generation()}-'
+        return marker in str(request_id or '')
+
+    def _response_matches_current_generation(self, payload: Any) -> bool:
+        if not isinstance(payload, dict):
+            return False
+        try:
+            generation = int(payload.get('project_generation'))
+        except (TypeError, ValueError):
+            return False
+        return (
+            generation == self._current_project_generation()
+            and self._request_matches_current_generation(payload.get('request_id'))
+        )
+
+    def _payload_matches_selected_project(
+        self, payload: Any, *, require_generation: bool = True
+    ) -> bool:
+        """Reject status belonging to any project other than the selected one."""
+        if not isinstance(payload, dict):
+            return False
+        nested = payload.get('execution_context')
+        if not isinstance(nested, dict):
+            nested = {}
+        project_id = str(
+            payload.get('project_id')
+            or payload.get('workspace_project_id')
+            or nested.get('project_id')
+            or ''
+        ).strip()
+        selected = self.project_repository.selected_project_id()
+        generation = payload.get('project_generation')
+        if generation is None:
+            generation = nested.get('project_generation')
+        if not require_generation:
+            generation_matches = True
+        else:
+            try:
+                generation_matches = int(generation) == self._current_project_generation()
+            except (TypeError, ValueError):
+                generation_matches = False
+        return bool(
+            selected and project_id and project_id == selected and generation_matches
+        )
+
+    def _clear_project_scoped_memory(self) -> None:
+        """Permanently discard every cached value owned by the old project."""
+        with self._lock:
+            self._motion_state = None
+            self._motion_state_received_at = None
+        with self._event_log_lock:
+            self._active_motor_errors = {}
+            self._last_motion_run_state = None
+        with self._jog_result_lock:
+            self._jog_results.clear()
+        with self._action_result_lock:
+            self._action_results.clear()
+        with self._motion_mapping_lock:
+            self._motion_mapping_results.clear()
+        with self._motion_run_lock:
+            self._motion_run_results.clear()
+            self._motion_run_status = {}
+        with self._midi_monitor_lock:
+            self._midi_monitor_results.clear()
+            self._midi_monitor_status = {}
+        with self._motion_studio_lock:
+            self._motion_studio_results.clear()
+            self._motion_studio_status = {}
+        with self._motion_studio_editor_lock:
+            self._motion_studio_editor_results.clear()
+        empty_scan_progress = {
+            'scan_id': '',
+            'events': [],
+            'running': False,
+            'updated_at': None,
+        }
+        scan_progress_lock = getattr(self, '_scan_progress_lock', None)
+        if scan_progress_lock is None:
+            self._scan_progress = empty_scan_progress
+        else:
+            with scan_progress_lock:
+                self._scan_progress = empty_scan_progress
 
     def _project_change_blocker(self) -> str:
         run_lock = getattr(self, '_motion_run_lock', None)
@@ -1593,8 +2186,18 @@ class MotionWebBridge(Node):
 
     def create_motion_project(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         self._ensure_project_change_allowed()
-        created = self.project_repository.create_project(payload.get('name'))
-        return self.select_motion_project(created['project']['project_id'])
+        previous_generation = self._current_project_generation()
+        self._execution_context_apply_lock.acquire()
+        try:
+            self._advance_project_generation()
+            self._invalidate_execution_nodes()
+            created = self.project_repository.create_project(payload.get('name'))
+        finally:
+            self._execution_context_apply_lock.release()
+        result = self.select_motion_project(created['project']['project_id'])
+        result['previous_project_generation'] = previous_generation
+        result['project_generation'] = self._current_project_generation()
+        return result
 
     def delete_motion_project(self, project_id: Any) -> Dict[str, Any]:
         self._ensure_project_mutation_allowed(project_id)
@@ -1603,7 +2206,16 @@ class MotionWebBridge(Node):
                 '현재 모터에 적용된 프로젝트는 삭제할 수 없습니다. '
                 '다른 프로젝트를 적용한 뒤 삭제하세요'
             )
-        result = self.project_repository.delete_project(project_id)
+        previous_generation = self._current_project_generation()
+        self._execution_context_apply_lock.acquire()
+        try:
+            self._advance_project_generation()
+            self._invalidate_execution_nodes()
+            result = self.project_repository.delete_project(project_id)
+        finally:
+            self._execution_context_apply_lock.release()
+        result['previous_project_generation'] = previous_generation
+        result['project_generation'] = self._current_project_generation()
         if not self.project_repository.selected_project_id():
             self.motor_config_file = Path()
         return result
@@ -1627,6 +2239,7 @@ class MotionWebBridge(Node):
     def _bind_selected_project_sources(self) -> None:
         project_id = self.project_repository.selected_project_id()
         if not project_id:
+            self.motor_config_file = Path()
             return
         try:
             detail = self.project_repository.get_project(project_id)
@@ -1636,29 +2249,50 @@ class MotionWebBridge(Node):
                 self.motor_config_file = self.project_repository.export_path(
                     project_id, 'motor_axes', motor_name
                 )
+            else:
+                self.motor_config_file = Path()
         except (OSError, ValueError, json.JSONDecodeError):
+            self.motor_config_file = Path()
             return
 
     def _initialize_selected_project_context(self) -> None:
         self._reconcile_execution_context()
 
     def load_motion_project(self, project_id: Any) -> Dict[str, Any]:
-        return self.project_repository.get_project(project_id)
+        result = self.project_repository.get_project(project_id)
+        result['project_generation'] = self._current_project_generation()
+        return result
 
     def select_motion_project(self, project_id: Any) -> Dict[str, Any]:
-        if str(project_id or '') != self.project_repository.selected_project_id():
-            self._ensure_project_change_allowed()
-        result = self.project_repository.select_project(project_id)
-        active = result.get('project', {}).get('active_files') or {}
-        motor_name = str(active.get('motor_axes') or '')
-        if motor_name:
-            self.motor_config_file = self.project_repository.export_path(
-                project_id, 'motor_axes', motor_name
-            )
-        self._set_execution_context_status(
-            state='selected', ready=False, project_id=str(project_id), context_id='',
-            message='프로젝트 선택 완료 · 실행 컨텍스트 적용 대기 중', nodes={},
+        previous_generation = self._current_project_generation()
+        changing_project = (
+            str(project_id or '') != self.project_repository.selected_project_id()
         )
+        if changing_project:
+            self._ensure_project_change_allowed()
+            self._execution_context_apply_lock.acquire()
+        try:
+            if changing_project:
+                self._advance_project_generation()
+                self._invalidate_execution_nodes()
+            result = self.project_repository.select_project(project_id)
+            result['previous_project_generation'] = previous_generation
+            result['project_generation'] = self._current_project_generation()
+            active = result.get('project', {}).get('active_files') or {}
+            motor_name = str(active.get('motor_axes') or '')
+            if motor_name:
+                self.motor_config_file = self.project_repository.export_path(
+                    project_id, 'motor_axes', motor_name
+                )
+            else:
+                self.motor_config_file = Path()
+            self._set_execution_context_status(
+                state='selected', ready=False, project_id=str(project_id), context_id='',
+                message='프로젝트 선택 완료 · 실행 컨텍스트 적용 대기 중', nodes={},
+            )
+        finally:
+            if changing_project:
+                self._execution_context_apply_lock.release()
         result['execution_context'] = self._reconcile_execution_context()
         return result
 
@@ -1714,11 +2348,55 @@ class MotionWebBridge(Node):
         result = self.project_repository.delete_file(project_id, category, file_name)
         if self.project_repository.selected_project_id() == str(project_id):
             replacement = str(result.get('replacement_active_file') or '')
-            if replacement and str(category) == 'motor_axes':
-                self.open_motion_project_file_for_editing(
-                    project_id, category, replacement
-                )
+            if str(category) == 'motor_axes':
+                if replacement:
+                    self.open_motion_project_file_for_editing(
+                        project_id, category, replacement
+                    )
+                    self._write_motor_config_selection(self.motor_config_file)
+                else:
+                    self.motor_config_file = Path()
+                    self._clear_motor_config_selection()
         return result
+
+    def delete_motor_config(self) -> Dict[str, Any]:
+        project_id = self.project_repository.selected_project_id()
+        if not project_id:
+            return {
+                'success': False,
+                'message': '통합 프로젝트를 먼저 선택하세요',
+                'config_file': '',
+                'content': '',
+                'registry': self._empty_motor_registry(),
+            }
+        try:
+            current_path = self._selected_motor_config_path()
+            deleted = self.delete_motion_project_file(
+                project_id, 'motor_axes', current_path.name
+            )
+        except (OSError, ValueError) as exc:
+            return {
+                'success': False,
+                'message': f'모터축 설정 파일 삭제 실패: {exc}',
+                'config_file': '',
+                'content': '',
+                'registry': self._empty_motor_registry(),
+            }
+
+        loaded = self.load_motor_config()
+        replacement = str(deleted.get('replacement_active_file') or '')
+        loaded.update({
+            'success': True,
+            'deleted_file': str(deleted.get('deleted_file') or current_path.name),
+            'replacement_active_file': replacement,
+            'trash_path': str(deleted.get('trash_path') or ''),
+            'message': (
+                f'모터축 설정 파일을 프로젝트 휴지통으로 이동하고 {replacement} 파일을 선택했습니다'
+                if replacement
+                else '모터축 설정 파일을 프로젝트 휴지통으로 이동했습니다'
+            ),
+        })
+        return loaded
 
     def activate_motion_project_file(
         self, project_id: Any, category: Any, file_name: Any
@@ -1797,10 +2475,21 @@ class MotionWebBridge(Node):
         try:
             self.motor_config_file = self._selected_motor_config_path()
         except ValueError as exc:
+            if '모터축 설정 파일이 없습니다' in str(exc):
+                return {
+                    'success': True,
+                    'saved': False,
+                    'message': '아직 저장된 모터축 설정 파일이 없습니다',
+                    'config_file': '',
+                    'config_revision': '',
+                    'content': '',
+                    'registry': self._empty_motor_registry(),
+                }
             return {
                 'success': False,
                 'message': str(exc),
                 'config_file': '',
+                'config_revision': '',
                 'content': '',
                 'registry': self._empty_motor_registry(),
             }
@@ -1809,6 +2498,7 @@ class MotionWebBridge(Node):
                 'success': False,
                 'message': 'motor config YAML not found',
                 'config_file': str(self.motor_config_file),
+                'config_revision': '',
                 'content': '',
                 'registry': self._empty_motor_registry(),
             }
@@ -1821,6 +2511,7 @@ class MotionWebBridge(Node):
                 'success': False,
                 'message': f'failed to load motor config YAML: {exc}',
                 'config_file': str(self.motor_config_file),
+                'config_revision': '',
                 'content': '',
                 'registry': self._empty_motor_registry(),
             }
@@ -1833,6 +2524,9 @@ class MotionWebBridge(Node):
             'success': True,
             'message': 'motor config YAML loaded',
             'config_file': str(self.motor_config_file),
+            'config_revision': hashlib.sha256(
+                self.motor_config_file.read_bytes()
+            ).hexdigest(),
             'content': content,
             'registry': self._registry_from_motor_config(axis_config),
         }
@@ -1843,6 +2537,23 @@ class MotionWebBridge(Node):
                 self.project_repository.selected_project_id()
             )
             target_file = self._motor_config_file_from_payload(payload)
+            expected_revision = str(payload.get('base_revision') or '').strip()
+            if target_file.is_file():
+                actual_revision = hashlib.sha256(target_file.read_bytes()).hexdigest()
+                if not expected_revision:
+                    raise ValueError(
+                        '설정 파일 버전 정보가 없습니다. 설정 다시 불러오기 후 저장하세요'
+                    )
+                if expected_revision != actual_revision:
+                    raise ValueError(
+                        '설정 파일이 화면을 불러온 뒤 변경됐습니다. '
+                        '현재 파일 보호를 위해 저장을 거부했습니다. 설정 다시 불러오기를 실행하세요'
+                    )
+            elif expected_revision:
+                raise ValueError(
+                    '화면에서 불러온 설정 파일이 현재 존재하지 않습니다. '
+                    '설정 다시 불러오기를 실행하세요'
+                )
             if 'content' in payload:
                 content = str(payload.get('content') or '')
                 config = yaml.safe_load(content) or {}
@@ -1860,6 +2571,16 @@ class MotionWebBridge(Node):
 
             if not isinstance(config, dict):
                 raise ValueError('motor config YAML root must be an object')
+            configured_axes = len(
+                self._registry_from_motor_config(
+                    self._expand_shared_driver_profiles(config)
+                ).get('motors') or []
+            )
+            if configured_axes == 0:
+                raise ValueError(
+                    '0축 모터 설정은 저장할 수 없습니다. '
+                    '설정 파일 제거는 현재 설정 파일 휴지통으로 이동을 사용하세요'
+                )
 
             self._write_motor_config(content, target_file)
         except (OSError, ValueError, yaml.YAMLError) as exc:
@@ -1900,15 +2621,7 @@ class MotionWebBridge(Node):
             if managed_service and managed_service != 'motion-control.service':
                 raise ValueError('허용되지 않은 자동실행 서비스 이름입니다')
             if managed_service:
-                subprocess.Popen(
-                    [
-                        '/usr/bin/systemctl', '--user', 'restart', '--no-block',
-                        managed_service,
-                    ],
-                    start_new_session=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
+                self._schedule_managed_service_restart(managed_service)
                 restart_mode = 'managed_service'
             else:
                 environment = dict(os.environ)
@@ -1953,15 +2666,7 @@ class MotionWebBridge(Node):
             }
         self._ensure_project_change_allowed()
         try:
-            subprocess.Popen(
-                [
-                    '/usr/bin/systemctl', '--user', 'restart', '--no-block',
-                    managed_service,
-                ],
-                start_new_session=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+            self._schedule_managed_service_restart(managed_service)
         except OSError as exc:
             return {
                 'success': False,
@@ -1974,6 +2679,33 @@ class MotionWebBridge(Node):
             'restart_mode': 'managed_service',
             **self.snapshot(),
         }
+
+    @staticmethod
+    def _schedule_managed_service_restart(managed_service: str) -> None:
+        """Return the HTTP response before stopping the process serving it.
+
+        Starting systemctl immediately races the API response against
+        Uvicorn shutdown.  A detached, fixed-command shell gives the response
+        a short window to leave the socket, then asks systemd to restart the
+        validated service.  Positional arguments keep the service name out of
+        shell parsing.
+        """
+        subprocess.Popen(
+            [
+                '/bin/bash',
+                '-c',
+                'sleep 0.5; exec "$@"',
+                'motion-control-delayed-restart',
+                '/usr/bin/systemctl',
+                '--user',
+                'restart',
+                '--no-block',
+                managed_service,
+            ],
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
 
     def list_motion_mappings(self) -> Dict[str, Any]:
         result = self._request_motion_mapping('list', {})
@@ -2096,12 +2828,15 @@ class MotionWebBridge(Node):
         payload: Dict[str, Any],
         timeout_sec: float = 2.0,
     ) -> Dict[str, Any]:
-        request_id = f'mapping-{time.time_ns()}'
+        request_id = self._new_project_request_id('mapping')
+        project_generation = self._current_project_generation()
         msg = String()
         request_payload = dict(payload) if isinstance(payload, dict) else {}
         request_payload['project_id'] = self.project_repository.selected_project_id()
+        request_payload['project_generation'] = project_generation
         msg.data = json.dumps({
             'request_id': request_id,
+            'project_generation': project_generation,
             'command': command,
             'payload': request_payload,
         }, ensure_ascii=False)
@@ -2150,7 +2885,14 @@ class MotionWebBridge(Node):
                 cached = dict(self._midi_monitor_status) if self._midi_monitor_status else {}
             cached.pop('_bridge_received_at', None)
             if cached:
-                result = cached
+                result = {
+                    **cached,
+                    'success': False,
+                    'node_state': 'stale',
+                    'connected': False,
+                    'motor_output_enabled': False,
+                    'message': 'MIDI 모니터 노드 응답 없음 · 이전 상태는 제어에 사용하지 않습니다',
+                }
         return self._safety_adjusted_midi_status(result)
 
     def _safety_adjusted_midi_status(
@@ -2284,12 +3026,15 @@ class MotionWebBridge(Node):
         payload: Dict[str, Any],
         timeout_sec: float = 2.0,
     ) -> Dict[str, Any]:
-        request_id = f'midi-{time.time_ns()}'
+        request_id = self._new_project_request_id('midi')
+        project_generation = self._current_project_generation()
         msg = String()
         request_payload = dict(payload) if isinstance(payload, dict) else {}
         request_payload['project_id'] = self.project_repository.selected_project_id()
+        request_payload['project_generation'] = project_generation
         msg.data = json.dumps({
             'request_id': request_id,
+            'project_generation': project_generation,
             'command': command,
             'payload': request_payload,
         }, ensure_ascii=False)
@@ -2312,14 +3057,17 @@ class MotionWebBridge(Node):
         payload: Dict[str, Any],
         timeout_sec: float = 2.0,
     ) -> Dict[str, Any]:
-        request_id = f'run-{time.time_ns()}'
+        request_id = self._new_project_request_id('run')
+        project_generation = self._current_project_generation()
         msg = String()
         request_payload = dict(payload) if isinstance(payload, dict) else {}
         request_payload['project_id'] = self.project_repository.selected_project_id()
+        request_payload['project_generation'] = project_generation
         if command in {'check', 'initialize', 'start'}:
             request_payload['context_id'] = self._execution_context_id()
         msg.data = json.dumps({
             'request_id': request_id,
+            'project_generation': project_generation,
             'command': command,
             'payload': request_payload,
         }, ensure_ascii=False)
@@ -2340,14 +3088,17 @@ class MotionWebBridge(Node):
         payload: Optional[Dict[str, Any]] = None,
         timeout_sec: float = 4.0,
     ) -> Dict[str, Any]:
-        request_id = f'studio-{time.time_ns()}'
+        request_id = self._new_project_request_id('studio')
+        project_generation = self._current_project_generation()
         msg = String()
         request_payload = dict(payload) if isinstance(payload, dict) else {}
         request_payload['project_id'] = self.project_repository.selected_project_id()
+        request_payload['project_generation'] = project_generation
         if command in {'record', 'play'}:
             request_payload['context_id'] = self._execution_context_id()
         msg.data = json.dumps({
             'request_id': request_id,
+            'project_generation': project_generation,
             'command': command,
             'payload': request_payload,
         }, ensure_ascii=False)
@@ -2373,12 +3124,17 @@ class MotionWebBridge(Node):
         payload: Optional[Dict[str, Any]] = None,
         timeout_sec: float = 8.0,
     ) -> Dict[str, Any]:
-        request_id = f'studio-editor-{time.time_ns()}'
+        request_id = self._new_project_request_id('studio-editor')
+        project_generation = self._current_project_generation()
         msg = String()
         msg.data = json.dumps({
             'request_id': request_id,
+            'project_generation': project_generation,
             'command': command,
-            'payload': dict(payload) if isinstance(payload, dict) else {},
+            'payload': {
+                **(dict(payload) if isinstance(payload, dict) else {}),
+                'project_generation': project_generation,
+            },
         }, ensure_ascii=False)
         self._motion_studio_editor_request_publisher.publish(msg)
         result = self._wait_for_motion_studio_editor_result(request_id, timeout_sec)
@@ -3189,9 +3945,10 @@ class MotionWebBridge(Node):
                 **self.snapshot(),
             }
 
-        request_id = f'jog-{time.time_ns()}'
+        request_id = self._new_project_request_id('jog')
         payload = {
             'request_id': request_id,
+            'project_generation': self._current_project_generation(),
             'command': 'ac_servo_jog',
             'axis': axis_value,
             'relative_deg': relative_value,
@@ -3265,9 +4022,10 @@ class MotionWebBridge(Node):
                 **self.snapshot(),
             }
 
-        request_id = f'dynamixel-jog-{time.time_ns()}'
+        request_id = self._new_project_request_id('dynamixel-jog')
         payload = {
             'request_id': request_id,
+            'project_generation': self._current_project_generation(),
             'command': 'dynamixel_jog',
             'axis': axis_value,
             'relative_deg': relative_value,
@@ -3359,9 +4117,10 @@ class MotionWebBridge(Node):
                 **self.snapshot(),
             }
 
-        request_id = f'ac-servo-action-{time.time_ns()}'
+        request_id = self._new_project_request_id('ac-servo-action')
         payload = {
             'request_id': request_id,
+            'project_generation': self._current_project_generation(),
             'command': 'ac_servo_absolute_move',
             'axis': axis_value,
             'target_deg': target_value,
@@ -3446,9 +4205,10 @@ class MotionWebBridge(Node):
                 **self.snapshot(),
             }
 
-        request_id = f'dynamixel-action-{time.time_ns()}'
+        request_id = self._new_project_request_id('dynamixel-action')
         payload = {
             'request_id': request_id,
+            'project_generation': self._current_project_generation(),
             'command': 'dynamixel_absolute_move',
             'axis': axis_value,
             'target_deg': target_value,
@@ -3544,9 +4304,10 @@ class MotionWebBridge(Node):
                 }
             axes = [axis_value]
 
-        request_id = f'ac-servo-control-{time.time_ns()}'
+        request_id = self._new_project_request_id('ac-servo-control')
         payload = {
             'request_id': request_id,
+            'project_generation': self._current_project_generation(),
             'command': 'ac_servo_control',
             'action': action_value,
             'scope': scope_value,
@@ -3599,9 +4360,10 @@ class MotionWebBridge(Node):
 
     def publish_safety_stop(self, emergency: bool) -> str:
         """Publish a priority safety command without waiting for acknowledgement."""
-        request_id = f'safety-stop-{time.time_ns()}'
+        request_id = self._new_project_request_id('safety-stop')
         payload = {
             'request_id': request_id,
+            'project_generation': self._current_project_generation(),
             'command': 'safety_emergency_stop' if emergency else 'safety_motion_stop',
         }
         self._safety_request_publisher.publish(
@@ -3621,7 +4383,15 @@ class MotionWebBridge(Node):
         return config if isinstance(config, dict) else self._default_motor_config()
 
     def _motor_config_file_from_payload(self, payload: Dict[str, Any]) -> Path:
-        active_path = self._selected_motor_config_path()
+        project_id = self.project_repository.selected_project_id()
+        if not project_id:
+            raise ValueError('통합 프로젝트를 먼저 선택하세요')
+        detail = self.project_repository.get_project(project_id)
+        project = detail.get('project') or {}
+        active = project.get('active_files') or {}
+        active_name = str(active.get('motor_axes') or '').strip()
+        config_dir = (Path(str(project.get('path') or '')) / 'motor_axes').resolve()
+        active_path = config_dir / active_name if active_name else config_dir / 'motor_axes.yaml'
         self.motor_config_file = active_path
         requested = str(payload.get('file_name') or '').strip()
         if not requested:
@@ -3633,7 +4403,6 @@ class MotionWebBridge(Node):
         if not name.lower().endswith(('.yaml', '.yml')):
             name = f'{name}.yaml'
 
-        config_dir = active_path.parent.resolve()
         target = (config_dir / name).resolve()
         try:
             target.relative_to(config_dir)
@@ -3662,6 +4431,14 @@ class MotionWebBridge(Node):
         selection_file = Path(project['path']) / 'runtime' / 'selected_motor_config_path.txt'
         selection_file.parent.mkdir(parents=True, exist_ok=True)
         selection_file.write_text(str(path) + '\n', encoding='utf-8')
+
+    def _clear_motor_config_selection(self) -> None:
+        project_id = self.project_repository.selected_project_id()
+        if not project_id:
+            return
+        project = self.project_repository.get_project(project_id)['project']
+        selection_file = Path(project['path']) / 'runtime' / 'selected_motor_config_path.txt'
+        selection_file.unlink(missing_ok=True)
 
     def _write_motor_config(self, content: str, target_file: Optional[Path] = None) -> None:
         target = target_file or self.motor_config_file
@@ -3741,6 +4518,7 @@ class MotionWebBridge(Node):
         for master in config.get('masters', []):
             if not isinstance(master, dict):
                 continue
+            master_id = self._optional_int(master.get('id'), 0)
             transport = str(master.get('type') or 'unknown')
             serial_port = master.get('serial_port')
             serial_baudrate = self._optional_int(master.get('serial_baudrate'), None)
@@ -3755,10 +4533,13 @@ class MotionWebBridge(Node):
                 alias = self._optional_int(slave.get('alias'), None)
                 web_identity = identity_by_axis.get(axis, {})
                 bus_id = self._optional_int(slave.get('bus_id'), None)
+                slave_position = self._optional_int(slave.get('position'), index)
                 name = str(slave.get('name') or f'Axis {axis}')
                 motor_id = (
                     f'{motor_type}_{transport}_alias_{alias}'
-                    if alias is not None
+                    if transport == 'ethercat' and alias is not None and alias > 0
+                    else f'{motor_type}_{transport}_master_{master_id}_slave_{slave_position}'
+                    if transport == 'ethercat'
                     else f'{motor_type}_{transport}_id_{bus_id}'
                     if bus_id is not None
                     else f'{motor_type}_{transport}_axis_{axis}'
@@ -3788,7 +4569,7 @@ class MotionWebBridge(Node):
                                 'serial_baudrate': serial_baudrate,
                                 'slave_position': self._optional_int(
                                     web_identity.get('slave_position'),
-                                    self._optional_int(slave.get('position'), None)
+                                    slave_position
                                     if alias in (None, 0) else None,
                                 ),
                                 'driver_model': driver.get('driver_model', ''),
@@ -3800,7 +4581,7 @@ class MotionWebBridge(Node):
                                 'serial_port': serial_port,
                                 'serial_baudrate': serial_baudrate,
                                 'alias': alias,
-                                'position': self._optional_int(slave.get('position'), 0),
+                                'position': slave_position,
                                 'vendor_id': self._optional_int(slave.get('vendor_id'), None),
                                 'product_id': self._optional_int(slave.get('product_id'), None),
                                 'profile_mode': self._optional_int(slave.get('profile_mode'), 0),
@@ -4404,6 +5185,33 @@ def create_app(bridge: MotionWebBridge) -> FastAPI:
     app = FastAPI(title='Motion Web Bridge')
     ui_share = Path(get_package_share_directory('motion_web_ui')) / 'static'
 
+    @app.middleware('http')
+    async def project_generation_boundary(request: Request, call_next):
+        request_generation = request.headers.get('X-Project-Generation')
+        start_generation = bridge._current_project_generation()
+        if request_generation not in (None, ''):
+            try:
+                if int(request_generation) != start_generation:
+                    return JSONResponse(
+                        status_code=409,
+                        content={
+                            'success': False,
+                            'stale_project_generation': True,
+                            'project_generation': start_generation,
+                            'message': '현재 프로젝트 세대와 다른 요청을 폐기했습니다',
+                        },
+                    )
+            except ValueError:
+                return JSONResponse(
+                    status_code=400,
+                    content={'success': False, 'message': '프로젝트 세대 형식이 올바르지 않습니다'},
+                )
+        response = await call_next(request)
+        response.headers['X-Project-Generation'] = str(
+            bridge._current_project_generation()
+        )
+        return response
+
     def project_call(method, *args):
         try:
             return method(*args)
@@ -4412,7 +5220,10 @@ def create_app(bridge: MotionWebBridge) -> FastAPI:
 
     @app.get('/')
     async def index():
-        return FileResponse(str(ui_share / 'index.html'))
+        return FileResponse(
+            str(ui_share / 'index.html'),
+            headers={'Cache-Control': 'no-store'},
+        )
 
     @app.get('/static/{asset_path:path}')
     async def static_asset(asset_path: str):
@@ -4422,7 +5233,10 @@ def create_app(bridge: MotionWebBridge) -> FastAPI:
         asset = ui_share / relative_path
         if not asset.is_file():
             raise HTTPException(status_code=404, detail='Not Found')
-        return FileResponse(str(asset))
+        return FileResponse(
+            str(asset),
+            headers={'Cache-Control': 'no-store'},
+        )
 
     @app.get('/api/status')
     async def status():
@@ -4589,6 +5403,10 @@ def create_app(bridge: MotionWebBridge) -> FastAPI:
     async def scan_dynamixel_motors():
         return await asyncio.to_thread(bridge.scan_dynamixel_motors)
 
+    @app.get('/api/motors/scan/progress')
+    async def motor_scan_progress():
+        return bridge.motor_scan_progress()
+
     @app.get('/api/motors/ethercat-aliases')
     async def read_ethercat_aliases():
         return await asyncio.to_thread(bridge.read_ethercat_aliases)
@@ -4610,6 +5428,10 @@ def create_app(bridge: MotionWebBridge) -> FastAPI:
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail='request body must be an object')
         return bridge.save_motor_config(body)
+
+    @app.delete('/api/motor-config')
+    async def delete_motor_config():
+        return project_call(bridge.delete_motor_config)
 
     @app.post('/api/motor-config/apply')
     async def apply_motor_config():
@@ -4959,8 +5781,20 @@ def create_app(bridge: MotionWebBridge) -> FastAPI:
         try:
             while True:
                 await websocket.send_json(bridge.snapshot())
-                await asyncio.sleep(period_sec)
+                try:
+                    event = await asyncio.wait_for(
+                        websocket.receive(), timeout=period_sec
+                    )
+                except asyncio.TimeoutError:
+                    continue
+                if event.get('type') == 'websocket.disconnect':
+                    return
         except WebSocketDisconnect:
+            return
+        except (ConnectionError, RuntimeError):
+            # The ASGI server may report a closed transport as a runtime or
+            # connection error while it is shutting down.  Either case means
+            # this status task must end so service restart is not blocked.
             return
 
     return app

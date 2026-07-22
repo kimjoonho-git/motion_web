@@ -1,21 +1,23 @@
 import {
   fetchStatusSnapshot,
+  getProjectGeneration,
   requestEmergencySafetyStop,
   requestMotionSafetyStop,
   restartManagedProgram,
   setMonitoringEnabled,
   stopMotionRun,
   stopMotionStudio,
-} from './api.js?v=20260720-full-regression-audit';
-import { getElements } from './dom.js?v=20260721-layer-manager-quick';
-import { createMotorEventLogController } from './event_log.js?v=20260720-full-regression-audit';
-import { createMidiMonitorController } from './midi_monitor.js?v=20260720-full-regression-audit';
-import { createMotionDataController } from './motion_data.js?v=20260720-full-regression-audit';
-import { createMotionStudioController } from './motion_studio.js?v=20260721-layer-manager-quick';
-import { createMotionTestController } from './motion_test.js?v=20260720-full-regression-audit';
-import { createMotorConfigController } from './motor_config.js?v=20260720-full-regression-audit';
-import { createProjectExplorerController } from './project_explorer.js?v=20260720-full-regression-audit';
-import { renderAccess, renderMonitoring } from './monitoring.js?v=20260720-position-turn';
+  setProjectGeneration,
+} from './api.js?v=20260722-motor-config-delete';
+import { getElements } from './dom.js?v=20260722-spike-repair';
+import { createMotorEventLogController } from './event_log.js?v=20260721-project-generation';
+import { createMidiMonitorController } from './midi_monitor.js?v=20260722-midi-fader-input-fix';
+import { createMotionDataController } from './motion_data.js?v=20260722-motion-axis-audit';
+import { createMotionStudioController } from './motion_studio.js?v=20260722-spike-repair';
+import { createMotionTestController } from './motion_test.js?v=20260721-project-generation';
+import { createMotorConfigController } from './motor_config.js?v=20260722-scan-runtime-gate';
+import { createProjectExplorerController } from './project_explorer.js?v=20260721-permanent-project-delete';
+import { renderAccess, renderMonitoring } from './monitoring.js?v=20260722-motion-value-topic';
 import { StatusSocket } from './socket.js';
 
 const el = getElements();
@@ -30,11 +32,14 @@ const appState = {
   configApplyStartedAtMs: null,
   configApplyReadySinceMs: null,
   configApplyConnectionInterrupted: false,
+  bridgeInstanceId: '',
+  restartPreviousBridgeInstanceId: '',
   motorIdentityBlockMessage: '',
   motorErrorActiveKeys: new Set(),
   motorErrorDismissedKeys: new Set(),
   motorErrorLatchedEntries: new Map(),
   executionContext: null,
+  projectGeneration: null,
 };
 const RESTART_READY_STABLE_MS = 3500;
 const IDENTITY_BLOCKED_WORKSPACES = new Set(['manual', 'motion']);
@@ -44,8 +49,7 @@ function blockWorkspaceForMotorIdentity(workspace) {
     return false;
   }
   window.alert(
-    `${appState.motorIdentityBlockMessage}\n\n`
-    + '모터 축 설정에서 연결값을 확인하고 업데이트·저장한 뒤 진행하세요.',
+    appState.motorIdentityBlockMessage,
   );
   appState.activeWorkspacePanel = 'config';
   renderWorkspacePanel();
@@ -102,6 +106,7 @@ function workContextStatus(configContext, motionContext) {
   if (!motionContext.motionFileSelected) return '모션 파일 미선택';
   if (!motionContext.motionFileValid) return '모션 파일 확인 필요';
   if (!motionContext.mappingFileSelected) return '매핑 파일 미선택';
+  if (motionContext.mappingChanged) return '모션축 설정 변경 있음';
   if (!motionContext.mappingValidated) return '매핑 검증 필요';
   return motionContext.mappingValid ? '검증 완료' : '매핑 검증 오류';
 }
@@ -125,6 +130,11 @@ function updateWorkContext() {
 
 function renderLatestState(nextState = null) {
   if (nextState) {
+    const generation = Number(nextState.project_generation);
+    if (
+      Number.isInteger(appState.projectGeneration)
+      && (!Number.isInteger(generation) || generation !== appState.projectGeneration)
+    ) return;
     appState.latestState = nextState;
   }
   if (!appState.latestState) return;
@@ -143,6 +153,58 @@ function renderLatestState(nextState = null) {
   updateWorkContext();
   updateMotorErrorPopup(appState.latestState);
   enforceEmergencyUi();
+}
+
+function clearBrowserProjectMemory(projectGeneration) {
+  setProjectGeneration(projectGeneration);
+  appState.projectGeneration = getProjectGeneration();
+  appState.latestState = null;
+  appState.executionContext = null;
+  appState.motorIdentityBlockMessage = '';
+  appState.motorErrorActiveKeys.clear();
+  appState.motorErrorDismissedKeys.clear();
+  appState.motorErrorLatchedEntries.clear();
+  setMotorErrorPopup(false);
+  renderMonitoring({
+    project_generation: appState.projectGeneration,
+    motors: [],
+    motor_count: 0,
+    monitoring_enabled: false,
+    connection_summary: {},
+  }, {
+    el,
+    rawMode: appState.rawMode,
+    activeMonitoringFilter: appState.activeMonitoringFilter,
+    shouldShowMonitoringMotor: () => false,
+    registryCount: 0,
+    selectedMotionTestAxis: null,
+    activeMonitoringDetailTab: appState.activeMonitoringDetailTab,
+  });
+}
+
+function acceptProjectPayload(payload) {
+  const generation = Number(payload?.project_generation);
+  if (!Number.isInteger(generation)) return false;
+  if (!Number.isInteger(appState.projectGeneration)) {
+    appState.projectGeneration = generation;
+    setProjectGeneration(generation);
+  }
+  if (generation > appState.projectGeneration) {
+    clearBrowserProjectMemory(generation);
+    motionTest.resetProjectState();
+    motionData.resetProjectState();
+    midiMonitor.resetProjectState();
+    motionStudio.resetProjectState();
+    motorEventLog.resetProjectState();
+    Promise.resolve().then(async () => {
+      await projectExplorer.refresh(true);
+      await motorConfig.loadProjectRegistry();
+      await motionData.fetchFiles();
+      await motionStudio.refresh(false);
+      updateWorkContext();
+    }).catch(() => {});
+  }
+  return generation === appState.projectGeneration;
 }
 
 function enforceEmergencyUi() {
@@ -178,6 +240,8 @@ function motionStateFromPayload(payload) {
 }
 
 function renderServiceManagement(payload) {
+  const incomingBridgeInstanceId = String(payload?.bridge_instance_id || '');
+  if (incomingBridgeInstanceId) appState.bridgeInstanceId = incomingBridgeInstanceId;
   const managed = Boolean(payload?.service_management?.managed);
   if (el.serviceMode) {
     el.serviceMode.textContent = managed ? '자동 실행 · 자동 복구' : '수동 실행';
@@ -375,7 +439,17 @@ function dismissMotorErrorPopup() {
 
 function restartReadyState(payload) {
   const state = motionStateFromPayload(payload) || appState.latestState;
-  if (appState.configApplyInProgress && !appState.configApplyConnectionInterrupted) {
+  const incomingBridgeInstanceId = String(payload?.bridge_instance_id || '');
+  const bridgeInstanceChanged = Boolean(
+    appState.restartPreviousBridgeInstanceId
+    && incomingBridgeInstanceId
+    && incomingBridgeInstanceId !== appState.restartPreviousBridgeInstanceId
+  );
+  if (
+    appState.configApplyInProgress
+    && !appState.configApplyConnectionInterrupted
+    && !bridgeInstanceChanged
+  ) {
     return {
       ready: false,
       title: '설정 적용·재시작 시작 대기',
@@ -529,6 +603,7 @@ function updateRestartProgress(payload = null) {
     appState.configApplyStartedAtMs = null;
     appState.configApplyReadySinceMs = null;
     appState.configApplyConnectionInterrupted = false;
+    appState.restartPreviousBridgeInstanceId = '';
     setRestartOverlay(true, state.title, '노드는 재시작됐지만 연결된 모터를 찾지 못했습니다.', state.detail);
     if (el.bridgeState) el.bridgeState.textContent = state.title;
     if (el.summaryText) el.summaryText.textContent = state.detail;
@@ -561,6 +636,7 @@ function updateRestartProgress(payload = null) {
   appState.configApplyStartedAtMs = null;
   appState.configApplyReadySinceMs = null;
   appState.configApplyConnectionInterrupted = false;
+  appState.restartPreviousBridgeInstanceId = '';
   setRestartOverlay(true, state.title, '설정 적용·재시작과 모터 상태 수신을 확인했습니다.', state.detail);
   if (el.bridgeState) el.bridgeState.textContent = '연결됨';
   if (el.summaryText) el.summaryText.textContent = '설정 적용·재시작 완료';
@@ -577,11 +653,13 @@ const motorConfig = createMotorConfigController({
   getLatestState: () => appState.latestState,
   renderLatestState,
   onWorkContextChange: updateWorkContext,
+  onProjectFilesChange: () => projectExplorer.refresh(true),
   onConfigApplyStart: () => {
     appState.configApplyInProgress = true;
     appState.configApplyStartedAtMs = Date.now();
     appState.configApplyReadySinceMs = null;
     appState.configApplyConnectionInterrupted = false;
+    appState.restartPreviousBridgeInstanceId = appState.bridgeInstanceId;
     if (el.bridgeState) el.bridgeState.textContent = '설정 반영 중';
     if (el.summaryText) el.summaryText.textContent = '설정 반영 중입니다. 웹 연결이 자동으로 다시 연결됩니다.';
     setRestartOverlay(
@@ -596,6 +674,7 @@ const motorConfig = createMotorConfigController({
     appState.configApplyStartedAtMs = null;
     appState.configApplyReadySinceMs = null;
     appState.configApplyConnectionInterrupted = false;
+    appState.restartPreviousBridgeInstanceId = '';
     setRestartOverlay(false);
   },
   onIdentityStatusChange: (message) => {
@@ -611,7 +690,9 @@ const motionTest = createMotionTestController({
 const motionData = createMotionDataController({
   el,
   getLatestState: () => appState.latestState,
+  getConfiguredMotors: () => motorConfig.getConfiguredMotors(),
   onWorkContextChange: updateWorkContext,
+  onProjectFilesChange: () => projectExplorer.refresh(true),
 });
 
 const midiMonitor = createMidiMonitorController({ el });
@@ -644,9 +725,13 @@ const projectExplorer = createProjectExplorerController({
     await motionStudio.refresh(false);
     await motionStudio.addMotionFile(fileName);
   },
-  onProjectChange: async (project) => {
+  onProjectChange: async (project, projectGeneration) => {
+    clearBrowserProjectMemory(projectGeneration);
+    motionTest.resetProjectState();
     motionData.resetProjectState();
+    midiMonitor.resetProjectState();
     motionStudio.resetProjectState();
+    motorEventLog.resetProjectState();
     await motorConfig.loadProjectRegistry();
     await motionData.fetchFiles();
     await motionStudio.refresh(false);
@@ -671,6 +756,7 @@ async function fetchStatus() {
   el.refreshButton.textContent = '새로고침 중';
   try {
     const payload = await fetchStatusSnapshot();
+    if (!acceptProjectPayload(payload)) return;
     if (el.bridgeState) {
       el.bridgeState.textContent = payload.bridge_state === 'ok'
         ? '정상'
@@ -684,6 +770,11 @@ async function fetchStatus() {
     updateRestartProgress(payload);
     el.refreshButton.textContent = `새로고침 완료 ${new Date().toLocaleTimeString()}`;
   } catch (error) {
+    if (Number.isInteger(Number(error?.projectBoundaryGeneration))) {
+      acceptProjectPayload({
+        project_generation: Number(error.projectBoundaryGeneration),
+      });
+    }
     if (el.bridgeState) el.bridgeState.textContent = 'HTTP 오류';
     el.refreshButton.textContent = '새로고침 실패';
   } finally {
@@ -722,6 +813,7 @@ function connectSocket() {
       }
     },
     onMessage: (payload) => {
+      if (!acceptProjectPayload(payload)) return;
       renderServiceManagement(payload);
       renderAccess(payload, el);
       midiMonitor.renderSnapshot(payload.midi_monitor || {});
@@ -792,6 +884,7 @@ if (el.programRestartButton) {
     appState.configApplyStartedAtMs = Date.now();
     appState.configApplyReadySinceMs = null;
     appState.configApplyConnectionInterrupted = false;
+    appState.restartPreviousBridgeInstanceId = appState.bridgeInstanceId;
     setRestartOverlay(
       true,
       '전체 프로그램 재시작 중입니다',
@@ -806,6 +899,7 @@ if (el.programRestartButton) {
       appState.configApplyStartedAtMs = null;
       appState.configApplyReadySinceMs = null;
       appState.configApplyConnectionInterrupted = false;
+      appState.restartPreviousBridgeInstanceId = '';
       setRestartOverlay(false);
       window.alert(error?.message || String(error));
     }

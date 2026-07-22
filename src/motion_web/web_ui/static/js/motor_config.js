@@ -4,9 +4,11 @@ import {
   requestMotorScan,
   requestAcServoScan,
   requestDynamixelScan,
+  fetchMotorScanProgress,
   writeEthercatAlias,
   saveMotorConfig,
-} from './api.js?v=20260720-eeprom-alias-write';
+  deleteMotorConfig,
+} from './api.js?v=20260722-motor-config-delete';
 import {
   clone,
   displayText,
@@ -27,11 +29,12 @@ import {
 import {
   detectedScanRow,
   runtimeIsAcServo,
+  runtimeMotorConfirmsRegistryMotor,
   scanKey,
   scanRowMatchesRegistryMotor,
   scanRowMatchesRuntimeMotor,
   scanRowToMotor as acServoScanRowToMotor,
-} from './motor_type_ac_servo.js';
+} from './motor_type_ac_servo.js?v=20260722-runtime-axis-confirm';
 import {
   dynamixelScanDeviceKey,
   dynamixelScanDeviceToMotor as buildDynamixelScanDeviceToMotor,
@@ -40,11 +43,66 @@ import {
   runtimeIsDynamixel,
 } from './motor_type_dynamixel.js';
 
+export function isEditableMotorConfigPath(pathValue) {
+  const path = String(pathValue || '');
+  const item = path.split('.').pop() || '';
+  if (/^masters\[\d+\]\.slaves\[\d+\]\./.test(path)) {
+    return ['controller_index', 'name'].includes(item);
+  }
+  if (/^drivers\[\d+\]\./.test(path)) {
+    return [
+      'lower',
+      'upper',
+      'speed',
+      'acceleration',
+      'deceleration',
+      'profile_velocity',
+      'profile_acceleration',
+      'profile_deceleration',
+    ].includes(item);
+  }
+  return false;
+}
+
+export function normalizeProjectLoadToken(candidate, currentToken) {
+  return Number.isInteger(candidate) ? candidate : currentToken;
+}
+
+export function conciseMotorScanMessage(value, maxLength = 180) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!text) return '모터 검색 실패';
+  if (text.includes('모터 런타임 피드백이 수신 중')) {
+    return '검색 중단: 서보가 운전 중이어서 EtherCAT 버스 재검색을 안전하게 실행하지 않았습니다.';
+  }
+  if (text.includes('Dynamixel 직렬 포트를 찾지 못')) {
+    return 'Dynamixel 검색 실패: 연결된 직렬 포트를 찾지 못했습니다.';
+  }
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, Math.max(1, maxLength - 1)).trimEnd()}…`;
+}
+
+export function motorControlConfigurationError(scope, configuredAxisCount) {
+  if (Number(configuredAxisCount) <= 0) return '';
+  if (scope?.runtime_matches_selected !== true) {
+    return '현재 선택 프로젝트와 실행 중인 모터 설정의 프로젝트가 다릅니다.';
+  }
+  if (scope?.motor_config_applied !== true) {
+    return '현재 프로젝트에 저장한 모터축 설정이 실행 시스템에 아직 적용되지 않았습니다. 설정 적용·재시작을 실행하세요.';
+  }
+  return '';
+}
+
+export function motorConfigApplyIdentityBlock(identityError, scanAvailable, aliasWritePending) {
+  if (aliasWritePending) return String(identityError || '');
+  return scanAvailable ? String(identityError || '') : '';
+}
+
 export function createMotorConfigController({
   el,
   getLatestState,
   renderLatestState,
   onWorkContextChange,
+  onProjectFilesChange,
   onConfigApplyStart,
   onConfigApplyComplete,
   onIdentityStatusChange,
@@ -61,6 +119,7 @@ export function createMotorConfigController({
   let motorConfigRawText = '';
   let savedMotorConfigRawText = '';
   let motorConfigFilePath = '';
+  let motorConfigRevision = '';
   let motorConfigFileNameDraft = '';
   let configTableDrafts = new Map();
   let selectedConfigMotorId = '';
@@ -68,6 +127,118 @@ export function createMotorConfigController({
   let pendingAliasWrite = null;
   let lastConfigTableRenderSignature = '';
   let lastConfigRawTextRenderSignature = '';
+  let projectLoadToken = 0;
+  let scanProgressTimer = null;
+  let scanProgressBaselineId = '';
+  let scanProgressActiveId = '';
+  let scanProgressRenderedCount = 0;
+
+  function stopScanProgressPolling() {
+    if (scanProgressTimer !== null) {
+      window.clearInterval(scanProgressTimer);
+      scanProgressTimer = null;
+    }
+  }
+
+  function closeScanProgressPopup() {
+    stopScanProgressPolling();
+    el.motorScanProgressModal?.classList.add('hidden');
+    document.body.classList.remove('modal-open');
+  }
+
+  function clearScanProgressPopup() {
+    el.motorScanProgressList?.replaceChildren();
+  }
+
+  function appendScanProgressLine(message, state = '') {
+    if (!el.motorScanProgressList) return;
+    const fullMessage = String(message || '');
+    const displayMessage = conciseMotorScanMessage(fullMessage);
+    const line = document.createElement('div');
+    line.className = `motor-scan-progress-line${state ? ` is-${state}` : ''}`;
+    line.textContent = displayMessage;
+    if (displayMessage !== fullMessage) line.title = fullMessage;
+    el.motorScanProgressList.appendChild(line);
+    el.motorScanProgressList.scrollTop = el.motorScanProgressList.scrollHeight;
+  }
+
+  async function pollScanProgress() {
+    if (!el.motorScanProgressModal || el.motorScanProgressModal.classList.contains('hidden')) return;
+    try {
+      const payload = await fetchMotorScanProgress();
+      const progress = payload?.progress || {};
+      const scanId = String(progress.scan_id || '');
+      if (!scanId || (scanId === scanProgressBaselineId && !scanProgressActiveId)) return;
+      if (scanProgressActiveId && scanId !== scanProgressActiveId) return;
+      if (!scanProgressActiveId) {
+        scanProgressActiveId = scanId;
+        scanProgressRenderedCount = 0;
+        if (el.motorScanProgressState) {
+          el.motorScanProgressState.title = `스캔 ID ${scanId}`;
+        }
+      }
+      const events = Array.isArray(progress.events) ? progress.events : [];
+      events.slice(scanProgressRenderedCount).forEach((event) => {
+        const phase = String(event.phase || '');
+        const lineState = phase === 'failed' || phase.endsWith('_failed')
+          ? 'failed'
+          : phase === 'partial' || phase === 'dynamixel_unavailable'
+            ? 'warning'
+            : phase === 'complete' || phase === 'completed' || phase.endsWith('_done')
+            ? 'done'
+            : 'running';
+        appendScanProgressLine(String(event.message || phase || '스캔 진행 중'), lineState);
+      });
+      scanProgressRenderedCount = events.length;
+      if (el.motorScanProgressState) {
+        el.motorScanProgressState.textContent = progress.running
+          ? '실시간 스캔 진행 중'
+          : '스캔 종료';
+        el.motorScanProgressState.dataset.state = progress.running ? 'running' : 'done';
+      }
+      if (!progress.running && scanProgressActiveId) stopScanProgressPolling();
+    } catch (error) {
+      if (!error?.staleProjectResponse) {
+        appendScanProgressLine(`진행 상태 수신 실패: ${error?.message || error}`, 'failed');
+      }
+    }
+  }
+
+  async function openScanProgressPopup(title) {
+    stopScanProgressPolling();
+    scanProgressBaselineId = '';
+    scanProgressActiveId = '';
+    scanProgressRenderedCount = 0;
+    if (el.motorScanProgressTitle) el.motorScanProgressTitle.textContent = title;
+    if (el.motorScanProgressState) {
+      el.motorScanProgressState.textContent = '스캔 요청 준비 중';
+      el.motorScanProgressState.dataset.state = 'running';
+    }
+    if (el.motorScanProgressList) el.motorScanProgressList.replaceChildren();
+    appendScanProgressLine('새 직접 스캔 요청을 전송합니다', 'running');
+    el.motorScanProgressModal?.classList.remove('hidden');
+    document.body.classList.add('modal-open');
+    try {
+      const payload = await fetchMotorScanProgress();
+      scanProgressBaselineId = String(payload?.progress?.scan_id || '');
+    } catch (_error) {
+      scanProgressBaselineId = '';
+    }
+    scanProgressTimer = window.setInterval(pollScanProgress, 100);
+  }
+
+  async function finishScanProgressPopup(success, fallbackMessage, outcome = '') {
+    await pollScanProgress();
+    if (!scanProgressActiveId && fallbackMessage) {
+      appendScanProgressLine(fallbackMessage, success ? 'done' : 'failed');
+    }
+    if (el.motorScanProgressState) {
+      const partial = outcome === 'partial';
+      el.motorScanProgressState.textContent = success ? '스캔 완료' : (partial ? '스캔 부분 완료' : '스캔 실패');
+      el.motorScanProgressState.dataset.state = success ? 'done' : (partial ? 'warning' : 'failed');
+    }
+    stopScanProgressPolling();
+  }
 
   function normalizeAxisRegistry(value) {
     const registry = normalizeRegistry(value || {});
@@ -194,12 +365,44 @@ export function createMotorConfigController({
 
   function runtimeMotors() {
     const state = getLatestState ? getLatestState() : null;
+    if (state?.project_scope?.runtime_matches_selected === false) return [];
     return Array.isArray(state?.motors) ? state.motors : [];
+  }
+
+  function selectedMotorConfigAlreadyApplied() {
+    const scope = getLatestState?.()?.project_scope || {};
+    return scope.runtime_matches_selected === true && scope.motor_config_applied === true;
+  }
+
+  function directEthercatScanAvailable() {
+    const scan = latestScan?.ethercat_scan;
+    return Boolean(scan && !scan.skipped && scan.available && Array.isArray(scan.slaves));
+  }
+
+  function acHardwareApplyBlockMessage() {
+    return motorConfigApplyIdentityBlock(
+      acHardwareIdentityErrorMessage(),
+      directEthercatScanAvailable(),
+      Boolean(pendingAliasWrite),
+    );
+  }
+
+  function motionControlBlockMessage() {
+    const scope = getLatestState?.()?.project_scope || {};
+    const configuredAxisCount = activeAxisMotors().filter((motor) => motor.enabled).length;
+    return motorControlConfigurationError(scope, configuredAxisCount)
+      || (identityUpdatePending ? '확인한 모터 연결값을 프로젝트에 저장해야 합니다.' : '');
   }
 
   function motorAxisValue(motor) {
     const axis = Number(motor?.config?.controller_index ?? motor?.axis);
     return Number.isInteger(axis) ? axis : null;
+  }
+
+  function assignedAlias(value) {
+    if (value === null || value === undefined || value === '') return false;
+    const alias = Number(value);
+    return Number.isInteger(alias) && alias > 0;
   }
 
   function rowDraft(row) {
@@ -281,9 +484,8 @@ export function createMotorConfigController({
         return Number(configuredAlias) === Number(motor.alias);
       }
       if (
-        identity.rotary_alias !== null && identity.rotary_alias !== undefined &&
-        motor.station_alias_register !== null &&
-        motor.station_alias_register !== undefined
+        Number(identity.rotary_alias) > 0 &&
+        Number(motor.station_alias_register) > 0
       ) {
         return Number(identity.rotary_alias) === Number(motor.station_alias_register);
       }
@@ -340,9 +542,35 @@ export function createMotorConfigController({
   }
 
   function acServoScanRows() {
-    return Array.isArray(latestScan?.matching_rows)
-      ? latestScan.matching_rows.filter((row) => detectedScanRow(row))
+    const slaves = Array.isArray(latestScan?.ethercat_scan?.slaves)
+      ? latestScan.ethercat_scan.slaves
       : [];
+    return slaves.filter((row) => detectedScanRow(row)).map((row) => ({
+      ...row,
+      driver_model: row.driver_model || row.order_number || row.device_name || '',
+    }));
+  }
+
+  function selectedProjectAcMatchingSummary(slaves) {
+    const configured = activeAxisMotors().filter(
+      (motor) => motor.transport === 'ethercat' && motor.enabled,
+    );
+    const matchedIds = new Set();
+    let matched = 0;
+    slaves.forEach((slave) => {
+      const motor = configured.find((item) => scanRowMatchesRegistryMotor(slave, item));
+      if (!motor) return;
+      matched += 1;
+      matchedIds.add(motor.id);
+    });
+    return {
+      matched,
+      configured: 0,
+      unregistered: Math.max(0, slaves.length - matched),
+      missing: configured.filter((motor) => !matchedIds.has(motor.id)).length,
+      duplicate_axis: 0,
+      total: slaves.length + configured.filter((motor) => !matchedIds.has(motor.id)).length,
+    };
   }
 
   function dynamixelScanDevices() {
@@ -416,6 +644,19 @@ export function createMotorConfigController({
     return null;
   }
 
+  function projectAliasValue(row) {
+    const motor = row.motor;
+    if (!motor || (motor.transport !== 'ethercat' && motor.motor_type !== 'ac_servo')) return '-';
+    return firstDefined(motor.identity?.ethercat_alias, motor.config?.alias, '-');
+  }
+
+  function directScanAliasValue(row) {
+    if (!row.scanRow) return '-';
+    return row.scanRow.ethercat_alias === null || row.scanRow.ethercat_alias === undefined
+      ? '읽기 실패'
+      : row.scanRow.ethercat_alias;
+  }
+
   function axisIdLabel(row) {
     const value = rowIdRaw(row);
     if (value === null || value === undefined) return '-';
@@ -426,18 +667,19 @@ export function createMotorConfigController({
     const motor = row.motor || row.proposedMotor;
     if (rowMotorType(row) !== 'ac_servo' && motor?.transport !== 'ethercat') return '-';
     if (field === 'eeprom_alias') {
-      return firstDefined(
-        motor?.identity?.ethercat_alias,
-        motor?.config?.alias,
-        row.scanRow?.ethercat_alias,
-        row.runtimeMotor?.alias,
-      );
+      return row.scanRow
+        ? firstDefined(row.scanRow.ethercat_alias, '읽기 실패')
+        : firstDefined(motor?.identity?.ethercat_alias, motor?.config?.alias, '-');
     }
     if (field === 'rotary_alias') {
-      return firstDefined(motor?.identity?.rotary_alias, row.scanRow?.rotary_alias);
+      return row.scanRow
+        ? firstDefined(row.scanRow.rotary_alias, '읽기 실패')
+        : firstDefined(motor?.identity?.rotary_alias, '-');
     }
     if (field === 'slave_position') {
-      return firstDefined(motor?.identity?.slave_position, row.scanRow?.slave_position);
+      return row.scanRow
+        ? firstDefined(row.scanRow.slave_position, '읽기 실패')
+        : firstDefined(motor?.identity?.slave_position, '-');
     }
     return '-';
   }
@@ -502,7 +744,7 @@ export function createMotorConfigController({
   function updateConfigTableButtonState() {
     if (el.updateConfigTableButton) {
       el.updateConfigTableButton.disabled = !hasConfigTableDrafts();
-      el.updateConfigTableButton.textContent = '표 업데이트';
+      el.updateConfigTableButton.textContent = '표 변경값 반영 초안';
     }
     if (el.saveConfigTableButton) {
       el.saveConfigTableButton.disabled = hasConfigTableDrafts() || !hasMotorConfigTableSaveChanges();
@@ -690,24 +932,7 @@ export function createMotorConfigController({
   }
 
   function isEditableConfigRow(row) {
-    const item = yamlItemName(row);
-    const path = String(row?.path || '');
-    if (/^masters\[\d+\]\.slaves\[\d+\]\./.test(path)) {
-      return ['controller_index', 'name', 'position'].includes(item);
-    }
-    if (/^drivers\[\d+\]\./.test(path)) {
-      return [
-        'lower',
-        'upper',
-        'speed',
-        'acceleration',
-        'deceleration',
-        'profile_velocity',
-        'profile_acceleration',
-        'profile_deceleration',
-      ].includes(item);
-    }
-    return false;
+    return isEditableMotorConfigPath(row?.path);
   }
 
   function configInputStep(row) {
@@ -1576,10 +1801,11 @@ export function createMotorConfigController({
     const changed = hasAnyConfigChanges();
     const recoveryMessage = acHardwareRecoveryMessage();
     const identityError = acHardwareIdentityErrorMessage();
-    const canApply = hasConfiguredAxes && !changed && (!identityError || Boolean(recoveryMessage));
-    onIdentityStatusChange?.(
-      identityError || (identityUpdatePending ? '확인한 모터 연결값을 프로젝트에 저장해야 합니다.' : ''),
-    );
+    const applyBlockMessage = acHardwareApplyBlockMessage();
+    const alreadyApplied = selectedMotorConfigAlreadyApplied();
+    const canApply = hasConfiguredAxes && !alreadyApplied && !changed &&
+      (!applyBlockMessage || Boolean(recoveryMessage));
+    onIdentityStatusChange?.(motionControlBlockMessage());
 
     if (el.addAxisButton) el.addAxisButton.disabled = !canAdd;
     if (el.updateAxisIdentityButton) el.updateAxisIdentityButton.disabled = !canUpdateIdentity;
@@ -1590,24 +1816,38 @@ export function createMotorConfigController({
       el.toggleAxisButton.disabled = !canToggle;
       if (editableRows.length > 0) {
         const shouldTurnOn = editableRows.some((row) => !row.motor.enabled);
-        el.toggleAxisButton.textContent = shouldTurnOn ? '선택 축 사용' : '선택 축 미사용';
+        el.toggleAxisButton.textContent = shouldTurnOn
+          ? '선택 축 사용'
+          : '선택 축 미사용';
       } else {
-        el.toggleAxisButton.textContent = '축 사용/미사용';
+        el.toggleAxisButton.textContent = '선택 축 사용상태 변경';
       }
     }
     if (el.saveAxisConfigButton) el.saveAxisConfigButton.disabled = !changed;
+    if (el.deleteMotorConfigButton) {
+      el.deleteMotorConfigButton.disabled = !motorConfigFilePath;
+      el.deleteMotorConfigButton.title = motorConfigFilePath
+        ? '현재 프로젝트의 활성 모터축 설정 파일을 프로젝트 휴지통으로 이동합니다. 실행 중인 장비 설정은 바뀌지 않습니다.'
+        : '현재 프로젝트에 삭제할 모터축 설정 파일이 없습니다.';
+    }
     if (el.applyAxisConfigButton) el.applyAxisConfigButton.disabled = !canApply;
     if (el.applyAxisConfigButton) {
-      el.applyAxisConfigButton.textContent = '설정 적용 및 재시작';
+      el.applyAxisConfigButton.textContent = alreadyApplied
+        ? '설정 적용 완료'
+        : '설정 적용 및 재시작';
       el.applyAxisConfigButton.title = canApply
         ? recoveryMessage || '저장된 현재 프로젝트 설정을 실행 시스템에 적용합니다.'
-        : changed
-          ? '변경 내용을 먼저 저장하세요.'
-          : identityError || '적용할 프로젝트 축 설정이 없습니다.';
+        : alreadyApplied
+          ? '현재 프로젝트의 저장 설정이 실행 시스템에 이미 적용됐습니다.'
+          : changed
+            ? '변경 내용을 먼저 저장하세요.'
+            : applyBlockMessage || '적용할 프로젝트 축 설정이 없습니다.';
     }
     if (el.headerNodeRestartButton) {
       el.headerNodeRestartButton.disabled = !canApply;
-      el.headerNodeRestartButton.textContent = '설정 적용·재시작';
+      el.headerNodeRestartButton.textContent = alreadyApplied
+        ? '설정 적용 완료'
+        : '설정 적용·재시작';
       el.headerNodeRestartButton.title = el.applyAxisConfigButton?.title || '';
     }
     if (el.addAxisButton) {
@@ -1771,6 +2011,8 @@ export function createMotorConfigController({
             typeText,
             name,
             idText,
+            projectAlias: projectAliasValue(row),
+            directScanAlias: directScanAliasValue(row),
             eepromAlias: eepromView.text,
             eepromMismatch: eepromView.mismatch,
             rotaryAlias: rotaryView.text,
@@ -1787,6 +2029,8 @@ export function createMotorConfigController({
         selected: view.selected,
         axis: view.axisValue,
         idText: view.idText,
+        projectAlias: view.projectAlias,
+        directScanAlias: view.directScanAlias,
         eepromAlias: view.eepromAlias,
         eepromMismatch: view.eepromMismatch,
         rotaryAlias: view.rotaryAlias,
@@ -1817,7 +2061,8 @@ export function createMotorConfigController({
               <td><input type="checkbox" data-axis-select="${escapeHtml(row.id)}"${view.selected ? ' checked' : ''}></td>
               <td><input class="axis-edit-input axis-number-input mono" data-axis-edit="axis" data-axis-row-id="${escapeHtml(row.id)}" type="number" min="0" step="1" value="${escapeHtml(view.axisValue ?? '')}"${disabled}></td>
               <td class="axis-id-cell mono">${displayText(view.idText)}</td>
-              <td class="mono${view.eepromMismatch ? ' identity-mismatch' : ''}">${displayText(view.eepromAlias)}</td>
+              <td class="mono">${displayText(view.projectAlias)}</td>
+              <td class="mono${view.eepromMismatch ? ' identity-mismatch' : ''}">${displayText(view.directScanAlias)}</td>
               <td class="mono${view.rotaryMismatch ? ' identity-mismatch' : ''}">${displayText(view.rotaryAlias)}</td>
               <td class="mono${view.slaveMismatch ? ' identity-mismatch' : ''}">${displayText(view.slavePosition)}</td>
               <td>${displayText(view.typeText)}</td>
@@ -1830,7 +2075,7 @@ export function createMotorConfigController({
             </tr>
           `;
         }).join('')
-          : '<tr><td colspan="13" class="empty">설정 파일을 불러오거나 모터 스캔을 실행하세요</td></tr>';
+          : '<tr><td colspan="14" class="empty">설정 파일을 불러오거나 모터 스캔을 실행하세요</td></tr>';
       }
     }
 
@@ -1850,53 +2095,137 @@ export function createMotorConfigController({
     motorConfigRawText = String(payload.content || '');
     savedMotorConfigRawText = motorConfigRawText;
     motorConfigFilePath = String(payload.config_file || '');
+    motorConfigRevision = String(payload.config_revision || '');
     motorConfigFileNameDraft = pathBasename(motorConfigFilePath);
     lastConfigTableRenderSignature = '';
     lastConfigRawTextRenderSignature = '';
     if (el.motorConfigState) {
       el.motorConfigState.textContent = payload.success === false
         ? uiMessage(payload.message, '설정 파일 불러오기 실패')
-        : '설정 파일 불러옴';
+        : motorConfigFilePath
+          ? '설정 파일 불러옴'
+          : '저장된 설정 파일 없음';
     }
     renderAxisSettings();
     renderLatestState();
   }
 
-  async function fetchRegistry() {
+  async function fetchRegistry(expectedToken = projectLoadToken) {
+    expectedToken = normalizeProjectLoadToken(expectedToken, projectLoadToken);
     setStatusMessage('설정 파일 불러오는 중');
     if (el.reloadMotorConfigButton) el.reloadMotorConfigButton.disabled = true;
+    if (el.deleteMotorConfigButton) el.deleteMotorConfigButton.disabled = true;
     try {
       const payload = await fetchMotorConfig();
+      if (expectedToken !== projectLoadToken) return;
       applyMotorConfigPayload(payload);
       const message = payload.success === false
         ? uiMessage(payload.message, '설정 파일 불러오기 실패')
-        : `설정 파일 불러옴 ${new Date().toLocaleTimeString()}`;
+        : motorConfigFilePath
+          ? `설정 파일 불러옴 ${new Date().toLocaleTimeString()}`
+          : '현재 프로젝트에 저장된 모터축 설정 파일이 없습니다.';
       setStatusMessage(message);
       setAxisMessage(message);
     } catch (error) {
+      if (error?.staleProjectResponse || expectedToken !== projectLoadToken) return;
       savedRegistry = normalizeAxisRegistry({});
       axisConfig = normalizeAxisRegistry({});
       configTableDrafts = new Map();
       motorConfigRawText = '';
       savedMotorConfigRawText = '';
       motorConfigFilePath = '';
+      motorConfigRevision = '';
       lastConfigTableRenderSignature = '';
       lastConfigRawTextRenderSignature = '';
       setStatusMessage('설정 파일 불러오기 실패');
       setAxisMessage('설정 파일 불러오기 실패');
       renderAxisSettings();
     } finally {
-      if (el.reloadMotorConfigButton) el.reloadMotorConfigButton.disabled = false;
+      if (expectedToken === projectLoadToken && el.reloadMotorConfigButton) {
+        el.reloadMotorConfigButton.disabled = false;
+      }
+    }
+  }
+
+  async function deleteCurrentMotorConfig() {
+    if (!motorConfigFilePath) {
+      setStatusMessage('삭제할 모터축 설정 파일 없음');
+      setAxisMessage('현재 프로젝트에 삭제할 모터축 설정 파일이 없습니다.');
+      renderAxisSettings();
+      return false;
+    }
+    const fileName = pathBasename(motorConfigFilePath);
+    const confirmed = window.confirm(
+      `${fileName} 파일을 현재 프로젝트의 휴지통으로 이동할까요?\n\n`
+      + '프로젝트의 모터축 설정 목록에서는 제거됩니다.\n'
+      + '현재 실행 중인 모터 제어 설정은 자동으로 변경되거나 재시작되지 않습니다.',
+    );
+    if (!confirmed) {
+      setAxisMessage('모터축 설정 파일 삭제 취소');
+      return false;
+    }
+
+    const expectedToken = projectLoadToken;
+    const button = el.deleteMotorConfigButton;
+    const originalText = button?.textContent || '';
+    if (button) {
+      button.disabled = true;
+      button.textContent = '휴지통 이동 중';
+    }
+    try {
+      const payload = await deleteMotorConfig();
+      if (expectedToken !== projectLoadToken) return false;
+      if (!payload.success) {
+        const message = uiMessage(payload.message, '모터축 설정 파일 삭제 실패');
+        setStatusMessage(message);
+        setAxisMessage(message);
+        return false;
+      }
+      applyMotorConfigPayload(payload);
+      const replacement = String(payload.replacement_active_file || '');
+      const message = replacement
+        ? `${fileName} 파일을 휴지통으로 이동하고 ${replacement} 파일을 불러왔습니다. 실행 설정은 변경되지 않았습니다.`
+        : `${fileName} 파일을 휴지통으로 이동했습니다. 현재 프로젝트에 모터축 설정 파일이 없습니다. 실행 설정은 변경되지 않았습니다.`;
+      setStatusMessage(message);
+      setAxisMessage(message);
+      await onProjectFilesChange?.();
+      onWorkContextChange?.();
+      return true;
+    } catch (error) {
+      if (error?.staleProjectResponse || expectedToken !== projectLoadToken) return false;
+      const message = `모터축 설정 파일 삭제 실패: ${error?.message || error}`;
+      setStatusMessage(message);
+      setAxisMessage(message);
+      return false;
+    } finally {
+      if (button) button.textContent = originalText;
+      if (expectedToken === projectLoadToken) renderAxisSettings();
     }
   }
 
   async function loadProjectRegistry() {
+    closeScanProgressPopup();
+    projectLoadToken += 1;
+    const expectedToken = projectLoadToken;
+    savedRegistry = normalizeAxisRegistry({});
+    axisConfig = normalizeAxisRegistry({});
     latestScan = null;
     selectedAxisIds = new Set();
     selectedConfigMotorId = '';
     rowEditDrafts = new Map();
     configTableDrafts = new Map();
+    configApplyPending = false;
+    identityUpdatePending = false;
+    pendingAliasWrite = null;
+    motorConfigRawText = '';
+    savedMotorConfigRawText = '';
+    motorConfigFilePath = '';
+    motorConfigRevision = '';
+    motorConfigFileNameDraft = '';
     lastAxisRenderSignature = '';
+    lastConfigTableRenderSignature = '';
+    lastConfigRawTextRenderSignature = '';
+    renderAxisSettings();
     if (el.scanResult) el.scanResult.textContent = '새 프로젝트에서 아직 검색하지 않았습니다';
     if (el.scanAllResult) {
       el.scanAllResult.textContent = '검색 전 · 새로 발견된 축은 자동으로 선택됩니다';
@@ -1904,25 +2233,7 @@ export function createMotorConfigController({
     if (el.dynamixelScanResult) {
       el.dynamixelScanResult.textContent = '새 프로젝트에서 아직 검색하지 않았습니다';
     }
-    await fetchRegistry();
-  }
-
-  async function resetAllAxisConfig() {
-    const confirmed = window.confirm(
-      '현재 프로젝트의 모터축 설정을 전부 비우는 편집 초안을 만듭니다.\n'
-      + '프로젝트 파일은 변경 내용 저장을 눌러야 바뀝니다.\n'
-      + '실행 중인 장비에는 자동 적용되지 않습니다.',
-    );
-    if (!confirmed) return;
-    axisConfig = normalizeAxisRegistry({ version: 1, updated_at: null, motors: [] });
-    selectedAxisIds = new Set();
-    selectedConfigMotorId = '';
-    rowEditDrafts = new Map();
-    configTableDrafts = new Map();
-    lastAxisRenderSignature = '';
-    setStatusMessage('모터축 설정 전체 초기화 예정 · 저장 필요');
-    setAxisMessage('모터축 설정을 비우는 초안입니다. 변경 내용 저장 전에는 파일이 바뀌지 않습니다.');
-    renderAxisSettings();
+    await fetchRegistry(expectedToken);
   }
 
   function axisOrderErrorMessage() {
@@ -1977,6 +2288,7 @@ export function createMotorConfigController({
   }
 
   function acHardwareIdentityErrorMessage() {
+    if (selectedMotorConfigAlreadyApplied()) return '';
     if (pendingAliasWrite) {
       return `Slave Position ${formatInt(pendingAliasWrite.slavePosition)}의 EEPROM Alias를 `
         + `${formatInt(pendingAliasWrite.newAlias)}(으)로 기록했습니다. `
@@ -1999,6 +2311,11 @@ export function createMotorConfigController({
       }
     }
 
+    const runtime = runtimeMotors();
+    if (enabledAcMotors.length > 0 && enabledAcMotors.every((motor) => (
+      runtimeMotorConfirmsRegistryMotor(motor, runtimeMotorForRegistryMotor(motor, runtime))
+    ))) return '';
+
     const scan = latestScan?.ethercat_scan;
     if (enabledAcMotors.length > 0 &&
         (!scan || scan.skipped || !Array.isArray(scan.slaves))) {
@@ -2018,17 +2335,16 @@ export function createMotorConfigController({
     )) {
       const scanRow = scan.slaves.find((item) => scanRowMatchesRegistryMotor(item, motor));
       if (!scanRow) {
-        return `Control Index ${formatInt(motorAxisValue(motor))}의 EEPROM Alias를 검색 결과에서 찾지 못했습니다.`;
+        return `Control Index ${formatInt(motorAxisValue(motor))}의 Slave Position을 검색 결과에서 찾지 못했습니다.`;
       }
       const expectedRotary = motor.identity?.rotary_alias;
       const expectedSlave = motor.identity?.slave_position;
-      if (expectedRotary === null || expectedRotary === undefined ||
-          expectedSlave === null || expectedSlave === undefined ||
-          scanRow.rotary_alias === null || scanRow.rotary_alias === undefined ||
+      if (expectedSlave === null || expectedSlave === undefined ||
           scanRow.slave_position === null || scanRow.slave_position === undefined) {
         return `Control Index ${formatInt(motorAxisValue(motor))}의 연결정보 확인 및 업데이트가 필요합니다.`;
       }
-      if (Number(expectedRotary) !== Number(scanRow.rotary_alias)) {
+      if (assignedAlias(expectedRotary) && assignedAlias(scanRow.rotary_alias) &&
+          Number(expectedRotary) !== Number(scanRow.rotary_alias)) {
         return `Control Index ${formatInt(motorAxisValue(motor))}의 Station Alias가 프로젝트와 다릅니다.`;
       }
       if (Number(expectedSlave) !== Number(scanRow.slave_position)) {
@@ -2070,11 +2386,11 @@ export function createMotorConfigController({
 
       const expectedStation = motor.identity?.rotary_alias;
       const observedStation = scanRow.rotary_alias;
-      if (expectedStation !== null && expectedStation !== undefined &&
-          observedStation !== null && observedStation !== undefined) {
+      if (assignedAlias(expectedStation) && assignedAlias(observedStation)) {
         if (Number(expectedStation) !== Number(observedStation)) return '';
         continue;
       }
+      if (!assignedAlias(expectedStation)) continue;
       const deviceState = String(scanRow.device_state || '').toUpperCase();
       if (observedStation !== null && observedStation !== undefined ||
           !deviceState.includes('ERROR') || !scanRow.rotary_alias_error) return '';
@@ -2119,8 +2435,16 @@ export function createMotorConfigController({
       const fileName = normalizedMotorConfigFileName() || pathBasename(motorConfigFilePath);
       const payload = await saveMotorConfig(
         hasMotorConfigTableSaveChanges()
-          ? { content: motorConfigRawText, file_name: fileName }
-          : { registry: saveableAxisRegistry(axisConfig), file_name: fileName },
+          ? {
+            content: motorConfigRawText,
+            file_name: fileName,
+            base_revision: motorConfigRevision,
+          }
+          : {
+            registry: saveableAxisRegistry(axisConfig),
+            file_name: fileName,
+            base_revision: motorConfigRevision,
+          },
       );
       if (!payload.success) {
         const message = uiMessage(payload.message, '축 설정 저장 실패');
@@ -2132,6 +2456,7 @@ export function createMotorConfigController({
       configApplyPending = true;
       setStatusMessage('축 설정 저장됨');
       setAxisMessage('프로젝트 축 목록 저장됨. 실제 반영은 4단계의 설정 적용 및 재시작을 눌러야 합니다.');
+      await onProjectFilesChange?.();
       return true;
     } catch (error) {
       const message = `축 설정 저장 실패: ${error?.message || error}`;
@@ -2159,10 +2484,10 @@ export function createMotorConfigController({
       return false;
     }
     const recoveryMessage = acHardwareRecoveryMessage();
-    const identityError = acHardwareIdentityErrorMessage();
-    if (identityError && !recoveryMessage) {
-      window.alert(identityError);
-      setAxisMessage(identityError, true);
+    const applyBlockMessage = acHardwareApplyBlockMessage();
+    if (applyBlockMessage && !recoveryMessage) {
+      window.alert(applyBlockMessage);
+      setAxisMessage(applyBlockMessage, true);
       renderAxisSettings();
       return false;
     }
@@ -2611,7 +2936,7 @@ export function createMotorConfigController({
     }
     const ethercatScan = scan.ethercat_scan || {};
     const slaves = Array.isArray(ethercatScan.slaves) ? ethercatScan.slaves : [];
-    const matching = scan.matching_summary || {};
+    const matching = selectedProjectAcMatchingSummary(slaves);
     const names = slaves.map((slave) => {
       const slaveText = `Slave ${formatInt(slave.slave_position)}`;
       const driver = slave.driver_model || slave.device_name || '확인 불가';
@@ -2621,7 +2946,22 @@ export function createMotorConfigController({
       return `${slaveText} (${driver}, ${alias})`;
     });
     const slaveText = names.length > 0 ? names.join(', ') : '없음';
-    el.scanResult.textContent = `AC 서보 검색 결과: EtherCAT ${formatInt(slaves.length)}축, 매칭 ${formatInt(matching.matched || 0)}축, 설정 외 ${formatInt(matching.unregistered || 0)}축, 검색된 축: ${slaveText}`;
+    const scanDuration = Number(ethercatScan.scan_duration_ms);
+    const durationText = Number.isFinite(scanDuration)
+      ? ` · ${Math.round(scanDuration)}ms`
+      : '';
+    const directState = !ethercatScan.available
+      ? conciseMotorScanMessage(
+        `직접 스캔 실패: ${ethercatScan.error || '장치를 읽지 못했습니다'}`,
+      )
+      : ethercatScan.complete === false
+        ? conciseMotorScanMessage(
+          `직접 스캔 부분 실패: ${ethercatScan.error || '일부 장치 값을 읽지 못했습니다'}`,
+        )
+        : ethercatScan.rescan_performed
+          ? `EtherCAT 버스 재열거 + SII 직접 읽기 완료${durationText}`
+          : `SII EEPROM 직접 읽기 완료${durationText}`;
+    el.scanResult.textContent = `${directState} · EtherCAT ${formatInt(slaves.length)}축, 매칭 ${formatInt(matching.matched || 0)}축, 설정 외 ${formatInt(matching.unregistered || 0)}축, 검색된 축: ${slaveText}`;
   }
 
   function renderDynamixelScan(scan) {
@@ -2660,10 +3000,13 @@ export function createMotorConfigController({
     if (!el.scanButton) return;
     el.scanButton.disabled = true;
     const originalText = el.scanButton.textContent;
+    const expectedToken = projectLoadToken;
     el.scanButton.textContent = '검색 중';
     if (el.scanResult) el.scanResult.textContent = 'AC 서보 검색 중';
+    await openScanProgressPopup('AC 서보 직접 스캔');
     try {
       const payload = await requestAcServoScan();
+      if (expectedToken !== projectLoadToken) return;
       renderScan(mergeAcServoScan(payload.scan));
       const selectedCount = autoSelectNewScanAxes();
       const identityError = acHardwareIdentityErrorMessage();
@@ -2671,10 +3014,12 @@ export function createMotorConfigController({
         ? `${identityError} 기존 프로젝트 축과 검색 축을 선택해 연결정보 반영을 확인하세요.`
         : `AC 서보 검색 완료 · 신규 ${formatInt(selectedCount)}축 자동 선택`, Boolean(identityError));
       if (payload.motion_state) renderLatestState(payload.motion_state);
-      el.scanButton.textContent = payload.success ? '검색 완료' : '검색 실패';
+      el.scanButton.textContent = payload.success ? '직접 검색 완료' : '직접 검색 실패';
+      await finishScanProgressPopup(payload.success, payload.success ? 'AC 서보 검색 완료' : 'AC 서보 검색 실패');
     } catch (error) {
       if (el.scanResult) el.scanResult.textContent = 'AC 서보 검색 실패';
       el.scanButton.textContent = '검색 실패';
+      await finishScanProgressPopup(false, `AC 서보 검색 실패: ${error?.message || error}`);
     } finally {
       setTimeout(() => {
         el.scanButton.textContent = originalText;
@@ -2687,18 +3032,23 @@ export function createMotorConfigController({
     if (!el.dynamixelScanButton) return;
     el.dynamixelScanButton.disabled = true;
     const originalText = el.dynamixelScanButton.textContent;
+    const expectedToken = projectLoadToken;
     el.dynamixelScanButton.textContent = '검색 중';
     if (el.dynamixelScanResult) el.dynamixelScanResult.textContent = '다이나믹셀 연결 확인 중';
+    await openScanProgressPopup('Dynamixel 직접 스캔');
     try {
       const payload = await requestDynamixelScan();
+      if (expectedToken !== projectLoadToken) return;
       renderDynamixelScan(mergeDynamixelScan(payload.scan));
       const selectedCount = autoSelectNewScanAxes();
       setAxisMessage(`다이나믹셀 검색 완료 · 신규 ${formatInt(selectedCount)}축 자동 선택`);
       if (payload.motion_state) renderLatestState(payload.motion_state);
       el.dynamixelScanButton.textContent = payload.success ? '검색 완료' : '검색 실패';
+      await finishScanProgressPopup(payload.success, payload.success ? 'Dynamixel 검색 완료' : 'Dynamixel 검색 실패');
     } catch (error) {
       if (el.dynamixelScanResult) el.dynamixelScanResult.textContent = '다이나믹셀 연결 확인 실패';
       el.dynamixelScanButton.textContent = '검색 실패';
+      await finishScanProgressPopup(false, `Dynamixel 검색 실패: ${error?.message || error}`);
     } finally {
       setTimeout(() => {
         el.dynamixelScanButton.textContent = originalText;
@@ -2711,32 +3061,52 @@ export function createMotorConfigController({
     if (!el.scanAllButton) return;
     el.scanAllButton.disabled = true;
     const originalText = el.scanAllButton.textContent;
+    const expectedToken = projectLoadToken;
     el.scanAllButton.textContent = '전체 검색 중';
     if (el.scanAllResult) el.scanAllResult.textContent = 'AC 서보와 다이나믹셀을 검색하고 있습니다';
+    await openScanProgressPopup('전체 모터 직접 스캔');
     try {
       const payload = await requestMotorScan();
+      if (expectedToken !== projectLoadToken) return;
       latestScan = payload.scan || null;
       renderScan(latestScan);
       renderDynamixelScan(latestScan);
       const selectedCount = autoSelectNewScanAxes();
       const summary = getDiscoverySummary();
       const identityError = acHardwareIdentityErrorMessage();
+      const scanComplete = payload.scan?.scan_complete === true;
+      const scanPartial = payload.scan?.scan_outcome === 'partial';
+      const dynamixelError = payload.scan?.dynamixel_scan?.error || '';
       if (el.scanAllResult) {
-        el.scanAllResult.textContent = payload.success
+        el.scanAllResult.textContent = scanComplete
           ? `검색 완료 · AC 서보 ${formatInt(summary.ethercatCount)}축 · 다이나믹셀 ${formatInt(summary.dynamixelCount)}축 · 신규 ${formatInt(selectedCount)}축 자동 선택`
-          : uiMessage(payload.message, '전체 모터 검색 실패');
+          : scanPartial
+            ? conciseMotorScanMessage(`부분 완료 · AC 서보 ${formatInt(summary.ethercatCount)}축 · 다이나믹셀 실패: ${dynamixelError || '직접 응답 없음'}`)
+            : conciseMotorScanMessage(uiMessage(payload.message, '전체 모터 검색 실패'));
       }
-      setAxisMessage(payload.success
+      setAxisMessage(scanComplete
         ? identityError
           ? `${identityError} 기존 프로젝트 축과 검색 축을 선택해 연결정보 반영을 확인하세요.`
           : `신규 ${formatInt(selectedCount)}축을 자동 선택했습니다. 이름과 축 번호를 확인한 뒤 선택 축 추가를 누르세요.`
-        : uiMessage(payload.message, '전체 모터 검색 실패'), Boolean(identityError) || !payload.success);
+        : scanPartial
+          ? conciseMotorScanMessage(`일부 검색만 완료됐습니다. ${dynamixelError || '연결되지 않은 모터 종류를 확인하세요.'}`)
+          : conciseMotorScanMessage(uiMessage(payload.message, '전체 모터 검색 실패')), Boolean(identityError) || !scanComplete);
       if (payload.motion_state) renderLatestState(payload.motion_state);
-      el.scanAllButton.textContent = payload.success ? '검색 완료' : '검색 실패';
+      el.scanAllButton.textContent = scanComplete ? '검색 완료' : (scanPartial ? '부분 완료' : '검색 실패');
+      await finishScanProgressPopup(
+        scanComplete,
+        scanComplete ? '전체 모터 검색 완료' : (scanPartial ? '전체 모터 검색 부분 완료' : '전체 모터 검색 실패'),
+        scanPartial ? 'partial' : '',
+      );
     } catch (error) {
-      if (el.scanAllResult) el.scanAllResult.textContent = `전체 모터 검색 실패: ${error?.message || error}`;
+      if (el.scanAllResult) {
+        el.scanAllResult.textContent = conciseMotorScanMessage(
+          `전체 모터 검색 실패: ${error?.message || error}`,
+        );
+      }
       setAxisMessage('전체 모터 검색에 실패했습니다. 고급 종류별 검색으로 연결을 확인할 수 있습니다.');
       el.scanAllButton.textContent = '검색 실패';
+      await finishScanProgressPopup(false, `전체 모터 검색 실패: ${error?.message || error}`);
     } finally {
       setTimeout(() => {
         el.scanAllButton.textContent = originalText;
@@ -2829,7 +3199,6 @@ export function createMotorConfigController({
     if (el.toggleAxisButton) el.toggleAxisButton.addEventListener('click', toggleSelectedAxis);
     if (el.sortAxisButton) el.sortAxisButton.addEventListener('click', sortAxisNumbers);
     if (el.saveAxisConfigButton) el.saveAxisConfigButton.addEventListener('click', saveAxisConfig);
-    if (el.resetAxisConfigButton) el.resetAxisConfigButton.addEventListener('click', resetAllAxisConfig);
     if (el.saveConfigTableButton) el.saveConfigTableButton.addEventListener('click', saveAxisConfig);
     if (el.applyAxisConfigButton) el.applyAxisConfigButton.addEventListener('click', applyConfigRestart);
     if (el.updateConfigTableButton) el.updateConfigTableButton.addEventListener('click', applyConfigTableUpdates);
@@ -2840,10 +3209,21 @@ export function createMotorConfigController({
         renderAxisSettings();
       });
     }
-    if (el.reloadMotorConfigButton) el.reloadMotorConfigButton.addEventListener('click', fetchRegistry);
+    if (el.reloadMotorConfigButton) {
+      el.reloadMotorConfigButton.addEventListener('click', () => fetchRegistry());
+    }
+    if (el.deleteMotorConfigButton) {
+      el.deleteMotorConfigButton.addEventListener('click', deleteCurrentMotorConfig);
+    }
     if (el.scanAllButton) el.scanAllButton.addEventListener('click', scanAllMotors);
     if (el.scanButton) el.scanButton.addEventListener('click', scanMotors);
     if (el.dynamixelScanButton) el.dynamixelScanButton.addEventListener('click', scanDynamixel);
+    if (el.motorScanProgressCloseButton) {
+      el.motorScanProgressCloseButton.addEventListener('click', closeScanProgressPopup);
+    }
+    if (el.motorScanProgressClearButton) {
+      el.motorScanProgressClearButton.addEventListener('click', clearScanProgressPopup);
+    }
   }
 
   return {
@@ -2853,6 +3233,7 @@ export function createMotorConfigController({
     getDiscoverySummary,
     getWorkContext,
     getRegistryCount: () => activeVisibleAxisMotors().length,
+    getConfiguredMotors: () => clone(activeVisibleAxisMotors()),
     renderAfterDisplayModeChange,
     renderRuntimeState,
     renderRegistrationTabs,

@@ -1,4 +1,6 @@
 import json
+import os
+import shutil
 import threading
 from pathlib import Path
 
@@ -7,7 +9,10 @@ import yaml
 
 from motion_web_bridge.project_repository import ProjectRepository
 from motion_web_bridge.bridge_node import MotionWebBridge
-from motion_web_bridge.service_entrypoint import resolve_applied_motor_config
+from motion_web_bridge.service_entrypoint import (
+    resolve_applied_motor_config,
+    resolve_project_generation,
+)
 
 
 MOTION_TEXT = '\n'.join([
@@ -16,19 +21,34 @@ MOTION_TEXT = '\n'.join([
 ])
 
 
+def test_project_generation_is_monotonic_and_survives_repository_restart(tmp_path):
+    root = tmp_path / 'projects'
+    repository = ProjectRepository(root)
+    project_id = repository.create_project('generation')['project']['project_id']
+
+    assert repository.project_generation() == 1
+    repository.set_project_generation(4)
+    repository.select_project(project_id)
+
+    restarted = ProjectRepository(root)
+    assert restarted.project_generation() == 4
+    assert restarted.selected_project_id() == project_id
+    with pytest.raises(ValueError, match='감소'):
+        restarted.set_project_generation(3)
+
+
 def test_new_project_is_ready_for_first_run_without_legacy_files(tmp_path):
     repository = ProjectRepository(tmp_path / 'projects')
     created = repository.create_project('처음 시작')
     project_id = created['project']['project_id']
     project_dir = tmp_path / 'projects' / project_id
 
-    motor = yaml.safe_load((project_dir / 'motor_axes' / 'motor_axes.yaml').read_text())
-    assert motor == {'period': 1000000, 'masters': [], 'drivers': []}
+    assert not (project_dir / 'motor_axes' / 'motor_axes.yaml').exists()
     assert list((project_dir / 'motion_axis_matching').iterdir()) == []
-    assert created['project']['active_files']['motor_axes'] == 'motor_axes.yaml'
+    assert created['project']['active_files']['motor_axes'] == ''
     assert created['project']['active_files']['motion_axis_matching'] == ''
 
-    with pytest.raises(ValueError, match='등록된 모터축'):
+    with pytest.raises(ValueError, match='모터축 설정 파일'):
         repository.prepare_runtime_motor_config(project_id)
     repository.save_file(
         project_id,
@@ -44,12 +64,43 @@ def test_new_project_is_ready_for_first_run_without_legacy_files(tmp_path):
     runtime_path = project_dir / 'runtime' / 'applied_motor_config.yaml'
     assert runtime_path.is_file()
     assert 'web_axis_identities' not in yaml.safe_load(runtime_path.read_text())
+    assert not repository.get_project(project_id)['project']['setup_status']['motor_applied']
+    repository.mark_runtime_motor_config_applied(project_id)
     assert repository.get_project(project_id)['project']['setup_status']['motor_applied']
+
+
+def test_legacy_untouched_motor_placeholder_is_removed(tmp_path):
+    root = tmp_path / 'projects'
+    repository = ProjectRepository(root)
+    project = repository.create_project('legacy placeholder')['project']
+    project_id = project['project_id']
+    project_dir = root / project_id
+    placeholder = project_dir / 'motor_axes' / 'motor_axes.yaml'
+    placeholder.write_text(
+        'period: 1000000\nmasters: []\ndrivers: []\n', encoding='utf-8'
+    )
+    manifest_path = project_dir / 'project.json'
+    manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+    manifest['active_files']['motor_axes'] = 'motor_axes.yaml'
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding='utf-8')
+    os.utime(placeholder, (manifest['created_at'], manifest['created_at']))
+
+    migrated = ProjectRepository(root).get_project(project_id)
+
+    assert not placeholder.exists()
+    assert migrated['project']['active_files']['motor_axes'] == ''
+    assert migrated['project']['counts']['motor_axes'] == 0
 
 
 def test_execution_context_changes_with_active_file_content(tmp_path):
     repository = ProjectRepository(tmp_path / 'projects')
     project_id = repository.create_project('context')['project']['project_id']
+    repository.save_file(
+        project_id,
+        'motor_axes',
+        'motor_axes.yaml',
+        'period: 1000000\nmasters: []\ndrivers: []\n',
+    )
     repository.import_text(
         project_id,
         'motion_axis_matching',
@@ -247,6 +298,132 @@ def test_motor_config_load_ignores_stale_path_from_another_project(tmp_path):
     assert yaml.safe_load(loaded['content'])['period'] == 2000000
 
 
+def test_project_without_saved_motor_file_clears_stale_editor_path(tmp_path):
+    repository = ProjectRepository(tmp_path / 'projects')
+    first_id = repository.create_project('first')['project']['project_id']
+    repository.save_file(
+        first_id, 'motor_axes', 'motor_axes.yaml',
+        'period: 1000000\nmasters: []\ndrivers: []\n',
+    )
+    stale_path = repository.export_path(first_id, 'motor_axes', 'motor_axes.yaml')
+    second_id = repository.create_project('second')['project']['project_id']
+    repository.select_project(second_id)
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge.project_repository = repository
+    bridge.motor_config_file = stale_path
+
+    bridge._bind_selected_project_sources()
+    loaded = bridge.load_motor_config()
+
+    assert bridge.motor_config_file == Path()
+    assert loaded['success'] is True
+    assert loaded['saved'] is False
+    assert loaded['config_file'] == ''
+    target = bridge._motor_config_file_from_payload({})
+    assert target == tmp_path / 'projects' / second_id / 'motor_axes' / 'motor_axes.yaml'
+
+
+def test_no_selected_project_clears_stale_editor_path(tmp_path):
+    repository = ProjectRepository(tmp_path / 'projects')
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge.project_repository = repository
+    bridge.motor_config_file = tmp_path / 'old-project' / 'motor_axes.yaml'
+
+    bridge._bind_selected_project_sources()
+
+    assert bridge.motor_config_file == Path()
+
+
+def test_delete_motor_config_only_moves_selected_project_file_to_its_trash(tmp_path):
+    repository = ProjectRepository(tmp_path / 'projects')
+    selected_id = repository.create_project('selected')['project']['project_id']
+    other_id = repository.create_project('other')['project']['project_id']
+    content = 'period: 1000000\nmasters: []\ndrivers: []\n'
+    repository.save_file(selected_id, 'motor_axes', 'selected.yaml', content)
+    repository.save_file(other_id, 'motor_axes', 'other.yaml', content)
+    repository.select_project(selected_id)
+    selected_path = repository.export_path(selected_id, 'motor_axes', 'selected.yaml')
+    other_path = repository.export_path(other_id, 'motor_axes', 'other.yaml')
+
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge.project_repository = repository
+    bridge.motor_config_file = selected_path
+    bridge._write_motor_config_selection(selected_path)
+
+    result = bridge.delete_motor_config()
+
+    assert result['success'] is True
+    assert result['deleted_file'] == 'selected.yaml'
+    assert result['replacement_active_file'] == ''
+    assert result['config_file'] == ''
+    assert bridge.motor_config_file == Path()
+    assert not selected_path.exists()
+    assert other_path.is_file()
+    assert repository.selected_project_id() == selected_id
+    assert repository.get_project(selected_id)['project']['active_files']['motor_axes'] == ''
+    assert not (
+        tmp_path / 'projects' / selected_id / 'runtime' / 'selected_motor_config_path.txt'
+    ).exists()
+    assert list(
+        (tmp_path / 'projects' / selected_id / 'trash' / 'motor_axes').glob(
+            '*-selected.yaml'
+        )
+    )
+
+
+def test_motor_config_save_rejects_stale_browser_revision(tmp_path):
+    repository = ProjectRepository(tmp_path / 'projects')
+    project_id = repository.create_project('revision')['project']['project_id']
+    content = (
+        'period: 1000000\nmasters:\n- id: 0\n  type: ethercat\n  slaves:\n'
+        '  - controller_index: 0\n    driver_id: 0\ndrivers:\n- id: 0\n  type: minas\n'
+    )
+    repository.save_file(project_id, 'motor_axes', 'motor_axes.yaml', content)
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge.project_repository = repository
+    bridge.motor_config_file = repository.export_path(
+        project_id, 'motor_axes', 'motor_axes.yaml'
+    )
+    loaded = bridge.load_motor_config()
+    bridge.motor_config_file.write_text(content.replace('1000000', '2000000'), encoding='utf-8')
+
+    result = bridge.save_motor_config({
+        'registry': loaded['registry'],
+        'file_name': 'motor_axes.yaml',
+        'base_revision': loaded['config_revision'],
+    })
+
+    assert result['success'] is False
+    assert '현재 파일 보호를 위해 저장을 거부' in result['message']
+    assert 'period: 2000000' in bridge.motor_config_file.read_text(encoding='utf-8')
+
+
+def test_motor_config_save_rejects_zero_axis_overwrite(tmp_path):
+    repository = ProjectRepository(tmp_path / 'projects')
+    project_id = repository.create_project('zero guard')['project']['project_id']
+    content = (
+        'period: 1000000\nmasters:\n- id: 0\n  type: ethercat\n  slaves:\n'
+        '  - controller_index: 0\n    driver_id: 0\ndrivers:\n- id: 0\n  type: minas\n'
+    )
+    repository.save_file(project_id, 'motor_axes', 'motor_axes.yaml', content)
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge.project_repository = repository
+    bridge.motor_config_file = repository.export_path(
+        project_id, 'motor_axes', 'motor_axes.yaml'
+    )
+    loaded = bridge.load_motor_config()
+
+    result = bridge.save_motor_config({
+        'registry': {'version': 1, 'motors': []},
+        'file_name': 'motor_axes.yaml',
+        'base_revision': loaded['config_revision'],
+    })
+
+    assert result['success'] is False
+    assert '0축 모터 설정은 저장할 수 없습니다' in result['message']
+    assert bridge.load_motor_config()['registry']['motors']
+
+
 def test_runtime_motor_config_rejects_unusable_ac_profile(tmp_path):
     repository = ProjectRepository(tmp_path / 'projects')
     project_id = repository.create_project('slow profile')['project']['project_id']
@@ -371,17 +548,18 @@ def test_project_tree_includes_root_runtime_and_trash_files(tmp_path):
     assert motions['children'][0]['relative_path'] == 'trash/motions/deleted.json'
 
 
-def test_active_required_file_delete_creates_empty_replacement(tmp_path):
+def test_active_required_file_delete_leaves_no_unsaved_replacement(tmp_path):
     repository = ProjectRepository(tmp_path / 'projects')
     project_id = repository.create_project('reset')['project']['project_id']
+    repository.save_file(
+        project_id, 'motor_axes', 'motor_axes.yaml',
+        'period: 1000000\nmasters: []\ndrivers: []\n',
+    )
 
     result = repository.delete_file(project_id, 'motor_axes', 'motor_axes.yaml')
 
-    assert result['replacement_active_file'] == 'motor_axes.yaml'
-    replacement = yaml.safe_load(
-        (tmp_path / 'projects' / project_id / 'motor_axes' / 'motor_axes.yaml').read_text()
-    )
-    assert replacement == {'period': 1000000, 'masters': [], 'drivers': []}
+    assert result['replacement_active_file'] == ''
+    assert not (tmp_path / 'projects' / project_id / 'motor_axes' / 'motor_axes.yaml').exists()
 
 
 def test_internal_motor_config_backups_move_to_project_runtime_history(tmp_path):
@@ -400,8 +578,8 @@ def test_internal_motor_config_backups_move_to_project_runtime_history(tmp_path)
         folder for folder in project['tree'] if folder['category'] == 'motor_axes'
     )
 
-    assert [item['name'] for item in motor_folder['children']] == ['motor_axes.yaml']
-    assert project['project']['counts']['motor_axes'] == 1
+    assert [item['name'] for item in motor_folder['children']] == []
+    assert project['project']['counts']['motor_axes'] == 0
     assert list(
         (tmp_path / 'projects' / project_id / 'runtime' / 'history' / 'motor_axes').glob(
             'motor_axes.yaml.bak-*'
@@ -409,7 +587,7 @@ def test_internal_motor_config_backups_move_to_project_runtime_history(tmp_path)
     )
 
 
-def test_runtime_project_is_derived_from_applied_config_not_selected_project(tmp_path):
+def test_runtime_from_another_project_is_hidden_at_the_project_boundary(tmp_path):
     repository = ProjectRepository(tmp_path / 'projects')
     runtime_id = repository.create_project('runtime')['project']['project_id']
     selected_id = repository.create_project('editor')['project']['project_id']
@@ -425,13 +603,13 @@ def test_runtime_project_is_derived_from_applied_config_not_selected_project(tmp
     listed = bridge.list_motion_projects()
 
     assert listed['selected_project_id'] == selected_id
-    assert listed['runtime_project_id'] == runtime_id
+    assert listed['runtime_project_id'] == ''
     assert next(
         item for item in listed['projects'] if item['project_id'] == runtime_id
-    )['runtime_active'] is True
+    )['runtime_active'] is False
 
 
-def test_managed_service_keeps_applied_project_separate_from_editor_project(tmp_path):
+def test_project_switch_discards_the_previous_applied_runtime(tmp_path):
     workspace = tmp_path / 'workspace'
     repository = ProjectRepository(workspace / 'motion_projects')
     runtime_id = repository.create_project('runtime')['project']['project_id']
@@ -456,23 +634,71 @@ def test_managed_service_keeps_applied_project_separate_from_editor_project(tmp_
         )
     )
     assert selection['project_id'] == editor_id
-    assert selection['applied_project_id'] == runtime_id
-    assert repository.applied_runtime_motor_config() == Path(prepared['runtime_file'])
-    assert resolve_applied_motor_config(workspace) == Path(prepared['runtime_file'])
+    assert 'applied_project_id' not in selection
+    assert repository.applied_runtime_motor_config() is None
+    assert resolve_applied_motor_config(workspace) is None
+    previous = next(
+        item for item in repository.list_projects()['projects']
+        if item['project_id'] == runtime_id
+    )
+    assert previous['setup_status']['motor_applied'] is False
+
+
+def test_service_entrypoint_never_loads_runtime_from_another_project(tmp_path):
+    workspace = tmp_path / 'workspace'
+    projects = workspace / 'motion_projects'
+    selected_id = 'selected-project'
+    previous_id = 'previous-project'
+    runtime = projects / previous_id / 'runtime' / 'applied_motor_config.yaml'
+    runtime.parent.mkdir(parents=True)
+    runtime.write_text('masters: []\n', encoding='utf-8')
+    (projects / '.selected_project.json').write_text(
+        json.dumps({
+            'project_id': selected_id,
+            'applied_project_id': previous_id,
+        }),
+        encoding='utf-8',
+    )
+
+    assert resolve_applied_motor_config(workspace) is None
+
+
+def test_service_entrypoint_restores_persisted_project_generation(tmp_path):
+    workspace = tmp_path / 'workspace'
+    projects = workspace / 'motion_projects'
+    projects.mkdir(parents=True)
+    (projects / '.selected_project.json').write_text(
+        json.dumps({'project_id': 'current-project', 'project_generation': 17}),
+        encoding='utf-8',
+    )
+
+    assert resolve_project_generation(workspace) == 17
+
+
+def test_service_entrypoint_rejects_invalid_project_generation(tmp_path):
+    workspace = tmp_path / 'workspace'
+    projects = workspace / 'motion_projects'
+    projects.mkdir(parents=True)
+    (projects / '.selected_project.json').write_text(
+        json.dumps({'project_id': 'current-project', 'project_generation': -1}),
+        encoding='utf-8',
+    )
+
+    assert resolve_project_generation(workspace) == 0
 
 
 def test_managed_service_restores_last_applied_config_after_project_edit(tmp_path):
     workspace = tmp_path / 'workspace'
     repository = ProjectRepository(workspace / 'motion_projects')
     project_id = repository.create_project('runtime')['project']['project_id']
-    source = repository.export_path(project_id, 'motor_axes', 'motor_axes.yaml')
-    source.write_text(
+    repository.save_file(
+        project_id, 'motor_axes', 'motor_axes.yaml',
         'period: 1000000\nmasters:\n- id: 0\n  type: ethercat\n  slaves:\n'
         '  - controller_index: 0\n    driver_id: 0\ndrivers:\n- id: 0\n'
         '  type: minas\n  profile_velocity: 18000\n'
         '  profile_acceleration: 180000\n  profile_deceleration: 180000\n',
-        encoding='utf-8',
     )
+    source = repository.export_path(project_id, 'motor_axes', 'motor_axes.yaml')
     repository.prepare_runtime_motor_config(project_id)
     repository.mark_runtime_motor_config_applied(project_id)
     assert resolve_applied_motor_config(workspace) is not None
@@ -568,10 +794,15 @@ def test_web_apply_requests_managed_service_restart_without_second_launch(
 
     assert result['success'] is True
     assert result['restart_mode'] == 'managed_service'
-    assert commands[0][0] == [
+    assert commands[0][0][:4] == [
+        '/bin/bash', '-c', 'sleep 0.5; exec "$@"',
+        'motion-control-delayed-restart',
+    ]
+    assert commands[0][0][4:] == [
         '/usr/bin/systemctl', '--user', 'restart', '--no-block',
         'motion-control.service',
     ]
+    assert commands[0][1]['start_new_session'] is True
     assert repository.applied_runtime_motor_config().is_file()
 
 
@@ -639,15 +870,26 @@ def test_copy_file_between_projects_is_a_physical_independent_copy(tmp_path):
     assert copied.read_text(encoding='utf-8') == MOTION_TEXT + '\n'
 
 
-def test_delete_project_moves_whole_folder_to_repository_trash(tmp_path):
+def test_delete_project_permanently_removes_folder_and_older_archives(tmp_path):
     repository = ProjectRepository(tmp_path / 'projects')
+    other_id = repository.create_project('keep me')['project']['project_id']
     project_id = repository.create_project('delete me')['project']['project_id']
+    project_dir = tmp_path / 'projects' / project_id
+    archive = tmp_path / 'projects' / '.trash' / 'projects' / f'legacy-{project_id}'
+    archive.parent.mkdir(parents=True)
+    shutil.copytree(project_dir, archive)
+    other_archive = archive.parent / f'legacy-{other_id}'
+    shutil.copytree(tmp_path / 'projects' / other_id, other_archive)
 
     result = repository.delete_project(project_id)
 
-    assert not (tmp_path / 'projects' / project_id).exists()
+    assert not project_dir.exists()
+    assert not archive.exists()
+    assert (tmp_path / 'projects' / other_id).is_dir()
+    assert other_archive.is_dir()
     assert result['selected_project_id'] == ''
-    assert Path(result['trash_path']).is_dir()
+    assert result['permanently_deleted'] is True
+    assert 'trash_path' not in result
 
 
 def test_import_rejects_path_escape_and_invalid_file(tmp_path):
@@ -686,6 +928,43 @@ def test_project_editor_rejects_automatic_external_file_sync(tmp_path):
 
     with pytest.raises(ValueError, match='프로젝트 외부'):
         repository.sync_project_file('motions', external)
+
+
+def test_project_repository_rejects_linked_project_directory(tmp_path):
+    root = tmp_path / 'projects'
+    repository = ProjectRepository(root)
+    external = tmp_path / 'external-project'
+    external.mkdir()
+    (external / 'project.json').write_text(
+        json.dumps({'version': 1, 'project_id': 'linked'}), encoding='utf-8'
+    )
+    (root / 'linked').symlink_to(external, target_is_directory=True)
+
+    with pytest.raises(ValueError, match='링크'):
+        repository.get_project('linked')
+
+
+def test_project_repository_rejects_linked_internal_directory(tmp_path):
+    repository = ProjectRepository(tmp_path / 'projects')
+    project_id = repository.create_project('isolated')['project']['project_id']
+    project_dir = tmp_path / 'projects' / project_id
+    (project_dir / 'motions').rmdir()
+    (project_dir / 'motions').symlink_to(tmp_path, target_is_directory=True)
+
+    with pytest.raises(ValueError, match='링크'):
+        repository.get_project(project_id)
+
+
+def test_project_repository_rejects_linked_asset_file(tmp_path):
+    repository = ProjectRepository(tmp_path / 'projects')
+    project_id = repository.create_project('isolated')['project']['project_id']
+    external = tmp_path / 'outside.json'
+    external.write_text(MOTION_TEXT + '\n', encoding='utf-8')
+    linked = tmp_path / 'projects' / project_id / 'motions' / 'linked.json'
+    linked.symlink_to(external)
+
+    with pytest.raises(ValueError, match='프로젝트 파일'):
+        repository.read_file(project_id, 'motions', 'linked.json')
 
 
 def test_web_file_read_rejects_non_selected_project(tmp_path):

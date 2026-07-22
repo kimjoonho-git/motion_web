@@ -55,22 +55,84 @@ class ProjectRepository:
         self.root.mkdir(parents=True, exist_ok=True)
         self.selection_file = self.root / '.selected_project.json'
         self._migrate_generated_empty_mappings()
+        self._migrate_generated_empty_motor_configs()
         self._migrate_internal_backups()
         self._remove_empty_no_project_workspace()
+        self._normalize_selection_boundary()
+
+    def _normalize_selection_boundary(self) -> None:
+        """Never retain an applied runtime belonging to another project."""
+        selection = self._read_selection()
+        selected = str(selection.get('project_id') or '').strip()
+        applied = str(selection.get('applied_project_id') or '').strip()
+        if not applied or applied == selected:
+            return
+        selection.pop('applied_project_id', None)
+        self._atomic_write(
+            self.selection_file,
+            json.dumps(selection, ensure_ascii=False) + '\n',
+        )
+
+    def _migrate_generated_empty_motor_configs(self) -> None:
+        """Remove untouched placeholder motor files created by older releases."""
+        empty = self._empty_motor_config()
+        for project_dir in self.root.iterdir():
+            if (
+                not project_dir.is_dir()
+                or project_dir.is_symlink()
+                or project_dir.name.startswith('.')
+            ):
+                continue
+            try:
+                manifest = self._read_manifest(project_dir)
+            except (OSError, ValueError, json.JSONDecodeError):
+                continue
+            active = manifest.get('active_files') or {}
+            if active.get('motor_axes') != DEFAULT_MOTOR_FILE:
+                continue
+            path = project_dir / 'motor_axes' / DEFAULT_MOTOR_FILE
+            runtime = manifest.get('runtime_state') or {}
+            if (
+                not path.is_file()
+                or path.is_symlink()
+                or runtime.get('applied_at') is not None
+            ):
+                continue
+            if (project_dir / 'runtime' / 'applied_motor_config.yaml').is_file():
+                continue
+            try:
+                content = yaml.safe_load(path.read_text(encoding='utf-8')) or {}
+                created_at = float(manifest.get('created_at') or 0.0)
+                untouched = abs(path.stat().st_mtime - created_at) <= 1.0
+            except (OSError, TypeError, ValueError, yaml.YAMLError):
+                continue
+            if content != empty or not untouched:
+                continue
+            path.unlink()
+            active['motor_axes'] = ''
+            manifest['active_files'] = active
+            self._write_manifest(project_dir, manifest)
 
     def _migrate_internal_backups(self) -> None:
         for project_dir in self.root.iterdir():
-            if not project_dir.is_dir() or project_dir.name.startswith('.'):
+            if (
+                not project_dir.is_dir()
+                or project_dir.is_symlink()
+                or project_dir.name.startswith('.')
+            ):
                 continue
             for category in ('motor_axes', 'motion_axis_matching'):
                 source_dir = project_dir / category
-                if not source_dir.is_dir():
+                if not source_dir.is_dir() or source_dir.is_symlink():
                     continue
-                history_dir = project_dir / 'runtime' / 'history' / category
+                history_dir = None
                 for source in source_dir.glob('*.bak-*'):
                     if not source.is_file() or source.is_symlink():
                         continue
-                    history_dir.mkdir(parents=True, exist_ok=True)
+                    if history_dir is None:
+                        history_dir = self._local_directory(
+                            project_dir, 'runtime', 'history', category
+                        )
                     target = history_dir / source.name
                     counter = 2
                     while target.exists():
@@ -110,11 +172,20 @@ class ProjectRepository:
         not match.
         """
         for project_dir in self.root.iterdir():
-            if not project_dir.is_dir() or project_dir.name.startswith('.'):
+            if (
+                not project_dir.is_dir()
+                or project_dir.is_symlink()
+                or project_dir.name.startswith('.')
+            ):
                 continue
             manifest_path = project_dir / 'project.json'
             generated = project_dir / 'motion_axis_matching' / DEFAULT_MOTION_AXIS_FILE
-            if not manifest_path.is_file() or not generated.is_file():
+            if (
+                not manifest_path.is_file()
+                or manifest_path.is_symlink()
+                or not generated.is_file()
+                or generated.is_symlink()
+            ):
                 continue
             try:
                 manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
@@ -130,8 +201,9 @@ class ProjectRepository:
                 or payload.get('mappings') != []
             ):
                 continue
-            trash_dir = project_dir / 'trash' / 'motion_axis_matching'
-            trash_dir.mkdir(parents=True, exist_ok=True)
+            trash_dir = self._local_directory(
+                project_dir, 'trash', 'motion_axis_matching'
+            )
             target = trash_dir / f'legacy-generated-empty-{DEFAULT_MOTION_AXIS_FILE}'
             counter = 2
             while target.exists():
@@ -193,7 +265,8 @@ class ProjectRepository:
             'created_at': now,
             'updated_at': now,
             'active_files': {
-                'motor_axes': DEFAULT_MOTOR_FILE,
+                # The first motor file is created only by an explicit user save.
+                'motor_axes': '',
                 # A new project has no motion-axis mapping until the user
                 # creates or imports one.  Do not manufacture a file that can
                 # be mistaken for a user-owned setup.
@@ -207,10 +280,6 @@ class ProjectRepository:
                 'jog_verified': False,
             },
         }
-        self._atomic_write(
-            project_dir / 'motor_axes' / DEFAULT_MOTOR_FILE,
-            yaml.safe_dump(self._empty_motor_config(), sort_keys=False, allow_unicode=True),
-        )
         self._write_manifest(project_dir, manifest)
         self.select_project(project_id)
         return self.get_project(project_id)
@@ -237,6 +306,8 @@ class ProjectRepository:
     def select_project(self, project_id: Any) -> Dict[str, Any]:
         project_dir = self._project_dir(project_id)
         selection = self._read_selection()
+        if str(selection.get('project_id') or '') != project_dir.name:
+            selection.pop('applied_project_id', None)
         selection['project_id'] = project_dir.name
         self._atomic_write(
             self.selection_file,
@@ -246,9 +317,7 @@ class ProjectRepository:
 
     def project_logs_dir(self, project_id: Any) -> Path:
         project_dir = self._project_dir(project_id)
-        logs_dir = project_dir / 'logs'
-        logs_dir.mkdir(exist_ok=True)
-        return logs_dir
+        return self._local_directory(project_dir, 'logs')
 
     def _read_selection(self) -> Dict[str, Any]:
         try:
@@ -261,6 +330,28 @@ class ProjectRepository:
         payload = self._read_selection()
         project_id = str(payload.get('project_id') or '').strip()
         return project_id if project_id == Path(project_id).name else ''
+
+    def project_generation(self) -> int:
+        """Return the durable generation shared by the bridge and browser."""
+        try:
+            generation = int(self._read_selection().get('project_generation') or 1)
+        except (TypeError, ValueError):
+            generation = 1
+        return max(1, generation)
+
+    def set_project_generation(self, generation: Any) -> int:
+        """Persist a monotonic project boundary across bridge restarts."""
+        value = max(1, int(generation))
+        selection = self._read_selection()
+        previous = self.project_generation()
+        if value < previous:
+            raise ValueError('project_generation은 감소시킬 수 없습니다')
+        selection['project_generation'] = value
+        self._atomic_write(
+            self.selection_file,
+            json.dumps(selection, ensure_ascii=False) + '\n',
+        )
+        return value
 
     def execution_context(self, project_id: Any) -> Dict[str, Any]:
         """Return one immutable identity for the project's active runtime files."""
@@ -324,6 +415,8 @@ class ProjectRepository:
     def mark_runtime_motor_config_applied(self, project_id: Any) -> Path:
         """Remember only which project runtime file the managed service must run."""
         project_dir = self._project_dir(project_id)
+        if self.selected_project_id() != project_dir.name:
+            raise ValueError('현재 선택 프로젝트의 모터 설정만 적용할 수 있습니다')
         runtime = project_dir / 'runtime' / 'applied_motor_config.yaml'
         if not runtime.is_file():
             raise ValueError('적용할 런타임 모터축 설정 파일이 없습니다')
@@ -339,6 +432,8 @@ class ProjectRepository:
         """Resolve the managed service config strictly inside its project folder."""
         selection = self._read_selection()
         project_id = str(selection.get('applied_project_id') or '').strip()
+        if project_id != self.selected_project_id():
+            return None
         if not project_id or project_id != Path(project_id).name:
             return None
         try:
@@ -351,16 +446,29 @@ class ProjectRepository:
     def delete_project(self, project_id: Any) -> Dict[str, Any]:
         project_dir = self._project_dir(project_id)
         manifest = self._read_manifest(project_dir)
+        project_name = str(manifest.get('name') or project_dir.name)
+
+        # Older releases archived deleted projects. Remove only archive
+        # directories whose own manifest confirms the exact same project ID.
         trash_root = self.root / '.trash' / 'projects'
-        trash_root.mkdir(parents=True, exist_ok=True)
-        stamp = time.strftime('%Y%m%d-%H%M%S')
-        target = trash_root / f'{stamp}-{project_dir.name}'
-        counter = 1
-        while target.exists():
-            target = trash_root / f'{stamp}-{counter}-{project_dir.name}'
-            counter += 1
-        project_dir.rename(target)
-        selection = self._read_selection()
+        if trash_root.is_dir() and not trash_root.is_symlink():
+            for archived in list(trash_root.iterdir()):
+                if not archived.is_dir() or archived.is_symlink():
+                    continue
+                try:
+                    archived_manifest = json.loads(
+                        (archived / 'project.json').read_text(encoding='utf-8')
+                    )
+                except (OSError, ValueError, json.JSONDecodeError):
+                    continue
+                if (
+                    isinstance(archived_manifest, dict)
+                    and archived_manifest.get('project_id') == project_dir.name
+                ):
+                    shutil.rmtree(archived)
+
+        original_selection = self._read_selection()
+        selection = dict(original_selection)
         if selection.get('project_id') == project_dir.name:
             selection.pop('project_id', None)
         if selection.get('applied_project_id') == project_dir.name:
@@ -375,11 +483,33 @@ class ProjectRepository:
                 self.selection_file.unlink()
             except FileNotFoundError:
                 pass
+
+        # Rename inside the repository first so a partially removed project
+        # can never be listed or opened. Report success only after rmtree has
+        # removed the complete directory tree.
+        deleting = self.root / f'.deleting-{project_dir.name}-{uuid.uuid4().hex}'
+        try:
+            project_dir.rename(deleting)
+            shutil.rmtree(deleting)
+        except OSError:
+            if deleting.exists() and not project_dir.exists():
+                deleting.rename(project_dir)
+            if original_selection:
+                self._atomic_write(
+                    self.selection_file,
+                    json.dumps(original_selection, ensure_ascii=False) + '\n',
+                )
+            else:
+                try:
+                    self.selection_file.unlink()
+                except FileNotFoundError:
+                    pass
+            raise
         return {
             **self.list_projects(),
-            'message': f"프로젝트 '{manifest.get('name') or project_dir.name}'를 휴지통으로 이동했습니다",
+            'message': f"프로젝트 '{project_name}'와 관련 파일을 영구 삭제했습니다",
             'deleted_project_id': project_dir.name,
-            'trash_path': str(target),
+            'permanently_deleted': True,
         }
 
     def copy_file_from_project(
@@ -510,13 +640,25 @@ class ProjectRepository:
     def save_file(
         self, project_id: Any, category: Any, file_name: Any, content: Any
     ) -> Dict[str, Any]:
-        path = self._asset_path(project_id, category, file_name)
+        project_dir = self._project_dir(project_id)
+        safe_category = self._category(category)
+        name = self._file_name(safe_category, file_name)
+        try:
+            path = self._asset_path(project_id, safe_category, name)
+        except ValueError:
+            manifest = self._read_manifest(project_dir)
+            if safe_category != 'motor_axes' or manifest['active_files'].get(safe_category):
+                raise
+            path = project_dir / safe_category / name
         text = str(content if content is not None else '')
         if len(text.encode('utf-8')) > MAX_TEXT_BYTES:
             raise ValueError('파일이 10MB 제한을 초과합니다')
-        self._validate_content(self._category(category), path.name, text)
+        self._validate_content(safe_category, path.name, text)
         self._atomic_write(path, text if text.endswith('\n') else text + '\n')
-        self._touch_manifest(self._project_dir(project_id))
+        manifest = self._read_manifest(project_dir)
+        if not manifest['active_files'].get(safe_category):
+            manifest['active_files'][safe_category] = path.name
+        self._write_manifest(project_dir, manifest)
         return self.read_file(project_id, category, file_name)
 
     def rename_file(
@@ -542,8 +684,7 @@ class ProjectRepository:
         source = self._asset_path(project_id, safe_category, file_name)
         manifest = self._read_manifest(project_dir)
         was_active = manifest['active_files'].get(safe_category) == source.name
-        trash_dir = project_dir / 'trash' / safe_category
-        trash_dir.mkdir(parents=True, exist_ok=True)
+        trash_dir = self._local_directory(project_dir, 'trash', safe_category)
         stamp = time.strftime('%Y%m%d-%H%M%S')
         target = trash_dir / f'{stamp}-{source.name}'
         counter = 1
@@ -559,12 +700,6 @@ class ProjectRepository:
             )
             if remaining:
                 replacement = remaining[0]
-            elif safe_category == 'motor_axes':
-                replacement = DEFAULT_MOTOR_FILE
-                self._atomic_write(
-                    project_dir / safe_category / replacement,
-                    yaml.safe_dump(self._empty_motor_config(), sort_keys=False, allow_unicode=True),
-                )
             manifest['active_files'][safe_category] = replacement
         manifest['updated_at'] = time.time()
         self._write_manifest(project_dir, manifest)
@@ -919,8 +1054,7 @@ class ProjectRepository:
                 'name': DISPLAY_NAMES[category],
                 'children': children,
             })
-        logs_dir = project_dir / 'logs'
-        logs_dir.mkdir(exist_ok=True)
+        logs_dir = self._local_directory(project_dir, 'logs')
         log_children = []
         for path in sorted(logs_dir.glob('*.jsonl'), reverse=True):
             if not path.is_file() or path.is_symlink():
@@ -948,8 +1082,7 @@ class ProjectRepository:
             ('runtime', 'runtime · 실행용'),
             ('trash', 'trash · 휴지통'),
         ):
-            directory = project_dir / category
-            directory.mkdir(exist_ok=True)
+            directory = self._local_directory(project_dir, category)
             tree.append({
                 'category': category,
                 'name': label,
@@ -1084,8 +1217,11 @@ class ProjectRepository:
         except (OSError, yaml.YAMLError, AttributeError):
             pass
         runtime_state = manifest.get('runtime_state') or {}
+        selection = self._read_selection()
         applied = bool(
             motor_sha
+            and selection.get('project_id') == project_dir.name
+            and selection.get('applied_project_id') == project_dir.name
             and self._motor_runtime_matches(project_dir, motor_path)
         )
         return {
@@ -1105,13 +1241,24 @@ class ProjectRepository:
         name = str(project_id or '').strip()
         if not name or name != Path(name).name or name.startswith('.'):
             raise ValueError('올바르지 않은 프로젝트 ID입니다')
-        path = (self.root / name).resolve()
-        if path.parent != self.root or not (path / 'project.json').is_file():
+        candidate = self.root / name
+        if candidate.is_symlink():
+            raise ValueError('프로젝트 폴더는 링크일 수 없습니다')
+        path = candidate.resolve()
+        manifest_path = path / 'project.json'
+        if (
+            path.parent != self.root
+            or manifest_path.is_symlink()
+            or not manifest_path.is_file()
+        ):
             raise ValueError(f'프로젝트를 찾을 수 없습니다: {name}')
         return path
 
     def _read_manifest(self, project_dir: Path) -> Dict[str, Any]:
-        payload = json.loads((project_dir / 'project.json').read_text(encoding='utf-8'))
+        manifest_path = project_dir / 'project.json'
+        if project_dir.is_symlink() or manifest_path.is_symlink():
+            raise ValueError('프로젝트 구조에 링크를 사용할 수 없습니다')
+        payload = json.loads(manifest_path.read_text(encoding='utf-8'))
         if not isinstance(payload, dict) or payload.get('version') != PROJECT_VERSION:
             raise ValueError('지원하지 않는 프로젝트 파일입니다')
         if payload.get('project_id') != project_dir.name:
@@ -1124,10 +1271,10 @@ class ProjectRepository:
         }
         payload['memo'] = str(payload.get('memo') or '')
         for category in PROJECT_CATEGORIES:
-            (project_dir / category).mkdir(exist_ok=True)
-        (project_dir / 'logs').mkdir(exist_ok=True)
-        (project_dir / 'runtime').mkdir(exist_ok=True)
-        (project_dir / 'trash').mkdir(exist_ok=True)
+            self._local_directory(project_dir, category)
+        self._local_directory(project_dir, 'logs')
+        self._local_directory(project_dir, 'runtime')
+        self._local_directory(project_dir, 'trash')
         return payload
 
     def _write_manifest(self, project_dir: Path, manifest: Dict[str, Any]) -> None:
@@ -1145,10 +1292,37 @@ class ProjectRepository:
         project_dir = self._project_dir(project_id)
         safe_category = self._category(category)
         name = self._file_name(safe_category, file_name)
-        path = (project_dir / safe_category / name).resolve()
-        if path.parent != (project_dir / safe_category).resolve() or not path.is_file():
+        candidate = project_dir / safe_category / name
+        path = candidate.resolve()
+        if (
+            path.parent != (project_dir / safe_category).resolve()
+            or candidate.is_symlink()
+            or not path.is_file()
+        ):
             raise ValueError(f'프로젝트 파일을 찾을 수 없습니다: {name}')
         return path
+
+    @staticmethod
+    def _local_directory(project_dir: Path, *parts: str) -> Path:
+        """Create a directory without following a link outside its project."""
+        root = project_dir.resolve()
+        current = project_dir
+        for part in parts:
+            current = current / part
+            if current.is_symlink():
+                raise ValueError(
+                    f'프로젝트 내부 폴더는 링크일 수 없습니다: {current.name}'
+                )
+            if current.exists() and not current.is_dir():
+                raise ValueError(
+                    f'프로젝트 폴더 경로가 올바르지 않습니다: {current.name}'
+                )
+            current.mkdir(exist_ok=True)
+            try:
+                current.resolve().relative_to(root)
+            except ValueError as exc:
+                raise ValueError('프로젝트 외부 폴더는 사용할 수 없습니다') from exc
+        return current
 
     @staticmethod
     def _category(category: Any) -> str:

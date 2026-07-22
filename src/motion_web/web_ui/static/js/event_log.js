@@ -2,7 +2,7 @@ import {
   clearMotorEvents,
   deleteMotorEventLogFile,
   fetchMotorEvents,
-} from './api.js?v=20260718-project-logs';
+} from './api.js?v=20260722-motor-config-delete';
 
 const CATEGORY_LABELS = {
   error: '모터 에러',
@@ -156,6 +156,16 @@ export function createMotorEventLogController({ el }) {
     refresh(true);
   }
 
+  function resetProjectState() {
+    activeFile = 'all';
+    loading = false;
+    lastLoadedAt = 0;
+    logFiles = [];
+    el.motorEventLogRows?.replaceChildren();
+    if (el.motorEventLogSummary) el.motorEventLogSummary.textContent = '';
+    renderLogFiles();
+  }
+
   async function clearAll() {
     const confirmed = window.confirm(
       '현재 프로젝트에 저장된 모터 동작 로그를 모두 삭제합니다.\n삭제한 로그는 복구할 수 없습니다.'
@@ -232,5 +242,6 @@ export function createMotorEventLogController({ el }) {
     activate,
     bindEvents,
     refresh,
+    resetProjectState,
   };
 }

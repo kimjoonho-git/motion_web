@@ -11,7 +11,7 @@ import {
   requestDynamixelAction,
   requestDynamixelJog,
   requestMotionSafetyStop,
-} from './api.js?v=20260705-dynamixel-action';
+} from './api.js?v=20260722-motor-config-delete';
 
 const DEFAULT_MAX_JOG_DELTA_DEG = 360.0;
 const MOTION_DONE_VELOCITY_DEG_SEC = 0.05;
@@ -1290,8 +1290,20 @@ export function createMotionTestController({ el, getLatestState }) {
     }
   }
 
+  function resetProjectState() {
+    selectedAxis = null;
+    lastAxisOptionsSignature = '';
+    lastOutputCapture = null;
+    lastCommandResult = null;
+    jogRequestInFlight = false;
+    servoControlInFlight = false;
+    motionStopInFlight = false;
+    renderLatestState();
+  }
+
   return {
     bindEvents,
+    resetProjectState,
     renderLatestState,
     selectAxis,
     getSelectedAxis: () => selectedAxis,

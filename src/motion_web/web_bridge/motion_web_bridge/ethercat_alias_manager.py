@@ -64,6 +64,24 @@ class EthercatAliasManager:
             slaves.append(current)
         return slaves
 
+    @staticmethod
+    def parse_sii_identity(data: bytes) -> Dict[str, int]:
+        if not isinstance(data, (bytes, bytearray)) or len(data) < 32:
+            raise EthercatAliasError('SII EEPROM 헤더가 32바이트보다 짧습니다.')
+        return {
+            'ethercat_alias': int.from_bytes(data[8:10], 'little'),
+            'vendor_id': int.from_bytes(data[16:20], 'little'),
+            'product_code': int.from_bytes(data[20:24], 'little'),
+            'revision_number': int.from_bytes(data[24:28], 'little'),
+            'serial_number': int.from_bytes(data[28:32], 'little'),
+        }
+
+    @staticmethod
+    def _error_text(value: Any) -> str:
+        if isinstance(value, bytes):
+            return value.decode('utf-8', errors='replace').strip()
+        return str(value or '').strip()
+
     def read_slaves(self, timeout_sec: float = 3.0) -> List[Dict[str, Any]]:
         try:
             completed = self._runner(
@@ -78,7 +96,36 @@ class EthercatAliasManager:
         if completed.returncode != 0:
             detail = completed.stderr.strip() or completed.stdout.strip()
             raise EthercatAliasError(f'EtherCAT Alias 읽기 실패: {detail}')
-        return self.parse_slaves(completed.stdout)
+        slaves = self.parse_slaves(completed.stdout)
+        if not slaves:
+            raise EthercatAliasError('현재 연결된 EtherCAT Slave를 찾지 못했습니다.')
+        for slave in slaves:
+            position = int(slave['slave_position'])
+            try:
+                sii = self._runner(
+                    ['ethercat', 'sii_read', '-p', str(position)],
+                    check=False,
+                    capture_output=True,
+                    timeout=timeout_sec,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                raise EthercatAliasError(
+                    f'Slave Position {position} SII EEPROM 읽기 실패: {exc}'
+                ) from exc
+            if sii.returncode != 0:
+                detail = self._error_text(sii.stderr) or self._error_text(sii.stdout)
+                raise EthercatAliasError(
+                    f'Slave Position {position} SII EEPROM 읽기 실패: {detail}'
+                )
+            try:
+                identity = self.parse_sii_identity(sii.stdout)
+            except EthercatAliasError as exc:
+                raise EthercatAliasError(
+                    f'Slave Position {position} {exc}'
+                ) from exc
+            slave.update(identity)
+            slave['identity_source'] = 'physical_sii'
+        return slaves
 
     def write_alias(
         self,

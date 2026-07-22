@@ -8,7 +8,7 @@ import {
   resetMidiRuntimeValues,
   selectMidiBank,
   updateMidiBank,
-} from './api.js?v=20260715-midi-device-connect';
+} from './api.js?v=20260722-motor-config-delete';
 
 const MIDI_MAX = 16383;
 const CHANNEL_COUNT = 8;
@@ -105,6 +105,7 @@ export function createMidiMonitorController({ el }) {
   const dirtyFields = new Set();
   let editSafetyResetTimer = null;
   let editSafetyResetRunning = false;
+  let editSafetyResetDone = false;
 
   function channelsOf(nextStatus = status) {
     return Array.isArray(nextStatus?.channels) ? nextStatus.channels : [];
@@ -138,6 +139,7 @@ export function createMidiMonitorController({ el }) {
       bankNameDraft = String(nextStatus?.active_bank?.name || activeBankId || 'Bank 1');
       mappingLoaded = true;
       dirtyFields.clear();
+      editSafetyResetDone = false;
       renderRows(true);
     } else if (activeMappings.length) {
       // A physical encoder changes filter_level directly in the MIDI node.
@@ -287,11 +289,17 @@ export function createMidiMonitorController({ el }) {
   }
 
   function render() {
-    const connected = Boolean(status?.connected);
+    const deviceConnected = Boolean(status?.device_connected);
+    const inputActive = Boolean(status?.connected);
     if (el.midiConnectionState) {
-      el.midiConnectionState.textContent = connected ? '연결됨' : '연결 대기';
-      el.midiConnectionState.classList.toggle('status-ok', connected);
-      el.midiConnectionState.classList.toggle('status-bad', !connected);
+      el.midiConnectionState.textContent = deviceConnected ? '연결됨' : '연결 대기';
+      el.midiConnectionState.classList.toggle('status-ok', deviceConnected);
+      el.midiConnectionState.classList.toggle('status-bad', !deviceConnected);
+    }
+    if (el.midiInputState) {
+      el.midiInputState.textContent = inputActive ? '수신 중' : '입력 대기';
+      el.midiInputState.classList.toggle('status-ok', inputActive);
+      el.midiInputState.classList.toggle('status-bad', !inputActive);
     }
     if (el.midiMotorOutputState) {
       el.midiMotorOutputState.textContent = status?.motor_output_enabled ? '활성' : '사용 안 함';
@@ -389,11 +397,13 @@ export function createMidiMonitorController({ el }) {
   }
 
   function scheduleEditSafetyReset() {
+    if (editSafetyResetDone) return;
     if (editSafetyResetTimer !== null) window.clearTimeout(editSafetyResetTimer);
     editSafetyResetTimer = window.setTimeout(async () => {
       editSafetyResetTimer = null;
       if (editSafetyResetRunning) return;
       editSafetyResetRunning = true;
+      editSafetyResetDone = true;
       try {
         const payload = requireSuccess(await resetMidiRuntimeValues());
         setStatus({
@@ -461,6 +471,7 @@ export function createMidiMonitorController({ el }) {
     try {
       const payload = await applySaveAndVerify();
       dirtyFields.clear();
+      editSafetyResetDone = false;
       setStatus(payload, { updateMapping: true });
       window.dispatchEvent(new CustomEvent('motion-project-files-changed'));
     } catch (error) {
@@ -569,6 +580,25 @@ export function createMidiMonitorController({ el }) {
     }
   }
 
+  function resetProjectState() {
+    status = null;
+    mappingDraft = Array.from(
+      { length: CHANNEL_COUNT }, (_, channel) => defaultMapping(channel)
+    );
+    mappingLoaded = false;
+    loading = false;
+    activeBankId = '';
+    bankNameDraft = 'Bank 1';
+    banks = [];
+    dirtyFields.clear();
+    if (editSafetyResetTimer !== null) window.clearTimeout(editSafetyResetTimer);
+    editSafetyResetTimer = null;
+    editSafetyResetRunning = false;
+    editSafetyResetDone = false;
+    renderRows(true);
+    render();
+  }
+
   function bindEvents() {
     el.midiMonitorRows?.addEventListener('input', (event) => updateDraftFromRow(event.target));
     el.midiMonitorRows?.addEventListener('change', (event) => updateDraftFromRow(event.target));
@@ -592,6 +622,7 @@ export function createMidiMonitorController({ el }) {
 
   return {
     refresh,
+    resetProjectState,
     renderSnapshot: (payload) => setStatus(payload),
   };
 }

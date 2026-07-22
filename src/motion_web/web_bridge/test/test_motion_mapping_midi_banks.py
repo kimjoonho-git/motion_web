@@ -1,3 +1,5 @@
+import threading
+
 from motion_web_bridge.bridge_node import MotionWebBridge
 
 
@@ -28,6 +30,31 @@ class SelectedProjectRepository:
                 'active_files': {'motion_axis_matching': 'mapping.yaml'}
             }
         }
+
+
+def test_midi_status_timeout_never_returns_cached_state_as_live():
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._request_midi_monitor = lambda *_args, **_kwargs: {
+        'success': False,
+        'message': 'timeout',
+    }
+    bridge._midi_monitor_lock = threading.Lock()
+    bridge._midi_monitor_status = {
+        'success': True,
+        'connected': True,
+        'motor_output_enabled': True,
+        'message': 'old live state',
+    }
+    bridge._safety_status_lock = threading.Lock()
+    bridge._safety_status = {'commands_blocked': False}
+
+    result = bridge.midi_monitor_status()
+
+    assert result['success'] is False
+    assert result['node_state'] == 'stale'
+    assert result['connected'] is False
+    assert result['motor_output_enabled'] is False
+    assert '이전 상태' in result['message']
 
 
 def test_startup_project_context_delegates_to_central_reconciler():

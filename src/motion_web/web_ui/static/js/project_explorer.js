@@ -15,7 +15,7 @@ import {
   saveProjectFile,
   saveProjectMemo,
   selectProject,
-} from './api.js?v=20260720-readonly-viewer';
+} from './api.js?v=20260722-motor-config-delete';
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (character) => ({
@@ -57,6 +57,7 @@ export function createProjectExplorerController({
     projects: [], project: null, tree: [], selectedFile: null, busy: false, projectRoot: '',
     copySourceProjectId: '', copySourceTree: [], runtimeProjectId: '', memoDraft: '', memoDirty: false,
     memoError: '',
+    projectGeneration: null,
   };
 
   function memoSupported() {
@@ -363,6 +364,9 @@ export function createProjectExplorerController({
     renderControls();
     try {
       const payload = await fetchProjects();
+      if (Number.isInteger(Number(payload.project_generation))) {
+        state.projectGeneration = Number(payload.project_generation);
+      }
       state.projects = payload.projects || [];
       state.runtimeProjectId = payload.runtime_project_id || '';
       state.projectRoot = payload.project_root || '';
@@ -392,6 +396,9 @@ export function createProjectExplorerController({
     renderControls();
     try {
       const payload = await action();
+      if (Number.isInteger(Number(payload.project_generation))) {
+        state.projectGeneration = Number(payload.project_generation);
+      }
       if (payload.project) {
         const changedProject = payload.project.project_id !== state.project?.project_id;
         state.project = payload.project;
@@ -401,6 +408,9 @@ export function createProjectExplorerController({
       setMessage(successMessage);
       const list = await fetchProjects();
       state.projects = list.projects || [];
+      if (Number.isInteger(Number(list.project_generation))) {
+        state.projectGeneration = Number(list.project_generation);
+      }
       state.runtimeProjectId = list.runtime_project_id || '';
     } catch (error) {
       setMessage(error.message, true);
@@ -500,19 +510,19 @@ export function createProjectExplorerController({
         return;
       }
       await run(() => selectProject(projectId), '프로젝트 선택 완료 · 장비에는 적용되지 않았습니다');
-      await onProjectChange(state.project);
+      await onProjectChange(state.project, state.projectGeneration);
     });
     el.projectCreateButton?.addEventListener('click', async () => {
       const name = window.prompt('새 프로젝트 이름을 입력하세요', '새 모션 프로젝트');
       if (!name?.trim()) return;
       await run(() => createProject({ name: name.trim() }), '프로젝트 생성 완료');
-      await onProjectChange(state.project);
+      await onProjectChange(state.project, state.projectGeneration);
     });
     el.projectDeleteButton?.addEventListener('click', async () => {
       if (!state.project || state.busy) return;
       const expected = String(state.project.name || '');
       const entered = window.prompt(
-        `프로젝트 전체를 휴지통으로 이동합니다.\n확인하려면 프로젝트 이름을 입력하세요.\n\n${expected}`,
+        `프로젝트와 관련 파일을 복구할 수 없도록 영구 삭제합니다.\n확인하려면 프로젝트 이름을 입력하세요.\n\n${expected}`,
         '',
       );
       if (entered !== expected) {
@@ -523,6 +533,9 @@ export function createProjectExplorerController({
       renderControls();
       try {
         const result = await deleteProject(state.project.project_id);
+        if (Number.isInteger(Number(result.project_generation))) {
+          state.projectGeneration = Number(result.project_generation);
+        }
         state.projects = result.projects || [];
         state.project = null;
         state.tree = [];
@@ -530,8 +543,8 @@ export function createProjectExplorerController({
         state.copySourceProjectId = '';
         state.copySourceTree = [];
         loadMemoDraft();
-        setMessage(result.message || '프로젝트를 휴지통으로 이동했습니다');
-        await onProjectChange(null);
+        setMessage(result.message || '프로젝트와 관련 파일을 영구 삭제했습니다');
+        await onProjectChange(null, state.projectGeneration);
       } catch (error) {
         setMessage(error.message, true);
       } finally {

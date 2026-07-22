@@ -1,3 +1,28 @@
+const PROJECT_GENERATION_KEY = '__motionProjectGeneration';
+
+export function setProjectGeneration(value) {
+  const parsed = Number(value);
+  if (Number.isInteger(parsed) && parsed >= 0) {
+    window[PROJECT_GENERATION_KEY] = parsed;
+  }
+}
+
+export function getProjectGeneration() {
+  const value = Number(window[PROJECT_GENERATION_KEY]);
+  return Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+async function projectFetch(input, options = {}) {
+  const expectedGeneration = getProjectGeneration();
+  const headers = new Headers(options.headers || {});
+  if (expectedGeneration !== null) {
+    headers.set('X-Project-Generation', String(expectedGeneration));
+  }
+  const response = await window.fetch(input, { ...options, headers });
+  response.projectGenerationExpected = expectedGeneration;
+  return response;
+}
+
 async function readJson(response) {
   let payload = null;
   try {
@@ -8,6 +33,44 @@ async function readJson(response) {
     }
     throw error;
   }
+  const expected = response.projectGenerationExpected;
+  const headerGeneration = Number(response.headers.get('X-Project-Generation'));
+  const payloadGeneration = Number(payload?.project_generation);
+  const responseGeneration = Number.isInteger(payloadGeneration)
+    ? payloadGeneration
+    : (Number.isInteger(headerGeneration) ? headerGeneration : null);
+  const previousGeneration = Number(payload?.previous_project_generation);
+  const transition = Number.isInteger(expected)
+    && Number.isInteger(previousGeneration)
+    && previousGeneration === expected
+    && Number.isInteger(payloadGeneration)
+    && payloadGeneration > expected;
+  const externalBoundary = response.status === 409
+    && payload?.stale_project_generation === true
+    && Number.isInteger(expected)
+    && Number.isInteger(responseGeneration)
+    && responseGeneration > expected;
+  if (externalBoundary) {
+    setProjectGeneration(responseGeneration);
+    const error = new Error(payload?.message || '프로젝트가 다른 브라우저에서 변경되었습니다');
+    error.projectBoundaryGeneration = responseGeneration;
+    throw error;
+  }
+  if (
+    !transition
+    && Number.isInteger(expected)
+    && (
+      (Number.isInteger(getProjectGeneration()) && expected !== getProjectGeneration())
+      || (Number.isInteger(responseGeneration) && responseGeneration !== expected)
+    )
+  ) {
+    const error = new Error('이전 프로젝트의 늦은 응답을 폐기했습니다');
+    error.staleProjectResponse = true;
+    throw error;
+  }
+  if (transition || getProjectGeneration() === null) {
+    setProjectGeneration(responseGeneration);
+  }
   if (!response.ok) {
     const detail = payload?.message || payload?.detail || `HTTP ${response.status}`;
     throw new Error(detail);
@@ -16,12 +79,12 @@ async function readJson(response) {
 }
 
 export async function fetchStatusSnapshot() {
-  const response = await fetch('/api/status');
+  const response = await projectFetch('/api/status');
   return readJson(response);
 }
 
 export async function restartManagedProgram() {
-  const response = await fetch('/api/system/program/restart', { method: 'POST' });
+  const response = await projectFetch('/api/system/program/restart', { method: 'POST' });
   return readJson(response);
 }
 
@@ -31,7 +94,7 @@ async function motionStudioRequest(path = '', method = 'GET', payload = null) {
     options.headers = { 'Content-Type': 'application/json' };
     options.body = JSON.stringify(payload);
   }
-  const response = await fetch(`/api/motion-studio${path}`, options);
+  const response = await projectFetch(`/api/motion-studio${path}`, options);
   return readJson(response);
 }
 
@@ -60,17 +123,17 @@ export async function fetchMotorEvents(category = 'all', limit = 300, fileName =
     limit: String(limit),
     file_name: String(fileName || 'all'),
   });
-  const response = await fetch(`/api/motor-events?${query.toString()}`);
+  const response = await projectFetch(`/api/motor-events?${query.toString()}`);
   return readJson(response);
 }
 
 export async function clearMotorEvents() {
-  const response = await fetch('/api/motor-events', { method: 'DELETE' });
+  const response = await projectFetch('/api/motor-events', { method: 'DELETE' });
   return readJson(response);
 }
 
 export async function deleteMotorEventLogFile(fileName) {
-  const response = await fetch(
+  const response = await projectFetch(
     `/api/motor-events/files/${encodeURIComponent(fileName)}`,
     { method: 'DELETE' },
   );
@@ -78,7 +141,7 @@ export async function deleteMotorEventLogFile(fileName) {
 }
 
 export async function setMonitoringEnabled(enabled) {
-  const response = await fetch('/api/monitoring/enabled', {
+  const response = await projectFetch('/api/monitoring/enabled', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ enabled }),
@@ -87,22 +150,27 @@ export async function setMonitoringEnabled(enabled) {
 }
 
 export async function requestMotorScan() {
-  const response = await fetch('/api/motors/scan', { method: 'POST' });
+  const response = await projectFetch('/api/motors/scan', { method: 'POST' });
   return readJson(response);
 }
 
 export async function requestAcServoScan() {
-  const response = await fetch('/api/motors/scan/ac-servo', { method: 'POST' });
+  const response = await projectFetch('/api/motors/scan/ac-servo', { method: 'POST' });
   return readJson(response);
 }
 
 export async function requestDynamixelScan() {
-  const response = await fetch('/api/motors/scan/dynamixel', { method: 'POST' });
+  const response = await projectFetch('/api/motors/scan/dynamixel', { method: 'POST' });
+  return readJson(response);
+}
+
+export async function fetchMotorScanProgress() {
+  const response = await projectFetch('/api/motors/scan/progress');
   return readJson(response);
 }
 
 export async function writeEthercatAlias(payload) {
-  const response = await fetch('/api/motors/ethercat-alias', {
+  const response = await projectFetch('/api/motors/ethercat-alias', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -111,12 +179,12 @@ export async function writeEthercatAlias(payload) {
 }
 
 export async function fetchMotorConfig() {
-  const response = await fetch('/api/motor-config');
+  const response = await projectFetch('/api/motor-config');
   return readJson(response);
 }
 
 export async function saveMotorConfig(payload) {
-  const response = await fetch('/api/motor-config', {
+  const response = await projectFetch('/api/motor-config', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -124,18 +192,23 @@ export async function saveMotorConfig(payload) {
   return readJson(response);
 }
 
+export async function deleteMotorConfig() {
+  const response = await projectFetch('/api/motor-config', { method: 'DELETE' });
+  return readJson(response);
+}
+
 export async function applyMotorConfig() {
-  const response = await fetch('/api/motor-config/apply', { method: 'POST' });
+  const response = await projectFetch('/api/motor-config/apply', { method: 'POST' });
   return readJson(response);
 }
 
 export async function fetchProjects() {
-  const response = await fetch('/api/projects');
+  const response = await projectFetch('/api/projects');
   return readJson(response);
 }
 
 export async function createProject(payload) {
-  const response = await fetch('/api/projects', {
+  const response = await projectFetch('/api/projects', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -144,14 +217,14 @@ export async function createProject(payload) {
 }
 
 export async function deleteProject(projectId) {
-  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}`, {
+  const response = await projectFetch(`/api/projects/${encodeURIComponent(projectId)}`, {
     method: 'DELETE',
   });
   return readJson(response);
 }
 
 export async function copyProjectFile(projectId, payload) {
-  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/copy-file`, {
+  const response = await projectFetch(`/api/projects/${encodeURIComponent(projectId)}/copy-file`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -160,19 +233,19 @@ export async function copyProjectFile(projectId, payload) {
 }
 
 export async function fetchProject(projectId) {
-  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}`);
+  const response = await projectFetch(`/api/projects/${encodeURIComponent(projectId)}`);
   return readJson(response);
 }
 
 export async function selectProject(projectId) {
-  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/select`, {
+  const response = await projectFetch(`/api/projects/${encodeURIComponent(projectId)}/select`, {
     method: 'POST',
   });
   return readJson(response);
 }
 
 export async function saveProjectMemo(projectId, memo) {
-  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}`, {
+  const response = await projectFetch(`/api/projects/${encodeURIComponent(projectId)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ memo }),
@@ -185,7 +258,7 @@ function projectFileUrl(projectId, category, fileName) {
 }
 
 export async function importProjectFile(projectId, payload) {
-  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/files`, {
+  const response = await projectFetch(`/api/projects/${encodeURIComponent(projectId)}/files`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -194,20 +267,20 @@ export async function importProjectFile(projectId, payload) {
 }
 
 export async function fetchProjectFile(projectId, category, fileName) {
-  const response = await fetch(projectFileUrl(projectId, category, fileName));
+  const response = await projectFetch(projectFileUrl(projectId, category, fileName));
   return readJson(response);
 }
 
 export async function fetchReadOnlyProjectFile(projectId, relativePath) {
   const query = new URLSearchParams({ relative_path: relativePath });
-  const response = await fetch(
+  const response = await projectFetch(
     `/api/projects/${encodeURIComponent(projectId)}/tree-file?${query.toString()}`,
   );
   return readJson(response);
 }
 
 export async function saveProjectFile(projectId, category, fileName, content) {
-  const response = await fetch(projectFileUrl(projectId, category, fileName), {
+  const response = await projectFetch(projectFileUrl(projectId, category, fileName), {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ content }),
@@ -216,7 +289,7 @@ export async function saveProjectFile(projectId, category, fileName, content) {
 }
 
 export async function renameProjectFile(projectId, category, fileName, newName) {
-  const response = await fetch(`${projectFileUrl(projectId, category, fileName)}/rename`, {
+  const response = await projectFetch(`${projectFileUrl(projectId, category, fileName)}/rename`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ new_name: newName }),
@@ -225,21 +298,21 @@ export async function renameProjectFile(projectId, category, fileName, newName) 
 }
 
 export async function activateProjectFile(projectId, category, fileName) {
-  const response = await fetch(`${projectFileUrl(projectId, category, fileName)}/active`, {
+  const response = await projectFetch(`${projectFileUrl(projectId, category, fileName)}/active`, {
     method: 'POST',
   });
   return readJson(response);
 }
 
 export async function openProjectFileEditor(projectId, category, fileName) {
-  const response = await fetch(`${projectFileUrl(projectId, category, fileName)}/open-editor`, {
+  const response = await projectFetch(`${projectFileUrl(projectId, category, fileName)}/open-editor`, {
     method: 'POST',
   });
   return readJson(response);
 }
 
 export async function deleteProjectFile(projectId, category, fileName) {
-  const response = await fetch(projectFileUrl(projectId, category, fileName), {
+  const response = await projectFetch(projectFileUrl(projectId, category, fileName), {
     method: 'DELETE',
   });
   return readJson(response);
@@ -250,17 +323,17 @@ export function projectFileDownloadUrl(projectId, category, fileName) {
 }
 
 export async function fetchMotionFiles() {
-  const response = await fetch('/api/motion-files');
+  const response = await projectFetch('/api/motion-files');
   return readJson(response);
 }
 
 export async function fetchMotionFile(fileId) {
-  const response = await fetch(`/api/motion-files/${encodeURIComponent(fileId)}`);
+  const response = await projectFetch(`/api/motion-files/${encodeURIComponent(fileId)}`);
   return readJson(response);
 }
 
 export async function uploadMotionFile(payload) {
-  const response = await fetch('/api/motion-files/upload', {
+  const response = await projectFetch('/api/motion-files/upload', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -269,24 +342,24 @@ export async function uploadMotionFile(payload) {
 }
 
 export async function deleteMotionFile(fileId) {
-  const response = await fetch(`/api/motion-files/${encodeURIComponent(fileId)}`, {
+  const response = await projectFetch(`/api/motion-files/${encodeURIComponent(fileId)}`, {
     method: 'DELETE',
   });
   return readJson(response);
 }
 
 export async function fetchMotionMappings() {
-  const response = await fetch('/api/motion-mappings');
+  const response = await projectFetch('/api/motion-mappings');
   return readJson(response);
 }
 
 export async function fetchMotionMapping(fileId) {
-  const response = await fetch(`/api/motion-mappings/${encodeURIComponent(fileId)}`);
+  const response = await projectFetch(`/api/motion-mappings/${encodeURIComponent(fileId)}`);
   return readJson(response);
 }
 
 export async function saveMotionMapping(payload) {
-  const response = await fetch('/api/motion-mappings', {
+  const response = await projectFetch('/api/motion-mappings', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -295,7 +368,7 @@ export async function saveMotionMapping(payload) {
 }
 
 export async function validateMotionMapping(payload) {
-  const response = await fetch('/api/motion-mappings/validate', {
+  const response = await projectFetch('/api/motion-mappings/validate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -304,19 +377,19 @@ export async function validateMotionMapping(payload) {
 }
 
 export async function deleteMotionMapping(fileId) {
-  const response = await fetch(`/api/motion-mappings/${encodeURIComponent(fileId)}`, {
+  const response = await projectFetch(`/api/motion-mappings/${encodeURIComponent(fileId)}`, {
     method: 'DELETE',
   });
   return readJson(response);
 }
 
 export async function fetchMotionRunStatus() {
-  const response = await fetch('/api/motion-run/status');
+  const response = await projectFetch('/api/motion-run/status');
   return readJson(response);
 }
 
 export async function checkMotionRun(payload) {
-  const response = await fetch('/api/motion-run/check', {
+  const response = await projectFetch('/api/motion-run/check', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -325,7 +398,7 @@ export async function checkMotionRun(payload) {
 }
 
 export async function initializeMotionRun(payload) {
-  const response = await fetch('/api/motion-run/initialize', {
+  const response = await projectFetch('/api/motion-run/initialize', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -334,7 +407,7 @@ export async function initializeMotionRun(payload) {
 }
 
 export async function startMotionRun(payload) {
-  const response = await fetch('/api/motion-run/start', {
+  const response = await projectFetch('/api/motion-run/start', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -343,27 +416,27 @@ export async function startMotionRun(payload) {
 }
 
 export async function stopMotionRun() {
-  const response = await fetch('/api/motion-run/stop', { method: 'POST' });
+  const response = await projectFetch('/api/motion-run/stop', { method: 'POST' });
   return readJson(response);
 }
 
 export async function requestMotionSafetyStop() {
-  const response = await fetch('/api/safety/motion-stop', { method: 'POST' });
+  const response = await projectFetch('/api/safety/motion-stop', { method: 'POST' });
   return readJson(response);
 }
 
 export async function requestEmergencySafetyStop() {
-  const response = await fetch('/api/safety/emergency-stop', { method: 'POST' });
+  const response = await projectFetch('/api/safety/emergency-stop', { method: 'POST' });
   return readJson(response);
 }
 
 export async function fetchMidiMonitor() {
-  const response = await fetch('/api/midi-monitor');
+  const response = await projectFetch('/api/midi-monitor');
   return readJson(response);
 }
 
 export async function saveMidiMapping(payload) {
-  const response = await fetch('/api/midi-monitor/mapping', {
+  const response = await projectFetch('/api/midi-monitor/mapping', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -372,7 +445,7 @@ export async function saveMidiMapping(payload) {
 }
 
 export async function createMidiBank(payload = {}) {
-  const response = await fetch('/api/midi-monitor/banks', {
+  const response = await projectFetch('/api/midi-monitor/banks', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -381,14 +454,14 @@ export async function createMidiBank(payload = {}) {
 }
 
 export async function selectMidiBank(bankId) {
-  const response = await fetch(`/api/midi-monitor/banks/${encodeURIComponent(bankId)}/select`, {
+  const response = await projectFetch(`/api/midi-monitor/banks/${encodeURIComponent(bankId)}/select`, {
     method: 'POST',
   });
   return readJson(response);
 }
 
 export async function updateMidiBank(bankId, payload) {
-  const response = await fetch(`/api/midi-monitor/banks/${encodeURIComponent(bankId)}`, {
+  const response = await projectFetch(`/api/midi-monitor/banks/${encodeURIComponent(bankId)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -397,34 +470,34 @@ export async function updateMidiBank(bankId, payload) {
 }
 
 export async function deleteMidiBank(bankId) {
-  const response = await fetch(`/api/midi-monitor/banks/${encodeURIComponent(bankId)}`, {
+  const response = await projectFetch(`/api/midi-monitor/banks/${encodeURIComponent(bankId)}`, {
     method: 'DELETE',
   });
   return readJson(response);
 }
 
 export async function loadMidiBanksFromFile() {
-  const response = await fetch('/api/midi-monitor/banks/file/load', { method: 'POST' });
+  const response = await projectFetch('/api/midi-monitor/banks/file/load', { method: 'POST' });
   return readJson(response);
 }
 
 export async function resetMidiRuntimeValues() {
-  const response = await fetch('/api/midi-monitor/runtime/reset', { method: 'POST' });
+  const response = await projectFetch('/api/midi-monitor/runtime/reset', { method: 'POST' });
   return readJson(response);
 }
 
 export async function connectMidiDevice() {
-  const response = await fetch('/api/midi-monitor/device/connect', { method: 'POST' });
+  const response = await projectFetch('/api/midi-monitor/device/connect', { method: 'POST' });
   return readJson(response);
 }
 
 export async function disconnectMidiDevice() {
-  const response = await fetch('/api/midi-monitor/device/disconnect', { method: 'POST' });
+  const response = await projectFetch('/api/midi-monitor/device/disconnect', { method: 'POST' });
   return readJson(response);
 }
 
 export async function requestAcServoJog(payload) {
-  const response = await fetch('/api/motion-test/ac-servo/jog', {
+  const response = await projectFetch('/api/motion-test/ac-servo/jog', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -433,7 +506,7 @@ export async function requestAcServoJog(payload) {
 }
 
 export async function requestDynamixelJog(payload) {
-  const response = await fetch('/api/motion-test/dynamixel/jog', {
+  const response = await projectFetch('/api/motion-test/dynamixel/jog', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -442,7 +515,7 @@ export async function requestDynamixelJog(payload) {
 }
 
 export async function requestAcServoAction(payload) {
-  const response = await fetch('/api/motion-test/ac-servo/action', {
+  const response = await projectFetch('/api/motion-test/ac-servo/action', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -451,7 +524,7 @@ export async function requestAcServoAction(payload) {
 }
 
 export async function requestDynamixelAction(payload) {
-  const response = await fetch('/api/motion-test/dynamixel/action', {
+  const response = await projectFetch('/api/motion-test/dynamixel/action', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -460,7 +533,7 @@ export async function requestDynamixelAction(payload) {
 }
 
 export async function requestAcServoControl(payload) {
-  const response = await fetch('/api/motion-test/ac-servo/control', {
+  const response = await projectFetch('/api/motion-test/ac-servo/control', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),

@@ -230,3 +230,31 @@ def test_ac_identity_metadata_round_trips_in_project_config(tmp_path):
     assert restored['identity']['ethercat_alias'] == 403
     assert restored['identity']['rotary_alias'] == 3
     assert restored['identity']['slave_position'] == 1
+
+
+def test_zero_alias_ac_axes_round_trip_with_unique_slave_ids(tmp_path):
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge.workspace_root = tmp_path
+    motors = []
+    for axis in range(5):
+        motor = _registry_motor(axis, transport='ethercat')
+        motor['identity'].update({
+            'ethercat_alias': None,
+            'rotary_alias': 0,
+            'slave_position': axis,
+        })
+        motor['config']['alias'] = None
+        motor['config']['position'] = axis
+        motors.append(motor)
+
+    config = bridge._motor_config_from_registry(
+        {'motors': motors}, bridge._default_motor_config()
+    )
+    restored = bridge._registry_from_motor_config(config)['motors']
+
+    assert [slave['alias'] for slave in config['masters'][0]['slaves']] == [0] * 5
+    assert [slave['position'] for slave in config['masters'][0]['slaves']] == list(range(5))
+    assert [motor['id'] for motor in restored] == [
+        f'ac_servo_ethercat_master_0_slave_{axis}' for axis in range(5)
+    ]
+    assert len({motor['id'] for motor in restored}) == 5
