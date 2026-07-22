@@ -40,6 +40,7 @@ class MotionMappingManager(Node):
         self.mappings_dir = self.motion_projects_dir
         self.motion_files_dir = self.motion_projects_dir
         self._execution_context: Dict[str, Any] = {}
+        self._project_generation = 0
         self.request_topic = str(
             self.declare_parameter(
                 'request_topic',
@@ -78,15 +79,30 @@ class MotionMappingManager(Node):
             return
 
         request_id = str(request.get('request_id') or '')
+        project_generation = request.get('project_generation')
         command = str(request.get('command') or '').strip()
         payload = request.get('payload')
         if not isinstance(payload, dict):
             payload = {}
 
         try:
-            self._select_project(payload)
+            self._validate_request_generation(command, project_generation, payload)
+            if command == 'invalidate_context':
+                self.mappings_dir = self.motion_projects_dir
+                self.motion_files_dir = self.motion_projects_dir
+                self._execution_context = {}
+                response = {
+                    'success': True,
+                    'message': '모션축 설정 실행 컨텍스 폐기',
+                    'project_id': '',
+                    'context_id': '',
+                }
+            else:
+                self._select_project(payload)
             if command == 'apply_context':
                 response = self._apply_context(payload)
+            elif command == 'invalidate_context':
+                pass
             elif command == 'list':
                 response = self._list_mappings()
             elif command == 'load':
@@ -119,7 +135,28 @@ class MotionMappingManager(Node):
             }
 
         response['request_id'] = request_id
+        response['project_generation'] = project_generation
         self._publish(response)
+
+    def _validate_request_generation(
+        self, command: str, request_generation: Any, payload: Dict[str, Any]
+    ) -> int:
+        try:
+            generation = int(request_generation)
+            payload_generation = int(payload.get('project_generation'))
+        except (TypeError, ValueError) as exc:
+            raise ValueError('프로젝트 세대 번호가 필요합니다') from exc
+        if generation < 1 or payload_generation != generation:
+            raise ValueError('요청의 프로젝트 세대 번호가 일치하지 않습니다')
+        current = int(getattr(self, '_project_generation', 0) or 0)
+        if command in {'apply_context', 'invalidate_context'}:
+            if generation < current:
+                raise ValueError('이전 프로젝트 세대의 요청을 폐기했습니다')
+            self._project_generation = generation
+            return generation
+        if generation != current:
+            raise ValueError('현재 프로젝트 세대와 다른 요청을 폐기했습니다')
+        return generation
 
     def _select_project(self, payload: Dict[str, Any]) -> str:
         project_id = str(payload.get('project_id') or '').strip()
@@ -160,6 +197,7 @@ class MotionMappingManager(Node):
         self._execution_context = {
             'context_id': context_id,
             'project_id': str(payload.get('project_id') or ''),
+            'project_generation': int(payload.get('project_generation') or 0),
             'mapping_file_id': path.name,
             'mapping_sha256': actual_sha,
         }
@@ -223,6 +261,7 @@ class MotionMappingManager(Node):
             mapping_payload = payload
 
         file_id = payload.get('file_id') or mapping_payload.get('file_id')
+        expected_revision = str(payload.get('base_revision') or '').strip()
         fallback_name = Path(str(file_id or '')).stem if file_id else ''
         mapping = self._normalize_mapping(mapping_payload, fallback_name=fallback_name)
         validation = self._validate_mapping(mapping)
@@ -247,6 +286,22 @@ class MotionMappingManager(Node):
                 source_path = self._mapping_file_path(file_id)
             except ValueError:
                 source_path = None
+        if source_path is not None and 'base_revision' in payload:
+            actual_revision = hashlib.sha256(source_path.read_bytes()).hexdigest()
+            if not expected_revision:
+                raise ValueError(
+                    '모션축 설정 파일 버전 정보가 없습니다. 파일을 다시 불러온 뒤 저장하세요'
+                )
+            if expected_revision != actual_revision:
+                raise ValueError(
+                    '모션축 설정 파일이 화면을 불러온 뒤 변경됐습니다. '
+                    '현재 파일 보호를 위해 저장을 거부했습니다. 파일을 다시 불러오세요'
+                )
+        elif expected_revision:
+            raise ValueError(
+                '화면에서 불러온 모션축 설정 파일이 현재 존재하지 않습니다. '
+                '목록을 새로고침하세요'
+            )
         path = self._new_or_existing_mapping_path(file_id, mapping.get('name'))
         midi_banks = self._midi_banks_from_file(source_path or path)
         if midi_banks is not None:
@@ -393,6 +448,7 @@ class MotionMappingManager(Node):
             'updated_at': stat.st_mtime,
             'valid': valid,
             'message': message,
+            'revision': hashlib.sha256(path.read_bytes()).hexdigest(),
             'name': mapping.get('name') if isinstance(mapping, dict) else path.stem,
             'motion_file_id': mapping.get('motion_file_id') if isinstance(mapping, dict) else '',
             'mapping_count': len(mappings),

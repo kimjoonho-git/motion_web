@@ -33,7 +33,6 @@ constexpr uint8_t kSelectNoteStart = 24;
 constexpr uint8_t kTouchNoteStart = 104;
 constexpr uint8_t kDisplayBottomRowOffset = 56;
 constexpr std::size_t kDisplayCharsPerChannel = 7;
-constexpr int32_t kFaderSyncTolerance = 16;
 
 std::string upper(std::string value)
 {
@@ -86,6 +85,8 @@ public:
     hold_fader_on_release_ = declare_parameter<bool>("hold_fader_on_release", true);
     movement_release_delay_ = std::chrono::milliseconds(std::max<int64_t>(
       50, declare_parameter<int64_t>("movement_release_delay_ms", 300)));
+    fader_command_settle_delay_ = std::chrono::milliseconds(std::max<int64_t>(
+      100, declare_parameter<int64_t>("fader_command_settle_ms", 1000)));
     const auto publish_period_ms = std::max<int64_t>(
       1, declare_parameter<int64_t>("publish_period_ms", 5));
     publisher_ = create_publisher<Midi>(
@@ -178,6 +179,23 @@ private:
       midi_output_ = std::move(output);
       device_connected_ = true;
       connection_message_ = "X-Touch connected";
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        // A newly opened MIDI port is a new hardware session. Never keep a
+        // pressed button or an unfinished motorized-fader synchronization
+        // from the previous port instance.
+        touch_.fill(false);
+        fader_.fill(0);
+        seen_.fill(false);
+        rec_pressed_.fill(false);
+        select_pressed_.fill(false);
+        changed_while_touched_.fill(false);
+        hold_pending_.fill(false);
+        movement_active_.fill(false);
+        commanded_fader_.fill(0);
+        fader_command_syncing_.fill(false);
+        input_event_seen_ = false;
+      }
       last_select_led_.fill(-1);
       last_rec_led_.fill(-1);
       last_dial_led_.fill(-1);
@@ -264,41 +282,24 @@ private:
     const uint8_t data1 = bytes[1];
     const uint8_t data2 = bytes[2];
     std::lock_guard<std::mutex> lock(mutex_);
+    input_event_seen_ = true;
+    last_input_event_at_ = std::chrono::steady_clock::now();
     if (status == 0xE0 && channel < kChannelCount) {
       const int32_t fader_value =
         std::clamp<int32_t>((data2 << 7) | data1, 0, kFaderMax);
-      const int32_t previous_value = fader_[channel];
       fader_[channel] = fader_value;
+      // X-Touch does not echo host-driven motor moves on this input port.
+      // Any received pitch-bend is therefore fresh physical user input and
+      // cancels the command-settle estimate for this channel.
+      fader_command_syncing_[channel] = false;
       seen_[channel] = true;
       const auto now = std::chrono::steady_clock::now();
-      bool commanded_fader_feedback = false;
-      if (touch_[channel]) {
-        fader_sync_active_[channel] = false;
-      } else if (fader_sync_active_[channel]) {
-        if (now >= fader_sync_deadline_[channel]) {
-          fader_sync_active_[channel] = false;
-        } else {
-          const int32_t start = fader_sync_start_[channel];
-          const int32_t target = fader_sync_target_[channel];
-          const int32_t lower = std::min(start, target) - kFaderSyncTolerance;
-          const int32_t upper = std::max(start, target) + kFaderSyncTolerance;
-          const bool inside_commanded_path = fader_value >= lower && fader_value <= upper;
-          const bool progressing = target >= start ?
-            fader_value + kFaderSyncTolerance >= previous_value :
-            fader_value - kFaderSyncTolerance <= previous_value;
-          commanded_fader_feedback = inside_commanded_path && progressing;
-          if (!commanded_fader_feedback ||
-            std::abs(fader_value - target) <= kFaderSyncTolerance)
-          {
-            fader_sync_active_[channel] = false;
-          }
-        }
-      }
-      if (!commanded_fader_feedback) {
-        changed_while_touched_[channel] = true;
-        movement_active_[channel] = true;
-        movement_deadline_[channel] = now + movement_release_delay_;
-      }
+      // X-Touch host-driven motor movement is not echoed as a pitch-bend
+      // input on the connected port. Therefore every received pitch-bend is
+      // a real surface input and must never be swallowed as output feedback.
+      changed_while_touched_[channel] = true;
+      movement_active_[channel] = true;
+      movement_deadline_[channel] = now + movement_release_delay_;
       // Do not feed a position back while the user is moving the fader.
       // Even an immediate echo can make the motor resist the hand. The final
       // position is sent once after the touch-release event below.
@@ -317,10 +318,6 @@ private:
       const std::size_t touch_channel = data1 - kTouchNoteStart;
       const bool was_touched = touch_[touch_channel];
       touch_[touch_channel] = status == 0x90 && data2 > 0;
-      if (touch_[touch_channel]) {
-        // A physical hand always owns the fader, even during motor synchronization.
-        fader_sync_active_[touch_channel] = false;
-      }
       seen_[touch_channel] = seen_[touch_channel] || touch_[touch_channel];
       if (hold_fader_on_release_ && was_touched && !touch_[touch_channel] &&
         changed_while_touched_[touch_channel])
@@ -338,7 +335,9 @@ private:
         const bool led_echo =
           std::chrono::steady_clock::now() < rec_led_suppress_until_[button_channel] &&
           pressed == rec_led_expected_[button_channel];
-        if (!led_echo) {
+        // As with SELECT, a release must never be suppressed by an LED-OFF
+        // echo window or the next physical press has no rising edge.
+        if (!pressed || !led_echo) {
           rec_pressed_[button_channel] = pressed;
         }
       } else if (
@@ -348,7 +347,10 @@ private:
         const bool led_echo =
           std::chrono::steady_clock::now() < select_led_suppress_until_[button_channel] &&
           pressed == select_led_expected_[button_channel];
-        if (!led_echo) {
+        // Always accept Note-OFF. Suppressing a quick physical release after
+        // SELECT LED-OFF leaves this channel latched and prevents the next
+        // physical press from producing a rising edge.
+        if (!pressed || !led_echo) {
           select_pressed_[button_channel] = pressed;
         }
       }
@@ -404,7 +406,7 @@ private:
       // Send it before cosmetic LED/LCD feedback so display traffic cannot
       // delay or starve the physical zero command.
       if (fader_position >= 0) {
-        send_fader_position(channel, fader_position);
+        send_commanded_fader_position(channel, fader_position);
       }
       if (last_select_led_[channel] != static_cast<int32_t>(selected)) {
         send_button_led(kSelectNoteStart + channel, selected);
@@ -507,28 +509,42 @@ private:
       return;
     }
     value = std::clamp<int32_t>(value, 0, kFaderMax);
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      // Suppress only the motor-driven path to this target. A physical touch,
-      // motion outside that path, reaching the target, or the safety timeout
-      // immediately returns ownership to the user.
-      const bool retrying_same_target =
-        fader_sync_active_[channel] && fader_sync_target_[channel] == value;
-      if (!retrying_same_target) {
-        fader_sync_start_[channel] = fader_[channel];
-        fader_sync_target_[channel] = value;
-        fader_sync_active_[channel] =
-          std::abs(fader_sync_start_[channel] - value) > kFaderSyncTolerance;
-        fader_sync_deadline_[channel] =
-          std::chrono::steady_clock::now() + std::chrono::milliseconds(1500);
-      }
-    }
     std::vector<unsigned char> bytes = {
       static_cast<unsigned char>(0xE0 | (channel & 0x0F)),
       static_cast<unsigned char>(value & 0x7F),
       static_cast<unsigned char>((value >> 7) & 0x7F),
     };
     send_message(std::move(bytes), "fader hold");
+  }
+
+  void send_commanded_fader_position(std::size_t channel, int32_t value)
+  {
+    if (!midi_output_ || !midi_output_->isPortOpen() || channel >= kChannelCount) {
+      return;
+    }
+    value = std::clamp<int32_t>(value, 0, kFaderMax);
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (
+        !fader_command_syncing_[channel] && fader_[channel] == value &&
+        !touch_[channel] && !movement_active_[channel])
+      {
+        // The reported state already matches. Still transmit the command so
+        // a newly reconnected surface is driven to the requested position,
+        // but do not create an artificial extra busy interval.
+        commanded_fader_[channel] = value;
+      } else {
+      // Repeated policy retries for the same target must not restart the
+      // settle timer forever. A new target starts a new settle interval.
+        if (!fader_command_syncing_[channel] || commanded_fader_[channel] != value) {
+          commanded_fader_[channel] = value;
+          fader_command_deadline_[channel] =
+            std::chrono::steady_clock::now() + fader_command_settle_delay_;
+        }
+        fader_command_syncing_[channel] = true;
+      }
+    }
+    send_fader_position(channel, value);
   }
 
   void publish_state()
@@ -543,6 +559,19 @@ private:
       const auto now = std::chrono::steady_clock::now();
       std::array<bool, kChannelCount> input_active{};
       for (std::size_t channel = 0; channel < kChannelCount; ++channel) {
+        if (
+          fader_command_syncing_[channel] &&
+          now >= fader_command_deadline_[channel] &&
+          !touch_[channel] && !movement_active_[channel])
+        {
+          // The surface provides no position echo for host-driven movement.
+          // After a full settle interval without physical input, report the
+          // commanded target as settled. Physical input always cancels this
+          // estimate in handle_midi().
+          fader_[channel] = commanded_fader_[channel];
+          seen_[channel] = true;
+          fader_command_syncing_[channel] = false;
+        }
         if (movement_active_[channel] && now >= movement_deadline_[channel]) {
           movement_active_[channel] = false;
           // Some X-Touch modes do not report the expected touch note. In
@@ -581,9 +610,18 @@ private:
         stream << "],\"fader_syncing\":[";
         for (std::size_t channel = 0; channel < kChannelCount; ++channel) {
           if (channel > 0) stream << ',';
-          stream << (fader_sync_active_[channel] ? "true" : "false");
+          stream << (fader_command_syncing_[channel] ? "true" : "false");
         }
-        stream << "]}";
+        stream << "],\"input_event_seen\":"
+               << (input_event_seen_ ? "true" : "false")
+               << ",\"last_input_event_age_ms\":";
+        if (input_event_seen_) {
+          stream << std::chrono::duration_cast<std::chrono::milliseconds>(
+            now - last_input_event_at_).count();
+        } else {
+          stream << -1;
+        }
+        stream << '}';
         input_state_msg.data = stream.str();
         publish_input_state = true;
         next_input_state_publish_ = now + std::chrono::milliseconds(20);
@@ -626,12 +664,12 @@ private:
   std::array<bool, kChannelCount> changed_while_touched_{};
   std::array<bool, kChannelCount> hold_pending_{};
   std::array<bool, kChannelCount> movement_active_{};
+  std::array<int32_t, kChannelCount> commanded_fader_{};
+  std::array<bool, kChannelCount> fader_command_syncing_{};
+  std::array<std::chrono::steady_clock::time_point, kChannelCount>
+    fader_command_deadline_{};
   std::array<std::chrono::steady_clock::time_point, kChannelCount>
     movement_deadline_{};
-  std::array<bool, kChannelCount> fader_sync_active_{};
-  std::array<int32_t, kChannelCount> fader_sync_start_{};
-  std::array<int32_t, kChannelCount> fader_sync_target_{};
-  std::array<std::chrono::steady_clock::time_point, kChannelCount> fader_sync_deadline_{};
   std::array<std::chrono::steady_clock::time_point, kChannelCount>
     select_led_suppress_until_{};
   std::array<std::chrono::steady_clock::time_point, kChannelCount>
@@ -644,10 +682,13 @@ private:
   std::array<std::string, kChannelCount> last_display_top_{};
   std::array<std::string, kChannelCount> last_display_bottom_{};
   std::chrono::milliseconds movement_release_delay_{300};
+  std::chrono::milliseconds fader_command_settle_delay_{1000};
   std::chrono::steady_clock::time_point next_input_state_publish_{};
+  std::chrono::steady_clock::time_point last_input_event_at_{};
   uint8_t display_device_id_{0x15};
   bool hold_fader_on_release_{true};
   bool device_connected_{false};
+  bool input_event_seen_{false};
   std::string connection_message_{"X-Touch disconnected"};
 };
 

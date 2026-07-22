@@ -1,4 +1,9 @@
+import json
+import tempfile
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from motion_state_monitor.monitor_node import MotionStateMonitor
 
@@ -23,6 +28,40 @@ class ConnectionStateTest(unittest.TestCase):
             self.assertEqual(motor['connection_state'], 'online')
             self.assertTrue(motor['connection_connected'])
             self.assertEqual(motor['connection_source'], 'runtime_topic')
+
+    def test_internal_limit_bit_is_reported_for_ac_servo(self):
+        self.monitor._motor_metadata = {1: {'motor_type': 'minas'}}
+        self.monitor._metadata_for = lambda _axis: {'motor_type': 'minas'}
+        message = SimpleNamespace(
+            statusword=[0x0E37],
+            position=[0.0],
+            velocity=[0.0],
+            effort=[0.0],
+            errorcode=[0],
+            controlword=[0x000F],
+        )
+
+        motor = self.monitor._motor_from_status(message, 0, 1, 10.0)
+
+        self.assertTrue(motor['internal_limit_active'])
+        self.assertIn('Internal limit active', motor['status_text'])
+
+    def test_high_rate_feedback_updates_freshness_without_reprocessing_axes(self):
+        self.monitor.monitoring_enabled = True
+        self.monitor.feedback_process_hz = 100.0
+        self.monitor._last_motor_status_at = 10.0
+        self.monitor._last_motor_status_processed_at = 10.0
+        self.monitor.max_motors = 50
+        self.monitor._motor_from_status = lambda *_args: self.fail(
+            'feedback inside the 100 Hz window must not be converted again'
+        )
+        message = SimpleNamespace(controller_index=[0])
+
+        with patch('motion_state_monitor.monitor_node.time.time', return_value=10.005):
+            self.monitor._motor_status_callback(message)
+
+        self.assertEqual(self.monitor._last_motor_status_at, 10.005)
+        self.assertEqual(self.monitor._last_motor_status_processed_at, 10.0)
 
     def test_bus_discovery_does_not_override_runtime_offline(self):
         motors = [{
@@ -75,7 +114,7 @@ class ConnectionStateTest(unittest.TestCase):
             {'available': False, 'skipped': True, 'slaves': []},
             {
                 'available': True,
-                'mode': 'runtime_topic',
+                'mode': 'direct_ping',
                 'devices': [{'id': 5}],
             },
             scan_ethercat=False,
@@ -84,7 +123,206 @@ class ConnectionStateTest(unittest.TestCase):
 
         self.assertEqual(rows[0]['connection_state'], 'online')
         self.assertEqual(rows[0]['discovery_state'], 'detected')
-        self.assertEqual(rows[0]['discovery_source'], 'runtime_topic')
+        self.assertEqual(rows[0]['discovery_source'], 'direct_ping')
+
+    def test_sii_header_is_the_physical_alias_and_identity_source(self):
+        data = bytearray(32)
+        data[8:10] = (0).to_bytes(2, 'little')
+        data[16:20] = (0x0000066F).to_bytes(4, 'little')
+        data[20:24] = (0x60380004).to_bytes(4, 'little')
+        data[24:28] = (1).to_bytes(4, 'little')
+        data[28:32] = (0x24121207).to_bytes(4, 'little')
+
+        identity = self.monitor._parse_sii_identity(bytes(data))
+
+        self.assertEqual(identity['ethercat_alias'], 0)
+        self.assertEqual(identity['vendor_id'], 0x0000066F)
+        self.assertEqual(identity['product_code'], 0x60380004)
+        self.assertEqual(identity['serial_number'], 0x24121207)
+
+    def test_physical_scan_success_requires_complete_direct_result(self):
+        success = {'available': True, 'complete': True, 'slaves_count': 5}
+        partial = {'available': True, 'complete': False, 'slaves_count': 5}
+        self.assertTrue(self.monitor._physical_section_success(success, 'slaves_count'))
+        self.assertFalse(self.monitor._physical_section_success(partial, 'slaves_count'))
+
+    def test_dynamixel_scan_never_injects_runtime_devices(self):
+        self.monitor._dynamixel_scan_targets = lambda: []
+
+        result = self.monitor._scan_dynamixel_motors()
+
+        self.assertEqual(result['mode'], 'direct_ping')
+        self.assertFalse(result['available'])
+        self.assertNotIn('runtime_devices', result)
+
+    def test_dynamixel_targets_cover_all_valid_ids(self):
+        self.monitor.motor_config_file = ''
+        self.monitor.dynamixel_scan_max_id = 252
+        self.monitor._dynamixel_serial_ports = lambda _config: [{
+            'port': '/dev/ttyUSB0', 'source': 'test', 'resolved': '/dev/ttyUSB0'
+        }]
+
+        targets = self.monitor._dynamixel_scan_targets()
+
+        self.assertEqual(targets[0]['ids'][0], 0)
+        self.assertEqual(targets[0]['ids'][-1], 252)
+        self.assertEqual(len(targets[0]['ids']), 253)
+
+    def test_full_scan_is_not_success_when_only_one_transport_completes(self):
+        self.monitor.monitoring_enabled = True
+        self.monitor._build_scan_result = lambda **_kwargs: {
+            'scan_complete': False,
+            'scan_success': True,
+        }
+        response = SimpleNamespace(success=None, message='')
+
+        self.monitor._scan_motors(None, response)
+
+        self.assertFalse(response.success)
+
+    def test_scan_contract_is_persisted_in_every_scan_result(self):
+        self.monitor._scan_sequence = 0
+        self.monitor._active_scan_id = ''
+        self.monitor._scan_progress_publisher = None
+        self.monitor.monitoring_enabled = True
+        self.monitor.input_topic = '/motor_status'
+        self.monitor.ethercat_status_topic = '/ethercat_status'
+        self.monitor._ethercat_status = {}
+        self.monitor._motor_metadata = {}
+        self.monitor._motors = {}
+        self.monitor._started_at = 0.0
+        self.monitor._skipped_ethercat_scan = lambda now: {
+            'available': False, 'complete': False, 'skipped': True,
+            'slaves_count': 0, 'slaves': [], 'scanned_at': now,
+        }
+        self.monitor._skipped_dynamixel_scan = lambda now: {
+            'available': False, 'complete': False, 'skipped': True,
+            'devices_count': 0, 'devices': [], 'scanned_at': now,
+        }
+
+        result = self.monitor._build_scan_result(
+            scan_ethercat=False,
+            scan_dynamixel=False,
+        )
+
+        contract = result['scan_contract']
+        self.assertEqual(contract['version'], 1)
+        self.assertTrue(contract['physical_only'])
+        self.assertTrue(contract['ethercat_requires_rescan'])
+        self.assertEqual(contract['dynamixel_id_min'], 0)
+        self.assertEqual(contract['dynamixel_id_max'], 252)
+        self.assertTrue(contract['full_success_requires_all_requested_transports'])
+
+    def test_scan_progress_publishes_real_backend_event(self):
+        published = []
+        self.monitor._active_scan_id = 'scan-1'
+        self.monitor._scan_progress_publisher = SimpleNamespace(
+            publish=lambda message: published.append(json.loads(message.data))
+        )
+
+        self.monitor._publish_scan_progress(
+            'ethercat_slave_done',
+            'Slave 2 읽기 완료',
+            transport='ethercat',
+            details={'slave_position': 2},
+        )
+
+        self.assertEqual(published[0]['scan_id'], 'scan-1')
+        self.assertEqual(published[0]['phase'], 'ethercat_slave_done')
+        self.assertEqual(published[0]['details']['slave_position'], 2)
+
+    def test_ethercat_scan_rescans_bus_before_reading_sii(self):
+        self.monitor._last_motor_status_at = None
+        self.monitor.disconnected_timeout_sec = 2.0
+        self.monitor._motor_metadata = {}
+        listing = '''=== Master 0, Slave 0 ===
+State: PREOP
+Identity:
+  Vendor Id: 0x0000066f
+  Product code: 0x60380004
+  Revision number: 0x00010000
+  Serial number: 0x24121207
+'''
+        sii = bytearray(32)
+        sii[16:20] = (0x0000066F).to_bytes(4, 'little')
+        sii[20:24] = (0x60380004).to_bytes(4, 'little')
+        sii[24:28] = (0x00010000).to_bytes(4, 'little')
+        sii[28:32] = (0x24121207).to_bytes(4, 'little')
+        calls = []
+
+        def run(command, **_kwargs):
+            calls.append(command)
+            if command[1] == 'master':
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout='Master0\n  Phase: Idle\n  Active: no\n',
+                    stderr='',
+                )
+            if command[1] == 'slaves':
+                return SimpleNamespace(returncode=0, stdout=listing, stderr='')
+            if command[1] == 'rescan':
+                return SimpleNamespace(returncode=0, stdout='', stderr='')
+            if command[1] == 'sii_read':
+                return SimpleNamespace(returncode=0, stdout=bytes(sii), stderr=b'')
+            if command[1] == 'reg_read':
+                return SimpleNamespace(returncode=0, stdout='0x0000 0', stderr='')
+            raise AssertionError(command)
+
+        with patch('motion_state_monitor.monitor_node.subprocess.run', side_effect=run):
+            result = self.monitor._scan_ethercat_slaves()
+
+        self.assertTrue(result['complete'])
+        self.assertTrue(result['rescan_performed'])
+        self.assertEqual(result['source'], 'ethercat_rescan_sii_and_register')
+        self.assertLess(calls.index(['ethercat', 'rescan']), calls.index(['ethercat', 'sii_read', '-p', '0']))
+
+    def test_ethercat_scan_blocks_rescan_while_slave_is_operational(self):
+        self.monitor._last_motor_status_at = None
+        self.monitor.disconnected_timeout_sec = 2.0
+        self.monitor._motor_metadata = {}
+        listing = '=== Master 0, Slave 0 ===\nState: OP\n'
+        calls = []
+
+        def run(command, **_kwargs):
+            calls.append(command)
+            if command[1] == 'master':
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout='Master0\n  Phase: Idle\n  Active: no\n',
+                    stderr='',
+                )
+            return SimpleNamespace(returncode=0, stdout=listing, stderr='')
+
+        with patch('motion_state_monitor.monitor_node.subprocess.run', side_effect=run):
+            result = self.monitor._scan_ethercat_slaves()
+
+        self.assertFalse(result['available'])
+        self.assertTrue(result['rescan_blocked'])
+        self.assertNotIn(['ethercat', 'rescan'], calls)
+
+    def test_ethercat_scan_blocks_rescan_while_master_is_claimed_during_startup(self):
+        self.monitor._last_motor_status_at = None
+        self.monitor.disconnected_timeout_sec = 2.0
+        self.monitor._motor_metadata = {}
+        calls = []
+
+        def run(command, **_kwargs):
+            calls.append(command)
+            if command[1] == 'master':
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout='Master0\n  Phase: Operation\n  Active: yes\n',
+                    stderr='',
+                )
+            raise AssertionError('Slave 조회 전에 Master 사용 상태로 차단해야 합니다')
+
+        with patch('motion_state_monitor.monitor_node.subprocess.run', side_effect=run):
+            result = self.monitor._scan_ethercat_slaves()
+
+        self.assertFalse(result['available'])
+        self.assertTrue(result['rescan_blocked'])
+        self.assertIn('모터 제어 프로그램이 사용 중', result['error'])
+        self.assertEqual(calls, [['ethercat', 'master']])
 
     def test_transient_communication_failure_is_debounced(self):
         first_failure = self.monitor._update_communication_health(3, True, 10.0)
@@ -101,6 +339,54 @@ class ConnectionStateTest(unittest.TestCase):
         self.assertTrue(recovering['confirmed_offline'])
         online = self.monitor._update_communication_health(3, False, 21.6)
         self.assertFalse(online['confirmed_offline'])
+
+    def test_zero_alias_axes_match_by_slave_position(self):
+        axes = [
+            {
+                'controller_index': position,
+                'display_name': f'Axis {position}',
+                'ethercat_alias': 0,
+                'ethercat_master_index': 0,
+                'slave_position': position,
+                'state': 'configured',
+            }
+            for position in range(5)
+        ]
+        slaves = [
+            {
+                'master_index': 0,
+                'slave_position': position,
+                'ethercat_alias': None,
+                'rotary_alias': 0,
+            }
+            for position in range(5)
+        ]
+
+        rows = self.monitor._build_matching_rows(slaves, axes)
+
+        self.assertEqual([row['controller_index'] for row in rows], list(range(5)))
+        self.assertEqual([row['match_state'] for row in rows], ['configured'] * 5)
+
+    def test_runtime_motor_state_is_tagged_with_owning_project(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project_dir = root / 'project-a'
+            runtime_dir = project_dir / 'runtime'
+            runtime_dir.mkdir(parents=True)
+            (project_dir / 'project.json').write_text(
+                json.dumps({'project_id': 'project-a'}), encoding='utf-8'
+            )
+            config = runtime_dir / 'applied_motor_config.yaml'
+            config.write_text('masters: []\n', encoding='utf-8')
+
+            self.assertEqual(
+                self.monitor._project_id_from_motor_config(config),
+                'project-a',
+            )
+            self.assertEqual(
+                self.monitor._project_id_from_motor_config(root / 'global.yaml'),
+                '',
+            )
 
 
 if __name__ == '__main__':

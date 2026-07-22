@@ -44,9 +44,10 @@ MOTOR_TYPE_CATALOG = [
 ]
 
 DYNAMIXEL_SCAN_BAUDRATES = (1000000,)
-DYNAMIXEL_SCAN_MAX_ID = 50
+DYNAMIXEL_SCAN_MAX_ID = 252
 DYNAMIXEL_SCAN_PROTOCOL = '2.0'
 COMMUNICATION_UNAVAILABLE_ERROR = 0xFFFF
+MOTOR_SCAN_CONTRACT_VERSION = 1
 
 
 class MotionStateMonitor(Node):
@@ -65,11 +66,22 @@ class MotionStateMonitor(Node):
             '/ethercat_status',
         ).value
         self.motor_config_file = self.declare_parameter('motor_config_file', '').value
+        self.project_id = self._project_id_from_motor_config(self.motor_config_file)
+        self.project_generation = int(
+            self.declare_parameter('project_generation', 0).value
+        )
         self.output_topic = self.declare_parameter(
             'output_topic',
             '/motion_control/motion_state',
         ).value
+        self.scan_progress_topic = self.declare_parameter(
+            'scan_progress_topic',
+            '/motion_control/motor_scan_progress',
+        ).value
         self.publish_hz = float(self.declare_parameter('publish_hz', 10.0).value)
+        self.feedback_process_hz = float(
+            self.declare_parameter('feedback_process_hz', 100.0).value
+        )
         self.max_motors = int(self.declare_parameter('max_motors', 50).value)
         self.stale_timeout_sec = float(self.declare_parameter('stale_timeout_sec', 0.5).value)
         self.disconnected_timeout_sec = float(
@@ -109,12 +121,18 @@ class MotionStateMonitor(Node):
         self._motor_metadata: Dict[int, Dict[str, Any]] = {}
         self._ethercat_status: Dict[str, Any] = {}
         self._last_motor_status_at: Optional[float] = None
+        self._last_motor_status_processed_at: Optional[float] = None
         self._last_ethercat_status_at: Optional[float] = None
         self._last_disabled_publish_at = 0.0
         self._started_at = time.time()
         self._subscription = None
+        self._scan_sequence = 0
+        self._active_scan_id = ''
 
         self._publisher = self.create_publisher(String, self.output_topic, 10)
+        self._scan_progress_publisher = self.create_publisher(
+            String, self.scan_progress_topic, 20
+        )
         self._input_qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
         self._service = self.create_service(SetBool, 'set_monitoring', self._set_monitoring)
         self._scan_service = self.create_service(Trigger, 'scan_motors', self._scan_motors)
@@ -176,6 +194,7 @@ class MotionStateMonitor(Node):
                 continue
             transport = str(master.get('type', 'unknown'))
             master_id = master.get('id')
+            ethercat_master_index = master.get('ethercat_master_index', 0)
             serial_port = master.get('serial_port')
             serial_baudrate = master.get('serial_baudrate')
             for slave in master.get('slaves', []):
@@ -200,6 +219,7 @@ class MotionStateMonitor(Node):
                     'transport': transport,
                     'transport_label': self._transport_label(transport),
                     'master_id': master_id,
+                    'ethercat_master_index': ethercat_master_index,
                     'driver_id': slave.get('driver_id'),
                     'driver_model': driver_model,
                     'pulse_per_revolution': pulse_per_revolution,
@@ -219,6 +239,7 @@ class MotionStateMonitor(Node):
                     'lower': self._optional_float(driver.get('lower')),
                     'upper': self._optional_float(driver.get('upper')),
                     'alias': slave.get('alias'),
+                    'slave_position': slave.get('position'),
                     'node_id': slave.get('node_id', slave.get('bus_id')),
                     'bus_id': slave.get('bus_id'),
                     'serial_port': serial_port,
@@ -336,7 +357,7 @@ class MotionStateMonitor(Node):
     def _scan_motors(self, request: Trigger.Request, response: Trigger.Response):
         del request
         result = self._build_scan_result(scan_ethercat=True, scan_dynamixel=True)
-        response.success = self.monitoring_enabled
+        response.success = bool(result.get('scan_complete'))
         response.message = json.dumps(result, ensure_ascii=False, separators=(',', ':'))
         if not self.monitoring_enabled:
             self.get_logger().warn('motor scan requested while monitoring is disabled.')
@@ -345,7 +366,9 @@ class MotionStateMonitor(Node):
     def _scan_ac_servo_motors(self, request: Trigger.Request, response: Trigger.Response):
         del request
         result = self._build_scan_result(scan_ethercat=True, scan_dynamixel=False)
-        response.success = self.monitoring_enabled
+        response.success = self._physical_section_success(
+            result.get('ethercat_scan'), 'slaves_count'
+        )
         response.message = json.dumps(result, ensure_ascii=False, separators=(',', ':'))
         if not self.monitoring_enabled:
             self.get_logger().warn('AC Servo scan requested while monitoring is disabled.')
@@ -354,7 +377,9 @@ class MotionStateMonitor(Node):
     def _scan_dynamixel_motors_service(self, request: Trigger.Request, response: Trigger.Response):
         del request
         result = self._build_scan_result(scan_ethercat=False, scan_dynamixel=True)
-        response.success = self.monitoring_enabled
+        response.success = self._physical_section_success(
+            result.get('dynamixel_scan'), 'devices_count'
+        )
         response.message = json.dumps(result, ensure_ascii=False, separators=(',', ':'))
         if not self.monitoring_enabled:
             self.get_logger().warn('Dynamixel scan requested while monitoring is disabled.')
@@ -366,6 +391,18 @@ class MotionStateMonitor(Node):
         scan_ethercat: bool,
         scan_dynamixel: bool,
     ) -> Dict[str, Any]:
+        self._scan_sequence = int(getattr(self, '_scan_sequence', 0)) + 1
+        self._active_scan_id = f'{int(time.time() * 1000)}-{self._scan_sequence}'
+        requested_labels = []
+        if scan_ethercat:
+            requested_labels.append('EtherCAT')
+        if scan_dynamixel:
+            requested_labels.append('Dynamixel')
+        self._publish_scan_progress(
+            'started',
+            f'{" + ".join(requested_labels)} 직접 스캔을 시작합니다',
+            transport='all',
+        )
         now = time.time()
         ethercat = self._current_ethercat_status(now)
         motors = self._current_motor_list(now)
@@ -436,7 +473,124 @@ class MotionStateMonitor(Node):
             'connected_axes': connected_axes,
             'known_axes': configured_axes,
         }
+        requested_sections = []
+        if scan_ethercat:
+            requested_sections.append(('ethercat', ethercat_scan, 'slaves_count'))
+        if scan_dynamixel:
+            requested_sections.append(('dynamixel', dynamixel_scan, 'devices_count'))
+        successful_sections = [
+            name for name, section, count_key in requested_sections
+            if self._physical_section_success(section, count_key)
+        ]
+        scan_errors = [
+            {
+                'transport': name,
+                'message': str(section.get('error') or '직접 스캔에서 장치를 확인하지 못했습니다'),
+            }
+            for name, section, count_key in requested_sections
+            if not self._physical_section_success(section, count_key)
+            and not bool(section.get('skipped'))
+        ]
+        scan_duration_ms = round((time.time() - now) * 1000.0, 3)
+        scan_outcome = (
+            'complete'
+            if len(successful_sections) == len(requested_sections)
+            else ('partial' if successful_sections else 'failed')
+        )
+        result.update({
+            'scan_id': self._active_scan_id,
+            'scan_duration_ms': scan_duration_ms,
+            'scan_contract': {
+                'version': MOTOR_SCAN_CONTRACT_VERSION,
+                'physical_only': True,
+                'ethercat_requires_rescan': True,
+                'dynamixel_protocol': DYNAMIXEL_SCAN_PROTOCOL,
+                'dynamixel_baudrate': DYNAMIXEL_SCAN_BAUDRATES[0],
+                'dynamixel_id_min': 0,
+                'dynamixel_id_max': DYNAMIXEL_SCAN_MAX_ID,
+                'full_success_requires_all_requested_transports': True,
+            },
+            'scan_success': bool(successful_sections),
+            'scan_complete': len(successful_sections) == len(requested_sections),
+            'scan_outcome': scan_outcome,
+            'scan_errors': scan_errors,
+            'physical_scan': {
+                'ethercat': ethercat_scan,
+                'dynamixel': dynamixel_scan,
+            },
+            'project_comparison': {
+                'matching_rows': matching_rows,
+                'matching_summary': self._matching_summary(matching_rows),
+            },
+            'runtime_status': {
+                'connection_rows': connection_rows,
+                'connection_summary': self._connection_summary(connection_rows),
+                'connected_axes': connected_axes,
+                'known_axes': configured_axes,
+            },
+        })
+        failed_summary = ' / '.join(
+            f'{item["transport"]}: {item["message"]}' for item in scan_errors
+        )
+        self._publish_scan_progress(
+            scan_outcome,
+            (
+                f'직접 스캔 완료: EtherCAT {ethercat_scan.get("slaves_count", 0)}축, '
+                f'Dynamixel {dynamixel_scan.get("devices_count", 0)}개, '
+                f'총 {scan_duration_ms:g}ms, ID {self._active_scan_id}'
+                if scan_outcome == 'complete'
+                else (
+                    f'직접 스캔 부분 완료: {failed_summary}'
+                    if scan_outcome == 'partial'
+                    else f'직접 스캔 실패: {failed_summary}'
+                )
+            ),
+            transport='all',
+            details={
+                'success': result['scan_success'],
+                'complete': result['scan_complete'],
+                'outcome': scan_outcome,
+                'ethercat_count': ethercat_scan.get('slaves_count', 0),
+                'dynamixel_count': dynamixel_scan.get('devices_count', 0),
+                'scan_duration_ms': scan_duration_ms,
+                'scan_id': self._active_scan_id,
+            },
+        )
         return result
+
+    def _publish_scan_progress(
+        self,
+        phase: str,
+        message: str,
+        *,
+        transport: str,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        publisher = getattr(self, '_scan_progress_publisher', None)
+        scan_id = str(getattr(self, '_active_scan_id', '') or '')
+        if publisher is None or not scan_id:
+            return
+        event = {
+            'scan_id': scan_id,
+            'phase': str(phase),
+            'transport': str(transport),
+            'message': str(message),
+            'details': details if isinstance(details, dict) else {},
+            'timestamp': time.time(),
+        }
+        msg = String()
+        msg.data = json.dumps(event, ensure_ascii=False, separators=(',', ':'))
+        publisher.publish(msg)
+
+    @staticmethod
+    def _physical_section_success(section: Any, count_key: str) -> bool:
+        if not isinstance(section, dict):
+            return False
+        return bool(
+            section.get('available')
+            and section.get('complete')
+            and int(section.get(count_key) or 0) > 0
+        )
 
     def _safe_scan_ethercat_slaves(self) -> Dict[str, Any]:
         try:
@@ -445,8 +599,11 @@ class MotionStateMonitor(Node):
             self.get_logger().error(f'EtherCAT scan failed: {exc}')
             return {
                 'available': False,
+                'complete': False,
+                'direct': True,
                 'scanned_at': time.time(),
                 'error': str(exc),
+                'slaves_count': 0,
                 'slaves': [],
             }
 
@@ -457,21 +614,24 @@ class MotionStateMonitor(Node):
             self.get_logger().error(f'Dynamixel scan failed: {exc}')
             return {
                 'available': False,
+                'complete': False,
+                'direct': True,
                 'scanned_at': time.time(),
                 'mode': 'direct_ping',
                 'protocol': DYNAMIXEL_SCAN_PROTOCOL,
-                'scan_rule': 'auto serial port, baudrate 1000000, broadcast ping plus ID 0-50',
+                'scan_rule': 'auto serial port, baudrate 1000000, broadcast ping plus ID 0-252',
                 'error': str(exc),
                 'targets': [],
                 'devices_count': 0,
                 'devices': [],
-                'runtime_devices': self._dynamixel_runtime_devices(),
             }
 
     @staticmethod
     def _skipped_ethercat_scan(scanned_at: float) -> Dict[str, Any]:
         return {
             'available': False,
+            'complete': False,
+            'direct': True,
             'skipped': True,
             'scanned_at': scanned_at,
             'error': '',
@@ -482,16 +642,17 @@ class MotionStateMonitor(Node):
     def _skipped_dynamixel_scan(self, scanned_at: float) -> Dict[str, Any]:
         return {
             'available': False,
+            'complete': False,
+            'direct': True,
             'skipped': True,
             'scanned_at': scanned_at,
             'mode': 'direct_ping',
             'protocol': DYNAMIXEL_SCAN_PROTOCOL,
-            'scan_rule': 'auto serial port, baudrate 1000000, broadcast ping plus ID 0-50',
+            'scan_rule': 'auto serial port, baudrate 1000000, broadcast ping plus ID 0-252',
             'error': '',
             'targets': [],
             'devices_count': 0,
             'devices': [],
-            'runtime_devices': self._dynamixel_runtime_devices(),
         }
 
     def _motor_status_callback(self, msg: MotorStatus) -> None:
@@ -500,6 +661,15 @@ class MotionStateMonitor(Node):
 
         now = time.time()
         self._last_motor_status_at = now
+        process_hz = max(float(getattr(self, 'feedback_process_hz', 0.0)), 0.0)
+        last_processed_at = getattr(self, '_last_motor_status_processed_at', None)
+        if (
+            process_hz > 0.0
+            and last_processed_at is not None
+            and now - float(last_processed_at) < 1.0 / process_hz
+        ):
+            return
+        self._last_motor_status_processed_at = now
 
         controller_indices = list(getattr(msg, 'controller_index', []))
         count = min(len(controller_indices), self.max_motors)
@@ -575,6 +745,7 @@ class MotionStateMonitor(Node):
         communication_unavailable = raw_errorcode == COMMUNICATION_UNAVAILABLE_ERROR
         motor_type = str(metadata.get('motor_type', '')).lower()
         is_dynamixel = motor_type == 'dynamixel'
+        internal_limit_active = bool(statusword & 0x0800) and not is_dynamixel
         status_text = (
             'Communication unavailable'
             if communication_unavailable
@@ -584,6 +755,8 @@ class MotionStateMonitor(Node):
                 else self._statusword_text(statusword)
             )
         )
+        if internal_limit_active and not communication_unavailable:
+            status_text = f'{status_text} · Internal limit active'
         servo_on = bool(statusword & 0x01) if is_dynamixel else (statusword & 0x006F) == 0x0027
         fault = (
             False
@@ -630,6 +803,7 @@ class MotionStateMonitor(Node):
             'current_raw': None,
             'servo_on': servo_on,
             'target_reached': None if is_dynamixel else bool(statusword & 0x0400),
+            'internal_limit_active': internal_limit_active,
             'fault': fault,
         }
 
@@ -669,6 +843,8 @@ class MotionStateMonitor(Node):
         motors = self._current_motor_list(now)
         state = {
             'schema_version': 1,
+            'project_id': getattr(self, 'project_id', ''),
+            'project_generation': int(getattr(self, 'project_generation', 0) or 0),
             'generated_at': now,
             'monitoring_enabled': self.monitoring_enabled,
             'source_topic': self.input_topic,
@@ -695,6 +871,28 @@ class MotionStateMonitor(Node):
         msg = String()
         msg.data = json.dumps(state, ensure_ascii=False, separators=(',', ':'))
         self._publisher.publish(msg)
+
+    @staticmethod
+    def _project_id_from_motor_config(config_file: Any) -> str:
+        """Derive ownership only from a project runtime configuration path."""
+        raw = str(config_file or '').strip()
+        if not raw:
+            return ''
+        path = Path(raw).expanduser().resolve()
+        if path.parent.name != 'runtime':
+            return ''
+        project_dir = path.parent.parent
+        manifest_path = project_dir / 'project.json'
+        if project_dir.is_symlink() or manifest_path.is_symlink() or not manifest_path.is_file():
+            return ''
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+        except (OSError, ValueError, json.JSONDecodeError):
+            return ''
+        if not isinstance(manifest, dict):
+            return ''
+        project_id = str(manifest.get('project_id') or '').strip()
+        return project_id if project_id and project_id == project_dir.name else ''
 
     def _current_motor_list(self, now: float) -> List[Dict[str, Any]]:
         motors: List[Dict[str, Any]] = []
@@ -1016,6 +1214,8 @@ class MotionStateMonitor(Node):
                 'driver_model': metadata.get('driver_model', ''),
                 'rated_power_w': metadata.get('rated_power_w'),
                 'ethercat_alias': metadata.get('alias'),
+                'ethercat_master_index': metadata.get('ethercat_master_index', 0),
+                'slave_position': metadata.get('slave_position'),
                 'state': 'configured',
                 'state_detail': '설정 파일에 등록된 축입니다.',
                 'fault': False,
@@ -1053,8 +1253,78 @@ class MotionStateMonitor(Node):
 
     def _scan_ethercat_slaves(self) -> Dict[str, Any]:
         started_at = time.time()
+        self._publish_scan_progress(
+            'ethercat_preflight',
+            'EtherCAT Slave 운전 상태를 확인합니다',
+            transport='ethercat',
+        )
+        runtime_feedback_fresh = (
+            self._last_motor_status_at is not None
+            and started_at - self._last_motor_status_at < self.disconnected_timeout_sec
+        )
+        ethercat_runtime_configured = any(
+            str(metadata.get('transport') or '').lower() == 'ethercat'
+            for metadata in self._motor_metadata.values()
+        )
         try:
-            completed = subprocess.run(
+            master_status = subprocess.run(
+                ['ethercat', 'master'],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=2.0,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return {
+                'available': False,
+                'complete': False,
+                'direct': True,
+                'rescan_performed': False,
+                'rescan_blocked': True,
+                'scanned_at': started_at,
+                'error': f'EtherCAT Master 운전 상태 확인 실패: {exc}',
+                'slaves_count': 0,
+                'slaves': [],
+            }
+
+        if master_status.returncode != 0:
+            return {
+                'available': False,
+                'complete': False,
+                'direct': True,
+                'rescan_performed': False,
+                'rescan_blocked': True,
+                'scanned_at': started_at,
+                'error': (
+                    'EtherCAT Master 운전 상태 확인 실패: '
+                    + (master_status.stderr.strip() or master_status.stdout.strip())
+                ),
+                'slaves_count': 0,
+                'slaves': [],
+            }
+
+        master_output = master_status.stdout
+        master_claimed = bool(
+            re.search(r'^\s*Phase:\s*Operation\s*$', master_output, re.MULTILINE | re.IGNORECASE)
+            or re.search(r'^\s*Active:\s*yes\s*$', master_output, re.MULTILINE | re.IGNORECASE)
+        )
+        if master_claimed:
+            return {
+                'available': False,
+                'complete': False,
+                'direct': True,
+                'rescan_performed': False,
+                'rescan_blocked': True,
+                'scanned_at': started_at,
+                'error': (
+                    'EtherCAT Master를 모터 제어 프로그램이 사용 중입니다. '
+                    '초기화 또는 운전 중 버스 재열거는 안전하지 않아 직접 스캔을 중단했습니다'
+                ),
+                'slaves_count': 0,
+                'slaves': [],
+            }
+        try:
+            preflight = subprocess.run(
                 ['ethercat', 'slaves', '-v'],
                 check=False,
                 capture_output=True,
@@ -1064,28 +1334,241 @@ class MotionStateMonitor(Node):
         except (OSError, subprocess.TimeoutExpired) as exc:
             return {
                 'available': False,
+                'complete': False,
+                'direct': True,
                 'scanned_at': started_at,
                 'error': str(exc),
+                'slaves_count': 0,
                 'slaves': [],
             }
 
-        if completed.returncode != 0:
+        if preflight.returncode != 0:
             return {
                 'available': False,
+                'complete': False,
+                'direct': True,
                 'scanned_at': started_at,
-                'error': completed.stderr.strip() or completed.stdout.strip(),
+                'error': preflight.stderr.strip() or preflight.stdout.strip(),
+                'slaves_count': 0,
                 'slaves': [],
             }
 
-        slaves = self._parse_ethercat_slaves(completed.stdout)
+        preflight_slaves = self._parse_ethercat_slaves(preflight.stdout)
+        active_states = sorted({
+            str(slave.get('device_state') or '').upper()
+            for slave in preflight_slaves
+            if str(slave.get('device_state') or '').upper() in {'SAFEOP', 'OP'}
+        })
+        if (runtime_feedback_fresh and ethercat_runtime_configured) or active_states:
+            reason = (
+                '모터 런타임 피드백이 수신 중입니다'
+                if runtime_feedback_fresh and ethercat_runtime_configured
+                else f'EtherCAT Slave가 {"/".join(active_states)} 상태입니다'
+            )
+            return {
+                'available': False,
+                'complete': False,
+                'direct': True,
+                'rescan_performed': False,
+                'rescan_blocked': True,
+                'scanned_at': started_at,
+                'error': (
+                    f'{reason}. 운전 중 버스 재열거는 안전하지 않아 직접 스캔을 중단했습니다'
+                ),
+                'slaves_count': 0,
+                'slaves': [],
+            }
+
+        self._publish_scan_progress(
+            'ethercat_rescan',
+            '기존 Slave 정보를 폐기하고 물리 EtherCAT 버스를 재열거합니다',
+            transport='ethercat',
+        )
+        try:
+            rescan_started_at = time.time()
+            rescanned = subprocess.run(
+                ['ethercat', 'rescan'],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=3.0,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return {
+                'available': False,
+                'complete': False,
+                'direct': True,
+                'rescan_performed': False,
+                'scanned_at': started_at,
+                'error': f'EtherCAT 버스 재스캔 실패: {exc}',
+                'slaves_count': 0,
+                'slaves': [],
+            }
+        rescan_duration_ms = round((time.time() - rescan_started_at) * 1000.0, 3)
+        if rescanned.returncode != 0:
+            return {
+                'available': False,
+                'complete': False,
+                'direct': True,
+                'rescan_performed': False,
+                'rescan_duration_ms': rescan_duration_ms,
+                'scanned_at': started_at,
+                'error': (
+                    'EtherCAT 버스 재스캔 실패: '
+                    + (rescanned.stderr.strip() or rescanned.stdout.strip() or 'unknown error')
+                ),
+                'slaves_count': 0,
+                'slaves': [],
+            }
+
+        self._publish_scan_progress(
+            'ethercat_rescan_done',
+            f'ethercat rescan 명령 실제 실행 완료 ({rescan_duration_ms:g}ms)',
+            transport='ethercat',
+            details={'rescan_duration_ms': rescan_duration_ms},
+        )
+
+        slaves: List[Dict[str, Any]] = []
+        previous_signature = None
+        topology_stable = False
+        listing_error = ''
+        for attempt in range(60):
+            try:
+                completed = subprocess.run(
+                    ['ethercat', 'slaves', '-v'],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=2.0,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                listing_error = str(exc)
+                break
+            if completed.returncode != 0:
+                listing_error = completed.stderr.strip() or completed.stdout.strip()
+            else:
+                slaves = self._parse_ethercat_slaves(completed.stdout)
+                signature = tuple(
+                    (
+                        slave.get('master_index'),
+                        slave.get('slave_position'),
+                        slave.get('vendor_id'),
+                        slave.get('product_code'),
+                        slave.get('revision_number'),
+                        slave.get('serial_number'),
+                    )
+                    for slave in slaves
+                )
+                identity_ready = bool(slaves) and all(
+                    all(
+                        int(slave.get(key) or 0) > 0
+                        for key in ('vendor_id', 'product_code', 'revision_number', 'serial_number')
+                    )
+                    for slave in slaves
+                )
+                if identity_ready and signature == previous_signature:
+                    topology_stable = True
+                    break
+                previous_signature = signature if identity_ready else None
+            if attempt < 59:
+                time.sleep(0.05)
+
+        errors: List[str] = []
+        if not slaves:
+            return {
+                'available': False,
+                'complete': False,
+                'direct': True,
+                'rescan_performed': True,
+                'rescan_duration_ms': rescan_duration_ms,
+                'scanned_at': started_at,
+                'error': listing_error or '재스캔 후 연결된 EtherCAT Slave를 찾지 못했습니다',
+                'slaves_count': 0,
+                'slaves': [],
+            }
+        if not topology_stable:
+            errors.append('재스캔 후 Slave 목록이 제한 시간 안에 안정화되지 않았습니다')
+        else:
+            self._publish_scan_progress(
+                'ethercat_topology',
+                f'새로 열거된 EtherCAT Slave {len(slaves)}개를 확인했습니다',
+                transport='ethercat',
+                details={'slaves_count': len(slaves)},
+            )
         for slave in slaves:
+            position = slave['slave_position']
+            self._publish_scan_progress(
+                'ethercat_slave_read',
+                f'Slave {position}: SII EEPROM과 Alias 레지스터를 읽습니다',
+                transport='ethercat',
+                details={'slave_position': position},
+            )
+            master_identity = {
+                key: slave.get(key)
+                for key in ('vendor_id', 'product_code', 'revision_number', 'serial_number')
+            }
+            sii_identity = self._read_sii_identity(slave['slave_position'])
+            slave['master_identity'] = master_identity
+            slave.update(sii_identity)
             rotary = self._read_station_alias_register(slave['slave_position'])
             slave.update(rotary)
+            slave_errors = []
+            if slave.get('sii_error'):
+                slave_errors.append(str(slave['sii_error']))
+            if slave.get('rotary_alias_error'):
+                slave_errors.append(str(slave['rotary_alias_error']))
+            identity_mismatches = []
+            if not slave.get('sii_error'):
+                for key in ('vendor_id', 'product_code', 'revision_number', 'serial_number'):
+                    master_value = master_identity.get(key)
+                    sii_value = slave.get(key)
+                    if (
+                        master_value is not None
+                        and sii_value is not None
+                        and int(master_value) > 0
+                        and master_value != sii_value
+                    ):
+                        identity_mismatches.append(
+                            f'{key} master={master_value} SII={sii_value}'
+                        )
+            slave['identity_consistent'] = not identity_mismatches
+            if identity_mismatches:
+                slave_errors.append(
+                    'Master/SII 장치 식별값 불일치: ' + ', '.join(identity_mismatches)
+                )
+            slave['direct_read_complete'] = not slave_errors
+            slave['scan_error'] = ' / '.join(slave_errors)
+            if slave_errors:
+                errors.append(
+                    f"Slave {slave['slave_position']}: {slave['scan_error']}"
+                )
+            self._publish_scan_progress(
+                'ethercat_slave_done' if not slave_errors else 'ethercat_slave_failed',
+                (
+                    f'Slave {position}: Alias {slave.get("ethercat_alias")}, '
+                    f'Serial {slave.get("serial_number")} 읽기 완료'
+                    if not slave_errors
+                    else f'Slave {position}: {slave["scan_error"]}'
+                ),
+                transport='ethercat',
+                details={
+                    'slave_position': position,
+                    'ethercat_alias': slave.get('ethercat_alias'),
+                    'serial_number': slave.get('serial_number'),
+                    'success': not slave_errors,
+                },
+            )
 
         return {
             'available': True,
+            'complete': not errors,
+            'direct': True,
+            'source': 'ethercat_rescan_sii_and_register',
+            'rescan_performed': True,
+            'rescan_duration_ms': rescan_duration_ms,
+            'scan_duration_ms': round((time.time() - started_at) * 1000.0, 3),
             'scanned_at': started_at,
-            'error': '',
+            'error': ' / '.join(errors),
             'slaves_count': len(slaves),
             'slaves': slaves,
         }
@@ -1108,6 +1591,7 @@ class MotionStateMonitor(Node):
                     'device_state': '',
                     'vendor_id': None,
                     'product_code': None,
+                    'revision_number': None,
                     'serial_number': None,
                     'order_number': '',
                     'device_name': '',
@@ -1127,6 +1611,8 @@ class MotionStateMonitor(Node):
                 current['vendor_id'] = self._parse_int(first_value)
             elif key == 'Product code':
                 current['product_code'] = self._parse_int(first_value)
+            elif key == 'Revision number':
+                current['revision_number'] = self._parse_int(first_value)
             elif key == 'Serial number':
                 current['serial_number'] = self._parse_int(first_value)
             elif key == 'Order number':
@@ -1138,35 +1624,101 @@ class MotionStateMonitor(Node):
             slaves.append(current)
         return slaves
 
-    def _read_station_alias_register(self, slave_position: int) -> Dict[str, Any]:
+    @staticmethod
+    def _parse_sii_identity(data: bytes) -> Dict[str, Any]:
+        if not isinstance(data, (bytes, bytearray)) or len(data) < 32:
+            raise ValueError('SII EEPROM 헤더가 32바이트보다 짧습니다')
+        return {
+            'ethercat_alias': int.from_bytes(data[8:10], 'little'),
+            'vendor_id': int.from_bytes(data[16:20], 'little'),
+            'product_code': int.from_bytes(data[20:24], 'little'),
+            'revision_number': int.from_bytes(data[24:28], 'little'),
+            'serial_number': int.from_bytes(data[28:32], 'little'),
+        }
+
+    def _read_sii_identity(self, slave_position: int) -> Dict[str, Any]:
         try:
             completed = subprocess.run(
-                [
-                    'ethercat',
-                    'reg_read',
-                    '-p',
-                    str(slave_position),
-                    '-t',
-                    'uint16',
-                    '0x0012',
-                ],
+                ['ethercat', 'sii_read', '-p', str(slave_position)],
                 check=False,
                 capture_output=True,
-                text=True,
-                timeout=1.0,
+                timeout=2.0,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             return {
-                'rotary_alias': None,
-                'rotary_alias_hex': '',
-                'rotary_alias_error': str(exc),
+                'ethercat_alias': None,
+                'sii_error': f'SII EEPROM 읽기 실패: {exc}',
+                'identity_source': 'physical_sii',
             }
-
         if completed.returncode != 0:
+            detail = completed.stderr.decode('utf-8', errors='replace').strip()
+            return {
+                'ethercat_alias': None,
+                'sii_error': f'SII EEPROM 읽기 실패: {detail or "unknown error"}',
+                'identity_source': 'physical_sii',
+            }
+        try:
+            identity = self._parse_sii_identity(completed.stdout)
+        except ValueError as exc:
+            return {
+                'ethercat_alias': None,
+                'sii_error': str(exc),
+                'identity_source': 'physical_sii',
+            }
+        return {
+            **identity,
+            'sii_error': '',
+            'identity_source': 'physical_sii',
+        }
+
+    def _read_station_alias_register(self, slave_position: int) -> Dict[str, Any]:
+        completed = None
+        last_error = ''
+        for attempt in range(3):
+            try:
+                completed = subprocess.run(
+                    [
+                        'ethercat',
+                        'reg_read',
+                        '-p',
+                        str(slave_position),
+                        '-t',
+                        'uint16',
+                        '0x0012',
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=1.0,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                last_error = str(exc)
+                completed = None
+            if completed is not None and completed.returncode == 0:
+                break
+            if completed is not None:
+                last_error = completed.stderr.strip() or completed.stdout.strip()
+            if attempt < 2:
+                self._publish_scan_progress(
+                    'ethercat_register_retry',
+                    (
+                        f'Slave {slave_position}: Alias 레지스터 응답 지연, '
+                        f'{attempt + 2}번째 읽기를 재시도합니다'
+                    ),
+                    transport='ethercat',
+                    details={
+                        'slave_position': slave_position,
+                        'next_attempt': attempt + 2,
+                        'error': last_error,
+                    },
+                )
+                time.sleep(0.05)
+
+        if completed is None or completed.returncode != 0:
             return {
                 'rotary_alias': None,
                 'rotary_alias_hex': '',
-                'rotary_alias_error': completed.stderr.strip() or completed.stdout.strip(),
+                'rotary_alias_error': last_error or 'Alias 레지스터 읽기 실패',
             }
 
         parts = completed.stdout.strip().split()
@@ -1182,60 +1734,34 @@ class MotionStateMonitor(Node):
 
     def _scan_dynamixel_motors(self) -> Dict[str, Any]:
         started_at = time.time()
-        targets = self._dynamixel_scan_targets()
-        runtime_devices = self._dynamixel_runtime_devices()
-        runtime_active = (
-            self._last_motor_status_at is not None and
-            (time.time() - self._last_motor_status_at) <= self.disconnected_timeout_sec
+        self._publish_scan_progress(
+            'dynamixel_targets',
+            'Dynamixel 직렬 포트와 검색 대상을 확인합니다',
+            transport='dynamixel',
         )
-
-        if runtime_active:
-            devices = [
-                {
-                    'id': device.get('id'),
-                    'controller_index': device.get('controller_index'),
-                    'packet_error': 0,
-                    'model_number': device.get('model_number'),
-                    'firmware_version': device.get('firmware_version'),
-                    'model_name': device.get('model_name') or '',
-                    'port': device.get('port'),
-                    'baudrate': device.get('baudrate'),
-                    'source': 'runtime',
-                }
-                for device in runtime_devices
-                if device.get('state') == 'detected'
-            ]
-            return {
-                'available': True,
-                'scanned_at': started_at,
-                'mode': 'runtime_topic',
-                'protocol': DYNAMIXEL_SCAN_PROTOCOL,
-                'scan_rule': 'motor_manager_node runtime feedback',
-                'error': '',
-                'warning': '',
-                'targets': targets,
-                'attempts': 0,
-                'id_fallback': False,
-                'devices_count': len(devices),
-                'devices': devices,
-                'runtime_devices': runtime_devices,
-            }
+        targets = self._dynamixel_scan_targets()
 
         if not targets:
+            self._publish_scan_progress(
+                'dynamixel_unavailable',
+                'Dynamixel 직렬 포트를 찾지 못해 실제 Ping을 실행할 수 없습니다',
+                transport='dynamixel',
+            )
             return {
                 'available': False,
+                'complete': False,
+                'direct': True,
                 'scanned_at': started_at,
                 'mode': 'direct_ping',
                 'protocol': DYNAMIXEL_SCAN_PROTOCOL,
-                'scan_rule': 'auto serial port, baudrate 1000000, broadcast ping plus ID 0-50',
+                'scan_rule': 'auto serial port, baudrate 1000000, broadcast ping plus ID 0-252',
                 'error': (
-                    'No Dynamixel serial port found. Checked /dev/serial/by-id, '
-                    '/dev/ttyUSB*, and /dev/ttyACM*.'
+                    'Dynamixel 직렬 포트를 찾지 못했습니다. '
+                    '/dev/serial/by-id, /dev/ttyUSB*, /dev/ttyACM* 경로를 확인했습니다.'
                 ),
                 'targets': [],
                 'devices_count': 0,
                 'devices': [],
-                'runtime_devices': runtime_devices,
             }
 
         devices: List[Dict[str, Any]] = []
@@ -1246,6 +1772,12 @@ class MotionStateMonitor(Node):
             ids = list(target.get('ids') or [])
             if not port or not baudrate:
                 continue
+            self._publish_scan_progress(
+                'dynamixel_port',
+                f'{port} @ {baudrate}bps에서 직접 Ping을 시작합니다',
+                transport='dynamixel',
+                details={'port': port, 'baudrate': baudrate},
+            )
             try:
                 fd = self._open_dynamixel_port(port, baudrate)
             except OSError as exc:
@@ -1281,7 +1813,6 @@ class MotionStateMonitor(Node):
                     if attempt >= attempts - 1:
                         break
 
-                self._merge_runtime_dynamixel_devices(devices_by_id, runtime_devices)
                 for device in devices_by_id.values():
                     device.update({
                         'port': port,
@@ -1292,49 +1823,37 @@ class MotionStateMonitor(Node):
                         ),
                     })
                     devices.append(device)
+                    self._publish_scan_progress(
+                        'dynamixel_device',
+                        f'Dynamixel ID {device.get("id")}: 실제 Ping 응답 확인',
+                        transport='dynamixel',
+                        details={
+                            'id': device.get('id'),
+                            'model_number': device.get('model_number'),
+                            'port': port,
+                        },
+                    )
             finally:
                 os.close(fd)
 
         return {
-            'available': True,
+            'available': bool(devices),
+            'complete': bool(devices) and not errors,
+            'direct': True,
             'scanned_at': started_at,
             'mode': 'direct_ping',
             'protocol': DYNAMIXEL_SCAN_PROTOCOL,
-            'scan_rule': 'auto serial port, baudrate 1000000, broadcast ping plus ID 0-50',
-            'error': '; '.join(errors),
+            'scan_rule': 'auto serial port, baudrate 1000000, broadcast ping plus ID 0-252',
+            'error': '; '.join(errors) if errors else (
+                '' if devices else '직접 Ping에 응답한 Dynamixel이 없습니다'
+            ),
             'warning': '',
             'targets': targets,
             'attempts': max(1, int(self.dynamixel_scan_attempts)),
             'id_fallback': bool(self.dynamixel_scan_id_fallback),
             'devices_count': len(devices),
             'devices': devices,
-            'runtime_devices': runtime_devices,
         }
-
-    def _dynamixel_runtime_devices(self) -> List[Dict[str, Any]]:
-        devices: List[Dict[str, Any]] = []
-        for motor in self._current_motor_list(time.time()):
-            controller_index = int(motor.get('controller_index'))
-            metadata = self._metadata_for(controller_index)
-            if str(metadata.get('motor_type', '')).lower() != 'dynamixel':
-                continue
-            bus_id = metadata.get('bus_id', metadata.get('node_id'))
-            if bus_id is None:
-                continue
-            devices.append({
-                'id': bus_id,
-                'controller_index': controller_index,
-                'port': metadata.get('serial_port'),
-                'baudrate': metadata.get('serial_baudrate'),
-                'model_name': metadata.get('driver_model') or '',
-                'model_number': None,
-                'firmware_version': None,
-                'state': motor.get('state', 'unknown'),
-                'last_seen_at': motor.get('last_seen_at'),
-                'age_sec': motor.get('age_sec'),
-                'source': 'runtime',
-            })
-        return devices
 
     @staticmethod
     def _dynamixel_device_has_valid_model(device: Dict[str, Any]) -> bool:
@@ -1343,34 +1862,6 @@ class MotionStateMonitor(Node):
             return int(model_number) > 0
         except (TypeError, ValueError):
             return False
-
-    def _merge_runtime_dynamixel_devices(
-        self,
-        devices_by_id: Dict[int, Dict[str, Any]],
-        runtime_devices: List[Dict[str, Any]],
-    ) -> None:
-        for runtime in runtime_devices:
-            try:
-                dxl_id = int(runtime.get('id'))
-            except (TypeError, ValueError):
-                continue
-            if runtime.get('state') != 'detected':
-                continue
-            current = devices_by_id.get(dxl_id)
-            if current is None:
-                devices_by_id[dxl_id] = {
-                    'id': dxl_id,
-                    'packet_error': 0,
-                    'model_number': runtime.get('model_number'),
-                    'firmware_version': runtime.get('firmware_version'),
-                    'model_name': runtime.get('model_name') or '',
-                    'source': 'runtime_fallback',
-                }
-                continue
-            if not current.get('model_name') and runtime.get('model_name'):
-                current['model_name'] = runtime.get('model_name')
-            if not self._dynamixel_device_has_valid_model(current) and runtime.get('model_number'):
-                current['model_number'] = runtime.get('model_number')
 
     def _dynamixel_scan_targets(self) -> List[Dict[str, Any]]:
         path = Path(str(self.motor_config_file)).expanduser() if self.motor_config_file else None
@@ -1385,7 +1876,7 @@ class MotionStateMonitor(Node):
                 self.get_logger().warn(f'Failed to read Dynamixel scan YAML: {exc}')
 
         ports = self._dynamixel_serial_ports(config)
-        scan_max_id = DYNAMIXEL_SCAN_MAX_ID
+        scan_max_id = max(0, min(252, int(self.dynamixel_scan_max_id)))
         ids = list(range(0, scan_max_id + 1))
         for master in config.get('masters', []):
             if not isinstance(master, dict):
@@ -1668,20 +2159,19 @@ class MotionStateMonitor(Node):
         slaves: List[Dict[str, Any]],
         configured_axes: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
-        axes_by_alias: Dict[int, List[Dict[str, Any]]] = {}
+        axes_by_identity: Dict[tuple, List[Dict[str, Any]]] = {}
         for axis in configured_axes:
-            alias = self._parse_int(axis.get('ethercat_alias'))
-            if alias is None:
-                continue
-            axes_by_alias.setdefault(alias, []).append(axis)
+            identity = self._configured_ethercat_identity(axis)
+            if identity is not None:
+                axes_by_identity.setdefault(identity, []).append(axis)
 
-        seen_aliases = set()
+        seen_identities = set()
         rows: List[Dict[str, Any]] = []
         for slave in slaves:
-            ethercat_alias = self._parse_int(slave.get('ethercat_alias'))
-            if ethercat_alias is not None:
-                seen_aliases.add(ethercat_alias)
-            axes = axes_by_alias.get(ethercat_alias, [])
+            identity = self._scanned_ethercat_identity(slave)
+            if identity is not None:
+                seen_identities.add(identity)
+            axes = axes_by_identity.get(identity, [])
             axis = axes[0] if axes else None
             if len(axes) > 1:
                 match_state = 'duplicate_axis'
@@ -1695,12 +2185,38 @@ class MotionStateMonitor(Node):
             rows.append(self._matching_row(slave, axis, match_state))
 
         for axis in configured_axes:
-            ethercat_alias = self._parse_int(axis.get('ethercat_alias'))
-            if ethercat_alias is None or ethercat_alias in seen_aliases:
+            identity = self._configured_ethercat_identity(axis)
+            if identity is None or identity in seen_identities:
                 continue
             rows.append(self._matching_row(None, axis, 'missing'))
 
         return rows
+
+    def _configured_ethercat_identity(
+        self, axis: Dict[str, Any]
+    ) -> Optional[tuple]:
+        alias = self._parse_int(axis.get('ethercat_alias'))
+        if alias is not None and alias > 0:
+            return ('alias', alias)
+        position = self._parse_int(axis.get('slave_position'))
+        if position is None:
+            return None
+        master_index = self._parse_int(axis.get('ethercat_master_index')) or 0
+        return ('position', master_index, position)
+
+    def _scanned_ethercat_identity(
+        self, slave: Dict[str, Any]
+    ) -> Optional[tuple]:
+        alias = self._parse_int(slave.get('ethercat_alias'))
+        if alias is None or alias <= 0:
+            alias = self._parse_int(slave.get('rotary_alias'))
+        if alias is not None and alias > 0:
+            return ('alias', alias)
+        position = self._parse_int(slave.get('slave_position'))
+        if position is None:
+            return None
+        master_index = self._parse_int(slave.get('master_index')) or 0
+        return ('position', master_index, position)
 
     def _matching_row(
         self,

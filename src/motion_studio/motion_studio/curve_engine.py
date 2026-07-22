@@ -16,6 +16,23 @@ EPSILON = 1e-9
 MAX_TIME_SCALE = 100.0
 
 
+def point_curve_order(curve: Dict[str, Any]) -> int:
+    """Return a validated curve order, including legacy straight curves."""
+    raw_order = curve.get('interpolation_order')
+    if raw_order is None:
+        points = [point for point in curve.get('points') or [] if isinstance(point, dict)]
+        if points and all(point.get('tangent_mode') == 'linear' for point in points):
+            return 1
+        return 3
+    try:
+        order = int(raw_order)
+    except (TypeError, ValueError) as exc:
+        raise ValueError('포인트 곡선은 직선, 3차, 5차 중 하나여야 합니다') from exc
+    if order not in {1, 3, 5}:
+        raise ValueError('포인트 곡선은 직선, 3차, 5차 중 하나여야 합니다')
+    return order
+
+
 def finite(value: Any, label: str) -> float:
     try:
         number = float(value)
@@ -112,16 +129,6 @@ def scale_time_segment(
     return result
 
 
-def _bezier(a: float, b: float, c: float, d: float, ratio: float) -> float:
-    inverse = 1.0 - ratio
-    return (
-        (inverse ** 3) * a
-        + 3.0 * (inverse ** 2) * ratio * b
-        + 3.0 * inverse * (ratio ** 2) * c
-        + (ratio ** 3) * d
-    )
-
-
 def _automatic_slope(points: Sequence[Dict[str, Any]], index: int) -> float:
     if len(points) < 2:
         return 0.0
@@ -133,7 +140,28 @@ def _automatic_slope(points: Sequence[Dict[str, Any]], index: int) -> float:
     return (float(after['value_deg']) - float(before['value_deg'])) / span
 
 
-def prepare_curve_points(raw_points: Sequence[Any]) -> List[Dict[str, Any]]:
+def _automatic_acceleration(points: Sequence[Dict[str, Any]], index: int) -> float:
+    if index <= 0 or index >= len(points) - 1:
+        return 0.0
+    before, point, after = points[index - 1], points[index], points[index + 1]
+    previous_span = float(point['time_sec']) - float(before['time_sec'])
+    following_span = float(after['time_sec']) - float(point['time_sec'])
+    if previous_span <= EPSILON or following_span <= EPSILON:
+        return 0.0
+    previous_slope = (
+        float(point['value_deg']) - float(before['value_deg'])
+    ) / previous_span
+    following_slope = (
+        float(after['value_deg']) - float(point['value_deg'])
+    ) / following_span
+    return 2.0 * (following_slope - previous_slope) / (
+        previous_span + following_span
+    )
+
+
+def prepare_curve_points(
+    raw_points: Sequence[Any], interpolation_order: int = 3
+) -> List[Dict[str, Any]]:
     """Normalize user-created points and their data-coordinate handles."""
     points = []
     for index, raw in enumerate(raw_points):
@@ -148,7 +176,7 @@ def prepare_curve_points(raw_points: Sequence[Any]) -> List[Dict[str, Any]]:
             'out_handle': dict(raw.get('out_handle') or {}),
         }
         if point['tangent_mode'] not in {'auto', 'smooth', 'broken', 'linear'}:
-            raise ValueError('탄젠트 방식은 자동, 부드럽게, 분리, 직선 중 하나여야 합니다')
+            raise ValueError('탄젠트 방식은 자동, 부드럽게, 분리 중 하나여야 합니다')
         points.append(point)
     points.sort(key=lambda item: (item['time_sec'], item['point_id']))
     if len(points) < 2:
@@ -160,6 +188,9 @@ def prepare_curve_points(raw_points: Sequence[Any]) -> List[Dict[str, Any]]:
     ):
         raise ValueError('포인트 시간은 서로 최소 20ms 이상 떨어져야 합니다')
 
+    if interpolation_order not in {1, 3, 5}:
+        raise ValueError('포인트 곡선은 직선, 3차, 5차 중 하나여야 합니다')
+
     for index, point in enumerate(points):
         previous_span = (
             point['time_sec'] - points[index - 1]['time_sec'] if index else 0.0
@@ -170,22 +201,31 @@ def prepare_curve_points(raw_points: Sequence[Any]) -> List[Dict[str, Any]]:
         )
         slope = _automatic_slope(points, index)
         mode = point['tangent_mode']
-        if mode in {'auto', 'linear'}:
+        is_boundary = index == 0 or index == len(points) - 1
+        # Legacy projects stored "linear" as a tangent mode.  It remains
+        # readable, while new projects store straightness at curve level.
+        if mode == 'linear':
+            mode = 'auto'
+        if interpolation_order == 1:
+            in_slope = (
+                (point['value_deg'] - points[index - 1]['value_deg']) / previous_span
+                if previous_span else 0.0
+            )
+            out_slope = (
+                (points[index + 1]['value_deg'] - point['value_deg']) / following_span
+                if following_span else 0.0
+            )
             in_dt = -(previous_span / 3.0) if previous_span else 0.0
             out_dt = (following_span / 3.0) if following_span else 0.0
-            if mode == 'linear':
-                in_slope = (
-                    (point['value_deg'] - points[index - 1]['value_deg']) / previous_span
-                    if previous_span else 0.0
-                )
-                out_slope = (
-                    (points[index + 1]['value_deg'] - point['value_deg']) / following_span
-                    if following_span else 0.0
-                )
-            else:
-                in_slope = out_slope = slope
             point['in_handle'] = {'dt_sec': in_dt, 'dv_deg': in_slope * in_dt}
             point['out_handle'] = {'dt_sec': out_dt, 'dv_deg': out_slope * out_dt}
+            continue
+        if mode in {'auto', 'broken'} or is_boundary:
+            in_dt = -(previous_span / 3.0) if previous_span else 0.0
+            out_dt = (following_span / 3.0) if following_span else 0.0
+            applied_slope = 0.0 if mode == 'broken' or is_boundary else slope
+            point['in_handle'] = {'dt_sec': in_dt, 'dv_deg': applied_slope * in_dt}
+            point['out_handle'] = {'dt_sec': out_dt, 'dv_deg': applied_slope * out_dt}
             continue
 
         in_dt = max(-previous_span / 2.0, min(0.0, finite(
@@ -196,43 +236,96 @@ def prepare_curve_points(raw_points: Sequence[Any]) -> List[Dict[str, Any]]:
         ))) if following_span else 0.0
         in_dv = finite(point['in_handle'].get('dv_deg', slope * in_dt), '들어오는 핸들 값')
         out_dv = finite(point['out_handle'].get('dv_deg', slope * out_dt), '나가는 핸들 값')
-        if mode == 'smooth':
-            slopes = []
-            if abs(in_dt) > EPSILON:
-                slopes.append(in_dv / in_dt)
-            if abs(out_dt) > EPSILON:
-                slopes.append(out_dv / out_dt)
-            shared = sum(slopes) / len(slopes) if slopes else slope
-            in_dv, out_dv = shared * in_dt, shared * out_dt
+        slopes = []
+        if abs(in_dt) > EPSILON:
+            slopes.append(in_dv / in_dt)
+        if abs(out_dt) > EPSILON:
+            slopes.append(out_dv / out_dt)
+        shared = sum(slopes) / len(slopes) if slopes else slope
+        in_dv, out_dv = shared * in_dt, shared * out_dt
         point['in_handle'] = {'dt_sec': in_dt, 'dv_deg': in_dv}
         point['out_handle'] = {'dt_sec': out_dt, 'dv_deg': out_dv}
     return points
 
 
-def _sample_bezier_segment(
-    first: Dict[str, Any], second: Dict[str, Any], time_sec: float
+def _point_slope(points: Sequence[Dict[str, Any]], index: int) -> float:
+    if index == 0 or index == len(points) - 1:
+        return 0.0
+    point = points[index]
+    if point['tangent_mode'] == 'broken':
+        return 0.0
+    handle = point.get('out_handle') or point.get('in_handle') or {}
+    dt_sec = float(handle.get('dt_sec') or 0.0)
+    if abs(dt_sec) <= EPSILON:
+        return _automatic_slope(points, index)
+    return float(handle.get('dv_deg') or 0.0) / dt_sec
+
+
+def _sample_polynomial_segment(
+    points: Sequence[Dict[str, Any]], index: int, time_sec: float,
+    interpolation_order: int,
 ) -> float:
-    x0, y0 = float(first['time_sec']), float(first['value_deg'])
-    x3, y3 = float(second['time_sec']), float(second['value_deg'])
-    out_handle = first['out_handle']
-    in_handle = second['in_handle']
-    x1 = x0 + float(out_handle['dt_sec'])
-    y1 = y0 + float(out_handle['dv_deg'])
-    x2 = x3 + float(in_handle['dt_sec'])
-    y2 = y3 + float(in_handle['dv_deg'])
-    low, high = 0.0, 1.0
-    for _ in range(32):
-        ratio = (low + high) / 2.0
-        if _bezier(x0, x1, x2, x3, ratio) < time_sec:
-            low = ratio
-        else:
-            high = ratio
-    return _bezier(y0, y1, y2, y3, (low + high) / 2.0)
+    first, second = points[index], points[index + 1]
+    start = float(first['time_sec'])
+    end = float(second['time_sec'])
+    span = end - start
+    ratio = max(0.0, min(1.0, (time_sec - start) / span))
+    first_value = float(first['value_deg'])
+    second_value = float(second['value_deg'])
+    if interpolation_order == 1:
+        return first_value + ((second_value - first_value) * ratio)
+
+    first_slope = _point_slope(points, index)
+    second_slope = _point_slope(points, index + 1)
+    if interpolation_order == 3:
+        ratio2, ratio3 = ratio * ratio, ratio * ratio * ratio
+        return (
+            ((2 * ratio3) - (3 * ratio2) + 1) * first_value
+            + (ratio3 - (2 * ratio2) + ratio) * span * first_slope
+            + ((-2 * ratio3) + (3 * ratio2)) * second_value
+            + (ratio3 - ratio2) * span * second_slope
+        )
+
+    first_acceleration = (
+        0.0 if first['tangent_mode'] == 'broken'
+        else _automatic_acceleration(points, index)
+    )
+    second_acceleration = (
+        0.0 if second['tangent_mode'] == 'broken'
+        else _automatic_acceleration(points, index + 1)
+    )
+    delta = second_value - first_value
+    c0 = first_value
+    c1 = first_slope * span
+    c2 = 0.5 * first_acceleration * span * span
+    remaining_value = delta - c1 - c2
+    remaining_slope = (second_slope * span) - c1 - (2.0 * c2)
+    remaining_acceleration = (
+        (second_acceleration * span * span) - (2.0 * c2)
+    )
+    c3 = (
+        (10.0 * remaining_value) - (4.0 * remaining_slope)
+        + (0.5 * remaining_acceleration)
+    )
+    c4 = (
+        (-15.0 * remaining_value) + (7.0 * remaining_slope)
+        - remaining_acceleration
+    )
+    c5 = (
+        (6.0 * remaining_value) - (3.0 * remaining_slope)
+        + (0.5 * remaining_acceleration)
+    )
+    return (
+        c0 + (c1 * ratio) + (c2 * ratio ** 2) + (c3 * ratio ** 3)
+        + (c4 * ratio ** 4) + (c5 * ratio ** 5)
+    )
 
 
-def render_point_curve(raw_points: Sequence[Any]) -> tuple[List[Dict[str, Any]], List[tuple[float, float]]]:
+def render_point_curve(
+    raw_points: Sequence[Any], interpolation_order: int = 3
+) -> tuple[List[Dict[str, Any]], List[tuple[float, float]]]:
     """Return normalized editor points and deterministic 20 ms samples."""
-    points = prepare_curve_points(raw_points)
+    points = prepare_curve_points(raw_points, interpolation_order)
     start = float(points[0]['time_sec'])
     end = float(points[-1]['time_sec'])
     count = int(round((end - start) / DEFAULT_PERIOD_SEC))
@@ -247,7 +340,9 @@ def render_point_curve(raw_points: Sequence[Any]) -> tuple[List[Dict[str, Any]],
             segment_index += 1
         samples.append((
             time_sec,
-            _sample_bezier_segment(points[segment_index], points[segment_index + 1], time_sec),
+            _sample_polynomial_segment(
+                points, segment_index, time_sec, interpolation_order
+            ),
         ))
     samples[0] = (start, float(points[0]['value_deg']))
     samples[-1] = (end, float(points[-1]['value_deg']))

@@ -48,6 +48,30 @@ def test_continuous_capability_accepts_values_inside_axis_tolerances():
     assert '5° 이내' in capability['reason']
 
 
+def test_motion_run_publishes_final_control_motion_values():
+    class CapturePublisher:
+        def __init__(self):
+            self.messages = []
+
+        def publish(self, message):
+            self.messages.append(message)
+
+    manager = MotionRunManager.__new__(MotionRunManager)
+    manager._execution_context = {
+        'project_id': 'project-1',
+        'project_generation': 9,
+    }
+    manager._motion_value_pub = CapturePublisher()
+
+    manager._publish_motion_values({'2-1': 3.5, 'bad': float('nan')})
+
+    payload = json.loads(manager._motion_value_pub.messages[-1].data)
+    assert payload['source'] == 'motion_run'
+    assert payload['project_id'] == 'project-1'
+    assert payload['project_generation'] == 9
+    assert payload['values'] == {'2-1': 3.5}
+
+
 def test_four_degree_motion_seam_is_allowed_even_if_motor_delta_is_large():
     capability = MotionRunManager._continuous_capability([{
         'motor_axis': 0,

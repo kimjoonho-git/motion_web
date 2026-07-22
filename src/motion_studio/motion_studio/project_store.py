@@ -494,6 +494,22 @@ def normalize_layer(layer: Any, index: int = 0) -> Dict[str, Any]:
         motion_id = str(curve.get('motion_id') or '').strip()
         if not MOTION_ID_PATTERN.match(motion_id):
             raise ValueError(f'invalid Motion ID in point curve: {motion_id}')
+        interpolation_order = curve.get('interpolation_order')
+        if interpolation_order is None:
+            legacy_points = [
+                point for point in curve.get('points') or [] if isinstance(point, dict)
+            ]
+            interpolation_order = (
+                1 if legacy_points and all(
+                    point.get('tangent_mode') == 'linear' for point in legacy_points
+                ) else 3
+            )
+        try:
+            interpolation_order = int(interpolation_order)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f'invalid point curve order: {interpolation_order}') from exc
+        if interpolation_order not in {1, 3, 5}:
+            raise ValueError(f'invalid point curve order: {interpolation_order}')
         points = []
         seen_point_ids = set()
         for point_index, point in enumerate(curve.get('points') or []):
@@ -528,6 +544,7 @@ def normalize_layer(layer: Any, index: int = 0) -> Dict[str, Any]:
         point_curves.append({
             'curve_id': curve_id,
             'motion_id': motion_id,
+            'interpolation_order': interpolation_order,
             'points': points,
         })
     return {

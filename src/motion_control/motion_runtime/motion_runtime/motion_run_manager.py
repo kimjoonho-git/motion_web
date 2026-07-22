@@ -15,7 +15,7 @@ import rclpy
 import yaml
 from motion_control_msgs.msg import MotorStatus
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Int8MultiArray, String
 
 
@@ -30,6 +30,7 @@ DEFAULT_MOTION_PROJECTS_DIR = (
 )
 DEFAULT_PERIOD_SEC = 0.02
 STATE_TIMEOUT_SEC = 1.0
+SAFETY_STATUS_TIMEOUT_SEC = 2.0
 AC_TARGET_TOLERANCE_DEG = 0.1
 DYNAMIXEL_TARGET_TOLERANCE_DEG = 1.0
 TARGET_SETTLE_TIMEOUT_SEC = 3.0
@@ -75,6 +76,18 @@ class MotionRunManager(Node):
                 '/motion_control/motion_run_status',
             ).value
         )
+        self.motion_value_topic = str(
+            self.declare_parameter(
+                'motion_value_topic',
+                '/motion_control/motion_value_state',
+            ).value
+        )
+        self.safety_status_topic = str(
+            self.declare_parameter(
+                'safety_status_topic',
+                '/motion_control/safety_status',
+            ).value
+        )
         self.action_request_topic = str(
             self.declare_parameter(
                 'action_request_topic',
@@ -100,6 +113,9 @@ class MotionRunManager(Node):
         self._state_lock = threading.Lock()
         self._latest_state: Optional[Dict[str, Any]] = None
         self._latest_state_at: Optional[float] = None
+        self._safety_status_lock = threading.Lock()
+        self._latest_safety_status: Optional[Dict[str, Any]] = None
+        self._latest_safety_status_at: Optional[float] = None
         self._run_lock = threading.RLock()
         self._run_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
@@ -123,6 +139,7 @@ class MotionRunManager(Node):
         self._status: Dict[str, Any] = self._empty_status()
         self._execution_context: Dict[str, Any] = {}
         self._execution_context_ready = False
+        self._project_generation = 0
         self._action_result_lock = threading.Lock()
         self._action_results: Dict[str, List[Dict[str, Any]]] = {}
 
@@ -131,6 +148,17 @@ class MotionRunManager(Node):
             self.motion_state_topic,
             self._motion_state_callback,
             10,
+        )
+        safety_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        self._safety_status_sub = self.create_subscription(
+            String,
+            self.safety_status_topic,
+            self._safety_status_callback,
+            safety_qos,
         )
         self._request_sub = self.create_subscription(
             String,
@@ -147,6 +175,14 @@ class MotionRunManager(Node):
         self._response_pub = self.create_publisher(String, self.response_topic, 10)
         self._status_pub = self.create_publisher(String, self.status_topic, 10)
         self._command_pub = self.create_publisher(MotorStatus, self.motor_command_topic, qos)
+        motion_value_qos = QoSProfile(
+            depth=10,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        self._motion_value_pub = self.create_publisher(
+            String, self.motion_value_topic, motion_value_qos
+        )
         self._action_request_pub = self.create_publisher(String, self.action_request_topic, 10)
         self._status_timer = self.create_timer(0.5, self._publish_status)
 
@@ -154,6 +190,7 @@ class MotionRunManager(Node):
             f'motion_run_manager started: state={self.motion_state_topic}, '
             f'command={self.motor_command_topic}, request={self.request_topic}, '
             f'action_request={self.action_request_topic}, '
+            f'safety_status={self.safety_status_topic}, '
             f'period={self.period_sec * 1000.0:.3f} ms, '
             f'motion_projects_dir={self.motion_projects_dir}'
         )
@@ -168,6 +205,18 @@ class MotionRunManager(Node):
             self._latest_state = payload if isinstance(payload, dict) else None
             self._latest_state_at = time.time()
 
+    def _safety_status_callback(self, msg: String) -> None:
+        try:
+            payload = json.loads(msg.data)
+        except json.JSONDecodeError:
+            self.get_logger().warn('Invalid safety_status JSON received.')
+            return
+        if not isinstance(payload, dict):
+            return
+        with self._safety_status_lock:
+            self._latest_safety_status = payload
+            self._latest_safety_status_at = time.monotonic()
+
     def _action_result_callback(self, msg: String) -> None:
         try:
             payload = json.loads(msg.data)
@@ -178,6 +227,12 @@ class MotionRunManager(Node):
             return
         request_id = str(payload.get('request_id') or '')
         if not request_id:
+            return
+        generation = int(self._execution_context.get('project_generation') or 0)
+        try:
+            if int(payload.get('project_generation')) != generation:
+                return
+        except (TypeError, ValueError):
             return
         now = time.time()
         with self._action_result_lock:
@@ -199,19 +254,38 @@ class MotionRunManager(Node):
             return
 
         request_id = str(request.get('request_id') or '')
+        project_generation = request.get('project_generation')
         command = str(request.get('command') or '').strip()
         payload = request.get('payload')
         if not isinstance(payload, dict):
             payload = {}
 
         try:
+            request_generation = self._validate_request_generation(
+                command, project_generation, payload
+            )
             if command == 'apply_context':
                 response = self._apply_execution_context(payload)
             elif command == 'confirm_context':
                 response = self._confirm_execution_context(payload)
             elif command == 'invalidate_context':
-                self._execution_context_ready = False
-                response = {'success': True, 'message': '모션 실행 컨텍스트 사용 중지'}
+                with self._run_lock:
+                    if self._run_thread is not None and self._run_thread.is_alive():
+                        raise ValueError(
+                            '모션 동작 중에는 프로젝트 메모리를 폐기할 수 없습니다'
+                        )
+                    self._execution_context = {}
+                    self._execution_context_ready = False
+                    self.motion_files_dir = self.motion_projects_dir
+                    self.mappings_dir = self.motion_projects_dir
+                    self._status = self._empty_status()
+                response = {
+                    'success': True,
+                    'message': '모션 실행 프로젝트 메모리 폐기',
+                    'project_id': '',
+                    'context_id': '',
+                    'status': self.status(),
+                }
             elif command == 'status':
                 response = {'success': True, 'message': 'motion run status', 'status': self.status()}
             elif command == 'check':
@@ -234,8 +308,29 @@ class MotionRunManager(Node):
             response = {'success': False, 'message': f'motion run command failed: {exc}'}
 
         response['request_id'] = request_id
+        response['project_generation'] = project_generation
         self._publish_response(response)
         self._publish_status()
+
+    def _validate_request_generation(
+        self, command: str, request_generation: Any, payload: Dict[str, Any]
+    ) -> int:
+        try:
+            generation = int(request_generation)
+            payload_generation = int(payload.get('project_generation'))
+        except (TypeError, ValueError) as exc:
+            raise ValueError('프로젝트 세대 번호가 필요합니다') from exc
+        if generation < 1 or payload_generation != generation:
+            raise ValueError('요청의 프로젝트 세대 번호가 일치하지 않습니다')
+        current = int(getattr(self, '_project_generation', 0) or 0)
+        if command in {'apply_context', 'invalidate_context'}:
+            if generation < current:
+                raise ValueError('이전 프로젝트 세대의 요청을 폐기했습니다')
+            self._project_generation = generation
+            return generation
+        if generation != current:
+            raise ValueError('현재 프로젝트 세대와 다른 요청을 폐기했습니다')
+        return generation
 
     def _apply_execution_context(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         project_id, _, mappings_dir = self._project_asset_dirs(payload)
@@ -254,6 +349,7 @@ class MotionRunManager(Node):
             next_context = {
                 'context_id': context_id,
                 'project_id': project_id,
+                'project_generation': int(payload.get('project_generation') or 0),
                 'mapping_file_id': mapping_path.name,
                 'mapping_sha256': actual_sha,
             }
@@ -290,6 +386,8 @@ class MotionRunManager(Node):
             or not context_id
             or context_id != applied.get('context_id')
             or project_id != applied.get('project_id')
+            or int(payload.get('project_generation') or 0)
+            != int(applied.get('project_generation') or 0)
         ):
             raise ValueError('현재 프로젝트 실행 컨텍스트 적용 대기 중입니다')
         _, _, mappings_dir = self._project_asset_dirs(payload)
@@ -347,6 +445,13 @@ class MotionRunManager(Node):
                 return {
                     'success': False,
                     'message': 'previous motion run task is still running',
+                    'status': self.status(),
+                }
+            ownership_error = self._playback_ownership_error()
+            if ownership_error:
+                return {
+                    'success': False,
+                    'message': ownership_error,
                     'status': self.status(),
                 }
             plan = self._build_plan(
@@ -475,6 +580,10 @@ class MotionRunManager(Node):
             )
             if not reached:
                 raise RuntimeError(f'초기 위치 도달 확인 실패: {message}')
+            self._publish_motion_values({
+                str(axis['motion_id']): float(axis['initial_motion_position_deg'])
+                for axis in init_axes
+            })
             initial_finished_at = time.time()
             status = self._status_from_plan('initialized', '초기 위치 이동 완료', plan)
             status['phase'] = 'initialized'
@@ -504,6 +613,7 @@ class MotionRunManager(Node):
         try:
             run_mode = str(plan.get('run_mode') or 'once')
             continuous = run_mode == 'continuous'
+            self._require_playback_command_allowed()
             motors = self._current_motors()
             self._prepare_motion_stream(motors, plan['axes'])
             motion_started_at = time.time()
@@ -533,8 +643,14 @@ class MotionRunManager(Node):
                         status['cycle_count'] = cycle_count
                         self._set_status(status)
                         return
+                    self._require_playback_command_allowed()
                     positions = sample['positions']
-                    self._publish_motion_setpoints(motors, plan['axes'], positions)
+                    self._publish_motion_setpoints(
+                        motors,
+                        plan['axes'],
+                        positions,
+                        sample.get('motion_values'),
+                    )
                     self._update_progress(
                         'running',
                         float(sample['time_sec']),
@@ -553,7 +669,12 @@ class MotionRunManager(Node):
 
             final_positions = samples[-1]['positions'] if samples else {}
             if final_positions:
-                self._publish_motion_setpoints(motors, plan['axes'], final_positions)
+                self._publish_motion_setpoints(
+                    motors,
+                    plan['axes'],
+                    final_positions,
+                    samples[-1].get('motion_values'),
+                )
                 status = self._status_from_plan('verifying', '모션 최종 위치 확인 중', plan)
                 status['phase'] = 'verifying'
                 status['phase_started_at'] = motion_started_at
@@ -649,6 +770,7 @@ class MotionRunManager(Node):
         for step in range(steps + 1):
             if self._stop_event.is_set():
                 raise InterruptedError()
+            self._require_playback_command_allowed()
 
             elapsed = min(step * tick_sec, duration)
             positions: Dict[int, float] = {}
@@ -703,9 +825,11 @@ class MotionRunManager(Node):
         else:
             raise RuntimeError(f'Axis {motor_axis} unsupported motor type for initialization: {motor_type}')
 
-        request_id = f'motion-init-{motor_axis}-{time.time_ns()}'
+        generation = int(self._execution_context.get('project_generation') or 0)
+        request_id = f'motion-init-g{generation}-{motor_axis}-{time.time_ns()}'
         payload = {
             'request_id': request_id,
+            'project_generation': generation,
             'command': command,
             'axis': motor_axis,
             'target_deg': float(target_position),
@@ -1058,6 +1182,7 @@ class MotionRunManager(Node):
         for index in range(sample_count):
             sample_time = min(start_time + (index * self.period_sec), end_time)
             positions = {}
+            motion_values = {}
             for axis in axes:
                 motion_value = self._interpolated_value(groups[axis['motion_id']], sample_time)
                 motion_value = self._clamp_motion_value(
@@ -1066,10 +1191,12 @@ class MotionRunManager(Node):
                     axis.get('motion_limit_upper_deg'),
                 )
                 positions[int(axis['motor_axis'])] = self._motor_target(axis['row'], motion_value)
+                motion_values[str(axis['motion_id'])] = float(motion_value)
             samples.append({
                 'time_sec': sample_time - start_time,
                 'absolute_time_sec': sample_time,
                 'positions': positions,
+                'motion_values': motion_values,
             })
 
         complete_motion_data_available = (
@@ -1175,10 +1302,69 @@ class MotionRunManager(Node):
         motors: List[Dict[str, Any]],
         axes: List[Dict[str, Any]],
         positions: Dict[int, float],
+        motion_values: Optional[Dict[str, float]] = None,
     ) -> None:
         if not positions:
             return
         self._publish_positions(motors, axes, positions)
+        if motion_values:
+            self._publish_motion_values(motion_values)
+
+    def _publish_motion_values(self, values: Dict[str, float]) -> None:
+        publisher = getattr(self, '_motion_value_pub', None)
+        if publisher is None:
+            return
+        cleaned = {}
+        for motion_id, value in values.items():
+            number = self._finite_float(value)
+            key = str(motion_id or '').strip()
+            if key and number is not None:
+                cleaned[key] = float(number)
+        if not cleaned:
+            return
+        payload = {
+            'source': 'motion_run',
+            'project_id': str(self._execution_context.get('project_id') or ''),
+            'project_generation': int(
+                self._execution_context.get('project_generation') or 0
+            ),
+            'stamp': time.time(),
+            'values': cleaned,
+        }
+        publisher.publish(String(data=json.dumps(payload, ensure_ascii=False)))
+
+    def _playback_ownership_error(self) -> str:
+        """Return why runtime commands cannot currently own motor output."""
+        lock = getattr(self, '_safety_status_lock', None)
+        if lock is None:
+            # Lightweight unit-test instances created with __new__ predate this
+            # runtime subscription. Normal ROS nodes always initialize the lock.
+            return ''
+        with lock:
+            payload = getattr(self, '_latest_safety_status', None)
+            received_at = getattr(self, '_latest_safety_status_at', None)
+            status = dict(payload) if isinstance(payload, dict) else None
+        if status is None or received_at is None:
+            return '모션 Supervisor 상태를 아직 받지 못했습니다'
+        if time.monotonic() - float(received_at) > SAFETY_STATUS_TIMEOUT_SEC:
+            return '모션 Supervisor 상태가 갱신되지 않았습니다'
+        if bool(status.get('emergency_latched')):
+            return '긴급정지 잠김 상태입니다. 전체 프로그램 재시작이 필요합니다'
+        if bool(status.get('commands_blocked')):
+            return str(status.get('message') or '모터 명령이 일시 차단된 상태입니다')
+        owner = str(status.get('command_owner') or 'none').strip().lower()
+        if owner not in ('none', 'playback'):
+            owner_names = {
+                'midi': 'MIDI 제어',
+                'manual': '수동 제어',
+            }
+            return f"{owner_names.get(owner, owner)}가 사용 중이어서 모션을 시작할 수 없습니다"
+        return ''
+
+    def _require_playback_command_allowed(self) -> None:
+        error = self._playback_ownership_error()
+        if error:
+            raise RuntimeError(error)
 
     def _prepare_motion_stream(
         self,

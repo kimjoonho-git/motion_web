@@ -121,6 +121,7 @@ class MotionStudioNode(Node):
         self._workspace_project_id = ''
         self._execution_context: Dict[str, Any] = {}
         self._execution_context_ready = False
+        self._project_generation = 0
         self._lock = threading.RLock()
         self._current_project: Optional[Dict[str, Any]] = None
         self._midi_state: Dict[str, Any] = {}
@@ -178,7 +179,19 @@ class MotionStudioNode(Node):
             return
         if isinstance(payload, dict):
             with self._lock:
-                self._midi_state = payload
+                context = payload.get('execution_context')
+                if not isinstance(context, dict):
+                    context = {}
+                project_id = str(
+                    payload.get('project_id')
+                    or context.get('project_id')
+                    or ''
+                )
+                if (
+                    self._execution_context_ready
+                    and project_id == self._workspace_project_id
+                ):
+                    self._midi_state = payload
 
     def _run_response_callback(self, msg: String) -> None:
         try:
@@ -186,7 +199,7 @@ class MotionStudioNode(Node):
         except json.JSONDecodeError:
             return
         request_id = str(payload.get('request_id') or '') if isinstance(payload, dict) else ''
-        if request_id:
+        if request_id and self._response_generation_matches(payload):
             with self._lock:
                 self._run_results[request_id] = payload
 
@@ -196,7 +209,7 @@ class MotionStudioNode(Node):
         except json.JSONDecodeError:
             return
         request_id = str(payload.get('request_id') or '') if isinstance(payload, dict) else ''
-        if request_id:
+        if request_id and self._response_generation_matches(payload):
             with self._lock:
                 self._midi_results[request_id] = payload
 
@@ -207,6 +220,16 @@ class MotionStudioNode(Node):
             return
         if isinstance(payload, dict):
             with self._lock:
+                if str(payload.get('project_id') or '') != self._workspace_project_id:
+                    return
+                context = payload.get('execution_context')
+                if not isinstance(context, dict):
+                    return
+                try:
+                    if int(context.get('project_generation')) != self._context_generation():
+                        return
+                except (TypeError, ValueError):
+                    return
                 self._motion_run_status = payload
                 studio_state = str(self._status.get('state') or '')
                 run_state = str(payload.get('state') or '')
@@ -253,16 +276,39 @@ class MotionStudioNode(Node):
         if not isinstance(request, dict):
             return
         request_id = str(request.get('request_id') or '')
+        project_generation = request.get('project_generation')
         command = str(request.get('command') or 'status').strip()
         payload = request.get('payload') if isinstance(request.get('payload'), dict) else {}
         try:
+            self._validate_request_generation(command, project_generation, payload)
             result = self._handle(command, payload)
         except Exception as exc:
             self.get_logger().error(f'studio command failed: {command}\n{traceback.format_exc()}')
             result = {'success': False, 'message': str(exc)}
         result['request_id'] = request_id
+        result['project_generation'] = project_generation
         self._publish_json(self._response_pub, result)
         self._publish_status()
+
+    def _validate_request_generation(
+        self, command: str, request_generation: Any, payload: Dict[str, Any]
+    ) -> int:
+        try:
+            generation = int(request_generation)
+            payload_generation = int(payload.get('project_generation'))
+        except (TypeError, ValueError) as exc:
+            raise ValueError('프로젝트 세대 번호가 필요합니다') from exc
+        if generation < 1 or payload_generation != generation:
+            raise ValueError('요청의 프로젝트 세대 번호가 일치하지 않습니다')
+        current = int(getattr(self, '_project_generation', 0) or 0)
+        if command in {'apply_context', 'invalidate_context'}:
+            if generation < current:
+                raise ValueError('이전 프로젝트 세대의 요청을 폐기했습니다')
+            self._project_generation = generation
+            return generation
+        if generation != current:
+            raise ValueError('현재 프로젝트 세대와 다른 요청을 폐기했습니다')
+        return generation
 
     def _handle(self, command: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         if command == 'status':
@@ -339,8 +385,28 @@ class MotionStudioNode(Node):
             }
         if command == 'invalidate_context':
             with self._lock:
+                self._operation_generation += 1
+                self._store = ProjectStore()
+                self._workspace_project_id = ''
+                self._current_project = None
+                self._execution_context = {}
                 self._execution_context_ready = False
-            return {'success': True, 'message': '모션 스튜디오 사용 차단', 'status': self.snapshot()}
+                self._midi_state = {}
+                self._motion_run_status = {}
+                self._run_results.clear()
+                self._midi_results.clear()
+                self._record_started = 0.0
+                self._record_frames = []
+                self._record_eligible_motion_ids = set()
+                self._recorded_motion_ids = set()
+                self._status = self._empty_status()
+            return {
+                'success': True,
+                'message': '모션 스튜디오 프로젝트 메모리 폐기',
+                'project_id': '',
+                'context_id': '',
+                'status': self.snapshot(),
+            }
         if command == 'create':
             with self._lock:
                 self._require_idle_locked()
@@ -453,6 +519,7 @@ class MotionStudioNode(Node):
             next_context = {
                 'context_id': context_id,
                 'project_id': self._workspace_project_id,
+                'project_generation': int(payload.get('project_generation') or 0),
                 'mapping_file_id': mapping_file_id,
                 'mapping_sha256': actual_sha,
             }
@@ -471,7 +538,11 @@ class MotionStudioNode(Node):
         with self._lock:
             ready = self._execution_context_ready
             project_id = self._execution_context.get('project_id')
-        if not ready or project_id != self._workspace_project_id:
+        if (
+            not ready
+            or project_id != self._workspace_project_id
+            or self._context_generation() != int(self._project_generation or 0)
+        ):
             raise ValueError('현재 프로젝트 실행 컨텍스트 적용 대기 중입니다')
         path = (
             self.motion_projects_dir / project_id / 'motion_axis_matching'
@@ -1212,6 +1283,7 @@ class MotionStudioNode(Node):
         return {
             'project_id': self._workspace_project_id,
             'context_id': self._execution_context.get('context_id', ''),
+            'project_generation': self._context_generation(),
             'request_source': 'motion_studio',
             'motion_file_id': file_id,
             'mapping_file_id': project['mapping_file_id'],
@@ -1219,10 +1291,26 @@ class MotionStudioNode(Node):
             'initial_move_time_sec': move_time,
         }
 
+    def _context_generation(self) -> int:
+        try:
+            return int(self._execution_context.get('project_generation') or 0)
+        except (AttributeError, TypeError, ValueError):
+            return 0
+
+    def _response_generation_matches(self, payload: Any) -> bool:
+        if not isinstance(payload, dict):
+            return False
+        try:
+            return int(payload.get('project_generation')) == self._context_generation()
+        except (TypeError, ValueError):
+            return False
+
     def _request_run(self, command: str, payload: Dict[str, Any], timeout: float) -> Dict[str, Any]:
-        request_id = f'studio-run-{time.time_ns()}'
+        generation = self._context_generation()
+        request_id = f'studio-run-g{generation}-{time.time_ns()}'
         self._publish_json(self._request_pub, {
-            'request_id': request_id, 'command': command, 'payload': payload
+            'request_id': request_id, 'project_generation': generation,
+            'command': command, 'payload': {**payload, 'project_generation': generation}
         })
         return self._wait_for_run_result(request_id, timeout)
 
@@ -1235,7 +1323,8 @@ class MotionStudioNode(Node):
         expected_state: str,
     ) -> Dict[str, Any]:
         """Publish only while the operation is active, atomically with cancellation."""
-        request_id = f'studio-run-{time.time_ns()}'
+        generation = self._context_generation()
+        request_id = f'studio-run-g{generation}-{time.time_ns()}'
         with self._lock:
             if (
                 operation_generation != self._operation_generation
@@ -1244,8 +1333,9 @@ class MotionStudioNode(Node):
                 return {'success': False, 'message': '사용자가 모션 동작을 정지했습니다'}
             self._publish_json(self._request_pub, {
                 'request_id': request_id,
+                'project_generation': generation,
                 'command': command,
-                'payload': payload,
+                'payload': {**payload, 'project_generation': generation},
             })
         return self._wait_for_run_result(request_id, timeout)
 
@@ -1260,11 +1350,14 @@ class MotionStudioNode(Node):
         return {'success': False, 'message': 'motion_run_manager 응답 시간 초과'}
 
     def _request_midi(self, command: str, payload: Dict[str, Any], timeout: float) -> Dict[str, Any]:
-        request_id = f'studio-midi-{time.time_ns()}'
+        generation = self._context_generation()
+        request_id = f'studio-midi-g{generation}-{time.time_ns()}'
         payload = dict(payload)
         payload['project_id'] = self._workspace_project_id
+        payload['project_generation'] = generation
         self._publish_json(self._midi_request_pub, {
-            'request_id': request_id, 'command': command, 'payload': payload
+            'request_id': request_id, 'project_generation': generation,
+            'command': command, 'payload': payload
         })
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:

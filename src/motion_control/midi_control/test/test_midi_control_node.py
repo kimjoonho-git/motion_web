@@ -9,6 +9,7 @@ from midi_control.bank_manager import MIDI_CHANNEL_COUNT, MidiBankManager
 from midi_control.midi_control_node import (
     MIDI_VALUE_MAX,
     MidiControlNode,
+    motion_value_display,
     motion_value_from_motor,
     motion_value_from_output,
     motor_target_from_motion,
@@ -26,6 +27,117 @@ class CapturePublisher:
 
     def publish(self, message):
         self.messages.append(message)
+
+
+def test_motion_value_display_uses_source_values_and_reports_missing_or_diff():
+    value, text, status = motion_value_display(
+        ['1-1', '1-2'],
+        {'1-1': 1.2345, '1-2': 1.2345},
+    )
+    assert value == pytest.approx(1.2345)
+    assert text == '1.234'
+    assert status == 'confirmed'
+    assert motion_value_display(['1-1'], {}) == (None, 'NO DATA', 'missing')
+    assert motion_value_display(
+        ['1-1', '1-2'],
+        {'1-1': 1.0, '1-2': 2.0},
+    ) == (None, 'DIFF', 'different')
+
+
+def test_motion_value_preview_is_available_only_while_select_is_enabled():
+    assert motion_value_display(
+        ['2-1'],
+        {},
+        control_enabled=False,
+        estimated_value=-10.0,
+    ) == (None, 'NO DATA', 'missing')
+    assert motion_value_display(
+        ['2-1'],
+        {},
+        control_enabled=True,
+        estimated_value=-10.0,
+    ) == (-10.0, '~-10.00', 'estimated')
+
+    # A confirmed source-topic value always takes priority over the preview.
+    assert motion_value_display(
+        ['2-1'],
+        {'2-1': 4.25},
+        control_enabled=True,
+        estimated_value=-10.0,
+    ) == (4.25, '4.250', 'confirmed')
+
+
+def test_motion_value_topic_cache_accepts_only_current_project_generation():
+    node = MidiControlNode.__new__(MidiControlNode)
+    node._lock = threading.Lock()
+    node._project_id = 'project-1'
+    node._execution_context = {'project_generation': 3}
+    node._source_motion_values = {}
+    node._source_motion_value_stamps = {}
+    node._source_motion_value_context = ('', 0)
+
+    node._motion_value_callback(SimpleNamespace(data=json.dumps({
+        'project_id': 'project-1',
+        'project_generation': 3,
+        'stamp': 10.0,
+        'values': {'2-1': 4.25},
+    })))
+    node._motion_value_callback(SimpleNamespace(data=json.dumps({
+        'project_id': 'project-1',
+        'project_generation': 2,
+        'stamp': 20.0,
+        'values': {'2-1': 9.0},
+    })))
+
+    assert node._source_motion_values == {'2-1': 4.25}
+
+
+def test_rec_mode_sends_source_motion_text_and_off_mode_keeps_14bit_text():
+    node = MidiControlNode.__new__(MidiControlNode)
+    node._state_publisher = CapturePublisher()
+    node._feedback_publisher = CapturePublisher()
+    node._lock = threading.Lock()
+    node._pending_fader_positions = [None] * MIDI_CHANNEL_COUNT
+    node._last_feedback = [None] * MIDI_CHANNEL_COUNT
+    channel = {
+        'channel': 0,
+        'control_enabled': False,
+        'display_motion_value': True,
+        'filter_level': 4,
+        'motion_id': '2-1',
+        'motion_value_display_text': '4.250',
+        'raw_value': 12345,
+        'observed_raw_value': 8192,
+        'final_output_value': 12345.0,
+    }
+    node._snapshot = lambda: {'channels': [dict(channel)]}
+
+    node._publish_state()
+    fields = node._feedback_publisher.messages[-1].data.split('\t')
+    assert fields[2] == '1'
+    assert fields[5] == '4.250'
+
+    channel['display_motion_value'] = False
+    node._snapshot = lambda: {'channels': [dict(channel)]}
+    node._publish_state()
+    fields = node._feedback_publisher.messages[-1].data.split('\t')
+    assert fields[2] == '0'
+    assert fields[5] == '8192'
+
+
+def test_midi_node_rejects_previous_project_generation():
+    node = MidiControlNode.__new__(MidiControlNode)
+    node._project_generation = 6
+
+    with pytest.raises(ValueError, match='이전 프로젝트 세대'):
+        node._validate_request_generation(
+            'invalidate_context', 5, {'project_generation': 5}
+        )
+
+    with pytest.raises(ValueError, match='현재 프로젝트 세대'):
+        node._validate_request_generation(
+            'update_bank', 7, {'project_generation': 7}
+        )
 
 
 def add_motor_control_state(node):
@@ -62,16 +174,53 @@ def test_input_state_keeps_physical_touch_movement_and_sync_separate():
     node._physical_touch = [False] * MIDI_CHANNEL_COUNT
     node._fader_moving = [False] * MIDI_CHANNEL_COUNT
     node._bridge_fader_syncing = [False] * MIDI_CHANNEL_COUNT
+    node._last_physical_input_monotonic = None
+    node._last_physical_input_wall = None
 
     node._input_state_callback(SimpleNamespace(data=(
         '{"physical_touch":[true,false],'
         '"fader_moving":[false,true],'
-        '"fader_syncing":[false,true]}'
+        '"fader_syncing":[false,true],'
+        '"input_event_seen":true,"last_input_event_age_ms":25}'
     )))
 
     assert node._physical_touch[:2] == [True, False]
     assert node._fader_moving[:2] == [False, True]
     assert node._bridge_fader_syncing[:2] == [False, True]
+    assert node._last_physical_input_monotonic is not None
+    assert time.monotonic() - node._last_physical_input_monotonic < 0.1
+
+
+def test_old_generation_motor_result_and_motion_state_are_discarded():
+    node = MidiControlNode.__new__(MidiControlNode)
+    node._lock = threading.Lock()
+    node._project_id = 'project-1'
+    node._execution_context = {'project_generation': 4}
+    node._execution_context_ready = True
+    node._latest_motion_state = {'marker': 'current'}
+    node._motor_command_state = ['inactive'] * MIDI_CHANNEL_COUNT
+
+    node._motor_result_callback(SimpleNamespace(data=json.dumps({
+        'project_generation': 3,
+        'channel': 0,
+        'success': False,
+        'message': 'stale failure',
+    })))
+    assert node._motor_command_state[0] == 'inactive'
+
+    node._motion_state_callback(SimpleNamespace(data=json.dumps({
+        'project_id': 'project-1',
+        'project_generation': 3,
+        'motors': [],
+    })))
+    assert node._latest_motion_state == {'marker': 'current'}
+
+    node._motion_state_callback(SimpleNamespace(data=json.dumps({
+        'project_id': 'project-1',
+        'project_generation': 4,
+        'motors': [{'controller_index': 2, 'position_deg': 12.5}],
+    })))
+    assert node._latest_motion_state['motors'][0]['position_deg'] == 12.5
 
 
 def test_bank_change_clears_select_and_parks_all_faders_at_zero():
@@ -174,8 +323,9 @@ def test_repeated_same_project_context_does_not_release_select(tmp_path):
     node._banks = MidiBankManager()
     node._bank_file_loaded = False
     node._bank_file_dirty = False
-    node._execution_context = {'context_id': ''}
+    node._execution_context = {'context_id': '', 'project_generation': 1}
     node._execution_context_ready = True
+    node._project_generation = 1
     node._control_enabled = [True] + [False] * (MIDI_CHANNEL_COUNT - 1)
     reset_calls = []
     node._reset_bank_change_state_locked = lambda: reset_calls.append(True)
@@ -188,10 +338,12 @@ def test_repeated_same_project_context_does_not_release_select(tmp_path):
 
     node._request_callback(SimpleNamespace(data=json.dumps({
         'request_id': 'same-context',
+        'project_generation': 1,
         'command': 'select_project',
         'payload': {
             'project_id': project_id,
             'mapping_file_id': mapping_name,
+            'project_generation': 1,
         },
     })))
 
@@ -232,6 +384,9 @@ def test_only_supervisor_approved_motion_values_become_recording_source():
     node._lock = threading.Lock()
     node._banks = MidiBankManager()
     node._axis_registry = SimpleNamespace(file_id='selected.yaml')
+    node._project_id = 'project-1'
+    node._execution_context = {'project_generation': 7}
+    node._motion_value_publisher = CapturePublisher()
     node._fader_parking = [False] * MIDI_CHANNEL_COUNT
     node._motor_command_state = ['inactive'] * MIDI_CHANNEL_COUNT
     node._motor_command_message = [''] * MIDI_CHANNEL_COUNT
@@ -249,6 +404,11 @@ def test_only_supervisor_approved_motion_values_become_recording_source():
 
     assert node._approved_motion_values[0] == {'1-1': 170.0}
     assert node._approved_motor_targets[0] == {2: 180.0}
+    assert node._current_motion_values == {'1-1': 170.0}
+    motion_state = json.loads(node._motion_value_publisher.messages[-1].data)
+    assert motion_state['source'] == 'midi'
+    assert motion_state['project_generation'] == 7
+    assert motion_state['values'] == {'1-1': 170.0}
 
     node._apply_motor_results([{
         'channel': 0,
@@ -264,6 +424,7 @@ def test_only_supervisor_approved_motion_values_become_recording_source():
     assert node._approved_motion_values[0] == {}
     assert node._approved_motor_targets[0] == {}
     assert node._motor_command_state[0] == 'rejected'
+    assert len(node._motion_value_publisher.messages) == 1
 
 
 def test_linked_targets_mark_the_channel_as_atomic():
@@ -298,6 +459,126 @@ def test_linked_axes_current_version_requires_identical_motion_ranges():
         require_same_motion_ranges(rows)
 
 
+def test_linked_select_uses_logical_motion_values_not_motor_positions():
+    node = MidiControlNode.__new__(MidiControlNode)
+    node._current_motion_values = {'1-1': 4.0, '1-2': 4.0}
+    row = {
+        'motion_lower_deg': -180.0,
+        'motion_upper_deg': 180.0,
+        'reference_position_deg': 0.0,
+        'scale': 1.0,
+        'gear_ratio': 1.0,
+    }
+    group = [
+        {
+            'motion_id': '1-1',
+            'row': row,
+            'motor': {'controller_index': 1, 'position_deg': 4.0},
+        },
+        {
+            'motion_id': '1-2',
+            'row': row,
+            'motor': {'controller_index': 2, 'position_deg': 4.0},
+        },
+    ]
+
+    assert node._logical_motion_value_for_group_locked(group) == 4.0
+
+    node._current_motion_values['1-2'] = 4.1
+    # An inconsistent logical group is not trusted; equal live feedback is
+    # inverted instead of averaging or retaining the conflicting values.
+    assert node._logical_motion_value_for_group_locked(group) == 4.0
+
+
+def test_unknown_logical_motion_value_falls_back_to_motor_feedback():
+    node = MidiControlNode.__new__(MidiControlNode)
+    group = [{
+        'motion_id': '1-1',
+        'row': {
+            'motion_lower_deg': -180.0,
+            'motion_upper_deg': 180.0,
+            'reference_position_deg': 10.0,
+            'scale': 2.0,
+            'gear_ratio': 1.0,
+        },
+        'motor': {
+            'controller_index': 2,
+            'position_deg': 30.0,
+            'lower': -180.0,
+            'upper': 180.0,
+        },
+    }]
+
+    assert node._logical_motion_value_for_group_locked(group) == 10.0
+
+
+def test_pickup_prefers_current_source_value_but_rejects_feedback_mismatch():
+    node = MidiControlNode.__new__(MidiControlNode)
+    node._project_id = 'project-1'
+    node._execution_context = {'project_generation': 3}
+    node._source_motion_value_context = ('project-1', 3)
+    node._source_motion_values = {'1-1': 5.0}
+    node._current_motion_values = {}
+    row = {
+        'motion_lower_deg': -20.0,
+        'motion_upper_deg': 20.0,
+        'reference_position_deg': 0.0,
+        'scale': 1.0,
+        'gear_ratio': 1.0,
+    }
+    motor = {
+        'controller_index': 2,
+        'position_deg': 5.0,
+        'lower': -180.0,
+        'upper': 180.0,
+        'connection_state': 'online',
+        'state': 'detected',
+        'age_sec': 0.01,
+    }
+    group = [{'motion_id': '1-1', 'row': row, 'motor': motor}]
+
+    assert node._pickup_reference_for_group_locked(group) == (5.0, 'source_topic')
+
+    motor['position_deg'] = 10.0
+    assert node._pickup_reference_for_group_locked(group) == (
+        10.0,
+        'motor_feedback',
+    )
+
+
+def test_pickup_rejects_stale_feedback_and_detects_crossing():
+    node = MidiControlNode.__new__(MidiControlNode)
+    node._project_id = 'project-1'
+    node._execution_context = {'project_generation': 3}
+    node._source_motion_value_context = ('project-1', 3)
+    node._source_motion_values = {'1-1': 5.0}
+    node._current_motion_values = {}
+    group = [{
+        'motion_id': '1-1',
+        'row': {
+            'motion_lower_deg': -20.0,
+            'motion_upper_deg': 20.0,
+            'reference_position_deg': 0.0,
+            'scale': 1.0,
+            'gear_ratio': 1.0,
+        },
+        'motor': {
+            'controller_index': 2,
+            'position_deg': 5.0,
+            'lower': -180.0,
+            'upper': 180.0,
+            'connection_state': 'stale',
+            'age_sec': 2.0,
+        },
+    }]
+
+    with pytest.raises(ValueError, match='최신 모터 피드백'):
+        node._pickup_reference_for_group_locked(group)
+
+    assert node._pickup_reached(-2.0, 2.0, 0.0, 0.1) is True
+    assert node._pickup_reached(None, 2.0, 0.0, 0.1) is False
+
+
 def parking_node():
     node = MidiControlNode.__new__(MidiControlNode)
     node._control_enabled = [False] * MIDI_CHANNEL_COUNT
@@ -329,13 +610,13 @@ def parking_node():
     return node
 
 
-def test_select_off_requests_motor_hold_and_enters_mandatory_zero_parking():
+def test_select_off_requests_motor_hold_and_does_not_block_next_select():
     node = parking_node()
 
     node._deactivate_control_channel_locked(0)
 
     assert node._control_enabled[0] is False
-    assert node._fader_parking[0] is True
+    assert node._fader_parking[0] is False
     assert node._pending_fader_positions[0] == 0
     assert node._pending_motor_requests == {}
     payload = json.loads(node._motor_request_publisher.messages[0].data)
@@ -344,7 +625,7 @@ def test_select_off_requests_motor_hold_and_enters_mandatory_zero_parking():
 
 def test_fader_parking_waits_for_hand_release_retries_zero_and_confirms_arrival():
     node = parking_node()
-    node._deactivate_control_channel_locked(0)
+    node._start_fader_parking_locked(0, time.monotonic())
     started = node._fader_park_last_command_at[0]
     node._pending_fader_positions[0] = None
     node._physical_touch[0] = True
@@ -362,6 +643,37 @@ def test_fader_parking_waits_for_hand_release_retries_zero_and_confirms_arrival(
     node._update_fader_parking_locked(0, 0, started + 1.2)
     assert node._fader_parking[0] is False
     assert node._raw_channels[0] == 0
+
+
+def test_failed_normal_fader_parking_times_out_and_allows_select_retry():
+    node = parking_node()
+    node._studio_select_locked = False
+    node._start_fader_parking_locked(0, time.monotonic())
+    started = node._fader_park_started_at[0]
+
+    was_parking = node._update_fader_parking_locked(
+        0, 2692, started + 2.1
+    )
+
+    assert was_parking is False
+    assert node._fader_parking[0] is False
+    assert node._pending_fader_positions[0] is None
+    assert node._motor_command_state[0] == 'fader_park_failed'
+    assert 'SELECT 재시도 가능' in node._motor_command_message[0]
+
+
+def test_studio_fader_parking_never_bypasses_physical_zero_requirement():
+    node = parking_node()
+    node._studio_select_locked = True
+    node._start_fader_parking_locked(0, time.monotonic())
+    started = node._fader_park_started_at[0]
+
+    was_parking = node._update_fader_parking_locked(
+        0, 2692, started + 20.0
+    )
+
+    assert was_parking is True
+    assert node._fader_parking[0] is True
 
 
 def test_studio_select_is_ignored_without_restarting_zero_fader_command():
@@ -389,6 +701,7 @@ def test_studio_select_is_ignored_without_restarting_zero_fader_command():
     node._device_connected = True
 
     node._deactivate_control_channel_locked(0, request_motor_hold=False)
+    node._start_fader_parking_locked(0, time.monotonic())
     node._pending_fader_positions[0] = None
     node._fader_moving[0] = True
     message = SimpleNamespace(
@@ -483,6 +796,9 @@ def test_one_selected_fader_creates_same_motion_value_for_two_linked_axes():
     node._midi_callback(message(select=True))
     node._midi_callback(message())
     node._awaiting_fader_sync[0] = False
+    node._midi_callback(message(touch=True, value=round(MIDI_VALUE_MAX / 2)))
+    assert node._pickup_pending[0] is False
+    assert node._pending_motor_requests == {}
     node._midi_callback(message(touch=True, value=MIDI_VALUE_MAX))
 
     targets = list(node._pending_motor_requests.values())
@@ -874,6 +1190,9 @@ def test_select_requires_matching_motion_axis_and_dial_updates_filter():
     node._motor_angle_mode = [False] * MIDI_CHANNEL_COUNT
     node._bank_file_dirty = False
     add_motor_control_state(node)
+    # With no accepted logical value, SELECT derives Motion 20 from actual
+    # motor position 30 and reference position 10.
+    node._latest_motion_state['motors'][0]['position_deg'] = 30.0
     matched = {'1-1': 2}
     row = {
         'motor_axis': 2,
@@ -903,7 +1222,7 @@ def test_select_requires_matching_motion_axis_and_dial_updates_filter():
 
     node._midi_callback(message(select=True))
     assert node._control_enabled[0] is True
-    assert node._pending_fader_positions[0] == pytest.approx(MIDI_VALUE_MAX / 2, abs=1)
+    assert node._pending_fader_positions[0] == MIDI_VALUE_MAX
     # An immediate SELECT LED echo must not toggle the channel back OFF.
     node._midi_callback(message(select=False))
     node._midi_callback(message(select=True))
@@ -916,21 +1235,99 @@ def test_select_requires_matching_motion_axis_and_dial_updates_filter():
     assert node._pending_fader_positions[0] == 0
     node._midi_callback(message(select=False, dial=4, value=8000))
 
-    # A rapid re-press while the physical fader has not reached zero must not
-    # overwrite the mandatory park command with a pickup position.
+    # A rapid re-press cancels normal SELECT-off parking and performs a fresh
+    # pickup. The user must not lose this press merely because the motorized
+    # fader has not reached zero.
+    node._last_select_toggle_at[0] = time.monotonic() - 1.0
+    node._midi_callback(message(select=True, dial=4, value=8000))
+    assert node._control_enabled[0] is True
+    assert node._fader_parking[0] is False
+    assert node._pending_fader_positions[0] == MIDI_VALUE_MAX
+
+    node._midi_callback(message(select=False, dial=4, value=8000))
     node._last_select_toggle_at[0] = time.monotonic() - 1.0
     node._midi_callback(message(select=True, dial=4, value=8000))
     assert node._control_enabled[0] is False
-    assert node._fader_parking[0] is True
-    assert node._pending_fader_positions[0] == 0
-    node._midi_callback(message(select=False, dial=4, value=0))
-    assert node._fader_parking[0] is False
 
     matched.clear()
     node._last_select_toggle_at[0] = time.monotonic() - 1.0
     node._midi_callback(message(select=True, dial=4))
     assert node._control_enabled[0] is False
     assert node._pending_fader_positions[0] == 0
+
+
+def test_hand_movement_commands_only_after_soft_takeover_pickup():
+    node = MidiControlNode.__new__(MidiControlNode)
+    node._lock = threading.Lock()
+    node._banks = MidiBankManager()
+    mappings = node._banks.active_bank()['mappings']
+    mappings[0]['motion_id'] = '1-1'
+    node._banks.update_bank('bank_1', mappings=mappings)
+    node._raw_channels = [0] * MIDI_CHANNEL_COUNT
+    node._channels = [0.0] * MIDI_CHANNEL_COUNT
+    node._filter_stage1 = [0.0] * MIDI_CHANNEL_COUNT
+    node._filter_stage2 = [0.0] * MIDI_CHANNEL_COUNT
+    node._filter_last_at = [None] * MIDI_CHANNEL_COUNT
+    node._touch = [False] * MIDI_CHANNEL_COUNT
+    node._dial = [0] * MIDI_CHANNEL_COUNT
+    node._btn0 = [False] * MIDI_CHANNEL_COUNT
+    node._btn1 = [False] * MIDI_CHANNEL_COUNT
+    node._btn2 = [False] * MIDI_CHANNEL_COUNT
+    node._btn3 = [False] * MIDI_CHANNEL_COUNT
+    node._previous_btn0 = [False] * MIDI_CHANNEL_COUNT
+    node._previous_btn3 = [False] * MIDI_CHANNEL_COUNT
+    node._previous_dial = [0] * MIDI_CHANNEL_COUNT
+    node._confirmed = [False] * MIDI_CHANNEL_COUNT
+    node._control_enabled = [False] * MIDI_CHANNEL_COUNT
+    node._final_output_values = [0.0] * MIDI_CHANNEL_COUNT
+    node._pending_fader_positions = [None] * MIDI_CHANNEL_COUNT
+    node._motor_angle_mode = [False] * MIDI_CHANNEL_COUNT
+    node._bank_file_dirty = False
+    add_motor_control_state(node)
+    row = {
+        'motor_axis': 2,
+        'motion_lower_deg': -20,
+        'motion_upper_deg': 20,
+        'reference_position_deg': 10,
+        'gear_ratio': 1,
+        'scale': 1,
+    }
+    node._axis_registry = SimpleNamespace(
+        motor_axis=lambda motion_id: 2 if motion_id == '1-1' else None,
+        mapping=lambda motion_id: row if motion_id == '1-1' else None,
+        file_id='selected.yaml',
+    )
+
+    def message(*, select=False, touched=False, value=0):
+        return SimpleNamespace(
+            channel=[value] + [0] * (MIDI_CHANNEL_COUNT - 1),
+            touch=[touched] + [False] * (MIDI_CHANNEL_COUNT - 1),
+            dial=[0] * MIDI_CHANNEL_COUNT,
+            btn0=[False] * MIDI_CHANNEL_COUNT,
+            btn1=[False] * MIDI_CHANNEL_COUNT,
+            btn2=[False] * MIDI_CHANNEL_COUNT,
+            btn3=[select] + [False] * (MIDI_CHANNEL_COUNT - 1),
+        )
+
+    node._midi_callback(message(select=True))
+    assert node._awaiting_fader_sync[0] is True
+    node._midi_callback(message(select=False, touched=True, value=12000))
+
+    assert node._awaiting_fader_sync[0] is False
+    assert node._pending_fader_positions[0] is None
+    assert node._raw_channels[0] == 12000
+    assert node._pickup_pending[0] is True
+    assert node._motor_follow_active[0] is False
+    assert (0, 2) not in node._pending_motor_requests
+
+    node._midi_callback(message(select=False, touched=True, value=8192))
+    assert node._pickup_pending[0] is False
+    assert node._motor_follow_active[0] is False
+    assert (0, 2) not in node._pending_motor_requests
+
+    node._midi_callback(message(select=False, touched=True, value=9000))
+    assert node._motor_follow_active[0] is True
+    assert (0, 2) in node._pending_motor_requests
 
 
 def test_only_one_selected_midi_line_can_own_the_same_motion_axis():
@@ -1032,8 +1429,8 @@ def test_unsafe_same_axis_handover_keeps_existing_line_selected():
     node._motor_angle_mode = [False] * MIDI_CHANNEL_COUNT
     node._bank_file_dirty = False
     add_motor_control_state(node)
-    # motor=-5 with reference=10 maps to motion=-15 (12.5%), which cannot
-    # be represented by the incoming 50..100% line.
+    # Logical motion -15 (12.5%) cannot be represented by the incoming
+    # 50..100% line. The actual motor position is intentionally unrelated.
     node._latest_motion_state = {
         'motors': [{
             'controller_index': 2,
@@ -1055,6 +1452,7 @@ def test_unsafe_same_axis_handover_keeps_existing_line_selected():
         mapping=lambda motion_id: row if motion_id == '1-1' else None,
         file_id='selected.yaml',
     )
+    node._current_motion_values = {'1-1': -15.0}
 
     def select_message(selected_channel=None):
         buttons = [False] * MIDI_CHANNEL_COUNT
@@ -1087,23 +1485,33 @@ def test_selected_mapping_context_is_used_when_no_run_mapping_is_active(tmp_path
     node = MidiControlNode.__new__(MidiControlNode)
     node._lock = threading.Lock()
     node._mappings_dir = tmp_path
+    node._project_id = 'project-1'
     node._selected_mapping_file_id = ''
     node._run_mapping_file_id = ''
     node._preferred_mapping_file_id = ''
     node._bank_config_file = None
     node._bank_file_loaded = False
     node._bank_file_dirty = False
+    node._execution_context = {'project_generation': 1}
     selected = tmp_path / 'selected.yaml'
     selected.write_text('mappings: []\n', encoding='utf-8')
 
     node._motion_mapping_response_callback(SimpleNamespace(
-        data='{"success": true, "file": {"id": "selected.yaml"}}'
+        data='{"success": true, "project_generation": 1, "file": {"id": "selected.yaml"}}'
+    ))
+    assert node._preferred_mapping_file_id == 'selected.yaml'
+
+    node._motion_run_status_callback(SimpleNamespace(
+        data='{"project_id": "other-project", "mapping_file_id": "other.yaml"}'
     ))
     assert node._preferred_mapping_file_id == 'selected.yaml'
     assert node._bank_config_file == selected
 
     node._motion_run_status_callback(SimpleNamespace(
-        data='{"mapping_file_id": "running.yaml"}'
+        data=(
+            '{"project_id": "project-1", "mapping_file_id": "running.yaml", '
+            '"execution_context": {"project_generation": 1}}'
+        )
     ))
     assert node._preferred_mapping_file_id == 'running.yaml'
     assert node._bank_config_file == selected
@@ -1111,7 +1519,12 @@ def test_selected_mapping_context_is_used_when_no_run_mapping_is_active(tmp_path
         'config_file': '/home/joonho_test/ros2_ws/config/active_motor_config.yaml'
     }) == selected
 
-    node._motion_run_status_callback(SimpleNamespace(data='{"mapping_file_id": ""}'))
+    node._motion_run_status_callback(SimpleNamespace(
+        data=(
+            '{"project_id": "project-1", "mapping_file_id": "", '
+            '"execution_context": {"project_generation": 1}}'
+        )
+    ))
     assert node._preferred_mapping_file_id == 'selected.yaml'
 
 

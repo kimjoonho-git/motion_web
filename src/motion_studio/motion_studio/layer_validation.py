@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Mapping, Sequence
 
-from .curve_engine import render_point_curve
+from .curve_engine import point_curve_order, render_point_curve
 
 
 EPSILON = 1e-9
@@ -45,7 +45,9 @@ def point_curve_frame_mismatches(
     issues = []
     for curve in layer.get('point_curves') or []:
         motion_id = str(curve.get('motion_id') or '')
-        normalized_points, expected_samples = render_point_curve(curve.get('points') or [])
+        normalized_points, expected_samples = render_point_curve(
+            curve.get('points') or [], point_curve_order(curve)
+        )
         mismatch_count = 0
         maximum_delta = 0.0
         first_mismatch = None

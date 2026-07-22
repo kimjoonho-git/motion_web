@@ -12,6 +12,19 @@ from motion_studio.studio_node import (
 from std_msgs.msg import String
 
 
+def test_studio_node_rejects_previous_project_generation():
+    node = MotionStudioNode.__new__(MotionStudioNode)
+    node._project_generation = 3
+
+    with pytest.raises(ValueError, match='이전 프로젝트 세대'):
+        node._validate_request_generation(
+            'invalidate_context', 2, {'project_generation': 2}
+        )
+
+    with pytest.raises(ValueError, match='현재 프로젝트 세대'):
+        node._validate_request_generation('save', 4, {'project_generation': 4})
+
+
 def test_recording_layer_name_does_not_repeat_after_delete_or_duplicate():
     layers = [
         {'name': '녹화 2'},
@@ -227,6 +240,7 @@ def test_recording_blocks_motor_initialization_when_midi_is_disconnected():
 def test_playback_status_mirrors_motion_run_progress_for_web_graph():
     node = MotionStudioNode.__new__(MotionStudioNode)
     node._lock = threading.RLock()
+    node._workspace_project_id = 'project-1'
     node._status = {
         'state': 'playing',
         'phase': 'playing',
@@ -234,8 +248,11 @@ def test_playback_status_mirrors_motion_run_progress_for_web_graph():
         'playback_duration_sec': 12.0,
     }
     node._motion_run_status = {}
+    node._execution_context = {'project_generation': 1}
 
     node._run_status_callback(String(data=json.dumps({
+        'project_id': 'project-1',
+        'execution_context': {'project_generation': 1},
         'request_source': 'motion_studio',
         'state': 'running',
         'progress': {
@@ -249,6 +266,15 @@ def test_playback_status_mirrors_motion_run_progress_for_web_graph():
     assert node._status['elapsed_sec'] == 3.2
     assert node._status['playback_duration_sec'] == 12.0
     assert node._status['runtime_progress']['ratio'] == pytest.approx(3.2 / 12.0)
+
+    node._run_status_callback(String(data=json.dumps({
+        'project_id': 'other-project',
+        'execution_context': {'project_generation': 1},
+        'request_source': 'motion_studio',
+        'state': 'running',
+        'progress': {'elapsed_sec': 9.0, 'duration_sec': 12.0, 'ratio': 0.75},
+    })))
+    assert node._status['elapsed_sec'] == 3.2
 
 
 def test_recording_snapshot_contains_bounded_live_graph_preview():

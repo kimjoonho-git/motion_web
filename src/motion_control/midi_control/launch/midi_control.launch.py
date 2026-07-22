@@ -34,6 +34,10 @@ def generate_launch_description():
                 # Keep manual-control state latched through brief pauses and
                 # noisy capacitive touch-OFF events.
                 'movement_release_delay_ms': 300,
+                # X-Touch does not echo host-driven fader positions. Treat a
+                # command as settled only after this quiet interval; any real
+                # touch or pitch-bend input cancels the estimate.
+                'fader_command_settle_ms': 1000,
                 # Send the final hand position once on release. The input
                 # bridge suppresses the motor-driven MIDI echo.
                 'hold_fader_on_release': True,

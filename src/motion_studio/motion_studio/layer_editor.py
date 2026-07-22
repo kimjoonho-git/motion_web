@@ -17,6 +17,7 @@ from .curve_engine import (
     finite as _finite,
     frame_time as _time,
     interpolate_range as _interpolate_range,
+    point_curve_order,
     render_point_curve,
     scale_time_segment as _scale_segment,
 )
@@ -114,6 +115,135 @@ def _overlapping_curves(
     return result
 
 
+def _isolated_spike_report(
+    points: Sequence[tuple[float, float]], start_sec: float, end_sec: float,
+    detection_threshold_deg: float, maximum_correction_deg: float,
+) -> Dict[str, Any]:
+    candidates = []
+    for index in range(2, len(points) - 2):
+        time_sec, value = points[index]
+        if time_sec <= start_sec + EPSILON or time_sec >= end_sec - EPSILON:
+            continue
+        window = points[index - 2:index + 3]
+        if any(
+            abs((window[offset + 1][0] - window[offset][0]) - DEFAULT_PERIOD_SEC)
+            > EPSILON
+            for offset in range(4)
+        ):
+            continue
+        before_two = float(points[index - 2][1])
+        before = float(points[index - 1][1])
+        after = float(points[index + 1][1])
+        after_two = float(points[index + 2][1])
+        predictions = sorted((
+            (before + after) / 2.0,
+            (2.0 * before) - before_two,
+            (2.0 * after) - after_two,
+        ))
+        expected = predictions[1]
+        correction = expected - float(value)
+        correction_size = abs(correction)
+        if correction_size + EPSILON < detection_threshold_deg:
+            continue
+
+        before_roughness = (
+            abs(before_two - (2.0 * before) + float(value))
+            + abs(before - (2.0 * float(value)) + after)
+            + abs(float(value) - (2.0 * after) + after_two)
+        )
+        after_roughness = (
+            abs(before_two - (2.0 * before) + expected)
+            + abs(before - (2.0 * expected) + after)
+            + abs(expected - (2.0 * after) + after_two)
+        )
+        if after_roughness >= before_roughness - EPSILON:
+            continue
+        candidates.append({
+            'index': index,
+            'time_sec': round(float(time_sec), 9),
+            'before_deg': float(value),
+            'after_deg': expected,
+            'change_deg': correction,
+            'correction_deg': correction_size,
+        })
+
+    clusters = []
+    for item in candidates:
+        if clusters and item['index'] == clusters[-1][-1]['index'] + 1:
+            clusters[-1].append(item)
+        else:
+            clusters.append([item])
+    actionable = []
+    consecutive = []
+    for cluster in clusters:
+        if len(cluster) == 1:
+            actionable.extend(cluster)
+            continue
+        ranked = sorted(cluster, key=lambda item: item['correction_deg'], reverse=True)
+        if ranked[0]['correction_deg'] >= (ranked[1]['correction_deg'] * 1.5) - EPSILON:
+            actionable.append(ranked[0])
+        else:
+            consecutive.extend(cluster)
+
+    changed = []
+    excluded = [
+        {
+            **{key: value for key, value in item.items() if key != 'index'},
+            'reason': 'consecutive_candidates',
+            'reason_text': '연속해서 튀는 프레임',
+        }
+        for item in consecutive
+    ]
+    for item in actionable:
+        public_item = {key: value for key, value in item.items() if key != 'index'}
+        if item['correction_deg'] > maximum_correction_deg + EPSILON:
+            excluded.append({
+                **public_item,
+                'reason': 'maximum_correction',
+                'reason_text': '최대 보정량 초과',
+            })
+        else:
+            changed.append(public_item)
+    return {'changed': changed, 'excluded': excluded}
+
+
+def spike_correction_report(
+    layer: Dict[str, Any], motion_ids: Iterable[Any], start_sec: Any, end_sec: Any,
+    detection_threshold_deg: Any, maximum_correction_deg: Any,
+) -> Dict[str, Any]:
+    working = normalize_layer(copy.deepcopy(layer))
+    tracks = _tracks(working)
+    selected = _selected_ids(working, motion_ids)
+    start = _time(start_sec)
+    end = _time(end_sec)
+    detection = _finite(detection_threshold_deg, '검출 기준')
+    maximum = _finite(maximum_correction_deg, '최대 보정량')
+    if detection <= 0.0:
+        raise ValueError('검출 기준은 0보다 커야 합니다')
+    if maximum < detection:
+        raise ValueError('최대 보정량은 검출 기준 이상이어야 합니다')
+    changed = []
+    excluded = []
+    for motion_id in selected:
+        report = _isolated_spike_report(
+            tracks[motion_id], start, end, detection, maximum
+        )
+        changed.extend({'motion_id': motion_id, **item} for item in report['changed'])
+        excluded.extend({'motion_id': motion_id, **item} for item in report['excluded'])
+    return {
+        'operation': 'repair_spikes',
+        'detection_threshold_deg': detection,
+        'maximum_correction_deg': maximum,
+        'changed': changed,
+        'excluded': excluded,
+        'changed_count': len(changed),
+        'excluded_count': len(excluded),
+        'maximum_applied_correction_deg': max(
+            (item['correction_deg'] for item in changed), default=0.0
+        ),
+    }
+
+
 def edit_layer(layer: Dict[str, Any], request: Dict[str, Any]) -> Dict[str, Any]:
     """Apply one operation to a temporary layer and return a new layer."""
     working = normalize_layer(copy.deepcopy(layer))
@@ -145,7 +275,9 @@ def edit_layer(layer: Dict[str, Any], request: Dict[str, Any]) -> Dict[str, Any]
             normalized_by_id = {}
             for curve in curves:
                 motion_id = str(curve.get('motion_id') or '')
-                normalized_points, rendered = render_point_curve(curve.get('points') or [])
+                normalized_points, rendered = render_point_curve(
+                    curve.get('points') or [], point_curve_order(curve)
+                )
                 start_sec, end_sec = rendered[0][0], rendered[-1][0]
                 tracks[motion_id] = [
                     point for point in tracks.get(motion_id, [])
@@ -190,12 +322,46 @@ def edit_layer(layer: Dict[str, Any], request: Dict[str, Any]) -> Dict[str, Any]
         working['edit_revision'] = int(working.get('edit_revision') or 0) + 1
         return normalize_layer(working)
 
+    if operation == 'copy_axis':
+        source_motion_id = str(request.get('source_motion_id') or '').strip()
+        selected = unique_motion_ids(request.get('motion_ids') or [])
+        if not source_motion_id:
+            raise ValueError('복사할 원본 Motion ID를 선택하세요')
+        if source_motion_id not in tracks:
+            raise ValueError(f'{source_motion_id} 축은 레이어에 없습니다')
+        if len(selected) != 1:
+            raise ValueError('복사 대상 Motion ID를 하나 선택하세요')
+        target_motion_id = selected[0]
+        if target_motion_id == source_motion_id:
+            raise ValueError('원본 축과 복사 대상 축이 같습니다')
+        if target_motion_id in tracks:
+            raise ValueError(f'{target_motion_id} 축은 이미 레이어에 있습니다')
+
+        tracks[target_motion_id] = list(tracks[source_motion_id])
+        copied_curves = []
+        for source_curve in working.get('point_curves') or []:
+            if str(source_curve.get('motion_id') or '') != source_motion_id:
+                continue
+            curve = copy.deepcopy(source_curve)
+            curve['curve_id'] = f'curve_{uuid.uuid4().hex[:8]}'
+            curve['motion_id'] = target_motion_id
+            for point in curve.get('points') or []:
+                point['point_id'] = f'point_{uuid.uuid4().hex[:8]}'
+            copied_curves.append(curve)
+        working.setdefault('point_curves', []).extend(copied_curves)
+        working['frames'] = _frames(tracks)
+        working['edit_revision'] = int(working.get('edit_revision') or 0) + 1
+        return normalize_layer(working)
+
     if operation == 'point_curve':
         selected = unique_motion_ids(request.get('motion_ids') or [])
         if len(selected) != 1:
             raise ValueError('포인트 곡선을 만들 Motion ID를 하나만 선택하세요')
         motion_id = selected[0]
-        normalized_points, rendered = render_point_curve(request.get('points') or [])
+        interpolation_order = point_curve_order(request)
+        normalized_points, rendered = render_point_curve(
+            request.get('points') or [], interpolation_order
+        )
         start_sec, end_sec = rendered[0][0], rendered[-1][0]
         curve_id = str(request.get('curve_id') or f'curve_{uuid.uuid4().hex[:8]}')
         if _overlapping_curves(
@@ -224,6 +390,7 @@ def edit_layer(layer: Dict[str, Any], request: Dict[str, Any]) -> Dict[str, Any]
         curves.append({
             'curve_id': curve_id,
             'motion_id': motion_id,
+            'interpolation_order': interpolation_order,
             'points': normalized_points,
         })
         working['point_curves'] = curves
@@ -267,16 +434,59 @@ def edit_layer(layer: Dict[str, Any], request: Dict[str, Any]) -> Dict[str, Any]
     ):
         raise ValueError('선택한 축의 편집 구간에 모션 데이터가 없습니다')
     if _overlapping_curves(working, selected, start_sec, end_sec):
+        if operation == 'repair_spikes':
+            raise ValueError(
+                '선택 구간에 포인트 곡선이 있어 튀는 값을 자동 보정할 수 '
+                '없습니다. 포인트와 탄젠트를 직접 수정하세요'
+            )
         raise ValueError(
             '선택 구간에 편집 가능한 포인트 곡선이 있습니다. '
             '포인트와 탄젠트를 수정하거나 곡선을 삭제한 뒤 작업하세요'
         )
 
-    if operation == 'delete_data':
+    spike_report = None
+    if operation == 'repair_spikes':
+        spike_report = spike_correction_report(
+            working,
+            selected,
+            start_sec,
+            end_sec,
+            request.get('spike_detection_threshold_deg', 0.1),
+            request.get('spike_maximum_correction_deg', 1.0),
+        )
+        corrections = {
+            (item['motion_id'], round(float(item['time_sec']), 9)): float(item['after_deg'])
+            for item in spike_report['changed']
+        }
+        for motion_id in selected:
+            tracks[motion_id] = [
+                (
+                    time_sec,
+                    corrections.get((motion_id, round(time_sec, 9)), value),
+                )
+                for time_sec, value in tracks[motion_id]
+            ]
+    elif operation == 'delete_data':
+        # A graph click can resolve to the sample immediately before the
+        # layer's final sample.  Treat a delete ending within one recording
+        # period of the layer end as reaching the end, otherwise a single
+        # trailing frame keeps the old layer duration alive.
+        layer_end_sec = max(
+            (time_sec for points in tracks.values() for time_sec, _value in points),
+            default=end_sec,
+        )
+        delete_end_sec = (
+            layer_end_sec
+            if (
+                set(selected) == set(tracks)
+                and 0.0 <= layer_end_sec - end_sec <= DEFAULT_PERIOD_SEC + EPSILON
+            )
+            else end_sec
+        )
         for motion_id in selected:
             tracks[motion_id] = [
                 point for point in tracks[motion_id]
-                if not _inside(point[0], start_sec, end_sec)
+                if not _inside(point[0], start_sec, delete_end_sec)
             ]
     elif operation == 'time_shift':
         delta = _time(abs(_finite(request.get('delta_sec'), '이동 시간')))
@@ -350,6 +560,8 @@ def edit_layer(layer: Dict[str, Any], request: Dict[str, Any]) -> Dict[str, Any]
     else:
         raise ValueError('지원하지 않는 레이어 편집 기능입니다')
 
+    if spike_report is not None and not spike_report['changed']:
+        return working
     working['frames'] = _frames(tracks)
     if len(working['frames']) > MAX_EDIT_FRAMES:
         raise ValueError(f'편집 결과가 최대 {MAX_EDIT_FRAMES:,}프레임을 초과합니다')

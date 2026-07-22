@@ -4,6 +4,7 @@ import threading
 from motion_control_msgs.msg import MotorStatus
 from std_msgs.msg import Int8MultiArray, String
 
+from motion_supervisor.command_arbiter import CommandArbiter, CommandOwner
 from motion_supervisor.supervisor_node import MotionSupervisor, motion_run_rejection_reason
 
 
@@ -13,6 +14,14 @@ class CapturePublisher:
 
     def publish(self, message):
         self.messages.append(message)
+
+
+class QuietLogger:
+    def warning(self, *_args, **_kwargs):
+        pass
+
+    def error(self, *_args, **_kwargs):
+        pass
 
 
 def test_runtime_command_is_allowed_when_state_is_current_and_manual_is_idle():
@@ -207,6 +216,232 @@ def test_normal_midi_position_keeps_short_command_ownership():
     assert supervisor._midi_active_until > 0.0
 
 
+def test_midi_blocks_every_ac_axis_with_live_internal_limit_status():
+    supervisor = MotionSupervisor.__new__(MotionSupervisor)
+    supervisor._last_motion_run_command_at = 0.0
+    supervisor._active_jogs = {}
+    supervisor._active_actions = {}
+    supervisor._midi_active_until = 0.0
+    supervisor._emergency_latched = False
+    supervisor._motion_stop_block_until = 0.0
+    supervisor._command_lock = threading.RLock()
+    supervisor._command_pub = CapturePublisher()
+    supervisor._current_motors = lambda: [{
+        'controller_index': 1,
+        'state': 'detected',
+        'fault': False,
+        'motor_type': 'minas',
+        'servo_on': True,
+        'statusword': 0x0E37,
+        'lower': -36000.0,
+        'upper': 36000.0,
+    }]
+
+    success, _, results = supervisor._handle_midi_position_batch([{
+        'request_id': 'limited', 'channel': 5, 'axis': 1, 'target_deg': 0.5,
+    }])
+
+    assert success is False
+    assert results[0]['success'] is False
+    assert 'internal limit is active' in results[0]['message']
+    assert supervisor._command_pub.messages == []
+
+
+def test_playback_owner_blocks_midi_even_without_legacy_grace_flag():
+    supervisor = MotionSupervisor.__new__(MotionSupervisor)
+    supervisor._last_motion_run_command_at = 0.0
+    supervisor._active_jogs = {}
+    supervisor._active_actions = {}
+    supervisor._midi_active_until = 0.0
+    supervisor._emergency_latched = False
+    supervisor._motion_stop_block_until = 0.0
+    supervisor._command_lock = threading.RLock()
+    supervisor._command_arbiter = CommandArbiter()
+    supervisor._project_generation = 1
+    supervisor._command_arbiter.acquire(CommandOwner.PLAYBACK, lease_sec=1.0)
+    supervisor._command_pub = CapturePublisher()
+    supervisor._current_motors = lambda: [{
+        'controller_index': 0,
+        'state': 'detected',
+        'fault': False,
+        'motor_type': 'dynamixel',
+        'lower': -180.0,
+        'upper': 180.0,
+    }]
+
+    success, message, results = supervisor._handle_midi_position_batch([
+        {'request_id': 'move', 'channel': 0, 'axis': 0, 'target_deg': 10.0},
+    ])
+
+    assert success is False
+    assert message == 'motion playback is active'
+    assert results[0]['success'] is False
+    assert supervisor._command_pub.messages == []
+
+
+def test_busy_playback_owner_rejects_manual_jog_before_handler_runs():
+    supervisor = MotionSupervisor.__new__(MotionSupervisor)
+    supervisor._emergency_latched = False
+    supervisor._motion_stop_block_until = 0.0
+    supervisor._active_jogs = {}
+    supervisor._active_actions = {}
+    supervisor._command_arbiter = CommandArbiter()
+    supervisor._project_generation = 1
+    supervisor._command_arbiter.acquire(CommandOwner.PLAYBACK, lease_sec=1.0)
+    results = []
+    supervisor._publish_result = lambda request_id, success, message: results.append(
+        (request_id, success, message)
+    )
+    supervisor._handle_ac_servo_jog = lambda _request: (_ for _ in ()).throw(
+        AssertionError('busy manual handler must not run')
+    )
+
+    supervisor._jog_request_callback(String(data=json.dumps({
+        'request_id': 'jog-1',
+        'project_generation': 1,
+        'command': 'ac_servo_jog',
+        'axis': 0,
+        'relative_deg': 1.0,
+    })))
+
+    assert results == [('jog-1', False, 'motion playback is active')]
+
+
+def test_runtime_callback_acquires_playback_owner_before_final_publish():
+    supervisor = MotionSupervisor.__new__(MotionSupervisor)
+    supervisor._active_jogs = {}
+    supervisor._active_actions = {}
+    supervisor._midi_active_until = 0.0
+    supervisor._last_motion_run_command_at = 0.0
+    supervisor._emergency_latched = False
+    supervisor._motion_stop_block_until = 0.0
+    supervisor._command_lock = threading.RLock()
+    supervisor._command_arbiter = CommandArbiter()
+    supervisor._project_generation = 1
+    supervisor._command_pub = CapturePublisher()
+    supervisor.get_logger = lambda: QuietLogger()
+    motors = [{'controller_index': 0}]
+    supervisor._current_motors = lambda: motors
+    command = supervisor._empty_motor_command(motors)
+    command.number_of_target_interfaces[0] = 2
+    command.target_interface_id[0] = Int8MultiArray(data=[0, 1])
+    command.controlword[0] = 1
+    command.position[0] = 5.0
+
+    supervisor._motion_run_command_callback(command)
+
+    assert supervisor._command_pub.messages == [command]
+    assert supervisor._command_arbiter.snapshot().owner is CommandOwner.PLAYBACK
+
+
+def test_failed_manual_request_releases_ownership():
+    supervisor = MotionSupervisor.__new__(MotionSupervisor)
+    supervisor._emergency_latched = False
+    supervisor._motion_stop_block_until = 0.0
+    supervisor._active_jogs = {}
+    supervisor._active_actions = {}
+    supervisor._command_arbiter = CommandArbiter()
+    supervisor._publish_result = lambda *_args: None
+    supervisor._handle_ac_servo_jog = lambda _request: (False, 'invalid jog')
+
+    supervisor._jog_request_callback(String(data=json.dumps({
+        'request_id': 'jog-invalid',
+        'command': 'ac_servo_jog',
+    })))
+
+    assert supervisor._command_arbiter.snapshot().owner is CommandOwner.NONE
+
+
+def test_servo_control_does_not_release_an_active_manual_trajectory_owner():
+    supervisor = MotionSupervisor.__new__(MotionSupervisor)
+    supervisor._emergency_latched = False
+    supervisor._motion_stop_block_until = 0.0
+    supervisor._active_jogs = {0: {'target_position': 10.0}}
+    supervisor._active_actions = {}
+    supervisor._command_arbiter = CommandArbiter()
+    supervisor._project_generation = 1
+    supervisor._command_arbiter.acquire(CommandOwner.MANUAL)
+    results = []
+    supervisor._publish_result = lambda request_id, success, message: results.append(
+        (request_id, success, message)
+    )
+    supervisor._handle_ac_servo_control = lambda _request: (_ for _ in ()).throw(
+        AssertionError('servo control must not run over an active trajectory')
+    )
+
+    supervisor._jog_request_callback(String(data=json.dumps({
+        'request_id': 'servo-off-during-jog',
+        'project_generation': 1,
+        'command': 'ac_servo_control',
+        'action': 'servo_off',
+        'axis': 0,
+    })))
+
+    assert results == [(
+        'servo-off-during-jog', False, 'a manual command is active'
+    )]
+    assert supervisor._command_arbiter.snapshot().owner is CommandOwner.MANUAL
+
+
+def test_project_boundary_rejects_old_commands_and_cancels_current_generation():
+    supervisor = MotionSupervisor.__new__(MotionSupervisor)
+    supervisor._project_generation = 4
+    supervisor._emergency_latched = False
+    supervisor._motion_stop_block_until = 0.0
+    supervisor._active_jogs = {0: {'target_position': 1.0}}
+    supervisor._active_actions = {}
+    supervisor._midi_active_until = 1.0
+    supervisor._last_motion_run_command_at = 1.0
+    supervisor._command_lock = threading.RLock()
+    supervisor._command_arbiter = CommandArbiter()
+    supervisor._command_arbiter.acquire(CommandOwner.MANUAL)
+    supervisor._latest_state = None
+    supervisor._latest_state_at = None
+    supervisor._command_pub = CapturePublisher()
+    supervisor._publish_safety_status = lambda: None
+
+    success, _ = supervisor._apply_project_generation_boundary({
+        'project_generation': 5,
+    })
+
+    assert success is True
+    assert supervisor._project_generation == 5
+    assert supervisor._active_jogs == {}
+    assert supervisor._command_arbiter.snapshot().owner is CommandOwner.NONE
+    assert supervisor._command_pub.messages == []
+    assert supervisor._request_generation_is_current({'project_generation': 4}) is False
+    assert supervisor._request_generation_is_current({'project_generation': 5}) is True
+
+
+def test_ac_servo_on_off_commands_never_include_target_position():
+    supervisor = MotionSupervisor.__new__(MotionSupervisor)
+    supervisor._command_lock = threading.RLock()
+    supervisor._command_pub = CapturePublisher()
+    supervisor._emergency_latched = False
+    supervisor._motion_stop_block_until = 0.0
+    motors = [{
+        'controller_index': 0,
+        'state': 'detected',
+        'motor_type': 'ac_servo',
+        'fault': False,
+    }]
+    supervisor._current_motors = lambda: motors
+
+    success_on, _ = supervisor._handle_ac_servo_control({
+        'action': 'servo_on', 'scope': 'all',
+    })
+    success_off, _ = supervisor._handle_ac_servo_control({
+        'action': 'servo_off', 'scope': 'all',
+    })
+
+    assert success_on is True
+    assert success_off is True
+    assert len(supervisor._command_pub.messages) == 4
+    for command in supervisor._command_pub.messages:
+        assert list(command.number_of_target_interfaces) == [1]
+        assert list(command.target_interface_id[0].data) == [0]
+
+
 def test_motor_command_shape_rejects_short_interface_data():
     command = MotorStatus()
     command.controller_index = [0]
@@ -263,27 +498,32 @@ def safety_supervisor():
 
 def test_motion_stop_holds_all_axes_without_emergency_latch():
     supervisor = safety_supervisor()
+    supervisor._command_arbiter = CommandArbiter()
+    supervisor._command_arbiter.acquire(CommandOwner.PLAYBACK, lease_sec=1.0)
     success, _ = supervisor._handle_safety_stop(False)
     assert success is True
     assert supervisor._emergency_latched is False
     assert supervisor._active_jogs == {}
+    assert supervisor._command_arbiter.snapshot().owner is CommandOwner.NONE
     command = supervisor._command_pub.messages[-1]
     assert list(command.number_of_target_interfaces) == [2, 2]
     assert list(command.position) == [15.0, -8.0]
 
 
-def test_emergency_stop_disables_ac_and_holds_dynamixel_then_latches():
+def test_emergency_stop_disables_ac_and_dynamixel_without_position_then_latches():
     supervisor = safety_supervisor()
     success, _ = supervisor._handle_safety_stop(True)
     assert success is True
     assert supervisor._emergency_latched is True
     command = supervisor._command_pub.messages[-1]
-    assert list(command.number_of_target_interfaces) == [1, 2]
+    assert list(command.number_of_target_interfaces) == [1, 1]
     assert command.controlword[0] == 0x0007
-    assert command.position[1] == -8.0
+    assert command.controlword[1] == 0
+    assert list(command.target_interface_id[0].data) == [0]
+    assert list(command.target_interface_id[1].data) == [0]
 
 
-def test_emergency_stop_uses_last_known_ac_axis_but_not_stale_position():
+def test_emergency_stop_disables_last_known_axes_without_stale_position():
     supervisor = safety_supervisor()
     last_known = supervisor._current_motors()
     supervisor._current_motors = lambda: []
@@ -291,8 +531,10 @@ def test_emergency_stop_uses_last_known_ac_axis_but_not_stale_position():
     success, _ = supervisor._handle_safety_stop(True)
     assert success is True
     command = supervisor._command_pub.messages[-1]
-    assert list(command.number_of_target_interfaces) == [1, 0]
+    assert list(command.number_of_target_interfaces) == [1, 1]
     assert command.controlword[0] == 0x0007
+    assert command.controlword[1] == 0
+    assert list(command.target_interface_id[1].data) == [0]
 
 
 def test_motion_stop_cannot_bypass_emergency_latch():

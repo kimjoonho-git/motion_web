@@ -21,6 +21,11 @@ def generate_launch_description():
             description='Absolute path to active motor YAML.',
         ),
         DeclareLaunchArgument('motion_state_topic', default_value='/motion_control/motion_state'),
+        DeclareLaunchArgument(
+            'project_generation',
+            default_value=os.environ.get('PROJECT_GENERATION', '0'),
+            description='Persisted generation of the selected project runtime.',
+        ),
         DeclareLaunchArgument('motor_status_topic', default_value='/motion_control/motor_status'),
         DeclareLaunchArgument(
             'safety_request_topic',
@@ -71,6 +76,7 @@ def generate_launch_description():
                 'input_type': 'motor_status',
                 'ethercat_status_topic': LaunchConfiguration('ethercat_status_topic'),
                 'motor_config_file': LaunchConfiguration('config_file'),
+                'project_generation': LaunchConfiguration('project_generation'),
                 'output_topic': LaunchConfiguration('motion_state_topic'),
                 'publish_hz': LaunchConfiguration('publish_hz'),
                 'max_motors': LaunchConfiguration('max_motors'),

@@ -51,6 +51,7 @@ def test_project_layers_round_trip(tmp_path):
         'edit_revision': 3,
         'point_curves': [{
             'curve_id': 'curve_1', 'motion_id': '1-1',
+            'interpolation_order': 5,
             'points': [
                 {'point_id': 'point_1', 'time_sec': 0.02, 'value_deg': 0.0,
                  'tangent_mode': 'auto'},
@@ -72,6 +73,7 @@ def test_project_layers_round_trip(tmp_path):
     assert loaded['layers'][0]['source_layer_ids'] == ['source_a', 'source_b']
     assert loaded['layers'][0]['edit_revision'] == 3
     assert loaded['layers'][0]['point_curves'][0]['points'][1]['tangent_mode'] == 'broken'
+    assert loaded['layers'][0]['point_curves'][0]['interpolation_order'] == 5
     assert loaded['layers'][0]['point_curves'][0]['points'][1]['in_handle']['dv_deg'] == -0.5
     assert loaded['layers'][0]['frames'][1]['values']['1-1'] == 1.5
     assert json.loads(

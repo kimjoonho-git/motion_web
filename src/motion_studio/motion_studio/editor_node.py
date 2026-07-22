@@ -11,7 +11,7 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
 
-from .layer_editor import edit_layer, merge_layers
+from .layer_editor import edit_layer, merge_layers, spike_correction_report
 from .layer_validation import point_curve_frame_mismatches, validate_ranges
 from .timeline import layer_conflicts, layer_transition_warnings
 
@@ -36,14 +36,17 @@ class MotionStudioEditorNode(Node):
         try:
             request = json.loads(msg.data)
             request_id = str(request.get('request_id') or '')
+            project_generation = request.get('project_generation')
             command = str(request.get('command') or '')
             payload = request.get('payload') if isinstance(request.get('payload'), dict) else {}
             result = self._handle(command, payload)
         except Exception as exc:
             self.get_logger().error(traceback.format_exc())
             request_id = locals().get('request_id', '')
+            project_generation = locals().get('project_generation')
             result = {'success': False, 'message': str(exc)}
         result['request_id'] = request_id
+        result['project_generation'] = project_generation
         self._response_pub.publish(String(data=json.dumps(
             result, ensure_ascii=False, separators=(',', ':')
         )))
@@ -73,17 +76,16 @@ class MotionStudioEditorNode(Node):
     def _handle(self, command: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         ranges = self._ranges(payload)
         if command == 'edit':
-            if str(payload.get('operation') or '') in {'add_axis', 'point_curve'}:
-                requested_ids = {
-                    str(value).strip()
-                    for value in payload.get('motion_ids') or []
-                    if str(value).strip()
-                }
-                unavailable = sorted(requested_ids - set(ranges))
-                if unavailable:
-                    raise ValueError(
-                        '현재 모션축 설정에 없는 Motion ID: ' + ', '.join(unavailable)
-                    )
+            operation_report = None
+            if str(payload.get('operation') or '') == 'repair_spikes':
+                operation_report = spike_correction_report(
+                    payload.get('layer') or {},
+                    payload.get('motion_ids') or [],
+                    payload.get('start_sec', 0.0),
+                    payload.get('end_sec', 0.0),
+                    payload.get('spike_detection_threshold_deg', 0.1),
+                    payload.get('spike_maximum_correction_deg', 1.0),
+                )
             layer = edit_layer(payload.get('layer') or {}, payload)
             range_issues = validate_ranges(layer, ranges)
             if range_issues:
@@ -106,6 +108,7 @@ class MotionStudioEditorNode(Node):
                 'success': True,
                 'message': '편집 결과를 임시 반영했습니다',
                 'layer': layer,
+                'operation_report': operation_report,
                 'validation': {
                     'conflicts': conflicts,
                     'transition_warnings': warnings,

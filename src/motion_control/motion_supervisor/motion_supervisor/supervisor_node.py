@@ -1,6 +1,7 @@
 import json
 import math
 import os
+import re
 import threading
 import time
 from pathlib import Path
@@ -15,6 +16,8 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Int8MultiArray, String
 
+from motion_supervisor.command_arbiter import CommandArbiter, CommandOwner
+
 
 ID_CONTROLWORD = 0
 ID_TARGET_POSITION = 1
@@ -25,6 +28,7 @@ CW_DISABLE_OPERATION_MINAS = 0x0007
 CW_FAULT_RESET_MINAS = 0x0080
 CW_NEW_SET_POINT_MINAS = 0x003F
 DYNAMIXEL_TORQUE_ENABLE = 1
+DYNAMIXEL_TORQUE_DISABLE = 0
 CONTROLWORD_SEQUENCE_DELAY_SEC = 0.05
 JOG_TARGET_TOLERANCE_DEG = 0.05
 JOG_DONE_VELOCITY_DEG_SEC = 0.05
@@ -47,6 +51,13 @@ DYNAMIXEL_ACTION_MIN_DEG = -180.0
 DYNAMIXEL_ACTION_MAX_DEG = 180.0
 MIDI_COMMAND_OWNERSHIP_SEC = 0.15
 MOTION_RUN_ACTIVE_GRACE_SEC = 0.15
+MANUAL_CONTROL_OWNERSHIP_SEC = 1.0
+
+COMMAND_OWNER_LABELS = {
+    CommandOwner.MANUAL: 'manual jog/action control',
+    CommandOwner.MIDI: 'MIDI fader control',
+    CommandOwner.PLAYBACK: 'motion playback',
+}
 
 
 def motion_run_rejection_reason(
@@ -140,6 +151,8 @@ class MotionSupervisor(Node):
         self._emergency_latched = False
         self._motion_stop_block_until = 0.0
         self._command_lock = threading.RLock()
+        self._command_arbiter = CommandArbiter()
+        self._project_generation = 0
         self._safety_callback_group = MutuallyExclusiveCallbackGroup()
 
         self._state_sub = self.create_subscription(
@@ -212,6 +225,36 @@ class MotionSupervisor(Node):
             f'action_period={self.action_period_sec * 1000.0:.3f} ms'
         )
 
+    def _command_arbiter_instance(self) -> CommandArbiter:
+        """Return the arbiter, including for lightweight unit-test instances."""
+        arbiter = getattr(self, '_command_arbiter', None)
+        if arbiter is None:
+            arbiter = CommandArbiter()
+            self._command_arbiter = arbiter
+        return arbiter
+
+    @staticmethod
+    def _command_owner_label(owner: CommandOwner) -> str:
+        return COMMAND_OWNER_LABELS.get(owner, 'another command source')
+
+    def _acquire_command_owner(
+        self,
+        owner: CommandOwner,
+        *,
+        lease_sec: Optional[float] = None,
+    ) -> tuple[bool, str]:
+        acquired, current_owner = self._command_arbiter_instance().acquire(
+            owner,
+            lease_sec=lease_sec,
+        )
+        if acquired:
+            return True, ''
+        return False, f'{self._command_owner_label(current_owner)} is active'
+
+    def _release_manual_owner_if_idle(self) -> None:
+        if not self._active_jogs and not self._active_actions:
+            self._command_arbiter_instance().release(CommandOwner.MANUAL)
+
     def _motion_state_callback(self, msg: String) -> None:
         try:
             state = json.loads(msg.data)
@@ -222,6 +265,7 @@ class MotionSupervisor(Node):
         self._latest_state_at = time.time()
         self._clear_completed_jogs()
         self._clear_completed_actions()
+        self._release_manual_owner_if_idle()
 
     def _motion_run_command_callback(self, msg: MotorStatus) -> None:
         """Relay runtime commands through the sole final command publisher."""
@@ -246,6 +290,17 @@ class MotionSupervisor(Node):
                 throttle_duration_sec=1.0,
             )
             return
+        acquired, current_owner = self._command_arbiter_instance().acquire(
+            CommandOwner.PLAYBACK,
+            lease_sec=MOTION_RUN_ACTIVE_GRACE_SEC,
+        )
+        if not acquired:
+            self.get_logger().warning(
+                'Rejected motion runtime command because '
+                f'{self._command_owner_label(current_owner)} is active.',
+                throttle_duration_sec=1.0,
+            )
+            return
         with self._command_lock:
             if self._emergency_latched or time.monotonic() < self._motion_stop_block_until:
                 return
@@ -260,6 +315,11 @@ class MotionSupervisor(Node):
             return
         if not isinstance(request, dict):
             self._publish_midi_position_result({}, False, 'invalid MIDI position request')
+            return
+        if not self._request_generation_is_current(request):
+            self._publish_midi_position_result(
+                request, False, '이전 프로젝트 세대의 MIDI 명령을 폐기했습니다'
+            )
             return
         if self._emergency_latched:
             self._publish_midi_position_result(
@@ -386,6 +446,14 @@ class MotionSupervisor(Node):
             elif self._is_ac_servo(motor):
                 if motor.get('servo_on') is not True:
                     error = f'Axis {axis} servo is OFF'
+                elif (
+                    target.get('operation') != 'hold'
+                    and self._ac_servo_internal_limit_active(motor)
+                ):
+                    error = (
+                        f'Axis {axis} internal limit is active; '
+                        'check POT/NOT, emergency stop, torque limit, and software limit'
+                    )
                 else:
                     controlword = CW_NEW_SET_POINT_MINAS
             elif self._is_dynamixel(motor):
@@ -417,7 +485,8 @@ class MotionSupervisor(Node):
             results.append(self._midi_target_result(
                 target,
                 True,
-                f'MIDI target sent: Axis {axis}{motion_text}, motor {target_position:.3f} deg',
+                f'MIDI target published: Axis {axis}{motion_text}, '
+                f'motor {target_position:.3f} deg (arrival not verified)',
             ))
             success_count += 1
 
@@ -457,10 +526,20 @@ class MotionSupervisor(Node):
                     self._midi_target_result(target, False, message)
                     for target in requests
                 ]
+            acquired, owner_error = self._acquire_command_owner(
+                CommandOwner.MIDI,
+                lease_sec=MIDI_COMMAND_OWNERSHIP_SEC,
+            )
+            if not acquired:
+                return False, owner_error, [
+                    self._midi_target_result(target, False, owner_error)
+                    for target in requests
+                ]
             # All accepted axes are published atomically in one MotorStatus,
             # preventing depth-1 QoS from dropping an earlier per-axis command.
             with self._command_lock:
                 if self._emergency_latched or time.monotonic() < self._motion_stop_block_until:
+                    self._command_arbiter_instance().release(CommandOwner.MIDI)
                     message = 'motor command blocked by safety stop'
                     return False, message, [
                         self._midi_target_result(target, False, message)
@@ -473,6 +552,7 @@ class MotionSupervisor(Node):
                 self._midi_active_until = now + MIDI_COMMAND_OWNERSHIP_SEC
             else:
                 self._midi_active_until = 0.0
+                self._command_arbiter_instance().release(CommandOwner.MIDI)
 
         all_success = success_count == len(requests)
         message = (
@@ -524,12 +604,23 @@ class MotionSupervisor(Node):
         if self._is_ac_servo(motor):
             if motor.get('servo_on') is not True:
                 return False, f'Axis {axis} servo is OFF'
+            if self._ac_servo_internal_limit_active(motor):
+                return False, (
+                    f'Axis {axis} internal limit is active; '
+                    'check POT/NOT, emergency stop, torque limit, and software limit'
+                )
             controlword = CW_NEW_SET_POINT_MINAS
         elif self._is_dynamixel(motor):
             controlword = DYNAMIXEL_TORQUE_ENABLE
         else:
             return False, f'Axis {axis} motor type is unsupported for MIDI control'
 
+        acquired, owner_error = self._acquire_command_owner(
+            CommandOwner.MIDI,
+            lease_sec=MIDI_COMMAND_OWNERSHIP_SEC,
+        )
+        if not acquired:
+            return False, owner_error
         success, message = self._publish_position_target(
             motors, motor, axis, target_position, controlword
         )
@@ -537,7 +628,11 @@ class MotionSupervisor(Node):
             self._midi_active_until = now + MIDI_COMMAND_OWNERSHIP_SEC
             motion_deg = self._optional_float(request.get('motion_deg'))
             motion_text = '' if motion_deg is None else f', motion {motion_deg:.3f} deg'
-            return True, f'MIDI target sent: Axis {axis}{motion_text}, motor {target_position:.3f} deg'
+            return True, (
+                f'MIDI target published: Axis {axis}{motion_text}, '
+                f'motor {target_position:.3f} deg (arrival not verified)'
+            )
+        self._command_arbiter_instance().release(CommandOwner.MIDI)
         return False, message
 
     def _publish_midi_position_result(
@@ -549,6 +644,7 @@ class MotionSupervisor(Node):
     ) -> None:
         payload = {
             'request_id': str(request.get('request_id') or ''),
+            'project_generation': request.get('project_generation'),
             'channel': request.get('channel'),
             'axis': request.get('axis'),
             'motion_id': request.get('motion_id'),
@@ -580,16 +676,38 @@ class MotionSupervisor(Node):
             success, message = self._handle_safety_stop(emergency=True)
         elif command == 'safety_motion_stop' and not self._emergency_latched:
             success, message = self._handle_safety_stop(emergency=False)
+        elif not self._request_generation_is_current(request):
+            success, message = False, '이전 프로젝트 세대의 수동 명령을 폐기했습니다'
         elif self._emergency_latched:
             success, message = False, 'emergency stop is latched; restart the full program'
         elif time.monotonic() < self._motion_stop_block_until:
             success, message = False, 'motion stop is settling'
-        elif command == 'ac_servo_control':
-            success, message = self._handle_ac_servo_control(request)
-        elif command == 'ac_servo_jog':
-            success, message = self._handle_ac_servo_jog(request)
-        elif command == 'dynamixel_jog':
-            success, message = self._handle_dynamixel_jog(request)
+        elif command == 'ac_servo_control' and (
+            self._active_jogs or self._active_actions
+        ):
+            success, message = False, 'a manual command is active'
+        elif command in ('ac_servo_control', 'ac_servo_jog', 'dynamixel_jog'):
+            lease_sec = (
+                MANUAL_CONTROL_OWNERSHIP_SEC
+                if command == 'ac_servo_control'
+                else None
+            )
+            success, message = self._acquire_command_owner(
+                CommandOwner.MANUAL,
+                lease_sec=lease_sec,
+            )
+            if success:
+                if command == 'ac_servo_control':
+                    try:
+                        success, message = self._handle_ac_servo_control(request)
+                    finally:
+                        self._command_arbiter_instance().release(CommandOwner.MANUAL)
+                elif command == 'ac_servo_jog':
+                    success, message = self._handle_ac_servo_jog(request)
+                else:
+                    success, message = self._handle_dynamixel_jog(request)
+                if not success:
+                    self._release_manual_owner_if_idle()
         else:
             success, message = False, f'unknown manual command: {command}'
         self._publish_result(request_id, success, message)
@@ -625,17 +743,76 @@ class MotionSupervisor(Node):
 
         request_id = str(request.get('request_id') or '')
         command = str(request.get('command') or 'ac_servo_absolute_move')
-        if self._emergency_latched:
+        if command == 'project_generation_boundary':
+            success, message = self._apply_project_generation_boundary(request)
+        elif not self._request_generation_is_current(request):
+            success, message = False, '이전 프로젝트 세대의 동작 명령을 폐기했습니다'
+        elif self._emergency_latched:
             success, message = False, 'emergency stop is latched; restart the full program'
         elif time.monotonic() < self._motion_stop_block_until:
             success, message = False, 'motion stop is settling'
-        elif command == 'ac_servo_absolute_move':
-            success, message = self._handle_ac_servo_absolute_move(request)
-        elif command == 'dynamixel_absolute_move':
-            success, message = self._handle_dynamixel_absolute_move(request)
+        elif command in ('ac_servo_absolute_move', 'dynamixel_absolute_move'):
+            success, message = self._acquire_command_owner(CommandOwner.MANUAL)
+            if success:
+                if command == 'ac_servo_absolute_move':
+                    success, message = self._handle_ac_servo_absolute_move(request)
+                else:
+                    success, message = self._handle_dynamixel_absolute_move(request)
+                if not success:
+                    self._release_manual_owner_if_idle()
         else:
             success, message = False, f'unknown action command: {command}'
         self._publish_action_result(request_id, success, message)
+
+    def _apply_project_generation_boundary(
+        self, request: Dict[str, Any]
+    ) -> tuple[bool, str]:
+        try:
+            generation = int(request.get('project_generation'))
+        except (TypeError, ValueError):
+            return False, '프로젝트 세대 번호가 필요합니다'
+        current = int(getattr(self, '_project_generation', 0) or 0)
+        if generation < current:
+            return False, '이전 프로젝트 세대 경계를 폐기했습니다'
+        self._project_generation = generation
+        if bool(getattr(self, '_emergency_latched', False)):
+            return True, f'프로젝트 세대 {generation} 명령 경계 적용 · 긴급정지 유지'
+
+        # A project/configuration restart is only a software command boundary.
+        # Never turn it into a motor set-point: servo/torque enable already holds
+        # the drive's current position and a sampled position may be stale or may
+        # have changed after an encoder/multi-turn reset.
+        cancelled_actions = []
+        with self._command_lock:
+            self._motion_stop_block_until = time.monotonic() + 0.5
+            cancelled_actions = [
+                str(item.get('request_id') or '')
+                for item in self._active_actions.values()
+                if isinstance(item, dict) and item.get('request_id')
+            ]
+            self._active_jogs.clear()
+            self._active_actions.clear()
+            self._midi_active_until = 0.0
+            self._last_motion_run_command_at = 0.0
+            self._command_arbiter_instance().revoke_all()
+
+        for request_id in cancelled_actions:
+            self._publish_action_result(
+                request_id,
+                False,
+                'trajectory cancelled by project/configuration restart',
+            )
+        self._publish_safety_status()
+        return True, f'프로젝트 세대 {generation} 명령 경계 적용'
+
+    def _request_generation_is_current(self, request: Dict[str, Any]) -> bool:
+        try:
+            generation = int(request.get('project_generation'))
+        except (TypeError, ValueError):
+            generation = self._request_project_generation(request.get('request_id'))
+        return generation >= 1 and generation == int(
+            getattr(self, '_project_generation', 0) or 0
+        )
 
     def _handle_ac_servo_jog(self, request: Dict[str, Any]) -> tuple[bool, str]:
         axis = self._optional_int(request.get('axis'))
@@ -1584,6 +1761,7 @@ class MotionSupervisor(Node):
             self._active_actions.clear()
             self._midi_active_until = 0.0
             self._last_motion_run_command_at = 0.0
+            self._command_arbiter_instance().revoke_all()
 
             current_motors = self._current_motors()
             motors = current_motors
@@ -1607,10 +1785,16 @@ class MotionSupervisor(Node):
                 position = self._optional_float(
                     motor.get('position_deg', motor.get('position'))
                 )
-                if self._is_ac_servo(motor) and emergency:
+                if emergency and (
+                    self._is_ac_servo(motor) or self._is_dynamixel(motor)
+                ):
                     command.number_of_target_interfaces[axis] = 1
                     command.target_interface_id[axis] = Int8MultiArray(data=[ID_CONTROLWORD])
-                    command.controlword[axis] = CW_DISABLE_OPERATION_MINAS
+                    command.controlword[axis] = (
+                        CW_DISABLE_OPERATION_MINAS
+                        if self._is_ac_servo(motor)
+                        else DYNAMIXEL_TORQUE_DISABLE
+                    )
                     affected_axes.append(axis)
                     continue
                 if axis not in current_axes:
@@ -1658,6 +1842,7 @@ class MotionSupervisor(Node):
             'emergency_latched': bool(self._emergency_latched),
             'motion_stop_settling': settling,
             'commands_blocked': bool(self._emergency_latched or settling),
+            'command_owner': self._command_arbiter_instance().snapshot().owner.value,
             'message': (
                 '긴급정지 잠김 · 전체 프로그램 재시작 필요'
                 if self._emergency_latched
@@ -1769,6 +1954,16 @@ class MotionSupervisor(Node):
         return 'minas' in text or 'ac servo' in text or 'ac_servo' in text
 
     @staticmethod
+    def _ac_servo_internal_limit_active(motor: Dict[str, Any]) -> bool:
+        """Use the live CiA-402 Statusword, never cached UI/mapping state."""
+        if motor.get('internal_limit_active') is not None:
+            return bool(motor.get('internal_limit_active'))
+        try:
+            return bool(int(motor.get('statusword', 0)) & 0x0800)
+        except (TypeError, ValueError):
+            return False
+
+    @staticmethod
     def _is_dynamixel(motor: Dict[str, Any]) -> bool:
         values = [
             motor.get('motor_type'),
@@ -1783,6 +1978,7 @@ class MotionSupervisor(Node):
     def _publish_result(self, request_id: str, success: bool, message: str) -> None:
         payload = {
             'request_id': request_id,
+            'project_generation': self._request_project_generation(request_id),
             'success': success,
             'message': message,
             'stamp': time.time(),
@@ -1796,6 +1992,7 @@ class MotionSupervisor(Node):
     def _publish_action_result(self, request_id: str, success: bool, message: str) -> None:
         payload = {
             'request_id': request_id,
+            'project_generation': self._request_project_generation(request_id),
             'success': success,
             'message': message,
             'stamp': time.time(),
@@ -1805,6 +2002,11 @@ class MotionSupervisor(Node):
             self.get_logger().info(message)
         else:
             self.get_logger().warn(message)
+
+    @staticmethod
+    def _request_project_generation(request_id: Any) -> int:
+        match = re.search(r'-g(\d+)-', str(request_id or ''))
+        return int(match.group(1)) if match else 0
 
     @staticmethod
     def _axis_list_text(axes: list[int]) -> str:
