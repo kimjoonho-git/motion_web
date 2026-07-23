@@ -63,7 +63,7 @@ test('primary edit workflow actions stay in the fixed top action area', () => {
   }
 });
 
-test('point curves expose separate detach and destructive delete actions', () => {
+test('motion types expose explicit conversion and destructive delete actions', () => {
   const html = readFileSync(
     new URL('../static/index.html', import.meta.url),
     'utf8',
@@ -72,11 +72,49 @@ test('point curves expose separate detach and destructive delete actions', () =>
     new URL('../static/js/motion_studio.js', import.meta.url),
     'utf8',
   );
-  assert.match(html, /id="studioEditorCurveDetachButton"[^>]*>포인트 연결 해제</);
+  assert.match(
+    html,
+    /id="studioEditorConvertToPointsButton"[^>]*>일반 모션 → 포인트 모션</,
+  );
+  assert.match(
+    html,
+    /id="studioEditorApproximationOrder">[\s\S]*?<option value="1">[\s\S]*?<option value="3" selected>[\s\S]*?<option value="5">/,
+  );
+  assert.match(
+    html,
+    /id="studioEditorCurveDetachButton"[^>]*>포인트 모션 → 일반 모션</,
+  );
   assert.match(html, /id="studioEditorCurveDeleteButton"[^>]*>곡선 구간 삭제</);
-  assert.match(source, /applyEditorOperation\('detach_point_curve', false\)/);
+  assert.match(source, /applyEditorOperation\('convert_motion_to_point_curve', false\)/);
+  assert.match(source, /applyEditorOperation\('convert_point_curve_to_motion', false\)/);
   assert.match(source, /points \|\| \[\]\)\.length <= 2/);
   assert.match(source, /selection_kind: editor\.selectionKind \|\| 'motion'/);
+  assert.match(source, /approximation_interpolation_order: Number\(/);
+  assert.match(source, /pointCurveIsSaved/);
+  assert.match(source, /먼저 저장해야 편집할 수 있습니다/);
+  assert.match(
+    source,
+    /const activeCurveId = editor\.pointDraft\?\.curve_id \|\| editor\.pendingCurveId \|\| ''/,
+  );
+  assert.match(source, /const workingPointCurve = Boolean\(storedCurveForDraft\(editor\)\)/);
+  assert.match(
+    source,
+    /studio-editor-operations'\)\?\.classList\.toggle\(\s*'hidden',\s*!workingPointCurve/,
+  );
+});
+
+test('axis range violations remain visible warnings without blocking edit apply', () => {
+  const source = readFileSync(
+    new URL('../static/js/motion_studio.js', import.meta.url),
+    'utf8',
+  );
+  assert.match(source, /previewValidation\.range_warnings/);
+  assert.match(source, /축 설정 범위 초과 경고/);
+  assert.match(source, /계속 진행 가능/);
+  assert.match(
+    source,
+    /\(displayedValidation\?\.range_warnings \|\| \[\]\)\.map/,
+  );
 });
 
 test('saving keeps the layer editor open and refreshes its saved baseline', () => {
@@ -88,8 +126,34 @@ test('saving keeps the layer editor open and refreshes its saved baseline', () =
     /const acceptSavedEditorLayer =[\s\S]*?const setEditorView =/,
   )?.[0] || '';
   assert.match(saveFlow, /editor\.original = clone\(savedLayer\)/);
+  assert.match(saveFlow, /editor\.undo = \[\]/);
+  assert.match(saveFlow, /editor\.redo = \[\]/);
   assert.match(saveFlow, /저장 완료 · 창을 닫지 않고 편집을 계속할 수 있습니다/);
   assert.doesNotMatch(saveFlow, /if \(result\) \{\s*closeLayerEditor\(\)/);
+});
+
+test('undo also cancels point drafts and previews before edit apply', () => {
+  const source = readFileSync(
+    new URL('../static/js/motion_studio.js', import.meta.url),
+    'utf8',
+  );
+  assert.match(source, /if \(editor\.preview\) \{[\s\S]*?discardEditorPreview/);
+  assert.match(source, /if \(pointDraftHasUnsavedChanges\(editor\)\)/);
+  assert.match(source, /편집 반영 전 포인트 변경을 취소했습니다/);
+  assert.match(source, /hasTransientChange/);
+});
+
+test('linear point curves do not become dirty only from legacy tangent naming', () => {
+  const source = readFileSync(
+    new URL('../static/js/motion_studio.js', import.meta.url),
+    'utf8',
+  );
+  const dirtyCheck = source.match(
+    /function pointDraftHasUnsavedChanges[\s\S]*?\n  }\n\n  function loadPointDraft/,
+  )?.[0] || '';
+  assert.match(dirtyCheck, /interpolation_order\) === 1/);
+  assert.match(dirtyCheck, /point\.tangent_mode === 'linear'/);
+  assert.match(dirtyCheck, /point\.tangent_mode = 'auto'/);
 });
 
 test('whole-layer range selection is grouped with range inputs, not axis management', () => {
