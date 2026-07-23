@@ -15,3 +15,8 @@ test('MIDI device connection and recent input activity are displayed separately'
   assert.match(controller, /midiConnectionState\.textContent = deviceConnected/);
   assert.match(controller, /midiInputState\.textContent = inputActive/);
 });
+
+test('a verified MIDI bank save reports the new mapping file revision', () => {
+  assert.match(controller, /createMidiMonitorController\(\{ el, onMappingFileSaved \}\)/);
+  assert.match(controller, /onMappingFileSaved\?\.\(payload\.file\)/);
+});

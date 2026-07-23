@@ -50,3 +50,10 @@ test('reference use is editable and project file explorer refresh is wired after
   assert.match(controller, /await onProjectFilesChange\?\.\(\)/);
   assert.match(html, /기준 사용·캡처/);
 });
+
+test('MIDI-only file saves can advance the editor revision without discarding its draft', () => {
+  assert.match(controller, /function syncMappingFileRevision\(file\)/);
+  assert.match(controller, /fileId !== selectedMappingId/);
+  assert.match(controller, /mappingRevision = revision/);
+  assert.match(controller, /syncMappingFileRevision,/);
+});
