@@ -94,7 +94,7 @@ function mappedOutput14bit(filteredValue, mapping) {
   return MIDI_MAX * Math.max(0, Math.min(100, outputPercent)) / 100;
 }
 
-export function createMidiMonitorController({ el }) {
+export function createMidiMonitorController({ el, onMappingFileSaved }) {
   let status = null;
   let mappingDraft = Array.from({ length: CHANNEL_COUNT }, (_, channel) => defaultMapping(channel));
   let mappingLoaded = false;
@@ -473,6 +473,7 @@ export function createMidiMonitorController({ el }) {
       dirtyFields.clear();
       editSafetyResetDone = false;
       setStatus(payload, { updateMapping: true });
+      onMappingFileSaved?.(payload.file);
       window.dispatchEvent(new CustomEvent('motion-project-files-changed'));
     } catch (error) {
       status = {

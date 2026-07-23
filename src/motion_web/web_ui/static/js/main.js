@@ -11,8 +11,8 @@ import {
 } from './api.js?v=20260722-motor-config-delete';
 import { getElements } from './dom.js?v=20260722-spike-repair';
 import { createMotorEventLogController } from './event_log.js?v=20260721-project-generation';
-import { createMidiMonitorController } from './midi_monitor.js?v=20260722-midi-fader-input-fix';
-import { createMotionDataController } from './motion_data.js?v=20260722-motion-axis-audit';
+import { createMidiMonitorController } from './midi_monitor.js?v=20260723-revision-sync';
+import { createMotionDataController } from './motion_data.js?v=20260723-revision-sync';
 import { createMotionStudioController } from './motion_studio.js?v=20260722-spike-repair';
 import { createMotionTestController } from './motion_test.js?v=20260721-project-generation';
 import { createMotorConfigController } from './motor_config.js?v=20260723-scan-summary';
@@ -695,7 +695,10 @@ const motionData = createMotionDataController({
   onProjectFilesChange: () => projectExplorer.refresh(true),
 });
 
-const midiMonitor = createMidiMonitorController({ el });
+const midiMonitor = createMidiMonitorController({
+  el,
+  onMappingFileSaved: (file) => motionData.syncMappingFileRevision(file),
+});
 const motionStudio = createMotionStudioController({
   el,
   getMotorActionBlockReason: studioMotorActionBlockReason,

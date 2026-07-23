@@ -408,6 +408,23 @@ export function createMotionDataController({
     onWorkContextChange?.();
   }
 
+  function syncMappingFileRevision(file) {
+    if (!file || typeof file !== 'object') return false;
+    const fileId = String(file.id || file.filename || '').trim();
+    const revision = String(file.revision || '').trim();
+    if (!fileId || fileId !== selectedMappingId || !revision) return false;
+    mappingRevision = revision;
+    mappingFiles = mappingFiles.map((item) => (
+      item?.id === fileId ? { ...item, ...file } : item
+    ));
+    setMappingMessage(
+      mappingDirty
+        ? 'MIDI Bank 저장을 반영했습니다 · 편집 중인 모션축 설정은 유지됩니다'
+        : 'MIDI Bank 저장을 반영했습니다 · 모션축 설정을 계속 편집할 수 있습니다',
+    );
+    return true;
+  }
+
   function confirmDiscardMappingChanges(action) {
     if (!mappingDirty) return true;
     return window.confirm(
@@ -2483,6 +2500,7 @@ export function createMotionDataController({
       if (category === 'motions') await loadFiles(fileName);
       if (category === 'motion_axis_matching') await loadMappings(fileName);
     },
+    syncMappingFileRevision,
     getWorkContext,
     render,
     renderRuntimeState,
