@@ -1349,7 +1349,7 @@ class MotionRunManager(Node):
         if time.monotonic() - float(received_at) > SAFETY_STATUS_TIMEOUT_SEC:
             return '모션 Supervisor 상태가 갱신되지 않았습니다'
         if bool(status.get('emergency_latched')):
-            return '긴급정지 잠김 상태입니다. 전체 프로그램 재시작이 필요합니다'
+            return '긴급정지 잠김 상태입니다. 상위 프로그램 재시작이 필요합니다'
         if bool(status.get('commands_blocked')):
             return str(status.get('message') or '모터 명령이 일시 차단된 상태입니다')
         owner = str(status.get('command_owner') or 'none').strip().lower()
