@@ -356,6 +356,29 @@ def test_repeated_same_project_context_does_not_release_select(tmp_path):
     assert node._control_enabled[0] is True
     assert reset_calls == []
 
+    def reset_for_changed_context():
+        reset_calls.append(True)
+        node._control_enabled = [False] * MIDI_CHANNEL_COUNT
+
+    node._reset_bank_change_state_locked = reset_for_changed_context
+    node._request_callback(SimpleNamespace(data=json.dumps({
+        'request_id': 'changed-context',
+        'project_generation': 1,
+        'command': 'select_project',
+        'payload': {
+            'project_id': project_id,
+            'mapping_file_id': mapping_name,
+            'project_generation': 1,
+            'context_id': 'changed-context',
+        },
+    })))
+
+    changed_response = json.loads(node._response_publisher.messages[-1].data)
+    assert changed_response['success'] is True
+    assert changed_response['context_changed'] is True
+    assert node._control_enabled == [False] * MIDI_CHANNEL_COUNT
+    assert reset_calls == [True]
+
 
 def test_pending_motor_targets_are_published_as_one_batch():
     node = MidiControlNode.__new__(MidiControlNode)
@@ -544,6 +567,51 @@ def test_pickup_prefers_current_source_value_but_rejects_feedback_mismatch():
         10.0,
         'motor_feedback',
     )
+
+
+def test_mapping_change_recalculates_fader_from_feedback_with_new_ratio_and_range():
+    node = MidiControlNode.__new__(MidiControlNode)
+    node._project_id = 'project-1'
+    node._execution_context = {'project_generation': 3}
+    node._source_motion_value_context = ('project-1', 3)
+    node._source_motion_values = {'1-1': 5.0}
+    node._current_motion_values = {'1-1': 5.0}
+    row = {
+        'motion_lower_deg': -10.0,
+        'motion_upper_deg': 10.0,
+        'reference_enabled': True,
+        'reference_position_deg': 100.0,
+        'offset_deg': 0.0,
+        'scale': 1.0,
+        'gear_ratio': 50.0,
+        'invert': False,
+    }
+    motor = {
+        'controller_index': 0,
+        'position_deg': 105.0,
+        'lower': -1000.0,
+        'upper': 1000.0,
+        'connection_state': 'online',
+        'state': 'detected',
+        'age_sec': 0.01,
+        'fault': False,
+    }
+    group = [{'motion_id': '1-1', 'row': row, 'motor': motor}]
+    bank_mapping = {
+        'min_percent': 0.0,
+        'max_percent': 100.0,
+        'reversed': False,
+    }
+
+    motion_value, source = node._pickup_reference_for_group_locked(group)
+    new_raw = raw_fader_for_motion(motion_value, row, bank_mapping)
+    old_raw = raw_fader_for_motion(5.0, row, bank_mapping)
+
+    assert source == 'motor_feedback'
+    assert motion_value == pytest.approx(0.1)
+    assert motor_target_from_motion(motion_value, row) == pytest.approx(105.0)
+    assert new_raw == round(MIDI_VALUE_MAX * 0.505)
+    assert new_raw != old_raw
 
 
 def test_pickup_rejects_stale_feedback_and_detects_crossing():
