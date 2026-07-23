@@ -123,6 +123,7 @@ class MotionStateMonitor(Node):
         self._last_motor_status_at: Optional[float] = None
         self._last_motor_status_processed_at: Optional[float] = None
         self._last_ethercat_status_at: Optional[float] = None
+        self._last_ethercat_physical_scan: Dict[str, Any] = {}
         self._last_disabled_publish_at = 0.0
         self._started_at = time.time()
         self._subscription = None
@@ -412,6 +413,8 @@ class MotionStateMonitor(Node):
             if scan_ethercat
             else self._skipped_ethercat_scan(now)
         )
+        if scan_ethercat:
+            self._last_ethercat_physical_scan = deepcopy(ethercat_scan)
         dynamixel_scan = (
             self._safe_scan_dynamixel_motors()
             if scan_dynamixel
@@ -921,6 +924,7 @@ class MotionStateMonitor(Node):
                     source = 'runtime_topic'
                 motor = self._configured_motor_placeholder(controller_index, state)
                 self._set_connection_fields(motor, state, reason, source, now)
+                self._set_physical_connection_fields(motor)
                 motors.append(motor)
                 continue
 
@@ -969,9 +973,64 @@ class MotionStateMonitor(Node):
                 source = 'runtime_topic'
             motor['state'] = state
             self._set_connection_fields(motor, state, reason, source, now)
+            self._set_physical_connection_fields(motor)
             motor['configuration_state'] = 'configured'
             motors.append(motor)
         return motors
+
+    def _set_physical_connection_fields(self, motor: Dict[str, Any]) -> None:
+        if str(motor.get('transport') or '').lower() != 'ethercat':
+            return
+        scan = getattr(self, '_last_ethercat_physical_scan', {})
+        scanned_at = scan.get('scanned_at') if isinstance(scan, dict) else None
+        if not scan or not scan.get('complete'):
+            motor.update({
+                'physical_connection_state': 'not_scanned' if not scan else 'unknown',
+                'physical_connection_confirmed': False,
+                'physical_connection_checked_at': scanned_at,
+                'physical_connection_message': (
+                    '물리 검색을 아직 실행하지 않았습니다.'
+                    if not scan
+                    else str(scan.get('error') or '최근 물리 검색을 완료하지 못했습니다.')
+                ),
+            })
+            return
+
+        expected_alias = self._parse_int(motor.get('alias'))
+        expected_position = self._parse_int(motor.get('slave_position'))
+        expected_master = self._parse_int(motor.get('ethercat_master_index')) or 0
+        matched = None
+        for slave in scan.get('slaves') or []:
+            if not isinstance(slave, dict):
+                continue
+            physical_alias = self._parse_int(
+                slave.get('ethercat_alias', slave.get('rotary_alias'))
+            )
+            if expected_alias not in (None, 0) and physical_alias == expected_alias:
+                matched = slave
+                break
+            if (
+                expected_alias in (None, 0)
+                and self._parse_int(slave.get('slave_position')) == expected_position
+                and (self._parse_int(slave.get('master_index')) or 0) == expected_master
+            ):
+                matched = slave
+                break
+
+        detected = matched is not None
+        motor.update({
+            'physical_connection_state': 'detected' if detected else 'missing',
+            'physical_connection_confirmed': True,
+            'physical_connection_checked_at': scanned_at,
+            'physical_connection_message': (
+                '최근 EtherCAT 물리 검색에서 확인됐습니다.'
+                if detected
+                else '최근 EtherCAT 물리 검색에서 확인되지 않았습니다.'
+            ),
+            'physical_slave_position': (
+                matched.get('slave_position') if matched is not None else None
+            ),
+        })
 
     def _set_connection_fields(
         self,
@@ -1258,14 +1317,6 @@ class MotionStateMonitor(Node):
             'EtherCAT Slave 운전 상태를 확인합니다',
             transport='ethercat',
         )
-        runtime_feedback_fresh = (
-            self._last_motor_status_at is not None
-            and started_at - self._last_motor_status_at < self.disconnected_timeout_sec
-        )
-        ethercat_runtime_configured = any(
-            str(metadata.get('transport') or '').lower() == 'ethercat'
-            for metadata in self._motor_metadata.values()
-        )
         try:
             master_status = subprocess.run(
                 ['ethercat', 'master'],
@@ -1359,12 +1410,8 @@ class MotionStateMonitor(Node):
             for slave in preflight_slaves
             if str(slave.get('device_state') or '').upper() in {'SAFEOP', 'OP'}
         })
-        if (runtime_feedback_fresh and ethercat_runtime_configured) or active_states:
-            reason = (
-                '모터 런타임 피드백이 수신 중입니다'
-                if runtime_feedback_fresh and ethercat_runtime_configured
-                else f'EtherCAT Slave가 {"/".join(active_states)} 상태입니다'
-            )
+        if active_states:
+            reason = f'EtherCAT Slave가 {"/".join(active_states)} 상태입니다'
             return {
                 'available': False,
                 'complete': False,

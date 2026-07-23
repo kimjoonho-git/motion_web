@@ -1994,7 +1994,7 @@ class MotionSupervisor(Node):
             'commands_blocked': bool(self._emergency_latched or settling),
             'command_owner': self._command_arbiter_instance().snapshot().owner.value,
             'message': (
-                '긴급정지 잠김 · 전체 프로그램 재시작 필요'
+                '긴급정지 잠김 · 상위 프로그램 재시작 필요'
                 if self._emergency_latched
                 else '전체 동작 정지 처리 중'
                 if settling

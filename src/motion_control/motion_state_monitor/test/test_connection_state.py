@@ -92,6 +92,50 @@ class ConnectionStateTest(unittest.TestCase):
         self.assertEqual(rows[0]['discovery_state'], 'detected')
         self.assertTrue(rows[0]['discovery_detected'])
 
+    def test_physical_connection_is_separate_from_runtime_feedback(self):
+        self.monitor._last_ethercat_physical_scan = {
+            'complete': True,
+            'scanned_at': 12.0,
+            'slaves': [{
+                'master_index': 0,
+                'slave_position': 0,
+                'ethercat_alias': 0,
+            }],
+        }
+        motor = {
+            'transport': 'ethercat',
+            'ethercat_master_index': 0,
+            'slave_position': 0,
+            'alias': 0,
+            'connection_state': 'online',
+        }
+
+        self.monitor._set_physical_connection_fields(motor)
+
+        self.assertEqual(motor['connection_state'], 'online')
+        self.assertEqual(motor['physical_connection_state'], 'detected')
+        self.assertTrue(motor['physical_connection_confirmed'])
+        self.assertEqual(motor['physical_connection_checked_at'], 12.0)
+
+    def test_failed_physical_scan_never_turns_runtime_feedback_into_physical_online(self):
+        self.monitor._last_ethercat_physical_scan = {
+            'complete': False,
+            'scanned_at': 15.0,
+            'error': 'link down',
+            'slaves': [],
+        }
+        motor = {
+            'transport': 'ethercat',
+            'connection_state': 'online',
+        }
+
+        self.monitor._set_physical_connection_fields(motor)
+
+        self.assertEqual(motor['connection_state'], 'online')
+        self.assertEqual(motor['physical_connection_state'], 'unknown')
+        self.assertFalse(motor['physical_connection_confirmed'])
+        self.assertEqual(motor['physical_connection_message'], 'link down')
+
     def test_serial_identity_falls_back_to_node_id(self):
         motors = [{
             'controller_index': 1,
@@ -232,7 +276,9 @@ class ConnectionStateTest(unittest.TestCase):
         self.assertEqual(published[0]['details']['slave_position'], 2)
 
     def test_ethercat_scan_rescans_bus_before_reading_sii(self):
-        self.monitor._last_motor_status_at = None
+        # A cached frame from the stopped Motor Manager must not block a scan
+        # after the master is confirmed idle.
+        self.monitor._last_motor_status_at = 10**12
         self.monitor.disconnected_timeout_sec = 2.0
         self.monitor._motor_metadata = {}
         listing = '''=== Master 0, Slave 0 ===
