@@ -26,6 +26,7 @@ from .timeline import layer_conflicts, layer_transition_warnings, render_project
 
 
 MAX_EDIT_FRAMES = 500_000
+MAX_APPROXIMATION_POINTS = 200
 
 
 def _selected_ids(layer: Dict[str, Any], values: Iterable[Any]) -> List[str]:
@@ -179,6 +180,132 @@ def _validate_point_curve_overlaps(curves: Sequence[Dict[str, Any]]) -> None:
                 raise ValueError(
                     f'{motion_id}의 포인트 곡선 구간이 이동 후 서로 겹칩니다'
                 )
+
+
+def approximate_motion_points(
+    samples: Sequence[tuple[float, float]],
+    tolerance_deg: Any = 0.1,
+    maximum_points: Any = 50,
+    interpolation_order: Any = 1,
+) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Approximate samples, then validate them with the requested final curve."""
+    if len(samples) < 2:
+        raise ValueError('포인트 변환에는 일반 모션점이 두 개 이상 필요합니다')
+    tolerance = _finite(tolerance_deg, '근사 허용 오차')
+    if tolerance <= 0.0:
+        raise ValueError('근사 허용 오차는 0보다 커야 합니다')
+    try:
+        curve_order = int(interpolation_order)
+    except (TypeError, ValueError) as exc:
+        raise ValueError('근사 곡선은 1차, 3차, 5차 중 하나여야 합니다') from exc
+    if curve_order not in {1, 3, 5}:
+        raise ValueError('근사 곡선은 1차, 3차, 5차 중 하나여야 합니다')
+    try:
+        point_limit = int(maximum_points)
+    except (TypeError, ValueError) as exc:
+        raise ValueError('최대 포인트 수가 올바르지 않습니다') from exc
+    point_limit = max(3, min(MAX_APPROXIMATION_POINTS, point_limit))
+    ordered = sorted(
+        (round(_time(time_sec), 9), float(value))
+        for time_sec, value in samples
+    )
+    selected_indices = {0, len(ordered) - 1}
+    if len(ordered) > 2:
+        selected_indices.add(len(ordered) // 2)
+
+    def interpolation_error(index: int, left: int, right: int) -> float:
+        time_sec, value = ordered[index]
+        left_time, left_value = ordered[left]
+        right_time, right_value = ordered[right]
+        span = right_time - left_time
+        ratio = (time_sec - left_time) / span if span > EPSILON else 0.0
+        expected = left_value + ((right_value - left_value) * ratio)
+        return abs(value - expected)
+
+    while len(selected_indices) < min(point_limit, len(ordered)):
+        indices = sorted(selected_indices)
+        candidate = None
+        maximum_error = -1.0
+        for left, right in zip(indices, indices[1:]):
+            for index in range(left + 1, right):
+                error = interpolation_error(index, left, right)
+                if error > maximum_error:
+                    candidate = index
+                    maximum_error = error
+        if candidate is None or maximum_error <= tolerance:
+            break
+        selected_indices.add(candidate)
+
+    initial_point_count = len(selected_indices)
+
+    def curve_points(
+        indices: Sequence[int], stable_ids: bool = False
+    ) -> List[Dict[str, Any]]:
+        tangent_mode = 'linear' if curve_order == 1 else 'auto'
+        return [
+            {
+                'point_id': (
+                    f'point_{uuid.uuid4().hex[:8]}'
+                    if stable_ids else f'fit_{index}'
+                ),
+                'time_sec': ordered[index][0],
+                'value_deg': ordered[index][1],
+                'tangent_mode': tangent_mode,
+            }
+            for index in indices
+        ]
+
+    def final_curve_errors(indices: Sequence[int]) -> List[float]:
+        _normalized, rendered = render_point_curve(
+            curve_points(indices), curve_order
+        )
+        rendered_by_time = {
+            round(time_sec, 9): float(value) for time_sec, value in rendered
+        }
+        return [
+            abs(value - rendered_by_time[round(time_sec, 9)])
+            for time_sec, value in ordered
+        ]
+
+    # The first pass selects candidates by fast linear tracking.  The second
+    # pass checks the curve the user will actually edit and inserts a control
+    # point at its largest remaining error.
+    errors = final_curve_errors(sorted(selected_indices))
+    while (
+        max(errors, default=0.0) > tolerance
+        and len(selected_indices) < min(point_limit, len(ordered))
+    ):
+        candidate = max(
+            (
+                index for index in range(len(ordered))
+                if index not in selected_indices
+            ),
+            key=lambda index: errors[index],
+            default=None,
+        )
+        if candidate is None:
+            break
+        selected_indices.add(candidate)
+        errors = final_curve_errors(sorted(selected_indices))
+
+    indices = sorted(selected_indices)
+    points = curve_points(indices, stable_ids=True)
+    errors = final_curve_errors(indices)
+    return points, {
+        'operation': 'convert_motion_to_point_curve',
+        'interpolation_order': curve_order,
+        'initial_point_count': initial_point_count,
+        'point_count': len(points),
+        'source_sample_count': len(ordered),
+        'tolerance_deg': tolerance,
+        'maximum_error_deg': max(errors, default=0.0),
+        'average_error_deg': (
+            sum(errors) / len(errors) if errors else 0.0
+        ),
+        'point_limit_reached': (
+            len(points) >= point_limit and max(errors, default=0.0) > tolerance
+        ),
+    }
 
 
 def _isolated_spike_report(
@@ -503,6 +630,21 @@ def edit_layer(layer: Dict[str, Any], request: Dict[str, Any]) -> Dict[str, Any]
         working['edit_revision'] = int(working.get('edit_revision') or 0) + 1
         return normalize_layer(working)
 
+    if operation == 'convert_point_curve_to_motion':
+        curve_id = str(request.get('curve_id') or '')
+        curve = next((
+            item for item in working.get('point_curves') or []
+            if str(item.get('curve_id') or '') == curve_id
+        ), None)
+        if curve is None:
+            raise ValueError('일반 모션으로 변환할 포인트 구간을 찾을 수 없습니다')
+        working['point_curves'] = [
+            item for item in working.get('point_curves') or []
+            if str(item.get('curve_id') or '') != curve_id
+        ]
+        working['edit_revision'] = int(working.get('edit_revision') or 0) + 1
+        return normalize_layer(working)
+
     selected = _selected_ids(working, request.get('motion_ids') or [])
     start_sec = _time(request.get('start_sec', 0.0))
     end_sec = _time(request.get('end_sec', start_sec))
@@ -514,10 +656,58 @@ def edit_layer(layer: Dict[str, Any], request: Dict[str, Any]) -> Dict[str, Any]
         for time_sec, _value in tracks[motion_id]
     ):
         raise ValueError('선택한 축의 편집 구간에 모션 데이터가 없습니다')
+
+    if operation == 'convert_motion_to_point_curve':
+        if len(selected) != 1:
+            raise ValueError('포인트로 변환할 Motion ID를 하나만 선택하세요')
+        motion_id = selected[0]
+        if _overlapping_curves(working, selected, start_sec, end_sec):
+            raise ValueError('선택 구간에 이미 포인트 모션 구간이 있습니다')
+        samples = [
+            point for point in tracks[motion_id]
+            if _inside(point[0], start_sec, end_sec)
+        ]
+        points, report = approximate_motion_points(
+            samples,
+            request.get('approximation_tolerance_deg', 0.1),
+            request.get('approximation_maximum_points', 50),
+            request.get('approximation_interpolation_order', 1),
+        )
+        if report['point_limit_reached']:
+            raise ValueError(
+                f"최대 {int(request.get('approximation_maximum_points') or 50)}개 "
+                '포인트로 허용 오차를 만족하지 못했습니다'
+            )
+        interpolation_order = int(report['interpolation_order'])
+        normalized_points, rendered = render_point_curve(
+            points, interpolation_order
+        )
+        curve_id = str(
+            request.get('curve_id') or f'curve_{uuid.uuid4().hex[:8]}'
+        )
+        tracks[motion_id] = [
+            point for point in tracks[motion_id]
+            if not _inside(point[0], start_sec, end_sec)
+        ] + rendered
+        working.setdefault('point_curves', []).append({
+            'curve_id': curve_id,
+            'motion_id': motion_id,
+            'interpolation_order': interpolation_order,
+            'points': normalized_points,
+        })
+        working['frames'] = _frames(tracks)
+        working['edit_revision'] = int(working.get('edit_revision') or 0) + 1
+        return normalize_layer(working)
+
     overlapping_curves = _overlapping_curves(
         working, selected, start_sec, end_sec
     )
     selection_kind = str(request.get('selection_kind') or '').strip()
+    if selection_kind == 'motion':
+        raise ValueError(
+            '일반 모션은 직접 편집할 수 없습니다. '
+            '포인트 모션으로 변환하고 저장한 뒤 편집하세요'
+        )
     linked_curve_operations = {
         'time_shift', 'time_scale', 'value_offset', 'value_scale',
     }

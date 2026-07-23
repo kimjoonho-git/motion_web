@@ -78,6 +78,54 @@ def test_layer_duplicate_is_independent_unlocked_and_disabled():
     assert project['layers'][0]['frames'][0]['values']['1-1'] == 0.0
 
 
+def test_layer_save_warns_but_keeps_values_outside_axis_range():
+    node = MotionStudioNode.__new__(MotionStudioNode)
+    node._lock = threading.RLock()
+    project = {'layers': [{
+        'layer_id': 'layer', 'name': '범위 경고',
+        'enabled': True, 'locked': False, 'created_at': 1.0,
+        'edit_revision': 0,
+        'frames': [
+            {'frame': 1, 'time_sec': 0.0, 'values': {'1-1': 0.0}},
+            {'frame': 2, 'time_sec': 0.02, 'values': {'1-1': 1.0}},
+        ],
+    }]}
+
+    class Store:
+        @staticmethod
+        def mapping_check(_project):
+            return {'motion_ids': ['1-1']}
+
+        @staticmethod
+        def save_project(value):
+            return value
+
+    node._store = Store()
+    node._require_idle_locked = lambda: None
+    node._require_project_locked = lambda: project
+    node._motion_ranges = lambda _mapping: {'1-1': (-5.0, 5.0)}
+    node._project_result = lambda value, message: {
+        'success': True, 'project': value, 'message': message,
+    }
+
+    result = node._replace_layer_data({
+        'layer_id': 'layer',
+        'original_revision': 0,
+        'layer': {
+            **project['layers'][0],
+            'edit_revision': 1,
+            'frames': [
+                {'frame': 1, 'time_sec': 0.0, 'values': {'1-1': 10.0}},
+                {'frame': 2, 'time_sec': 0.02, 'values': {'1-1': 20.0}},
+            ],
+        },
+    })
+
+    assert result['success'] is True
+    assert len(result['range_warnings']) == 2
+    assert result['project']['layers'][0]['frames'][1]['values']['1-1'] == 20.0
+
+
 def test_create_layer_adds_empty_disabled_editable_layer():
     node = MotionStudioNode.__new__(MotionStudioNode)
     node._lock = threading.RLock()

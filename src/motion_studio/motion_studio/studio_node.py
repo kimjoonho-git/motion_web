@@ -591,6 +591,16 @@ class MotionStudioNode(Node):
             project, motion_ranges, self._manual_initial_values(mapping)
         )
         curve_mismatches = project_point_curve_frame_mismatches(project)
+        range_warnings = [
+            {
+                **issue,
+                'layer_id': str(layer.get('layer_id') or ''),
+                'layer_name': str(layer.get('name') or ''),
+            }
+            for layer in project.get('layers') or []
+            if isinstance(layer, dict)
+            for issue in validate_ranges(layer, motion_ranges)
+        ]
         return {
             'success': True,
             'message': message,
@@ -600,6 +610,7 @@ class MotionStudioNode(Node):
             'composition': {
                 'conflicts': conflicts,
                 'transition_warnings': transition_warnings,
+                'range_warnings': range_warnings,
                 'point_curve_mismatches': curve_mismatches,
                 'conflict_free': not conflicts and not transition_warnings and not curve_mismatches,
             },
@@ -1131,12 +1142,6 @@ class MotionStudioNode(Node):
             if missing:
                 raise ValueError('모션축 설정에 없는 Motion ID: ' + ', '.join(missing))
             range_issues = validate_ranges(updated, self._motion_ranges(mapping))
-            if range_issues:
-                first = range_issues[0]
-                raise ValueError(
-                    f"{first['motion_id']} {first['time_sec']:.3f}초 값 "
-                    f"{first['value_deg']:.3f}°가 모션 범위를 벗어납니다"
-                )
             curve_mismatches = point_curve_frame_mismatches(updated)
             if curve_mismatches:
                 first = curve_mismatches[0]
@@ -1146,7 +1151,9 @@ class MotionStudioNode(Node):
             project['layers'][index] = updated
             self._current_project = self._store.save_project(project)
             project = self._current_project
-        return self._project_result(project, '편집한 레이어를 저장했습니다')
+        result = self._project_result(project, '편집한 레이어를 저장했습니다')
+        result['range_warnings'] = range_issues
+        return result
 
     def _delete_layer(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         layer_id = str(payload.get('layer_id') or '')
@@ -1238,11 +1245,6 @@ class MotionStudioNode(Node):
             if set(merged.get('source_layer_ids') or []) != source_ids:
                 raise ValueError('합성 결과의 원본 레이어 정보가 일치하지 않습니다')
             range_issues = validate_ranges(merged, self._motion_ranges(mapping))
-            if range_issues:
-                first = range_issues[0]
-                raise ValueError(
-                    f"{first['motion_id']} {first['time_sec']:.3f}초 값이 모션 범위를 벗어납니다"
-                )
             merged = dict(merged)
             merged['layer_id'] = f'merged_{uuid.uuid4().hex[:8]}'
             merged['name'] = str(payload.get('name') or merged.get('name') or '합친 레이어')[:40]
@@ -1256,6 +1258,7 @@ class MotionStudioNode(Node):
             project, '선택 레이어를 새 레이어로 합쳤습니다 · 결과는 재생 미선택 상태입니다'
         )
         result['layer_id'] = merged['layer_id']
+        result['range_warnings'] = range_issues
         return result
 
     @staticmethod
