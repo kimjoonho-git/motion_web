@@ -1,6 +1,7 @@
 import json
 import threading
 
+import pytest
 from motion_control_msgs.msg import MotorStatus
 from std_msgs.msg import Int8MultiArray, String
 
@@ -17,6 +18,9 @@ class CapturePublisher:
 
 
 class QuietLogger:
+    def info(self, *_args, **_kwargs):
+        pass
+
     def warning(self, *_args, **_kwargs):
         pass
 
@@ -48,6 +52,65 @@ def test_runtime_command_is_rejected_while_emergency_stop_is_latched():
     assert motion_run_rejection_reason(True, False, False, True) == (
         'emergency stop is latched; restart the full program'
     )
+
+
+def test_ac_servo_jog_duration_uses_40ms_units_with_half_second_cap():
+    supervisor = MotionSupervisor.__new__(MotionSupervisor)
+    supervisor.action_period_sec = 0.02
+    supervisor._velocity_limit_deg_sec = lambda _motor: 18000.0
+    supervisor._acceleration_limit_deg_sec2 = lambda _motor: 180000.0
+
+    corrected = supervisor._correct_jog_duration_sec({}, 0.0, 360.0)
+    steps = supervisor._jog_step_count(corrected['applied_sec'])
+
+    assert corrected['applied_sec'] == pytest.approx(0.48)
+    assert steps == 12
+    assert steps * 0.04 == pytest.approx(0.48)
+
+
+def test_ac_servo_jog_exceeds_half_second_for_lower_motor_limits():
+    supervisor = MotionSupervisor.__new__(MotionSupervisor)
+    supervisor.action_period_sec = 0.02
+    supervisor._velocity_limit_deg_sec = lambda _motor: 300.0
+    supervisor._acceleration_limit_deg_sec2 = lambda _motor: 3000.0
+
+    corrected = supervisor._correct_jog_duration_sec({}, 0.0, 360.0)
+    steps = supervisor._jog_step_count(corrected['applied_sec'])
+
+    assert corrected['applied_sec'] == pytest.approx(1.8)
+    assert steps == 45
+    assert steps * 0.04 == pytest.approx(1.8)
+
+
+def test_ac_servo_jog_trajectory_sends_cubic_intermediate_targets():
+    supervisor = MotionSupervisor.__new__(MotionSupervisor)
+    supervisor.action_period_sec = 0.001
+    supervisor._jog_threads = {}
+    motor = {'controller_index': 0}
+    supervisor._active_jogs = {
+        0: {
+            'start_position': 0.0,
+            'target_position': 100.0,
+            'steps': 5.0,
+            'command_period_sec': 0.001,
+            'motors': [motor],
+            'motor': motor,
+            'last_step': 0.0,
+        },
+    }
+    positions = []
+    supervisor._publish_ac_servo_action_setpoint = (
+        lambda _motors, _motor, _axis, target: (
+            positions.append(target) is None,
+            '',
+        )
+    )
+    supervisor.get_logger = lambda: QuietLogger()
+
+    supervisor._run_ac_servo_jog_trajectory(0)
+
+    assert positions == pytest.approx([10.4, 35.2, 64.8, 89.6, 100.0])
+    assert supervisor._active_jogs[0]['last_step'] == 5.0
 
 
 def test_midi_result_returns_the_exact_supervisor_approved_command_values():
