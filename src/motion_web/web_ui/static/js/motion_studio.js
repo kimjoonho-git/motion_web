@@ -140,7 +140,9 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
   function selectedMidi() {
     const result = new Map();
     for (const channel of state.midi?.channels || []) {
-      if (channel?.control_enabled && channel.motion_id) result.set(String(channel.motion_id), channel);
+      if ((channel?.select_enabled ?? channel?.control_enabled) && channel.motion_id) {
+        result.set(String(channel.motion_id), channel);
+      }
     }
     return result;
   }
