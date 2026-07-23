@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
@@ -7,12 +8,17 @@ import {
   motionStudioEditorNextValueScale,
   motionStudioEditorValueBounds,
   motionStudioLayerMotionIds,
+  motionStudioPointCurvePreview,
+  motionStudioPointCurveViewEnd,
+  motionStudioPointDragStarted,
+  motionStudioPointHitTarget,
+  motionStudioSelectionKindsMatch,
   motionStudioShouldEditPoint,
   resolveMotionStudioSelectedLayerId,
   synchronizeMotionStudioEditorTimeline,
 } from '../static/js/motion_studio.js';
 
-test('saved points are selectable only during point-curve editing', () => {
+test('a point click edits points only in point mode so general edits can select it', () => {
   const pointTarget = { point: { point_id: 'point_1' } };
 
   assert.equal(motionStudioShouldEditPoint('point_curve', pointTarget), true);
@@ -20,6 +26,121 @@ test('saved points are selectable only during point-curve editing', () => {
   assert.equal(motionStudioShouldEditPoint('value_offset', pointTarget), false);
   assert.equal(motionStudioShouldEditPoint('interpolate', pointTarget), false);
   assert.equal(motionStudioShouldEditPoint('point_curve', null), false);
+});
+
+test('edit ranges allow only point-to-point or motion-to-motion selection', () => {
+  assert.equal(motionStudioSelectionKindsMatch('point', 'point'), true);
+  assert.equal(motionStudioSelectionKindsMatch('motion', 'motion'), true);
+  assert.equal(motionStudioSelectionKindsMatch('point', 'motion'), false);
+  assert.equal(motionStudioSelectionKindsMatch('motion', 'point'), false);
+  assert.equal(motionStudioSelectionKindsMatch('', 'point'), false);
+});
+
+test('primary edit workflow actions stay in the fixed top action area', () => {
+  const html = readFileSync(
+    new URL('../static/index.html', import.meta.url),
+    'utf8',
+  );
+  const actionArea = html.match(
+    /<div class="studio-editor-primary-actions"[\s\S]*?<\/div>\s*<div class="studio-editor-layout">/,
+  )?.[0] || '';
+  assert.match(actionArea, /id="studioEditorApplyButton"/);
+  assert.match(actionArea, /id="studioEditorUpdateButton"/);
+  assert.match(actionArea, /id="studioEditorSaveButton"/);
+  assert.match(actionArea, /id="studioEditorUndoButton"/);
+  assert.match(actionArea, /id="studioEditorRedoButton"/);
+  assert.match(actionArea, />1\. 결과 미리보기</);
+  assert.match(actionArea, />2\. 편집 반영</);
+  assert.match(actionArea, />3\. 저장</);
+  for (const id of [
+    'studioEditorApplyButton',
+    'studioEditorUpdateButton',
+    'studioEditorSaveButton',
+    'studioEditorUndoButton',
+    'studioEditorRedoButton',
+  ]) {
+    assert.equal((html.match(new RegExp(`id="${id}"`, 'g')) || []).length, 1);
+  }
+});
+
+test('point curves expose separate detach and destructive delete actions', () => {
+  const html = readFileSync(
+    new URL('../static/index.html', import.meta.url),
+    'utf8',
+  );
+  const source = readFileSync(
+    new URL('../static/js/motion_studio.js', import.meta.url),
+    'utf8',
+  );
+  assert.match(html, /id="studioEditorCurveDetachButton"[^>]*>포인트 연결 해제</);
+  assert.match(html, /id="studioEditorCurveDeleteButton"[^>]*>곡선 구간 삭제</);
+  assert.match(source, /applyEditorOperation\('detach_point_curve', false\)/);
+  assert.match(source, /points \|\| \[\]\)\.length <= 2/);
+  assert.match(source, /selection_kind: editor\.selectionKind \|\| 'motion'/);
+});
+
+test('saving keeps the layer editor open and refreshes its saved baseline', () => {
+  const source = readFileSync(
+    new URL('../static/js/motion_studio.js', import.meta.url),
+    'utf8',
+  );
+  const saveFlow = source.match(
+    /const acceptSavedEditorLayer =[\s\S]*?const setEditorView =/,
+  )?.[0] || '';
+  assert.match(saveFlow, /editor\.original = clone\(savedLayer\)/);
+  assert.match(saveFlow, /저장 완료 · 창을 닫지 않고 편집을 계속할 수 있습니다/);
+  assert.doesNotMatch(saveFlow, /if \(result\) \{\s*closeLayerEditor\(\)/);
+});
+
+test('whole-layer range selection is grouped with range inputs, not axis management', () => {
+  const html = readFileSync(
+    new URL('../static/index.html', import.meta.url),
+    'utf8',
+  );
+  const sidebar = html.match(
+    /<aside class="studio-editor-sidebar">[\s\S]*?<\/aside>/,
+  )?.[0] || '';
+  const scope = html.match(
+    /<div id="studioEditorScopeControls"[\s\S]*?<\/div>/,
+  )?.[0] || '';
+  assert.doesNotMatch(sidebar, /studioEditorSelectWholeRangeButton/);
+  assert.match(scope, /studioEditorStart/);
+  assert.match(scope, /studioEditorEnd/);
+  assert.match(scope, /studioEditorSelectWholeRangeButton/);
+});
+
+test('point hit target is forgiving and a click does not become a drag', () => {
+  const target = { x: 100, y: 50, point: { point_id: 'point_1' } };
+  assert.equal(motionStudioPointHitTarget([target], 113, 50), target);
+  assert.equal(motionStudioPointHitTarget([target], 115, 50), null);
+  assert.equal(
+    motionStudioPointDragStarted({ startX: 100, startY: 50, moved: false }, 102, 51),
+    false,
+  );
+  assert.equal(
+    motionStudioPointDragStarted({ startX: 100, startY: 50, moved: false }, 104, 50),
+    true,
+  );
+});
+
+test('point-curve workspace is not limited by the existing axis duration', () => {
+  assert.equal(motionStudioPointCurveViewEnd(0.02), 10);
+  assert.equal(motionStudioPointCurveViewEnd(7.86, 20), 20);
+  assert.equal(motionStudioPointCurveViewEnd(7.86, 20, 35), 35);
+});
+
+test('point draft renders a visible curve before server apply', () => {
+  const points = [
+    { point_id: 'start', time_sec: 0, value_deg: 0, tangent_mode: 'auto' },
+    { point_id: 'end', time_sec: 5, value_deg: 10, tangent_mode: 'auto' },
+  ];
+  for (const order of [1, 3, 5]) {
+    const preview = motionStudioPointCurvePreview(points, order);
+    assert.equal(preview.length > 2, true);
+    assert.deepEqual(preview[0], { timeSec: 0, value: 0 });
+    assert.deepEqual(preview.at(-1), { timeSec: 5, value: 10 });
+    assert.equal(Math.abs(preview[Math.floor(preview.length / 2)].value - 5) < 1e-9, true);
+  }
 });
 
 function layer(...times) {

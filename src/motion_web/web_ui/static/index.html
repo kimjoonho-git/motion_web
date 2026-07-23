@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>모션 녹화 시스템 0.5.0</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260723-header-operation-groups">
+    <link rel="stylesheet" href="/static/styles.css?v=20260723-editor-workflow-terms">
   </head>
   <body>
     <main class="shell">
@@ -1223,6 +1223,21 @@
             <div><strong id="studioEditorTitle">레이어 편집</strong><span id="studioEditorSubtitle">임시 작업본</span></div>
             <button id="studioEditorCloseButton" type="button">닫기</button>
           </div>
+          <div class="studio-editor-primary-actions" aria-label="레이어 편집 주요 작업">
+            <div class="studio-editor-history-actions">
+              <button id="studioEditorUndoButton" type="button" disabled>실행 취소</button>
+              <button id="studioEditorRedoButton" type="button" disabled>다시 실행</button>
+            </div>
+            <div class="studio-editor-preview-actions">
+              <span>현재 기능의 결과를 확인한 뒤 작업본에 반영하세요</span>
+              <button id="studioEditorApplyButton" type="button">1. 결과 미리보기</button>
+              <button id="studioEditorUpdateButton" class="primary" type="button" disabled>2. 편집 반영</button>
+            </div>
+            <div class="studio-editor-final-actions">
+              <span>저장 후에도 계속 편집할 수 있습니다</span>
+              <button id="studioEditorSaveButton" class="primary" type="button">3. 저장</button>
+            </div>
+          </div>
           <div class="studio-editor-layout">
             <aside class="studio-editor-sidebar">
               <strong>편집할 Motion ID</strong>
@@ -1242,11 +1257,6 @@
                 </div>
                 <small>추가: ID·초기값 입력 · 복사: 원본 선택 후 새 대상 ID 입력</small>
               </div>
-              <strong>편집 구간</strong>
-              <label class="compact-field studio-editor-range-field"><span>시작(초)</span><input id="studioEditorStart" type="number" min="0" step="0.02" placeholder="선택" value=""></label>
-              <label class="compact-field studio-editor-range-field"><span>끝(초)</span><input id="studioEditorEnd" type="number" min="0" step="0.02" placeholder="선택" value=""></label>
-              <button id="studioEditorSelectWholeRangeButton" type="button">레이어 전체 구간 선택</button>
-              <small>그래프에서 시작점과 끝점을 한 번씩 클릭하거나 시간을 직접 입력하세요.</small>
             </aside>
             <div class="studio-editor-main">
               <div class="studio-editor-toolbar">
@@ -1262,7 +1272,14 @@
               <div class="studio-editor-canvas-wrap"><canvas id="studioEditorGraph" height="430"></canvas></div>
               <div id="studioEditorLegend" class="studio-layer-graph-legend"></div>
               <section class="studio-editor-operation-panel">
-                <strong>선택 구간 편집</strong>
+                <strong id="studioEditorOperationTitle">선택 구간 편집</strong>
+                <div id="studioEditorScopeControls" class="studio-editor-scope-controls">
+                  <strong>편집 구간</strong>
+                  <label class="compact-field studio-editor-range-field"><span>시작(초)</span><input id="studioEditorStart" type="number" min="0" step="0.02" placeholder="선택" value=""></label>
+                  <label class="compact-field studio-editor-range-field"><span>끝(초)</span><input id="studioEditorEnd" type="number" min="0" step="0.02" placeholder="선택" value=""></label>
+                  <button id="studioEditorSelectWholeRangeButton" type="button">레이어 전체 구간</button>
+                  <small>그래프에서 시작점과 끝점을 클릭하거나 시간을 직접 입력하세요.</small>
+                </div>
                 <div class="studio-editor-operations">
                   <label class="compact-field studio-editor-operation-field"><span>편집 기능</span><select id="studioEditorOperation">
                     <option value="time_scale">시간 배율</option>
@@ -1291,24 +1308,24 @@
                     <label class="compact-field"><span>구간 곡선</span><select id="studioEditorPointCurveOrder">
                       <option value="1">직선</option><option value="3" selected>3차 곡선</option><option value="5">5차 곡선</option>
                     </select></label>
+                    <label class="compact-field"><span>시간축 끝(초)</span><input id="studioEditorPointTimelineEnd" type="number" min="0.02" step="0.02" value="10.00"></label>
                     <label class="compact-field"><span>시간(초)</span><input id="studioEditorPointTime" type="number" min="0" step="0.02" disabled></label>
                     <label class="compact-field"><span>모션값(°)</span><input id="studioEditorPointValue" type="number" step="0.01" disabled></label>
                     <label class="compact-field"><span>탄젠트</span><select id="studioEditorPointMode" disabled>
                       <option value="auto">자동</option><option value="smooth">부드럽게</option><option value="broken">분리</option>
                     </select></label>
                     <button id="studioEditorPointDeleteButton" class="off" type="button" disabled>포인트 삭제</button>
-                    <button id="studioEditorCurveDeleteButton" class="off" type="button" disabled>곡선 삭제</button>
+                    <button id="studioEditorCurveDetachButton" type="button" disabled>포인트 연결 해제</button>
+                    <button id="studioEditorCurveDeleteButton" class="off" type="button" disabled>곡선 구간 삭제</button>
                   </div>
-                  <button id="studioEditorApplyButton" type="button">적용</button>
-                  <button id="studioEditorUpdateButton" class="primary" type="button" disabled>업데이트</button>
                 </div>
                 <div id="studioEditorOperationHelp" class="studio-editor-operation-help">시작점을 기준으로 선택 구간의 시간을 배율만큼 줄이거나 늘립니다.</div>
                 <div id="studioEditorSpikeReport" class="studio-editor-operation-help hidden"></div>
               </section>
-              <div id="studioEditorMessage" class="registry-message">적용으로 미리 본 뒤 업데이트하여 작업본에 누적하세요. 마지막에 최종 저장합니다.</div>
+              <div id="studioEditorMessage" class="registry-message">결과를 미리 본 뒤 편집 반영하여 작업본에 누적하세요. 저장 후에도 계속 편집할 수 있습니다.</div>
               <div class="studio-editor-footer">
-                <div class="registry-actions"><button id="studioEditorUndoButton" type="button" disabled>실행 취소</button><button id="studioEditorRedoButton" type="button" disabled>다시 실행</button></div>
-                <div class="studio-editor-save-guide"><span>편집을 모두 마쳤을 때만 저장하세요</span><div class="registry-actions"><button id="studioEditorDiscardButton" type="button">저장하지 않고 닫기</button><button id="studioEditorSaveButton" class="primary" type="button">최종 저장 후 닫기</button></div></div>
+                <span>1. 결과 미리보기 → 2. 편집 반영 → 3. 저장 · 닫기는 저장과 별도입니다.</span>
+                <button id="studioEditorDiscardButton" type="button">닫기</button>
               </div>
             </div>
           </div>
@@ -1404,6 +1421,6 @@
       </section>
     </div>
 
-    <script type="module" src="/static/app.js?v=20260723-header-operation-groups"></script>
+    <script type="module" src="/static/app.js?v=20260723-same-point-selection"></script>
   </body>
 </html>
