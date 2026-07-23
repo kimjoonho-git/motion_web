@@ -46,6 +46,11 @@ DEFAULT_ACTION_DURATION_SEC = 1.0
 MIN_ACTION_DURATION_SEC = 0.02
 CUBIC_SMOOTHSTEP_MAX_VELOCITY = 1.5
 CUBIC_SMOOTHSTEP_MAX_ACCELERATION = 6.0
+DEFAULT_JOG_MIN_DURATION_SEC = 0.15
+DEFAULT_JOG_MAX_DURATION_SEC = 0.5
+JOG_COMMAND_PERIOD_SEC = 0.04
+DEFAULT_JOG_VELOCITY_DEG_SEC = 1125.0
+DEFAULT_JOG_ACCELERATION_DEG_SEC2 = 9375.0
 ACTION_RESULT_SETTLE_SEC = 2.0
 DYNAMIXEL_ACTION_MIN_DEG = -180.0
 DYNAMIXEL_ACTION_MAX_DEG = 180.0
@@ -144,6 +149,7 @@ class MotionSupervisor(Node):
         self._latest_state_at: Optional[float] = None
         self._active_jogs: Dict[int, Dict[str, Any]] = {}
         self._active_actions: Dict[int, Dict[str, Any]] = {}
+        self._jog_threads: Dict[int, threading.Thread] = {}
         self._action_threads: Dict[int, threading.Thread] = {}
         self._motor_config_cache: Optional[Dict[str, Any]] = None
         self._midi_active_until = 0.0
@@ -860,23 +866,44 @@ class MotionSupervisor(Node):
             )
 
         target_position = current_position + relative_deg
-        success, message = self._publish_position_target(
-            motors,
+        limit_error = self._target_position_limit_error(motor, target_position)
+        if limit_error:
+            return False, limit_error
+
+        jog_duration = self._correct_jog_duration_sec(
             motor,
-            axis,
+            current_position,
             target_position,
-            CW_NEW_SET_POINT_MINAS,
         )
-        if not success:
-            return False, message
+        command_period_sec = JOG_COMMAND_PERIOD_SEC
+        steps = self._jog_step_count(jog_duration['applied_sec'])
         self._active_jogs[axis] = {
+            'request_id': str(request.get('request_id') or ''),
             'target_position': float(target_position),
             'started_at': time.time(),
+            'started_monotonic': time.monotonic(),
+            'start_position': float(current_position),
+            'applied_duration_sec': float(steps * command_period_sec),
+            'command_period_sec': float(command_period_sec),
+            'steps': float(steps),
+            'last_step': 0.0,
+            'motors': motors,
+            'motor': motor,
         }
+        thread = threading.Thread(
+            target=self._run_ac_servo_jog_trajectory,
+            args=(axis,),
+            daemon=True,
+        )
+        self._jog_threads[axis] = thread
+        thread.start()
+
         return (
             True,
-            f'AC Servo jog command sent: Axis {axis}, '
-            f'{relative_deg:+.3f} deg, target {target_position:.3f} deg',
+            f'AC Servo smooth jog started: Axis {axis}, '
+            f'{relative_deg:+.3f} deg, target {target_position:.3f} deg, '
+            f'command interval {command_period_sec * 1000.0:.1f}ms, '
+            f'steps {steps}, duration {steps * command_period_sec:.3f}s',
         )
 
     def _handle_dynamixel_jog(self, request: Dict[str, Any]) -> tuple[bool, str]:
@@ -1139,6 +1166,75 @@ class MotionSupervisor(Node):
 
     def _clear_completed_actions(self) -> None:
         self._clear_completed_action_targets()
+
+    def _run_ac_servo_jog_trajectory(self, axis: int) -> None:
+        active = self._active_jogs.get(axis)
+        if active is None:
+            self._jog_threads.pop(axis, None)
+            return
+
+        steps = max(1, int(active.get('steps') or 1))
+        active_start_position = self._optional_float(active.get('start_position'))
+        active_target_position = self._optional_float(active.get('target_position'))
+        start_position = 0.0 if active_start_position is None else active_start_position
+        target_position = (
+            start_position
+            if active_target_position is None
+            else active_target_position
+        )
+        command_period_sec = max(
+            self._optional_float(active.get('command_period_sec'))
+            or self._action_command_period_sec(),
+            self.action_period_sec,
+        )
+        start_time = time.monotonic()
+
+        for step in range(1, steps + 1):
+            active = self._active_jogs.get(axis)
+            if active is None:
+                break
+
+            u = min(max(step / steps, 0.0), 1.0)
+            command_position = start_position + (
+                (target_position - start_position) * self._cubic_smoothstep(u)
+            )
+            motors = active.get('motors')
+            motor = active.get('motor')
+            if not isinstance(motors, list) or not isinstance(motor, dict):
+                self._active_jogs.pop(axis, None)
+                self.get_logger().warning(
+                    f'AC Servo smooth jog stopped: Axis {axis}, '
+                    'motor state snapshot is unavailable'
+                )
+                break
+
+            success, message = self._publish_ac_servo_action_setpoint(
+                motors,
+                motor,
+                axis,
+                command_position,
+            )
+            if not success:
+                self._active_jogs.pop(axis, None)
+                self.get_logger().warning(
+                    f'AC Servo smooth jog stopped: Axis {axis}, {message}'
+                )
+                break
+
+            active['last_step'] = float(step)
+            next_time = start_time + (step * command_period_sec)
+            sleep_sec = next_time - time.monotonic()
+            if sleep_sec > 0.0:
+                time.sleep(sleep_sec)
+
+        active = self._active_jogs.get(axis)
+        if active is not None and int(active.get('last_step') or 0) >= steps:
+            active['commands_sent_at'] = time.time()
+            self.get_logger().info(
+                f'AC Servo smooth jog commands sent: Axis {axis}, '
+                f'sent {steps}/{steps} steps, target {target_position:.3f} deg'
+            )
+        self._jog_threads.pop(axis, None)
 
     def _run_action_trajectory(self, axis: int) -> None:
         active = self._active_actions.get(axis)
@@ -1445,6 +1541,60 @@ class MotionSupervisor(Node):
             'velocity_limit_deg_sec': velocity_limit,
             'acceleration_limit_deg_sec2': acceleration_limit,
         }
+
+    def _correct_jog_duration_sec(
+        self,
+        motor: Dict[str, Any],
+        current_position: float,
+        target_position: float,
+    ) -> Dict[str, Any]:
+        distance = abs(target_position - current_position)
+        configured_velocity = self._velocity_limit_deg_sec(motor)
+        configured_acceleration = self._acceleration_limit_deg_sec2(motor)
+        applied = max(DEFAULT_JOG_MIN_DURATION_SEC, JOG_COMMAND_PERIOD_SEC)
+        if distance > 0.0:
+            nominal_duration = max(
+                CUBIC_SMOOTHSTEP_MAX_VELOCITY
+                * distance
+                / DEFAULT_JOG_VELOCITY_DEG_SEC,
+                math.sqrt(
+                    CUBIC_SMOOTHSTEP_MAX_ACCELERATION
+                    * distance
+                    / DEFAULT_JOG_ACCELERATION_DEG_SEC2
+                ),
+            )
+            applied = max(
+                applied,
+                min(nominal_duration, DEFAULT_JOG_MAX_DURATION_SEC),
+            )
+            if configured_velocity is not None:
+                applied = max(
+                    applied,
+                    CUBIC_SMOOTHSTEP_MAX_VELOCITY
+                    * distance
+                    / configured_velocity,
+                )
+            if configured_acceleration is not None:
+                applied = max(
+                    applied,
+                    math.sqrt(
+                        CUBIC_SMOOTHSTEP_MAX_ACCELERATION
+                        * distance
+                        / configured_acceleration
+                    ),
+                )
+        return {
+            'applied_sec': applied,
+            'velocity_limit_deg_sec': configured_velocity,
+            'acceleration_limit_deg_sec2': configured_acceleration,
+        }
+
+    @staticmethod
+    def _jog_step_count(duration_sec: float) -> int:
+        return max(
+            4,
+            int(math.ceil((duration_sec - 1e-9) / JOG_COMMAND_PERIOD_SEC)),
+        )
 
     def _velocity_limit_deg_sec(self, motor: Dict[str, Any]) -> Optional[float]:
         driver = self._driver_config_for_motor(motor)
