@@ -21,6 +21,8 @@
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/string.hpp>
 
+#include "midi_input_bridge/fader_command_guard.hpp"
+
 namespace
 {
 
@@ -287,6 +289,7 @@ private:
     if (status == 0xE0 && channel < kChannelCount) {
       const int32_t fader_value =
         std::clamp<int32_t>((data2 << 7) | data1, 0, kFaderMax);
+      ++fader_input_generation_[channel];
       fader_[channel] = fader_value;
       // X-Touch does not echo host-driven motor moves on this input port.
       // Any received pitch-bend is therefore fresh physical user input and
@@ -318,6 +321,7 @@ private:
       const std::size_t touch_channel = data1 - kTouchNoteStart;
       const bool was_touched = touch_[touch_channel];
       touch_[touch_channel] = status == 0x90 && data2 > 0;
+      ++fader_input_generation_[touch_channel];
       seen_[touch_channel] = seen_[touch_channel] || touch_[touch_channel];
       if (hold_fader_on_release_ && was_touched && !touch_[touch_channel] &&
         changed_while_touched_[touch_channel])
@@ -388,7 +392,7 @@ private:
     while (std::getline(stream, field, '\t')) {
       fields.push_back(field);
     }
-    if (fields.size() != 7) {
+    if (fields.size() != 8) {
       RCLCPP_WARN_THROTTLE(
         get_logger(), *get_clock(), 5000, "Invalid X-Touch feedback payload");
       return;
@@ -402,11 +406,13 @@ private:
       const bool motor_angle_mode = std::stoi(fields[2]) != 0;
       const int filter_level = std::clamp(std::stoi(fields[3]), 0, 13);
       const int fader_position = std::stoi(fields[6]);
+      const std::uint64_t expected_input_generation = std::stoull(fields[7]);
       // A motorized-fader target is time-critical during recording prepare.
       // Send it before cosmetic LED/LCD feedback so display traffic cannot
       // delay or starve the physical zero command.
       if (fader_position >= 0) {
-        send_commanded_fader_position(channel, fader_position);
+        send_commanded_fader_position(
+          channel, fader_position, expected_input_generation);
       }
       if (last_select_led_[channel] != static_cast<int32_t>(selected)) {
         send_button_led(kSelectNoteStart + channel, selected);
@@ -517,32 +523,50 @@ private:
     send_message(std::move(bytes), "fader hold");
   }
 
-  void send_commanded_fader_position(std::size_t channel, int32_t value)
+  void send_commanded_fader_position(
+    std::size_t channel,
+    int32_t value,
+    std::uint64_t expected_input_generation)
   {
     if (!midi_output_ || !midi_output_->isPortOpen() || channel >= kChannelCount) {
       return;
     }
     value = std::clamp<int32_t>(value, 0, kFaderMax);
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!midi_input_bridge::should_accept_fader_command(
+        expected_input_generation,
+        fader_input_generation_[channel],
+        touch_[channel],
+        movement_active_[channel]))
     {
-      std::lock_guard<std::mutex> lock(mutex_);
-      if (
-        !fader_command_syncing_[channel] && fader_[channel] == value &&
-        !touch_[channel] && !movement_active_[channel])
-      {
-        // The reported state already matches. Still transmit the command so
-        // a newly reconnected surface is driven to the requested position,
-        // but do not create an artificial extra busy interval.
-        commanded_fader_[channel] = value;
-      } else {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 2000,
+        "Dropped stale/busy fader target: channel=%zu target=%d "
+        "expected_generation=%llu current_generation=%llu touch=%d moving=%d",
+        channel + 1, value,
+        static_cast<unsigned long long>(expected_input_generation),
+        static_cast<unsigned long long>(fader_input_generation_[channel]),
+        touch_[channel] ? 1 : 0,
+        movement_active_[channel] ? 1 : 0);
+      return;
+    }
+    if (
+      !fader_command_syncing_[channel] && fader_[channel] == value &&
+      !touch_[channel] && !movement_active_[channel])
+    {
+      // The reported state already matches. Still transmit the command so
+      // a newly reconnected surface is driven to the requested position,
+      // but do not create an artificial extra busy interval.
+      commanded_fader_[channel] = value;
+    } else {
       // Repeated policy retries for the same target must not restart the
       // settle timer forever. A new target starts a new settle interval.
-        if (!fader_command_syncing_[channel] || commanded_fader_[channel] != value) {
-          commanded_fader_[channel] = value;
-          fader_command_deadline_[channel] =
-            std::chrono::steady_clock::now() + fader_command_settle_delay_;
-        }
-        fader_command_syncing_[channel] = true;
+      if (!fader_command_syncing_[channel] || commanded_fader_[channel] != value) {
+        commanded_fader_[channel] = value;
+        fader_command_deadline_[channel] =
+          std::chrono::steady_clock::now() + fader_command_settle_delay_;
       }
+      fader_command_syncing_[channel] = true;
     }
     send_fader_position(channel, value);
   }
@@ -612,6 +636,11 @@ private:
           if (channel > 0) stream << ',';
           stream << (fader_command_syncing_[channel] ? "true" : "false");
         }
+        stream << "],\"fader_input_generation\":[";
+        for (std::size_t channel = 0; channel < kChannelCount; ++channel) {
+          if (channel > 0) stream << ',';
+          stream << fader_input_generation_[channel];
+        }
         stream << "],\"input_event_seen\":"
                << (input_event_seen_ ? "true" : "false")
                << ",\"last_input_event_age_ms\":";
@@ -665,6 +694,7 @@ private:
   std::array<bool, kChannelCount> hold_pending_{};
   std::array<bool, kChannelCount> movement_active_{};
   std::array<int32_t, kChannelCount> commanded_fader_{};
+  std::array<std::uint64_t, kChannelCount> fader_input_generation_{};
   std::array<bool, kChannelCount> fader_command_syncing_{};
   std::array<std::chrono::steady_clock::time_point, kChannelCount>
     fader_command_deadline_{};
