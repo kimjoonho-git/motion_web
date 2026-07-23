@@ -1031,6 +1031,10 @@ class MotionWebBridge(Node):
                 'managed': bool(os.environ.get('MOTION_CONTROL_SERVICE_UNIT')),
                 'mode': 'automatic' if os.environ.get('MOTION_CONTROL_SERVICE_UNIT') else 'manual',
                 'unit': str(os.environ.get('MOTION_CONTROL_SERVICE_UNIT') or ''),
+                'motor_managed': (
+                    os.environ.get('MOTION_MOTOR_SERVICE_UNIT') == 'motion-motor.service'
+                ),
+                'motor_unit': str(os.environ.get('MOTION_MOTOR_SERVICE_UNIT') or ''),
                 'runtime': runtime_status,
             },
             'motion_state_topic': self.motion_state_topic,
@@ -1871,13 +1875,19 @@ class MotionWebBridge(Node):
         }
 
     def scan_motors(self, timeout_sec: float = 20.0) -> Dict[str, Any]:
-        return self._call_scan_service(self._scan_client, self.scan_service, timeout_sec)
+        return self._call_scan_service(
+            self._scan_client,
+            self.scan_service,
+            timeout_sec,
+            release_ethercat=True,
+        )
 
     def scan_ac_servo_motors(self, timeout_sec: float = 10.0) -> Dict[str, Any]:
         return self._call_scan_service(
             self._scan_ac_servo_client,
             self.scan_ac_servo_service,
             timeout_sec,
+            release_ethercat=True,
         )
 
     def scan_dynamixel_motors(self, timeout_sec: float = 20.0) -> Dict[str, Any]:
@@ -1939,6 +1949,8 @@ class MotionWebBridge(Node):
         client,
         service_name: str,
         timeout_sec: float,
+        *,
+        release_ethercat: bool = False,
     ) -> Dict[str, Any]:
         scan_lock = getattr(self, '_motor_scan_request_lock', None)
         if scan_lock is None:
@@ -1954,9 +1966,179 @@ class MotionWebBridge(Node):
                 **self.snapshot(),
             }
         try:
+            if release_ethercat:
+                return self._call_ethercat_scan_service_locked(
+                    client,
+                    service_name,
+                    timeout_sec,
+                )
             return self._call_scan_service_locked(client, service_name, timeout_sec)
         finally:
             scan_lock.release()
+
+    def _call_ethercat_scan_service_locked(
+        self,
+        client,
+        service_name: str,
+        timeout_sec: float,
+    ) -> Dict[str, Any]:
+        """Release the persistent EtherCAT owner for one physical scan.
+
+        The scan contract requires ``ethercat rescan``.  The persistent Motor
+        Manager must therefore be stopped first and restored afterwards.  This
+        orchestration belongs to the upper web layer; motion_system remains
+        unchanged.
+        """
+        motor_service = str(
+            os.environ.get('MOTION_MOTOR_SERVICE_UNIT') or ''
+        ).strip()
+        if motor_service != 'motion-motor.service':
+            return self._call_scan_service_locked(client, service_name, timeout_sec)
+
+        blocker = self._ethercat_scan_safety_blocker()
+        if blocker:
+            return {
+                'success': False,
+                'message': f'AC Servo 검색 미실행: {blocker}',
+                'scan': None,
+                'scan_blocked': True,
+                'project_id': self.project_repository.selected_project_id(),
+                'project_generation': self._current_project_generation(),
+                **self.snapshot(),
+            }
+
+        was_active = self._managed_user_service_active(motor_service)
+        stopped = False
+        result: Dict[str, Any]
+        restore_error = ''
+        try:
+            if was_active:
+                self._run_managed_user_service('stop', motor_service)
+                stopped = True
+                self._wait_for_ethercat_release(timeout_sec=5.0)
+            result = self._call_scan_service_locked(client, service_name, timeout_sec)
+        except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
+            result = {
+                'success': False,
+                'message': f'AC Servo 검색 미실행: {exc}',
+                'scan': None,
+                'scan_blocked': True,
+                'project_id': self.project_repository.selected_project_id(),
+                'project_generation': self._current_project_generation(),
+                **self.snapshot(),
+            }
+        finally:
+            if was_active and stopped:
+                try:
+                    self._run_managed_user_service('start', motor_service)
+                except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
+                    restore_error = str(exc)
+
+        result['motor_service_was_active'] = was_active
+        result['motor_service_restored'] = bool(was_active and not restore_error)
+        if restore_error:
+            result['success'] = False
+            result['restore_error'] = restore_error
+            result['message'] = (
+                f'{result.get("message") or "AC Servo 검색 종료"} / '
+                f'Motor Manager 복구 실패: {restore_error}'
+            )
+        return result
+
+    def _ethercat_scan_safety_blocker(self) -> str:
+        blocker = self._project_change_blocker()
+        if blocker:
+            return blocker
+
+        with self._lock:
+            motion_state = copy.deepcopy(self._motion_state)
+            received_at = self._motion_state_received_at
+        if not isinstance(motion_state, dict) or received_at is None:
+            return ''
+        if time.time() - float(received_at) > 1.0:
+            return ''
+
+        moving_axes = []
+        for motor in motion_state.get('motors') or []:
+            if not isinstance(motor, dict):
+                continue
+            if str(motor.get('transport') or '').lower() != 'ethercat':
+                continue
+            velocity = _monitoring_finite_float(
+                motor.get('velocity_deg_s', motor.get('velocity'))
+            )
+            # Some disconnected/faulted servo runtimes retain sub-degree
+            # quantization noise.  Treat only a command-scale value as
+            # movement evidence; active motion/studio commands are blocked
+            # separately above.
+            if velocity is not None and abs(velocity) > 1.0:
+                moving_axes.append(str(motor.get('controller_index', '?')))
+        if moving_axes:
+            return (
+                f'AC Servo 축 {", ".join(moving_axes)}이 움직이는 중입니다. '
+                '완전히 정지한 뒤 다시 검색하세요'
+            )
+        return ''
+
+    @staticmethod
+    def _managed_user_service_active(service: str) -> bool:
+        completed = subprocess.run(
+            ['/usr/bin/systemctl', '--user', 'is-active', '--quiet', service],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=3.0,
+        )
+        return completed.returncode == 0
+
+    @staticmethod
+    def _run_managed_user_service(action: str, service: str) -> None:
+        if action not in {'start', 'stop'} or service != 'motion-motor.service':
+            raise ValueError('허용되지 않은 Motor Manager 서비스 작업입니다')
+        completed = subprocess.run(
+            ['/usr/bin/systemctl', '--user', action, service],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10.0,
+        )
+        if completed.returncode != 0:
+            detail = completed.stderr.strip() or completed.stdout.strip()
+            raise RuntimeError(detail or f'{service} {action} 실패')
+
+    @staticmethod
+    def _wait_for_ethercat_release(timeout_sec: float) -> None:
+        deadline = time.time() + timeout_sec
+        last_output = ''
+        while time.time() < deadline:
+            completed = subprocess.run(
+                ['ethercat', 'master'],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=2.0,
+            )
+            last_output = completed.stderr.strip() or completed.stdout.strip()
+            if completed.returncode == 0:
+                claimed = bool(
+                    re.search(
+                        r'^\s*Phase:\s*Operation\s*$',
+                        completed.stdout,
+                        re.MULTILINE | re.IGNORECASE,
+                    )
+                    or re.search(
+                        r'^\s*Active:\s*yes\s*$',
+                        completed.stdout,
+                        re.MULTILINE | re.IGNORECASE,
+                    )
+                )
+                if not claimed:
+                    return
+            time.sleep(0.05)
+        raise RuntimeError(
+            'Motor Manager 정지 후에도 EtherCAT Master 사용 상태가 해제되지 않았습니다'
+            + (f': {last_output}' if last_output else '')
+        )
 
     def _call_scan_service_locked(
         self,
@@ -2634,11 +2816,22 @@ class MotionWebBridge(Node):
             managed_service = str(
                 os.environ.get('MOTION_CONTROL_SERVICE_UNIT') or ''
             ).strip()
+            motor_service = str(
+                os.environ.get('MOTION_MOTOR_SERVICE_UNIT') or ''
+            ).strip()
             if managed_service and managed_service != 'motion-control.service':
                 raise ValueError('허용되지 않은 자동실행 서비스 이름입니다')
             if managed_service:
-                self._schedule_managed_service_restart(managed_service)
-                restart_mode = 'managed_service'
+                if motor_service != 'motion-motor.service':
+                    raise ValueError(
+                        'Motor Manager 분리 서비스가 설치되지 않았습니다. '
+                        '최초 설치를 다시 실행하세요'
+                    )
+                self._schedule_managed_service_restart(
+                    motor_service,
+                    managed_service,
+                )
+                restart_mode = 'split_managed_services'
             else:
                 environment = dict(os.environ)
                 environment['MOTOR_CONFIG_FILE'] = str(prepared['runtime_file'])
@@ -2670,7 +2863,7 @@ class MotionWebBridge(Node):
         }
 
     def restart_managed_program(self) -> Dict[str, Any]:
-        """Restart the installed program service only after an explicit web action."""
+        """Restart only upper-level nodes while Motor Manager keeps running."""
         managed_service = str(
             os.environ.get('MOTION_CONTROL_SERVICE_UNIT') or ''
         ).strip()
@@ -2678,6 +2871,15 @@ class MotionWebBridge(Node):
             return {
                 'success': False,
                 'message': '자동실행 서비스가 설치되지 않았습니다. 최초 설치를 먼저 완료하세요',
+                **self.snapshot(),
+            }
+        if os.environ.get('MOTION_MOTOR_SERVICE_UNIT') != 'motion-motor.service':
+            return {
+                'success': False,
+                'message': (
+                    'Motor Manager 분리 서비스가 설치되지 않았습니다. '
+                    '최초 설치를 다시 실행하세요'
+                ),
                 **self.snapshot(),
             }
         self._ensure_project_change_allowed()
@@ -2691,13 +2893,49 @@ class MotionWebBridge(Node):
             }
         return {
             'success': True,
-            'message': '전체 프로그램 재시작을 시작했습니다. 웹이 자동으로 다시 연결됩니다',
-            'restart_mode': 'managed_service',
+            'message': (
+                '상위 프로그램 재시작을 시작했습니다. '
+                'Motor Manager와 현재 서보 상태는 유지됩니다'
+            ),
+            'restart_mode': 'upper_service',
+            **self.snapshot(),
+        }
+
+    def restart_motor_control_system(self) -> Dict[str, Any]:
+        """Restart the persistent Motor Manager only after explicit confirmation."""
+        motor_service = str(
+            os.environ.get('MOTION_MOTOR_SERVICE_UNIT') or ''
+        ).strip()
+        if motor_service != 'motion-motor.service':
+            return {
+                'success': False,
+                'message': (
+                    'Motor Manager 분리 서비스가 설치되지 않았습니다. '
+                    '최초 설치를 다시 실행하세요'
+                ),
+                **self.snapshot(),
+            }
+        self._ensure_project_change_allowed()
+        try:
+            self._schedule_managed_service_restart(motor_service)
+        except OSError as exc:
+            return {
+                'success': False,
+                'message': f'모터 제어 시스템 재시작 요청에 실패했습니다: {exc}',
+                **self.snapshot(),
+            }
+        return {
+            'success': True,
+            'message': (
+                '모터 제어 시스템 재시작을 시작했습니다. '
+                'AC Servo가 OFF됐다가 자동 ON될 수 있습니다'
+            ),
+            'restart_mode': 'motor_service',
             **self.snapshot(),
         }
 
     @staticmethod
-    def _schedule_managed_service_restart(managed_service: str) -> None:
+    def _schedule_managed_service_restart(*managed_services: str) -> None:
         """Return the HTTP response before stopping the process serving it.
 
         Starting systemctl immediately races the API response against
@@ -2706,6 +2944,12 @@ class MotionWebBridge(Node):
         validated service.  Positional arguments keep the service name out of
         shell parsing.
         """
+        allowed_services = {'motion-control.service', 'motion-motor.service'}
+        if (
+            not managed_services
+            or any(service not in allowed_services for service in managed_services)
+        ):
+            raise ValueError('허용되지 않은 자동실행 서비스 이름입니다')
         subprocess.Popen(
             [
                 '/bin/bash',
@@ -2716,7 +2960,7 @@ class MotionWebBridge(Node):
                 '--user',
                 'restart',
                 '--no-block',
-                managed_service,
+                *managed_services,
             ],
             start_new_session=True,
             stdout=subprocess.DEVNULL,
@@ -5456,6 +5700,13 @@ def create_app(bridge: MotionWebBridge) -> FastAPI:
     @app.post('/api/system/program/restart')
     async def restart_managed_program():
         return await asyncio.to_thread(project_call, bridge.restart_managed_program)
+
+    @app.post('/api/system/motor-control/restart')
+    async def restart_motor_control_system():
+        return await asyncio.to_thread(
+            project_call,
+            bridge.restart_motor_control_system,
+        )
 
     @app.get('/api/motion-files')
     async def motion_files():

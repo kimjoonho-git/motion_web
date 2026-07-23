@@ -1,7 +1,9 @@
 import asyncio
 import threading
 import json
+import time
 
+import pytest
 from std_msgs.msg import String
 
 from motion_web_bridge.bridge_node import MotionWebBridge, create_app
@@ -508,6 +510,84 @@ def test_physical_scan_is_allowed_without_a_selected_project():
     assert result['project_id'] == ''
     assert result['project_generation'] == 0
     assert result['scan']['scan_id'] == 'physical-1'
+
+
+def test_ac_servo_scan_temporarily_releases_and_restores_motor_service(monkeypatch):
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._lock = threading.Lock()
+    bridge._motion_state = {'motors': []}
+    bridge._motion_state_received_at = time.time()
+    bridge._motion_run_lock = threading.Lock()
+    bridge._motion_run_status = {}
+    bridge._motion_studio_lock = threading.Lock()
+    bridge._motion_studio_status = {}
+    bridge.project_repository = type('Repository', (), {
+        'selected_project_id': lambda _self: 'project-a',
+    })()
+    bridge.snapshot = lambda: {}
+    bridge._current_project_generation = lambda: 3
+    bridge._managed_user_service_active = lambda _service: True
+    calls = []
+    bridge._run_managed_user_service = (
+        lambda action, service: calls.append((action, service))
+    )
+    bridge._wait_for_ethercat_release = lambda timeout_sec: calls.append(
+        ('released', timeout_sec)
+    )
+    bridge._call_scan_service_locked = lambda *_args: {
+        'success': True,
+        'message': 'scan complete',
+        'scan': {'scan_id': 'scan-1'},
+    }
+    monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
+
+    result = bridge._call_ethercat_scan_service_locked(
+        object(), '/scan_ac_servo_motors', 10.0
+    )
+
+    assert result['success'] is True
+    assert result['motor_service_was_active'] is True
+    assert result['motor_service_restored'] is True
+    assert calls == [
+        ('stop', 'motion-motor.service'),
+        ('released', 5.0),
+        ('start', 'motion-motor.service'),
+    ]
+
+
+def test_ac_servo_scan_is_blocked_while_runtime_velocity_is_nonzero(monkeypatch):
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._lock = threading.Lock()
+    bridge._motion_state = {
+        'motors': [{
+            'controller_index': 2,
+            'transport': 'ethercat',
+            'velocity_deg_s': 1.5,
+        }],
+    }
+    bridge._motion_state_received_at = time.time()
+    bridge._motion_run_lock = threading.Lock()
+    bridge._motion_run_status = {}
+    bridge._motion_studio_lock = threading.Lock()
+    bridge._motion_studio_status = {}
+    bridge.project_repository = type('Repository', (), {
+        'selected_project_id': lambda _self: 'project-a',
+    })()
+    bridge.snapshot = lambda: {}
+    bridge._current_project_generation = lambda: 3
+    bridge._managed_user_service_active = lambda _service: (
+        pytest.fail('moving motor must be rejected before checking systemd')
+    )
+    monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
+
+    result = bridge._call_ethercat_scan_service_locked(
+        object(), '/scan_ac_servo_motors', 10.0
+    )
+
+    assert result['success'] is False
+    assert result['scan_blocked'] is True
+    assert '축 2' in result['message']
+    assert '움직이는 중' in result['message']
 
 
 def test_scan_result_is_discarded_after_a_to_b_to_a_project_switch():

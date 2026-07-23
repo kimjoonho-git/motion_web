@@ -4,20 +4,21 @@ import {
   requestEmergencySafetyStop,
   requestMotionSafetyStop,
   restartManagedProgram,
+  restartMotorControlSystem,
   setMonitoringEnabled,
   stopMotionRun,
   stopMotionStudio,
   setProjectGeneration,
-} from './api.js?v=20260722-motor-config-delete';
-import { getElements } from './dom.js?v=20260722-spike-repair';
+} from './api.js?v=20260723-servo-service-split';
+import { getElements } from './dom.js?v=20260723-header-operation-groups';
 import { createMotorEventLogController } from './event_log.js?v=20260721-project-generation';
 import { createMidiMonitorController } from './midi_monitor.js?v=20260723-revision-sync';
 import { createMotionDataController } from './motion_data.js?v=20260723-revision-sync';
 import { createMotionStudioController } from './motion_studio.js?v=20260722-spike-repair';
 import { createMotionTestController } from './motion_test.js?v=20260721-project-generation';
-import { createMotorConfigController } from './motor_config.js?v=20260723-scan-summary';
-import { createProjectExplorerController } from './project_explorer.js?v=20260721-permanent-project-delete';
-import { renderAccess, renderMonitoring } from './monitoring.js?v=20260722-motion-value-topic';
+import { createMotorConfigController } from './motor_config.js?v=20260723-header-operation-groups';
+import { createProjectExplorerController } from './project_explorer.js?v=20260723-program-restart-label';
+import { renderAccess, renderMonitoring } from './monitoring.js?v=20260723-physical-runtime-state';
 import { StatusSocket } from './socket.js';
 
 const el = getElements();
@@ -57,7 +58,7 @@ function blockWorkspaceForMotorIdentity(workspace) {
 }
 
 function studioMotorActionBlockReason() {
-  if (appState.emergencyLatched) return '긴급정지 잠김 상태입니다. 전체 프로그램 재시작이 필요합니다.';
+  if (appState.emergencyLatched) return '긴급정지 잠김 상태입니다. 프로그램 재시작이 필요합니다.';
   if (appState.motorIdentityBlockMessage) return appState.motorIdentityBlockMessage;
   if (!appState.executionContext?.ready) {
     return appState.executionContext?.message || '현재 프로젝트 실행 설정 적용 대기 중입니다.';
@@ -243,12 +244,21 @@ function renderServiceManagement(payload) {
   const incomingBridgeInstanceId = String(payload?.bridge_instance_id || '');
   if (incomingBridgeInstanceId) appState.bridgeInstanceId = incomingBridgeInstanceId;
   const managed = Boolean(payload?.service_management?.managed);
+  const motorManaged = Boolean(payload?.service_management?.motor_managed);
   if (el.serviceMode) {
-    el.serviceMode.textContent = managed ? '자동 실행 · 자동 복구' : '수동 실행';
-    el.serviceMode.classList.toggle('warning-text', !managed);
+    el.serviceMode.textContent = managed
+      ? (motorManaged ? '분리 자동 실행 · 자동 복구' : '분리 서비스 설치 필요')
+      : '수동 실행';
+    el.serviceMode.classList.toggle('warning-text', !managed || !motorManaged);
   }
-  if (el.programRestartButton) el.programRestartButton.disabled = !managed;
-  if (el.headerProgramRestartButton) el.headerProgramRestartButton.disabled = !managed;
+  if (el.programRestartButton) el.programRestartButton.disabled = !(managed && motorManaged);
+  if (el.motorControlRestartButton) el.motorControlRestartButton.disabled = !motorManaged;
+  if (el.headerProgramRestartButton) {
+    el.headerProgramRestartButton.disabled = !(managed && motorManaged);
+  }
+  if (el.headerMotorControlRestartButton) {
+    el.headerMotorControlRestartButton.disabled = !motorManaged;
+  }
   appState.emergencyLatched = Boolean(payload?.safety_status?.emergency_latched);
   appState.executionContext = payload?.execution_context || null;
   const contextReady = Boolean(appState.executionContext?.ready);
@@ -272,7 +282,7 @@ function renderServiceManagement(payload) {
     el.executionContextState.classList.toggle('warning-text', !contextReady);
   }
   if (appState.emergencyLatched && el.summaryText) {
-    el.summaryText.textContent = '긴급정지 잠김 · 전체 프로그램 재시작 필요';
+    el.summaryText.textContent = '긴급정지 잠김 · 프로그램 재시작 필요';
   }
   if (el.programHealthDetail) {
     const age = Number(payload?.motion_state_age_sec);
@@ -280,9 +290,16 @@ function renderServiceManagement(payload) {
       ? '모터 상태 수신 정상'
       : '모터 상태 수신 확인 필요';
     el.programHealthDetail.textContent = managed
-      ? `자동실행 정상 · ${stateText}`
+      ? (
+        motorManaged
+          ? `분리 자동실행 정상 · ${stateText}`
+          : `상위 서비스만 설치됨 · ${stateText} · 최초 서비스 설치 다시 실행 필요`
+      )
       : `수동 실행 중 · ${stateText} · 최초 서비스 설치 필요`;
-    el.programHealthDetail.classList.toggle('warning-text', !managed || !(Number.isFinite(age) && age <= 1.0));
+    el.programHealthDetail.classList.toggle(
+      'warning-text',
+      !managed || !motorManaged || !(Number.isFinite(age) && age <= 1.0),
+    );
   }
   enforceEmergencyUi();
 }
@@ -878,9 +895,9 @@ if (el.programPageReloadButton) {
 if (el.programRestartButton) {
   el.programRestartButton.addEventListener('click', async () => {
     const confirmed = window.confirm(
-      '전체 프로그램을 재시작합니다.\n\n'
-      + '모터 제어 통신이 잠시 끊기고 서보 상태에 영향을 줄 수 있습니다.\n'
-      + '모션 녹화·재생이 정지된 상태이고 장비가 안전한지 확인했습니까?',
+      '프로그램을 재시작합니다.\n\n'
+      + 'Motor Manager와 EtherCAT은 계속 실행되며 현재 서보 ON/OFF 상태를 유지합니다.\n'
+      + '모션 녹화·재생이 정지된 상태인지 확인했습니까?',
     );
     if (!confirmed) return;
     appState.configApplyInProgress = true;
@@ -890,8 +907,8 @@ if (el.programRestartButton) {
     appState.restartPreviousBridgeInstanceId = appState.bridgeInstanceId;
     setRestartOverlay(
       true,
-      '전체 프로그램 재시작 중입니다',
-      '서비스가 종료된 뒤 자동으로 다시 실행되고 웹도 다시 연결됩니다.',
+      '프로그램 재시작 중입니다',
+      '웹·Supervisor·모션 실행·MIDI가 다시 실행되고 웹도 자동으로 연결됩니다.',
       '재시작 요청 전송 중',
     );
     try {
@@ -909,23 +926,47 @@ if (el.programRestartButton) {
   });
 }
 
+if (el.motorControlRestartButton) {
+  el.motorControlRestartButton.addEventListener('click', async () => {
+    const confirmed = window.confirm(
+      '모터 제어 시스템을 재시작합니다.\n\n'
+      + 'Motor Manager와 EtherCAT 통신이 중단되며 AC Servo가 OFF됐다가 자동 ON될 수 있습니다.\n'
+      + '모든 모션이 정지됐고 장비가 안전한지 확인했습니까?',
+    );
+    if (!confirmed) return;
+    el.motorControlRestartButton.disabled = true;
+    const originalText = el.motorControlRestartButton.textContent;
+    el.motorControlRestartButton.textContent = '모터 제어 재시작 중';
+    try {
+      const payload = await restartMotorControlSystem();
+      if (payload?.success === false) throw new Error(payload.message || '재시작 요청 실패');
+      window.setTimeout(() => fetchStatus(), 1500);
+    } catch (error) {
+      window.alert(error?.message || String(error));
+    } finally {
+      el.motorControlRestartButton.textContent = originalText;
+      window.setTimeout(() => fetchStatus(), 3000);
+    }
+  });
+}
+
 if (el.headerProgramRestartButton) {
   el.headerProgramRestartButton.addEventListener('click', () => {
     if (!el.programRestartButton || el.programRestartButton.disabled) {
-      window.alert('전체 프로그램 재시작을 사용할 수 없습니다. 시스템 정보에서 프로그램 상태를 확인하세요.');
+      window.alert('프로그램 재시작을 사용할 수 없습니다. 시스템 정보에서 프로그램 상태를 확인하세요.');
       return;
     }
     el.programRestartButton.click();
   });
 }
 
-if (el.headerNodeRestartButton) {
-  el.headerNodeRestartButton.addEventListener('click', () => {
-    if (!el.applyAxisConfigButton || el.applyAxisConfigButton.disabled) {
-      window.alert('설정 적용·재시작을 사용할 수 없습니다. 모터 축 설정의 현재 상태와 다음 작업 안내를 확인하세요.');
+if (el.headerMotorControlRestartButton) {
+  el.headerMotorControlRestartButton.addEventListener('click', () => {
+    if (!el.motorControlRestartButton || el.motorControlRestartButton.disabled) {
+      window.alert('모터 제어 재시작을 사용할 수 없습니다. 시스템 정보에서 프로그램 상태를 확인하세요.');
       return;
     }
-    el.applyAxisConfigButton.click();
+    el.motorControlRestartButton.click();
   });
 }
 
@@ -976,7 +1017,7 @@ async function runSafetyStop(emergency) {
     if (safetyFailure) failures.unshift(`최종 모터 출력: ${safetyFailure}`);
     if (el.summaryText) {
       el.summaryText.textContent = emergency
-        ? '긴급정지 잠김 · 전체 프로그램 재시작 필요'
+        ? '긴급정지 잠김 · 프로그램 재시작 필요'
         : failures.length ? '전체 동작 정지 · 일부 상태 확인 필요' : '전체 동작 정지 완료';
     }
     if (failures.length) {

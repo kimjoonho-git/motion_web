@@ -235,7 +235,27 @@ function stateCell(motor) {
   };
   const stateClass = motor.fault ? 'fault' : (stateClassByName[stateName] || stateName);
   const detail = motor.connection_message || motor.state_detail || '';
-  return `<span class="state ${escapeHtml(stateClass)}" title="${displayText(detail)}">${displayText(stateLabel(stateName))}</span>`;
+  const runtimeLabel = stateName === 'online' ? '수신 중' : stateLabel(stateName);
+  return `<span class="state ${escapeHtml(stateClass)}" title="${displayText(detail)}">${displayText(runtimeLabel)}</span>`;
+}
+
+function physicalConnectionCell(motor) {
+  if (motorFilterKey(motor) !== 'ac_servo') return '-';
+  const stateName = motor.physical_connection_state || 'not_scanned';
+  const labels = {
+    detected: '물리 확인',
+    missing: '미검출',
+    unknown: '확인 불가',
+    not_scanned: '검색 전',
+  };
+  const classes = {
+    detected: 'detected',
+    missing: 'disconnected',
+    unknown: 'stale',
+    not_scanned: 'stale',
+  };
+  const detail = motor.physical_connection_message || '';
+  return `<span class="state ${escapeHtml(classes[stateName] || 'stale')}" title="${displayText(detail)}">${displayText(labels[stateName] || '확인 불가')}</span>`;
 }
 
 function positionHeaderText(rawMode) {
@@ -276,7 +296,8 @@ function monitoringColumnsForFilter(filter, rawMode) {
 
   const common = [
     ...identity,
-    { label: '연결 상태', cell: (motor) => stateCell(motor) },
+    { label: '물리 연결 (최근 검색)', cell: (motor) => physicalConnectionCell(motor) },
+    { label: '런타임 수신', cell: (motor) => stateCell(motor) },
     { label: '서보 상태', className: (motor) => statusClass(motor), cell: (motor) => displayText(statusText(motor, rawMode)) },
     { label: '오류', className: (motor) => errorClass(motor), cell: (motor) => displayText(errorText(motor, rawMode)) },
     { label: positionHeaderText(rawMode), className: 'mono', cell: (motor) => displayText(positionText(motor, rawMode)) },
@@ -429,7 +450,18 @@ function detailRowsForTab(motor, tab, rawMode) {
   const isDynamixel = type === 'dynamixel';
   if (tab === 'connection') {
     return [
-      ['연결 상태', stateLabel(motor.connection_state || motor.state)],
+      ['물리 연결 (최근 검색)', motor.physical_connection_state === 'detected'
+        ? '물리 확인'
+        : motor.physical_connection_state === 'missing'
+          ? '미검출'
+          : motor.physical_connection_state === 'unknown'
+            ? '확인 불가'
+            : '검색 전'],
+      ['물리 연결 설명', motor.physical_connection_message || '-'],
+      ['물리 검색 시각', dateTimeValue(motor.physical_connection_checked_at)],
+      ['런타임 수신 상태', (motor.connection_state || motor.state) === 'online'
+        ? '수신 중'
+        : stateLabel(motor.connection_state || motor.state)],
       ['통신 방식', transportValue(motor)],
       ['마스터 ID', motor.master_id ?? '-'],
       ['통신 포트', motor.serial_port || motor.can_interface || '-'],
@@ -612,7 +644,7 @@ export function renderMonitoring(state, options) {
       + Number(connectionSummary.initializing || 0)
       + Number(connectionSummary.monitoring_off || 0)
       + Number(connectionSummary.unknown || 0);
-    el.summaryText.textContent = `연결 상태: 온라인 ${formatInt(onlineCount)}축, 연결 끊김 ${formatInt(offlineCount)}축, 버스 끊김 ${formatInt(busDownCount)}축, 확인 중 ${formatInt(pendingCount)}축 · ${registryText}${filteredText} · 모터 타입 ${formatCounts(state.motor_type_counts)}`;
+    el.summaryText.textContent = `런타임 수신: 수신 중 ${formatInt(onlineCount)}축, 수신 끊김 ${formatInt(offlineCount)}축, 버스 끊김 ${formatInt(busDownCount)}축, 확인 중 ${formatInt(pendingCount)}축 · 물리 연결은 최근 AC Servo 검색 결과 기준 · ${registryText}${filteredText} · 모터 타입 ${formatCounts(state.motor_type_counts)}`;
   }
   if (el.monitoringViewSummary) {
     el.monitoringViewSummary.textContent = `${motorFilterLabel(activeMonitoringFilter)} · 설정 기준 ${formatInt(motors.length)}축 표시`;

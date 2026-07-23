@@ -24,6 +24,7 @@ setup(
         'console_scripts': [
             'motion_web_bridge = motion_web_bridge.bridge_node:main',
             'motion_control_service = motion_web_bridge.service_entrypoint:main',
+            'motion_motor_service = motion_web_bridge.service_entrypoint:motor_main',
         ],
     },
 )
