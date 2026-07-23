@@ -196,7 +196,9 @@ export function createMidiMonitorController({ el, onMappingFileSaved }) {
       if (sensitivityMode) mapping.min_percent = 0;
       const groupValid = live?.motion_group_valid !== false;
       const faderParking = Boolean(live?.fader_parking);
-      const selected = Boolean(live?.motion_axis_matched) && groupValid && Boolean(live?.control_enabled);
+      const selected = Boolean(live?.motion_axis_matched)
+        && groupValid
+        && Boolean(live?.select_enabled ?? live?.control_enabled);
       const activationRejected = live?.motor_command_state === 'activation_rejected';
       const activationMessage = String(
         live?.motor_command_message
