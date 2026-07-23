@@ -97,7 +97,11 @@ def test_rec_mode_sends_source_motion_text_and_off_mode_keeps_14bit_text():
     node._state_publisher = CapturePublisher()
     node._feedback_publisher = CapturePublisher()
     node._lock = threading.Lock()
-    node._pending_fader_positions = [None] * MIDI_CHANNEL_COUNT
+    node._pending_fader_positions = [4321] + [None] * (MIDI_CHANNEL_COUNT - 1)
+    node._fader_input_generation = [8] + [0] * (MIDI_CHANNEL_COUNT - 1)
+    node._pending_fader_input_generations = [7] + [0] * (
+        MIDI_CHANNEL_COUNT - 1
+    )
     node._last_feedback = [None] * MIDI_CHANNEL_COUNT
     channel = {
         'channel': 0,
@@ -114,15 +118,23 @@ def test_rec_mode_sends_source_motion_text_and_off_mode_keeps_14bit_text():
 
     node._publish_state()
     fields = node._feedback_publisher.messages[-1].data.split('\t')
+    assert len(fields) == 8
     assert fields[2] == '1'
     assert fields[5] == '4.250'
+    assert fields[6] == '4321'
+    assert fields[7] == '7'
 
     channel['display_motion_value'] = False
+    channel['display_raw_value'] = 0
     node._snapshot = lambda: {'channels': [dict(channel)]}
     node._publish_state()
     fields = node._feedback_publisher.messages[-1].data.split('\t')
     assert fields[2] == '0'
-    assert fields[5] == '8192'
+    # A SELECT pickup/park target is shown immediately; the independent
+    # observed value remains available for physical-arrival checks.
+    assert fields[5] == '0'
+    assert fields[6] == '-1'
+    assert fields[7] == '8'
 
 
 def test_midi_node_rejects_previous_project_generation():
@@ -148,6 +160,8 @@ def add_motor_control_state(node):
     node._physical_touch = [False] * MIDI_CHANNEL_COUNT
     node._fader_moving = [False] * MIDI_CHANNEL_COUNT
     node._bridge_fader_syncing = [False] * MIDI_CHANNEL_COUNT
+    node._fader_input_generation = [0] * MIDI_CHANNEL_COUNT
+    node._pending_fader_input_generations = [0] * MIDI_CHANNEL_COUNT
     node._fader_sync_targets = [None] * MIDI_CHANNEL_COUNT
     node._awaiting_fader_sync = [False] * MIDI_CHANNEL_COUNT
     node._fader_sync_not_before = [0.0] * MIDI_CHANNEL_COUNT
@@ -174,6 +188,8 @@ def test_input_state_keeps_physical_touch_movement_and_sync_separate():
     node._physical_touch = [False] * MIDI_CHANNEL_COUNT
     node._fader_moving = [False] * MIDI_CHANNEL_COUNT
     node._bridge_fader_syncing = [False] * MIDI_CHANNEL_COUNT
+    node._fader_input_generation = [0] * MIDI_CHANNEL_COUNT
+    node._pending_fader_input_generations = [0] * MIDI_CHANNEL_COUNT
     node._last_physical_input_monotonic = None
     node._last_physical_input_wall = None
 
@@ -181,12 +197,14 @@ def test_input_state_keeps_physical_touch_movement_and_sync_separate():
         '{"physical_touch":[true,false],'
         '"fader_moving":[false,true],'
         '"fader_syncing":[false,true],'
+        '"fader_input_generation":[12,34],'
         '"input_event_seen":true,"last_input_event_age_ms":25}'
     )))
 
     assert node._physical_touch[:2] == [True, False]
     assert node._fader_moving[:2] == [False, True]
     assert node._bridge_fader_syncing[:2] == [False, True]
+    assert node._fader_input_generation[:2] == [12, 34]
     assert node._last_physical_input_monotonic is not None
     assert time.monotonic() - node._last_physical_input_monotonic < 0.1
 
@@ -678,17 +696,29 @@ def parking_node():
     return node
 
 
-def test_select_off_requests_motor_hold_and_does_not_block_next_select():
+def test_select_off_requests_motor_hold_and_retries_fader_zero():
     node = parking_node()
 
     node._deactivate_control_channel_locked(0)
 
     assert node._control_enabled[0] is False
-    assert node._fader_parking[0] is False
+    assert node._fader_parking[0] is True
     assert node._pending_fader_positions[0] == 0
     assert node._pending_motor_requests == {}
     payload = json.loads(node._motor_request_publisher.messages[0].data)
     assert payload['hold_axes'] == [2, 3]
+
+    # Simulate the bridge dropping the first zero command while the last hand
+    # movement is still active. SELECT OFF must retry after release.
+    started = node._fader_park_last_command_at[0]
+    node._pending_fader_positions[0] = None
+    node._fader_moving[0] = True
+    node._update_fader_parking_locked(0, 7000, started + 0.2)
+    assert node._pending_fader_positions[0] is None
+
+    node._fader_moving[0] = False
+    node._update_fader_parking_locked(0, 7000, started + 0.3)
+    assert node._pending_fader_positions[0] == 0
 
 
 def test_fader_parking_waits_for_hand_release_retries_zero_and_confirms_arrival():

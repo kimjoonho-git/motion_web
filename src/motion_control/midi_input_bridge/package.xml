@@ -10,6 +10,7 @@
   <depend>midi_msgs</depend>
   <depend>std_msgs</depend>
   <depend>librtmidi-dev</depend>
+  <test_depend>ament_cmake_gtest</test_depend>
   <export>
     <build_type>ament_cmake</build_type>
   </export>
