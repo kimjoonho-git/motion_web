@@ -1,7 +1,12 @@
 import pytest
 
 from motion_studio.curve_engine import interpolation_ratio, render_point_curve
-from motion_studio.layer_editor import edit_layer, merge_layers, spike_correction_report
+from motion_studio.layer_editor import (
+    approximate_motion_points,
+    edit_layer,
+    merge_layers,
+    spike_correction_report,
+)
 from motion_studio.layer_validation import point_curve_frame_mismatches
 
 
@@ -205,6 +210,36 @@ def test_add_axis_rejects_existing_axis():
             'motion_ids': ['1-1'],
             'initial_value_deg': 0.0,
         })
+
+
+def test_point_curve_can_extend_an_axis_beyond_its_existing_layer_duration():
+    empty = {
+        'layer_id': 'empty', 'name': '빈 레이어',
+        'enabled': True, 'locked': False, 'frames': [],
+    }
+    added = edit_layer(empty, {
+        'operation': 'add_axis',
+        'motion_ids': ['3-1'],
+        'initial_value_deg': 0.0,
+    })
+    assert [frame['time_sec'] for frame in added['frames']] == [0.0, 0.02]
+
+    extended = edit_layer(added, {
+        'operation': 'point_curve',
+        'motion_ids': ['3-1'],
+        'interpolation_order': 3,
+        'curve_id': 'curve_extended',
+        'points': [
+            {'point_id': 'start', 'time_sec': 0.0, 'value_deg': 0.0},
+            {'point_id': 'middle', 'time_sec': 2.5, 'value_deg': 10.0},
+            {'point_id': 'end', 'time_sec': 5.0, 'value_deg': -5.0},
+        ],
+    })
+
+    assert extended['frames'][-1]['time_sec'] == 5.0
+    assert extended['frames'][-1]['values']['3-1'] == pytest.approx(-5.0)
+    assert extended['point_curves'][0]['curve_id'] == 'curve_extended'
+    assert point_curve_frame_mismatches(extended) == []
 
 
 def test_copy_axis_copies_all_frame_values_without_changing_source():
@@ -427,16 +462,268 @@ def test_curve_boundaries_and_broken_points_stop_with_zero_slope():
     ])
 
 
-def test_frame_edit_cannot_silently_desynchronize_a_point_curve():
-    source = edit_layer(layer(), {
-        'operation': 'point_curve', 'motion_ids': ['1-1'], 'curve_id': 'curve_user',
+def linked_point_curve_layer():
+    return edit_layer({
+        'layer_id': 'linked', 'name': '연동 곡선',
+        'enabled': True, 'locked': False,
+        'frames': [
+            {'frame': 1, 'time_sec': 1.0, 'values': {'1-1': 10.0}},
+            {'frame': 2, 'time_sec': 2.0, 'values': {'1-1': 20.0}},
+        ],
+    }, {
+        'operation': 'point_curve',
+        'motion_ids': ['1-1'],
+        'curve_id': 'curve_linked',
+        'interpolation_order': 3,
         'points': [
-            {'point_id': 'p1', 'time_sec': 0.02, 'value_deg': 10.0},
-            {'point_id': 'p2', 'time_sec': 0.08, 'value_deg': 40.0},
+            {'point_id': 'p1', 'time_sec': 1.0, 'value_deg': 10.0},
+            {
+                'point_id': 'p2', 'time_sec': 1.5, 'value_deg': 30.0,
+                'tangent_mode': 'smooth',
+                'in_handle': {'dt_sec': -0.1, 'dv_deg': -2.0},
+                'out_handle': {'dt_sec': 0.1, 'dv_deg': 2.0},
+            },
+            {'point_id': 'p3', 'time_sec': 2.0, 'value_deg': 20.0},
         ],
     })
-    with pytest.raises(ValueError, match='포인트 곡선'):
-        edit_layer(source, request('value_offset', offset_deg=2.0))
+
+
+def test_time_shift_moves_point_metadata_and_rendered_curve_together():
+    result = edit_layer(linked_point_curve_layer(), {
+        'operation': 'time_shift', 'motion_ids': ['1-1'],
+        'start_sec': 1.0, 'end_sec': 2.0, 'delta_sec': 0.2,
+    })
+
+    curve = result['point_curves'][0]
+    assert [point['time_sec'] for point in curve['points']] == [1.2, 1.7, 2.2]
+    assert result['frames'][0]['time_sec'] == 1.2
+    assert result['frames'][-1]['time_sec'] == 2.2
+    assert point_curve_frame_mismatches(result) == []
+
+
+def test_time_scale_moves_point_times_and_handle_times_together():
+    result = edit_layer(linked_point_curve_layer(), {
+        'operation': 'time_scale', 'motion_ids': ['1-1'],
+        'start_sec': 1.0, 'end_sec': 2.0, 'factor': 0.5,
+    })
+
+    points = result['point_curves'][0]['points']
+    assert [point['time_sec'] for point in points] == [1.0, 1.24, 1.5]
+    assert points[1]['out_handle']['dt_sec'] == pytest.approx(0.05)
+    assert result['frames'][-1]['time_sec'] == 1.5
+    assert point_curve_frame_mismatches(result) == []
+
+
+def test_value_edits_move_point_values_and_handles_together():
+    offset = edit_layer(linked_point_curve_layer(), {
+        'operation': 'value_offset', 'motion_ids': ['1-1'],
+        'start_sec': 1.0, 'end_sec': 2.0, 'offset_deg': -5.0,
+    })
+    assert [
+        point['value_deg'] for point in offset['point_curves'][0]['points']
+    ] == [5.0, 25.0, 15.0]
+    assert point_curve_frame_mismatches(offset) == []
+
+    scaled = edit_layer(linked_point_curve_layer(), {
+        'operation': 'value_scale', 'motion_ids': ['1-1'],
+        'start_sec': 1.0, 'end_sec': 2.0, 'factor': 0.5,
+    })
+    points = scaled['point_curves'][0]['points']
+    assert [point['value_deg'] for point in points] == [10.0, 20.0, 15.0]
+    assert points[1]['out_handle']['dv_deg'] == pytest.approx(1.0)
+    assert point_curve_frame_mismatches(scaled) == []
+
+
+def test_point_to_point_partial_edit_moves_only_existing_point_controls():
+    result = edit_layer(linked_point_curve_layer(), {
+        'operation': 'time_shift', 'motion_ids': ['1-1'],
+        'start_sec': 1.0, 'end_sec': 1.5, 'delta_sec': 0.2,
+        'selection_kind': 'point',
+    })
+
+    points = result['point_curves'][0]['points']
+    assert [point['point_id'] for point in points] == ['p1', 'p2', 'p3']
+    assert [point['time_sec'] for point in points] == [1.2, 1.7, 2.0]
+    assert point_curve_frame_mismatches(result) == []
+
+
+def test_motion_point_selection_is_locked_until_point_conversion():
+    with pytest.raises(ValueError, match='일반 모션은 직접 편집할 수 없습니다'):
+        edit_layer(linked_point_curve_layer(), {
+            'operation': 'time_scale', 'motion_ids': ['1-1'],
+            'start_sec': 1.2, 'end_sec': 1.8, 'factor': 0.5,
+            'selection_kind': 'motion',
+        })
+
+
+def test_point_selection_requires_two_real_point_controls():
+    with pytest.raises(ValueError, match='포인트 두 개'):
+        edit_layer(linked_point_curve_layer(), {
+            'operation': 'value_scale', 'motion_ids': ['1-1'],
+            'start_sec': 1.2, 'end_sec': 1.8, 'factor': 0.5,
+            'selection_kind': 'point',
+        })
+
+
+def test_recorded_motion_is_approximated_only_when_conversion_is_requested():
+    source = {
+        'layer_id': 'recorded', 'name': 'MIDI 녹화',
+        'enabled': True, 'locked': False,
+        'frames': [
+            {
+                'frame': index + 1,
+                'time_sec': index * 0.02,
+                'values': {'1-1': value},
+            }
+            for index, value in enumerate([0.0, 0.0, 5.0, 10.0, 10.0])
+        ],
+    }
+    converted = edit_layer(source, {
+        'operation': 'convert_motion_to_point_curve',
+        'motion_ids': ['1-1'],
+        'selection_kind': 'motion',
+        'start_sec': 0.0,
+        'end_sec': 0.08,
+        'approximation_tolerance_deg': 0.01,
+        'approximation_maximum_points': 20,
+        'curve_id': 'curve_fitted',
+    })
+
+    curve = converted['point_curves'][0]
+    assert curve['curve_id'] == 'curve_fitted'
+    assert curve['interpolation_order'] == 1
+    assert 3 <= len(curve['points']) <= 5
+    assert point_curve_frame_mismatches(converted) == []
+
+
+def test_automatic_approximation_uses_more_points_for_complex_motion():
+    simple, simple_report = approximate_motion_points([
+        (index * 0.02, float(index))
+        for index in range(21)
+    ], tolerance_deg=0.01, maximum_points=50)
+    complex_points, complex_report = approximate_motion_points([
+        (index * 0.02, 10.0 if index % 2 else 0.0)
+        for index in range(21)
+    ], tolerance_deg=0.01, maximum_points=50)
+
+    assert len(simple) == 3
+    assert len(complex_points) > len(simple)
+    assert simple_report['maximum_error_deg'] <= 0.01
+    assert complex_report['maximum_error_deg'] <= 0.01
+
+
+@pytest.mark.parametrize('interpolation_order', [3, 5])
+def test_automatic_approximation_rechecks_the_selected_curve_order(
+    interpolation_order,
+):
+    samples = [
+        (index * 0.02, float(index))
+        for index in range(21)
+    ]
+
+    points, report = approximate_motion_points(
+        samples,
+        tolerance_deg=0.1,
+        maximum_points=50,
+        interpolation_order=interpolation_order,
+    )
+
+    assert report['interpolation_order'] == interpolation_order
+    assert report['initial_point_count'] == 3
+    assert len(points) > report['initial_point_count']
+    assert report['maximum_error_deg'] <= 0.1
+    assert {point['tangent_mode'] for point in points} == {'auto'}
+
+
+def test_conversion_stores_the_selected_approximation_curve_order():
+    source = {
+        'layer_id': 'recorded-order', 'name': '차수 선택',
+        'enabled': True, 'locked': False,
+        'frames': [
+            {
+                'frame': index + 1,
+                'time_sec': index * 0.02,
+                'values': {'1-1': float(index)},
+            }
+            for index in range(21)
+        ],
+    }
+
+    converted = edit_layer(source, {
+        'operation': 'convert_motion_to_point_curve',
+        'motion_ids': ['1-1'],
+        'selection_kind': 'motion',
+        'start_sec': 0.0,
+        'end_sec': 0.4,
+        'approximation_tolerance_deg': 0.1,
+        'approximation_maximum_points': 50,
+        'approximation_interpolation_order': 3,
+        'curve_id': 'curve_cubic',
+    })
+
+    assert converted['point_curves'][0]['interpolation_order'] == 3
+    assert point_curve_frame_mismatches(converted) == []
+
+
+def test_point_motion_can_be_baked_back_to_locked_general_motion():
+    source = linked_point_curve_layer()
+    result = edit_layer(source, {
+        'operation': 'convert_point_curve_to_motion',
+        'curve_id': 'curve_linked',
+    })
+
+    assert result['point_curves'] == []
+    assert result['frames'] == source['frames']
+
+
+def test_multiple_point_and_general_ranges_coexist_and_convert_independently():
+    source = {
+        'layer_id': 'mixed', 'name': '혼합 구간',
+        'enabled': True, 'locked': False,
+        'frames': [
+            {
+                'frame': index + 1,
+                'time_sec': index * 0.02,
+                'values': {'1-1': float(index % 4)},
+            }
+            for index in range(16)
+        ],
+    }
+    first = edit_layer(source, {
+        'operation': 'convert_motion_to_point_curve',
+        'motion_ids': ['1-1'], 'start_sec': 0.0, 'end_sec': 0.08,
+        'curve_id': 'point_range_1',
+        'approximation_tolerance_deg': 0.01,
+    })
+    mixed = edit_layer(first, {
+        'operation': 'convert_motion_to_point_curve',
+        'motion_ids': ['1-1'], 'start_sec': 0.16, 'end_sec': 0.24,
+        'curve_id': 'point_range_2',
+        'approximation_tolerance_deg': 0.01,
+    })
+
+    assert [
+        curve['curve_id'] for curve in mixed['point_curves']
+    ] == ['point_range_1', 'point_range_2']
+    baked = edit_layer(mixed, {
+        'operation': 'convert_point_curve_to_motion',
+        'curve_id': 'point_range_1',
+    })
+    assert [
+        curve['curve_id'] for curve in baked['point_curves']
+    ] == ['point_range_2']
+    assert point_curve_frame_mismatches(baked) == []
+
+
+def test_detach_point_curve_keeps_rendered_frames():
+    source = linked_point_curve_layer()
+    result = edit_layer(source, {
+        'operation': 'detach_point_curve',
+        'curve_id': 'curve_linked',
+    })
+
+    assert result['point_curves'] == []
+    assert result['frames'] == source['frames']
 
 
 def test_point_curves_for_same_axis_cannot_overlap():

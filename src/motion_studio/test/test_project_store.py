@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from motion_studio.layer_editor import edit_layer
 from motion_studio.project_store import ProjectStore
 
 
@@ -79,6 +80,51 @@ def test_project_layers_round_trip(tmp_path):
     assert json.loads(
         (tmp_path / 'runtime' / 'studio_projects' / f"{saved['project_id']}.json").read_text()
     )
+
+
+def test_linked_point_edits_remain_isolated_between_two_projects(tmp_path):
+    write_mapping(tmp_path)
+    store = ProjectStore(tmp_path)
+    projects = [
+        store.create_project('프로젝트 A', 'face.yaml'),
+        store.create_project('프로젝트 B', 'face.yaml'),
+    ]
+    for index, project in enumerate(projects):
+        project['layers'] = [{
+            'layer_id': 'same_layer_id',
+            'name': f'레이어 {index}',
+            'frames': [
+                {'frame': 1, 'time_sec': 0.0, 'values': {'1-1': float(index)}},
+                {'frame': 2, 'time_sec': 1.0, 'values': {'1-1': 10.0 + index}},
+            ],
+        }]
+        projects[index] = store.save_project(project)
+
+    first = store.load_project(projects[0]['project_id'])
+    first['layers'][0] = edit_layer(first['layers'][0], {
+        'operation': 'point_curve',
+        'motion_ids': ['1-1'],
+        'curve_id': 'curve_a',
+        'points': [
+            {'point_id': 'a1', 'time_sec': 0.0, 'value_deg': 0.0},
+            {'point_id': 'a2', 'time_sec': 1.0, 'value_deg': 10.0},
+        ],
+    })
+    first['layers'][0] = edit_layer(first['layers'][0], {
+        'operation': 'time_shift',
+        'motion_ids': ['1-1'],
+        'start_sec': 0.0,
+        'end_sec': 1.0,
+        'delta_sec': 0.2,
+    })
+    store.save_project(first)
+
+    saved_first = store.load_project(projects[0]['project_id'])
+    untouched_second = store.load_project(projects[1]['project_id'])
+    assert saved_first['layers'][0]['frames'][0]['time_sec'] == 0.2
+    assert saved_first['layers'][0]['point_curves'][0]['curve_id'] == 'curve_a'
+    assert untouched_second['layers'][0]['frames'][0]['time_sec'] == 0.0
+    assert untouched_second['layers'][0].get('point_curves') == []
 
 
 def test_mapping_checksum_detects_external_change(tmp_path):

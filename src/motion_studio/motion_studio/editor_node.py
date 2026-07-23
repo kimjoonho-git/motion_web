@@ -11,7 +11,12 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
 
-from .layer_editor import edit_layer, merge_layers, spike_correction_report
+from .layer_editor import (
+    approximate_motion_points,
+    edit_layer,
+    merge_layers,
+    spike_correction_report,
+)
 from .layer_validation import point_curve_frame_mismatches, validate_ranges
 from .timeline import layer_conflicts, layer_transition_warnings
 
@@ -86,14 +91,33 @@ class MotionStudioEditorNode(Node):
                     payload.get('spike_detection_threshold_deg', 0.1),
                     payload.get('spike_maximum_correction_deg', 1.0),
                 )
+            if str(payload.get('operation') or '') == 'convert_motion_to_point_curve':
+                selected = {
+                    str(value) for value in payload.get('motion_ids') or [] if str(value)
+                }
+                if len(selected) == 1:
+                    motion_id = next(iter(selected))
+                    start_sec = float(payload.get('start_sec') or 0.0)
+                    end_sec = float(payload.get('end_sec') or start_sec)
+                    samples = sorted(
+                        (
+                            float(frame.get('time_sec') or 0.0),
+                            float((frame.get('values') or {})[motion_id]),
+                        )
+                        for frame in (payload.get('layer') or {}).get('frames') or []
+                        if (
+                            motion_id in (frame.get('values') or {})
+                            and start_sec <= float(frame.get('time_sec') or 0.0) <= end_sec
+                        )
+                    )
+                    _points, operation_report = approximate_motion_points(
+                        samples,
+                        payload.get('approximation_tolerance_deg', 0.1),
+                        payload.get('approximation_maximum_points', 50),
+                        payload.get('approximation_interpolation_order', 1),
+                    )
             layer = edit_layer(payload.get('layer') or {}, payload)
             range_issues = validate_ranges(layer, ranges)
-            if range_issues:
-                first = range_issues[0]
-                raise ValueError(
-                    f"{first['motion_id']} {first['time_sec']:.3f}초 값 "
-                    f"{first['value_deg']:.3f}°가 모션 범위를 벗어납니다"
-                )
             project = copy.deepcopy(payload.get('project') or {})
             for index, existing in enumerate(project.get('layers') or []):
                 if str(existing.get('layer_id') or '') == str(layer.get('layer_id') or ''):
@@ -112,6 +136,7 @@ class MotionStudioEditorNode(Node):
                 'validation': {
                     'conflicts': conflicts,
                     'transition_warnings': warnings,
+                    'range_warnings': range_issues,
                     'point_curve_mismatches': curve_mismatches,
                     'playable': not conflicts and not warnings and not curve_mismatches,
                 },
