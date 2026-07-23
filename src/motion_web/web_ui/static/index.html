@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>모션 녹화 시스템 0.5.0</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260722-motion-axis-audit">
+    <link rel="stylesheet" href="/static/styles.css?v=20260723-type-scan">
   </head>
   <body>
     <main class="shell">
@@ -209,15 +209,29 @@
           </div>
         </details>
 
-        <section class="axis-setup-step" aria-label="전체 모터 검색">
+        <section class="axis-setup-step" aria-label="모터 타입별 검색">
           <div class="section-head axis-settings-head">
             <strong>1. 장비 검색</strong>
-            <span>연결된 모터를 한 번에 검색합니다</span>
+            <span>AC Servo와 Dynamixel을 각각 독립적으로 검색합니다</span>
           </div>
-          <div class="scan-panel axis-primary-scan">
-            <button id="scanAllButton" class="primary" type="button">전체 모터 검색</button>
-            <span id="scanAllResult">검색 전 · 새로 발견된 축은 자동으로 선택됩니다</span>
+          <div class="axis-scan-grid">
+            <section class="scan-panel axis-type-scan" aria-label="AC Servo 검색">
+              <button id="scanButton" class="primary" type="button">AC Servo 검색</button>
+              <span id="scanResult">EtherCAT 재검색 후 실제 Slave를 확인합니다</span>
+            </section>
+            <section class="scan-panel axis-type-scan" aria-label="Dynamixel 검색">
+              <button id="dynamixelScanButton" class="primary" type="button">Dynamixel 검색</button>
+              <span id="dynamixelScanResult">직렬 포트에서 Protocol 2.0, ID 0~252를 확인합니다</span>
+            </section>
           </div>
+          <details class="axis-full-scan-tools">
+            <summary>전체 모터 순차 검색</summary>
+            <p>AC Servo 검색이 끝난 다음 Dynamixel 검색을 실행합니다. 한 타입만 성공하면 부분 완료로 표시합니다.</p>
+            <div class="scan-panel axis-primary-scan">
+              <button id="scanAllButton" type="button">전체 모터 검색</button>
+              <span id="scanAllResult">검색 전 · 새로 발견된 축은 자동으로 선택됩니다</span>
+            </div>
+          </details>
         </section>
 
         <section class="axis-settings-panel" aria-label="모터 축 설정 표">
@@ -315,36 +329,6 @@
             <pre id="motorConfigRawText" class="config-raw-text">설정 파일을 불러오는 중</pre>
           </div>
         </section>
-
-        <details class="settings-panel axis-advanced-panel" aria-label="모터 종류별 개별 검색">
-          <summary class="section-head">
-            <strong>고급: 종류별 개별 검색</strong>
-            <span>필요한 경우에만 사용</span>
-          </summary>
-          <div id="registrationTabs" class="tabbar" role="tablist" aria-label="모터 검색 종류">
-            <button class="tab-button active" type="button" data-registration-tab="ac_servo">AC 서보</button>
-            <button class="tab-button" type="button" data-registration-tab="dynamixel">다이나믹셀</button>
-            <button class="tab-button" type="button" data-registration-tab="cubemars">큐브마스</button>
-          </div>
-
-          <div class="registration-tab-panel" data-registration-panel="ac_servo">
-            <section class="scan-panel" aria-label="AC 서보 검색">
-              <button id="scanButton" type="button">AC 서보만 검색</button>
-              <span id="scanResult">AC 서보 EtherCAT 연결 확인</span>
-            </section>
-          </div>
-
-          <div class="registration-tab-panel hidden" data-registration-panel="dynamixel">
-            <section class="scan-panel" aria-label="다이나믹셀 검색">
-              <button id="dynamixelScanButton" type="button">다이나믹셀만 검색</button>
-              <span id="dynamixelScanResult">통신 포트 자동 검색, 프로토콜 2.0, 1,000,000bps, 전체 ID 검색(0~252)</span>
-            </section>
-          </div>
-
-          <div class="registration-tab-panel hidden" data-registration-panel="cubemars">
-            <div class="registration-placeholder">큐브마스 자동 검색은 아직 지원하지 않습니다.</div>
-          </div>
-        </details>
 
         <section class="axis-setup-step axis-apply-step" aria-label="모터 설정 적용">
           <div class="section-head axis-settings-head">
@@ -1411,6 +1395,6 @@
       </section>
     </div>
 
-    <script type="module" src="/static/app.js?v=20260722-spike-repair"></script>
+    <script type="module" src="/static/app.js?v=20260723-scan-summary"></script>
   </body>
 </html>

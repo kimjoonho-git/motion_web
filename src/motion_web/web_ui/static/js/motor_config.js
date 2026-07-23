@@ -132,6 +132,30 @@ export function createMotorConfigController({
   let scanProgressBaselineId = '';
   let scanProgressActiveId = '';
   let scanProgressRenderedCount = 0;
+  let scanRequestRunning = false;
+
+  function setScanButtonsDisabled(disabled) {
+    [el.scanButton, el.dynamixelScanButton, el.scanAllButton].forEach((button) => {
+      if (button) button.disabled = disabled;
+    });
+  }
+
+  function beginScanRequest(button, runningText) {
+    if (!button || scanRequestRunning) return '';
+    scanRequestRunning = true;
+    const originalText = button.textContent;
+    setScanButtonsDisabled(true);
+    button.textContent = runningText;
+    return originalText;
+  }
+
+  function finishScanRequest(button, originalText) {
+    window.setTimeout(() => {
+      if (button) button.textContent = originalText;
+      scanRequestRunning = false;
+      setScanButtonsDisabled(false);
+    }, 1200);
+  }
 
   function stopScanProgressPolling() {
     if (scanProgressTimer !== null) {
@@ -2936,32 +2960,12 @@ export function createMotorConfigController({
     }
     const ethercatScan = scan.ethercat_scan || {};
     const slaves = Array.isArray(ethercatScan.slaves) ? ethercatScan.slaves : [];
-    const matching = selectedProjectAcMatchingSummary(slaves);
-    const names = slaves.map((slave) => {
-      const slaveText = `Slave ${formatInt(slave.slave_position)}`;
-      const driver = slave.driver_model || slave.device_name || '확인 불가';
-      const alias = slave.ethercat_alias !== null && slave.ethercat_alias !== undefined
-        ? `alias ${formatInt(slave.ethercat_alias)}`
-        : 'alias -';
-      return `${slaveText} (${driver}, ${alias})`;
-    });
-    const slaveText = names.length > 0 ? names.join(', ') : '없음';
-    const scanDuration = Number(ethercatScan.scan_duration_ms);
-    const durationText = Number.isFinite(scanDuration)
-      ? ` · ${Math.round(scanDuration)}ms`
-      : '';
-    const directState = !ethercatScan.available
-      ? conciseMotorScanMessage(
-        `직접 스캔 실패: ${ethercatScan.error || '장치를 읽지 못했습니다'}`,
-      )
-      : ethercatScan.complete === false
-        ? conciseMotorScanMessage(
-          `직접 스캔 부분 실패: ${ethercatScan.error || '일부 장치 값을 읽지 못했습니다'}`,
-        )
-        : ethercatScan.rescan_performed
-          ? `EtherCAT 버스 재열거 + SII 직접 읽기 완료${durationText}`
-          : `SII EEPROM 직접 읽기 완료${durationText}`;
-    el.scanResult.textContent = `${directState} · EtherCAT ${formatInt(slaves.length)}축, 매칭 ${formatInt(matching.matched || 0)}축, 설정 외 ${formatInt(matching.unregistered || 0)}축, 검색된 축: ${slaveText}`;
+    const resultState = ethercatScan.available && ethercatScan.complete
+      ? '검색 완료'
+      : ethercatScan.available
+        ? '검색 부분 완료'
+        : '검색 실패';
+    el.scanResult.textContent = `${resultState} · ${formatInt(slaves.length)}축`;
   }
 
   function renderDynamixelScan(scan) {
@@ -2972,36 +2976,18 @@ export function createMotorConfigController({
       return;
     }
     const devices = Array.isArray(dynamixelScan.devices) ? dynamixelScan.devices : [];
-    const targetCount = Array.isArray(dynamixelScan.targets) ? dynamixelScan.targets.length : 0;
-    const targetPorts = Array.isArray(dynamixelScan.targets)
-      ? [...new Set(dynamixelScan.targets.map((target) => target.port || '-'))]
-      : [];
-    const targetBaudrates = Array.isArray(dynamixelScan.targets)
-      ? [...new Set(dynamixelScan.targets.map((target) => target.baudrate).filter((baudrate) => baudrate))]
-      : [];
-    const protocol = dynamixelScan.protocol || '2.0';
-    const targetText = `${targetPorts.join(', ') || '-'}, protocol ${protocol}, baudrate ${targetBaudrates.map(formatInt).join(', ') || '-'}`;
-    const deviceText = devices.length > 0
-      ? devices.map((device) => {
-        const model = modelTextFromDevice(device) || '모델 확인 불가';
-        return `ID ${formatInt(device.id)} (${model})`;
-      }).join(', ')
-      : '없음';
-    const warningText = dynamixelScan.warning ? ` / ${dynamixelScan.warning}` : '';
-    const errorText = dynamixelScan.error ? ` / ${dynamixelScan.error}` : '';
-    if (dynamixelScan.mode === 'runtime_topic') {
-      el.dynamixelScanResult.textContent = `다이나믹셀 실행 상태 연결 확인: 온라인 피드백 ${formatInt(devices.length)}개, ${deviceText} / 실행 중인 제어기의 피드백 기준${warningText}${errorText}`;
-    } else {
-      el.dynamixelScanResult.textContent = `다이나믹셀 직접 응답 확인 결과: 후보 ${formatInt(targetCount)}개 (${targetText}), 감지 ${formatInt(devices.length)}개, ${deviceText}${warningText}${errorText}`;
-    }
+    const resultState = dynamixelScan.available && dynamixelScan.complete
+      ? '검색 완료'
+      : dynamixelScan.available
+        ? '검색 부분 완료'
+        : '검색 실패';
+    el.dynamixelScanResult.textContent = `${resultState} · ${formatInt(devices.length)}개`;
   }
 
   async function scanMotors() {
-    if (!el.scanButton) return;
-    el.scanButton.disabled = true;
-    const originalText = el.scanButton.textContent;
+    const originalText = beginScanRequest(el.scanButton, '검색 중');
+    if (!originalText) return;
     const expectedToken = projectLoadToken;
-    el.scanButton.textContent = '검색 중';
     if (el.scanResult) el.scanResult.textContent = 'AC 서보 검색 중';
     await openScanProgressPopup('AC 서보 직접 스캔');
     try {
@@ -3021,19 +3007,14 @@ export function createMotorConfigController({
       el.scanButton.textContent = '검색 실패';
       await finishScanProgressPopup(false, `AC 서보 검색 실패: ${error?.message || error}`);
     } finally {
-      setTimeout(() => {
-        el.scanButton.textContent = originalText;
-        el.scanButton.disabled = false;
-      }, 1200);
+      finishScanRequest(el.scanButton, originalText);
     }
   }
 
   async function scanDynamixel() {
-    if (!el.dynamixelScanButton) return;
-    el.dynamixelScanButton.disabled = true;
-    const originalText = el.dynamixelScanButton.textContent;
+    const originalText = beginScanRequest(el.dynamixelScanButton, '검색 중');
+    if (!originalText) return;
     const expectedToken = projectLoadToken;
-    el.dynamixelScanButton.textContent = '검색 중';
     if (el.dynamixelScanResult) el.dynamixelScanResult.textContent = '다이나믹셀 연결 확인 중';
     await openScanProgressPopup('Dynamixel 직접 스캔');
     try {
@@ -3050,19 +3031,14 @@ export function createMotorConfigController({
       el.dynamixelScanButton.textContent = '검색 실패';
       await finishScanProgressPopup(false, `Dynamixel 검색 실패: ${error?.message || error}`);
     } finally {
-      setTimeout(() => {
-        el.dynamixelScanButton.textContent = originalText;
-        el.dynamixelScanButton.disabled = false;
-      }, 1200);
+      finishScanRequest(el.dynamixelScanButton, originalText);
     }
   }
 
   async function scanAllMotors() {
-    if (!el.scanAllButton) return;
-    el.scanAllButton.disabled = true;
-    const originalText = el.scanAllButton.textContent;
+    const originalText = beginScanRequest(el.scanAllButton, '전체 검색 중');
+    if (!originalText) return;
     const expectedToken = projectLoadToken;
-    el.scanAllButton.textContent = '전체 검색 중';
     if (el.scanAllResult) el.scanAllResult.textContent = 'AC 서보와 다이나믹셀을 검색하고 있습니다';
     await openScanProgressPopup('전체 모터 직접 스캔');
     try {
@@ -3108,10 +3084,7 @@ export function createMotorConfigController({
       el.scanAllButton.textContent = '검색 실패';
       await finishScanProgressPopup(false, `전체 모터 검색 실패: ${error?.message || error}`);
     } finally {
-      setTimeout(() => {
-        el.scanAllButton.textContent = originalText;
-        el.scanAllButton.disabled = false;
-      }, 1200);
+      finishScanRequest(el.scanAllButton, originalText);
     }
   }
 

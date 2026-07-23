@@ -1660,16 +1660,47 @@ button[aria-disabled="true"] {
 
 .axis-primary-scan {
   margin-bottom: 0;
-  border-color: #a9c4e8;
-  background: #f3f8ff;
+  background: #fff;
 }
 
 .axis-primary-scan button {
   min-width: 160px;
 }
 
-.axis-advanced-panel {
-  margin-top: 14px;
+.axis-scan-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.axis-type-scan {
+  align-items: flex-start;
+  flex-direction: column;
+  margin-bottom: 0;
+  border-color: #a9c4e8;
+  background: #f3f8ff;
+}
+
+.axis-type-scan button {
+  min-width: 180px;
+}
+
+.axis-full-scan-tools {
+  margin-top: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  background: #fff;
+}
+
+.axis-full-scan-tools > summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.axis-full-scan-tools > p {
+  margin: 8px 0;
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .axis-apply-step {
@@ -5279,6 +5310,10 @@ body.ui-locked {
 
   .scan-panel span {
     white-space: normal;
+  }
+
+  .axis-scan-grid {
+    grid-template-columns: 1fr;
   }
 
   .section-head {

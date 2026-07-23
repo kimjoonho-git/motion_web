@@ -376,6 +376,7 @@ class MotionWebBridge(Node):
         }
         self._event_log_lock = threading.RLock()
         self._scan_progress_lock = threading.RLock()
+        self._motor_scan_request_lock = threading.Lock()
         self._scan_progress: Dict[str, Any] = {
             'scan_id': '',
             'events': [],
@@ -1939,17 +1940,32 @@ class MotionWebBridge(Node):
         service_name: str,
         timeout_sec: float,
     ) -> Dict[str, Any]:
-        scan_project_id = self.project_repository.selected_project_id()
-        scan_generation = self._current_project_generation()
-        if not scan_project_id:
+        scan_lock = getattr(self, '_motor_scan_request_lock', None)
+        if scan_lock is None:
+            scan_lock = threading.Lock()
+            self._motor_scan_request_lock = scan_lock
+        if not scan_lock.acquire(blocking=False):
             return {
                 'success': False,
-                'message': '먼저 프로젝트를 선택한 후 모터를 검색하세요',
+                'message': '다른 모터 검색이 진행 중입니다. 완료 후 다시 시도하세요',
                 'scan': None,
-                'project_id': '',
-                'project_generation': scan_generation,
+                'project_id': self.project_repository.selected_project_id(),
+                'project_generation': self._current_project_generation(),
                 **self.snapshot(),
             }
+        try:
+            return self._call_scan_service_locked(client, service_name, timeout_sec)
+        finally:
+            scan_lock.release()
+
+    def _call_scan_service_locked(
+        self,
+        client,
+        service_name: str,
+        timeout_sec: float,
+    ) -> Dict[str, Any]:
+        scan_project_id = self.project_repository.selected_project_id()
+        scan_generation = self._current_project_generation()
         if not client.wait_for_service(timeout_sec=0.2):
             return {
                 'success': False,

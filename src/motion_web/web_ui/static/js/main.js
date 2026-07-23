@@ -15,7 +15,7 @@ import { createMidiMonitorController } from './midi_monitor.js?v=20260722-midi-f
 import { createMotionDataController } from './motion_data.js?v=20260722-motion-axis-audit';
 import { createMotionStudioController } from './motion_studio.js?v=20260722-spike-repair';
 import { createMotionTestController } from './motion_test.js?v=20260721-project-generation';
-import { createMotorConfigController } from './motor_config.js?v=20260722-scan-runtime-gate';
+import { createMotorConfigController } from './motor_config.js?v=20260723-scan-summary';
 import { createProjectExplorerController } from './project_explorer.js?v=20260721-permanent-project-delete';
 import { renderAccess, renderMonitoring } from './monitoring.js?v=20260722-motion-value-topic';
 import { StatusSocket } from './socket.js';

@@ -450,6 +450,66 @@ def test_scan_result_is_discarded_if_project_changes_while_scanning():
     assert result['project_id'] == 'project-b'
 
 
+def test_scan_request_is_rejected_while_another_motor_type_scan_is_running():
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motor_scan_request_lock = threading.Lock()
+    bridge._motor_scan_request_lock.acquire()
+    bridge._project_generation_lock = threading.Lock()
+    bridge._project_generation = 3
+    bridge.project_repository = type('Repository', (), {
+        'selected_project_id': lambda _self: 'project-a',
+    })()
+    bridge.snapshot = lambda: {}
+
+    class Client:
+        def wait_for_service(self, **_kwargs):
+            raise AssertionError('busy scan must not call another ROS scan service')
+
+    result = bridge._call_scan_service(Client(), '/scan_dynamixel_motors', 1.0)
+
+    assert result['success'] is False
+    assert result['scan'] is None
+    assert result['project_id'] == 'project-a'
+    assert result['project_generation'] == 3
+    assert '다른 모터 검색이 진행 중' in result['message']
+
+
+def test_physical_scan_is_allowed_without_a_selected_project():
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motor_scan_request_lock = threading.Lock()
+    bridge._project_generation_lock = threading.Lock()
+    bridge._project_generation = 0
+    bridge.project_repository = type('Repository', (), {
+        'selected_project_id': lambda _self: '',
+    })()
+    bridge.snapshot = lambda: {}
+    bridge.get_logger = lambda: type('Logger', (), {'warn': lambda *_args: None})()
+
+    class Future:
+        def done(self):
+            return True
+
+        def result(self):
+            return type('Response', (), {
+                'success': True,
+                'message': '{"scan_id":"physical-1","scan_complete":true}',
+            })()
+
+    class Client:
+        def wait_for_service(self, **_kwargs):
+            return True
+
+        def call_async(self, _request):
+            return Future()
+
+    result = bridge._call_scan_service(Client(), '/scan_ac_servo_motors', 1.0)
+
+    assert result['success'] is True
+    assert result['project_id'] == ''
+    assert result['project_generation'] == 0
+    assert result['scan']['scan_id'] == 'physical-1'
+
+
 def test_scan_result_is_discarded_after_a_to_b_to_a_project_switch():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge._project_generation_lock = threading.Lock()
