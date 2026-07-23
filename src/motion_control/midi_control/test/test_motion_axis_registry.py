@@ -78,3 +78,28 @@ def test_registry_resolves_stable_motor_ref_after_controller_index_changes(tmp_p
 
     assert registry.motor_axis('1-1') == 4
     assert registry.motor_axis('1-2') == 1
+
+
+def test_registry_refresh_reloads_changed_gear_ratio(tmp_path):
+    mapping = tmp_path / 'selected.yaml'
+    write_mapping(
+        mapping,
+        '- motion_id: 1-1\n'
+        '  enabled: true\n'
+        '  motor_axis: 0\n'
+        '  gear_ratio: 1.0\n',
+    )
+    registry = MotionAxisRegistry(tmp_path)
+    registry.refresh('selected.yaml')
+    assert registry.mapping('1-1')['gear_ratio'] == 1.0
+
+    write_mapping(
+        mapping,
+        '- motion_id: 1-1\n'
+        '  enabled: true\n'
+        '  motor_axis: 0\n'
+        '  gear_ratio: 50.0\n',
+    )
+    registry.refresh('selected.yaml')
+
+    assert registry.mapping('1-1')['gear_ratio'] == 50.0
