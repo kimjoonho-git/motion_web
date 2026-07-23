@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from motion_web_bridge import service_entrypoint
 from motion_web_bridge.project_repository import ProjectRepository
 from motion_web_bridge.bridge_node import MotionWebBridge
 from motion_web_bridge.service_entrypoint import (
@@ -687,6 +688,83 @@ def test_service_entrypoint_rejects_invalid_project_generation(tmp_path):
     assert resolve_project_generation(workspace) == 0
 
 
+def test_upper_service_entrypoint_never_starts_embedded_motor_manager(
+    tmp_path, monkeypatch
+):
+    workspace = tmp_path / 'workspace'
+    restart_script = workspace / 'scripts' / 'restart_motion_monitor.sh'
+    restart_script.parent.mkdir(parents=True)
+    restart_script.write_text('#!/bin/bash\n', encoding='utf-8')
+    projects = workspace / 'motion_projects'
+    runtime = projects / 'current' / 'runtime' / 'applied_motor_config.yaml'
+    runtime.parent.mkdir(parents=True)
+    runtime.write_text('masters: []\n', encoding='utf-8')
+    (projects / '.selected_project.json').write_text(
+        json.dumps({
+            'project_id': 'current',
+            'applied_project_id': 'current',
+            'project_generation': 7,
+        }),
+        encoding='utf-8',
+    )
+    captured = {}
+    monkeypatch.setenv('MOTION_WORKSPACE', str(workspace))
+    monkeypatch.setattr(
+        service_entrypoint.os,
+        'execvpe',
+        lambda executable, arguments, environment: captured.update({
+            'executable': executable,
+            'arguments': arguments,
+            'environment': environment,
+        }),
+    )
+
+    service_entrypoint.main()
+
+    assert captured['environment']['START_MOTOR_MANAGER'] == 'false'
+    assert captured['environment']['MOTOR_CONFIG_FILE'] == str(runtime)
+    assert captured['environment']['MOTION_PROJECT_GENERATION'] == '7'
+
+
+def test_motor_service_entrypoint_starts_only_applied_motor_runtime(
+    tmp_path, monkeypatch
+):
+    workspace = tmp_path / 'workspace'
+    runner = (
+        workspace / 'src' / 'motion_web' / 'web_bridge'
+        / 'deploy' / 'run_motor_service.sh'
+    )
+    runner.parent.mkdir(parents=True)
+    runner.write_text('#!/bin/bash\n', encoding='utf-8')
+    projects = workspace / 'motion_projects'
+    runtime = projects / 'current' / 'runtime' / 'applied_motor_config.yaml'
+    runtime.parent.mkdir(parents=True)
+    runtime.write_text('masters: []\n', encoding='utf-8')
+    (projects / '.selected_project.json').write_text(
+        json.dumps({
+            'project_id': 'current',
+            'applied_project_id': 'current',
+        }),
+        encoding='utf-8',
+    )
+    captured = {}
+    monkeypatch.setenv('MOTION_WORKSPACE', str(workspace))
+    monkeypatch.setattr(
+        service_entrypoint.os,
+        'execvpe',
+        lambda executable, arguments, environment: captured.update({
+            'executable': executable,
+            'arguments': arguments,
+            'environment': environment,
+        }),
+    )
+
+    service_entrypoint.motor_main()
+
+    assert captured['arguments'] == ['/bin/bash', str(runner)]
+    assert captured['environment']['MOTOR_CONFIG_FILE'] == str(runtime)
+
+
 def test_managed_service_restores_last_applied_config_after_project_edit(tmp_path):
     workspace = tmp_path / 'workspace'
     repository = ProjectRepository(workspace / 'motion_projects')
@@ -785,6 +863,7 @@ def test_web_apply_requests_managed_service_restart_without_second_launch(
     bridge.snapshot = lambda: {}
     commands = []
     monkeypatch.setenv('MOTION_CONTROL_SERVICE_UNIT', 'motion-control.service')
+    monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
     monkeypatch.setattr(
         'motion_web_bridge.bridge_node.subprocess.Popen',
         lambda command, **kwargs: commands.append((command, kwargs)),
@@ -793,14 +872,14 @@ def test_web_apply_requests_managed_service_restart_without_second_launch(
     result = bridge.apply_motor_config()
 
     assert result['success'] is True
-    assert result['restart_mode'] == 'managed_service'
+    assert result['restart_mode'] == 'split_managed_services'
     assert commands[0][0][:4] == [
         '/bin/bash', '-c', 'sleep 0.5; exec "$@"',
         'motion-control-delayed-restart',
     ]
     assert commands[0][0][4:] == [
         '/usr/bin/systemctl', '--user', 'restart', '--no-block',
-        'motion-control.service',
+        'motion-motor.service', 'motion-control.service',
     ]
     assert commands[0][1]['start_new_session'] is True
     assert repository.applied_runtime_motor_config().is_file()
@@ -815,6 +894,7 @@ def test_user_can_request_managed_program_restart_from_web(monkeypatch):
     bridge.snapshot = lambda: {}
     commands = []
     monkeypatch.setenv('MOTION_CONTROL_SERVICE_UNIT', 'motion-control.service')
+    monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
     monkeypatch.setattr(
         'motion_web_bridge.bridge_node.subprocess.Popen',
         lambda command, **kwargs: commands.append((command, kwargs)),
@@ -835,6 +915,30 @@ def test_program_restart_button_requires_installed_service(monkeypatch):
 
     assert result['success'] is False
     assert '최초 설치' in result['message']
+
+
+def test_user_can_restart_only_motor_control_service_from_web(monkeypatch):
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_run_lock = threading.Lock()
+    bridge._motion_studio_lock = threading.Lock()
+    bridge._motion_run_status = {'state': 'idle'}
+    bridge._motion_studio_status = {'state': 'idle'}
+    bridge.snapshot = lambda: {}
+    commands = []
+    monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
+    monkeypatch.setattr(
+        'motion_web_bridge.bridge_node.subprocess.Popen',
+        lambda command, **kwargs: commands.append((command, kwargs)),
+    )
+
+    result = bridge.restart_motor_control_system()
+
+    assert result['success'] is True
+    assert result['restart_mode'] == 'motor_service'
+    assert commands[0][0][4:] == [
+        '/usr/bin/systemctl', '--user', 'restart', '--no-block',
+        'motion-motor.service',
+    ]
 
 
 @pytest.mark.parametrize(

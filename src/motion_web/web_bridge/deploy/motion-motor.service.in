@@ -1,0 +1,19 @@
+[Unit]
+Description=Motion Control Persistent Motor Manager
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@WORKSPACE@
+Environment="MOTION_WORKSPACE=@WORKSPACE@"
+Environment="ROS_LOCALHOST_ONLY=1"
+ExecStart=/bin/bash @MOTOR_SERVICE_RUNNER@
+Restart=on-failure
+RestartSec=3
+KillMode=control-group
+KillSignal=SIGINT
+TimeoutStopSec=8
+
+[Install]
+WantedBy=default.target

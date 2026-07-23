@@ -1867,13 +1867,6 @@ export function createMotorConfigController({
             ? '변경 내용을 먼저 저장하세요.'
             : applyBlockMessage || '적용할 프로젝트 축 설정이 없습니다.';
     }
-    if (el.headerNodeRestartButton) {
-      el.headerNodeRestartButton.disabled = !canApply;
-      el.headerNodeRestartButton.textContent = alreadyApplied
-        ? '설정 적용 완료'
-        : '설정 적용·재시작';
-      el.headerNodeRestartButton.title = el.applyAxisConfigButton?.title || '';
-    }
     if (el.addAxisButton) {
       el.addAxisButton.title = canAdd
         ? '선택한 검색 축을 편집 초안에 추가합니다. 파일은 아직 변경되지 않습니다.'

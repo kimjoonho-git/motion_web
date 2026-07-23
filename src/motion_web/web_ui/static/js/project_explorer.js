@@ -324,7 +324,7 @@ export function createProjectExplorerController({
       const status = !state.project
         ? '프로젝트를 선택하면 메모를 입력할 수 있습니다'
         : !memoSupported()
-          ? '메모 저장 기능을 사용하려면 전체 프로그램 재시작이 필요합니다'
+          ? '메모 저장 기능을 사용하려면 프로그램 재시작이 필요합니다'
           : state.memoError
             ? `저장 실패: ${state.memoError}`
             : state.memoDirty

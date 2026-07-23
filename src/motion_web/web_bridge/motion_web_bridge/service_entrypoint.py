@@ -66,6 +66,9 @@ def main() -> None:
     environment['MOTION_PROJECT_GENERATION'] = str(
         resolve_project_generation(workspace)
     )
+    # The installed upper-level service must never recreate Motor Manager.
+    # motion-motor.service owns the driver/EtherCAT process independently.
+    environment['START_MOTOR_MANAGER'] = 'false'
     if runtime_config:
         environment['MOTOR_CONFIG_FILE'] = str(runtime_config)
     else:
@@ -75,6 +78,30 @@ def main() -> None:
         ['/bin/bash', str(restart_script)],
         environment,
     )
+
+
+def motor_main() -> None:
+    """Start only the persistent low-level Motor Manager service."""
+    workspace = Path(
+        os.environ.get('MOTION_WORKSPACE') or Path.cwd()
+    ).expanduser().resolve()
+    runtime_config = resolve_applied_motor_config(workspace)
+    if runtime_config is None:
+        print(
+            '적용된 프로젝트 모터 설정이 없어 Motor Manager를 시작하지 않습니다.',
+            flush=True,
+        )
+        return
+
+    runner = workspace / 'src' / 'motion_web' / 'web_bridge' / 'deploy' / 'run_motor_service.sh'
+    if not runner.is_file():
+        raise SystemExit(f'motor service runner not found: {runner}')
+
+    environment = dict(os.environ)
+    environment['MOTION_WORKSPACE'] = str(workspace)
+    environment.setdefault('ROS_LOCALHOST_ONLY', '1')
+    environment['MOTOR_CONFIG_FILE'] = str(runtime_config)
+    os.execvpe('/bin/bash', ['/bin/bash', str(runner)], environment)
 
 
 if __name__ == '__main__':

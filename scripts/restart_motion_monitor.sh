@@ -17,6 +17,7 @@ log() {
 # must keep its low-level motor topics local. The web UI is still reachable
 # from another PC because this setting affects ROS DDS only, not HTTP.
 export ROS_LOCALHOST_ONLY="${ROS_LOCALHOST_ONLY:-1}"
+START_MOTOR_MANAGER_MODE="${START_MOTOR_MANAGER:-auto}"
 
 any_running() {
   for pattern in "$@"; do
@@ -51,7 +52,6 @@ sleep "${RESTART_DELAY_SEC:-0.2}"
 patterns=(
   "ros2 launch motion_state_monitor motion_monitor.launch.py"
   "ros2 launch motion_state_monitor project_services.launch.py"
-  "install/motion_control_bridge/lib/motion_control_bridge/motor_manager_node"
   "install/motion_state_monitor/lib/motion_state_monitor/motion_state_monitor"
   "install/motion_supervisor/lib/motion_supervisor/motion_supervisor"
   "ros2 run motion_supervisor motion_supervisor"
@@ -70,6 +70,12 @@ patterns=(
   "install/motion_web_bridge/lib/motion_web_bridge/motion_run_manager"
   "ros2 launch motion_web_bridge midi_monitor.launch.py"
 )
+if [[ "${START_MOTOR_MANAGER_MODE}" == "true" ]] \
+  || { [[ "${START_MOTOR_MANAGER_MODE}" == "auto" ]] && [[ -n "${MOTOR_CONFIG_FILE:-}" ]]; }; then
+  patterns+=(
+    "install/motion_control_bridge/lib/motion_control_bridge/motor_manager_node"
+  )
+fi
 
 for pattern in "${patterns[@]}"; do
   pkill -TERM -f "${pattern}" || true
@@ -131,9 +137,12 @@ recover_ethercat_errors_before_launch() {
 
 cd "${WORKSPACE}"
 CONFIG_FILE="${MOTOR_CONFIG_FILE:-${WORKSPACE}/config/bootstrap_motor_config.yaml}"
-START_MOTOR_MANAGER="false"
-if [[ -n "${MOTOR_CONFIG_FILE:-}" ]]; then
-  START_MOTOR_MANAGER="true"
+START_MOTOR_MANAGER="${START_MOTOR_MANAGER_MODE}"
+if [[ "${START_MOTOR_MANAGER}" == "auto" ]]; then
+  START_MOTOR_MANAGER="false"
+  if [[ -n "${MOTOR_CONFIG_FILE:-}" ]]; then
+    START_MOTOR_MANAGER="true"
+  fi
 fi
 
 MOTOR_START_BLOCK_REASON=""

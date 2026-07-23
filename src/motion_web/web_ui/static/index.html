@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>모션 녹화 시스템 0.5.0</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260723-type-scan">
+    <link rel="stylesheet" href="/static/styles.css?v=20260723-header-operation-groups">
   </head>
   <body>
     <main class="shell">
@@ -14,18 +14,25 @@
           <span class="version-badge">버전 0.5.0</span>
         </div>
         <div class="topbar-operations" aria-label="중요 시스템 조작">
-          <span id="headerProjectName" class="header-project-name" title="현재 프로젝트">프로젝트 없음</span>
-          <span id="headerContextState" class="header-context-state waiting" title="저장 설정과 실행 설정 일치 여부">설정 확인 중</span>
+          <div class="topbar-operation-status">
+            <span id="headerProjectName" class="header-project-name" title="현재 프로젝트">프로젝트 없음</span>
+            <span id="headerContextState" class="header-context-state waiting" title="저장 설정과 실행 설정 일치 여부">설정 확인 중</span>
+          </div>
           <div class="topbar-operation-buttons">
-            <button id="headerMotionStopButton" class="header-motion-stop" type="button" title="전체 모터 동작을 정지하고 서보 ON을 유지합니다">전체 동작 정지</button>
-            <button id="headerEmergencyStopButton" class="header-emergency-stop" type="button" aria-keyshortcuts="Control+Shift+E" title="전체 동작을 정지하고 AC 서보를 끈 뒤 명령을 잠급니다 (Ctrl+Shift+E)">긴급 정지</button>
-            <button id="headerNodeRestartButton" type="button" disabled>설정 적용·재시작</button>
-            <button id="headerProgramRestartButton" type="button" disabled>전체 프로그램 재시작</button>
+            <div class="topbar-operation-group topbar-safety-actions" aria-label="정지 조작">
+              <button id="headerMotionStopButton" class="header-motion-stop" type="button" title="전체 모터 동작을 정지하고 서보 ON을 유지합니다">전체 동작 정지</button>
+              <button id="headerEmergencyStopButton" class="header-emergency-stop" type="button" aria-keyshortcuts="Control+Shift+E" title="전체 동작을 정지하고 AC 서보를 끈 뒤 명령을 잠급니다 (Ctrl+Shift+E)">긴급 정지</button>
+            </div>
+            <span class="topbar-operation-divider" aria-hidden="true"></span>
+            <div class="topbar-operation-group topbar-restart-actions" aria-label="재시작 조작">
+              <button id="headerMotorControlRestartButton" class="header-motor-restart" type="button" title="Motor Manager와 EtherCAT 통신을 재시작합니다" disabled>모터 제어 재시작</button>
+              <button id="headerProgramRestartButton" type="button" disabled>프로그램 재시작</button>
+            </div>
           </div>
         </div>
       </header>
       <div id="emergencyStopBanner" class="emergency-stop-banner hidden" role="alert">
-        긴급정지 잠김 · 모터 동작 명령이 차단되었습니다 · 전체 프로그램 재시작 필요
+        긴급정지 잠김 · 모터 동작 명령이 차단되었습니다 · 프로그램 재시작 필요
       </div>
 
       <nav id="workspaceTabs" class="workspace-tabs" aria-label="작업 화면">
@@ -106,9 +113,10 @@
             <div class="registry-actions system-program-actions">
               <button id="programStatusRefreshButton" type="button">상태 다시 확인</button>
               <button id="programPageReloadButton" type="button">화면 갱신</button>
-              <button id="programRestartButton" class="danger" type="button" disabled>전체 프로그램 재시작</button>
+              <button id="programRestartButton" type="button" disabled>프로그램 재시작</button>
+              <button id="motorControlRestartButton" class="danger" type="button" disabled>모터 제어 시스템 재시작</button>
             </div>
-            <div class="registry-message axis-apply-warning system-restart-warning">화면 갱신은 모터에 영향이 없습니다. 전체 재시작은 장비가 안전할 때만 사용하세요.</div>
+            <div class="registry-message axis-apply-warning system-restart-warning">프로그램 재시작은 서보 상태를 유지합니다. 모터 제어 시스템 재시작은 서보가 OFF됐다가 자동 ON될 수 있으므로 장비가 안전할 때만 사용하세요.</div>
           </section>
         </div>
 
@@ -354,7 +362,7 @@
 
         <div class="monitoring-summary-grid" aria-label="모터 상태 요약">
           <div><span>전체 모터</span><strong id="monitoringTotalCount">0축</strong></div>
-          <div><span>온라인</span><strong id="monitoringOnlineCount">0축</strong></div>
+          <div><span>런타임 수신</span><strong id="monitoringOnlineCount">0축</strong></div>
           <div><span>오류</span><strong id="monitoringFaultCount">0축</strong></div>
           <div><span>갱신 지연</span><strong id="monitoringStaleCount">0축</strong></div>
         </div>
@@ -382,7 +390,8 @@
                 <th>ID</th>
                 <th>모터 종류</th>
                 <th>이름</th>
-                <th>연결 상태</th>
+                <th>물리 연결 (최근 검색)</th>
+                <th>런타임 수신</th>
                 <th>서보 상태</th>
                 <th>오류</th>
                 <th>위치 (deg)</th>
@@ -1395,6 +1404,6 @@
       </section>
     </div>
 
-    <script type="module" src="/static/app.js?v=20260723-revision-sync"></script>
+    <script type="module" src="/static/app.js?v=20260723-header-operation-groups"></script>
   </body>
 </html>

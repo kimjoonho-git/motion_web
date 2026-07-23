@@ -88,6 +88,11 @@ export async function restartManagedProgram() {
   return readJson(response);
 }
 
+export async function restartMotorControlSystem() {
+  const response = await projectFetch('/api/system/motor-control/restart', { method: 'POST' });
+  return readJson(response);
+}
+
 async function motionStudioRequest(path = '', method = 'GET', payload = null) {
   const options = { method };
   if (payload !== null) {

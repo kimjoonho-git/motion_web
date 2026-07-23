@@ -1130,6 +1130,15 @@ body {
 
 .topbar-operations {
   display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: flex-end;
+  gap: 7px;
+  min-width: 0;
+}
+
+.topbar-operation-status {
+  display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 12px;
@@ -1186,6 +1195,19 @@ body {
   gap: 7px;
 }
 
+.topbar-operation-group {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.topbar-operation-divider {
+  width: 1px;
+  height: 28px;
+  margin: 0 5px;
+  background: #b9c4ce;
+}
+
 .topbar-operation-buttons button {
   min-height: 34px;
   padding: 7px 11px;
@@ -1212,6 +1234,17 @@ body {
 
 .topbar-operation-buttons .header-motion-stop:hover:not(:disabled) {
   background: #b75f05;
+}
+
+.topbar-operation-buttons .header-motor-restart {
+  border-color: #c43b32;
+  background: #fff3f2;
+  color: #a91515;
+  font-weight: 800;
+}
+
+.topbar-operation-buttons .header-motor-restart:hover:not(:disabled) {
+  background: #ffe5e2;
 }
 
 .emergency-stop-banner {
@@ -5287,12 +5320,26 @@ body.ui-locked {
     flex-direction: column;
   }
 
+  .topbar-operation-status {
+    align-items: stretch;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
   .header-project-name {
     max-width: none;
   }
 
   .topbar-operation-buttons {
     flex-wrap: wrap;
+  }
+
+  .topbar-operation-group {
+    flex-wrap: wrap;
+  }
+
+  .topbar-operation-divider {
+    display: none;
   }
 
   .actions {
