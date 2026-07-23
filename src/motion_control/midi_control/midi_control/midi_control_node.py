@@ -35,12 +35,17 @@ FADER_SYNC_MIN_DURATION_SEC = 0.10
 FADER_PARK_RETRY_SEC = 0.15
 FADER_PARK_TOLERANCE_RAW = 16
 FADER_PARK_TIMEOUT_SEC = 2.0
+PLAYBACK_FADER_RESUME_DELAY_SEC = 0.35
 SELECT_TOGGLE_DEBOUNCE_SEC = 0.08
 SELECT_RANGE_TOLERANCE_PERCENT = 0.25
 LINKED_RANGE_TOLERANCE_DEG = 1e-6
 LINKED_MOTION_VALUE_TOLERANCE_DEG = 1e-6
 PICKUP_TOLERANCE_DEG = 0.5
 PICKUP_FEEDBACK_CONSISTENCY_DEG = 1.0
+
+
+class LinkedMotionRangeMismatch(ValueError):
+    """Raised when one MIDI fader links Motion IDs with different ranges."""
 
 
 def motion_value_display(
@@ -206,7 +211,9 @@ def require_same_motion_ranges(rows: List[Dict[str, Any]]) -> tuple[float, float
         or abs(upper - first_upper) > LINKED_RANGE_TOLERANCE_DEG
         for lower, upper in ranges[1:]
     ):
-        raise ValueError('연동 Motion ID의 모션 범위가 서로 다릅니다')
+        raise LinkedMotionRangeMismatch(
+            '연동 Motion ID의 모션 범위가 서로 다릅니다'
+        )
     return first_lower, first_upper
 
 
@@ -344,6 +351,11 @@ class MidiControlNode(Node):
                 'motion_run_status_topic', '/motion_control/motion_run_status'
             ).value
         )
+        self.motion_studio_status_topic = str(
+            self.declare_parameter(
+                'motion_studio_status_topic', '/motion_studio/status'
+            ).value
+        )
         self.motion_mapping_response_topic = str(
             self.declare_parameter(
                 'motion_mapping_response_topic',
@@ -433,6 +445,17 @@ class MidiControlNode(Node):
         self._confirmed = [False] * MIDI_CHANNEL_COUNT
         self._control_enabled = [False] * MIDI_CHANNEL_COUNT
         self._studio_select_locked = False
+        self._motion_run_state = 'idle'
+        self._motion_run_request_source = ''
+        self._motion_studio_state = 'idle'
+        self._playback_phase = 'idle'
+        self._playback_follow_enabled = [False] * MIDI_CHANNEL_COUNT
+        self._playback_follow_targets: List[int | None] = [
+            None
+        ] * MIDI_CHANNEL_COUNT
+        self._playback_follow_resume_not_before = [
+            0.0
+        ] * MIDI_CHANNEL_COUNT
         self._studio_zero_fader_targets = [0] * MIDI_CHANNEL_COUNT
         self._final_output_values = [0.0] * MIDI_CHANNEL_COUNT
         # Runtime always starts with SELECT OFF, so park all physical faders.
@@ -557,6 +580,12 @@ class MidiControlNode(Node):
         )
         self._motion_run_status_subscription = self.create_subscription(
             String, self.motion_run_status_topic, self._motion_run_status_callback, 10
+        )
+        self._motion_studio_status_subscription = self.create_subscription(
+            String,
+            self.motion_studio_status_topic,
+            self._motion_studio_status_callback,
+            10,
         )
         self._motion_mapping_response_subscription = self.create_subscription(
             String,
@@ -790,6 +819,7 @@ class MidiControlNode(Node):
         now = time.monotonic()
         with self._lock:
             self._ensure_pickup_state_locked()
+            select_lock_reason = self._select_lock_reason_locked()
             if not hasattr(self, '_observed_raw_channels'):
                 self._observed_raw_channels = list(self._raw_channels)
             mappings = self._banks.active_bank()['mappings']
@@ -906,7 +936,7 @@ class MidiControlNode(Node):
                 if (
                     select_rising
                     and select_allowed
-                    and not self._studio_select_locked
+                    and not select_lock_reason
                     and self._fader_parking[channel]
                 ):
                     # SELECT-OFF has already released/held the robot motor.
@@ -922,10 +952,35 @@ class MidiControlNode(Node):
                     self._awaiting_fader_sync[channel] = False
                     self._fader_sync_not_before[channel] = 0.0
                     was_parking = False
+                self._ensure_playback_follow_state_locked()
                 if (
                     select_rising
                     and select_allowed
-                    and not self._studio_select_locked
+                    and not select_lock_reason
+                    and self._execution_context_ready
+                    and self._playback_phase == 'playing'
+                    and not was_parking
+                ):
+                    self._last_select_toggle_at[channel] = now
+                    try:
+                        self._set_playback_follow_enabled_locked(
+                            channel,
+                            not self._playback_follow_enabled[channel],
+                            mappings[channel],
+                        )
+                    except ValueError as exc:
+                        self._playback_follow_enabled[channel] = False
+                        self._playback_follow_targets[channel] = None
+                        self._motor_command_state[channel] = (
+                            'playback_follow_rejected'
+                        )
+                        self._motor_command_message[channel] = (
+                            f'재생 위치 추종 불가: {exc}'
+                        )
+                elif (
+                    select_rising
+                    and select_allowed
+                    and not select_lock_reason
                     and self._execution_context_ready
                     and not was_parking
                 ):
@@ -1010,10 +1065,13 @@ class MidiControlNode(Node):
                                 int(group[0]['axis'])
                             ]
                             self._motor_follow_active[channel] = False
-                elif select_rising and self._studio_select_locked:
-                    self._motor_command_state[channel] = 'studio_initializing'
+                elif select_rising and select_lock_reason:
+                    self._motor_command_state[channel] = (
+                        'studio_initializing'
+                        if self._studio_select_locked else 'select_locked'
+                    )
                     self._motor_command_message[channel] = (
-                        '녹화 초기화 중 · SELECT 입력 무시됨'
+                        f'{select_lock_reason} · SELECT 입력 무시됨'
                     )
                 elif select_rising and not self._execution_context_ready:
                     self._motor_command_state[channel] = 'context_waiting'
@@ -1254,6 +1312,201 @@ class MidiControlNode(Node):
         # retrying park path instead of a one-shot zero command.
         self._start_fader_parking_locked(channel, time.monotonic())
 
+    def _select_lock_reason_locked(self) -> str:
+        if bool(getattr(self, '_studio_select_locked', False)):
+            return '모션 녹화 초기화 중'
+        self._ensure_playback_follow_state_locked()
+        if self._playback_phase == 'initializing':
+            return '초기 위치 이동 중'
+        if self._playback_phase == 'stopping':
+            return '모션 정지 중'
+        return ''
+
+    def _ensure_playback_follow_state_locked(self) -> None:
+        if not hasattr(self, '_motion_run_state'):
+            self._motion_run_state = 'idle'
+        if not hasattr(self, '_motion_run_request_source'):
+            self._motion_run_request_source = ''
+        if not hasattr(self, '_motion_studio_state'):
+            self._motion_studio_state = 'idle'
+        if not hasattr(self, '_playback_phase'):
+            self._playback_phase = 'idle'
+        if not hasattr(self, '_playback_follow_enabled'):
+            self._playback_follow_enabled = [False] * MIDI_CHANNEL_COUNT
+        if not hasattr(self, '_playback_follow_targets'):
+            self._playback_follow_targets = [None] * MIDI_CHANNEL_COUNT
+        if not hasattr(self, '_playback_follow_resume_not_before'):
+            self._playback_follow_resume_not_before = [
+                0.0
+            ] * MIDI_CHANNEL_COUNT
+
+    def _force_all_select_off_for_playback_locked(self, message: str) -> None:
+        """Release MIDI ownership/follow state without commanding robot motors."""
+        self._ensure_playback_follow_state_locked()
+        now = time.monotonic()
+        for channel in range(MIDI_CHANNEL_COUNT):
+            was_selected = bool(
+                self._control_enabled[channel]
+                or self._playback_follow_enabled[channel]
+            )
+            if self._control_enabled[channel]:
+                self._deactivate_control_channel_locked(
+                    channel, request_motor_hold=False
+                )
+            self._playback_follow_enabled[channel] = False
+            self._playback_follow_targets[channel] = None
+            self._playback_follow_resume_not_before[channel] = 0.0
+            self._clear_pending_channel_locked(channel)
+            self._motor_follow_active[channel] = False
+            if was_selected and not self._fader_parking[channel]:
+                self._start_fader_parking_locked(channel, now)
+            if was_selected:
+                self._motor_command_state[channel] = 'playback_select_off'
+                self._motor_command_message[channel] = message
+                self._last_feedback[channel] = None
+        self._previous_btn3 = list(getattr(
+            self, '_btn3', [False] * MIDI_CHANNEL_COUNT
+        ))
+
+    def _combined_playback_phase_locked(self) -> str:
+        """Combine general-motion and Motion Studio into one MIDI lifecycle."""
+        self._ensure_playback_follow_state_locked()
+        studio_state = self._motion_studio_state
+        run_state = self._motion_run_state
+        run_terminal = run_state in {
+            'idle', 'ready', 'initialized', 'completed', 'stopped', 'error'
+        }
+        if studio_state == 'initializing':
+            return 'initializing'
+        if studio_state == 'playing':
+            return 'idle' if run_terminal else 'playing'
+        if studio_state == 'stopping':
+            return 'stopping'
+        if run_state == 'initializing':
+            return 'initializing'
+        if run_state in {'running', 'verifying'}:
+            return 'playing'
+        if run_state == 'stopping':
+            return 'stopping'
+        return 'idle'
+
+    def _update_playback_phase_locked(self) -> None:
+        self._ensure_playback_follow_state_locked()
+        previous = self._playback_phase
+        current = self._combined_playback_phase_locked()
+        if current == previous:
+            return
+        self._playback_phase = current
+        if current == 'initializing':
+            message = '초기 위치 이동 시작 · SELECT OFF 및 잠금'
+        elif current == 'playing':
+            message = '모션 동작 시작 · SELECT OFF'
+        elif current == 'stopping':
+            message = '모션 정지 시작 · SELECT OFF'
+        elif previous == 'initializing':
+            message = '초기 위치 이동 종료 · SELECT OFF'
+        else:
+            message = '모션 동작 종료 · SELECT OFF'
+        self._force_all_select_off_for_playback_locked(message)
+
+    def _playback_follow_target_locked(
+        self, channel: int, mapping: Dict[str, Any]
+    ) -> int:
+        group = self._mapping_group_locked(mapping)
+        motion_ids = [str(item['motion_id']) for item in group]
+        values = [
+            _finite_float(self._source_motion_values.get(motion_id))
+            for motion_id in motion_ids
+        ]
+        if any(value is None for value in values):
+            raise ValueError('현재 모션 동작값을 아직 받지 못했습니다')
+        logical_values = [float(value) for value in values if value is not None]
+        if (
+            max(logical_values) - min(logical_values)
+            > LINKED_MOTION_VALUE_TOLERANCE_DEG
+        ):
+            raise ValueError('연동 Motion ID의 현재 동작값이 서로 다릅니다')
+        motion_value = sum(logical_values) / len(logical_values)
+        return raw_fader_for_motion(
+            motion_value,
+            group[0]['row'],
+            mapping,
+            safe_motion_range_for_group(group),
+        )
+
+    def _set_playback_follow_enabled_locked(
+        self, channel: int, enabled: bool, mapping: Dict[str, Any]
+    ) -> None:
+        self._ensure_playback_follow_state_locked()
+        now = time.monotonic()
+        if not enabled:
+            self._playback_follow_enabled[channel] = False
+            self._playback_follow_targets[channel] = None
+            self._playback_follow_resume_not_before[channel] = 0.0
+            self._start_fader_parking_locked(channel, now)
+            self._motor_command_state[channel] = 'playback_follow_off'
+            self._motor_command_message[channel] = (
+                '재생 위치 추종 OFF · 페이더 0 복귀 중'
+            )
+            return
+        if mapping.get('enabled') is False:
+            raise ValueError('현재 뱅크에서 이 라인의 사용이 꺼져 있습니다')
+        target = self._playback_follow_target_locked(channel, mapping)
+        self._fader_parking[channel] = False
+        self._fader_park_started_at[channel] = 0.0
+        self._fader_park_last_command_at[channel] = 0.0
+        self._control_enabled[channel] = False
+        self._clear_pickup_state_locked(channel)
+        self._clear_pending_channel_locked(channel)
+        self._motor_follow_active[channel] = False
+        self._playback_follow_enabled[channel] = True
+        self._playback_follow_targets[channel] = target
+        self._playback_follow_resume_not_before[channel] = 0.0
+        self._queue_fader_position_locked(channel, target)
+        self._motor_command_state[channel] = 'playback_follow'
+        self._motor_command_message[channel] = '재생 모션값 읽기 전용 추종 중'
+        self._last_feedback[channel] = None
+
+    def _service_playback_follow_locked(self, now: float) -> None:
+        self._ensure_playback_follow_state_locked()
+        if self._playback_phase != 'playing':
+            return
+        mappings = self._banks.active_bank()['mappings']
+        for channel, enabled in enumerate(self._playback_follow_enabled):
+            if not enabled:
+                continue
+            try:
+                target = self._playback_follow_target_locked(
+                    channel, mappings[channel]
+                )
+            except ValueError as exc:
+                self._motor_command_state[channel] = 'playback_follow_waiting'
+                self._motor_command_message[channel] = f'재생 위치 추종 대기: {exc}'
+                continue
+            self._playback_follow_targets[channel] = target
+            busy = bool(
+                self._physical_touch[channel]
+                or self._fader_moving[channel]
+            )
+            if busy:
+                self._queue_fader_position_locked(channel, None)
+                self._playback_follow_resume_not_before[channel] = max(
+                    self._playback_follow_resume_not_before[channel],
+                    now + PLAYBACK_FADER_RESUME_DELAY_SEC,
+                )
+                self._motor_command_message[channel] = (
+                    '사용자 터치 중 · 재생 위치 추종 일시 정지'
+                )
+                continue
+            if now < self._playback_follow_resume_not_before[channel]:
+                continue
+            pending = self._pending_fader_positions[channel]
+            observed = self._observed_raw_channels[channel]
+            if pending != target and abs(int(observed) - target) > 1:
+                self._queue_fader_position_locked(channel, target)
+            self._motor_command_state[channel] = 'playback_follow'
+            self._motor_command_message[channel] = '재생 모션값 읽기 전용 추종 중'
+
     def _input_state_callback(self, msg: String) -> None:
         try:
             payload = json.loads(msg.data)
@@ -1286,6 +1539,7 @@ class MidiControlNode(Node):
                 )
                 for channel in range(MIDI_CHANNEL_COUNT)
             ]
+            self._service_playback_follow_locked(time.monotonic())
             if payload.get('input_event_seen') is True:
                 try:
                     age_sec = max(
@@ -1394,6 +1648,7 @@ class MidiControlNode(Node):
                     continue
                 self._source_motion_values[motion_id] = value
                 self._source_motion_value_stamps[motion_id] = stamp
+            self._service_playback_follow_locked(time.monotonic())
 
     def _ensure_approved_command_state_locked(self) -> None:
         if not hasattr(self, '_approved_motion_values'):
@@ -1691,10 +1946,41 @@ class MidiControlNode(Node):
             return
         mapping_file_id = str(payload.get('mapping_file_id') or '').strip()
         with self._lock:
+            self._ensure_playback_follow_state_locked()
+            self._motion_run_state = str(payload.get('state') or 'idle')
+            self._motion_run_request_source = str(
+                payload.get('request_source') or ''
+            )
+            self._update_playback_phase_locked()
             self._run_mapping_file_id = mapping_file_id
             self._preferred_mapping_file_id = (
                 self._run_mapping_file_id or self._selected_mapping_file_id
             )
+
+    def _motion_studio_status_callback(self, msg: String) -> None:
+        try:
+            payload = json.loads(msg.data)
+        except json.JSONDecodeError:
+            return
+        if not isinstance(payload, dict):
+            return
+        context = payload.get('execution_context')
+        if not isinstance(context, dict):
+            return
+        try:
+            if (
+                str(context.get('project_id') or '') != self._project_id
+                or int(context.get('project_generation')) != int(
+                    self._execution_context.get('project_generation')
+                )
+            ):
+                return
+        except (AttributeError, TypeError, ValueError):
+            return
+        with self._lock:
+            self._ensure_playback_follow_state_locked()
+            self._motion_studio_state = str(payload.get('state') or 'idle')
+            self._update_playback_phase_locked()
 
     def _motion_mapping_response_callback(self, msg: String) -> None:
         try:
@@ -1832,6 +2118,7 @@ class MidiControlNode(Node):
         now_monotonic = time.monotonic()
         with self._lock:
             self._ensure_fader_parking_state_locked()
+            self._service_playback_follow_locked(now_monotonic)
             self._refresh_axis_registry_locked(now_monotonic)
             if self._execution_context_ready and self._bank_config_file is not None:
                 expected_sha = str(self._execution_context.get('mapping_sha256') or '')
@@ -1868,6 +2155,13 @@ class MidiControlNode(Node):
             ]
             confirmed = list(self._confirmed)
             control_enabled = list(self._control_enabled)
+            self._ensure_playback_follow_state_locked()
+            playback_follow_enabled = list(self._playback_follow_enabled)
+            select_enabled = [
+                bool(control_enabled[channel] or playback_follow_enabled[channel])
+                for channel in range(MIDI_CHANNEL_COUNT)
+            ]
+            playback_phase = self._playback_phase
             motion_value_mode = list(self._motor_angle_mode)
             motion_state = dict(self._latest_motion_state)
             source_context = (
@@ -1971,6 +2265,7 @@ class MidiControlNode(Node):
             awaiting_fader_sync = list(self._awaiting_fader_sync)
             fader_sync_targets = list(self._fader_sync_targets)
             fader_parking = list(self._fader_parking)
+            select_lock_reason = self._select_lock_reason_locked()
             self._ensure_approved_command_state_locked()
             self._ensure_current_motion_state_locked()
             self._ensure_pickup_state_locked()
@@ -2079,6 +2374,8 @@ class MidiControlNode(Node):
                 'dial': dial[channel],
                 'buttons': buttons[channel],
                 'control_enabled': control_enabled[channel],
+                'select_enabled': select_enabled[channel],
+                'playback_follow_enabled': playback_follow_enabled[channel],
                 'pickup_pending': pickup_pending[channel],
                 'pickup_complete': bool(
                     control_enabled[channel] and not pickup_pending[channel]
@@ -2169,11 +2466,9 @@ class MidiControlNode(Node):
             'unit': '14bit',
             'motor_output_enabled': self._execution_context_ready,
             'motor_output_path': 'motion_supervisor',
-            'select_locked': self._studio_select_locked,
-            'select_lock_reason': (
-                '모션 녹화 초기화 중'
-                if self._studio_select_locked else ''
-            ),
+            'select_locked': bool(select_lock_reason),
+            'select_lock_reason': select_lock_reason,
+            'playback_phase': playback_phase,
             'motion_mapping_file_id': mapping_file_id,
             'touch_gated_input': True,
             'filter_order': FILTER_ORDER,
@@ -2212,7 +2507,9 @@ class MidiControlNode(Node):
                 )))
             )
             feedback = (
-                int(bool(channel['control_enabled'])),
+                int(bool(channel.get(
+                    'select_enabled', channel['control_enabled']
+                ))),
                 int(display_motion_value),
                 int(channel['filter_level']),
                 str(channel['motion_id']),
@@ -2243,6 +2540,12 @@ class MidiControlNode(Node):
 
     def _reset_runtime_controls_locked(self) -> None:
         self._control_enabled = [False] * MIDI_CHANNEL_COUNT
+        self._ensure_playback_follow_state_locked()
+        self._playback_follow_enabled = [False] * MIDI_CHANNEL_COUNT
+        self._playback_follow_targets = [None] * MIDI_CHANNEL_COUNT
+        self._playback_follow_resume_not_before = [
+            0.0
+        ] * MIDI_CHANNEL_COUNT
         self._final_output_values = [0.0] * MIDI_CHANNEL_COUNT
         self._observed_raw_channels = [0] * MIDI_CHANNEL_COUNT
         self._pending_fader_positions = [0] * MIDI_CHANNEL_COUNT
@@ -2417,8 +2720,9 @@ class MidiControlNode(Node):
         mappings = self._banks.snapshot()['active_bank']['mappings']
         targets = []
         errors = []
-        validated_groups = set()
-        for mapping in mappings:
+        unavailable_channels = []
+        validation_results: Dict[tuple[str, ...], str | None] = {}
+        for channel, mapping in enumerate(mappings):
             if mapping.get('enabled') is False:
                 continue
             motion_ids = mapping_motion_ids(mapping)
@@ -2430,15 +2734,29 @@ class MidiControlNode(Node):
             if not mapped:
                 continue
             signature = tuple(motion_ids)
-            if signature in validated_groups:
-                continue
-            validated_groups.add(signature)
-            try:
-                self._mapping_group_locked(mapping)
-            except ValueError as exc:
-                errors.append(str(exc))
+            if signature not in validation_results:
+                try:
+                    self._mapping_group_locked(mapping)
+                except LinkedMotionRangeMismatch as exc:
+                    validation_results[signature] = str(exc)
+                except ValueError as exc:
+                    errors.append(str(exc))
+                    validation_results[signature] = None
+                else:
+                    validation_results[signature] = None
+            unavailable_message = validation_results[signature]
+            if unavailable_message:
+                unavailable_channels.append({
+                    'channel': channel + 1,
+                    'motion_ids': motion_ids,
+                    'message': unavailable_message,
+                })
         if errors:
-            return {'targets': targets, 'errors': errors}
+            return {
+                'targets': targets,
+                'errors': errors,
+                'unavailable_channels': unavailable_channels,
+            }
 
         self._studio_select_locked = True
         self._pending_motor_requests.clear()
@@ -2479,7 +2797,11 @@ class MidiControlNode(Node):
                 'mapped': mapped,
             })
         self._previous_btn3 = list(self._btn3)
-        return {'targets': targets, 'errors': errors}
+        return {
+            'targets': targets,
+            'errors': errors,
+            'unavailable_channels': unavailable_channels,
+        }
 
     def _studio_recording_zero_status_locked(self) -> Dict[str, Any]:
         """Report whether every physical MIDI fader has finished parking at zero."""
@@ -2574,6 +2896,10 @@ class MidiControlNode(Node):
                         self._banks = incoming_banks
                         self._current_motion_values = {}
                         self._reset_bank_change_state_locked()
+                        self._motion_run_state = 'idle'
+                        self._motion_run_request_source = ''
+                        self._motion_studio_state = 'idle'
+                        self._playback_phase = 'idle'
                         self._execution_context_ready = False
                     self._execution_context = {
                         'context_id': context_id,
@@ -2738,7 +3064,14 @@ class MidiControlNode(Node):
                 response.update(prepare_result)
                 response['success'] = not prepare_result['errors']
                 response['message'] = (
-                    '모든 SELECT 해제 · SELECT 잠금 · 모든 페이더 물리 0 이동 시작'
+                    (
+                        '모든 SELECT 해제 · SELECT 잠금 · 모든 페이더 물리 0 이동 시작'
+                        + (
+                            f' · 범위 불일치 연동 채널 '
+                            f'{len(prepare_result["unavailable_channels"])}개 선택 불가'
+                            if prepare_result['unavailable_channels'] else ''
+                        )
+                    )
                     if not prepare_result['errors']
                     else prepare_result['errors'][0]
                 )

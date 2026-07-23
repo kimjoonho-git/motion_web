@@ -323,12 +323,18 @@ private:
       touch_[touch_channel] = status == 0x90 && data2 > 0;
       ++fader_input_generation_[touch_channel];
       seen_[touch_channel] = seen_[touch_channel] || touch_[touch_channel];
-      if (hold_fader_on_release_ && was_touched && !touch_[touch_channel] &&
-        changed_while_touched_[touch_channel])
+      if (midi_input_bridge::should_rearm_fader_release_hold(
+          hold_fader_on_release_,
+          was_touched,
+          touch_[touch_channel],
+          changed_while_touched_[touch_channel]))
       {
         // Do not trust a single touch-OFF event. Capacitive touch can flicker
-        // while the hand is still moving, which would let the motor grab the
-        // fader. The movement inactivity timer performs the final hold.
+        // while the hand is still moving. Re-arm the inactivity window even
+        // if it already expired while the hand was resting on the fader.
+        // Otherwise the eventual real release never sends the final hold and
+        // the surface can return to its previous host-commanded position.
+        movement_active_[touch_channel] = true;
         movement_deadline_[touch_channel] =
           std::chrono::steady_clock::now() + movement_release_delay_;
       }
