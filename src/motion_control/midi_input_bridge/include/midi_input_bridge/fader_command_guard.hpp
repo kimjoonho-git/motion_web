@@ -16,4 +16,16 @@ inline bool should_accept_fader_command(
          !physically_moving;
 }
 
+inline bool should_rearm_fader_release_hold(
+  bool hold_enabled,
+  bool was_touched,
+  bool is_touched,
+  bool changed_while_touched)
+{
+  return hold_enabled &&
+         was_touched &&
+         !is_touched &&
+         changed_while_touched;
+}
+
 }  // namespace midi_input_bridge

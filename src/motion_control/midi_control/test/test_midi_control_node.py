@@ -721,6 +721,325 @@ def test_select_off_requests_motor_hold_and_retries_fader_zero():
     assert node._pending_fader_positions[0] == 0
 
 
+def playback_lock_node():
+    node = parking_node()
+    node._lock = threading.Lock()
+    node._project_id = 'project-1'
+    node._execution_context = {'project_generation': 4}
+    node._selected_mapping_file_id = 'mapping.yaml'
+    node._run_mapping_file_id = ''
+    node._preferred_mapping_file_id = 'mapping.yaml'
+    node._studio_select_locked = False
+    node._btn3 = [False] * MIDI_CHANNEL_COUNT
+    node._previous_btn3 = [False] * MIDI_CHANNEL_COUNT
+    node._motion_run_state = 'idle'
+    node._motion_run_request_source = ''
+    node._motion_studio_state = 'idle'
+    node._playback_phase = 'idle'
+    node._playback_follow_enabled = [False] * MIDI_CHANNEL_COUNT
+    node._playback_follow_targets = [None] * MIDI_CHANNEL_COUNT
+    node._playback_follow_resume_not_before = [0.0] * MIDI_CHANNEL_COUNT
+    return node
+
+
+def playback_follow_node():
+    node = playback_lock_node()
+    node._banks = MidiBankManager()
+    mappings = node._banks.active_bank()['mappings']
+    mappings[0]['motion_id'] = '1-1'
+    node._banks.update_bank('bank_1', mappings=mappings)
+    node._execution_context_ready = True
+    node._raw_channels = [8000] * MIDI_CHANNEL_COUNT
+    node._observed_raw_channels = [8000] * MIDI_CHANNEL_COUNT
+    node._channels = [8000.0] * MIDI_CHANNEL_COUNT
+    node._filter_stage1 = [8000.0] * MIDI_CHANNEL_COUNT
+    node._filter_stage2 = [8000.0] * MIDI_CHANNEL_COUNT
+    node._filter_last_at = [None] * MIDI_CHANNEL_COUNT
+    node._touch = [False] * MIDI_CHANNEL_COUNT
+    node._dial = [0] * MIDI_CHANNEL_COUNT
+    node._btn0 = [False] * MIDI_CHANNEL_COUNT
+    node._btn1 = [False] * MIDI_CHANNEL_COUNT
+    node._btn2 = [False] * MIDI_CHANNEL_COUNT
+    node._btn3 = [False] * MIDI_CHANNEL_COUNT
+    node._previous_btn0 = [False] * MIDI_CHANNEL_COUNT
+    node._previous_btn3 = [False] * MIDI_CHANNEL_COUNT
+    node._previous_dial = [0] * MIDI_CHANNEL_COUNT
+    node._confirmed = [False] * MIDI_CHANNEL_COUNT
+    node._final_output_values = [0.0] * MIDI_CHANNEL_COUNT
+    node._motor_angle_mode = [False] * MIDI_CHANNEL_COUNT
+    node._bank_file_dirty = False
+    node._fader_input_generation = [0] * MIDI_CHANNEL_COUNT
+    node._pending_fader_input_generations = [0] * MIDI_CHANNEL_COUNT
+    node._last_select_toggle_at = [0.0] * MIDI_CHANNEL_COUNT
+    node._last_received_monotonic = None
+    node._last_received_wall = None
+    node._pickup_pending = [False] * MIDI_CHANNEL_COUNT
+    node._pickup_reference_motion = [None] * MIDI_CHANNEL_COUNT
+    node._pickup_previous_motion = [None] * MIDI_CHANNEL_COUNT
+    node._pickup_reference_source = [''] * MIDI_CHANNEL_COUNT
+    node._source_motion_values = {'1-1': 0.0}
+    node._source_motion_value_stamps = {'1-1': 1.0}
+    node._source_motion_value_context = ('project-1', 4)
+    row = {
+        'motor_axis': 2,
+        'motion_lower_deg': -20,
+        'motion_upper_deg': 20,
+        'reference_position_deg': 0,
+        'gear_ratio': 1,
+        'scale': 1,
+    }
+    node._latest_motion_state = {'motors': [{
+        'controller_index': 2,
+        'position_deg': 0.0,
+        'lower': -180.0,
+        'upper': 180.0,
+    }]}
+    node._axis_registry = SimpleNamespace(
+        motor_axis=lambda motion_id: 2 if motion_id == '1-1' else None,
+        mapping=lambda motion_id: row if motion_id == '1-1' else None,
+        file_id='mapping.yaml',
+    )
+    return node
+
+
+def midi_message(*, select=False, touched=False, value=0):
+    return SimpleNamespace(
+        channel=[value] + [0] * (MIDI_CHANNEL_COUNT - 1),
+        touch=[touched] + [False] * (MIDI_CHANNEL_COUNT - 1),
+        dial=[0] * MIDI_CHANNEL_COUNT,
+        btn0=[False] * MIDI_CHANNEL_COUNT,
+        btn1=[False] * MIDI_CHANNEL_COUNT,
+        btn2=[False] * MIDI_CHANNEL_COUNT,
+        btn3=[select] + [False] * (MIDI_CHANNEL_COUNT - 1),
+    )
+
+
+def test_motion_playback_start_releases_owner_without_locking_select():
+    node = playback_lock_node()
+    running = {
+        'state': 'running',
+        'project_id': 'project-1',
+        'mapping_file_id': 'mapping.yaml',
+        'execution_context': {'project_generation': 4},
+    }
+
+    node._motion_run_status_callback(
+        SimpleNamespace(data=json.dumps(running))
+    )
+
+    assert node._playback_phase == 'playing'
+    assert node._select_lock_reason_locked() == ''
+    assert node._control_enabled[0] is False
+    assert node._fader_parking[0] is True
+    assert node._pending_fader_positions[0] == 0
+    # Playback already owns the robot motor, so SELECT release must not send
+    # a competing MIDI hold request.
+    assert node._motor_request_publisher.messages == []
+
+    running['state'] = 'completed'
+    node._motion_run_status_callback(
+        SimpleNamespace(data=json.dumps(running))
+    )
+    assert node._playback_phase == 'idle'
+    assert node._select_lock_reason_locked() == ''
+
+
+def test_layer_initial_move_locks_select_but_recording_allows_select():
+    node = playback_lock_node()
+    status = {
+        'state': 'initializing',
+        'execution_context': {
+            'project_id': 'project-1',
+            'project_generation': 4,
+        },
+    }
+
+    node._motion_studio_status_callback(
+        SimpleNamespace(data=json.dumps(status))
+    )
+
+    assert node._playback_phase == 'initializing'
+    assert node._select_lock_reason_locked() == '초기 위치 이동 중'
+    assert node._control_enabled[0] is False
+    assert node._motor_request_publisher.messages == []
+
+    status['state'] = 'recording'
+    node._motion_studio_status_callback(
+        SimpleNamespace(data=json.dumps(status))
+    )
+    assert node._playback_phase == 'idle'
+    assert node._select_lock_reason_locked() == ''
+
+
+def test_initial_move_blocks_select_and_preview_playback_allows_read_only_follow():
+    node = playback_follow_node()
+    studio = {
+        'state': 'initializing',
+        'execution_context': {
+            'project_id': 'project-1',
+            'project_generation': 4,
+        },
+    }
+    run = {
+        'state': 'initializing',
+        'project_id': 'project-1',
+        'mapping_file_id': 'mapping.yaml',
+        'request_source': 'motion_studio',
+        'execution_context': {'project_generation': 4},
+    }
+    node._motion_studio_status_callback(
+        SimpleNamespace(data=json.dumps(studio))
+    )
+    node._motion_run_status_callback(SimpleNamespace(data=json.dumps(run)))
+    node._midi_callback(midi_message(select=True, value=8000))
+
+    assert node._playback_phase == 'initializing'
+    assert node._select_lock_reason_locked() == '초기 위치 이동 중'
+    assert node._control_enabled[0] is False
+    assert node._playback_follow_enabled[0] is False
+
+    node._midi_callback(midi_message(select=False, value=8000))
+    run['state'] = 'running'
+    node._motion_run_status_callback(SimpleNamespace(data=json.dumps(run)))
+    assert node._playback_phase == 'initializing'
+    studio['state'] = 'playing'
+    node._motion_studio_status_callback(
+        SimpleNamespace(data=json.dumps(studio))
+    )
+    node._last_select_toggle_at[0] = time.monotonic() - 1.0
+    node._midi_callback(midi_message(select=True, value=8000))
+
+    assert node._playback_phase == 'playing'
+    assert node._select_lock_reason_locked() == ''
+    assert node._playback_follow_enabled[0] is True
+    assert node._control_enabled[0] is False
+    assert node._pending_fader_positions[0] == round(MIDI_VALUE_MAX / 2)
+    assert node._pending_motor_requests == {}
+    assert node._motor_request_publisher.messages == []
+
+
+def test_playback_touch_never_commands_motor_and_release_resumes_latest_target():
+    node = playback_follow_node()
+    node._motion_run_state = 'running'
+    node._update_playback_phase_locked()
+    node._set_playback_follow_enabled_locked(
+        0, True, node._banks.active_bank()['mappings'][0]
+    )
+    node._pending_fader_positions[0] = None
+
+    node._input_state_callback(SimpleNamespace(data=json.dumps({
+        'physical_touch': [True],
+        'fader_moving': [True],
+        'fader_syncing': [False],
+        'fader_input_generation': [2],
+    })))
+    node._midi_callback(midi_message(touched=True, value=12000))
+    node._motion_value_callback(SimpleNamespace(data=json.dumps({
+        'project_id': 'project-1',
+        'project_generation': 4,
+        'stamp': 2.0,
+        'values': {'1-1': 10.0},
+    })))
+
+    assert node._pending_motor_requests == {}
+    assert node._pending_fader_positions[0] is None
+    assert node._playback_follow_targets[0] == round(MIDI_VALUE_MAX * 0.75)
+
+    node._input_state_callback(SimpleNamespace(data=json.dumps({
+        'physical_touch': [False],
+        'fader_moving': [False],
+        'fader_syncing': [False],
+        'fader_input_generation': [2],
+    })))
+    assert node._pending_fader_positions[0] is None
+    node._playback_follow_resume_not_before[0] = time.monotonic() - 0.01
+    node._service_playback_follow_locked(time.monotonic())
+
+    assert node._pending_fader_positions[0] == round(MIDI_VALUE_MAX * 0.75)
+    assert node._control_enabled[0] is False
+    assert node._pending_motor_requests == {}
+
+
+def test_playback_follow_keeps_streaming_while_bridge_settles_previous_command():
+    node = playback_follow_node()
+    node._motion_run_state = 'running'
+    node._update_playback_phase_locked()
+    node._set_playback_follow_enabled_locked(
+        0, True, node._banks.active_bank()['mappings'][0]
+    )
+    node._pending_fader_positions[0] = None
+    node._bridge_fader_syncing[0] = True
+    node._source_motion_values['1-1'] = 5.0
+
+    node._service_playback_follow_locked(time.monotonic())
+
+    assert node._pending_fader_positions[0] == round(MIDI_VALUE_MAX * 0.625)
+    assert node._motor_command_state[0] == 'playback_follow'
+    assert node._pending_motor_requests == {}
+
+
+def test_general_and_preview_playback_end_force_follow_select_off():
+    node = playback_follow_node()
+    run = {
+        'state': 'running',
+        'project_id': 'project-1',
+        'mapping_file_id': 'mapping.yaml',
+        'execution_context': {'project_generation': 4},
+    }
+    node._motion_run_status_callback(SimpleNamespace(data=json.dumps(run)))
+    node._set_playback_follow_enabled_locked(
+        0, True, node._banks.active_bank()['mappings'][0]
+    )
+    run['state'] = 'completed'
+    node._motion_run_status_callback(SimpleNamespace(data=json.dumps(run)))
+    assert node._playback_phase == 'idle'
+    assert node._playback_follow_enabled == [False] * MIDI_CHANNEL_COUNT
+    assert node._pending_fader_positions[0] == 0
+
+    studio = {
+        'state': 'playing',
+        'execution_context': {
+            'project_id': 'project-1',
+            'project_generation': 4,
+        },
+    }
+    run['state'] = 'running'
+    run['request_source'] = 'motion_studio'
+    node._motion_run_status_callback(SimpleNamespace(data=json.dumps(run)))
+    node._motion_studio_status_callback(
+        SimpleNamespace(data=json.dumps(studio))
+    )
+    node._set_playback_follow_enabled_locked(
+        0, True, node._banks.active_bank()['mappings'][0]
+    )
+    run['state'] = 'stopped'
+    node._motion_run_status_callback(SimpleNamespace(data=json.dumps(run)))
+    assert node._playback_phase == 'idle'
+    assert node._playback_follow_enabled == [False] * MIDI_CHANNEL_COUNT
+    assert node._pending_fader_positions[0] == 0
+
+
+def test_playback_status_isolated_between_projects():
+    node = playback_follow_node()
+    other = {
+        'state': 'running',
+        'project_id': 'project-2',
+        'mapping_file_id': 'other.yaml',
+        'execution_context': {'project_generation': 4},
+    }
+    node._motion_run_status_callback(SimpleNamespace(data=json.dumps(other)))
+    assert node._playback_phase == 'idle'
+
+    other['project_id'] = 'project-1'
+    other['execution_context']['project_generation'] = 3
+    node._motion_run_status_callback(SimpleNamespace(data=json.dumps(other)))
+    assert node._playback_phase == 'idle'
+
+    other['execution_context']['project_generation'] = 4
+    node._motion_run_status_callback(SimpleNamespace(data=json.dumps(other)))
+    assert node._playback_phase == 'playing'
+
+
 def test_fader_parking_waits_for_hand_release_retries_zero_and_confirms_arrival():
     node = parking_node()
     node._start_fader_parking_locked(0, time.monotonic())
@@ -1078,6 +1397,82 @@ def test_studio_recording_prepare_clears_select_and_parks_at_physical_zero():
     assert node._studio_zero_fader_targets == [0] * MIDI_CHANNEL_COUNT
     assert node._raw_channels == [0] * MIDI_CHANNEL_COUNT
     assert node._motor_request_publisher.messages == []
+
+
+def test_studio_recording_prepare_skips_linked_channel_with_mismatched_ranges():
+    mappings = [{
+        'channel': channel,
+        'motion_id': (
+            '1-1' if channel == 0
+            else '1-2' if channel == 1
+            else f'9-{channel + 1}'
+        ),
+        'linked_motion_ids': ['1-3'] if channel == 1 else [],
+        'enabled': channel < 2,
+        'min_percent': 0.0,
+        'max_percent': 100.0,
+        'reversed': False,
+        'filter_level': 0,
+    } for channel in range(MIDI_CHANNEL_COUNT)]
+
+    class Banks:
+        @staticmethod
+        def snapshot():
+            return {'active_bank': {'mappings': mappings}}
+
+    rows = {
+        '1-1': {'motion_lower_deg': -20.0, 'motion_upper_deg': 20.0},
+        '1-2': {'motion_lower_deg': -10.0, 'motion_upper_deg': 15.0},
+        '1-3': {'motion_lower_deg': -15.0, 'motion_upper_deg': 10.0},
+    }
+    axes = {'1-1': 0, '1-2': 1, '1-3': 2}
+
+    class Registry:
+        @staticmethod
+        def refresh(_preferred=None, _motion_state=None):
+            return None
+
+        @staticmethod
+        def mapping(motion_id):
+            return rows.get(motion_id)
+
+        @staticmethod
+        def motor_axis(motion_id):
+            return axes.get(motion_id)
+
+    node = parking_node()
+    node._banks = Banks()
+    node._axis_registry = Registry()
+    node._preferred_mapping_file_id = ''
+    node._last_axis_registry_refresh = 0.0
+    node._latest_motion_state = {
+        'motors': [
+            {
+                'controller_index': axis,
+                'position_deg': 0.0,
+                'lower': -180.0,
+                'upper': 180.0,
+            }
+            for axis in range(3)
+        ]
+    }
+    node._studio_select_locked = False
+    node._studio_zero_fader_targets = [0] * MIDI_CHANNEL_COUNT
+    node._filter_last_at = [None] * MIDI_CHANNEL_COUNT
+    node._last_feedback = [None] * MIDI_CHANNEL_COUNT
+    node._btn3 = [False] * MIDI_CHANNEL_COUNT
+    node._previous_btn3 = [False] * MIDI_CHANNEL_COUNT
+
+    result = node._prepare_studio_recording_locked()
+
+    assert result['errors'] == []
+    assert result['unavailable_channels'] == [{
+        'channel': 2,
+        'motion_ids': ['1-2', '1-3'],
+        'message': '연동 Motion ID의 모션 범위가 서로 다릅니다',
+    }]
+    assert node._studio_select_locked is True
+    assert node._pending_fader_positions == [0] * MIDI_CHANNEL_COUNT
 
 
 def test_studio_recording_zero_status_waits_for_physical_parking_completion():

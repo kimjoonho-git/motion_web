@@ -59,6 +59,7 @@ def generate_launch_description():
                 'connection_state_topic': '/xtouch/connection/state',
                 'motion_state_topic': '/motion_control/motion_state',
                 'motion_run_status_topic': '/motion_control/motion_run_status',
+                'motion_studio_status_topic': '/motion_studio/status',
                 'motion_mapping_response_topic': '/motion_control/motion_mapping_response',
                 'motor_request_topic': '/motion_control/midi_position_request',
                 'motor_result_topic': '/motion_control/midi_position_result',
