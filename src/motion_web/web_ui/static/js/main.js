@@ -10,11 +10,11 @@ import {
   stopMotionStudio,
   setProjectGeneration,
 } from './api.js?v=20260723-servo-service-split';
-import { getElements } from './dom.js?v=20260723-header-operation-groups';
+import { getElements } from './dom.js?v=20260723-point-linked-edit';
 import { createMotorEventLogController } from './event_log.js?v=20260721-project-generation';
 import { createMidiMonitorController } from './midi_monitor.js?v=20260723-revision-sync';
 import { createMotionDataController } from './motion_data.js?v=20260723-revision-sync';
-import { createMotionStudioController } from './motion_studio.js?v=20260722-spike-repair';
+import { createMotionStudioController } from './motion_studio.js?v=20260723-point-save-state';
 import { createMotionTestController } from './motion_test.js?v=20260721-project-generation';
 import { createMotorConfigController } from './motor_config.js?v=20260723-header-operation-groups';
 import { createProjectExplorerController } from './project_explorer.js?v=20260723-program-restart-label';

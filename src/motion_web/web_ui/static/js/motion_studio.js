@@ -112,6 +112,131 @@ export function motionStudioShouldEditPoint(operation, pointTarget) {
   return operation === 'point_curve' && Boolean(pointTarget);
 }
 
+export function motionStudioSelectionKindsMatch(firstKind, secondKind) {
+  return ['point', 'motion'].includes(firstKind) && firstKind === secondKind;
+}
+
+export function motionStudioPointHitTarget(targets, x, y, radius = 14) {
+  return (Array.isArray(targets) ? targets : []).find(
+    (target) => Math.hypot(Number(target.x) - x, Number(target.y) - y) <= radius,
+  ) || null;
+}
+
+export function motionStudioPointDragStarted(draggingPoint, x, y) {
+  if (!draggingPoint) return false;
+  if (draggingPoint.moved) return true;
+  return Math.hypot(
+    x - Number(draggingPoint.startX),
+    y - Number(draggingPoint.startY),
+  ) >= 3;
+}
+
+export function motionStudioPointCurveViewEnd(
+  layerDuration,
+  currentViewEnd = 0,
+  requestedViewEnd = 0,
+) {
+  return Math.max(
+    10,
+    Number(layerDuration) || 0,
+    Number(currentViewEnd) || 0,
+    Number(requestedViewEnd) || 0,
+  );
+}
+
+export function motionStudioPointCurvePreview(rawPoints, interpolationOrder = 3) {
+  const points = (Array.isArray(rawPoints) ? rawPoints : [])
+    .map((point) => ({
+      ...point,
+      time_sec: Number(point?.time_sec),
+      value_deg: Number(point?.value_deg),
+    }))
+    .filter((point) => Number.isFinite(point.time_sec) && Number.isFinite(point.value_deg))
+    .sort((first, second) => first.time_sec - second.time_sec);
+  if (points.length < 2) return [];
+  const order = [1, 3, 5].includes(Number(interpolationOrder))
+    ? Number(interpolationOrder) : 3;
+  const automaticSlope = (index) => {
+    const before = points[Math.max(0, index - 1)];
+    const after = points[Math.min(points.length - 1, index + 1)];
+    const span = after.time_sec - before.time_sec;
+    return span > 1e-9 ? (after.value_deg - before.value_deg) / span : 0;
+  };
+  const pointSlope = (index) => {
+    if (index === 0 || index === points.length - 1) return 0;
+    const point = points[index];
+    if (point.tangent_mode === 'broken') return 0;
+    if (point.tangent_mode === 'smooth') {
+      const handle = point.out_handle || point.in_handle || {};
+      const dt = Number(handle.dt_sec);
+      const dv = Number(handle.dv_deg);
+      if (Number.isFinite(dt) && Number.isFinite(dv) && Math.abs(dt) > 1e-9) {
+        return dv / dt;
+      }
+    }
+    return automaticSlope(index);
+  };
+  const acceleration = (index) => {
+    if (index <= 0 || index >= points.length - 1) return 0;
+    if (points[index].tangent_mode === 'broken') return 0;
+    const before = points[index - 1];
+    const point = points[index];
+    const after = points[index + 1];
+    const previousSpan = point.time_sec - before.time_sec;
+    const followingSpan = after.time_sec - point.time_sec;
+    if (previousSpan <= 1e-9 || followingSpan <= 1e-9) return 0;
+    const previousSlope = (point.value_deg - before.value_deg) / previousSpan;
+    const followingSlope = (after.value_deg - point.value_deg) / followingSpan;
+    return 2 * (followingSlope - previousSlope) / (previousSpan + followingSpan);
+  };
+  const result = [];
+  points.slice(0, -1).forEach((first, index) => {
+    const second = points[index + 1];
+    const span = second.time_sec - first.time_sec;
+    if (span <= 1e-9) return;
+    const steps = Math.max(8, Math.min(80, Math.ceil(span / 0.02)));
+    for (let step = 0; step <= steps; step += 1) {
+      if (index > 0 && step === 0) continue;
+      const ratio = step / steps;
+      let value;
+      if (order === 1) {
+        value = first.value_deg + ((second.value_deg - first.value_deg) * ratio);
+      } else if (order === 3) {
+        const ratio2 = ratio * ratio;
+        const ratio3 = ratio2 * ratio;
+        value = (
+          (((2 * ratio3) - (3 * ratio2) + 1) * first.value_deg)
+          + ((ratio3 - (2 * ratio2) + ratio) * span * pointSlope(index))
+          + (((-2 * ratio3) + (3 * ratio2)) * second.value_deg)
+          + ((ratio3 - ratio2) * span * pointSlope(index + 1))
+        );
+      } else {
+        const firstSlope = pointSlope(index);
+        const secondSlope = pointSlope(index + 1);
+        const firstAcceleration = acceleration(index);
+        const secondAcceleration = acceleration(index + 1);
+        const delta = second.value_deg - first.value_deg;
+        const c0 = first.value_deg;
+        const c1 = firstSlope * span;
+        const c2 = 0.5 * firstAcceleration * span * span;
+        const remainingValue = delta - c1 - c2;
+        const remainingSlope = (secondSlope * span) - c1 - (2 * c2);
+        const remainingAcceleration = (secondAcceleration * span * span) - (2 * c2);
+        const c3 = (10 * remainingValue) - (4 * remainingSlope)
+          + (0.5 * remainingAcceleration);
+        const c4 = (-15 * remainingValue) + (7 * remainingSlope)
+          - remainingAcceleration;
+        const c5 = (6 * remainingValue) - (3 * remainingSlope)
+          + (0.5 * remainingAcceleration);
+        value = c0 + (c1 * ratio) + (c2 * ratio ** 2) + (c3 * ratio ** 3)
+          + (c4 * ratio ** 4) + (c5 * ratio ** 5);
+      }
+      result.push({ timeSec: first.time_sec + (span * ratio), value });
+    }
+  });
+  return result;
+}
+
 export function createMotionStudioController({ el, getMotorActionBlockReason = () => '' }) {
   const state = {
     mappings: [], motionFiles: [], project: null, workspaceProject: null,
@@ -660,6 +785,38 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     ) || null;
   }
 
+  function storedCurveForDraft(editor = state.editor) {
+    const curveId = String(editor?.pointDraft?.curve_id || '');
+    if (!curveId) return null;
+    return editorPointCurves(editor?.working).find(
+      (curve) => String(curve.curve_id || '') === curveId,
+    ) || null;
+  }
+
+  function pointCurveIsSaved(editor, curveId) {
+    const targetId = String(curveId || '');
+    return Boolean(targetId) && editorPointCurves(editor?.original).some(
+      (curve) => String(curve.curve_id || '') === targetId,
+    );
+  }
+
+  function pointDraftHasUnsavedChanges(editor = state.editor) {
+    if (!editor?.pointDraft) return false;
+    const stored = storedCurveForDraft(editor);
+    if (!stored) return true;
+    const comparable = (curve) => {
+      const normalized = clone(curve);
+      if (Number(normalized?.interpolation_order) === 1) {
+        (normalized.points || []).forEach((point) => {
+          if (point.tangent_mode === 'linear') point.tangent_mode = 'auto';
+        });
+      }
+      return normalized;
+    };
+    return JSON.stringify(comparable(stored))
+      !== JSON.stringify(comparable(editor.pointDraft));
+  }
+
   function loadPointDraft(curve, pointId = '') {
     const editor = state.editor;
     if (!editor || !curve) return;
@@ -686,9 +843,22 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
 
   function setPointCurveMode(curve = null, pointId = '') {
     if (el.studioEditorOperation) el.studioEditorOperation.value = 'point_curve';
+    if (state.editor) state.editor.operation = 'point_curve';
     if (curve) {
       selectOnlyEditorAxis(curve.motion_id);
       loadPointDraft(curve, pointId);
+      const points = curve.points || [];
+      if (el.studioEditorStart) {
+        el.studioEditorStart.value = Number(points[0]?.time_sec || 0).toFixed(2);
+      }
+      if (el.studioEditorEnd) {
+        el.studioEditorEnd.value = Number(
+          points[points.length - 1]?.time_sec || 0,
+        ).toFixed(2);
+      }
+      state.editor.selectionKind = 'point';
+      state.editor.selectionStage = 0;
+      state.editor.selectionAnchor = null;
     }
     renderEditor();
   }
@@ -697,21 +867,46 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     const editor = state.editor;
     const point = selectedDraftPoint(editor);
     const pointMode = el.studioEditorOperation?.value === 'point_curve';
+    const savedPointCurve = pointCurveIsSaved(editor, editor?.pointDraft?.curve_id);
     [el.studioEditorPointTime, el.studioEditorPointValue, el.studioEditorPointMode].forEach((field) => {
-      if (field) field.disabled = !pointMode || !point;
+      if (field) field.disabled = !pointMode || !point || !savedPointCurve;
     });
     if (el.studioEditorPointDeleteButton) {
-      el.studioEditorPointDeleteButton.disabled = !pointMode || !point;
+      const canDeletePoint = pointMode
+        && Boolean(point)
+        && savedPointCurve
+        && (editor?.pointDraft?.points?.length || 0) > 2;
+      el.studioEditorPointDeleteButton.disabled = !canDeletePoint;
+      el.studioEditorPointDeleteButton.title = canDeletePoint
+        ? '선택한 포인트만 삭제하고 남은 포인트로 곡선을 다시 계산합니다'
+        : '곡선을 유지하려면 포인트가 최소 2개 필요합니다';
+    }
+    const storedPointCurve = editorPointCurves(editor?.working).some(
+      (curve) => curve.curve_id === editor?.pointDraft?.curve_id,
+    );
+    if (el.studioEditorCurveDetachButton) {
+      el.studioEditorCurveDetachButton.disabled = (
+        !pointMode || !storedPointCurve || !savedPointCurve
+      );
     }
     if (el.studioEditorCurveDeleteButton) {
       el.studioEditorCurveDeleteButton.disabled = !pointMode || !editor?.pointDraft?.curve_id;
     }
     if (el.studioEditorPointCurveOrder) {
-      el.studioEditorPointCurveOrder.disabled = !pointMode;
+      el.studioEditorPointCurveOrder.disabled = !pointMode || !savedPointCurve;
       if (document.activeElement !== el.studioEditorPointCurveOrder) {
         el.studioEditorPointCurveOrder.value = String(
           editor?.pointDraft?.interpolation_order || editor?.pointCurveOrder || 3,
         );
+      }
+    }
+    if (el.studioEditorPointTimelineEnd) {
+      el.studioEditorPointTimelineEnd.disabled = !pointMode;
+      if (document.activeElement !== el.studioEditorPointTimelineEnd) {
+        el.studioEditorPointTimelineEnd.value = Number(
+          editor?.pointTimelineEnd
+          || motionStudioPointCurveViewEnd(editorDuration(editor?.working)),
+        ).toFixed(2);
       }
     }
     if (!point) {
@@ -792,6 +987,8 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
   function openLayerEditor(layer) {
     if (!layer || layer.locked) return;
     const duration = editorDuration(layer);
+    const operation = el.studioEditorOperation?.value || 'time_scale';
+    const pointTimelineEnd = motionStudioPointCurveViewEnd(duration);
     state.editor = {
       layerId: layer.layer_id,
       original: clone(layer),
@@ -800,15 +997,18 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       previewValidation: null,
       undo: [], redo: [],
       viewStart: 0,
-      viewEnd: Math.max(0.02, duration),
+      viewEnd: operation === 'point_curve'
+        ? pointTimelineEnd : Math.max(0.02, duration),
       valueScale: 1,
       selectionStage: 0,
       selectionAnchor: null,
+      selectionKind: '',
       lastGraphClick: null,
       cursor: null,
       graphMetrics: null,
       pointDraft: null,
       pointCurveOrder: 3,
+      pointTimelineEnd,
       selectedPointId: '',
       pointHitTargets: [],
       handleHitTargets: [],
@@ -816,16 +1016,17 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       draggingPoint: null,
       panningGraph: null,
       operationReport: null,
+      operation,
       validation: { conflicts: [], transition_warnings: [], playable: true },
     };
     if (el.studioEditorTitle) el.studioEditorTitle.textContent = `레이어 편집 · ${layer.name}`;
-    if (el.studioEditorSubtitle) el.studioEditorSubtitle.textContent = '작업본 업데이트 0회 · 아직 저장되지 않음';
+    if (el.studioEditorSubtitle) el.studioEditorSubtitle.textContent = '편집 반영 0회 · 아직 저장되지 않음';
     refreshEditorAxisControls(new Set(editorMotionIds(layer)), layer);
     if (el.studioEditorStart) el.studioEditorStart.value = '';
     if (el.studioEditorEnd) el.studioEditorEnd.value = '';
     el.studioLayerEditorModal?.classList.remove('hidden');
     document.body.classList.add('modal-open');
-    setEditorMessage('값을 입력하고 적용으로 미리 본 뒤 업데이트하세요. 마지막에 최종 저장합니다.');
+    setEditorMessage('값을 입력하고 결과를 미리 본 뒤 편집 반영하세요. 저장 후에도 계속 편집할 수 있습니다.');
     renderEditor();
   }
 
@@ -850,9 +1051,41 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
 
   function renderEditorControls() {
     const editor = state.editor;
-    if (el.studioEditorUndoButton) el.studioEditorUndoButton.disabled = !editor?.undo.length;
-    if (el.studioEditorRedoButton) el.studioEditorRedoButton.disabled = !editor?.redo.length;
+    const operation = el.studioEditorOperation?.value || 'value_offset';
+    const pointMode = operation === 'point_curve';
+    const savedPointCurve = pointCurveIsSaved(editor, editor?.pointDraft?.curve_id);
+    const workingPointCurve = Boolean(storedCurveForDraft(editor));
+    const hasTransientChange = Boolean(editor?.preview) || pointDraftHasUnsavedChanges(editor);
+    if (el.studioEditorUndoButton) {
+      el.studioEditorUndoButton.disabled = !hasTransientChange && !editor?.undo.length;
+    }
+    if (el.studioEditorRedoButton) {
+      el.studioEditorRedoButton.disabled = hasTransientChange || !editor?.redo.length;
+    }
     if (el.studioEditorUpdateButton) el.studioEditorUpdateButton.disabled = !editor?.preview;
+    if (el.studioEditorApplyButton) {
+      el.studioEditorApplyButton.disabled = (
+        Boolean(editor?.preview) || !savedPointCurve
+      );
+    }
+    if (el.studioEditorSaveButton) el.studioEditorSaveButton.disabled = Boolean(editor?.preview);
+    if (el.studioEditorOperationTitle) {
+      el.studioEditorOperationTitle.textContent = pointMode
+        ? '포인트 곡선 편집'
+        : '선택 구간 편집';
+    }
+    el.studioEditorScopeControls?.classList.toggle('hidden', pointMode);
+    document.querySelector('.studio-editor-conversion-controls')?.classList.toggle(
+      'hidden',
+      workingPointCurve,
+    );
+    document.querySelector('.studio-editor-operations')?.classList.toggle(
+      'hidden',
+      !workingPointCurve,
+    );
+    if (el.studioEditorFitSelectionButton) {
+      el.studioEditorFitSelectionButton.disabled = pointMode;
+    }
     if (el.studioEditorAddAxisButton) {
       el.studioEditorAddAxisButton.disabled = !el.studioEditorAddAxisSelect?.value
         || Boolean(editor?.preview);
@@ -862,15 +1095,26 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
         || !el.studioEditorCopyAxisTarget?.value
         || Boolean(editor?.preview);
     }
-    const operation = el.studioEditorOperation?.value || 'value_offset';
+    if (el.studioEditorOperation) {
+      el.studioEditorOperation.disabled = Boolean(editor?.preview);
+    }
+    if (el.studioEditorConvertToPointsButton) {
+      el.studioEditorConvertToPointsButton.disabled = (
+        Boolean(editor?.preview)
+        || pointMode
+        || editor?.selectionStage === 1
+        || editor?.selectionKind !== 'motion'
+        || editorSelectedMotionIds().length !== 1
+        || !el.studioEditorStart?.value
+        || !el.studioEditorEnd?.value
+      );
+    }
     document.querySelectorAll('[data-studio-editor-value]').forEach((field) => {
       const kind = field.dataset.studioEditorValue;
       field.classList.toggle('hidden', !(
         (operation === 'value_offset' && kind === 'offset')
         || ((operation === 'value_scale' || operation === 'time_scale') && kind === 'factor')
         || (operation === 'time_shift' && kind === 'delta')
-        || (operation === 'repair_spikes' && kind === 'spike')
-        || (operation === 'interpolate' && kind === 'curve')
         || (operation === 'point_curve' && kind === 'points')
       ));
     });
@@ -881,43 +1125,15 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     }
     if (el.studioEditorOperationHelp) {
       const help = {
-        time_scale: '시작점을 기준으로 선택 구간의 시간을 조절합니다. 0.90배는 10% 단축, 1.10배는 10% 연장하며 20ms 간격으로 다시 계산합니다.',
-        value_scale: '시작점의 모션값을 기준으로 선택 구간의 변화량을 조절합니다. 0.90배는 10% 축소, 1.10배는 10% 확대합니다.',
-        time_shift: '선택 구간 전체를 입력한 시간만큼 이동합니다. 예: -300ms는 선택 구간을 300ms 앞으로 이동합니다.',
-        value_offset: '선택 구간 전체를 입력한 각도만큼 위아래로 이동합니다. 예: -10°는 모든 모션값에서 10°를 뺍니다.',
-        repair_spikes: '선택 구간의 20ms 프레임 중 주변 흐름에서 혼자 벗어난 한 프레임만 보정합니다. 연속 튀임·최대 보정량 초과·포인트 곡선은 변경하지 않습니다.',
-        interpolate: '선택한 실제 시작점과 끝점 사이를 20ms 간격으로 다시 채웁니다. 1차·3차·5차 결과를 적용으로 비교한 뒤 업데이트하세요.',
-        point_curve: '구간 곡선(직선·3차·5차)과 포인트 탄젠트(자동·부드럽게·분리)를 조합합니다. 포인트는 상하·좌우로, 그래프 배경은 좌우로 드래그할 수 있습니다.',
+        time_scale: '저장된 포인트 모션 구간에서 포인트 두 개를 선택한 뒤 시간을 조절합니다.',
+        value_scale: '저장된 포인트 모션 구간에서 포인트 두 개를 선택한 뒤 모션값 변화량을 조절합니다.',
+        time_shift: '저장된 포인트 모션 구간과 포인트를 선택한 뒤 시간을 이동합니다.',
+        value_offset: '저장된 포인트 모션 구간과 포인트를 선택한 뒤 모션값을 이동합니다.',
+        point_curve: savedPointCurve
+          ? '저장된 포인트 모션입니다. 포인트 추가·이동과 탄젠트 편집이 가능합니다.'
+          : '변환된 포인트 모션을 먼저 저장해야 편집할 수 있습니다.',
       };
       el.studioEditorOperationHelp.textContent = help[operation] || '';
-    }
-    if (el.studioEditorSpikeReport) {
-      const report = operation === 'repair_spikes' ? editor?.operationReport : null;
-      el.studioEditorSpikeReport.classList.toggle('hidden', !report);
-      if (report) {
-        const changed = report.changed || [];
-        const excluded = report.excluded || [];
-        const rows = [
-          ...changed.map((item) => ({ ...item, status: '보정' })),
-          ...excluded.map((item) => ({
-            ...item,
-            status: `제외 · ${item.reason_text || '기준 미충족'}`,
-          })),
-        ];
-        const detail = rows.slice(0, 20).map((item) => (
-          `<div>${escapeHtml(item.motion_id)} · ${Number(item.time_sec).toFixed(3)}초 · `
-          + `${Number(item.before_deg).toFixed(3)}° → ${Number(item.after_deg).toFixed(3)}° · `
-          + `${escapeHtml(item.status)}</div>`
-        )).join('');
-        el.studioEditorSpikeReport.innerHTML = (
-          `<strong>보정 ${changed.length}개 · 제외 ${excluded.length}개 · `
-          + `최대 변경 ${Number(report.maximum_applied_correction_deg || 0).toFixed(3)}°</strong>`
-          + detail
-          + (rows.length > 20 ? `<div>외 ${rows.length - 20}개</div>` : '')
-        );
-      } else {
-        el.studioEditorSpikeReport.textContent = '';
-      }
     }
     syncPointControls();
   }
@@ -932,6 +1148,13 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     const workingTracks = layerTracks(displayedLayer);
     const ids = [...new Set([...originalTracks.keys(), ...workingTracks.keys()])]
       .filter((motionId) => selected.has(motionId));
+    const draftPreview = (
+      el.studioEditorOperation?.value === 'point_curve'
+      && editor.pointDraft && selected.has(editor.pointDraft.motion_id)
+    ) ? motionStudioPointCurvePreview(
+        editor.pointDraft.points,
+        editor.pointDraft.interpolation_order || editor.pointCurveOrder,
+      ) : [];
     const width = Math.max(680, Math.floor(canvas.getBoundingClientRect().width || 900));
     const height = Math.max(210, Math.floor(canvas.getBoundingClientRect().height || 320));
     const ratio = window.devicePixelRatio || 1;
@@ -947,7 +1170,10 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     const viewEnd = Math.max(viewStart + 0.02, Number(editor.viewEnd || 0.02));
     const visiblePoints = ids.flatMap((motionId) => [
       ...(workingTracks.get(motionId) || []), ...(originalTracks.get(motionId) || []),
-    ].filter((point) => point.timeSec >= viewStart - 1e-9 && point.timeSec <= viewEnd + 1e-9));
+    ].filter((point) => point.timeSec >= viewStart - 1e-9 && point.timeSec <= viewEnd + 1e-9))
+      .concat(draftPreview.filter(
+        (point) => point.timeSec >= viewStart - 1e-9 && point.timeSec <= viewEnd + 1e-9,
+      ));
     const valueSource = visiblePoints.length ? visiblePoints : ids.flatMap((id) => [
       ...(workingTracks.get(id) || []), ...(originalTracks.get(id) || []),
     ]);
@@ -966,6 +1192,33 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     const valueFor = (y) => maxValue - (((y - padding.top) / plotHeight) * (maxValue - minValue));
     editor.graphMetrics = { padding, plotWidth, plotHeight, width, height, viewStart, viewEnd, minValue, maxValue, xFor, yFor, timeFor, valueFor };
     context.fillStyle = '#fff'; context.fillRect(0, 0, width, height);
+    editorPointCurves(displayedLayer)
+      .filter((curve) => selected.has(curve.motion_id))
+      .forEach((curve, index) => {
+        const points = curve.points || [];
+        const startSec = Number(points[0]?.time_sec);
+        const endSec = Number(points[points.length - 1]?.time_sec);
+        if (!Number.isFinite(startSec) || !Number.isFinite(endSec)) return;
+        const left = Math.max(viewStart, startSec);
+        const right = Math.min(viewEnd, endSec);
+        if (right < left) return;
+        context.fillStyle = index % 2
+          ? 'rgba(126, 87, 194, 0.08)'
+          : 'rgba(31, 111, 235, 0.08)';
+        context.fillRect(
+          xFor(left),
+          padding.top,
+          Math.max(1, xFor(right) - xFor(left)),
+          plotHeight,
+        );
+        context.fillStyle = '#526579';
+        context.font = '11px sans-serif';
+        context.fillText(
+          `포인트 구간 ${index + 1}`,
+          xFor(left) + 5,
+          padding.top + 14,
+        );
+      });
     const selectionStartText = el.studioEditorStart?.value?.trim() || '';
     const selectionEndText = el.studioEditorEnd?.value?.trim() || '';
     const selectionStart = Number(selectionStartText);
@@ -1015,25 +1268,29 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     };
     drawTracks(originalTracks, true, 0.4); drawTracks(workingTracks, false, 1);
     context.globalAlpha = 1; context.setLineDash([]);
-    if (editor.operationReport?.operation === 'repair_spikes') {
-      (editor.operationReport.changed || []).forEach((item) => {
-        const timeSec = Number(item.time_sec); const value = Number(item.after_deg);
-        if (timeSec < viewStart || timeSec > viewEnd) return;
-        context.beginPath(); context.fillStyle = '#d33b3b'; context.strokeStyle = '#fff';
-        context.lineWidth = 1.5; context.arc(xFor(timeSec), yFor(value), 5, 0, Math.PI * 2);
-        context.fill(); context.stroke();
+    if (draftPreview.length) {
+      const colorIndex = ids.indexOf(editor.pointDraft.motion_id);
+      context.beginPath();
+      context.strokeStyle = colors[(colorIndex < 0 ? 0 : colorIndex) % colors.length];
+      context.lineWidth = 3;
+      context.setLineDash([3, 2]);
+      let started = false;
+      draftPreview.forEach((point) => {
+        if (point.timeSec < viewStart - 1e-9 || point.timeSec > viewEnd + 1e-9) return;
+        const x = xFor(point.timeSec);
+        const y = yFor(point.value);
+        if (!started) {
+          context.moveTo(x, y);
+          started = true;
+        } else {
+          context.lineTo(x, y);
+        }
       });
-      (editor.operationReport.excluded || []).forEach((item) => {
-        const timeSec = Number(item.time_sec); const value = Number(item.before_deg);
-        if (timeSec < viewStart || timeSec > viewEnd) return;
-        const x = xFor(timeSec); const y = yFor(value);
-        context.strokeStyle = '#d97706'; context.lineWidth = 2;
-        context.beginPath(); context.moveTo(x - 4, y - 4); context.lineTo(x + 4, y + 4);
-        context.moveTo(x + 4, y - 4); context.lineTo(x - 4, y + 4); context.stroke();
-      });
+      if (started) context.stroke();
+      context.setLineDash([]);
     }
     let displayedCurves = editorPointCurves(displayedLayer).map((curve) => clone(curve));
-    if (editor.pointDraft) {
+    if (editor.pointDraft && el.studioEditorOperation?.value === 'point_curve') {
       displayedCurves = displayedCurves.filter(
         (curve) => curve.curve_id !== editor.pointDraft.curve_id,
       );
@@ -1076,6 +1333,7 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     const issueTimes = [
       ...(displayedValidation?.conflicts || []).map((item) => Number(item.start_sec)),
       ...(displayedValidation?.transition_warnings || []).map((item) => Number(item.second_time_sec)),
+      ...(displayedValidation?.range_warnings || []).map((item) => Number(item.time_sec)),
     ].filter(Number.isFinite);
     context.strokeStyle = '#d33b3b'; context.setLineDash([4, 3]);
     issueTimes.forEach((timeSec) => {
@@ -1103,7 +1361,7 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       el.studioEditorLegend.innerHTML = ids.map((motionId, index) => (
         `<span><i style="background:${colors[index % colors.length]}"></i>${escapeHtml(motionId)}</span>`
       )).join('') + (editor.preview
-        ? '<span>점선: 저장 원본 · 실선: 적용 미리보기</span>'
+        ? '<span>점선: 저장 원본 · 실선: 결과 미리보기</span>'
         : '<span>점선: 저장 원본 · 실선: 현재 작업본</span>');
     }
   }
@@ -1137,10 +1395,11 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     editor.preview = null;
     editor.previewValidation = null;
     editor.operationReport = null;
+    editor.pendingCurveId = '';
     refreshEditorTimeline(editor.working, preview);
     refreshEditorAxisControls(null, editor.working);
     if (el.studioEditorSubtitle) {
-      el.studioEditorSubtitle.textContent = `작업본 업데이트 ${editor.undo.length}회 · 아직 저장되지 않음`;
+      el.studioEditorSubtitle.textContent = `편집 반영 ${editor.undo.length}회 · 아직 저장되지 않음`;
     }
     if (message) setEditorMessage(message);
     renderEditor();
@@ -1150,22 +1409,12 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
   function updateEditorWorkingCopy() {
     const editor = state.editor;
     if (!editor?.preview) {
-      setEditorMessage('먼저 적용 버튼으로 편집 결과를 미리 확인하세요.', true);
+      setEditorMessage('먼저 결과 미리보기 버튼으로 편집 결과를 확인하세요.', true);
       return;
     }
-    if (editor.operationReport?.operation === 'repair_spikes') {
-      const conflicts = editor.previewValidation?.conflicts?.length || 0;
-      const warnings = editor.previewValidation?.transition_warnings?.length || 0;
-      if (conflicts || warnings) {
-        setEditorMessage('보정 결과에 충돌 또는 20ms 급변이 남아 업데이트를 차단했습니다.', true);
-        return;
-      }
-      const count = Number(editor.operationReport.changed_count || 0);
-      const maximum = Number(editor.operationReport.maximum_applied_correction_deg || 0);
-      if (!window.confirm(
-        `튀는 점 ${count}개를 보정합니다. 최대 변경량 ${maximum.toFixed(3)}°입니다. 업데이트할까요?`,
-      )) return;
-    }
+    const appliedOperation = editor.operationReport?.operation || '';
+    const activeCurveId = editor.pointDraft?.curve_id || editor.pendingCurveId || '';
+    const selectedPointId = editor.selectedPointId;
     const previousIds = new Set(editorMotionIds(editor.working));
     const selectedIds = new Set(editorSelectedMotionIds());
     const previewIds = editorMotionIds(editor.preview);
@@ -1181,11 +1430,27 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     editor.preview = null;
     editor.previewValidation = null;
     editor.operationReport = null;
+    editor.pendingCurveId = '';
+    if (activeCurveId) {
+      const updatedCurve = editorPointCurves(editor.working).find(
+        (curve) => curve.curve_id === activeCurveId,
+      );
+      if (updatedCurve) loadPointDraft(updatedCurve, selectedPointId);
+    }
     refreshEditorAxisControls(selectedIds, editor.working);
     if (el.studioEditorSubtitle) {
-      el.studioEditorSubtitle.textContent = `작업본 업데이트 ${editor.undo.length}회 · 아직 저장되지 않음`;
+      el.studioEditorSubtitle.textContent = `편집 반영 ${editor.undo.length}회 · 아직 저장되지 않음`;
     }
-    setEditorMessage(`업데이트 ${editor.undo.length}회 완료 · 다음 편집을 계속할 수 있습니다.`);
+    const appliedRangeWarningCount = editor.validation?.range_warnings?.length || 0;
+    const appliedMessage = appliedOperation === 'convert_motion_to_point_curve'
+      ? '포인트 변환을 작업본에 반영했습니다. 지금 저장해야 포인트 편집이 활성화됩니다.'
+      : `편집 반영 ${editor.undo.length}회 완료 · 다음 편집을 계속할 수 있습니다.`;
+    setEditorMessage(
+      appliedMessage + (appliedRangeWarningCount
+        ? ` · 축 설정 범위 초과 경고 ${appliedRangeWarningCount}건`
+        : ''),
+      appliedRangeWarningCount > 0,
+    );
     renderEditor();
   }
 
@@ -1193,7 +1458,7 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     const editor = state.editor;
     if (!editor) return;
     if (editor.preview) {
-      setEditorMessage('현재 적용 미리보기를 먼저 업데이트하거나 취소하세요.', true);
+      setEditorMessage('현재 결과 미리보기를 먼저 편집 반영하거나 취소하세요.', true);
       return;
     }
     const motionId = String(el.studioEditorAddAxisSelect?.value || '').trim();
@@ -1227,10 +1492,10 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
         || { conflicts: [], transition_warnings: [], playable: true };
       refreshEditorAxisControls(new Set([motionId]), editor.preview);
       if (el.studioEditorSubtitle) {
-        el.studioEditorSubtitle.textContent = '축 추가 미리보기 · 업데이트 전';
+        el.studioEditorSubtitle.textContent = '축 추가 미리보기 · 편집 반영 전';
       }
       setEditorMessage(
-        `${motionId} 축 추가 미리보기 완료 · 초기값 ${initialValue.toFixed(3)}° · 확인 후 업데이트하세요.`,
+        `${motionId} 축 추가 미리보기 완료 · 초기값 ${initialValue.toFixed(3)}° · 확인 후 편집 반영하세요.`,
       );
       renderEditor();
     } catch (error) {
@@ -1244,7 +1509,7 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     const editor = state.editor;
     if (!editor) return;
     if (editor.preview) {
-      setEditorMessage('현재 적용 미리보기를 먼저 업데이트하거나 취소하세요.', true);
+      setEditorMessage('현재 결과 미리보기를 먼저 편집 반영하거나 취소하세요.', true);
       return;
     }
     const sourceMotionId = String(el.studioEditorCopyAxisSource?.value || '').trim();
@@ -1274,10 +1539,10 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
         || { conflicts: [], transition_warnings: [], playable: true };
       refreshEditorAxisControls(new Set([targetMotionId]), editor.preview);
       if (el.studioEditorSubtitle) {
-        el.studioEditorSubtitle.textContent = '축 복사 미리보기 · 업데이트 전';
+        el.studioEditorSubtitle.textContent = '축 복사 미리보기 · 편집 반영 전';
       }
       setEditorMessage(
-        `${sourceMotionId} → ${targetMotionId} 축 복사 미리보기 완료 · 확인 후 업데이트하세요.`,
+        `${sourceMotionId} → ${targetMotionId} 축 복사 미리보기 완료 · 확인 후 편집 반영하세요.`,
       );
       renderEditor();
     } catch (error) {
@@ -1293,14 +1558,21 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     const operation = typeof operationOverride === 'string' && operationOverride
       ? operationOverride
       : (el.studioEditorOperation?.value || 'value_offset');
-    if (operation !== 'point_curve' && operation !== 'delete_point_curve' && editor.selectionStage === 1) {
+    const pointMetadataOperation = [
+      'point_curve', 'delete_point_curve', 'detach_point_curve',
+      'convert_point_curve_to_motion',
+    ].includes(operation);
+    if (!pointMetadataOperation && editor.selectionStage === 1) {
       setEditorMessage('종료 시간을 그래프에서 한 번 더 클릭하세요.', true);
       return;
     }
     const motionIds = editorSelectedMotionIds();
-    if (!motionIds.length && operation !== 'delete_point_curve') { setEditorMessage('편집할 Motion ID를 선택하세요', true); return; }
     if (
-      operation !== 'point_curve' && operation !== 'delete_point_curve'
+      !motionIds.length
+      && !['delete_point_curve', 'detach_point_curve'].includes(operation)
+    ) { setEditorMessage('편집할 Motion ID를 선택하세요', true); return; }
+    if (
+      !pointMetadataOperation
       && (!el.studioEditorStart?.value?.trim() || !el.studioEditorEnd?.value?.trim())
     ) {
       setEditorMessage('그래프에서 시작점과 끝점을 선택하거나 시간을 직접 입력하세요.', true);
@@ -1320,43 +1592,34 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       project: state.project,
       operation,
       motion_ids: motionIds,
+      selection_kind: editor.selectionKind || 'motion',
       start_sec: Number(el.studioEditorStart?.value || 0),
       end_sec: Number(el.studioEditorEnd?.value || 0),
       offset_deg: Number(el.studioEditorOffset?.value || 0),
       factor: Number(el.studioEditorFactor?.value || 1),
       delta_sec: Number(el.studioEditorDelta?.value || 0) / 1000,
-      spike_detection_threshold_deg: Number(el.studioEditorSpikeThreshold?.value || 0.1),
-      spike_maximum_correction_deg: Number(el.studioEditorSpikeMaximum?.value || 1.0),
       interpolation_order: operation === 'point_curve'
         ? Number(editor.pointDraft?.interpolation_order || el.studioEditorPointCurveOrder?.value || 3)
-        : Number(el.studioEditorInterpolationChoices?.querySelector('input:checked')?.value || 1),
-      curve_id: editor.pointDraft?.curve_id || '',
+        : 1,
+      curve_id: editor.pendingCurveId || editor.pointDraft?.curve_id || '',
       points: operation === 'point_curve' ? clone(editor.pointDraft?.points || []) : [],
+      approximation_tolerance_deg: Number(
+        el.studioEditorApproximationTolerance?.value || 0.1,
+      ),
+      approximation_interpolation_order: Number(
+        el.studioEditorApproximationOrder?.value || 3,
+      ),
+      approximation_maximum_points: Number(
+        el.studioEditorApproximationMaximumPoints?.value || 50,
+      ),
       mapping_rows: activeMapping()?.rows || [],
     };
     el.studioEditorApplyButton.disabled = true;
     if (el.studioEditorUpdateButton) el.studioEditorUpdateButton.disabled = true;
-    if (el.studioEditorDeleteAxisDataButton) {
-      el.studioEditorDeleteAxisDataButton.disabled = true;
-    }
-    if (el.studioEditorDeleteWholeAxisButton) {
-      el.studioEditorDeleteWholeAxisButton.disabled = true;
-    }
     try {
       const result = await editMotionStudioLayer(payload);
       if (result.success === false) throw new Error(result.message || '편집 실패');
       editor.operationReport = result.operation_report || null;
-      if (operation === 'repair_spikes' && !editor.operationReport?.changed_count) {
-        editor.preview = null;
-        editor.previewValidation = result.validation
-          || { conflicts: [], transition_warnings: [], playable: true };
-        const excluded = Number(editor.operationReport?.excluded_count || 0);
-        setEditorMessage(excluded
-          ? `보정할 점은 없고 ${excluded}개는 연속 튀짐 또는 최대 보정량 초과로 제외했습니다.`
-          : '선택 구간에서 검출 기준을 넘는 고립된 튀는 점을 찾지 못했습니다.');
-        renderEditor();
-        return;
-      }
       editor.preview = clone(result.layer);
       refreshEditorTimeline(editor.preview, editor.working);
       if (operation === 'point_curve' && editor.pointDraft) {
@@ -1365,70 +1628,52 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
         );
         if (calculated) loadPointDraft(calculated, editor.selectedPointId);
       }
-      if (operation === 'delete_point_curve') {
+      if (
+        operation === 'delete_point_curve'
+        || operation === 'detach_point_curve'
+        || operation === 'convert_point_curve_to_motion'
+      ) {
         editor.pointDraft = null;
         editor.selectedPointId = '';
       }
       editor.previewValidation = result.validation
         || { conflicts: [], transition_warnings: [], playable: true };
       if (el.studioEditorSubtitle) {
-        el.studioEditorSubtitle.textContent = '적용 미리보기 · 업데이트 전';
+        el.studioEditorSubtitle.textContent = '결과 미리보기 · 편집 반영 전';
       }
       const issueCount = (editor.previewValidation.conflicts?.length || 0)
         + (editor.previewValidation.transition_warnings?.length || 0);
-      if (operation === 'repair_spikes') {
-        const report = editor.operationReport;
+      const rangeWarningCount = editor.previewValidation.range_warnings?.length || 0;
+      const rangeWarningText = rangeWarningCount
+        ? ` · 축 설정 범위 초과 경고 ${rangeWarningCount}건 (계속 진행 가능)`
+        : '';
+      if (operation === 'convert_motion_to_point_curve') {
+        const report = editor.operationReport || {};
         setEditorMessage(
-          `튀는 점 ${report.changed_count}개 보정 미리보기 · `
-          + `최대 ${Number(report.maximum_applied_correction_deg).toFixed(3)}° 변경 · `
-          + `제외 ${report.excluded_count}개`,
-          issueCount > 0,
+          `포인트 근사 미리보기 · ${Number(report.interpolation_order || 1)}차 곡선 · `
+          + `${Number(report.source_sample_count || 0)}개 모션점 → `
+          + `${Number(report.point_count || 0)}개 포인트 · 최대 오차 `
+          + `${Number(report.maximum_error_deg || 0).toFixed(4)}° · `
+          + `편집 반영 후 저장해야 포인트 편집이 활성화됩니다.${rangeWarningText}`,
+          rangeWarningCount > 0,
         );
       } else {
-        setEditorMessage(issueCount
-          ? `적용 미리보기 · 충돌 또는 급변 ${issueCount}건 · 확인 후 값을 바꾸거나 업데이트하세요`
-          : '적용 미리보기 완료 · 결과가 맞으면 업데이트를 누르세요.', issueCount > 0);
+        const previewMessage = issueCount
+          ? `결과 미리보기 · 충돌 또는 급변 ${issueCount}건 · 확인 후 값을 바꾸거나 편집 반영하세요${rangeWarningText}`
+          : `결과 미리보기 완료 · 결과가 맞으면 편집 반영을 누르세요.${rangeWarningText}`;
+        setEditorMessage(
+          previewMessage,
+          issueCount > 0 || rangeWarningCount > 0,
+        );
       }
       renderEditor();
     } catch (error) {
+      if (operation === 'convert_motion_to_point_curve') editor.pendingCurveId = '';
       setEditorMessage(error.message || String(error), true);
     } finally {
       el.studioEditorApplyButton.disabled = false;
-      if (el.studioEditorDeleteAxisDataButton) {
-        el.studioEditorDeleteAxisDataButton.disabled = false;
-      }
-      if (el.studioEditorDeleteWholeAxisButton) {
-        el.studioEditorDeleteWholeAxisButton.disabled = false;
-      }
       renderEditorControls();
     }
-  }
-
-  async function deleteSelectedWholeAxes() {
-    const editor = state.editor;
-    if (!editor) return;
-    const selectedIds = editorSelectedMotionIds();
-    if (!selectedIds.length) {
-      setEditorMessage('전체 삭제할 Motion ID를 선택하세요', true);
-      return;
-    }
-    const allIds = editorMotionIds(editor.working);
-    if (selectedIds.length >= allIds.length) {
-      setEditorMessage('모든 축을 없애려면 편집 창을 닫고 레이어 삭제를 사용하세요.', true);
-      return;
-    }
-    if (!window.confirm(`선택한 축 ${selectedIds.join(', ')}의 전체 데이터를 삭제할까요?`)) return;
-    const times = (editor.working.frames || [])
-      .filter((frame) => selectedIds.some((motionId) => motionId in (frame.values || {})))
-      .map((frame) => Number(frame.time_sec))
-      .filter(Number.isFinite);
-    if (!times.length) {
-      setEditorMessage('선택한 축의 모션 데이터가 없습니다.', true);
-      return;
-    }
-    if (el.studioEditorStart) el.studioEditorStart.value = Math.min(...times).toFixed(3);
-    if (el.studioEditorEnd) el.studioEditorEnd.value = Math.max(...times).toFixed(3);
-    await applyEditorOperation('delete_data', false);
   }
 
   function nextMergedLayerName() {
@@ -2143,7 +2388,7 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     });
     const selectEditorAxes = (checked) => {
       el.studioEditorAxisList?.querySelectorAll('input').forEach((input) => { input.checked = checked; });
-      if (!discardEditorPreview('축 선택이 바뀌어 적용 미리보기를 취소했습니다.')) renderEditor();
+      if (!discardEditorPreview('축 선택이 바뀌어 결과 미리보기를 취소했습니다.')) renderEditor();
     };
     el.studioEditorSelectAllButton?.addEventListener('click', () => selectEditorAxes(true));
     el.studioEditorSelectNoneButton?.addEventListener('click', () => selectEditorAxes(false));
@@ -2153,10 +2398,62 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     el.studioEditorCopyAxisTarget?.addEventListener('input', renderEditorControls);
     el.studioEditorCopyAxisButton?.addEventListener('click', previewEditorAxisCopy);
     el.studioEditorAxisList?.addEventListener('change', () => {
-      if (!discardEditorPreview('축 선택이 바뀌어 적용 미리보기를 취소했습니다.')) renderEditor();
+      if (!discardEditorPreview('축 선택이 바뀌어 결과 미리보기를 취소했습니다.')) renderEditor();
     });
     el.studioEditorOperation?.addEventListener('change', () => {
-      if (!discardEditorPreview('편집 기능이 바뀌어 적용 미리보기를 취소했습니다.')) renderEditor();
+      const editor = state.editor;
+      if (!editor) return;
+      const nextOperation = el.studioEditorOperation.value;
+      if (editor.preview) {
+        el.studioEditorOperation.value = editor.operation || 'time_scale';
+        setEditorMessage(
+          '현재 결과 미리보기를 먼저 편집 반영한 뒤 편집 기능을 바꾸세요.',
+          true,
+        );
+        renderEditor();
+        return;
+      }
+      if (
+        editor.operation === 'point_curve'
+        && nextOperation !== 'point_curve'
+        && pointDraftHasUnsavedChanges(editor)
+      ) {
+        el.studioEditorOperation.value = 'point_curve';
+        setEditorMessage(
+          '변경한 포인트를 먼저 결과 미리보기하고 편집 반영한 뒤 다른 기능으로 이동하세요.',
+          true,
+        );
+        renderEditor();
+        return;
+      }
+      const linkedCurve = (
+        editor.operation === 'point_curve' && nextOperation !== 'point_curve'
+      ) ? storedCurveForDraft(editor) : null;
+      editor.operation = nextOperation;
+      if (linkedCurve) {
+        const points = linkedCurve.points || [];
+        el.studioEditorStart.value = Number(points[0]?.time_sec || 0).toFixed(2);
+        el.studioEditorEnd.value = Number(points[points.length - 1]?.time_sec || 0).toFixed(2);
+        editor.selectionStage = 0;
+        editor.selectionAnchor = null;
+        editor.selectionKind = 'point';
+      }
+      if (editor.operation === 'point_curve') {
+        editor.pointTimelineEnd = motionStudioPointCurveViewEnd(
+          editorDuration(editor.working),
+          editor.viewEnd,
+          editor.pointTimelineEnd,
+        );
+        editor.viewStart = 0;
+        editor.viewEnd = editor.pointTimelineEnd;
+      }
+      renderEditor();
+      if (linkedCurve) {
+        setEditorMessage(
+          `${linkedCurve.motion_id} 포인트 곡선 전체 구간을 선택했습니다. `
+          + '시간·모션값 편집 시 포인트와 탄젠트도 함께 변경됩니다.',
+        );
+      }
     });
     const updateSelectedPointFromControls = () => {
       const editor = state.editor;
@@ -2165,12 +2462,22 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       const timeSec = Number(el.studioEditorPointTime?.value);
       const valueDeg = Number(el.studioEditorPointValue?.value);
       const tangentMode = el.studioEditorPointMode?.value || 'auto';
-      discardEditorPreview('포인트 값이 바뀌어 적용 미리보기를 취소했습니다.');
-      if (Number.isFinite(timeSec)) point.time_sec = Math.max(0, Math.round(timeSec / 0.02) * 0.02);
+      discardEditorPreview('포인트 값이 바뀌어 결과 미리보기를 취소했습니다.');
+      if (Number.isFinite(timeSec)) {
+        point.time_sec = Math.max(0, Math.round(timeSec / 0.02) * 0.02);
+        if (point.time_sec > editor.viewEnd) {
+          editor.pointTimelineEnd = motionStudioPointCurveViewEnd(
+            editorDuration(editor.working),
+            editor.viewEnd,
+            point.time_sec + Math.max(1, point.time_sec * 0.05),
+          );
+          editor.viewEnd = editor.pointTimelineEnd;
+        }
+      }
       if (Number.isFinite(valueDeg)) point.value_deg = valueDeg;
       point.tangent_mode = tangentMode;
       editor.pointDraft.points.sort((first, second) => first.time_sec - second.time_sec);
-      setEditorMessage('포인트 변경 완료 · 적용을 눌러 곡선을 다시 계산하세요.');
+      setEditorMessage('포인트 변경 완료 · 결과 미리보기를 눌러 곡선을 다시 계산하세요.');
       renderEditor();
     };
     el.studioEditorPointTime?.addEventListener('change', updateSelectedPointFromControls);
@@ -2182,20 +2489,54 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       const interpolationOrder = Number(el.studioEditorPointCurveOrder?.value || 3);
       editor.pointCurveOrder = interpolationOrder;
       if (editor.pointDraft) editor.pointDraft.interpolation_order = interpolationOrder;
-      discardEditorPreview('구간 곡선 방식이 바뀌어 적용 미리보기를 취소했습니다.');
-      setEditorMessage(`${interpolationOrder === 1 ? '직선' : `${interpolationOrder}차 곡선`} 선택 · 적용을 눌러 다시 계산하세요.`);
+      discardEditorPreview('구간 곡선 방식이 바뀌어 결과 미리보기를 취소했습니다.');
+      setEditorMessage(`${interpolationOrder === 1 ? '직선' : `${interpolationOrder}차 곡선`} 선택 · 결과 미리보기를 눌러 다시 계산하세요.`);
+      renderEditor();
+    });
+    el.studioEditorPointTimelineEnd?.addEventListener('change', () => {
+      const editor = state.editor;
+      if (!editor) return;
+      const requested = Number(el.studioEditorPointTimelineEnd.value);
+      if (!Number.isFinite(requested) || requested <= 0) {
+        setEditorMessage('포인트 작업 시간축 끝은 0보다 큰 시간을 입력하세요.', true);
+        syncPointControls();
+        return;
+      }
+      editor.pointTimelineEnd = Math.max(0.02, requested);
+      editor.viewStart = 0;
+      editor.viewEnd = editor.pointTimelineEnd;
+      setEditorMessage(
+        `포인트 작업 시간축을 0초~${editor.pointTimelineEnd.toFixed(2)}초로 표시합니다.`,
+      );
       renderEditor();
     });
     el.studioEditorPointDeleteButton?.addEventListener('click', () => {
       const editor = state.editor; const point = selectedDraftPoint(editor);
       if (!editor?.pointDraft || !point) return;
+      if ((editor.pointDraft.points || []).length <= 2) {
+        setEditorMessage(
+          '곡선을 유지하려면 포인트가 최소 2개 필요하므로 더 삭제할 수 없습니다.',
+          true,
+        );
+        return;
+      }
       discardEditorPreview();
       editor.pointDraft.points = editor.pointDraft.points.filter(
         (item) => item.point_id !== point.point_id,
       );
       editor.selectedPointId = editor.pointDraft.points[0]?.point_id || '';
-      setEditorMessage('포인트를 작업본에서 제거했습니다 · 적용 전에는 저장되지 않습니다.');
+      setEditorMessage('포인트를 작업본에서 제거했습니다 · 결과 계산 전에는 저장되지 않습니다.');
       renderEditor();
+    });
+    el.studioEditorCurveDetachButton?.addEventListener('click', () => {
+      const editor = state.editor;
+      const curve = storedCurveForDraft(editor);
+      if (!curve) return;
+      if (!window.confirm(
+        '현재 20ms 그래프를 그대로 유지하고 일반 모션으로 변환할까요? '
+        + '저장 후에는 다시 포인트 모션으로 변환하기 전까지 편집할 수 없습니다.',
+      )) return;
+      applyEditorOperation('convert_point_curve_to_motion', false);
     });
     el.studioEditorCurveDeleteButton?.addEventListener('click', () => {
       const editor = state.editor;
@@ -2208,23 +2549,40 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
         setEditorMessage('저장 전 포인트 곡선을 취소했습니다.'); renderEditor();
         return;
       }
-      if (!window.confirm('선택한 포인트 곡선과 해당 구간 데이터를 삭제할까요?')) return;
+      if (!window.confirm(
+        '선택한 포인트와 해당 곡선 구간의 그래프 데이터를 모두 삭제할까요?',
+      )) return;
       applyEditorOperation('delete_point_curve', false);
     });
     [el.studioEditorOffset, el.studioEditorFactor, el.studioEditorDelta].forEach((input) => {
       input?.addEventListener('input', () => {
-        discardEditorPreview('편집값이 바뀌어 적용 미리보기를 취소했습니다. 다시 적용하세요.');
+        discardEditorPreview('편집값이 바뀌어 결과 미리보기를 취소했습니다. 다시 계산하세요.');
       });
     });
-    el.studioEditorInterpolationChoices?.addEventListener('change', () => {
-      discardEditorPreview('보간 그래프가 바뀌어 적용 미리보기를 취소했습니다. 다시 적용하세요.');
+    el.studioEditorConvertToPointsButton?.addEventListener('click', () => {
+      const editor = state.editor;
+      if (!editor) return;
+      if (editor.selectionKind !== 'motion' || editor.selectionStage === 1) {
+        setEditorMessage('일반 모션점 두 개로 변환 구간을 먼저 선택하세요.', true);
+        return;
+      }
+      if (editorSelectedMotionIds().length !== 1) {
+        setEditorMessage('포인트로 변환할 Motion ID를 하나만 선택하세요.', true);
+        return;
+      }
+      editor.pendingCurveId = editorId('curve');
+      applyEditorOperation('convert_motion_to_point_curve', false);
     });
     const handleEditorRangeInput = () => {
       if (state.editor) {
         state.editor.selectionStage = 0;
         state.editor.selectionAnchor = null;
+        state.editor.selectionKind = 'motion';
       }
-      if (!discardEditorPreview('편집 구간이 바뀌어 적용 미리보기를 취소했습니다.')) drawEditorGraph();
+      if (!discardEditorPreview('편집 구간이 바뀌어 결과 미리보기를 취소했습니다.')) {
+        renderEditorControls();
+        drawEditorGraph();
+      }
     };
     el.studioEditorStart?.addEventListener('input', handleEditorRangeInput);
     el.studioEditorEnd?.addEventListener('input', handleEditorRangeInput);
@@ -2237,19 +2595,27 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       el.studioEditorEnd.value = bounds.end.toFixed(2);
       editor.selectionStage = 0;
       editor.selectionAnchor = null;
+      editor.selectionKind = 'motion';
       setEditorMessage(`레이어 전체 구간 선택 · ${bounds.start.toFixed(2)}초 ~ ${bounds.end.toFixed(2)}초`);
+      renderEditorControls();
       drawEditorGraph();
     });
     el.studioEditorApplyButton?.addEventListener('click', () => applyEditorOperation());
     el.studioEditorUpdateButton?.addEventListener('click', updateEditorWorkingCopy);
-    el.studioEditorDeleteAxisDataButton?.addEventListener('click', () => (
-      applyEditorOperation('delete_data')
-    ));
-    el.studioEditorDeleteWholeAxisButton?.addEventListener('click', deleteSelectedWholeAxes);
     const discardEditor = () => {
       if (
-        (state.editor?.undo.length || state.editor?.preview)
-        && !window.confirm('저장하지 않은 편집 내용과 적용 미리보기를 버리고 닫을까요?')
+        (
+          state.editor?.preview
+          || (
+            state.editor
+            && !motionStudioLayerDataEqual(
+              state.editor.original,
+              state.editor.working,
+            )
+          )
+          || pointDraftHasUnsavedChanges(state.editor)
+        )
+        && !window.confirm('저장하지 않은 편집 내용과 결과 미리보기를 버리고 닫을까요?')
       ) return;
       closeLayerEditor();
     };
@@ -2257,8 +2623,25 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     el.studioEditorDiscardButton?.addEventListener('click', discardEditor);
     el.studioEditorUndoButton?.addEventListener('click', () => {
       const editor = state.editor;
-      if (!editor?.undo.length) return;
-      discardEditorPreview();
+      if (!editor) return;
+      if (editor.preview) {
+        discardEditorPreview('결과 미리보기를 취소하고 현재 작업본으로 돌아왔습니다.');
+        return;
+      }
+      if (pointDraftHasUnsavedChanges(editor)) {
+        const stored = storedCurveForDraft(editor);
+        if (stored) {
+          loadPointDraft(stored, editor.selectedPointId);
+          setEditorMessage('편집 반영 전 포인트 변경을 취소했습니다.');
+        } else {
+          editor.pointDraft = null;
+          editor.selectedPointId = '';
+          setEditorMessage('편집 반영 전 포인트 작업을 취소했습니다.');
+        }
+        renderEditor();
+        return;
+      }
+      if (!editor.undo.length) return;
       editor.redo.push({ layer: clone(editor.working), validation: clone(editor.validation) });
       const previous = editor.undo.pop();
       const replacedLayer = editor.working;
@@ -2267,7 +2650,7 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       refreshEditorTimeline(editor.working, replacedLayer);
       refreshEditorAxisControls(null, editor.working);
       if (el.studioEditorSubtitle) {
-        el.studioEditorSubtitle.textContent = `작업본 업데이트 ${editor.undo.length}회 · 아직 저장되지 않음`;
+        el.studioEditorSubtitle.textContent = `편집 반영 ${editor.undo.length}회 · 아직 저장되지 않음`;
       }
       setEditorMessage('직전 편집을 취소했습니다'); renderEditor();
     });
@@ -2283,15 +2666,51 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       refreshEditorTimeline(editor.working, replacedLayer);
       refreshEditorAxisControls(null, editor.working);
       if (el.studioEditorSubtitle) {
-        el.studioEditorSubtitle.textContent = `작업본 업데이트 ${editor.undo.length}회 · 아직 저장되지 않음`;
+        el.studioEditorSubtitle.textContent = `편집 반영 ${editor.undo.length}회 · 아직 저장되지 않음`;
       }
-      setEditorMessage('취소한 편집을 다시 적용했습니다'); renderEditor();
+      setEditorMessage('취소한 편집을 다시 반영했습니다'); renderEditor();
     });
+    const acceptSavedEditorLayer = (editor, savedLayer, message) => {
+      const previousWorking = editor.working;
+      const selectedPointId = editor.selectedPointId;
+      const activeCurveId = editor.pointDraft?.curve_id;
+      editor.original = clone(savedLayer);
+      editor.working = clone(savedLayer);
+      editor.preview = null;
+      editor.previewValidation = null;
+      editor.operationReport = null;
+      editor.undo = [];
+      editor.redo = [];
+      refreshEditorTimeline(editor.working, previousWorking);
+      refreshEditorAxisControls(null, editor.working);
+      if (activeCurveId && el.studioEditorOperation?.value === 'point_curve') {
+        const savedCurve = editorPointCurves(editor.working).find(
+          (curve) => curve.curve_id === activeCurveId,
+        );
+        if (savedCurve) loadPointDraft(savedCurve, selectedPointId);
+        else {
+          editor.pointDraft = null;
+          editor.selectedPointId = '';
+        }
+      }
+      if (el.studioEditorSubtitle) {
+        el.studioEditorSubtitle.textContent = '저장 완료 · 계속 편집 가능';
+      }
+      setEditorMessage(message);
+      renderEditor();
+    };
     el.studioEditorSaveButton?.addEventListener('click', async () => {
       const editor = state.editor;
       if (!editor) return;
       if (editor.preview) {
-        setEditorMessage('적용 미리보기를 먼저 업데이트한 뒤 최종 저장하세요.', true);
+        setEditorMessage('결과 미리보기를 먼저 편집 반영한 뒤 저장하세요.', true);
+        return;
+      }
+      if (pointDraftHasUnsavedChanges(editor)) {
+        setEditorMessage(
+          '포인트 변경을 먼저 결과 미리보기하고 편집 반영한 뒤 저장하세요.',
+          true,
+        );
         return;
       }
       const result = await run(() => saveMotionStudioLayerData({
@@ -2300,7 +2719,16 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
         layer: editor.working,
       }));
       if (result) {
-        closeLayerEditor();
+        const savedLayer = state.project?.layers?.find(
+          (layer) => layer.layer_id === editor.layerId,
+        ) || editor.working;
+        acceptSavedEditorLayer(
+          editor,
+          savedLayer,
+          result.range_warnings?.length
+            ? `저장 완료 · 축 설정 범위 초과 경고 ${result.range_warnings.length}건 · 계속 편집할 수 있습니다.`
+            : '저장 완료 · 창을 닫지 않고 편집을 계속할 수 있습니다.',
+        );
         return;
       }
       const currentLayer = state.project?.layers?.find(
@@ -2313,8 +2741,11 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
         && currentRevision !== originalRevision
         && motionStudioLayerDataEqual(currentLayer, editor.working)
       ) {
-        closeLayerEditor();
-        setMessage('같은 편집 결과가 이미 저장되어 편집 창을 닫았습니다.');
+        acceptSavedEditorLayer(
+          editor,
+          currentLayer,
+          '같은 편집 결과가 이미 저장되어 현재 작업본을 동기화했습니다.',
+        );
         return;
       }
       if (currentLayer && currentRevision !== originalRevision) {
@@ -2356,12 +2787,6 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       scaleEditorValues(1.7);
       setEditorView(center - span / 2, center + span / 2);
     });
-    el.studioEditorInterpolationButton?.addEventListener('click', () => {
-      if (!el.studioEditorOperation) return;
-      el.studioEditorOperation.value = 'interpolate';
-      el.studioEditorOperation.dispatchEvent(new Event('change'));
-      setEditorMessage('시작점과 끝점을 선택하고 1차·3차·5차 그래프를 고른 뒤 적용하세요.');
-    });
     el.studioEditorFitAllButton?.addEventListener('click', () => {
       const editor = state.editor; if (!editor) return;
       editor.valueScale = 1;
@@ -2383,18 +2808,28 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       const rect = el.studioEditorGraph.getBoundingClientRect();
       const x = event.clientX - rect.left; const y = event.clientY - rect.top;
       if (editor.draggingPoint) {
+        if (!motionStudioPointDragStarted(editor.draggingPoint, x, y)) return;
+        if (!editor.draggingPoint.activated) {
+          const pendingDrag = { ...editor.draggingPoint, activated: true };
+          setPointCurveMode(
+            pendingDrag.curve,
+            pendingDrag.pointId,
+          );
+          editor.draggingPoint = pendingDrag;
+        }
         const point = selectedDraftPoint(editor);
         if (!point) return;
+        const activeMetrics = editor.graphMetrics || metrics;
         const snappedTime = Math.max(
           0,
-          Math.round(metrics.timeFor(x) / 0.02) * 0.02,
+          Math.round(activeMetrics.timeFor(x) / 0.02) * 0.02,
         );
         const collides = (editor.pointDraft?.points || []).some(
           (candidate) => candidate.point_id !== point.point_id
             && Math.abs(Number(candidate.time_sec) - snappedTime) < 0.02 - 1e-9,
         );
         if (!collides) point.time_sec = Number(snappedTime.toFixed(2));
-        point.value_deg = Number(metrics.valueFor(y).toFixed(6));
+        point.value_deg = Number(activeMetrics.valueFor(y).toFixed(6));
         editor.pointDraft.points.sort((first, second) => first.time_sec - second.time_sec);
         editor.draggingPoint.moved = true;
         editor.suppressGraphClick = true;
@@ -2475,7 +2910,6 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
         editor.suppressGraphClick = false;
         return;
       }
-      discardEditorPreview('편집 구간을 다시 선택하여 적용 미리보기를 취소했습니다.');
       // 하나의 실제 클릭이 중복 처리되거나 같은 위치에서 더블클릭된 경우에는
       // 두 번째 지점으로 확정하지 않는다.
       if (event.motionStudioRangeHandled) return;
@@ -2493,17 +2927,51 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
         || clickPoint.y < padding.top
         || clickPoint.y > padding.top + metrics.plotHeight
       ) return;
-      const pointTarget = (editor.pointHitTargets || []).find(
-        (target) => Math.hypot(target.x - clickPoint.x, target.y - clickPoint.y) <= 10,
+      const pointTarget = motionStudioPointHitTarget(
+        editor.pointHitTargets,
+        clickPoint.x,
+        clickPoint.y,
       );
-      if (motionStudioShouldEditPoint(el.studioEditorOperation?.value, pointTarget)) {
+      if (pointTarget && el.studioEditorOperation?.value !== 'point_curve') {
         setPointCurveMode(pointTarget.curve, pointTarget.point.point_id);
         setEditorMessage(
-          `${pointTarget.curve.motion_id} 사용자 포인트 선택 · 탄젠트 핸들을 드래그하거나 값을 수정하세요.`,
+          pointCurveIsSaved(editor, pointTarget.curve.curve_id)
+            ? `${pointTarget.curve.motion_id} 포인트 모션 구간 선택 · 포인트 편집이 가능합니다.`
+            : '변환된 포인트 모션을 먼저 저장해야 편집할 수 있습니다.',
+          !pointCurveIsSaved(editor, pointTarget.curve.curve_id),
         );
         return;
       }
+      if (motionStudioShouldEditPoint(el.studioEditorOperation?.value, pointTarget)) {
+        if (!pointCurveIsSaved(editor, pointTarget.curve.curve_id)) {
+          setPointCurveMode(pointTarget.curve, pointTarget.point.point_id);
+          setEditorMessage('변환된 포인트 모션을 먼저 저장해야 편집할 수 있습니다.', true);
+          return;
+        }
+        if (editor.preview) {
+          setEditorMessage(
+            '현재 결과 미리보기를 먼저 편집 반영한 뒤 포인트를 수정하세요.',
+            true,
+          );
+          return;
+        }
+        setPointCurveMode(pointTarget.curve, pointTarget.point.point_id);
+        setEditorMessage(
+          `${pointTarget.curve.motion_id} 포인트 선택 · 포인트를 드래그하거나 시간·모션값을 수정하세요.`,
+        );
+        return;
+      }
+      discardEditorPreview('편집 구간을 다시 선택하여 결과 미리보기를 취소했습니다.');
       if (el.studioEditorOperation?.value === 'point_curve') {
+        if (!pointCurveIsSaved(editor, editor.pointDraft?.curve_id)) {
+          setEditorMessage(
+            editor.pointDraft
+              ? '변환된 포인트 모션을 먼저 저장해야 편집할 수 있습니다.'
+              : '일반 모션을 포인트 모션으로 변환하고 저장한 뒤 편집하세요.',
+            true,
+          );
+          return;
+        }
         const selectedIds = editorSelectedMotionIds();
         if (selectedIds.length !== 1) {
           setEditorMessage('포인트를 만들 Motion ID를 하나만 선택하세요.', true);
@@ -2550,17 +3018,64 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       }
       const cursorMatchesClick = editor.cursor
         && Math.hypot(editor.cursor.x - clickPoint.x, editor.cursor.y - clickPoint.y) < 3;
-      const targetTime = cursorMatchesClick
-        ? (editor.cursor.nearest?.timeSec ?? editor.cursor.timeSec)
-        : metrics.timeFor(clickPoint.x);
+      const clickKind = pointTarget ? 'point' : 'motion';
+      const motionTarget = cursorMatchesClick ? editor.cursor.nearest : null;
+      if (clickKind === 'motion' && !motionTarget) {
+        setEditorMessage('포인트 또는 그래프의 모션점 가까이를 클릭하세요.', true);
+        return;
+      }
+      if (clickKind === 'motion') {
+        const pointRegion = editorPointCurves(editor.preview || editor.working).find(
+          (curve) => {
+            if (curve.motion_id !== motionTarget.motionId) return false;
+            const points = curve.points || [];
+            const startSec = Number(points[0]?.time_sec);
+            const endSec = Number(points[points.length - 1]?.time_sec);
+            return (
+              Number(motionTarget.timeSec) >= startSec - 1e-9
+              && Number(motionTarget.timeSec) <= endSec + 1e-9
+            );
+          },
+        );
+        if (pointRegion) {
+          setPointCurveMode(pointRegion, pointRegion.points?.[0]?.point_id || '');
+          setEditorMessage(
+            pointCurveIsSaved(editor, pointRegion.curve_id)
+              ? '포인트 모션 구간입니다. 동그란 포인트를 선택해 편집하세요.'
+              : '변환된 포인트 모션을 먼저 저장해야 편집할 수 있습니다.',
+            !pointCurveIsSaved(editor, pointRegion.curve_id),
+          );
+          return;
+        }
+      }
+      if (clickKind === 'motion' && editor.pointDraft) {
+        editor.pointDraft = null;
+        editor.selectedPointId = '';
+        renderEditorControls();
+      }
+      const targetTime = pointTarget
+        ? Number(pointTarget.point.time_sec)
+        : Number(motionTarget.timeSec);
       const snapped = Math.max(0, Math.round(targetTime / 0.02) * 0.02);
       if (editor.selectionStage === 0) {
         el.studioEditorStart.value = snapped.toFixed(2);
         el.studioEditorEnd.value = '';
         editor.selectionStage = 1;
         editor.selectionAnchor = snapped;
-        setEditorMessage(`구간 선택 1/2 · 시작 ${snapped.toFixed(2)}초 · 종료할 다른 지점을 한 번 클릭하세요.`);
+        editor.selectionKind = clickKind;
+        const kindText = clickKind === 'point' ? '포인트' : '모션점';
+        setEditorMessage(
+          `${kindText} 구간 선택 1/2 · 시작 ${snapped.toFixed(2)}초 · `
+          + `종료할 다른 ${kindText}을 한 번 클릭하세요.`,
+        );
       } else {
+        if (!motionStudioSelectionKindsMatch(editor.selectionKind, clickKind)) {
+          setEditorMessage(
+            '포인트는 포인트끼리, 모션점은 모션점끼리 선택하세요.',
+            true,
+          );
+          return;
+        }
         const first = Number.isFinite(editor.selectionAnchor)
           ? editor.selectionAnchor
           : Number(el.studioEditorStart.value || 0);
@@ -2568,10 +3083,13 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
         el.studioEditorEnd.value = Math.max(first, snapped).toFixed(2);
         editor.selectionStage = 0;
         editor.selectionAnchor = null;
+        const kindText = clickKind === 'point' ? '포인트' : '모션점';
         setEditorMessage(
-          `구간 선택 2/2 완료 · ${el.studioEditorStart.value}초 ~ ${el.studioEditorEnd.value}초`,
+          `${kindText} 구간 선택 2/2 완료 · `
+          + `${el.studioEditorStart.value}초 ~ ${el.studioEditorEnd.value}초`,
         );
       }
+      renderEditorControls();
       drawEditorGraph();
     });
     el.studioEditorGraph?.addEventListener('mousedown', (event) => {
@@ -2587,25 +3105,50 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
         event.preventDefault();
         editor.draggingHandle = { side: handle.side };
         editor.suppressGraphClick = true;
-        discardEditorPreview('탄젠트를 바꾸어 적용 미리보기를 취소했습니다.');
-        setEditorMessage('탄젠트 핸들 조절 중 · 놓은 뒤 적용하여 곡선을 계산하세요.');
+        discardEditorPreview('탄젠트를 바꾸어 결과 미리보기를 취소했습니다.');
+        setEditorMessage('탄젠트 핸들 조절 중 · 놓은 뒤 결과 미리보기로 곡선을 계산하세요.');
         return;
       }
-      const pointTarget = (editor.pointHitTargets || []).find(
-        (target) => Math.hypot(target.x - x, target.y - y) <= 10,
+      const pointTarget = motionStudioPointHitTarget(
+        editor.pointHitTargets,
+        x,
+        y,
       );
-      if (motionStudioShouldEditPoint(el.studioEditorOperation?.value, pointTarget)) {
-        event.preventDefault();
-        if (editor.pointDraft?.curve_id !== pointTarget.curve.curve_id) {
-          selectOnlyEditorAxis(pointTarget.curve.motion_id);
-          loadPointDraft(pointTarget.curve, pointTarget.point.point_id);
-        } else {
-          editor.selectedPointId = pointTarget.point.point_id;
+      if (pointTarget) {
+        if (!pointCurveIsSaved(editor, pointTarget.curve.curve_id)) {
+          setPointCurveMode(pointTarget.curve, pointTarget.point.point_id);
+          setEditorMessage('변환된 포인트 모션을 먼저 저장해야 편집할 수 있습니다.', true);
+          return;
         }
-        discardEditorPreview('포인트를 이동해 적용 미리보기를 취소했습니다.');
-        editor.draggingPoint = { pointId: pointTarget.point.point_id, moved: false };
-        editor.suppressGraphClick = true;
-        setEditorMessage('포인트 이동 중 · 좌우는 시간, 상하는 모션값을 바꿉니다.');
+        if (editor.preview) {
+          setEditorMessage(
+            '현재 결과 미리보기를 먼저 편집 반영한 뒤 포인트를 이동하세요.',
+            true,
+          );
+          return;
+        }
+        event.preventDefault();
+        const pointMode = el.studioEditorOperation?.value === 'point_curve';
+        if (pointMode) {
+          setPointCurveMode(pointTarget.curve, pointTarget.point.point_id);
+        }
+        editor.draggingPoint = {
+          pointId: pointTarget.point.point_id,
+          curve: pointTarget.curve,
+          startX: x,
+          startY: y,
+          moved: false,
+          activated: pointMode,
+        };
+        if (pointMode) {
+          syncPointControls();
+          drawEditorGraph();
+        }
+        setEditorMessage(
+          pointMode
+            ? '포인트 선택 · 그대로 드래그하면 좌우는 시간, 상하는 모션값을 바꿉니다.'
+            : '한 번 클릭하면 현재 편집 구간으로 선택하고, 드래그하면 포인트를 이동합니다.',
+        );
         return;
       }
       const { padding } = metrics;
@@ -2627,7 +3170,7 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       if (!editor) return;
       if (editor.draggingHandle) {
         editor.draggingHandle = null;
-        setEditorMessage('탄젠트 핸들 변경 완료 · 적용을 눌러 20ms 곡선을 계산하세요.');
+        setEditorMessage('탄젠트 핸들 변경 완료 · 결과 미리보기를 눌러 20ms 곡선을 계산하세요.');
         renderEditor();
         return;
       }
@@ -2635,8 +3178,11 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
         const moved = editor.draggingPoint.moved;
         editor.draggingPoint = null;
         if (moved) {
-          setEditorMessage('포인트 이동 완료 · 적용을 눌러 곡선을 다시 계산하세요.');
+          setEditorMessage('포인트 이동 완료 · 결과 미리보기를 눌러 곡선을 다시 계산하세요.');
           renderEditor();
+        } else {
+          syncPointControls();
+          drawEditorGraph();
         }
         return;
       }
