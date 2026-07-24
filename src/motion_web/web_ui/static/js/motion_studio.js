@@ -16,6 +16,48 @@ import {
   stopMotionStudio,
   updateMotionStudioLayer,
 } from './api.js?v=20260722-motor-config-delete';
+import {
+  motionStudioEditorNextValueScale,
+  motionStudioEditorValueBounds,
+  motionStudioLayerDataEqual,
+  motionStudioLayerDuration,
+  motionStudioLayerMotionIds,
+  motionStudioPointCurvePreview,
+  motionStudioPointCurveViewEnd,
+  motionStudioPointDragStarted,
+  motionStudioPointHitTarget,
+  motionStudioSelectionKindsMatch,
+  motionStudioShouldEditPoint,
+  resolveMotionStudioSelectedLayerId,
+  synchronizeMotionStudioEditorTimeline,
+} from './motion_studio_calculations.js?v=20260724-studio-cleanup-1';
+import {
+  motionStudioCompositionTracks as compositionTracks,
+  motionStudioLayerTracks as layerTracks,
+} from './motion_studio_graph.js?v=20260724-studio-cleanup-1';
+import {
+  bindMotionStudioEvent,
+  createMotionStudioState,
+  renderMotionStudioWorkspace,
+  resetMotionStudioProjectState,
+  setMotionStudioMessage,
+} from './motion_studio_ui.js?v=20260724-studio-cleanup-1';
+
+export {
+  motionStudioEditorNextValueScale,
+  motionStudioEditorValueBounds,
+  motionStudioLayerDataEqual,
+  motionStudioLayerDuration,
+  motionStudioLayerMotionIds,
+  motionStudioPointCurvePreview,
+  motionStudioPointCurveViewEnd,
+  motionStudioPointDragStarted,
+  motionStudioPointHitTarget,
+  motionStudioSelectionKindsMatch,
+  motionStudioShouldEditPoint,
+  resolveMotionStudioSelectedLayerId,
+  synchronizeMotionStudioEditorTimeline,
+};
 
 const MOTION_ID_PATTERN = /^[1-9]\d*-[1-9]\d*$/;
 
@@ -37,221 +79,8 @@ function editorId(prefix) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
 }
 
-export function motionStudioLayerDuration(layer) {
-  return Math.max(
-    0,
-    ...(layer?.frames || [])
-      .map((frame) => Number(frame.time_sec))
-      .filter((timeSec) => Number.isFinite(timeSec) && timeSec >= 0),
-  );
-}
-
-export function motionStudioEditorValueBounds(minimum, maximum, scale = 1) {
-  let minValue = Number.isFinite(Number(minimum)) ? Number(minimum) : -1;
-  let maxValue = Number.isFinite(Number(maximum)) ? Number(maximum) : 1;
-  if (maxValue < minValue) [minValue, maxValue] = [maxValue, minValue];
-  if (Math.abs(maxValue - minValue) < 1e-9) {
-    minValue -= 1;
-    maxValue += 1;
-  }
-  const numericScale = Number(scale);
-  const valueScale = Number.isFinite(numericScale) && numericScale > 0 ? numericScale : 1;
-  const center = (minValue + maxValue) / 2;
-  const halfSpan = ((maxValue - minValue) / 2) * valueScale;
-  return { minValue: center - halfSpan, maxValue: center + halfSpan };
-}
-
-export function motionStudioEditorNextValueScale(currentScale, factor) {
-  const current = Number.isFinite(Number(currentScale)) && Number(currentScale) > 0
-    ? Number(currentScale) : 1;
-  const multiplier = Number(factor);
-  if (!Number.isFinite(multiplier) || multiplier <= 0) return current;
-  const next = current * multiplier;
-  return Number.isFinite(next) && next > 0 ? next : current;
-}
-
-export function synchronizeMotionStudioEditorTimeline(editor, layer, previousLayer = null) {
-  if (!editor) return false;
-  const duration = motionStudioLayerDuration(layer);
-  const previousDuration = previousLayer === null
-    ? Number.NaN
-    : motionStudioLayerDuration(previousLayer);
-  if (Number.isFinite(previousDuration) && Math.abs(duration - previousDuration) <= 1e-9) {
-    return false;
-  }
-  editor.viewStart = 0;
-  editor.viewEnd = Math.max(0.02, duration);
-  editor.selectionStage = 0;
-  editor.selectionAnchor = null;
-  return true;
-}
-
-export function motionStudioLayerDataEqual(first, second) {
-  return JSON.stringify({
-    frames: first?.frames || [],
-    point_curves: first?.point_curves || [],
-  }) === JSON.stringify({
-    frames: second?.frames || [],
-    point_curves: second?.point_curves || [],
-  });
-}
-
-export function motionStudioLayerMotionIds(layer) {
-  return [...new Set((layer?.frames || []).flatMap(
-    (frame) => Object.keys(frame?.values || {}),
-  ))];
-}
-
-export function resolveMotionStudioSelectedLayerId(layers, selectedLayerId = '') {
-  const available = Array.isArray(layers) ? layers : [];
-  if (available.some((layer) => layer.layer_id === selectedLayerId)) return selectedLayerId;
-  return String(available[0]?.layer_id || '');
-}
-
-export function motionStudioShouldEditPoint(operation, pointTarget) {
-  return operation === 'point_curve' && Boolean(pointTarget);
-}
-
-export function motionStudioSelectionKindsMatch(firstKind, secondKind) {
-  return ['point', 'motion'].includes(firstKind) && firstKind === secondKind;
-}
-
-export function motionStudioPointHitTarget(targets, x, y, radius = 14) {
-  return (Array.isArray(targets) ? targets : []).find(
-    (target) => Math.hypot(Number(target.x) - x, Number(target.y) - y) <= radius,
-  ) || null;
-}
-
-export function motionStudioPointDragStarted(draggingPoint, x, y) {
-  if (!draggingPoint) return false;
-  if (draggingPoint.moved) return true;
-  return Math.hypot(
-    x - Number(draggingPoint.startX),
-    y - Number(draggingPoint.startY),
-  ) >= 3;
-}
-
-export function motionStudioPointCurveViewEnd(
-  layerDuration,
-  currentViewEnd = 0,
-  requestedViewEnd = 0,
-) {
-  return Math.max(
-    10,
-    Number(layerDuration) || 0,
-    Number(currentViewEnd) || 0,
-    Number(requestedViewEnd) || 0,
-  );
-}
-
-export function motionStudioPointCurvePreview(rawPoints, interpolationOrder = 3) {
-  const points = (Array.isArray(rawPoints) ? rawPoints : [])
-    .map((point) => ({
-      ...point,
-      time_sec: Number(point?.time_sec),
-      value_deg: Number(point?.value_deg),
-    }))
-    .filter((point) => Number.isFinite(point.time_sec) && Number.isFinite(point.value_deg))
-    .sort((first, second) => first.time_sec - second.time_sec);
-  if (points.length < 2) return [];
-  const order = [1, 3, 5].includes(Number(interpolationOrder))
-    ? Number(interpolationOrder) : 3;
-  const automaticSlope = (index) => {
-    const before = points[Math.max(0, index - 1)];
-    const after = points[Math.min(points.length - 1, index + 1)];
-    const span = after.time_sec - before.time_sec;
-    return span > 1e-9 ? (after.value_deg - before.value_deg) / span : 0;
-  };
-  const pointSlope = (index) => {
-    if (index === 0 || index === points.length - 1) return 0;
-    const point = points[index];
-    if (point.tangent_mode === 'broken') return 0;
-    if (point.tangent_mode === 'smooth') {
-      const handle = point.out_handle || point.in_handle || {};
-      const dt = Number(handle.dt_sec);
-      const dv = Number(handle.dv_deg);
-      if (Number.isFinite(dt) && Number.isFinite(dv) && Math.abs(dt) > 1e-9) {
-        return dv / dt;
-      }
-    }
-    return automaticSlope(index);
-  };
-  const acceleration = (index) => {
-    if (index <= 0 || index >= points.length - 1) return 0;
-    if (points[index].tangent_mode === 'broken') return 0;
-    const before = points[index - 1];
-    const point = points[index];
-    const after = points[index + 1];
-    const previousSpan = point.time_sec - before.time_sec;
-    const followingSpan = after.time_sec - point.time_sec;
-    if (previousSpan <= 1e-9 || followingSpan <= 1e-9) return 0;
-    const previousSlope = (point.value_deg - before.value_deg) / previousSpan;
-    const followingSlope = (after.value_deg - point.value_deg) / followingSpan;
-    return 2 * (followingSlope - previousSlope) / (previousSpan + followingSpan);
-  };
-  const result = [];
-  points.slice(0, -1).forEach((first, index) => {
-    const second = points[index + 1];
-    const span = second.time_sec - first.time_sec;
-    if (span <= 1e-9) return;
-    const steps = Math.max(8, Math.min(80, Math.ceil(span / 0.02)));
-    for (let step = 0; step <= steps; step += 1) {
-      if (index > 0 && step === 0) continue;
-      const ratio = step / steps;
-      let value;
-      if (order === 1) {
-        value = first.value_deg + ((second.value_deg - first.value_deg) * ratio);
-      } else if (order === 3) {
-        const ratio2 = ratio * ratio;
-        const ratio3 = ratio2 * ratio;
-        value = (
-          (((2 * ratio3) - (3 * ratio2) + 1) * first.value_deg)
-          + ((ratio3 - (2 * ratio2) + ratio) * span * pointSlope(index))
-          + (((-2 * ratio3) + (3 * ratio2)) * second.value_deg)
-          + ((ratio3 - ratio2) * span * pointSlope(index + 1))
-        );
-      } else {
-        const firstSlope = pointSlope(index);
-        const secondSlope = pointSlope(index + 1);
-        const firstAcceleration = acceleration(index);
-        const secondAcceleration = acceleration(index + 1);
-        const delta = second.value_deg - first.value_deg;
-        const c0 = first.value_deg;
-        const c1 = firstSlope * span;
-        const c2 = 0.5 * firstAcceleration * span * span;
-        const remainingValue = delta - c1 - c2;
-        const remainingSlope = (secondSlope * span) - c1 - (2 * c2);
-        const remainingAcceleration = (secondAcceleration * span * span) - (2 * c2);
-        const c3 = (10 * remainingValue) - (4 * remainingSlope)
-          + (0.5 * remainingAcceleration);
-        const c4 = (-15 * remainingValue) + (7 * remainingSlope)
-          - remainingAcceleration;
-        const c5 = (6 * remainingValue) - (3 * remainingSlope)
-          + (0.5 * remainingAcceleration);
-        value = c0 + (c1 * ratio) + (c2 * ratio ** 2) + (c3 * ratio ** 3)
-          + (c4 * ratio ** 4) + (c5 * ratio ** 5);
-      }
-      result.push({ timeSec: first.time_sec + (span * ratio), value });
-    }
-  });
-  return result;
-}
-
 export function createMotionStudioController({ el, getMotorActionBlockReason = () => '' }) {
-  const state = {
-    mappings: [], motionFiles: [], project: null, workspaceProject: null,
-    status: {}, midi: {}, composition: {
-      conflicts: [], transition_warnings: [], point_curve_mismatches: [], conflict_free: true,
-    }, busy: false,
-    axisRenderKey: '', selectedLayerId: '', layerDetailMode: 'composition',
-    activeLayerDetailTab: 'graph',
-    editor: null, detailGraph: null, playbackGraphRenderedAt: 0,
-    lastPlaybackDisplayState: 'idle',
-    playbackClock: null, playbackAnimationFrame: 0,
-    recordingPreviewKey: '',
-    layerManagerTab: 'create', mergeLayerIds: new Set(),
-    mergeResultMessage: '', mergeResultError: false,
-  };
+  const state = createMotionStudioState();
 
   const clone = (value) => JSON.parse(JSON.stringify(value));
 
@@ -278,9 +107,7 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
   }
 
   function setMessage(message, error = false) {
-    if (!el.studioMessage) return;
-    el.studioMessage.textContent = message || '';
-    el.studioMessage.classList.toggle('error-text', error);
+    setMotionStudioMessage(el.studioMessage, message, error);
   }
 
   function setBusy(busy) {
@@ -304,22 +131,7 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
   }
 
   function renderLists() {
-    if (el.studioWorkspaceName) {
-      el.studioWorkspaceName.textContent = state.workspaceProject?.name || '통합 프로젝트 미선택';
-    }
-    if (el.studioWorkspaceFiles) {
-      const active = state.workspaceProject?.active_files || {};
-      el.studioWorkspaceFiles.textContent = state.workspaceProject
-        ? `모터축: ${active.motor_axes || '미선택'} · 매칭: ${active.motion_axis_matching || '미선택'} · 모션: ${active.motions || '미선택'}`
-        : '왼쪽에서 프로젝트와 현재 파일을 선택하세요';
-    }
-    if (el.studioImportFileSelect) {
-      const selected = el.studioImportFileSelect.value;
-      el.studioImportFileSelect.innerHTML = '<option value="">가져올 모션 파일 선택</option>' + state.motionFiles.map((item) => (
-        `<option value="${escapeHtml(item.file_id)}" ${item.valid ? '' : 'disabled'}>${escapeHtml(item.title || item.file_id)} · ${item.frame_count}프레임${item.valid ? '' : ' · 오류'}</option>`
-      )).join('');
-      el.studioImportFileSelect.value = selected;
-    }
+    renderMotionStudioWorkspace(el, state);
   }
 
   function renderMapping() {
@@ -464,88 +276,6 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
         </tr>`;
       }).join('') : '<tr><td colspan="3" class="empty">레이어가 없습니다</td></tr>';
     }
-  }
-
-  function layerTracks(layer) {
-    const tracks = new Map();
-    for (const frame of layer?.frames || []) {
-      const timeSec = Number(frame.time_sec || 0);
-      for (const [motionId, rawValue] of Object.entries(frame.values || {})) {
-        const value = Number(rawValue);
-        if (!Number.isFinite(timeSec) || !Number.isFinite(value)) continue;
-        if (!tracks.has(motionId)) tracks.set(motionId, []);
-        tracks.get(motionId).push({ timeSec, value });
-      }
-    }
-    for (const points of tracks.values()) {
-      points.sort((left, right) => left.timeSec - right.timeSec);
-    }
-    return tracks;
-  }
-
-  function sampleTrack(points, timeSec) {
-    if (!points?.length) return null;
-    let low = 0; let high = points.length;
-    while (low < high) {
-      const middle = Math.floor((low + high) / 2);
-      if (points[middle].timeSec < timeSec) low = middle + 1;
-      else high = middle;
-    }
-    const point = points[low];
-    if (point && Math.abs(point.timeSec - timeSec) < 1e-7) return point.value;
-    const previous = points[low - 1];
-    if (!point || !previous) return null;
-    const span = point.timeSec - previous.timeSec;
-    if (span > 0.031 || span <= 0) return null;
-    const ratio = (timeSec - previous.timeSec) / span;
-    return previous.value + ((point.value - previous.value) * ratio);
-  }
-
-  function compositionTracks(layers, mappingRows = []) {
-    const enabledLayers = layers.filter((layer) => layer.enabled !== false);
-    const sources = enabledLayers.map((layer) => layerTracks(layer));
-    const motionIds = new Set(sources.flatMap((tracks) => [...tracks.keys()]));
-    const manualInitialValues = new Map(mappingRows.filter((row) => (
-      String(row.initial_mode || 'first_frame') === 'manual'
-    )).map((row) => [String(row.motion_id), Number(row.initial_motion_position_deg || 0)]));
-    const firstPoints = new Map();
-    for (const source of sources) {
-      for (const [motionId, points] of source.entries()) {
-        if (!points.length) continue;
-        const current = firstPoints.get(motionId);
-        if (!current || points[0].timeSec < current.timeSec) firstPoints.set(motionId, points[0]);
-      }
-    }
-    const duration = Math.max(0, ...enabledLayers.flatMap((layer) => (
-      (layer.frames || []).map((frame) => Number(frame.time_sec || 0))
-    )));
-    const sampleCount = Math.max(0, Math.ceil(duration / 0.02));
-    const tracks = new Map([...motionIds].map((motionId) => [motionId, []]));
-    const lastValues = new Map([...motionIds].map((motionId) => {
-      const firstPoint = firstPoints.get(motionId);
-      return [motionId, manualInitialValues.has(motionId)
-        ? manualInitialValues.get(motionId) : Number(firstPoint?.value || 0)];
-    }));
-    for (let index = 1; index <= sampleCount; index += 1) {
-      const timeSec = Number((index * 0.02).toFixed(9));
-      for (const motionId of motionIds) {
-        let value = null;
-        for (const source of sources) {
-          const candidate = sampleTrack(source.get(motionId), timeSec);
-          if (candidate !== null) value = candidate;
-        }
-        const firstPoint = firstPoints.get(motionId);
-        if (value === null && firstPoint && timeSec < firstPoint.timeSec) {
-          value = manualInitialValues.has(motionId)
-            ? manualInitialValues.get(motionId)
-            : firstPoint.value;
-        }
-        if (value === null) value = lastValues.get(motionId) ?? 0;
-        lastValues.set(motionId, value);
-        tracks.get(motionId).push({ timeSec, value });
-      }
-    }
-    return { tracks, duration, sampleCount, enabledLayers };
   }
 
   function playbackView(duration = 0) {
@@ -2110,23 +1840,7 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
   }
 
   function resetProjectState() {
-    state.mappings = [];
-    state.motionFiles = [];
-    state.project = null;
-    state.workspaceProject = null;
-    state.status = {};
-    state.composition = {
-      conflicts: [], transition_warnings: [], point_curve_mismatches: [], conflict_free: true,
-    };
-    state.axisRenderKey = '';
-    state.selectedLayerId = '';
-    state.layerDetailMode = 'composition';
-    state.activeLayerDetailTab = 'graph';
-    state.detailGraph = null;
-    state.playbackGraphRenderedAt = 0;
-    state.lastPlaybackDisplayState = 'idle';
-    state.mergeResultMessage = '';
-    state.mergeResultError = false;
+    resetMotionStudioProjectState(state);
     setMessage('현재 프로젝트 모션 스튜디오를 불러오세요');
     render();
   }
@@ -2140,7 +1854,7 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       studioGrid.insertBefore(el.studioLayerDetail, layerPanel);
       studioGrid.appendChild(axisPanel);
     }
-    el.studioConflictInfo?.addEventListener('click', (event) => {
+    bindMotionStudioEvent(el.studioConflictInfo, 'click', (event) => {
       const button = event.target.closest('[data-resolve-point-curve]');
       if (!button) return;
       resolvePointCurveMismatch(
