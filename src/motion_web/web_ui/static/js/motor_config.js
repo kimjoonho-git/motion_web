@@ -1782,6 +1782,14 @@ export function createMotorConfigController({
     if (row.runtimeMotor?.fault) {
       return { text: '오류', detail: '오류 팝업에서 확인', className: 'duplicate', ready: false };
     }
+    const physicalMatched = rowMotorType(row) === 'ac_servo'
+      ? Boolean(row.scanRow)
+      : rowMotorType(row) === 'dynamixel'
+        ? Boolean(row.scanDevice)
+        : false;
+    if (!physicalMatched) {
+      return { text: '물리 확인 필요', detail: '장비 검색 후 판정', className: 'review', ready: false };
+    }
     if (permission.text === '범위 복귀만') {
       return { text: '복귀 필요', detail: '경계 복귀 후 재확인', className: 'review', ready: false };
     }
@@ -1789,6 +1797,143 @@ export function createMotorConfigController({
       return { text: '구동 준비', detail: '실물 검증 미확인', className: 'matched', ready: true };
     }
     return { text: '준비 중', detail: permission.detail || mapping.detail, className: 'review', ready: false };
+  }
+
+  function motorStatusTypeKey(motor) {
+    const type = String(motor?.motor_type || motor?.motor_type_label || '').toLowerCase();
+    const transport = String(motor?.transport || motor?.transport_label || '').toLowerCase();
+    if (type.includes('dynamixel')) return 'dynamixel';
+    if (type.includes('cubemars')) return 'cubemars';
+    if (
+      type.includes('ac_servo') ||
+      type.includes('ac servo') ||
+      type.includes('minas') ||
+      transport.includes('ethercat')
+    ) return 'ac_servo';
+    return 'unknown';
+  }
+
+  function motorStatusTypeLabel(key) {
+    if (key === 'ac_servo') return 'AC 서보';
+    if (key === 'dynamixel') return 'Dynamixel';
+    if (key === 'cubemars') return 'CubeMars';
+    return '기타·확인 불가';
+  }
+
+  function countMotorsByStatusType(motors, predicate = () => true) {
+    const counts = new Map();
+    motors.filter(predicate).forEach((motor) => {
+      const key = motorStatusTypeKey(motor);
+      counts.set(key, (counts.get(key) || 0) + 1);
+    });
+    return counts;
+  }
+
+  function physicalScanStatus(typeKey) {
+    if (typeKey === 'ac_servo') {
+      const scan = latestScan?.ethercat_scan;
+      if (!scan || scan.skipped) return { code: 'unknown', text: '미확인', count: null };
+      const count = Array.isArray(scan.slaves) ? scan.slaves.length : 0;
+      if (scan.available && scan.complete) return { code: count > 0 ? 'good' : 'off', text: `${formatInt(count)}축`, count };
+      if (scan.available && count > 0) return { code: 'warning', text: `부분 ${formatInt(count)}축`, count };
+      return { code: 'error', text: '검증 불가', count: null };
+    }
+    if (typeKey === 'dynamixel') {
+      const scan = latestScan?.dynamixel_scan;
+      if (!scan || scan.skipped) return { code: 'unknown', text: '미확인', count: null };
+      const count = Array.isArray(scan.devices) ? scan.devices.length : 0;
+      if (scan.available && scan.complete) return { code: count > 0 ? 'good' : 'off', text: `${formatInt(count)}축`, count };
+      if (scan.available && count > 0) return { code: 'warning', text: `부분 ${formatInt(count)}축`, count };
+      return { code: 'error', text: '검증 불가', count: null };
+    }
+    if (typeKey === 'cubemars') return { code: 'unknown', text: '검색 미지원', count: null };
+    return { code: 'unknown', text: '미확인', count: null };
+  }
+
+  function statusCell(text, code = '') {
+    return `<span class="motor-status-value${code ? ` ${escapeHtml(code)}` : ''}">${displayText(text)}</span>`;
+  }
+
+  function renderMotorTypeStatus(rowViews, changed) {
+    if (!el.motorTypeRows) return;
+    const latest = getLatestState?.() || {};
+    const runtime = runtimeMotors();
+    const projectMotors = selectActiveVisibleRegistryMotors(savedRegistry);
+    const projectCounts = countMotorsByStatusType(projectMotors);
+    const runtimeCounts = countMotorsByStatusType(runtime);
+    const feedbackCounts = countMotorsByStatusType(
+      runtime,
+      (motor) => motor.connection_connected === true ||
+        (!Object.prototype.hasOwnProperty.call(motor, 'connection_connected') && motor.state === 'detected'),
+    );
+    const driveCounts = countMotorsByStatusType(runtime, (motor) => motor.servo_on === true);
+    const faultCounts = countMotorsByStatusType(
+      runtime,
+      (motor) => Boolean(motor.fault) || Number(motor.errorcode || 0) !== 0,
+    );
+    const scope = latest.project_scope || {};
+    const runtimeMatchesProject = scope.runtime_matches_selected === true;
+    const runtimeApplied = runtimeMatchesProject && scope.motor_config_applied === true;
+    const types = new Set(['ac_servo', 'dynamixel']);
+    [...projectMotors, ...runtime].forEach((motor) => types.add(motorStatusTypeKey(motor)));
+    const orderedTypes = ['ac_servo', 'dynamixel', 'cubemars', 'unknown']
+      .filter((key) => types.has(key));
+
+    const html = orderedTypes.map((typeKey) => {
+      const physical = physicalScanStatus(typeKey);
+      const typeRows = rowViews.filter(
+        (view) => view.row.motor &&
+          !view.row.motor.deleted &&
+          view.row.motor.enabled &&
+          motorStatusTypeKey(view.row.motor) === typeKey,
+      );
+      const physicalConfirmed = physical.count !== null;
+      const controllable = physicalConfirmed && runtimeApplied && !changed
+        ? typeRows.filter((view) => {
+          const matchedByScan = typeKey === 'ac_servo'
+            ? Boolean(view.row.scanRow)
+            : typeKey === 'dynamixel'
+              ? Boolean(view.row.scanDevice)
+              : false;
+          return matchedByScan && view.overall.ready;
+        }).length
+        : null;
+      const appliedText = !runtimeMatchesProject
+        ? '다른 프로젝트'
+        : !runtimeApplied
+          ? '미적용'
+          : `${formatInt(runtimeCounts.get(typeKey) || 0)}축`;
+      const appliedCode = runtimeApplied ? 'good' : 'warning';
+      const feedbackCount = feedbackCounts.get(typeKey) || 0;
+      const driveCount = driveCounts.get(typeKey) || 0;
+      const faultCount = faultCounts.get(typeKey) || 0;
+      const controllableText = controllable === null
+        ? (physical.code === 'error' ? '검증 불가' : '미확인')
+        : `${formatInt(controllable)}축`;
+      const controllableCode = controllable === null
+        ? (physical.code === 'error' ? 'error' : 'unknown')
+        : controllable > 0 ? 'good' : 'off';
+      return `
+        <tr>
+          <th scope="row">${displayText(motorStatusTypeLabel(typeKey))}</th>
+          <td>${statusCell(`${formatInt(projectCounts.get(typeKey) || 0)}축`, 'configured')}</td>
+          <td>${statusCell(physical.text, physical.code)}</td>
+          <td>${statusCell(appliedText, appliedCode)}</td>
+          <td>${statusCell(`${formatInt(feedbackCount)}축`, feedbackCount > 0 ? 'received' : 'off')}</td>
+          <td>${statusCell(`${formatInt(faultCount)}축`, faultCount > 0 ? 'error' : 'good')}</td>
+          <td>${statusCell(`${formatInt(driveCount)}축`, driveCount > 0 ? 'good' : 'off')}</td>
+          <td>${statusCell(controllableText, controllableCode)}</td>
+        </tr>
+      `;
+    }).join('');
+    if (el.motorTypeRows.innerHTML !== html) el.motorTypeRows.innerHTML = html;
+
+    if (el.motorTypeSummaryDetail) {
+      const summary = getDiscoverySummary();
+      el.motorTypeSummaryDetail.textContent = summary.hasDirectScan
+        ? `최근 물리 검색 결과 · 감지 ${formatInt(summary.discoveredCount)}축`
+        : '물리 감지 미확인 · 장비 검색 후 판정';
+    }
   }
 
   function renderMotorReadiness(rows, rowViews, changed) {
@@ -1803,9 +1948,14 @@ export function createMotorConfigController({
     const serviceReady = runtimeFresh && (
       runtimeResponding || Boolean(latest.service_management?.motor_managed)
     );
-    const connectionReady = configuredRows.length > 0 && configuredRows.every(
-      (view) => view.row.runtimeMotor?.state === 'detected',
-    );
+    const connectionReady = configuredRows.length > 0 && configuredRows.every((view) => (
+      view.row.runtimeMotor?.state === 'detected' &&
+      (rowMotorType(view.row) === 'ac_servo'
+        ? Boolean(view.row.scanRow)
+        : rowMotorType(view.row) === 'dynamixel'
+          ? Boolean(view.row.scanDevice)
+          : false)
+    ));
     const configurationReady = configuredRows.length > 0 && !changed;
     const applicationReady = configurationReady && selectedMotorConfigAlreadyApplied() && !configApplyPending;
     const mappingReady = configuredRows.length > 0 && configuredRows.every((view) => view.mapping.ready);
@@ -2372,6 +2522,7 @@ export function createMotorConfigController({
           : '<tr><td colspan="10" class="empty">설정 파일을 불러오거나 모터 스캔을 실행하세요</td></tr>';
       }
       renderMotorReadiness(rows, rowViews, changed);
+      renderMotorTypeStatus(rowViews, changed);
     }
 
     renderAxisButtons(rows);

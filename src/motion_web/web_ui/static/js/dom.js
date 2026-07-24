@@ -20,6 +20,7 @@ export function getElements() {
     knownMotorCount: document.getElementById('knownMotorCount'),
     accessUrl: document.getElementById('accessUrl'),
     motorTypeRows: document.getElementById('motorTypeRows'),
+    motorTypeSummaryDetail: document.getElementById('motorTypeSummaryDetail'),
     lastUpdate: document.getElementById('lastUpdate'),
     summaryText: document.getElementById('summaryText'),
     monitorToggle: document.getElementById('monitorToggle'),

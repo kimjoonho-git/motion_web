@@ -1,6 +1,5 @@
 import {
   aliasText,
-  countBy,
   displayText,
   escapeHtml,
   formatCounts,
@@ -342,33 +341,6 @@ function filterMonitoringMotors(motors, activeMonitoringFilter) {
   return motors.filter((motor) => motorFilterKey(motor) === activeMonitoringFilter);
 }
 
-function renderMotorTypeSummary(state, motors, el) {
-  if (!el.motorTypeRows) return;
-  const knownCounts = countBy(motors, 'motor_type_label');
-  const onlineCounts = countBy(
-    motors.filter((motor) => motor.connection_connected === true
-      || (!('connection_connected' in motor) && motor.state === 'detected')),
-    'motor_type_label',
-  );
-  const catalog = Array.isArray(state.motor_type_catalog) && state.motor_type_catalog.length > 0
-    ? state.motor_type_catalog.map((item) => item.label || item.type || 'Unknown')
-    : Object.keys(knownCounts);
-  const labels = Array.from(new Set([...catalog, ...Object.keys(knownCounts), 'Unknown']));
-
-  const html = labels.map((label) => {
-    const known = knownCounts[label] || 0;
-    const online = onlineCounts[label] || 0;
-    const activeClass = online > 0 ? 'online' : 'offline';
-    return `
-      <div class="type-row ${activeClass}">
-        <span>${motorFilterLabel(normalizeMotorTypeKey(label, label))}</span>
-        <strong>${formatInt(known)} / ${formatInt(online)}</strong>
-      </div>
-    `;
-  }).join('');
-  if (el.motorTypeRows.innerHTML !== html) el.motorTypeRows.innerHTML = html;
-}
-
 function motorIdValue(motor) {
   const type = motorFilterKey(motor);
   const value = type === 'ac_servo'
@@ -627,7 +599,6 @@ export function renderMonitoring(state, options) {
   if (el.knownMotorCount) {
     el.knownMotorCount.textContent = `${formatInt(state.known_motors_count || allMotors.length)} / ${formatInt(state.max_motors || 50)}`;
   }
-  renderMotorTypeSummary(state, allMotors, el);
   if (el.lastUpdate) el.lastUpdate.textContent = formatTime(state.generated_at);
 
   const registryFilteredCount = allMotors.length - registryFilteredMotors.length;

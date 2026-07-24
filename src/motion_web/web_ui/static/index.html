@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>모션 녹화 시스템 0.5.0</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260724-motor-management-1">
+    <link rel="stylesheet" href="/static/styles.css?v=20260724-motor-status-3">
   </head>
   <body>
     <main class="shell">
@@ -65,11 +65,14 @@
           <div class="project-sidebar-head">
             <div>
               <strong>현재 프로젝트</strong>
-              <span id="projectExplorerMessage">변경은 시스템 정보에서만 가능합니다</span>
+              <span id="projectExplorerMessage">여기서 프로젝트를 변경할 수 있습니다</span>
             </div>
             <button id="projectExplorerRefreshButton" class="icon-button" type="button" title="새로고침" aria-label="프로젝트 새로고침">↻</button>
           </div>
           <div id="projectExplorerCurrentName" class="project-current-display">선택된 프로젝트 없음</div>
+          <select id="projectExplorerSelect" class="wide-select project-sidebar-select" aria-label="현재 프로젝트 변경">
+            <option value="">프로젝트 선택</option>
+          </select>
           <aside id="projectExplorerTree" class="project-explorer-tree" aria-label="프로젝트 파일">
             <div class="empty">프로젝트를 만들거나 선택하세요</div>
           </aside>
@@ -81,7 +84,7 @@
 
       <section class="system-panel workspace-panel hidden" data-workspace-panel="system" aria-label="시스템 정보">
         <div class="section-head system-page-head workspace-page-head">
-          <div><strong>시스템 정보</strong><small>현재 프로젝트, 실행 상태, 적용 파일을 한곳에서 확인합니다</small></div>
+          <div><strong>시스템 정보</strong><small>프로그램 실행 상태와 적용 정보를 확인합니다</small></div>
           <span id="summaryText">모션 상태 수신 대기</span>
         </div>
 
@@ -105,34 +108,18 @@
           </div>
         </section>
 
-        <div class="system-dashboard-grid">
-          <section class="project-system-manager system-project-card" aria-label="현재 프로젝트 선택">
-            <div class="section-head compact">
-              <strong>현재 프로젝트</strong>
-              <span>프로젝트 변경은 이 화면에서만 가능</span>
-            </div>
-            <select id="projectExplorerSelect" class="wide-select" aria-label="현재 프로젝트">
-              <option value="">프로젝트 선택</option>
-            </select>
-            <div class="project-context-compare">
-              <div><span>화면에서 선택</span><strong id="projectSelectedStatus">선택 없음</strong></div>
-              <div><span>모터에 적용·실행 중</span><strong id="projectRuntimeStatus">적용 정보 없음</strong></div>
-            </div>
-          </section>
-
-          <section class="project-system-manager system-program-card" aria-label="프로그램 상태 및 재시작">
-            <div class="section-head compact">
-              <strong>프로그램 상태 및 복구</strong>
-              <span id="programHealthDetail">웹 연결과 자동실행 상태를 확인합니다</span>
-            </div>
-            <div class="registry-actions system-program-actions">
-              <button id="programStatusRefreshButton" type="button">상태 다시 확인</button>
-              <button id="programPageReloadButton" type="button">화면 갱신</button>
-              <button id="programRestartButton" type="button" disabled>프로그램 재시작</button>
-            </div>
-            <div class="registry-message axis-apply-warning system-restart-warning">프로그램 재시작은 서보 상태를 유지합니다. 모터 관리 화면의 모터 제어 재시작은 서보가 OFF됐다가 자동 ON될 수 있으므로 장비가 안전할 때만 사용하세요.</div>
-          </section>
-        </div>
+        <section class="project-system-manager system-program-card" aria-label="프로그램 상태 및 재시작">
+          <div class="section-head compact">
+            <strong>프로그램 상태 및 복구</strong>
+            <span id="programHealthDetail">웹 연결과 자동실행 상태를 확인합니다</span>
+          </div>
+          <div class="registry-actions system-program-actions">
+            <button id="programStatusRefreshButton" type="button">상태 다시 확인</button>
+            <button id="programPageReloadButton" type="button">화면 갱신</button>
+            <button id="programRestartButton" type="button" disabled>프로그램 재시작</button>
+          </div>
+          <div class="registry-message axis-apply-warning system-restart-warning">프로그램 재시작은 서보 상태를 유지합니다. 모터 관리 화면의 모터 제어 재시작은 서보가 OFF됐다가 자동 ON될 수 있으므로 장비가 안전할 때만 사용하세요.</div>
+        </section>
 
         <section class="project-system-manager system-project-memo" aria-label="프로젝트 메모">
           <div class="section-head compact">
@@ -253,10 +240,26 @@
         <section class="type-summary" aria-label="모터 종류 요약">
           <div class="section-head">
             <strong>현재 실행 장비 상태</strong>
-            <span>프로젝트 파일과 별도 · 전체 / 온라인</span>
+            <span id="motorTypeSummaryDetail">물리 감지는 최근 장비 검색 결과를 기준으로 합니다</span>
           </div>
-          <div id="motorTypeRows" class="type-grid">
-            <div class="empty">모터 종류 정보 없음</div>
+          <div class="motor-type-status-wrap">
+            <table class="motor-type-status-table">
+              <thead>
+                <tr>
+                  <th>모터 종류</th>
+                  <th title="현재 선택 프로젝트에 저장된 활성 모터축">프로젝트 설정</th>
+                  <th title="최근 장비 검색에서 실제 응답한 장치">물리 감지</th>
+                  <th title="현재 실행 시스템에 실제 적용된 모터축">실행 적용</th>
+                  <th title="motor_manager 상태 메시지에 포함된 축 수이며 물리 연결 수가 아닙니다">런타임 보고 축</th>
+                  <th>오류</th>
+                  <th>서보·토크 ON</th>
+                  <th title="물리 감지, 실행 적용, 모션 매칭, 위치 범위 및 구동 조건을 충족한 축">제어 가능</th>
+                </tr>
+              </thead>
+              <tbody id="motorTypeRows">
+                <tr><td colspan="8" class="empty">장비 상태를 확인하고 있습니다</td></tr>
+              </tbody>
+            </table>
           </div>
         </section>
 
@@ -266,34 +269,29 @@
             <span id="motorConfigState">불러오지 않음</span>
           </summary>
           <div class="registry-actions">
-            <button id="reloadMotorConfigButton" type="button">설정 다시 불러오기</button>
-            <button id="deleteMotorConfigButton" class="danger" type="button" disabled>현재 설정 파일 휴지통으로 이동</button>
+            <button id="reloadMotorConfigButton" type="button">설정 불러오기</button>
+            <button id="deleteMotorConfigButton" class="danger" type="button" disabled>설정 삭제</button>
           </div>
         </details>
 
         <section class="axis-setup-step settings-step-card" aria-label="모터 타입별 검색">
           <div class="section-head axis-settings-head">
             <strong>1. 장비 검색</strong>
-            <span>AC Servo와 Dynamixel을 각각 독립적으로 검색합니다</span>
           </div>
           <div class="axis-scan-grid">
-            <section class="scan-panel axis-type-scan" aria-label="AC Servo 검색">
-              <button id="scanButton" class="primary" type="button">AC Servo 검색</button>
-              <span id="scanResult">EtherCAT 재검색 후 실제 Slave를 확인합니다</span>
+            <section class="axis-type-scan" aria-label="전체 모터 검색">
+              <button id="scanAllButton" class="primary" type="button">전체 모터 검색</button>
+              <span id="scanAllResult">대기</span>
             </section>
-            <section class="scan-panel axis-type-scan" aria-label="Dynamixel 검색">
+            <section class="axis-type-scan" aria-label="AC Servo 검색">
+              <button id="scanButton" class="primary" type="button">AC Servo 검색</button>
+              <span id="scanResult">대기</span>
+            </section>
+            <section class="axis-type-scan" aria-label="Dynamixel 검색">
               <button id="dynamixelScanButton" class="primary" type="button">Dynamixel 검색</button>
-              <span id="dynamixelScanResult">직렬 포트에서 Protocol 2.0, ID 0~252를 확인합니다</span>
+              <span id="dynamixelScanResult">대기</span>
             </section>
           </div>
-          <details class="axis-full-scan-tools">
-            <summary>전체 모터 순차 검색</summary>
-            <p>AC Servo 검색이 끝난 다음 Dynamixel 검색을 실행합니다. 한 타입만 성공하면 부분 완료로 표시합니다.</p>
-            <div class="scan-panel axis-primary-scan">
-              <button id="scanAllButton" type="button">전체 모터 검색</button>
-              <span id="scanAllResult">검색 전 · 새로 발견된 축은 자동으로 선택됩니다</span>
-            </div>
-          </details>
         </section>
 
         <section class="axis-settings-panel settings-step-card" aria-label="모터 축 설정 표">
@@ -304,8 +302,8 @@
 
           <div id="axisSettingsTabs" class="tabbar axis-settings-tabs" role="tablist" aria-label="모터 축 설정 화면">
             <button class="tab-button active" type="button" data-axis-settings-tab="current">축 목록 편집</button>
-            <button class="tab-button" type="button" data-axis-settings-tab="table">고급 설정 표</button>
-            <button class="tab-button" type="button" data-axis-settings-tab="raw">고급 원본 보기</button>
+            <button class="tab-button" type="button" data-axis-settings-tab="table">상세 설정 표</button>
+            <button class="tab-button" type="button" data-axis-settings-tab="raw">원본 보기</button>
           </div>
 
           <div class="axis-settings-tab-panel" data-axis-settings-panel="current">
@@ -1532,6 +1530,6 @@
       </section>
     </div>
 
-    <script type="module" src="/static/app.js?v=20260724-motor-management-1"></script>
+    <script type="module" src="/static/app.js?v=20260724-motor-status-3"></script>
   </body>
 </html>
