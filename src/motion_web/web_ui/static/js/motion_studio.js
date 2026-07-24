@@ -48,6 +48,12 @@ import {
   resetMotionStudioProjectState,
   setMotionStudioMessage,
 } from './motion_studio_ui.js?v=20260724-studio-cleanup-3';
+import {
+  motionStudioEditorAxisLabel,
+  motionStudioEditorInspectorState,
+  renderMotionStudioEditorPresentation,
+  requestMotionStudioEditorSave,
+} from './motion_studio_editor_ui.js?v=20260724-studio-editor-ui';
 
 export {
   motionStudioCanCreatePointCurve,
@@ -88,7 +94,11 @@ function editorId(prefix) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
 }
 
-export function createMotionStudioController({ el, getMotorActionBlockReason = () => '' }) {
+export function createMotionStudioController({
+  el,
+  getMotorActionBlockReason = () => '',
+  getConfiguredMotors = () => [],
+}) {
   const state = createMotionStudioState();
 
   const clone = (value) => JSON.parse(JSON.stringify(value));
@@ -113,6 +123,23 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
   function activeMapping() {
     const fileId = state.project?.mapping_file_id;
     return state.mappings.find((mapping) => mapping.file_id === fileId) || null;
+  }
+
+  function configuredMotors() {
+    try {
+      const motors = getConfiguredMotors?.();
+      return Array.isArray(motors) ? motors : [];
+    } catch (_error) {
+      return [];
+    }
+  }
+
+  function editorAxisLabel(motionId) {
+    return motionStudioEditorAxisLabel(
+      motionId,
+      activeMapping()?.rows || [],
+      configuredMotors(),
+    );
   }
 
   function setMessage(message, error = false) {
@@ -630,7 +657,7 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       el.studioEditorAxisList.innerHTML = ids.map((motionId) => (
         `<label><input type="checkbox" value="${escapeHtml(motionId)}"${
           previousSelection.has(motionId) ? ' checked' : ''
-        }>${escapeHtml(motionId)}</label>`
+        }><span>${escapeHtml(editorAxisLabel(motionId))}</span></label>`
       )).join('');
     }
 
@@ -641,7 +668,9 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     if (el.studioEditorCopyAxisSource) {
       const previousSource = el.studioEditorCopyAxisSource.value;
       el.studioEditorCopyAxisSource.innerHTML = ids.length
-        ? ids.map((motionId) => `<option value="${escapeHtml(motionId)}">${escapeHtml(motionId)}</option>`).join('')
+        ? ids.map((motionId) => (
+          `<option value="${escapeHtml(motionId)}">${escapeHtml(editorAxisLabel(motionId))}</option>`
+        )).join('')
         : '<option value="">원본 축 없음</option>';
       if (ids.includes(previousSource)) el.studioEditorCopyAxisSource.value = previousSource;
     }
@@ -710,9 +739,13 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       operationReport: null,
       operation,
       validation: { conflicts: [], transition_warnings: [], playable: true },
+      saveState: 'saved',
+      savedAt: '',
+      saveError: '',
+      saveFailureFingerprint: '',
     };
     if (el.studioEditorTitle) el.studioEditorTitle.textContent = `레이어 편집 · ${layer.name}`;
-    if (el.studioEditorSubtitle) el.studioEditorSubtitle.textContent = '편집 반영 0회 · 아직 저장되지 않음';
+    if (el.studioEditorSubtitle) el.studioEditorSubtitle.textContent = '편집 반영 0회';
     refreshEditorAxisControls(new Set(editorMotionIds(layer)), layer);
     if (el.studioEditorStart) el.studioEditorStart.value = '';
     if (el.studioEditorEnd) el.studioEditorEnd.value = '';
@@ -727,6 +760,7 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     if (el.studioEditorStart) el.studioEditorStart.value = '';
     if (el.studioEditorEnd) el.studioEditorEnd.value = '';
     el.studioLayerEditorModal?.classList.add('hidden');
+    el.studioEditorSaveConfirmModal?.classList.add('hidden');
     document.body.classList.remove('modal-open');
   }
 
@@ -749,6 +783,25 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     const creatablePointCurve = pointMode && pointCurveCanBeCreated(editor);
     const workingPointCurve = Boolean(storedCurveForDraft(editor));
     const hasTransientChange = Boolean(editor?.preview) || pointDraftHasUnsavedChanges(editor);
+    const workingFingerprint = JSON.stringify({
+      frames: editor?.working?.frames || [],
+      point_curves: editor?.working?.point_curves || [],
+      pointDraft: editor?.pointDraft || null,
+    });
+    const layerDirty = Boolean(editor) && !motionStudioLayerDataEqual(
+      editor.original,
+      editor.working,
+    );
+    if (editor?.saveState === 'failed'
+      && editor.saveFailureFingerprint !== workingFingerprint) {
+      editor.saveState = 'dirty';
+      editor.saveError = '';
+    }
+    let saveState = editor?.saveState || 'saved';
+    if (editor?.preview) saveState = 'preview';
+    else if (!['saving', 'failed'].includes(saveState)) {
+      saveState = layerDirty || pointDraftHasUnsavedChanges(editor) ? 'dirty' : 'saved';
+    }
     if (el.studioEditorUndoButton) {
       el.studioEditorUndoButton.disabled = !hasTransientChange && !editor?.undo.length;
     }
@@ -761,7 +814,12 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
         Boolean(editor?.preview) || (!savedPointCurve && !creatablePointCurve)
       );
     }
-    if (el.studioEditorSaveButton) el.studioEditorSaveButton.disabled = Boolean(editor?.preview);
+    if (el.studioEditorSaveButton) {
+      el.studioEditorSaveButton.disabled = (
+        !['dirty', 'failed'].includes(saveState)
+        || pointDraftHasUnsavedChanges(editor)
+      );
+    }
     if (el.studioEditorOperationTitle) {
       el.studioEditorOperationTitle.textContent = pointMode
         ? '포인트 곡선 편집'
@@ -830,6 +888,22 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       };
       el.studioEditorOperationHelp.textContent = help[operation] || '';
     }
+    renderMotionStudioEditorPresentation(el, {
+      saveState,
+      savedAt: editor?.savedAt || '',
+      saveError: editor?.saveError || '',
+      inspector: motionStudioEditorInspectorState({
+        preview: Boolean(editor?.preview),
+        pointDraftUnsaved: pointDraftHasUnsavedChanges(editor)
+          || (workingPointCurve && !savedPointCurve),
+        savedPointCurve,
+        pointSelected: Boolean(selectedDraftPoint(editor)),
+        rangeSelected: Boolean(
+          el.studioEditorStart?.value?.trim() && el.studioEditorEnd?.value?.trim(),
+        ),
+      }),
+      showDangerZone: pointMode && Boolean(editor?.pointDraft?.curve_id),
+    });
     syncPointControls();
   }
 
@@ -879,7 +953,7 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     refreshEditorTimeline(editor.working, preview);
     refreshEditorAxisControls(null, editor.working);
     if (el.studioEditorSubtitle) {
-      el.studioEditorSubtitle.textContent = `편집 반영 ${editor.undo.length}회 · 아직 저장되지 않음`;
+      el.studioEditorSubtitle.textContent = `편집 반영 ${editor.undo.length}회`;
     }
     if (message) setEditorMessage(message);
     renderEditor();
@@ -919,7 +993,7 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     }
     refreshEditorAxisControls(selectedIds, editor.working);
     if (el.studioEditorSubtitle) {
-      el.studioEditorSubtitle.textContent = `편집 반영 ${editor.undo.length}회 · 아직 저장되지 않음`;
+      el.studioEditorSubtitle.textContent = `편집 반영 ${editor.undo.length}회`;
     }
     const appliedRangeWarningCount = editor.validation?.range_warnings?.length || 0;
     const appliedMessage = appliedOperation === 'convert_motion_to_point_curve'
@@ -1546,7 +1620,7 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     renderConflicts(); renderControls();
   }
 
-  async function run(action) {
+  async function run(action, { onError = null } = {}) {
     setBusy(true);
     setMessage('요청 처리 중입니다…');
     try {
@@ -1561,6 +1635,7 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       return result;
     } catch (error) {
       setMessage(error.message || String(error), true);
+      onError?.(error);
       return null;
     } finally {
       setBusy(false);
@@ -2089,7 +2164,6 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       closeLayerEditor();
     };
     el.studioEditorCloseButton?.addEventListener('click', discardEditor);
-    el.studioEditorDiscardButton?.addEventListener('click', discardEditor);
     el.studioEditorUndoButton?.addEventListener('click', () => {
       const editor = state.editor;
       if (!editor) return;
@@ -2119,7 +2193,7 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       refreshEditorTimeline(editor.working, replacedLayer);
       refreshEditorAxisControls(null, editor.working);
       if (el.studioEditorSubtitle) {
-        el.studioEditorSubtitle.textContent = `편집 반영 ${editor.undo.length}회 · 아직 저장되지 않음`;
+        el.studioEditorSubtitle.textContent = `편집 반영 ${editor.undo.length}회`;
       }
       setEditorMessage('직전 편집을 취소했습니다'); renderEditor();
     });
@@ -2135,7 +2209,7 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       refreshEditorTimeline(editor.working, replacedLayer);
       refreshEditorAxisControls(null, editor.working);
       if (el.studioEditorSubtitle) {
-        el.studioEditorSubtitle.textContent = `편집 반영 ${editor.undo.length}회 · 아직 저장되지 않음`;
+        el.studioEditorSubtitle.textContent = `편집 반영 ${editor.undo.length}회`;
       }
       setEditorMessage('취소한 편집을 다시 반영했습니다'); renderEditor();
     });
@@ -2150,6 +2224,14 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       editor.operationReport = null;
       editor.undo = [];
       editor.redo = [];
+      editor.saveState = 'saved';
+      editor.savedAt = new Date().toLocaleTimeString('ko-KR', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      });
+      editor.saveError = '';
+      editor.saveFailureFingerprint = '';
       refreshEditorTimeline(editor.working, previousWorking);
       refreshEditorAxisControls(null, editor.working);
       if (activeCurveId && el.studioEditorOperation?.value === 'point_curve') {
@@ -2163,7 +2245,7 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
         }
       }
       if (el.studioEditorSubtitle) {
-        el.studioEditorSubtitle.textContent = '저장 완료 · 계속 편집 가능';
+        el.studioEditorSubtitle.textContent = '편집 반영 0회';
       }
       setEditorMessage(message);
       renderEditor();
@@ -2182,11 +2264,40 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
         );
         return;
       }
+      if (motionStudioLayerDataEqual(editor.original, editor.working)) {
+        setEditorMessage('저장할 변경사항이 없습니다.');
+        renderEditor();
+        return;
+      }
+      const confirmed = await requestMotionStudioEditorSave(el, {
+        layerName: editor.working?.name || editor.original?.name || editor.layerId,
+        editCount: editor.undo.length,
+        pointCurvesChanged: JSON.stringify(editor.original?.point_curves || [])
+          !== JSON.stringify(editor.working?.point_curves || []),
+        warningCount: editor.validation?.range_warnings?.length || 0,
+      });
+      if (!confirmed || state.editor !== editor) return;
+      editor.saveState = 'saving';
+      editor.saveError = '';
+      renderEditor();
       const result = await run(() => saveMotionStudioLayerData({
         layer_id: editor.layerId,
         original_revision: Number(editor.original.edit_revision || 0),
         layer: editor.working,
-      }));
+      }), {
+        onError: (error) => {
+          if (state.editor !== editor) return;
+          editor.saveState = 'failed';
+          editor.saveError = error.message || String(error);
+          editor.saveFailureFingerprint = JSON.stringify({
+            frames: editor.working?.frames || [],
+            point_curves: editor.working?.point_curves || [],
+            pointDraft: editor.pointDraft || null,
+          });
+          setEditorMessage(`저장 실패 · ${editor.saveError}`, true);
+          renderEditor();
+        },
+      });
       if (result) {
         const savedLayer = state.project?.layers?.find(
           (layer) => layer.layer_id === editor.layerId,
@@ -2218,14 +2329,27 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
         return;
       }
       if (currentLayer && currentRevision !== originalRevision) {
+        editor.saveState = 'failed';
+        editor.saveError = '저장 중 원본 레이어가 변경되었습니다.';
         setEditorMessage(
           '저장 중 원본 레이어가 변경되었습니다. 현재 작업은 저장되지 않았습니다. '
           + '편집 창을 닫고 최신 레이어를 다시 열어 작업하세요.',
           true,
         );
+        renderEditor();
         return;
       }
-      setEditorMessage('레이어 저장에 실패했습니다. 화면 상단 오류 내용을 확인하세요.', true);
+      if (editor.saveState !== 'failed') {
+        editor.saveState = 'failed';
+        editor.saveError = '레이어를 저장하지 못했습니다.';
+        editor.saveFailureFingerprint = JSON.stringify({
+          frames: editor.working?.frames || [],
+          point_curves: editor.working?.point_curves || [],
+          pointDraft: editor.pointDraft || null,
+        });
+        setEditorMessage('저장 실패 · 현재 작업본은 유지됩니다.', true);
+        renderEditor();
+      }
     });
     const setEditorView = (start, end) => {
       const editor = state.editor;
@@ -2242,19 +2366,25 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       // JavaScript numeric overflow boundary.
       editor.valueScale = motionStudioEditorNextValueScale(editor.valueScale, factor);
     };
-    el.studioEditorZoomInButton?.addEventListener('click', () => {
+    el.studioEditorTimeZoomInButton?.addEventListener('click', () => {
       const editor = state.editor; if (!editor) return;
       const center = (editor.viewStart + editor.viewEnd) / 2;
       const span = (editor.viewEnd - editor.viewStart) * 0.6;
-      scaleEditorValues(0.6);
       setEditorView(center - span / 2, center + span / 2);
     });
-    el.studioEditorZoomOutButton?.addEventListener('click', () => {
+    el.studioEditorTimeZoomOutButton?.addEventListener('click', () => {
       const editor = state.editor; if (!editor) return;
       const center = (editor.viewStart + editor.viewEnd) / 2;
       const span = (editor.viewEnd - editor.viewStart) * 1.7;
-      scaleEditorValues(1.7);
       setEditorView(center - span / 2, center + span / 2);
+    });
+    el.studioEditorValueZoomInButton?.addEventListener('click', () => {
+      scaleEditorValues(0.6);
+      drawEditorGraph();
+    });
+    el.studioEditorValueZoomOutButton?.addEventListener('click', () => {
+      scaleEditorValues(1.7);
+      drawEditorGraph();
     });
     el.studioEditorFitAllButton?.addEventListener('click', () => {
       const editor = state.editor; if (!editor) return;
@@ -2692,7 +2822,6 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       const zoomFactor = event.deltaY < 0 ? 0.8 : 1.25;
       const newSpan = span * zoomFactor;
       const ratio = (center - editor.viewStart) / span;
-      scaleEditorValues(zoomFactor);
       setEditorView(center - (newSpan * ratio), center + (newSpan * (1 - ratio)));
     }, { passive: false });
 

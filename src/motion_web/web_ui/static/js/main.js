@@ -14,7 +14,7 @@ import { getElements } from './dom.js?v=20260723-point-linked-edit';
 import { createMotorEventLogController } from './event_log.js?v=20260721-project-generation';
 import { createMidiMonitorController } from './midi_monitor.js?v=20260723-revision-sync';
 import { createMotionDataController } from './motion_data.js?v=20260723-revision-sync';
-import { createMotionStudioController } from './motion_studio.js?v=20260724-studio-cleanup-3';
+import { createMotionStudioController } from './motion_studio.js?v=20260724-layer-editor-ui-2';
 import { createMotionTestController } from './motion_test.js?v=20260721-project-generation';
 import { createMotorConfigController } from './motor_config.js?v=20260723-header-operation-groups';
 import { createProjectExplorerController } from './project_explorer.js?v=20260723-program-restart-label';
@@ -719,6 +719,7 @@ const midiMonitor = createMidiMonitorController({
 const motionStudio = createMotionStudioController({
   el,
   getMotorActionBlockReason: studioMotorActionBlockReason,
+  getConfiguredMotors: () => motorConfig.getConfiguredMotors(),
 });
 const projectExplorer = createProjectExplorerController({
   el,

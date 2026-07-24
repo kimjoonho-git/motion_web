@@ -122,9 +122,10 @@ test('primary edit workflow actions stay in the fixed top action area', () => {
   assert.match(actionArea, /id="studioEditorSaveButton"/);
   assert.match(actionArea, /id="studioEditorUndoButton"/);
   assert.match(actionArea, /id="studioEditorRedoButton"/);
-  assert.match(actionArea, />1\. 결과 미리보기</);
-  assert.match(actionArea, />2\. 편집 반영</);
-  assert.match(actionArea, />3\. 저장</);
+  assert.match(actionArea, />변경 미리보기</);
+  assert.match(actionArea, />작업본 반영</);
+  assert.match(actionArea, /id="studioEditorSaveButton"[^>]*>저장</);
+  assert.match(actionArea, /id="studioEditorCloseButton"[^>]*>닫기</);
   for (const id of [
     'studioEditorApplyButton',
     'studioEditorUpdateButton',
@@ -134,6 +135,34 @@ test('primary edit workflow actions stay in the fixed top action area', () => {
   ]) {
     assert.equal((html.match(new RegExp(`id="${id}"`, 'g')) || []).length, 1);
   }
+});
+
+test('editor uses three stable columns and a dedicated save confirmation', () => {
+  const html = readFileSync(
+    new URL('../static/index.html', import.meta.url),
+    'utf8',
+  );
+  const styles = readFileSync(
+    new URL('../static/styles.css', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    html,
+    /studio-editor-layout[\s\S]*?studio-editor-sidebar[\s\S]*?studio-editor-main[\s\S]*?studio-editor-inspector/,
+  );
+  assert.match(html, /id="studioEditorSaveConfirmModal"/);
+  assert.match(html, /id="studioEditorDangerZone"/);
+  assert.match(html, /id="studioEditorTimeZoomInButton"/);
+  assert.match(html, /id="studioEditorValueZoomInButton"/);
+  assert.equal((html.match(/id="studioEditorCloseButton"/g) || []).length, 1);
+  assert.match(
+    styles,
+    /grid-template-columns:\s*220px minmax\(0,\s*1fr\) 310px/,
+  );
+  assert.match(
+    styles,
+    /grid-template-rows:\s*auto var\(--studio-editor-graph-height\) auto auto auto/,
+  );
 });
 
 test('motion types expose explicit conversion and destructive delete actions', () => {
