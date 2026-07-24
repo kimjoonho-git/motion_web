@@ -11,6 +11,7 @@ import copy
 import uuid
 from typing import Any, Dict, Iterable, List, Mapping, Sequence
 
+from .axis_operations import apply_axis_operation
 from .curve_engine import (
     EPSILON,
     MAX_TIME_SCALE,
@@ -423,64 +424,10 @@ def edit_layer(layer: Dict[str, Any], request: Dict[str, Any]) -> Dict[str, Any]
         working['edit_revision'] = int(working.get('edit_revision') or 0) + 1
         return normalize_layer(working)
 
-    if operation == 'add_axis':
-        selected = unique_motion_ids(request.get('motion_ids') or [])
-        if len(selected) != 1:
-            raise ValueError('추가할 Motion ID를 하나 선택하세요')
-        motion_id = selected[0]
-        if motion_id in tracks:
-            raise ValueError(f'{motion_id} 축은 이미 레이어에 있습니다')
-        initial_value = _finite(request.get('initial_value_deg', 0.0), '초기 모션값')
-        frame_times = [
-            _time(frame.get('time_sec', 0.0))
-            for frame in working.get('frames') or []
-        ]
-        start_sec = min(frame_times, default=0.0)
-        end_sec = max(frame_times, default=start_sec + DEFAULT_PERIOD_SEC)
-        if end_sec - start_sec < DEFAULT_PERIOD_SEC - EPSILON:
-            end_sec = start_sec + DEFAULT_PERIOD_SEC
-        count = int(round((end_sec - start_sec) / DEFAULT_PERIOD_SEC))
-        tracks[motion_id] = [
-            (
-                round(start_sec + (index * DEFAULT_PERIOD_SEC), 9),
-                initial_value,
-            )
-            for index in range(count + 1)
-        ]
+    if apply_axis_operation(operation, working, tracks, request):
         working['frames'] = _frames(tracks)
         if len(working['frames']) > MAX_EDIT_FRAMES:
             raise ValueError(f'편집 결과가 최대 {MAX_EDIT_FRAMES:,}프레임을 초과합니다')
-        working['edit_revision'] = int(working.get('edit_revision') or 0) + 1
-        return normalize_layer(working)
-
-    if operation == 'copy_axis':
-        source_motion_id = str(request.get('source_motion_id') or '').strip()
-        selected = unique_motion_ids(request.get('motion_ids') or [])
-        if not source_motion_id:
-            raise ValueError('복사할 원본 Motion ID를 선택하세요')
-        if source_motion_id not in tracks:
-            raise ValueError(f'{source_motion_id} 축은 레이어에 없습니다')
-        if len(selected) != 1:
-            raise ValueError('복사 대상 Motion ID를 하나 선택하세요')
-        target_motion_id = selected[0]
-        if target_motion_id == source_motion_id:
-            raise ValueError('원본 축과 복사 대상 축이 같습니다')
-        if target_motion_id in tracks:
-            raise ValueError(f'{target_motion_id} 축은 이미 레이어에 있습니다')
-
-        tracks[target_motion_id] = list(tracks[source_motion_id])
-        copied_curves = []
-        for source_curve in working.get('point_curves') or []:
-            if str(source_curve.get('motion_id') or '') != source_motion_id:
-                continue
-            curve = copy.deepcopy(source_curve)
-            curve['curve_id'] = f'curve_{uuid.uuid4().hex[:8]}'
-            curve['motion_id'] = target_motion_id
-            for point in curve.get('points') or []:
-                point['point_id'] = f'point_{uuid.uuid4().hex[:8]}'
-            copied_curves.append(curve)
-        working.setdefault('point_curves', []).extend(copied_curves)
-        working['frames'] = _frames(tracks)
         working['edit_revision'] = int(working.get('edit_revision') or 0) + 1
         return normalize_layer(working)
 
@@ -857,6 +804,36 @@ def edit_layer(layer: Dict[str, Any], request: Dict[str, Any]) -> Dict[str, Any]
     return normalize_layer(working)
 
 
+def collect_merged_point_curves(
+    layers: Iterable[Mapping[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Copy point curves from source layers without allowing ID collisions."""
+    merged_point_curves = []
+    used_curve_ids = set()
+    used_point_ids = set()
+    for layer in layers:
+        for source_curve in layer.get('point_curves') or []:
+            curve = copy.deepcopy(source_curve)
+            curve_id = str(curve.get('curve_id') or '')
+            if not curve_id or curve_id in used_curve_ids:
+                curve_id = f'curve_{uuid.uuid4().hex[:8]}'
+                while curve_id in used_curve_ids:
+                    curve_id = f'curve_{uuid.uuid4().hex[:8]}'
+            curve['curve_id'] = curve_id
+            used_curve_ids.add(curve_id)
+            for point in curve.get('points') or []:
+                point_id = str(point.get('point_id') or '')
+                if not point_id or point_id in used_point_ids:
+                    point_id = f'point_{uuid.uuid4().hex[:8]}'
+                    while point_id in used_point_ids:
+                        point_id = f'point_{uuid.uuid4().hex[:8]}'
+                point['point_id'] = point_id
+                used_point_ids.add(point_id)
+            merged_point_curves.append(curve)
+    validate_point_curve_overlaps(merged_point_curves)
+    return merged_point_curves
+
+
 def merge_layers(
     project: Dict[str, Any],
     layer_ids: Iterable[Any],
@@ -908,6 +885,7 @@ def merge_layers(
         motion_ranges_deg=motion_ranges_deg,
         initial_motion_values_deg=initial_motion_values_deg,
     )
+    merged_point_curves = collect_merged_point_curves(selected_layers)
     return normalize_layer({
         'layer_id': f'merged_{uuid.uuid4().hex[:8]}',
         'name': str(name or '합친 레이어').strip()[:40] or '합친 레이어',
@@ -915,4 +893,5 @@ def merge_layers(
         'locked': False,
         'source_layer_ids': sorted(selected_ids),
         'frames': frames,
+        'point_curves': merged_point_curves,
     })

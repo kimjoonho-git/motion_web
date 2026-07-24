@@ -18,6 +18,7 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
 
+from .layer_editor import collect_merged_point_curves
 from .layer_validation import (
     point_curve_frame_mismatches,
     project_point_curve_frame_mismatches,
@@ -1117,7 +1118,12 @@ class MotionStudioNode(Node):
                 if expected != int(item.get('edit_revision') or 0):
                     raise ValueError('합성 미리보기 이후 원본 레이어가 변경되었습니다')
             mapping = self._store.mapping_check(project)
-            merged = normalize_layer(copy.deepcopy(provided))
+            authoritative_preview = copy.deepcopy(provided)
+            # The project is the source of truth at commit time.  This also
+            # protects point data when editor and studio nodes briefly run
+            # different builds during a restart.
+            authoritative_preview['point_curves'] = collect_merged_point_curves(sources)
+            merged = normalize_layer(authoritative_preview)
             if set(merged.get('source_layer_ids') or []) != source_ids:
                 raise ValueError('합성 결과의 원본 레이어 정보가 일치하지 않습니다')
             range_issues = validate_ranges(merged, self._motion_ranges(mapping))

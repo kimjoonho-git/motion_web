@@ -23,19 +23,19 @@ from .timeline import layer_conflicts, layer_transition_warnings
 
 class MotionStudioEditorNode(Node):
     def __init__(self) -> None:
-        # This node shares a process with MotionStudioNode. Ignore the launch
-        # file's global ``__node:=motion_studio_node`` remap so both nodes keep
-        # distinct graph and rosout identities.
-        super().__init__('motion_studio_editor_node', use_global_arguments=False)
-        request_topic = str(self.declare_parameter(
+        super().__init__('motion_studio_editor_node')
+        self.request_topic = str(self.declare_parameter(
             'request_topic', '/motion_studio/editor/request'
         ).value)
-        response_topic = str(self.declare_parameter(
+        self.response_topic = str(self.declare_parameter(
             'response_topic', '/motion_studio/editor/response'
         ).value)
-        self._response_pub = self.create_publisher(String, response_topic, 10)
-        self.create_subscription(String, request_topic, self._request_callback, 10)
-        self.get_logger().info('motion_studio_editor_node started')
+        self._response_pub = self.create_publisher(String, self.response_topic, 10)
+        self.create_subscription(String, self.request_topic, self._request_callback, 10)
+        self.get_logger().info(
+            'motion_studio_editor_node started: '
+            f'request={self.request_topic}, response={self.response_topic}'
+        )
 
     def _request_callback(self, msg: String) -> None:
         try:

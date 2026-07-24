@@ -823,6 +823,102 @@ def test_merge_creates_one_layer_and_preserves_sources():
     assert len(merged['frames']) == 4
 
 
+def test_merge_preserves_point_curves_from_each_source_layer():
+    first = edit_layer({
+        'layer_id': 'a',
+        'name': '첫 포인트',
+        'enabled': True,
+        'locked': False,
+        'frames': [],
+    }, {
+        'operation': 'point_curve',
+        'motion_ids': ['1-1'],
+        'curve_id': 'curve-a',
+        'interpolation_order': 1,
+        'points': [
+            {'point_id': 'a-start', 'time_sec': 0.02, 'value_deg': 1.0},
+            {'point_id': 'a-end', 'time_sec': 0.04, 'value_deg': 2.0},
+        ],
+    })
+    second = edit_layer({
+        'layer_id': 'b',
+        'name': '둘째 포인트',
+        'enabled': True,
+        'locked': False,
+        'frames': [],
+    }, {
+        'operation': 'point_curve',
+        'motion_ids': ['2-1'],
+        'curve_id': 'curve-b',
+        'interpolation_order': 3,
+        'points': [
+            {'point_id': 'b-start', 'time_sec': 0.06, 'value_deg': 3.0},
+            {'point_id': 'b-end', 'time_sec': 0.08, 'value_deg': 4.0},
+        ],
+    })
+
+    merged = merge_layers(
+        {'period_sec': 0.02, 'layers': [first, second]},
+        ['a', 'b'],
+    )
+
+    assert {
+        curve['curve_id'] for curve in merged['point_curves']
+    } == {'curve-a', 'curve-b'}
+    assert {
+        point['point_id']
+        for curve in merged['point_curves']
+        for point in curve['points']
+    } == {'a-start', 'a-end', 'b-start', 'b-end'}
+    assert point_curve_frame_mismatches(merged) == []
+
+
+def test_merged_point_curves_remain_isolated_between_two_projects():
+    def merge_project(project_id, base_value):
+        layers = []
+        for index, motion_id in enumerate(['1-1', '2-1'], start=1):
+            layer_id = f'{project_id}-layer-{index}'
+            layers.append(edit_layer({
+                'layer_id': layer_id,
+                'name': layer_id,
+                'enabled': True,
+                'locked': False,
+                'frames': [],
+            }, {
+                'operation': 'point_curve',
+                'motion_ids': [motion_id],
+                'curve_id': f'{project_id}-curve-{index}',
+                'interpolation_order': 1,
+                'points': [
+                    {
+                        'point_id': f'{project_id}-point-{index}-start',
+                        'time_sec': 0.02,
+                        'value_deg': base_value + index,
+                    },
+                    {
+                        'point_id': f'{project_id}-point-{index}-end',
+                        'time_sec': 0.04,
+                        'value_deg': base_value + index + 1,
+                    },
+                ],
+            }))
+        return merge_layers(
+            {'period_sec': 0.02, 'layers': layers},
+            [layer['layer_id'] for layer in layers],
+        )
+
+    first = merge_project('project-a', 0.0)
+    second = merge_project('project-b', 100.0)
+
+    assert {
+        curve['curve_id'] for curve in first['point_curves']
+    } == {'project-a-curve-1', 'project-a-curve-2'}
+    assert {
+        curve['curve_id'] for curve in second['point_curves']
+    } == {'project-b-curve-1', 'project-b-curve-2'}
+    assert first['frames'] != second['frames']
+
+
 def test_merge_reports_exact_overlap_and_transition_stop_reason():
     first = {
         'layer_id': 'a', 'name': '앞 레이어', 'frames': [
