@@ -106,6 +106,7 @@ export function createMotorConfigController({
   onConfigApplyStart,
   onConfigApplyComplete,
   onIdentityStatusChange,
+  onAcServoControl,
 }) {
   let activeRegistrationTab = 'ac_servo';
   let latestScan = null;
@@ -1616,6 +1617,243 @@ export function createMotorConfigController({
     return ['설정됨', 'matched'];
   }
 
+  function finiteRuntimeNumber(value) {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  function rowDeviceIdentity(row) {
+    const runtime = row.runtimeMotor || {};
+    if (rowMotorType(row) === 'ac_servo') {
+      const model = firstDefined(
+        row.scanRow?.driver_model,
+        row.scanRow?.device_name,
+        row.motor?.identity?.driver_model,
+        driverLabel(row),
+      );
+      const serial = firstDefined(
+        row.scanRow?.serial_number,
+        runtime.serial_number,
+      );
+      return {
+        title: model || 'AC 서보',
+        detail: serial === null || serial === undefined || serial === ''
+          ? 'Serial 미수신'
+          : `Serial ${serial}`,
+      };
+    }
+    if (rowMotorType(row) === 'dynamixel') {
+      const model = firstDefined(
+        row.scanDevice?.model_name,
+        row.scanDevice?.model_number,
+        runtime.model_name,
+        driverLabel(row),
+      );
+      const firmware = firstDefined(row.scanDevice?.firmware_version, runtime.firmware_version);
+      return {
+        title: model ? `Dynamixel ${model}` : 'Dynamixel',
+        detail: firmware === null || firmware === undefined
+          ? `${axisIdLabel(row)} · FW 미수신`
+          : `${axisIdLabel(row)} · FW ${firmware}`,
+      };
+    }
+    return { title: driverLabel(row), detail: axisIdLabel(row) };
+  }
+
+  function rowConnectionIdentity(row) {
+    if (rowMotorType(row) === 'ac_servo') {
+      return {
+        title: `${axisIdLabel(row)} · Slave ${displayText(acIdentityValue(row, 'slave_position'))}`,
+        detail: `EEPROM ${displayText(directScanAliasValue(row))} · Station ${displayText(acIdentityValue(row, 'rotary_alias'))}`,
+      };
+    }
+    const motor = row.motor || row.proposedMotor;
+    const port = firstDefined(
+      row.scanDevice?.port,
+      motor?.identity?.serial_port,
+      motor?.config?.serial_port,
+      row.runtimeMotor?.serial_port,
+    );
+    return {
+      title: axisIdLabel(row),
+      detail: port ? String(port) : '직렬 포트 미수신',
+    };
+  }
+
+  function rowMappingView(row) {
+    const runtime = row.runtimeMotor;
+    if (!row.motor || row.motor.deleted || !row.motor.enabled) {
+      return { text: '미사용 축', detail: '모션 적용 제외', className: 'unknown', ready: false };
+    }
+    if (!runtime) {
+      return { text: '확인 불가', detail: '실행 상태 미수신', className: 'review', ready: false };
+    }
+    if (runtime.motion_axis_configured === true && runtime.motion_id) {
+      return {
+        text: '매칭됨',
+        detail: `Motion ${runtime.motion_id}`,
+        className: 'matched',
+        ready: true,
+      };
+    }
+    if (runtime.motion_axis_configured === true) {
+      return { text: '매칭 오류', detail: 'Motion ID 중복·누락', className: 'duplicate', ready: false };
+    }
+    return { text: '미매칭', detail: '모션축 설정 필요', className: 'review', ready: false };
+  }
+
+  function rowDriveView(row) {
+    const runtime = row.runtimeMotor;
+    const driveName = rowMotorType(row) === 'dynamixel' ? '토크' : '서보';
+    if (!runtime) {
+      return { text: `${driveName} 확인 불가`, detail: '실행 상태 미수신', className: 'review', ready: false };
+    }
+    if (runtime.fault) {
+      return { text: '오류 발생', detail: runtime.error_text || runtime.error || '장치 오류 확인', className: 'duplicate', ready: false };
+    }
+    const ready = runtime.servo_on === true;
+    return {
+      text: `${driveName} ${ready ? 'ON' : 'OFF'}`,
+      detail: rowMotorType(row) === 'dynamixel'
+        ? 'Torque Enable 상태'
+        : '서보 드라이버 상태',
+      className: ready ? 'matched' : 'review',
+      ready,
+    };
+  }
+
+  function rowMotionPermissionView(row, mapping, drive) {
+    const runtime = row.runtimeMotor;
+    const latest = getLatestState?.() || {};
+    const context = latest.execution_context || {};
+    if (!row.motor || row.motor.deleted || !row.motor.enabled) {
+      return { text: '사용 안 함', detail: '프로젝트에서 비활성', className: 'unknown', ready: false };
+    }
+    if (!runtime || runtime.state !== 'detected') {
+      return { text: '동작 차단', detail: '모터 연결 확인 필요', className: 'duplicate', ready: false };
+    }
+    if (runtime.fault) {
+      return { text: '동작 차단', detail: '장치 오류 해제 필요', className: 'duplicate', ready: false };
+    }
+    const current = finiteRuntimeNumber(firstDefined(runtime.position_deg, runtime.position));
+    const lower = finiteRuntimeNumber(runtime.lower);
+    const upper = finiteRuntimeNumber(runtime.upper);
+    if (current === null) {
+      return { text: '동작 차단', detail: '현재 위치 미수신', className: 'duplicate', ready: false };
+    }
+    if (lower === null || upper === null || lower > upper) {
+      return { text: '동작 차단', detail: 'lower / upper 확인 필요', className: 'duplicate', ready: false };
+    }
+    if (current < lower || current > upper) {
+      return { text: '범위 복귀만', detail: `${lower.toFixed(1)}° ~ ${upper.toFixed(1)}°`, className: 'review', ready: false };
+    }
+    if (!drive.ready) {
+      return { text: '동작 대기', detail: `${rowMotorType(row) === 'dynamixel' ? '토크' : '서보'} ON 필요`, className: 'review', ready: false };
+    }
+    if (!context.ready) {
+      return { text: '동작 대기', detail: '실행 설정 적용 필요', className: 'review', ready: false };
+    }
+    return { text: '조그·동작 가능', detail: '현재 조건 충족', className: 'matched', ready: true };
+  }
+
+  function rowMotionRunView(row, mapping, permission) {
+    const run = getLatestState?.()?.motion_run_status || {};
+    if (!mapping.ready) {
+      return { text: '실행 불가', detail: mapping.detail, className: 'review', ready: false };
+    }
+    if (!permission.ready) {
+      return { text: '실행 대기', detail: permission.detail, className: 'review', ready: false };
+    }
+    if (run.active || run.running) {
+      return { text: '모션 실행 중', detail: '현재 실행 상태', className: 'configured', ready: true };
+    }
+    return {
+      text: '실행 가능',
+      detail: '축별 실행 이력은 미지원',
+      className: 'matched',
+      ready: true,
+    };
+  }
+
+  function rowOverallView(row, mapping, drive, permission, motionRun) {
+    if (!row.motor || row.motor.deleted || !row.motor.enabled) {
+      return { text: '관리 제외', detail: '미사용 축', className: 'unknown', ready: false };
+    }
+    if (row.runtimeMotor?.fault) {
+      return { text: '오류', detail: '오류 팝업에서 확인', className: 'duplicate', ready: false };
+    }
+    if (permission.text === '범위 복귀만') {
+      return { text: '복귀 필요', detail: '경계 복귀 후 재확인', className: 'review', ready: false };
+    }
+    if (mapping.ready && drive.ready && permission.ready && motionRun.ready) {
+      return { text: '구동 준비', detail: '실물 검증 미확인', className: 'matched', ready: true };
+    }
+    return { text: '준비 중', detail: permission.detail || mapping.detail, className: 'review', ready: false };
+  }
+
+  function renderMotorReadiness(rows, rowViews, changed) {
+    const latest = getLatestState?.() || {};
+    const configuredRows = rowViews.filter(
+      (view) => view.row.motor && !view.row.motor.deleted && view.row.motor.enabled,
+    );
+    const runtimeFresh = latest.motion_state_age_sec === null ||
+      latest.motion_state_age_sec === undefined ||
+      Number(latest.motion_state_age_sec) <= 2;
+    const runtimeResponding = Array.isArray(latest.motors);
+    const serviceReady = runtimeFresh && (
+      runtimeResponding || Boolean(latest.service_management?.motor_managed)
+    );
+    const connectionReady = configuredRows.length > 0 && configuredRows.every(
+      (view) => view.row.runtimeMotor?.state === 'detected',
+    );
+    const configurationReady = configuredRows.length > 0 && !changed;
+    const applicationReady = configurationReady && selectedMotorConfigAlreadyApplied() && !configApplyPending;
+    const mappingReady = configuredRows.length > 0 && configuredRows.every((view) => view.mapping.ready);
+    const driveReady = configuredRows.length > 0 && configuredRows.every((view) => view.drive.ready);
+    const faults = configuredRows.filter((view) => Boolean(view.row.runtimeMotor?.fault)).length;
+    const readyAxes = configuredRows.filter((view) => view.overall.ready).length;
+    const steps = [
+      { key: 'service', ready: serviceReady, text: serviceReady ? '서비스 응답 정상' : '모터 제어 재시작·응답 확인', next: '모터 제어 서비스를 시작하거나 재시작하세요.' },
+      { key: 'connection', ready: connectionReady, text: connectionReady ? '등록 축 연결됨' : '모터 전원·연결 및 검색 필요', next: '모터 전원을 확인한 뒤 장비 검색을 실행하세요.' },
+      { key: 'configuration', ready: configurationReady, text: configurationReady ? '축 설정 저장됨' : '축 설정 저장 필요', next: '검색 결과를 확인하고 모터축 설정을 저장하세요.' },
+      { key: 'application', ready: applicationReady, text: applicationReady ? '실행 시스템 적용됨' : '설정 적용 필요', next: '설정 적용 및 재시작을 실행하세요.' },
+      { key: 'mapping', ready: mappingReady, text: mappingReady ? '모션축 매칭됨' : '모션축 매칭 필요', next: '모션축 설정에서 각 모터축의 Motion ID를 연결하세요.' },
+      { key: 'drive', ready: driveReady, text: driveReady ? '서보·토크 준비됨' : '서보·토크 상태 확인', next: 'AC 서보를 켜고 Dynamixel 토크 상태를 확인하세요.' },
+      { key: 'verification', ready: false, text: '실물 조그·동작 확인 필요', next: '실제 장비에서 조그와 동작 모드를 확인하세요.' },
+    ];
+    const currentIndex = steps.findIndex((step) => !step.ready);
+
+    if (el.motorReadinessSteps) {
+      steps.forEach((step, index) => {
+        const item = el.motorReadinessSteps.querySelector(`[data-motor-readiness-step="${step.key}"]`);
+        if (!item) return;
+        const state = step.ready ? 'complete' : index === currentIndex
+          ? (faults > 0 ? 'error' : 'current')
+          : 'pending';
+        item.dataset.state = state;
+        const detail = item.querySelector('small');
+        if (detail) detail.textContent = step.text;
+      });
+    }
+    if (el.motorReadinessHeadline) {
+      el.motorReadinessHeadline.textContent = faults > 0
+        ? `오류 ${formatInt(faults)}축 확인 필요`
+        : readyAxes === configuredRows.length && configuredRows.length > 0
+          ? '구동 준비 · 실물 검증 미확인'
+          : '준비 작업 진행 중';
+    }
+    if (el.motorReadinessAxisCount) {
+      el.motorReadinessAxisCount.textContent = `${formatInt(readyAxes)}/${formatInt(configuredRows.length)}축`;
+    }
+    if (el.motorReadinessCurrentStep) {
+      el.motorReadinessCurrentStep.textContent = `${currentIndex + 1}단계 · ${steps[currentIndex]?.text || '확인 완료'}`;
+    }
+    if (el.motorReadinessFaultCount) el.motorReadinessFaultCount.textContent = `${formatInt(faults)}축`;
+    if (el.motorReadinessNextAction) {
+      el.motorReadinessNextAction.textContent = steps[currentIndex]?.next || '현재 조건에서 추가 작업이 없습니다.';
+    }
+  }
+
   function rowById(rowId) {
     return axisRowsData().find((row) => row.id === rowId) || null;
   }
@@ -2018,6 +2256,15 @@ export function createMotorConfigController({
           const slaveView = acIdentityView(row, 'slave_position');
           const axisValue = rowAxisRaw(row);
           const editable = !(row.motor && row.motor.deleted);
+          const identity = rowDeviceIdentity(row);
+          const connection = rowConnectionIdentity(row);
+          const mapping = rowMappingView(row);
+          const drive = rowDriveView(row);
+          const permission = rowMotionPermissionView(row, mapping, drive);
+          const motionRun = rowMotionRunView(row, mapping, permission);
+          const overall = rowOverallView(row, mapping, drive, permission, motionRun);
+          const showAcServoControls = rowMotorType(row) === 'ac_servo' &&
+            Boolean(row.motor && !row.motor.deleted && row.motor.enabled);
           return {
             row,
             selected,
@@ -2041,6 +2288,14 @@ export function createMotorConfigController({
             axisValue,
             editable,
             onOff,
+            identity,
+            connection,
+            mapping,
+            drive,
+            permission,
+            motionRun,
+            overall,
+            showAcServoControls,
           };
         });
       const renderSignature = JSON.stringify(rowViews.map((view) => ({
@@ -2067,6 +2322,14 @@ export function createMotorConfigController({
         runtimeText: view.runtimeText,
         runtimeClass: view.runtimeClass,
         onOff: view.onOff,
+        identity: view.identity,
+        connection: view.connection,
+        mapping: view.mapping,
+        drive: view.drive,
+        permission: view.permission,
+        motionRun: view.motionRun,
+        overall: view.overall,
+        showAcServoControls: view.showAcServoControls,
       })));
 
       if (renderSignature !== lastAxisRenderSignature) {
@@ -2078,24 +2341,37 @@ export function createMotorConfigController({
           return `
             <tr class="${view.selected ? 'selected-row' : ''}" data-axis-row="${escapeHtml(row.id)}">
               <td><input type="checkbox" data-axis-select="${escapeHtml(row.id)}"${view.selected ? ' checked' : ''}></td>
-              <td><input class="axis-edit-input axis-number-input mono" data-axis-edit="axis" data-axis-row-id="${escapeHtml(row.id)}" type="number" min="0" step="1" value="${escapeHtml(view.axisValue ?? '')}"${disabled}></td>
-              <td class="axis-id-cell mono">${displayText(view.idText)}</td>
-              <td class="mono">${displayText(view.projectAlias)}</td>
-              <td class="mono${view.eepromMismatch ? ' identity-mismatch' : ''}">${displayText(view.directScanAlias)}</td>
-              <td class="mono${view.rotaryMismatch ? ' identity-mismatch' : ''}">${displayText(view.rotaryAlias)}</td>
-              <td class="mono${view.slaveMismatch ? ' identity-mismatch' : ''}">${displayText(view.slavePosition)}</td>
-              <td>${displayText(view.typeText)}</td>
-              <td><input class="axis-edit-input axis-name-input" data-axis-edit="name" data-axis-row-id="${escapeHtml(row.id)}" value="${escapeHtml(view.name === '-' ? '' : view.name)}"${disabled}></td>
-              <td>${displayText(driverLabel(row))}</td>
-              <td><span class="match-state ${escapeHtml(view.settingClass)}">${displayText(view.settingText)}</span></td>
-              <td><span class="match-state ${escapeHtml(view.scanClass)}">${displayText(view.scanText)}</span></td>
-              <td><span class="match-state ${escapeHtml(view.runtimeClass)}">${displayText(view.runtimeText)}</span></td>
-              <td class="mono">${displayText(view.onOff)}</td>
+              <td class="axis-combined-cell">
+                <input class="axis-edit-input axis-number-input mono" aria-label="축 번호" data-axis-edit="axis" data-axis-row-id="${escapeHtml(row.id)}" type="number" min="0" step="1" value="${escapeHtml(view.axisValue ?? '')}"${disabled}>
+                <input class="axis-edit-input axis-name-input" aria-label="축 이름" data-axis-edit="name" data-axis-row-id="${escapeHtml(row.id)}" value="${escapeHtml(view.name === '-' ? '' : view.name)}"${disabled}>
+              </td>
+              <td class="axis-status-stack"><strong>${displayText(view.identity.title)}</strong><small>${displayText(view.identity.detail)}</small></td>
+              <td class="axis-status-stack mono"><strong>${displayText(view.connection.title)}</strong><small>${displayText(view.connection.detail)}</small></td>
+              <td class="axis-status-stack">
+                <span class="match-state ${escapeHtml(view.settingClass)}">${displayText(view.settingText)}</span>
+                <small>${displayText(view.runtimeText)}</small>
+              </td>
+              <td class="axis-status-stack"><span class="match-state ${escapeHtml(view.mapping.className)}">${displayText(view.mapping.text)}</span><small>${displayText(view.mapping.detail)}</small></td>
+              <td class="axis-status-stack">
+                <span class="match-state ${escapeHtml(view.drive.className)}">${displayText(view.drive.text)}</span>
+                <small>${displayText(view.drive.detail)}</small>
+                ${view.showAcServoControls ? `
+                  <div class="axis-inline-actions">
+                    <button type="button" data-axis-servo-action="servo_on" data-axis-servo-index="${escapeHtml(view.axisValue ?? '')}">ON</button>
+                    <button type="button" data-axis-servo-action="servo_off" data-axis-servo-index="${escapeHtml(view.axisValue ?? '')}">OFF</button>
+                    <button type="button" data-axis-servo-action="fault_reset" data-axis-servo-index="${escapeHtml(view.axisValue ?? '')}">오류 초기화</button>
+                  </div>
+                ` : ''}
+              </td>
+              <td class="axis-status-stack"><span class="match-state ${escapeHtml(view.permission.className)}">${displayText(view.permission.text)}</span><small>${displayText(view.permission.detail)}</small></td>
+              <td class="axis-status-stack"><span class="match-state ${escapeHtml(view.motionRun.className)}">${displayText(view.motionRun.text)}</span><small>${displayText(view.motionRun.detail)}</small></td>
+              <td class="axis-status-stack"><span class="match-state ${escapeHtml(view.overall.className)}">${displayText(view.overall.text)}</span><small>${displayText(view.overall.detail)}</small></td>
             </tr>
           `;
         }).join('')
-          : '<tr><td colspan="14" class="empty">설정 파일을 불러오거나 모터 스캔을 실행하세요</td></tr>';
+          : '<tr><td colspan="10" class="empty">설정 파일을 불러오거나 모터 스캔을 실행하세요</td></tr>';
       }
+      renderMotorReadiness(rows, rowViews, changed);
     }
 
     renderAxisButtons(rows);
@@ -3118,7 +3394,7 @@ export function createMotorConfigController({
 
     if (el.axisRows) {
       el.axisRows.addEventListener('pointerdown', (event) => {
-        if (event.target.closest('[data-axis-edit]')) return;
+        if (event.target.closest('[data-axis-edit], button')) return;
         if (event.button !== undefined && event.button !== 0) return;
         const row = event.target.closest('tr[data-axis-row]');
         if (!row) return;
@@ -3131,6 +3407,23 @@ export function createMotorConfigController({
         const input = event.target.closest('[data-axis-edit]');
         if (!input) return;
         handleAxisEdit(input);
+      });
+
+      el.axisRows.addEventListener('click', async (event) => {
+        const button = event.target.closest('button[data-axis-servo-action]');
+        if (!button || !onAcServoControl) return;
+        event.stopPropagation();
+        const axis = Number(button.dataset.axisServoIndex);
+        if (!Number.isInteger(axis) || axis < 0) {
+          setAxisMessage('AC 서보 제어 축 번호를 확인할 수 없습니다.', true);
+          return;
+        }
+        button.disabled = true;
+        try {
+          await onAcServoControl(button.dataset.axisServoAction || '', axis);
+        } finally {
+          button.disabled = false;
+        }
       });
     }
 

@@ -1399,6 +1399,10 @@ export function createMotionTestController({ el, getLatestState }) {
     resetProjectState,
     renderLatestState,
     selectAxis,
+    controlAcServo: async (action, axis) => {
+      selectAxis(axis);
+      await sendAcServoControl(action, 'selected');
+    },
     getSelectedAxis: () => selectedAxis,
   };
 }

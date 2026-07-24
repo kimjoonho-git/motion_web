@@ -17,21 +17,19 @@ test('program and motor-control restart actions keep distinct API routes', () =>
   );
 });
 
-test('header restart controls delegate to the guarded system controls', () => {
-  assert.match(html, /id="headerMotorControlRestartButton"[\s\S]*?id="headerProgramRestartButton"/);
+test('program restart stays in the header and motor restart stays in motor management', () => {
+  assert.doesNotMatch(html, /id="headerMotorControlRestartButton"/);
+  assert.match(html, /id="headerProgramRestartButton"/);
   assert.match(html, /id="programRestartButton"[^>]*>프로그램 재시작</);
   assert.match(
     html,
-    /id="motorControlRestartButton"[^>]*>모터 제어 시스템 재시작</,
+    /class="motor-readiness-overview"[\s\S]*?id="motorControlRestartButton"[^>]*>모터 제어 재시작</,
   );
   assert.match(
     main,
     /headerProgramRestartButton\.addEventListener\('click'[\s\S]*?programRestartButton\.click\(\)/,
   );
-  assert.match(
-    main,
-    /headerMotorControlRestartButton\.addEventListener\('click'[\s\S]*?motorControlRestartButton\.click\(\)/,
-  );
+  assert.doesNotMatch(main, /headerMotorControlRestartButton/);
 });
 
 test('restart controls require confirmation and invoke only their matching operation', () => {

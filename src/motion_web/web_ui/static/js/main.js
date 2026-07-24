@@ -10,13 +10,13 @@ import {
   stopMotionStudio,
   setProjectGeneration,
 } from './api.js?v=20260723-servo-service-split';
-import { getElements } from './dom.js?v=20260724-ui-navigation-2';
+import { getElements } from './dom.js?v=20260724-motor-management-1';
 import { createMotorEventLogController } from './event_log.js?v=20260721-project-generation';
 import { createMidiMonitorController } from './midi_monitor.js?v=20260724-ui-finish-1';
 import { createMotionDataController } from './motion_data.js?v=20260724-ui-navigation-2';
 import { createMotionStudioController } from './motion_studio.js?v=20260724-editor-history-1';
-import { createMotionTestController } from './motion_test.js?v=20260724-range-recovery-1';
-import { createMotorConfigController } from './motor_config.js?v=20260724-ui-finish-1';
+import { createMotionTestController } from './motion_test.js?v=20260724-motor-management-1';
+import { createMotorConfigController } from './motor_config.js?v=20260724-motor-management-1';
 import { createProjectExplorerController } from './project_explorer.js?v=20260724-ui-connect-2';
 import { renderAccess, renderMonitoring } from './monitoring.js?v=20260723-physical-runtime-state';
 import { StatusSocket } from './socket.js';
@@ -279,6 +279,10 @@ function motionStateFromPayload(payload) {
     motion_test_limits: payload.motion_test_limits || payload.motion_state.motion_test_limits || {},
     motion_run_status: payload.motion_run_status || payload.motion_state.motion_run_status || {},
     execution_context: payload.execution_context || {},
+    service_management: payload.service_management || {},
+    safety_status: payload.safety_status || {},
+    motion_state_age_sec: payload.motion_state_age_sec,
+    project_scope: payload.project_scope || payload.motion_state.project_scope || {},
   };
 }
 
@@ -297,9 +301,6 @@ function renderServiceManagement(payload) {
   if (el.motorControlRestartButton) el.motorControlRestartButton.disabled = !motorManaged;
   if (el.headerProgramRestartButton) {
     el.headerProgramRestartButton.disabled = !(managed && motorManaged);
-  }
-  if (el.headerMotorControlRestartButton) {
-    el.headerMotorControlRestartButton.disabled = !motorManaged;
   }
   appState.emergencyLatched = Boolean(payload?.safety_status?.emergency_latched);
   appState.executionContext = payload?.execution_context || null;
@@ -746,6 +747,8 @@ function updateRestartProgress(payload = null) {
   }, 800);
 }
 
+let motionTest = null;
+
 const motorConfig = createMotorConfigController({
   el,
   getRawMode: () => appState.rawMode,
@@ -781,9 +784,10 @@ const motorConfig = createMotorConfigController({
   onIdentityStatusChange: (message) => {
     appState.motorIdentityBlockMessage = String(message || '');
   },
+  onAcServoControl: (action, axis) => motionTest?.controlAcServo(action, axis),
 });
 
-const motionTest = createMotionTestController({
+motionTest = createMotionTestController({
   el,
   getLatestState: () => appState.latestState,
 });
@@ -1039,16 +1043,6 @@ if (el.headerProgramRestartButton) {
       return;
     }
     el.programRestartButton.click();
-  });
-}
-
-if (el.headerMotorControlRestartButton) {
-  el.headerMotorControlRestartButton.addEventListener('click', () => {
-    if (!el.motorControlRestartButton || el.motorControlRestartButton.disabled) {
-      window.alert('모터 제어 재시작을 사용할 수 없습니다. 시스템 정보에서 프로그램 상태를 확인하세요.');
-      return;
-    }
-    el.motorControlRestartButton.click();
   });
 }
 
