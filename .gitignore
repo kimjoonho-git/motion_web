@@ -28,6 +28,7 @@ backups/
 
 # Do not include the separate low-level motor-system repository here.
 src/motion_system/
+src/motion_control_studio/
 
 # Misc local files
 packages.microsoft.gpg

@@ -1,10 +1,9 @@
-# Motion Control Web
+# Motion Web
 
-ROS2 기반 상위 모션 제어 및 웹 UI 패키지입니다.
+ROS 2 기반 모션 제어 웹 브리지와 웹 UI 패키지입니다.
 
-이 저장소는 `motion_system_ros2`의 motor manager / driver 계층 위에서 동작하며,
-모터 상태 모니터링, 모터축 설정, 모션파일 관리, 모션축 매핑, 초기 위치 이동,
-모션 실행 기능을 제공합니다.
+이 저장소는 별도 `motion_control_studio`와 `motion_system` 저장소 위에서
+동작하며, 웹 API, 웹 UI, 공통 설정과 실행 스크립트를 관리합니다.
 
 ## 주요 기능
 
@@ -25,14 +24,6 @@ ROS2 기반 상위 모션 제어 및 웹 UI 패키지입니다.
 ## 패키지 구성
 
 ```text
-src/motion_control
-├── midi_control
-├── motion_runtime
-├── motion_state_monitor
-└── motion_supervisor
-
-src/motion_studio
-
 src/motion_web
 ├── web_bridge
 └── web_ui
@@ -44,10 +35,11 @@ docs
 
 ## 의존 관계
 
-이 저장소는 아래 저장소의 모터 시스템 위에서 동작합니다.
+이 저장소는 아래 두 저장소의 제어 계층 위에서 동작합니다.
 
 ```text
-motion_system_ros2
+src/motion_control_studio
+src/motion_system
 ```
 
 계층 구조:
