@@ -33,6 +33,22 @@ def generate_launch_description():
         DeclareLaunchArgument('publish_hz', default_value='10.0'),
         DeclareLaunchArgument('max_jog_delta_deg', default_value='360.0'),
         DeclareLaunchArgument('start_midi_control', default_value='true'),
+        DeclareLaunchArgument(
+            'motion_studio_request_topic',
+            default_value='/motion_studio/request',
+        ),
+        DeclareLaunchArgument(
+            'motion_studio_response_topic',
+            default_value='/motion_studio/response',
+        ),
+        DeclareLaunchArgument(
+            'motion_studio_editor_request_topic',
+            default_value='/motion_studio/editor/request',
+        ),
+        DeclareLaunchArgument(
+            'motion_studio_editor_response_topic',
+            default_value='/motion_studio/editor/response',
+        ),
         Node(
             package='motion_runtime',
             executable='motion_mapping_manager',
@@ -59,6 +75,8 @@ def generate_launch_description():
             output='screen',
             parameters=[{
                 'motion_projects_dir': LaunchConfiguration('motion_projects_dir'),
+                'request_topic': LaunchConfiguration('motion_studio_request_topic'),
+                'response_topic': LaunchConfiguration('motion_studio_response_topic'),
             }],
         ),
         Node(
@@ -66,6 +84,14 @@ def generate_launch_description():
             executable='motion_studio_editor_node',
             name='motion_studio_editor_node',
             output='screen',
+            parameters=[{
+                'request_topic': LaunchConfiguration(
+                    'motion_studio_editor_request_topic'
+                ),
+                'response_topic': LaunchConfiguration(
+                    'motion_studio_editor_response_topic'
+                ),
+            }],
         ),
         Node(
             package='midi_control',
@@ -106,6 +132,18 @@ def generate_launch_description():
                 'web_publish_hz': LaunchConfiguration('publish_hz'),
                 'motor_config_file': LaunchConfiguration('config_file'),
                 'motion_projects_dir': LaunchConfiguration('motion_projects_dir'),
+                'motion_studio_request_topic': LaunchConfiguration(
+                    'motion_studio_request_topic'
+                ),
+                'motion_studio_response_topic': LaunchConfiguration(
+                    'motion_studio_response_topic'
+                ),
+                'motion_studio_editor_request_topic': LaunchConfiguration(
+                    'motion_studio_editor_request_topic'
+                ),
+                'motion_studio_editor_response_topic': LaunchConfiguration(
+                    'motion_studio_editor_response_topic'
+                ),
             }],
         ),
     ])

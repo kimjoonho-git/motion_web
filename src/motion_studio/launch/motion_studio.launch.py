@@ -14,6 +14,22 @@ def generate_launch_description():
             'motion_projects_dir',
             default_value=str(workspace / 'motion_projects'),
         ),
+        DeclareLaunchArgument(
+            'motion_studio_request_topic',
+            default_value='/motion_studio/request',
+        ),
+        DeclareLaunchArgument(
+            'motion_studio_response_topic',
+            default_value='/motion_studio/response',
+        ),
+        DeclareLaunchArgument(
+            'motion_studio_editor_request_topic',
+            default_value='/motion_studio/editor/request',
+        ),
+        DeclareLaunchArgument(
+            'motion_studio_editor_response_topic',
+            default_value='/motion_studio/editor/response',
+        ),
         Node(
             package='motion_studio',
             executable='motion_studio_node',
@@ -21,6 +37,8 @@ def generate_launch_description():
             output='screen',
             parameters=[{
                 'motion_projects_dir': LaunchConfiguration('motion_projects_dir'),
+                'request_topic': LaunchConfiguration('motion_studio_request_topic'),
+                'response_topic': LaunchConfiguration('motion_studio_response_topic'),
             }],
         ),
         Node(
@@ -28,5 +46,13 @@ def generate_launch_description():
             executable='motion_studio_editor_node',
             name='motion_studio_editor_node',
             output='screen',
+            parameters=[{
+                'request_topic': LaunchConfiguration(
+                    'motion_studio_editor_request_topic'
+                ),
+                'response_topic': LaunchConfiguration(
+                    'motion_studio_editor_response_topic'
+                ),
+            }],
         ),
     ])

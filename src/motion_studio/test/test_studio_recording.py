@@ -36,6 +36,30 @@ def test_recording_layer_name_does_not_repeat_after_delete_or_duplicate():
     assert next_numbered_layer_name([{'name': '녹화 1'}, {'name': '녹화 3'}], '녹화') == '녹화 4'
 
 
+def test_terminal_status_clears_playback_and_progress_metadata():
+    node = MotionStudioNode.__new__(MotionStudioNode)
+    node._status = {
+        'state': 'playing',
+        'runtime_progress': {'ratio': 0.5},
+        'initialization_progress': {'ratio': 1.0},
+        'playback_duration_sec': 12.0,
+        'playback_layer_count': 3,
+    }
+    node._current_project = None
+    node._store = type('Store', (), {'summary': staticmethod(lambda project: project)})()
+    node._selected_motion_values_locked = lambda: {}
+    node._recorded_motion_ids = set()
+    node._record_mode = 'record'
+
+    node._set_status_locked('error', '재생 실패')
+
+    assert node._status['message'] == '재생 실패'
+    assert node._status['runtime_progress'] == {}
+    assert node._status['initialization_progress'] == {}
+    assert node._status['playback_duration_sec'] == 0.0
+    assert node._status['playback_layer_count'] == 0
+
+
 def test_layer_duplicate_is_independent_unlocked_and_disabled():
     node = MotionStudioNode.__new__(MotionStudioNode)
     node._lock = threading.RLock()
@@ -76,6 +100,91 @@ def test_layer_duplicate_is_independent_unlocked_and_disabled():
     assert copied['point_curves'][0]['points'][0]['point_id'] != 'point_a'
     copied['frames'][0]['values']['1-1'] = 99.0
     assert project['layers'][0]['frames'][0]['values']['1-1'] == 0.0
+
+
+def test_merge_commit_restores_source_points_when_editor_preview_omits_them():
+    node = MotionStudioNode.__new__(MotionStudioNode)
+    node._lock = threading.RLock()
+    point_curve = {
+        'curve_id': 'curve-source',
+        'motion_id': '1-1',
+        'interpolation_order': 1,
+        'points': [
+            {'point_id': 'point-start', 'time_sec': 0.02, 'value_deg': 0.0},
+            {'point_id': 'point-end', 'time_sec': 0.04, 'value_deg': 1.0},
+        ],
+    }
+    project = {'layers': [
+        {
+            'layer_id': 'source-a', 'name': '포인트 원본',
+            'enabled': True, 'locked': False, 'edit_revision': 3,
+            'point_curves': [point_curve],
+            'frames': [
+                {'frame': 1, 'time_sec': 0.02, 'values': {'1-1': 0.0}},
+                {'frame': 2, 'time_sec': 0.04, 'values': {'1-1': 1.0}},
+            ],
+        },
+        {
+            'layer_id': 'source-b', 'name': '일반 원본',
+            'enabled': True, 'locked': False, 'edit_revision': 1,
+            'point_curves': [],
+            'frames': [
+                {'frame': 3, 'time_sec': 0.06, 'values': {'2-1': 2.0}},
+                {'frame': 4, 'time_sec': 0.08, 'values': {'2-1': 3.0}},
+            ],
+        },
+    ]}
+
+    class Store:
+        @staticmethod
+        def mapping_check(_project):
+            return {'rows': [
+                {
+                    'motion_id': motion_id,
+                    'motion_lower_deg': -180.0,
+                    'motion_upper_deg': 180.0,
+                }
+                for motion_id in ('1-1', '2-1')
+            ]}
+
+        @staticmethod
+        def save_project(value):
+            return value
+
+    node._store = Store()
+    node._require_idle_locked = lambda: None
+    node._require_project_locked = lambda: project
+    node._project_result = lambda value, message: {
+        'success': True, 'project': value, 'message': message,
+    }
+
+    result = node._commit_merged_layer({
+        'source_layer_ids': ['source-a', 'source-b'],
+        'source_revisions': {'source-a': 3, 'source-b': 1},
+        'name': '방어 병합',
+        # Simulate a preview produced by the previously running editor build.
+        'layer': {
+            'layer_id': 'preview',
+            'name': '구버전 미리보기',
+            'source_layer_ids': ['source-a', 'source-b'],
+            'point_curves': [],
+            'frames': [
+                {'frame': 1, 'time_sec': 0.02, 'values': {'1-1': 0.0}},
+                {'frame': 2, 'time_sec': 0.04, 'values': {'1-1': 1.0}},
+                {'frame': 3, 'time_sec': 0.06, 'values': {'2-1': 2.0}},
+                {'frame': 4, 'time_sec': 0.08, 'values': {'2-1': 3.0}},
+            ],
+        },
+    })
+
+    merged = result['project']['layers'][-1]
+    assert merged['name'] == '방어 병합'
+    assert len(merged['point_curves']) == 1
+    assert merged['point_curves'][0]['curve_id'] == 'curve-source'
+    assert [
+        point['point_id'] for point in merged['point_curves'][0]['points']
+    ] == ['point-start', 'point-end']
+    assert project['layers'][0]['point_curves'] == [point_curve]
 
 
 def test_layer_save_warns_but_keeps_values_outside_axis_range():

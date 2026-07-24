@@ -1,3 +1,8 @@
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from rclpy.node import Node
+
 from motion_studio.editor_node import MotionStudioEditorNode
 
 
@@ -12,6 +17,35 @@ def base_layer():
             {'frame': 2, 'time_sec': 0.04, 'values': {'1-1': 20.0}},
         ],
     }
+
+
+def test_editor_node_keeps_global_ros_arguments_enabled_for_parameter_overrides():
+    declared = {
+        'request_topic': '/isolated/editor/request',
+        'response_topic': '/isolated/editor/response',
+    }
+    editor = MotionStudioEditorNode.__new__(MotionStudioEditorNode)
+
+    with (
+        patch.object(Node, '__init__', return_value=None) as node_init,
+        patch.object(
+            MotionStudioEditorNode,
+            'declare_parameter',
+            side_effect=lambda name, _default: SimpleNamespace(value=declared[name]),
+        ),
+        patch.object(MotionStudioEditorNode, 'create_publisher', return_value=object()),
+        patch.object(MotionStudioEditorNode, 'create_subscription'),
+        patch.object(
+            MotionStudioEditorNode,
+            'get_logger',
+            return_value=SimpleNamespace(info=lambda _message: None),
+        ),
+    ):
+        MotionStudioEditorNode.__init__(editor)
+
+    node_init.assert_called_once_with('motion_studio_editor_node')
+    assert editor.request_topic == '/isolated/editor/request'
+    assert editor.response_topic == '/isolated/editor/response'
 
 
 def test_editor_allows_unregistered_motion_id_for_axis_addition():
@@ -172,3 +206,56 @@ def test_point_approximation_results_are_isolated_between_projects():
     assert first['layer']['point_curves'][0]['curve_id'] == 'curve-project-a'
     assert second['layer']['point_curves'][0]['curve_id'] == 'curve-project-b'
     assert first['layer']['frames'] != second['layer']['frames']
+
+
+def test_editor_merge_response_preserves_source_point_curves():
+    editor = MotionStudioEditorNode.__new__(MotionStudioEditorNode)
+    first = {
+        'layer_id': 'a',
+        'name': '첫 곡선',
+        'enabled': True,
+        'locked': False,
+        'frames': [
+            {'frame': 1, 'time_sec': 0.02, 'values': {'1-1': 1.0}},
+            {'frame': 2, 'time_sec': 0.04, 'values': {'1-1': 2.0}},
+        ],
+        'point_curves': [{
+            'curve_id': 'curve-a',
+            'motion_id': '1-1',
+            'interpolation_order': 1,
+            'points': [
+                {'point_id': 'a-start', 'time_sec': 0.02, 'value_deg': 1.0},
+                {'point_id': 'a-end', 'time_sec': 0.04, 'value_deg': 2.0},
+            ],
+        }],
+    }
+    second = {
+        'layer_id': 'b',
+        'name': '둘째 곡선',
+        'enabled': True,
+        'locked': False,
+        'frames': [
+            {'frame': 3, 'time_sec': 0.06, 'values': {'2-1': 3.0}},
+            {'frame': 4, 'time_sec': 0.08, 'values': {'2-1': 4.0}},
+        ],
+        'point_curves': [{
+            'curve_id': 'curve-b',
+            'motion_id': '2-1',
+            'interpolation_order': 1,
+            'points': [
+                {'point_id': 'b-start', 'time_sec': 0.06, 'value_deg': 3.0},
+                {'point_id': 'b-end', 'time_sec': 0.08, 'value_deg': 4.0},
+            ],
+        }],
+    }
+
+    result = editor._handle('merge', {
+        'project': {'period_sec': 0.02, 'layers': [first, second]},
+        'layer_ids': ['a', 'b'],
+        'mapping_rows': [],
+    })
+
+    assert result['success'] is True
+    assert {
+        curve['curve_id'] for curve in result['layer']['point_curves']
+    } == {'curve-a', 'curve-b'}
