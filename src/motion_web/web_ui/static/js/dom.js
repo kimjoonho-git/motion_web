@@ -164,7 +164,6 @@ export function getElements() {
     motionTestResultText: document.getElementById('motionTestResultText'),
     motionTestActualState: document.getElementById('motionTestActualState'),
     motionTestActualText: document.getElementById('motionTestActualText'),
-    motionTabs: document.getElementById('motionTabs'),
     motionPanels: document.querySelectorAll('[data-motion-panel]'),
     motionWorkspaceTitle: document.getElementById('motionWorkspaceTitle'),
     motionWorkspaceSubtitle: document.getElementById('motionWorkspaceSubtitle'),

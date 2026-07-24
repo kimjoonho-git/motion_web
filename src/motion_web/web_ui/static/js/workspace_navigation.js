@@ -70,8 +70,41 @@ export function defaultWorkspaceForGroup(group) {
 }
 
 export function workspaceForLegacyNavigation(workspace, motionTab = '') {
-  if (workspace !== 'motion') return normalizeWorkspaceRoute(workspace);
+  if (!['motion', 'project'].includes(workspace)) return normalizeWorkspaceRoute(workspace);
   const tab = String(motionTab || 'files');
   return Object.entries(MOTION_WORKSPACE_TABS)
     .find(([, value]) => value === tab)?.[0] || 'motion-files';
+}
+
+export function workspaceForProjectCategory(
+  category,
+  fallbackWorkspace = 'monitoring',
+  motionTab = '',
+) {
+  const routes = {
+    motor_axes: 'config',
+    motion_axis_matching: 'motion-mapping',
+    motions: 'motion-files',
+    layers: 'studio',
+    logs: 'log',
+  };
+  return routes[String(category || '')]
+    || workspaceForLegacyNavigation(fallbackWorkspace, motionTab);
+}
+
+export function createWorkspaceRouteState(initialRoute = WORKSPACE_DEFAULTS.operations) {
+  let activeRoute = normalizeWorkspaceRoute(initialRoute);
+  const lastByGroup = { ...WORKSPACE_DEFAULTS };
+  lastByGroup[workspaceGroupFor(activeRoute)] = activeRoute;
+  return {
+    current: () => activeRoute,
+    select: (route) => {
+      activeRoute = normalizeWorkspaceRoute(route);
+      lastByGroup[workspaceGroupFor(activeRoute)] = activeRoute;
+      return activeRoute;
+    },
+    forGroup: (group) => (
+      lastByGroup[String(group || '')] || defaultWorkspaceForGroup(group)
+    ),
+  };
 }

@@ -26,6 +26,14 @@ test('two-level workspace navigation exposes every defined group and route', () 
   assert.doesNotMatch(main, /tab\?\.click\(\)/);
 });
 
+test('motion screens use workspace routes without obsolete internal tab controls', () => {
+  assert.doesNotMatch(html, /id=["']motionTabs["']/);
+  assert.doesNotMatch(html, /data-motion-tab=/);
+  for (const panel of ['files', 'mapping', 'midi', 'run']) {
+    assert.match(html, new RegExp(`data-motion-panel=["']${panel}["']`));
+  }
+});
+
 test('settings workflows preserve action IDs exactly once and expose four steps', () => {
   for (const id of [
     'scanButton',

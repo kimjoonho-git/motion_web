@@ -10,17 +10,18 @@ import {
   stopMotionStudio,
   setProjectGeneration,
 } from './api.js?v=20260723-servo-service-split';
-import { getElements } from './dom.js?v=20260724-ui-navigation-1';
+import { getElements } from './dom.js?v=20260724-ui-navigation-2';
 import { createMotorEventLogController } from './event_log.js?v=20260721-project-generation';
 import { createMidiMonitorController } from './midi_monitor.js?v=20260723-revision-sync';
-import { createMotionDataController } from './motion_data.js?v=20260724-ui-navigation-1';
+import { createMotionDataController } from './motion_data.js?v=20260724-ui-navigation-2';
 import { createMotionStudioController } from './motion_studio.js?v=20260724-layer-editor-ui-2';
 import { createMotionTestController } from './motion_test.js?v=20260721-project-generation';
 import { createMotorConfigController } from './motor_config.js?v=20260723-header-operation-groups';
-import { createProjectExplorerController } from './project_explorer.js?v=20260723-program-restart-label';
+import { createProjectExplorerController } from './project_explorer.js?v=20260724-ui-navigation-2';
 import { renderAccess, renderMonitoring } from './monitoring.js?v=20260723-physical-runtime-state';
 import { StatusSocket } from './socket.js';
 import {
+  createWorkspaceRouteState,
   defaultWorkspaceForGroup,
   motionTabForWorkspace,
   MOTION_WORKSPACE_DETAILS,
@@ -28,7 +29,8 @@ import {
   workspaceForLegacyNavigation,
   workspaceGroupFor,
   workspacePanelFor,
-} from './workspace_navigation.js?v=20260724-ui-navigation-1';
+  workspaceForProjectCategory,
+} from './workspace_navigation.js?v=20260724-ui-navigation-2';
 
 const el = getElements();
 const appState = {
@@ -36,7 +38,6 @@ const appState = {
   rawMode: false,
   activeMonitoringFilter: 'all',
   activeMonitoringDetailTab: 'basic',
-  activeWorkspacePanel: 'monitoring',
   emergencyLatched: false,
   configApplyInProgress: false,
   configApplyStartedAtMs: null,
@@ -51,6 +52,7 @@ const appState = {
   executionContext: null,
   projectGeneration: null,
 };
+const workspaceRouteState = createWorkspaceRouteState('monitoring');
 const RESTART_READY_STABLE_MS = 3500;
 const IDENTITY_BLOCKED_WORKSPACES = new Set(['manual', 'motion-run']);
 
@@ -61,7 +63,7 @@ function blockWorkspaceForMotorIdentity(workspace) {
   window.alert(
     appState.motorIdentityBlockMessage,
   );
-  appState.activeWorkspacePanel = 'config';
+  workspaceRouteState.select('config');
   renderWorkspacePanel();
   return true;
 }
@@ -91,10 +93,9 @@ function studioMotorActionBlockReason() {
 }
 
 function renderWorkspacePanel() {
-  const activeWorkspace = normalizeWorkspaceRoute(appState.activeWorkspacePanel);
+  const activeWorkspace = normalizeWorkspaceRoute(workspaceRouteState.current());
   const activeGroup = workspaceGroupFor(activeWorkspace);
   const activePanel = workspacePanelFor(activeWorkspace);
-  appState.activeWorkspacePanel = activeWorkspace;
   if (el.workspaceTabs) {
     el.workspaceTabs.querySelectorAll('[data-workspace-group]').forEach((button) => {
       const active = button.dataset.workspaceGroup === activeGroup;
@@ -129,7 +130,7 @@ function renderWorkspacePanel() {
 function setActiveWorkspace(workspace, motionTab = '') {
   const target = workspaceForLegacyNavigation(workspace, motionTab);
   if (blockWorkspaceForMotorIdentity(target)) return '';
-  appState.activeWorkspacePanel = target;
+  workspaceRouteState.select(target);
   renderWorkspacePanel();
   return target;
 }
@@ -761,14 +762,19 @@ const motionStudio = createMotionStudioController({
 });
 const projectExplorer = createProjectExplorerController({
   el,
-  onOpenEditor: (result) => {
-    const target = setActiveWorkspace(result.workspace || 'system', result.motion_tab);
+  onOpenEditor: (result, requestedWorkspace = '') => {
+    const targetRoute = requestedWorkspace || workspaceForProjectCategory(
+      result.category,
+      result.workspace || 'system',
+      result.motion_tab,
+    );
+    const target = setActiveWorkspace(targetRoute);
     if (!target) return;
-    if (result.workspace === 'config') motorConfig.fetchRegistry();
-    if (result.workspace === 'motion') {
+    if (target === 'config') motorConfig.fetchRegistry();
+    if (['motions', 'motion_axis_matching'].includes(result.category)) {
       motionData.openProjectFile(result.category, result.file_name);
     }
-    if (result.workspace === 'studio') motionStudio.refresh(false);
+    if (target === 'studio') motionStudio.refresh(false);
   },
   onManageFile: () => {
     setActiveWorkspace('system');
@@ -1116,9 +1122,9 @@ if (el.workspaceTabs) {
     const groupButton = event.target.closest('button[data-workspace-group]');
     if (groupButton) {
       const group = groupButton.dataset.workspaceGroup || 'operations';
-      if (workspaceGroupFor(appState.activeWorkspacePanel) === group) return;
+      if (workspaceGroupFor(workspaceRouteState.current()) === group) return;
       const target = setActiveWorkspace(
-        defaultWorkspaceForGroup(group),
+        workspaceRouteState.forGroup(group) || defaultWorkspaceForGroup(group),
       );
       if (!target) return;
       renderLatestState();
