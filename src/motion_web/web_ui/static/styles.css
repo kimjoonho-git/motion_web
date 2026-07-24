@@ -923,9 +923,14 @@ button.project-tree-midi:hover {
 
 .studio-grid {
   display: grid;
-  grid-template-columns: minmax(420px, 0.82fr) minmax(560px, 1.18fr);
+  grid-template-columns: minmax(360px, 0.82fr) minmax(0, 1.18fr);
   gap: 14px;
   align-items: start;
+  min-width: 0;
+}
+
+.studio-grid > * {
+  min-width: 0;
 }
 
 .studio-transport-panel,
@@ -1315,6 +1320,11 @@ button {
   border-radius: 6px;
   font-weight: 700;
   cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease,
+    color 120ms ease,
+    box-shadow 120ms ease;
 }
 
 button.primary {
@@ -1323,10 +1333,28 @@ button.primary {
   color: #ffffff;
 }
 
+button.primary:hover:not(:disabled) {
+  border-color: #1559be;
+  background: #1559be;
+}
+
+button.danger,
 button.off {
   background: #ffffff;
   color: var(--red);
   border-color: var(--red);
+}
+
+button.danger:hover:not(:disabled),
+button.off:hover:not(:disabled) {
+  background: #fff0f0;
+  border-color: #9f1f1f;
+  color: #9f1f1f;
+}
+
+button:focus-visible {
+  outline: 3px solid rgba(31, 111, 235, 0.24);
+  outline-offset: 2px;
 }
 
 button:disabled,
@@ -4011,9 +4039,14 @@ th {
 
 .motion-file-layout {
   display: grid;
-  grid-template-columns: minmax(220px, 0.45fr) minmax(760px, 1.8fr);
+  grid-template-columns: minmax(220px, 0.45fr) minmax(0, 1.8fr);
   gap: 12px;
   align-items: start;
+  min-width: 0;
+}
+
+.motion-file-layout > * {
+  min-width: 0;
 }
 
 .motion-file-column,
@@ -5116,6 +5149,12 @@ body.ui-locked {
 .midi-monitor-layout {
   display: grid;
   gap: 14px;
+  min-width: 0;
+}
+
+.midi-monitor-layout > *,
+.motion-tab-panel {
+  min-width: 0;
 }
 
 .midi-safety-notice {
@@ -5414,11 +5453,56 @@ body.ui-locked {
 }
 
 .workspace-panel .registry-message {
+  position: relative;
   padding: 8px 10px;
   border-left: 3px solid #bdc9d5;
   border-radius: 0 6px 6px 0;
   background: #f8fafc;
   line-height: 1.45;
+}
+
+.workspace-panel .registry-message[data-feedback-state="busy"] {
+  padding-right: 34px;
+  border-left-color: #6ca2e8;
+  background: #f2f7ff;
+  color: #315f98;
+}
+
+.workspace-panel .registry-message[data-feedback-state="busy"]::after {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  width: 12px;
+  height: 12px;
+  margin-top: -7px;
+  border: 2px solid #b8cee9;
+  border-top-color: var(--blue);
+  border-radius: 50%;
+  animation: spin 800ms linear infinite;
+  content: "";
+}
+
+.workspace-panel .registry-message[data-feedback-state="success"] {
+  border-left-color: #56a879;
+  background: #f0faf4;
+  color: #17653b;
+}
+
+.workspace-panel .registry-message[data-feedback-state="warning"] {
+  border-left-color: #d2a13b;
+  background: #fff9e8;
+  color: #805b0b;
+}
+
+.workspace-panel .registry-message[data-feedback-state="error"] {
+  border-left-color: #d45a5a;
+  background: #fff2f2;
+  color: #9f1f1f;
+  font-weight: 700;
+}
+
+.workspace-content > .workspace-panel {
+  margin-bottom: 0;
 }
 
 .workspace-panel .tabbar:not(.workspace-tabs) {

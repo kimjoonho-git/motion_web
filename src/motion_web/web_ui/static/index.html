@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>모션 녹화 시스템 0.5.0</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260724-ui-navigation-2">
+    <link rel="stylesheet" href="/static/styles.css?v=20260724-ui-finish-1">
   </head>
   <body>
     <main class="shell">
@@ -94,7 +94,7 @@
           </div>
           <div class="status-strip system-status-primary" aria-label="핵심 상태">
             <div><span>프로그램 실행</span><strong id="serviceMode">확인 중</strong></div>
-            <div><span>웹 브릿지</span><strong id="bridgeState">연결 중</strong></div>
+            <div><span>웹 브리지</span><strong id="bridgeState">연결 중</strong></div>
             <div><span>모니터링</span><strong id="monitoringState">확인 중</strong></div>
             <div><span>온라인 모터</span><strong id="onlineMotorCount">0</strong></div>
             <div><span>프로젝트 실행 설정</span><strong id="executionContextState">확인 중</strong></div>
@@ -337,8 +337,8 @@
             <div id="motorConfigTablePath" class="registry-message config-file-path">설정 파일: -</div>
             <div class="registry-message">파일 이름 변경·가져오기·내보내기·삭제는 왼쪽 프로젝트 파일의 ⋮ 버튼에서 관리합니다.</div>
             <div class="registry-actions">
-              <button id="updateConfigTableButton" class="primary" type="button" disabled>표 변경값 반영 초안</button>
-              <button id="saveConfigTableButton" type="button" disabled>파일 저장</button>
+              <button id="updateConfigTableButton" type="button" disabled>표 변경값을 초안에 반영</button>
+              <button id="saveConfigTableButton" class="primary" type="button" disabled>설정 파일 저장</button>
             </div>
             <div class="config-profile-help">
               <strong>프로파일 값 기준</strong>
@@ -362,7 +362,7 @@
           <div class="settings-commit-actions">
             <div class="registry-message">현재 상태와 설정 상태를 확인하세요. 저장만으로는 모터 제어 시스템이 재시작되지 않습니다.</div>
             <div class="registry-actions">
-              <button id="saveAxisConfigButton" class="primary" type="button" disabled>변경 내용 검증·저장</button>
+              <button id="saveAxisConfigButton" class="primary" type="button" disabled>변경 내용 검증 후 저장</button>
             </div>
           </div>
         </section>
@@ -838,7 +838,7 @@
               <div class="settings-commit-actions">
                 <div class="registry-message">저장 후에도 현재 화면에서 계속 편집할 수 있습니다.</div>
                 <div class="registry-actions settings-file-actions">
-                  <button id="saveMotionMappingButton" class="primary" type="button">현재 파일 저장</button>
+                  <button id="saveMotionMappingButton" class="primary" type="button">모션축 설정 저장</button>
                   <button id="resetMotionMappingButton" type="button">저장된 내용으로 되돌리기</button>
                   <button id="deleteMotionMappingButton" class="danger" type="button" disabled>현재 설정 파일 삭제</button>
                 </div>
@@ -903,7 +903,7 @@
                 <div class="registry-actions midi-bank-actions">
                   <button id="addMidiBankButton" type="button">뱅크 추가</button>
                   <button id="deleteMidiBankButton" class="danger" type="button">뱅크 삭제</button>
-                  <button id="saveMidiMappingButton" class="primary" type="button">뱅크 설정 적용/저장</button>
+                  <button id="saveMidiMappingButton" class="primary" type="button">MIDI 뱅크 설정 저장</button>
                   <button id="loadMidiBanksFileButton" type="button">파일에서 불러오기</button>
                 </div>
               </div>
@@ -1499,6 +1499,6 @@
       </section>
     </div>
 
-    <script type="module" src="/static/app.js?v=20260724-ui-navigation-2"></script>
+    <script type="module" src="/static/app.js?v=20260724-ui-finish-1"></script>
   </body>
 </html>

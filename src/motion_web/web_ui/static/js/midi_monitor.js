@@ -480,7 +480,7 @@ export function createMidiMonitorController({ el, onMappingFileSaved }) {
     } catch (error) {
       status = {
         ...(status || {}),
-        message: `뱅크 설정 적용/파일 저장 실패: ${error?.message || error}`,
+        message: `MIDI 뱅크 설정 저장 실패: ${error?.message || error}`,
       };
     } finally {
       loading = false;

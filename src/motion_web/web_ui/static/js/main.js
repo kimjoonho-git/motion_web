@@ -12,11 +12,11 @@ import {
 } from './api.js?v=20260723-servo-service-split';
 import { getElements } from './dom.js?v=20260724-ui-navigation-2';
 import { createMotorEventLogController } from './event_log.js?v=20260721-project-generation';
-import { createMidiMonitorController } from './midi_monitor.js?v=20260723-revision-sync';
+import { createMidiMonitorController } from './midi_monitor.js?v=20260724-ui-finish-1';
 import { createMotionDataController } from './motion_data.js?v=20260724-ui-navigation-2';
 import { createMotionStudioController } from './motion_studio.js?v=20260724-layer-editor-ui-2';
 import { createMotionTestController } from './motion_test.js?v=20260721-project-generation';
-import { createMotorConfigController } from './motor_config.js?v=20260723-header-operation-groups';
+import { createMotorConfigController } from './motor_config.js?v=20260724-ui-finish-1';
 import { createProjectExplorerController } from './project_explorer.js?v=20260724-ui-navigation-2';
 import { renderAccess, renderMonitoring } from './monitoring.js?v=20260723-physical-runtime-state';
 import { StatusSocket } from './socket.js';
@@ -31,8 +31,10 @@ import {
   workspacePanelFor,
   workspaceForProjectCategory,
 } from './workspace_navigation.js?v=20260724-ui-navigation-2';
+import { installFeedbackPresentation } from './ui_feedback.js?v=20260724-ui-finish-1';
 
 const el = getElements();
+installFeedbackPresentation(document);
 const appState = {
   latestState: null,
   rawMode: false,
