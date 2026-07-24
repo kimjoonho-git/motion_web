@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
+  motionStudioCanCreatePointCurve,
+  motionStudioCanvasEventPoint,
   motionStudioLayerDataEqual,
   motionStudioLayerDuration,
   motionStudioEditorNextValueScale,
@@ -12,11 +14,59 @@ import {
   motionStudioPointCurveViewEnd,
   motionStudioPointDragStarted,
   motionStudioPointHitTarget,
+  motionStudioRuntimeStatusMessage,
   motionStudioSelectionKindsMatch,
   motionStudioShouldEditPoint,
   resolveMotionStudioSelectedLayerId,
   synchronizeMotionStudioEditorTimeline,
 } from '../static/js/motion_studio.js';
+
+test('canvas pointer coordinates follow the internal graph size on scaled displays', () => {
+  assert.deepEqual(
+    motionStudioCanvasEventPoint(
+      { left: 20, top: 10, width: 480, height: 240 },
+      260,
+      130,
+      960,
+      480,
+    ),
+    { x: 480, y: 240 },
+  );
+  assert.deepEqual(
+    motionStudioCanvasEventPoint(
+      { left: 20, top: 10, width: 0, height: 0 },
+      120,
+      60,
+      960,
+      480,
+    ),
+    { x: 100, y: 50 },
+  );
+});
+
+test('runtime status feedback reports asynchronous failure and active completion', () => {
+  assert.deepEqual(
+    motionStudioRuntimeStatusMessage(
+      { state: 'initializing', message: '초기 위치 이동 중' },
+      { state: 'error', message: '서보가 꺼져 있습니다' },
+    ),
+    { message: '서보가 꺼져 있습니다', error: true },
+  );
+  assert.deepEqual(
+    motionStudioRuntimeStatusMessage(
+      { state: 'playing', message: '재생 중' },
+      { state: 'idle', message: '재생 완료' },
+    ),
+    { message: '재생 완료', error: false },
+  );
+  assert.equal(
+    motionStudioRuntimeStatusMessage(
+      { state: 'idle', message: '대기' },
+      { state: 'idle', message: '대기' },
+    ),
+    null,
+  );
+});
 
 test('a point click edits points only in point mode so general edits can select it', () => {
   const pointTarget = { point: { point_id: 'point_1' } };
@@ -26,6 +76,29 @@ test('a point click edits points only in point mode so general edits can select 
   assert.equal(motionStudioShouldEditPoint('value_offset', pointTarget), false);
   assert.equal(motionStudioShouldEditPoint('interpolate', pointTarget), false);
   assert.equal(motionStudioShouldEditPoint('point_curve', null), false);
+});
+
+test('a newly added flat axis can start a point curve without converting motion', () => {
+  const flatLayer = {
+    frames: [
+      { time_sec: 0.00, values: { '3-1': 5 } },
+      { time_sec: 0.02, values: { '3-1': 5 } },
+    ],
+    point_curves: [],
+  };
+
+  assert.equal(motionStudioCanCreatePointCurve(flatLayer, '3-1'), true);
+  assert.equal(motionStudioCanCreatePointCurve({
+    ...flatLayer,
+    frames: [
+      { time_sec: 0.00, values: { '3-1': 5 } },
+      { time_sec: 0.02, values: { '3-1': 6 } },
+    ],
+  }, '3-1'), false);
+  assert.equal(motionStudioCanCreatePointCurve({
+    ...flatLayer,
+    point_curves: [{ curve_id: 'curve-a', motion_id: '3-1', points: [] }],
+  }, '3-1'), false);
 });
 
 test('edit ranges allow only point-to-point or motion-to-motion selection', () => {
@@ -49,9 +122,10 @@ test('primary edit workflow actions stay in the fixed top action area', () => {
   assert.match(actionArea, /id="studioEditorSaveButton"/);
   assert.match(actionArea, /id="studioEditorUndoButton"/);
   assert.match(actionArea, /id="studioEditorRedoButton"/);
-  assert.match(actionArea, />1\. 결과 미리보기</);
-  assert.match(actionArea, />2\. 편집 반영</);
-  assert.match(actionArea, />3\. 저장</);
+  assert.match(actionArea, />변경 미리보기</);
+  assert.match(actionArea, />작업본 반영</);
+  assert.match(actionArea, /id="studioEditorSaveButton"[^>]*>저장</);
+  assert.match(actionArea, /id="studioEditorCloseButton"[^>]*>닫기</);
   for (const id of [
     'studioEditorApplyButton',
     'studioEditorUpdateButton',
@@ -61,6 +135,34 @@ test('primary edit workflow actions stay in the fixed top action area', () => {
   ]) {
     assert.equal((html.match(new RegExp(`id="${id}"`, 'g')) || []).length, 1);
   }
+});
+
+test('editor uses three stable columns and a dedicated save confirmation', () => {
+  const html = readFileSync(
+    new URL('../static/index.html', import.meta.url),
+    'utf8',
+  );
+  const styles = readFileSync(
+    new URL('../static/styles.css', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    html,
+    /studio-editor-layout[\s\S]*?studio-editor-sidebar[\s\S]*?studio-editor-main[\s\S]*?studio-editor-inspector/,
+  );
+  assert.match(html, /id="studioEditorSaveConfirmModal"/);
+  assert.match(html, /id="studioEditorDangerZone"/);
+  assert.match(html, /id="studioEditorTimeZoomInButton"/);
+  assert.match(html, /id="studioEditorValueZoomInButton"/);
+  assert.equal((html.match(/id="studioEditorCloseButton"/g) || []).length, 1);
+  assert.match(
+    styles,
+    /grid-template-columns:\s*220px minmax\(0,\s*1fr\) 310px/,
+  );
+  assert.match(
+    styles,
+    /grid-template-rows:\s*auto var\(--studio-editor-graph-height\) auto auto auto/,
+  );
 });
 
 test('motion types expose explicit conversion and destructive delete actions', () => {
@@ -108,11 +210,15 @@ test('axis range violations remain visible warnings without blocking edit apply'
     new URL('../static/js/motion_studio.js', import.meta.url),
     'utf8',
   );
+  const graphSource = readFileSync(
+    new URL('../static/js/motion_studio_graph.js', import.meta.url),
+    'utf8',
+  );
   assert.match(source, /previewValidation\.range_warnings/);
   assert.match(source, /축 설정 범위 초과 경고/);
   assert.match(source, /계속 진행 가능/);
   assert.match(
-    source,
+    graphSource,
     /\(displayedValidation\?\.range_warnings \|\| \[\]\)\.map/,
   );
 });

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>모션 녹화 시스템 0.5.0</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260723-motion-type-conversion">
+    <link rel="stylesheet" href="/static/styles.css?v=20260724-layer-editor-ui-2">
   </head>
   <body>
     <main class="shell">
@@ -1221,7 +1221,7 @@
         <section class="studio-editor-dialog">
           <div class="section-head">
             <div><strong id="studioEditorTitle">레이어 편집</strong><span id="studioEditorSubtitle">임시 작업본</span></div>
-            <button id="studioEditorCloseButton" type="button">닫기</button>
+            <span id="studioEditorSaveStatus" class="status-chip off" role="status">저장됨</span>
           </div>
           <div class="studio-editor-primary-actions" aria-label="레이어 편집 주요 작업">
             <div class="studio-editor-history-actions">
@@ -1230,46 +1230,70 @@
             </div>
             <div class="studio-editor-preview-actions">
               <span>현재 기능의 결과를 확인한 뒤 작업본에 반영하세요</span>
-              <button id="studioEditorApplyButton" type="button">1. 결과 미리보기</button>
-              <button id="studioEditorUpdateButton" class="primary" type="button" disabled>2. 편집 반영</button>
+              <button id="studioEditorApplyButton" type="button">변경 미리보기</button>
+              <button id="studioEditorUpdateButton" class="primary" type="button" disabled>작업본 반영</button>
             </div>
             <div class="studio-editor-final-actions">
-              <span>저장 후에도 계속 편집할 수 있습니다</span>
-              <button id="studioEditorSaveButton" class="primary" type="button">3. 저장</button>
+              <button id="studioEditorSaveButton" class="primary" type="button" disabled>저장</button>
+              <button id="studioEditorCloseButton" type="button">닫기</button>
             </div>
           </div>
           <div class="studio-editor-layout">
             <aside class="studio-editor-sidebar">
-              <strong>편집할 Motion ID</strong>
+              <strong>모션축 선택</strong>
               <div class="registry-actions"><button id="studioEditorSelectAllButton" type="button">전체 선택</button><button id="studioEditorSelectNoneButton" type="button">전체 해제</button></div>
               <div id="studioEditorAxisList" class="studio-editor-axis-list"></div>
-              <div class="studio-editor-add-axis">
-                <strong>축 만들기</strong>
-                <div class="studio-editor-axis-create-row">
-                  <input id="studioEditorAddAxisSelect" type="text" inputmode="text" placeholder="새 ID (예: 1-2)" aria-label="추가할 Motion ID">
-                  <input id="studioEditorAddAxisValue" type="number" step="0.1" value="0" aria-label="새 축 초기값">
-                  <button id="studioEditorAddAxisButton" type="button">추가</button>
+              <details class="studio-editor-axis-management">
+                <summary>축 관리</summary>
+                <div class="studio-editor-add-axis">
+                  <section class="studio-editor-axis-form">
+                    <strong>축 추가</strong>
+                    <label><span>Motion ID</span><input id="studioEditorAddAxisSelect" type="text" inputmode="text" placeholder="예: 1-2" aria-label="추가할 Motion ID"></label>
+                    <div class="studio-editor-axis-form-action">
+                      <label><span>초기값</span><input id="studioEditorAddAxisValue" type="number" step="0.1" value="0" aria-label="새 축 초기값"></label>
+                      <button id="studioEditorAddAxisButton" type="button">추가</button>
+                    </div>
+                  </section>
+                  <section class="studio-editor-axis-form">
+                    <strong>축 복사</strong>
+                    <label><span>원본 축</span><select id="studioEditorCopyAxisSource" aria-label="복사할 원본 Motion ID"><option value="">원본 축 없음</option></select></label>
+                    <div class="studio-editor-axis-form-action">
+                      <label><span>대상 ID</span><input id="studioEditorCopyAxisTarget" type="text" inputmode="text" placeholder="예: 1-2" aria-label="복사 대상 Motion ID"></label>
+                      <button id="studioEditorCopyAxisButton" type="button">복사</button>
+                    </div>
+                  </section>
+                  <small>새 축을 만들거나 기존 축의 모션값을 새 ID로 복사합니다.</small>
                 </div>
-                <div class="studio-editor-axis-create-row">
-                  <select id="studioEditorCopyAxisSource" aria-label="복사할 원본 Motion ID"><option value="">원본 축 없음</option></select>
-                  <input id="studioEditorCopyAxisTarget" type="text" inputmode="text" placeholder="대상 ID (예: 1-2)" aria-label="복사 대상 Motion ID">
-                  <button id="studioEditorCopyAxisButton" type="button">복사</button>
-                </div>
-                <small>추가: ID·초기값 입력 · 복사: 원본 선택 후 새 대상 ID 입력</small>
-              </div>
+              </details>
             </aside>
             <div class="studio-editor-main">
               <div class="studio-editor-toolbar">
-                <button id="studioEditorZoomInButton" type="button">그래프 확대</button>
-                <button id="studioEditorZoomOutButton" type="button">그래프 축소</button>
-                <button id="studioEditorFitSelectionButton" type="button">선택 구간 보기</button>
-                <button id="studioEditorFitAllButton" type="button">전체 보기</button>
-                <span id="studioEditorCursorInfo">그래프 위에 마우스를 올리세요</span>
+                <div class="studio-editor-tool-group" aria-label="시간축 도구">
+                  <span>시간</span>
+                  <button id="studioEditorTimeZoomInButton" type="button">확대</button>
+                  <button id="studioEditorTimeZoomOutButton" type="button">축소</button>
+                </div>
+                <div class="studio-editor-tool-group" aria-label="값축 도구">
+                  <span>값</span>
+                  <button id="studioEditorValueZoomInButton" type="button">확대</button>
+                  <button id="studioEditorValueZoomOutButton" type="button">축소</button>
+                </div>
+                <button id="studioEditorFitSelectionButton" type="button">선택 구간 맞춤</button>
+                <button id="studioEditorFitAllButton" type="button">전체 맞춤</button>
               </div>
               <div class="studio-editor-canvas-wrap"><canvas id="studioEditorGraph" height="430"></canvas></div>
               <div id="studioEditorLegend" class="studio-layer-graph-legend"></div>
+              <div id="studioEditorCursorInfo" class="studio-editor-cursor-info">그래프 위에 마우스를 올리세요</div>
+              <div id="studioEditorMessage" class="registry-message">결과를 미리 본 뒤 편집 반영하여 작업본에 누적하세요.</div>
+            </div>
+            <aside id="studioEditorInspector" class="studio-editor-inspector">
+              <div class="studio-editor-inspector-head">
+                <strong>편집 인스펙터</strong>
+                <span id="studioEditorInspectorState" class="status-chip off">선택 없음</span>
+              </div>
               <section class="studio-editor-operation-panel">
                 <strong id="studioEditorOperationTitle">선택 구간 편집</strong>
+                <p id="studioEditorSelectionGuide" class="studio-editor-selection-guide">그래프에서 모션점이나 포인트를 선택하세요.</p>
                 <div id="studioEditorScopeControls" class="studio-editor-scope-controls">
                   <strong>편집 구간</strong>
                   <label class="compact-field studio-editor-range-field"><span>시작(초)</span><input id="studioEditorStart" type="number" min="0" step="0.02" placeholder="선택" value=""></label>
@@ -1279,21 +1303,21 @@
                 </div>
                 <div class="studio-editor-conversion-controls">
                   <strong>구간 종류 변환</strong>
-                  <label class="compact-field"><span>근사 정밀도</span>
+                  <label class="compact-field studio-editor-inspector-field"><span>근사 정밀도</span>
                     <select id="studioEditorApproximationTolerance">
                       <option value="0.5">부드럽게 (0.5°)</option>
                       <option value="0.1" selected>표준 (0.1°)</option>
                       <option value="0.02">정밀하게 (0.02°)</option>
                     </select>
                   </label>
-                  <label class="compact-field"><span>근사 곡선</span>
+                  <label class="compact-field studio-editor-inspector-field"><span>근사 곡선</span>
                     <select id="studioEditorApproximationOrder">
                       <option value="1">1차 (직선)</option>
                       <option value="3" selected>3차 (부드럽게)</option>
                       <option value="5">5차 (더 부드럽게)</option>
                     </select>
                   </label>
-                  <label class="compact-field"><span>최대 포인트</span>
+                  <label class="compact-field studio-editor-inspector-field"><span>최대 포인트</span>
                     <input id="studioEditorApproximationMaximumPoints" type="number" min="3" max="200" step="1" value="50">
                   </label>
                   <button id="studioEditorConvertToPointsButton" type="button">일반 모션 → 포인트 모션</button>
@@ -1321,19 +1345,35 @@
                     <label class="compact-field"><span>탄젠트</span><select id="studioEditorPointMode" disabled>
                       <option value="auto">자동</option><option value="smooth">부드럽게</option><option value="broken">분리</option>
                     </select></label>
-                    <button id="studioEditorPointDeleteButton" class="off" type="button" disabled>포인트 삭제</button>
-                    <button id="studioEditorCurveDetachButton" type="button" disabled>포인트 모션 → 일반 모션</button>
-                    <button id="studioEditorCurveDeleteButton" class="off" type="button" disabled>곡선 구간 삭제</button>
                   </div>
                 </div>
                 <div id="studioEditorOperationHelp" class="studio-editor-operation-help">시작점을 기준으로 선택 구간의 시간을 배율만큼 줄이거나 늘립니다.</div>
               </section>
-              <div id="studioEditorMessage" class="registry-message">결과를 미리 본 뒤 편집 반영하여 작업본에 누적하세요. 저장 후에도 계속 편집할 수 있습니다.</div>
-              <div class="studio-editor-footer">
-                <span>1. 결과 미리보기 → 2. 편집 반영 → 3. 저장 · 닫기는 저장과 별도입니다.</span>
-                <button id="studioEditorDiscardButton" type="button">닫기</button>
-              </div>
-            </div>
+              <section id="studioEditorDangerZone" class="studio-editor-danger-zone hidden">
+                <strong>구간 관리</strong>
+                <small>선택한 포인트 또는 곡선 구간에 적용되는 위험 작업입니다.</small>
+                <button id="studioEditorPointDeleteButton" class="off" type="button" disabled>포인트 삭제</button>
+                <button id="studioEditorCurveDetachButton" type="button" disabled>포인트 모션 → 일반 모션</button>
+                <button id="studioEditorCurveDeleteButton" class="off" type="button" disabled>곡선 구간 삭제</button>
+              </section>
+            </aside>
+          </div>
+        </section>
+      </div>
+
+      <div id="studioEditorSaveConfirmModal" class="confirm-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="studioEditorSaveConfirmTitle">
+        <section class="confirm-dialog studio-editor-save-confirm">
+          <strong id="studioEditorSaveConfirmTitle">레이어를 저장할까요?</strong>
+          <dl class="studio-editor-save-summary">
+            <div><dt>레이어</dt><dd id="studioEditorSaveLayerName">-</dd></div>
+            <div><dt>반영된 편집</dt><dd id="studioEditorSaveEditCount">0회</dd></div>
+            <div><dt>포인트 곡선</dt><dd id="studioEditorSavePointChange">변경 없음</dd></div>
+            <div><dt>축 범위 경고</dt><dd id="studioEditorSaveWarningCount">0건</dd></div>
+          </dl>
+          <p>저장하면 실행 취소 기록이 초기화됩니다.</p>
+          <div class="registry-actions">
+            <button id="studioEditorSaveCancelButton" type="button">취소</button>
+            <button id="studioEditorSaveConfirmButton" class="primary" type="button">저장</button>
           </div>
         </section>
       </div>
@@ -1427,6 +1467,6 @@
       </section>
     </div>
 
-    <script type="module" src="/static/app.js?v=20260723-point-save-state"></script>
+    <script type="module" src="/static/app.js?v=20260724-layer-editor-ui-2"></script>
   </body>
 </html>

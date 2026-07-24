@@ -1,1 +1,1 @@
-import './js/main.js?v=20260723-point-save-state';
+import './js/main.js?v=20260724-layer-editor-ui-2';
