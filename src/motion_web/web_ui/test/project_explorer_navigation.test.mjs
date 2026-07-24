@@ -54,3 +54,25 @@ test('failed file loads cannot reuse a previous selection or race feature naviga
   assert.match(main, /await motionData\.openProjectFile\(result\.category, result\.file_name\)/);
   assert.match(main, /if \(target === 'studio'\) await motionStudio\.refresh\(false\)/);
 });
+
+test('project.json loads automatically and remains read-only', () => {
+  assert.match(
+    projectExplorer,
+    /async function loadProjectInfoFile\(projectId, relativePath = 'project\.json'\)/,
+  );
+  assert.match(
+    projectExplorer,
+    /async function loadProject[\s\S]*?await loadProjectInfoFile\(state\.project\?\.project_id\)/,
+  );
+  assert.match(projectExplorer, /el\.projectFileEditor\.readOnly = true/);
+});
+
+test('managed file actions open from the project tree popup', () => {
+  assert.match(
+    projectExplorer,
+    /if \(event\.target\.closest\('\[data-project-manage\]'\)\)[\s\S]*?openFileActionMenu\(anchorRect\)/,
+  );
+  assert.match(projectExplorer, /function closeFileActionMenu\(\)/);
+  assert.match(projectExplorer, /document\.addEventListener\('pointerdown'/);
+  assert.doesNotMatch(projectExplorer, /projectFileSaveButton/);
+});

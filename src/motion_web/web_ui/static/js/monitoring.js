@@ -591,14 +591,10 @@ export function renderMonitoring(state, options) {
     el.monitorToggle.classList.toggle('primary', enabled);
   }
   if (el.displayModeToggle) el.displayModeToggle.textContent = rawMode ? '해석값 보기' : '원시값 보기';
-  const connectionSummary = state.connection_summary || {};
-  const onlineCount = Number.isFinite(Number(connectionSummary.online))
-    ? Number(connectionSummary.online)
-    : Number(state.online_motors_count || state.detected_count || 0);
-  if (el.onlineMotorCount) el.onlineMotorCount.textContent = formatInt(onlineCount);
-  if (el.knownMotorCount) {
-    el.knownMotorCount.textContent = `${formatInt(state.known_motors_count || allMotors.length)} / ${formatInt(state.max_motors || 50)}`;
-  }
+  const faultCount = allMotors.filter(
+    (motor) => Boolean(motor.fault) || Number(motor.errorcode || 0) !== 0,
+  ).length;
+  if (el.systemFaultCount) el.systemFaultCount.textContent = `${formatInt(faultCount)}축`;
   if (el.lastUpdate) el.lastUpdate.textContent = formatTime(state.generated_at);
 
   const registryFilteredCount = allMotors.length - registryFilteredMotors.length;

@@ -10,15 +10,15 @@ import {
   stopMotionStudio,
   setProjectGeneration,
 } from './api.js?v=20260723-servo-service-split';
-import { getElements } from './dom.js?v=20260724-motor-status-3';
+import { getElements } from './dom.js?v=20260724-system-layout-1';
 import { createMotorEventLogController } from './event_log.js?v=20260721-project-generation';
 import { createMidiMonitorController } from './midi_monitor.js?v=20260724-ui-finish-1';
 import { createMotionDataController } from './motion_data.js?v=20260724-ui-navigation-2';
 import { createMotionStudioController } from './motion_studio.js?v=20260724-editor-history-1';
 import { createMotionTestController } from './motion_test.js?v=20260724-motor-management-1';
-import { createMotorConfigController } from './motor_config.js?v=20260724-motor-status-3';
-import { createProjectExplorerController } from './project_explorer.js?v=20260724-ui-connect-2';
-import { renderAccess, renderMonitoring } from './monitoring.js?v=20260724-motor-status-terms-1';
+import { createMotorConfigController } from './motor_config.js?v=20260724-motor-management-layout-2';
+import { createProjectExplorerController } from './project_explorer.js?v=20260724-system-layout-1';
+import { renderAccess, renderMonitoring } from './monitoring.js?v=20260724-system-layout-1';
 import { StatusSocket } from './socket.js';
 import {
   createWorkspaceRouteState,

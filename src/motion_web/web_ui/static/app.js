@@ -1,1 +1,1 @@
-import './js/main.js?v=20260724-motor-status-3';
+import './js/main.js?v=20260724-system-layout-1';

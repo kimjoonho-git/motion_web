@@ -771,12 +771,6 @@ export function createMotorConfigController({
       el.updateConfigTableButton.disabled = !hasConfigTableDrafts();
       el.updateConfigTableButton.textContent = '표 변경값을 초안에 반영';
     }
-    if (el.saveConfigTableButton) {
-      el.saveConfigTableButton.disabled = hasConfigTableDrafts() || !hasMotorConfigTableSaveChanges();
-      el.saveConfigTableButton.textContent = hasConfigTableDrafts()
-        ? '초안 반영 필요'
-        : '설정 파일 저장';
-    }
   }
 
   function pathBasename(path) {
@@ -3611,7 +3605,6 @@ export function createMotorConfigController({
     if (el.toggleAxisButton) el.toggleAxisButton.addEventListener('click', toggleSelectedAxis);
     if (el.sortAxisButton) el.sortAxisButton.addEventListener('click', sortAxisNumbers);
     if (el.saveAxisConfigButton) el.saveAxisConfigButton.addEventListener('click', saveAxisConfig);
-    if (el.saveConfigTableButton) el.saveConfigTableButton.addEventListener('click', saveAxisConfig);
     if (el.applyAxisConfigButton) el.applyAxisConfigButton.addEventListener('click', applyConfigRestart);
     if (el.updateConfigTableButton) el.updateConfigTableButton.addEventListener('click', applyConfigTableUpdates);
     if (el.motorConfigFileNameInput) {

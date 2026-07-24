@@ -15,7 +15,6 @@ const actions = {
   toggleAxisButton: 'toggleSelectedAxis',
   sortAxisButton: 'sortAxisNumbers',
   saveAxisConfigButton: 'saveAxisConfig',
-  saveConfigTableButton: 'saveAxisConfig',
   applyAxisConfigButton: 'applyConfigRestart',
   updateConfigTableButton: 'applyConfigTableUpdates',
   deleteMotorConfigButton: 'deleteCurrentMotorConfig',

@@ -24,6 +24,17 @@ test('motor management exposes one seven-stage preparation flow', () => {
   assert.match(styles, /\.motor-readiness-steps/);
 });
 
+test('motor readiness summary keeps each title and value on one compact row', () => {
+  assert.match(
+    styles,
+    /\.motor-readiness-summary > div\s*\{[\s\S]*?display: flex;[\s\S]*?min-height: 40px;/,
+  );
+  assert.match(
+    styles,
+    /\.motor-readiness-summary strong\s*\{[\s\S]*?text-overflow: ellipsis;[\s\S]*?white-space: nowrap;/,
+  );
+});
+
 test('axis readiness table keeps runtime facts distinct', () => {
   for (const heading of [
     '실제 장치 식별',
@@ -43,7 +54,7 @@ test('axis readiness table keeps runtime facts distinct', () => {
 });
 
 test('unsupported Dynamixel torque controls are not presented as working actions', () => {
-  assert.match(html, /현재 명시적 토크 제어 버튼은 지원하지 않으며/);
+  assert.match(html, /Dynamixel · Torque Enable\/Disable · 동작 명령 시 Torque Enable/);
   assert.doesNotMatch(html, /id="[^"]*Dynamixel[^"]*Torque/);
 });
 
@@ -70,6 +81,23 @@ test('motor setting tabs use concise names', () => {
   assert.doesNotMatch(html, />고급 원본 보기</);
 });
 
+test('motor management actions follow control, edit, save and apply groups', () => {
+  assert.match(
+    html,
+    /장비 제어[\s\S]*id="allAcServoOnButton"[\s\S]*id="allAcServoOffButton"[\s\S]*시스템[\s\S]*id="motorControlRestartButton"/,
+  );
+  assert.match(
+    html,
+    /class="axis-edit-toolbar"[\s\S]*id="addAxisButton"[\s\S]*id="updateAxisIdentityButton"[\s\S]*id="toggleAxisButton"[\s\S]*id="sortAxisButton"[\s\S]*id="deleteAxisButton"/,
+  );
+  assert.match(
+    html,
+    /3\. 저장·실행 적용[\s\S]*id="saveAxisConfigButton"[\s\S]*id="applyAxisConfigButton"/,
+  );
+  assert.doesNotMatch(html, /id="saveConfigTableButton"/);
+  assert.match(styles, /\.settings-final-actions\s*\{[\s\S]*?grid-template-columns: repeat\(2,/);
+});
+
 test('project selection lives in the left project sidebar only', () => {
   const sidebar = html.match(/<aside class="project-sidebar"[\s\S]*?<\/aside>\s*<section id="projectSetupProgress"/)?.[0] || '';
   assert.match(sidebar, /id="projectExplorerCurrentName"/);
@@ -78,10 +106,55 @@ test('project selection lives in the left project sidebar only', () => {
 });
 
 test('system status cards use compact exact desktop columns', () => {
-  assert.match(styles, /\.system-status-primary\s*\{[\s\S]*?grid-template-columns: repeat\(5,/);
+  assert.match(
+    styles,
+    /\.system-runtime-grid\s*\{[\s\S]*?grid-template-columns: minmax\(0, 3fr\) minmax\(400px, 2fr\)/,
+  );
+  assert.match(
+    styles,
+    /\.system-project-grid\s*\{[\s\S]*?grid-template-columns: minmax\(0, 3fr\) minmax\(400px, 2fr\)/,
+  );
+  assert.match(
+    styles,
+    /@media \(max-width: 1500px\)[\s\S]*?\.system-runtime-grid,[\s\S]*?\.system-project-grid\s*\{[\s\S]*?grid-template-columns: 1fr/,
+  );
+  assert.match(
+    html,
+    /class="system-runtime-grid"[\s\S]*class="system-overview-card"[\s\S]*class="project-system-manager system-program-card"/,
+  );
+  assert.match(
+    styles,
+    /\.system-status-primary\s*\{[\s\S]*?grid-template-columns: minmax\(0, 1\.35fr\) repeat\(4,/,
+  );
   assert.match(styles, /\.system-status-primary > div\s*\{[\s\S]*?min-height: 56px;/);
-  assert.match(styles, /\.system-status-secondary\s*\{[\s\S]*?grid-template-columns: repeat\(4,/);
+  assert.match(styles, /\.system-status-secondary\s*\{[\s\S]*?grid-template-columns: repeat\(2,/);
   assert.match(styles, /\.system-status-secondary > div\s*\{[\s\S]*?min-height: 46px;/);
+});
+
+test('system project tools and memo use a fixed two-column layout', () => {
+  assert.match(
+    styles,
+    /\.system-project-grid\s*\{[\s\S]*?grid-template-columns: minmax\(0, 3fr\) minmax\(400px, 2fr\)/,
+  );
+  assert.match(
+    html,
+    /class="system-project-grid"[\s\S]*class="project-system-manager system-project-tools"[\s\S]*class="project-system-manager system-project-memo"/,
+  );
+  assert.doesNotMatch(html, /<details class="project-system-manager system-project-tools"/);
+});
+
+test('project information is read-only and file actions live in the popup menu', () => {
+  const manager = html.match(
+    /<section id="projectFileManager"[\s\S]*?<textarea id="projectFileEditor"[\s\S]*?<\/section>/,
+  )?.[0] || '';
+  assert.match(
+    manager,
+    /class="section-head compact system-project-info-head"[\s\S]*id="projectFileEditorTitle"[\s\S]*id="projectFileInfo"/,
+  );
+  assert.equal((manager.match(/class="section-head/g) || []).length, 1);
+  assert.match(manager, /id="projectFileEditor"[\s\S]*readonly disabled/);
+  assert.doesNotMatch(manager, /id="projectFile(?:OpenEditor|Rename|Activate|Export|Delete)Button"/);
+  assert.match(html, /id="projectFileActionMenu"[\s\S]*id="projectFileOpenEditorButton"[\s\S]*id="projectFileDeleteButton"/);
 });
 
 test('motor type summary separates configuration, physical and runtime facts', () => {
