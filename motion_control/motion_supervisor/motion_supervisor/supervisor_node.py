@@ -1018,6 +1018,17 @@ class MotionSupervisor(Node):
                 f'target {active["target_position"]:.3f} deg',
             )
 
+        if request.get('range_recovery') is True:
+            return self._start_range_recovery(
+                motors,
+                motor,
+                axis,
+                current_position,
+                target_position,
+                request_id,
+                is_ac_servo=True,
+            )
+
         corrected_duration = self._correct_action_duration_sec(
             motor,
             current_position,
@@ -1069,13 +1080,20 @@ class MotionSupervisor(Node):
         axis = self._optional_int(request.get('axis'))
         target_position = self._optional_float(request.get('target_deg'))
         requested_duration = self._optional_float(request.get('duration_sec'))
+        range_recovery = request.get('range_recovery') is True
         if axis is None:
             return False, 'axis is required'
         if target_position is None:
             return False, 'target_deg is required'
         if requested_duration is not None and requested_duration <= 0:
             return False, 'duration_sec must be greater than 0'
-        if target_position < DYNAMIXEL_ACTION_MIN_DEG or target_position > DYNAMIXEL_ACTION_MAX_DEG:
+        if (
+            not range_recovery
+            and (
+                target_position < DYNAMIXEL_ACTION_MIN_DEG
+                or target_position > DYNAMIXEL_ACTION_MAX_DEG
+            )
+        ):
             return (
                 False,
                 f'Dynamixel action target must be between '
@@ -1113,6 +1131,17 @@ class MotionSupervisor(Node):
                 False,
                 f'Axis {axis} previous action is still running: '
                 f'target {active["target_position"]:.3f} deg',
+            )
+
+        if range_recovery:
+            return self._start_range_recovery(
+                motors,
+                motor,
+                axis,
+                current_position,
+                target_position,
+                request_id,
+                is_ac_servo=False,
             )
 
         corrected_duration = self._correct_action_duration_sec(
@@ -1715,6 +1744,98 @@ class MotionSupervisor(Node):
                 f'is above upper limit {upper:.3f} deg'
             )
         return ''
+
+    def _range_recovery_target_error(
+        self,
+        motor: Dict[str, Any],
+        current_position: float,
+        target_position: float,
+    ) -> str:
+        axis = self._optional_int(motor.get('controller_index'))
+        lower = self._optional_float(motor.get('lower'))
+        upper = self._optional_float(motor.get('upper'))
+        if lower is None or upper is None or lower > upper:
+            return f'Axis {axis} has invalid position limits'
+
+        expected_target: Optional[float] = None
+        boundary_name = ''
+        if current_position < lower:
+            expected_target = lower
+            boundary_name = 'lower'
+        elif current_position > upper:
+            expected_target = upper
+            boundary_name = 'upper'
+        else:
+            return f'Axis {axis} is already within position limits'
+
+        if not math.isclose(target_position, expected_target, abs_tol=1e-6):
+            return (
+                f'Axis {axis} range recovery must target the {boundary_name} '
+                f'limit {expected_target:.3f} deg'
+            )
+        return ''
+
+    def _start_range_recovery(
+        self,
+        motors: list[Dict[str, Any]],
+        motor: Dict[str, Any],
+        axis: int,
+        current_position: float,
+        target_position: float,
+        request_id: str,
+        *,
+        is_ac_servo: bool,
+    ) -> tuple[bool, str]:
+        recovery_error = self._range_recovery_target_error(
+            motor,
+            current_position,
+            target_position,
+        )
+        if recovery_error:
+            return False, recovery_error
+
+        if is_ac_servo:
+            success, message = self._publish_ac_servo_action_setpoint(
+                motors,
+                motor,
+                axis,
+                target_position,
+            )
+            label = 'AC Servo range recovery'
+        else:
+            success, message = self._publish_position_target(
+                motors,
+                motor,
+                axis,
+                target_position,
+                DYNAMIXEL_TORQUE_ENABLE,
+            )
+            label = 'Dynamixel range recovery'
+        if not success:
+            return False, message
+
+        now = time.time()
+        self._active_actions[axis] = {
+            'request_id': request_id,
+            'target_position': float(target_position),
+            'started_at': now,
+            'started_monotonic': time.monotonic(),
+            'start_position': float(current_position),
+            'applied_duration_sec': 0.0,
+            'requested_duration_sec': 0.0,
+            'command_period_sec': 0.0,
+            'steps': 1.0,
+            'last_step': 1.0,
+            'commands_sent_at': now,
+            'motors': motors,
+            'motor': motor,
+            'label': label,
+        }
+        return (
+            True,
+            f'{label} started: Axis {axis}, current {current_position:.3f} deg, '
+            f'target {target_position:.3f} deg',
+        )
 
     def _target_tolerance_deg(self, motor: Dict[str, Any]) -> float:
         if not self._is_dynamixel(motor):

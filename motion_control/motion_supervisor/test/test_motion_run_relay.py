@@ -82,6 +82,61 @@ def test_ac_servo_jog_exceeds_half_second_for_lower_motor_limits():
     assert steps * 0.04 == pytest.approx(1.8)
 
 
+def test_range_recovery_accepts_only_the_violated_boundary():
+    supervisor = MotionSupervisor.__new__(MotionSupervisor)
+    motor = {
+        'controller_index': 0,
+        'lower': -1000.0,
+        'upper': 1000.0,
+    }
+
+    assert supervisor._range_recovery_target_error(motor, -1200.0, -1000.0) == ''
+    assert supervisor._range_recovery_target_error(motor, 1200.0, 1000.0) == ''
+    assert 'must target the lower limit' in supervisor._range_recovery_target_error(
+        motor,
+        -1200.0,
+        -900.0,
+    )
+    assert 'already within position limits' in supervisor._range_recovery_target_error(
+        motor,
+        0.0,
+        -1000.0,
+    )
+
+
+def test_range_recovery_sends_one_in_range_target_without_intermediate_targets():
+    supervisor = MotionSupervisor.__new__(MotionSupervisor)
+    supervisor._active_actions = {}
+    published = []
+    supervisor._publish_ac_servo_action_setpoint = (
+        lambda _motors, _motor, axis, target: (
+            published.append((axis, target)) is None,
+            '',
+        )
+    )
+    motor = {
+        'controller_index': 0,
+        'lower': -1000.0,
+        'upper': 1000.0,
+    }
+
+    success, message = supervisor._start_range_recovery(
+        [motor],
+        motor,
+        0,
+        -1200.0,
+        -1000.0,
+        'recovery-1',
+        is_ac_servo=True,
+    )
+
+    assert success is True
+    assert 'range recovery started' in message
+    assert published == [(0, -1000.0)]
+    assert supervisor._active_actions[0]['steps'] == 1.0
+    assert supervisor._active_actions[0]['last_step'] == 1.0
+
+
 def test_ac_servo_jog_trajectory_sends_cubic_intermediate_targets():
     supervisor = MotionSupervisor.__new__(MotionSupervisor)
     supervisor.action_period_sec = 0.001
