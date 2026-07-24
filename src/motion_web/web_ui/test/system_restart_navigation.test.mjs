@@ -49,3 +49,19 @@ test('restart controls require confirmation and invoke only their matching opera
   assert.match(motorHandler, /restartMotorControlSystem\(\)/);
   assert.doesNotMatch(motorHandler, /restartManagedProgram\(\)/);
 });
+
+test('program restart readiness does not require motor runtime state', () => {
+  assert.match(main, /restartCheckMode: ''/);
+  assert.match(
+    main,
+    /if \(appState\.restartCheckMode === 'program'\)[\s\S]*?title: '프로그램 재시작 완료'[\s\S]*?const runtime = payload\?\.service_management\?\.runtime/,
+  );
+  assert.match(
+    main,
+    /programRestartButton\.addEventListener\('click'[\s\S]*?restartCheckMode = 'program'/,
+  );
+  assert.match(
+    main,
+    /onConfigApplyStart:[\s\S]*?restartCheckMode = 'motor_apply'/,
+  );
+});

@@ -14,7 +14,7 @@ import { getElements } from './dom.js?v=20260724-ui-navigation-2';
 import { createMotorEventLogController } from './event_log.js?v=20260721-project-generation';
 import { createMidiMonitorController } from './midi_monitor.js?v=20260724-ui-finish-1';
 import { createMotionDataController } from './motion_data.js?v=20260724-ui-navigation-2';
-import { createMotionStudioController } from './motion_studio.js?v=20260724-layer-editor-ui-2';
+import { createMotionStudioController } from './motion_studio.js?v=20260724-editor-history-1';
 import { createMotionTestController } from './motion_test.js?v=20260721-project-generation';
 import { createMotorConfigController } from './motor_config.js?v=20260724-ui-finish-1';
 import { createProjectExplorerController } from './project_explorer.js?v=20260724-ui-connect-2';
@@ -45,6 +45,7 @@ const appState = {
   configApplyStartedAtMs: null,
   configApplyReadySinceMs: null,
   configApplyConnectionInterrupted: false,
+  restartCheckMode: '',
   bridgeInstanceId: '',
   restartPreviousBridgeInstanceId: '',
   motorIdentityBlockMessage: '',
@@ -521,6 +522,20 @@ function restartReadyState(payload) {
       detail: 'motion_web_bridge 재시작을 기다리는 중',
     };
   }
+  if (appState.restartCheckMode === 'program') {
+    if (!bridgeInstanceChanged) {
+      return {
+        ready: false,
+        title: '프로그램 재시작 확인 중',
+        detail: '새 motion_web_bridge 인스턴스 확인 대기',
+      };
+    }
+    return {
+      ready: true,
+      title: '프로그램 재시작 완료',
+      detail: '웹·Supervisor·모션 실행·MIDI 재연결 확인 · 모터 제어 상태는 변경하지 않음',
+    };
+  }
   const runtime = payload?.service_management?.runtime || {};
   if (runtime.phase === 'motor_manager_start_blocked') {
     return {
@@ -650,17 +665,21 @@ function restartReadyState(payload) {
 
 function updateRestartProgress(payload = null) {
   if (!appState.configApplyInProgress) return;
+  const programRestart = appState.restartCheckMode === 'program';
   const state = restartReadyState(payload);
-  const message = [
-    'motor_manager_node, motion_state_monitor, motion_supervisor, motion_web_bridge 상태를 확인하는 중입니다.',
-    'YAML 등록 수가 아니라 직접 검색되거나 실제 감지된 모터를 기준으로 확인합니다.',
-  ].join(' ');
+  const message = programRestart
+    ? '웹·Supervisor·모션 실행·MIDI가 다시 연결됐는지 확인하는 중입니다.'
+    : [
+      'motor_manager_node, motion_state_monitor, motion_supervisor, motion_web_bridge 상태를 확인하는 중입니다.',
+      'YAML 등록 수가 아니라 직접 검색되거나 실제 감지된 모터를 기준으로 확인합니다.',
+    ].join(' ');
 
   if (state.failed) {
     appState.configApplyInProgress = false;
     appState.configApplyStartedAtMs = null;
     appState.configApplyReadySinceMs = null;
     appState.configApplyConnectionInterrupted = false;
+    appState.restartCheckMode = '';
     appState.restartPreviousBridgeInstanceId = '';
     setRestartOverlay(true, state.title, '노드는 재시작됐지만 연결된 모터를 찾지 못했습니다.', state.detail);
     if (el.bridgeState) el.bridgeState.textContent = state.title;
@@ -681,12 +700,22 @@ function updateRestartProgress(payload = null) {
 
   if (!appState.configApplyReadySinceMs) {
     appState.configApplyReadySinceMs = Date.now();
-    setRestartOverlay(true, '설정 적용·재시작 완료 확인 중', message, state.detail);
+    setRestartOverlay(
+      true,
+      programRestart ? '프로그램 재시작 완료 확인 중' : '설정 적용·재시작 완료 확인 중',
+      message,
+      state.detail,
+    );
     return;
   }
 
   if (Date.now() - appState.configApplyReadySinceMs < RESTART_READY_STABLE_MS) {
-    setRestartOverlay(true, '설정 적용·재시작 완료 확인 중', message, state.detail);
+    setRestartOverlay(
+      true,
+      programRestart ? '프로그램 재시작 완료 확인 중' : '설정 적용·재시작 완료 확인 중',
+      message,
+      state.detail,
+    );
     return;
   }
 
@@ -694,10 +723,22 @@ function updateRestartProgress(payload = null) {
   appState.configApplyStartedAtMs = null;
   appState.configApplyReadySinceMs = null;
   appState.configApplyConnectionInterrupted = false;
+  appState.restartCheckMode = '';
   appState.restartPreviousBridgeInstanceId = '';
-  setRestartOverlay(true, state.title, '설정 적용·재시작과 모터 상태 수신을 확인했습니다.', state.detail);
+  setRestartOverlay(
+    true,
+    state.title,
+    programRestart
+      ? '프로그램 재시작과 웹 자동 재연결을 확인했습니다.'
+      : '설정 적용·재시작과 모터 상태 수신을 확인했습니다.',
+    state.detail,
+  );
   if (el.bridgeState) el.bridgeState.textContent = '연결됨';
-  if (el.summaryText) el.summaryText.textContent = '설정 적용·재시작 완료';
+  if (el.summaryText) {
+    el.summaryText.textContent = programRestart
+      ? '프로그램 재시작 완료'
+      : '설정 적용·재시작 완료';
+  }
   setTimeout(() => {
     if (!appState.configApplyInProgress) {
       setRestartOverlay(false);
@@ -717,6 +758,7 @@ const motorConfig = createMotorConfigController({
     appState.configApplyStartedAtMs = Date.now();
     appState.configApplyReadySinceMs = null;
     appState.configApplyConnectionInterrupted = false;
+    appState.restartCheckMode = 'motor_apply';
     appState.restartPreviousBridgeInstanceId = appState.bridgeInstanceId;
     if (el.bridgeState) el.bridgeState.textContent = '설정 반영 중';
     if (el.summaryText) el.summaryText.textContent = '설정 반영 중입니다. 웹 연결이 자동으로 다시 연결됩니다.';
@@ -732,6 +774,7 @@ const motorConfig = createMotorConfigController({
     appState.configApplyStartedAtMs = null;
     appState.configApplyReadySinceMs = null;
     appState.configApplyConnectionInterrupted = false;
+    appState.restartCheckMode = '';
     appState.restartPreviousBridgeInstanceId = '';
     setRestartOverlay(false);
   },
@@ -941,6 +984,7 @@ if (el.programRestartButton) {
     appState.configApplyStartedAtMs = Date.now();
     appState.configApplyReadySinceMs = null;
     appState.configApplyConnectionInterrupted = false;
+    appState.restartCheckMode = 'program';
     appState.restartPreviousBridgeInstanceId = appState.bridgeInstanceId;
     setRestartOverlay(
       true,
@@ -956,6 +1000,7 @@ if (el.programRestartButton) {
       appState.configApplyStartedAtMs = null;
       appState.configApplyReadySinceMs = null;
       appState.configApplyConnectionInterrupted = false;
+      appState.restartCheckMode = '';
       appState.restartPreviousBridgeInstanceId = '';
       setRestartOverlay(false);
       window.alert(error?.message || String(error));

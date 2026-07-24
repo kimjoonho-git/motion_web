@@ -975,7 +975,12 @@ export function createMotionStudioController({
     previewIds.forEach((motionId) => {
       if (!previousIds.has(motionId)) selectedIds.add(motionId);
     });
-    editor.undo.push({ layer: clone(editor.working), validation: clone(editor.validation) });
+    editor.undo.push({
+      layer: clone(editor.working),
+      validation: clone(editor.validation),
+      curveId: String(editor.pointDraft?.curve_id || ''),
+      selectedPointId: String(editor.selectedPointId || ''),
+    });
     editor.redo = [];
     editor.working = clone(editor.preview);
     editor.validation = clone(
@@ -2185,11 +2190,25 @@ export function createMotionStudioController({
         return;
       }
       if (!editor.undo.length) return;
-      editor.redo.push({ layer: clone(editor.working), validation: clone(editor.validation) });
+      editor.redo.push({
+        layer: clone(editor.working),
+        validation: clone(editor.validation),
+        curveId: String(editor.pointDraft?.curve_id || ''),
+        selectedPointId: String(editor.selectedPointId || ''),
+      });
       const previous = editor.undo.pop();
       const replacedLayer = editor.working;
       editor.working = previous.layer;
       editor.validation = previous.validation;
+      const previousCurve = editorPointCurves(editor.working).find(
+        (curve) => String(curve.curve_id || '') === String(previous.curveId || ''),
+      );
+      if (previousCurve) {
+        loadPointDraft(previousCurve, previous.selectedPointId);
+      } else {
+        editor.pointDraft = null;
+        editor.selectedPointId = '';
+      }
       refreshEditorTimeline(editor.working, replacedLayer);
       refreshEditorAxisControls(null, editor.working);
       if (el.studioEditorSubtitle) {
@@ -2201,11 +2220,25 @@ export function createMotionStudioController({
       const editor = state.editor;
       if (!editor?.redo.length) return;
       discardEditorPreview();
-      editor.undo.push({ layer: clone(editor.working), validation: clone(editor.validation) });
+      editor.undo.push({
+        layer: clone(editor.working),
+        validation: clone(editor.validation),
+        curveId: String(editor.pointDraft?.curve_id || ''),
+        selectedPointId: String(editor.selectedPointId || ''),
+      });
       const following = editor.redo.pop();
       const replacedLayer = editor.working;
       editor.working = following.layer;
       editor.validation = following.validation;
+      const followingCurve = editorPointCurves(editor.working).find(
+        (curve) => String(curve.curve_id || '') === String(following.curveId || ''),
+      );
+      if (followingCurve) {
+        loadPointDraft(followingCurve, following.selectedPointId);
+      } else {
+        editor.pointDraft = null;
+        editor.selectedPointId = '';
+      }
       refreshEditorTimeline(editor.working, replacedLayer);
       refreshEditorAxisControls(null, editor.working);
       if (el.studioEditorSubtitle) {

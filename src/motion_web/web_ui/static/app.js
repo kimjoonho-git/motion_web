@@ -1,1 +1,1 @@
-import './js/main.js?v=20260724-ui-connect-2';
+import './js/main.js?v=20260724-functional-fix-1';
