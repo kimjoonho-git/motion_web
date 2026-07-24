@@ -26,9 +26,6 @@ backups/
 *.swp
 *.swo
 
-# Do not include the separate low-level motor-system repository here.
-src/motion_system/
-
 # Misc local files
 packages.microsoft.gpg
 sdo.txt
