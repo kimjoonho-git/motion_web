@@ -30,6 +30,10 @@ backups/
 src/motion_system/
 src/motion_control_studio/
 
+# Local agent configuration
+.agents/
+.codex/
+
 # Misc local files
 packages.microsoft.gpg
 sdo.txt
