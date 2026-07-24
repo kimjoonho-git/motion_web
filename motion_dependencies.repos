@@ -1,0 +1,9 @@
+repositories:
+  src/motion_control_studio:
+    type: git
+    url: https://github.com/kimjoonho-git/motion_control_studio.git
+    version: d5c015833801acc065e403d371bfd4ad338de8a9
+  src/motion_system:
+    type: git
+    url: https://github.com/kimjoonho-git/motion_system_ros2.git
+    version: 5ec19096952c1f536270ca50c75bedb6cc40e996
