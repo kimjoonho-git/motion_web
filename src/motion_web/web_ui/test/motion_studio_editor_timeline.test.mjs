@@ -439,3 +439,26 @@ test('layer selection stays valid and falls back after deletion', () => {
   assert.equal(resolveMotionStudioSelectedLayerId(layers, 'deleted'), 'first');
   assert.equal(resolveMotionStudioSelectedLayerId([], 'deleted'), '');
 });
+
+test('editor history restores point-curve selection with each applied edit', () => {
+  const source = readFileSync(
+    new URL('../static/js/motion_studio.js', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    source,
+    /editor\.undo\.push\(\{[\s\S]*?curveId:[\s\S]*?selectedPointId:/,
+  );
+  assert.match(
+    source,
+    /editor\.redo\.push\(\{[\s\S]*?curveId:[\s\S]*?selectedPointId:/,
+  );
+  assert.match(
+    source,
+    /const previousCurve = editorPointCurves\(editor\.working\)\.find\([\s\S]*?loadPointDraft\(previousCurve, previous\.selectedPointId\)/,
+  );
+  assert.match(
+    source,
+    /const followingCurve = editorPointCurves\(editor\.working\)\.find\([\s\S]*?loadPointDraft\(followingCurve, following\.selectedPointId\)/,
+  );
+});

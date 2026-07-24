@@ -768,11 +768,13 @@ export function createMotorConfigController({
   function updateConfigTableButtonState() {
     if (el.updateConfigTableButton) {
       el.updateConfigTableButton.disabled = !hasConfigTableDrafts();
-      el.updateConfigTableButton.textContent = '표 변경값 반영 초안';
+      el.updateConfigTableButton.textContent = '표 변경값을 초안에 반영';
     }
     if (el.saveConfigTableButton) {
       el.saveConfigTableButton.disabled = hasConfigTableDrafts() || !hasMotorConfigTableSaveChanges();
-      el.saveConfigTableButton.textContent = hasConfigTableDrafts() ? '표 업데이트 필요' : '파일 저장';
+      el.saveConfigTableButton.textContent = hasConfigTableDrafts()
+        ? '초안 반영 필요'
+        : '설정 파일 저장';
     }
   }
 
@@ -1525,7 +1527,7 @@ export function createMotorConfigController({
     lastAxisRenderSignature = '';
     lastConfigTableRenderSignature = '';
     lastConfigRawTextRenderSignature = '';
-    setAxisMessage('설정 파일 표 업데이트 완료. 저장하려면 파일 저장을 누르세요.');
+    setAxisMessage('설정 파일 초안 반영 완료. 저장하려면 설정 파일 저장을 누르세요.');
     renderAxisSettings();
   }
 
@@ -2446,7 +2448,7 @@ export function createMotorConfigController({
     try {
       if (hasConfigTableDrafts()) {
         setStatusMessage('표 업데이트 필요');
-        setAxisMessage('파일 저장 전 표 업데이트를 먼저 누르세요.');
+        setAxisMessage('설정 파일 저장 전 표 변경값을 초안에 먼저 반영하세요.');
         return false;
       }
       const fileName = normalizedMotorConfigFileName() || pathBasename(motorConfigFilePath);
@@ -3171,7 +3173,7 @@ export function createMotorConfigController({
     if (el.motorConfigFileNameInput) {
       el.motorConfigFileNameInput.addEventListener('input', (event) => {
         motorConfigFileNameDraft = event.target.value || '';
-        setAxisMessage('파일명 변경값은 파일 저장을 누르면 적용됩니다.');
+        setAxisMessage('파일명 변경값은 설정 파일 저장을 누르면 적용됩니다.');
         renderAxisSettings();
       });
     }

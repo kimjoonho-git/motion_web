@@ -194,13 +194,16 @@ export function createProjectExplorerController({
           ? `<button type="button" class="project-tree-action project-tree-add" data-project-add-layer title="스튜디오 레이어로 추가" aria-label="${escapeHtml(file.name)} 레이어로 추가">＋</button>`
           : '';
         const bankInfo = file.category === 'motion_axis_matching' ? file.midi_banks : null;
+        const midiRouteAttributes = bankInfo
+          ? `data-project-open-midi data-project-category="${escapeHtml(file.category)}" data-project-file="${escapeHtml(file.name)}"`
+          : '';
         const fileBadge = isLogFile
           ? `<span class="project-tree-log-count">${Number(file.record_count) || 0}건</span>`
           : (file.active ? '<span class="project-tree-active">현재</span>' : '');
         const bankTree = bankInfo ? (() => {
           if (!bankInfo.stored) {
-            return '<div class="project-tree-midi project-tree-midi-missing">'
-              + '<span class="project-tree-branch">└</span><span>MIDI 뱅크</span><small>미저장</small></div>';
+            return `<button type="button" class="project-tree-midi project-tree-midi-missing" ${midiRouteAttributes}>`
+              + '<span class="project-tree-branch">└</span><span>MIDI 뱅크</span><small>미저장</small></button>';
           }
           const banks = (bankInfo.banks || []).map((bank, bankIndex) => (
             '<div class="project-tree-midi-bank">'
@@ -210,8 +213,9 @@ export function createProjectExplorerController({
             + `<small>${Number(bank.mapping_count) || 0}채널</small></div>`
           )).join('');
           return '<div class="project-tree-midi-group">'
-            + '<div class="project-tree-midi"><span class="project-tree-branch">└</span>'
-            + `<span>MIDI 뱅크</span><small>${Number(bankInfo.count) || 0}개</small></div>`
+            + `<button type="button" class="project-tree-midi" ${midiRouteAttributes}>`
+            + '<span class="project-tree-branch">└</span>'
+            + `<span>MIDI 뱅크</span><small>${Number(bankInfo.count) || 0}개</small></button>`
             + `<div class="project-tree-midi-banks">${banks || '<div class="project-tree-midi-bank empty">뱅크 없음</div>'}</div></div>`;
         })() : '';
         return `<div class="project-tree-file-entry"><div class="project-tree-file-row${selected ? ' selected' : ''}" `
@@ -391,7 +395,7 @@ export function createProjectExplorerController({
   }
 
   async function run(action, successMessage) {
-    if (state.busy) return;
+    if (state.busy) return false;
     state.busy = true;
     renderControls();
     try {
@@ -412,8 +416,10 @@ export function createProjectExplorerController({
         state.projectGeneration = Number(list.project_generation);
       }
       state.runtimeProjectId = list.runtime_project_id || '';
+      return true;
     } catch (error) {
       setMessage(error.message, true);
+      return false;
     } finally {
       state.busy = false;
       render();
@@ -421,14 +427,17 @@ export function createProjectExplorerController({
   }
 
   async function openFile(category, fileName) {
-    if (!state.project || state.busy) return;
+    if (!state.project || state.busy) return false;
     state.busy = true;
+    state.selectedFile = null;
     renderControls();
     try {
       state.selectedFile = await fetchProjectFile(state.project.project_id, category, fileName);
       setMessage(`${fileName} 열기 완료`);
+      return true;
     } catch (error) {
       setMessage(error.message, true);
+      return false;
     } finally {
       state.busy = false;
       render();
@@ -453,18 +462,20 @@ export function createProjectExplorerController({
     }
   }
 
-  async function openInFeature(category, fileName) {
-    if (!state.project || state.busy) return;
-    await openFile(category, fileName);
-    if (!state.selectedFile) return;
+  async function openInFeature(category, fileName, targetWorkspace = '') {
+    if (!state.project || state.busy) return false;
+    const opened = await openFile(category, fileName);
+    if (!opened || !state.selectedFile) return false;
     state.busy = true;
     renderControls();
     try {
       const result = await openProjectFileEditor(state.project.project_id, category, fileName);
       setMessage(result.message || `${fileName} 기능에서 열기 완료`);
-      onOpenEditor(result);
+      await onOpenEditor(result, targetWorkspace);
+      return true;
     } catch (error) {
       setMessage(error.message, true);
+      return false;
     } finally {
       state.busy = false;
       render();
@@ -509,14 +520,20 @@ export function createProjectExplorerController({
         el.projectExplorerSelect.value = state.project?.project_id || '';
         return;
       }
-      await run(() => selectProject(projectId), '프로젝트 선택 완료 · 장비에는 적용되지 않았습니다');
-      await onProjectChange(state.project, state.projectGeneration);
+      const changed = await run(
+        () => selectProject(projectId),
+        '프로젝트 선택 완료 · 장비에는 적용되지 않았습니다',
+      );
+      if (changed) await onProjectChange(state.project, state.projectGeneration);
     });
     el.projectCreateButton?.addEventListener('click', async () => {
       const name = window.prompt('새 프로젝트 이름을 입력하세요', '새 모션 프로젝트');
       if (!name?.trim()) return;
-      await run(() => createProject({ name: name.trim() }), '프로젝트 생성 완료');
-      await onProjectChange(state.project, state.projectGeneration);
+      const created = await run(
+        () => createProject({ name: name.trim() }),
+        '프로젝트 생성 완료',
+      );
+      if (created) await onProjectChange(state.project, state.projectGeneration);
     });
     el.projectDeleteButton?.addEventListener('click', async () => {
       if (!state.project || state.busy) return;
@@ -620,6 +637,11 @@ export function createProjectExplorerController({
         onNavigate('log');
         return;
       }
+      if (event.target.closest('[data-project-open-midi]')) {
+        onNavigate('motion-midi');
+        await openInFeature(category, fileName, 'motion-midi');
+        return;
+      }
       if (event.target.closest('[data-project-add-layer]')) {
         if (!state.project || state.busy) return;
         state.busy = true;
@@ -636,8 +658,8 @@ export function createProjectExplorerController({
         return;
       }
       if (event.target.closest('[data-project-manage]')) {
-        await openFile(category, fileName);
-        if (state.selectedFile) onManageFile(state.selectedFile);
+        const opened = await openFile(category, fileName);
+        if (opened && state.selectedFile) await onManageFile(state.selectedFile);
         return;
       }
       if (event.target.closest('[data-project-open]')) {
@@ -669,7 +691,7 @@ export function createProjectExplorerController({
           state.project.project_id, file.category, file.file_name,
         );
         setMessage(result.message || '기능 탭에 연결했습니다');
-        onOpenEditor(result);
+        await onOpenEditor(result);
       } catch (error) {
         setMessage(error.message, true);
       } finally {

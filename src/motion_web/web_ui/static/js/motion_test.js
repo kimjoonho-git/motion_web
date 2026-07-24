@@ -163,6 +163,31 @@ function limitSnapshot(motor, gearRatio, field, mode = '') {
   };
 }
 
+export function recoveryTargetForMotor(motor) {
+  const current = positionDeg(motor);
+  const lower = numericValue(motor?.lower, null);
+  const upper = numericValue(motor?.upper, null);
+  if (current === null) {
+    return { targetDeg: null, boundary: '', message: '현재 위치를 확인할 수 없습니다' };
+  }
+  if (lower === null || upper === null || lower > upper) {
+    return { targetDeg: null, boundary: '', message: '유효한 위치 제한 하한·상한이 필요합니다' };
+  }
+  if (current < lower) {
+    return { targetDeg: lower, boundary: 'lower', message: '하한 경계로 복귀합니다' };
+  }
+  if (current > upper) {
+    return { targetDeg: upper, boundary: 'upper', message: '상한 경계로 복귀합니다' };
+  }
+  return { targetDeg: null, boundary: 'inside', message: '현재 위치가 정상 범위 안입니다' };
+}
+
+function modeLabel(mode) {
+  if (mode === 'action') return '동작 모드';
+  if (mode === 'recovery') return '범위 복귀';
+  return '조그 모드';
+}
+
 function finiteDelta(a, b) {
   return a === null || b === null ? null : a - b;
 }
@@ -467,19 +492,27 @@ export function createMotionTestController({ el, getLatestState }) {
 
     const mode = el.motionTestMode?.value || 'jog';
     const isJog = mode === 'jog';
+    const isRecovery = mode === 'recovery';
     const jogDirection = numericValue(options.jogDirection, lastJogDirection);
-    const gearRatio = isJog ? 1 : actionGearRatio(el, motor);
+    const gearRatio = mode === 'action' ? actionGearRatio(el, motor) : 1;
     const currentOutputDeg = currentMotorDeg / gearRatio;
+    const recovery = isRecovery ? recoveryTargetForMotor(motor) : null;
     const command = isJog
       ? numericValue(el.motionTestJogDistance?.value, null)
-      : numericValue(el.motionTestPosition?.value, null);
+      : (
+        isRecovery
+          ? recovery?.targetDeg
+          : numericValue(el.motionTestPosition?.value, null)
+      );
     if (command === null || (isJog && command <= 0)) return null;
     if (isJog && Math.abs(command) > maxJogDeltaDeg(getLatestState())) return null;
 
     const commandRelativeDeg = isJog
       ? Math.abs(command) * jogDirection
       : null;
-    const targetOutputDeg = isJog ? currentOutputDeg + commandRelativeDeg : command;
+    const targetOutputDeg = isJog
+      ? currentOutputDeg + commandRelativeDeg
+      : (isRecovery ? command / gearRatio : command);
     const outputDeltaDeg = targetOutputDeg - currentOutputDeg;
     const targetMotorDeg = targetOutputDeg * gearRatio;
     const motorDeltaDeg = targetMotorDeg - currentMotorDeg;
@@ -491,6 +524,7 @@ export function createMotionTestController({ el, getLatestState }) {
     return {
       motor,
       mode,
+      recoveryBoundary: recovery?.boundary || '',
       jogDirection: isJog ? jogDirection : null,
       gearRatio,
       currentOutputDeg,
@@ -533,11 +567,12 @@ export function createMotionTestController({ el, getLatestState }) {
     });
     if (el.motionTestModePanels) {
       el.motionTestModePanels.forEach((panel) => {
-        panel.classList.toggle('hidden', panel.dataset.motionTestPanel !== mode);
+        const panelModes = String(panel.dataset.motionTestPanel || '').split(/\s+/);
+        panel.classList.toggle('hidden', !panelModes.includes(mode));
       });
     }
     if (el.motionTestModeSummary) {
-      el.motionTestModeSummary.textContent = mode === 'action' ? '동작 모드' : '조그 모드';
+      el.motionTestModeSummary.textContent = modeLabel(mode);
     }
   }
 
@@ -551,6 +586,12 @@ export function createMotionTestController({ el, getLatestState }) {
     }
     if (!plan) {
       el.motionTestResultState.textContent = '입력 대기';
+      const mode = el.motionTestMode?.value || 'jog';
+      if (mode === 'recovery') {
+        const recovery = recoveryTargetForMotor(selectedMotor());
+        el.motionTestResultText.textContent = recovery.message;
+        return;
+      }
       const jogValue = numericValue(el.motionTestJogDistance?.value, null);
       const maxJog = maxJogDeltaDeg(getLatestState());
       el.motionTestResultText.textContent = (
@@ -570,13 +611,18 @@ export function createMotionTestController({ el, getLatestState }) {
     }
 
     const isJog = plan.mode === 'jog';
-    const modeText = isJog ? '조그 모드' : '동작 모드';
+    const modeText = modeLabel(plan.mode);
     const directionText = plan.jogDirection === -1 ? '- 방향' : '+ 방향';
     const lines = [
       `명령 모드: ${modeText}`,
     ];
     if (isJog) {
       lines.push(`조그 방향: ${directionText}`);
+    } else if (plan.mode === 'recovery') {
+      lines.push(`모터 명령 절대값: ${positionPairText(plan.targetMotorDeg, plan.targetRaw)}`);
+      lines.push(`모터 명령 상대값: ${positionPairText(plan.motorDeltaDeg, plan.deltaRaw, true)}`);
+      lines.push(`복귀 경계: ${plan.recoveryBoundary === 'lower' ? '하한' : '상한'}`);
+      lines.push('제어: 드라이브 속도·가속도 제한으로 경계 복귀');
     } else {
       const gearText = isDynamixelMotor(plan.motor)
         ? `${formatNumber(plan.gearRatio, 3)}:1 (다이나믹셀 고정)`
@@ -686,7 +732,7 @@ export function createMotionTestController({ el, getLatestState }) {
       ? null
       : result.raw - lastOutputCapture.start.raw;
 
-    el.motionTestOutputState.textContent = lastOutputCapture.mode === 'jog' ? '조그 모드 결과' : '동작 모드 결과';
+    el.motionTestOutputState.textContent = `${modeLabel(lastOutputCapture.mode)} 결과`;
     el.motionTestOutputText.innerHTML = valueTableHtml(
       ['구분', '출력축 각도', '모터축 각도', '원시값', '동작 시간'],
       [
@@ -717,7 +763,7 @@ export function createMotionTestController({ el, getLatestState }) {
 
   function captureOutputStart(plan = commandPlan()) {
     if (!plan) return;
-    const actionTimeoutMs = plan.mode === 'action'
+    const actionTimeoutMs = plan.mode !== 'jog'
       ? Math.max(
         ((numericValue(plan.duration?.appliedSec, plan.duration?.requestedSec) || 0) * 1000)
           + ACTION_MOTION_LOCK_EXTRA_MS,
@@ -771,7 +817,7 @@ export function createMotionTestController({ el, getLatestState }) {
     if (
       !motor
       || !lastOutputCapture
-      || lastOutputCapture.mode !== 'action'
+      || lastOutputCapture.mode === 'jog'
       || Number(lastOutputCapture.axis) !== Number(selectedAxis)
       || !lastOutputCapture.commandAcceptedAtMs
       || lastOutputCapture.completedAtMs
@@ -793,13 +839,18 @@ export function createMotionTestController({ el, getLatestState }) {
       el.motionTestActualText.textContent = lastCommandResult.message || '-';
       return;
     }
-    if ((el.motionTestMode?.value || 'jog') === 'action') {
+    const mode = el.motionTestMode?.value || 'jog';
+    if (mode !== 'jog') {
       const motor = selectedMotor();
       const label = actionMotorLabel(motor);
       el.motionTestActualState.textContent = '명령 전';
       el.motionTestActualText.textContent = [
-        `${label} 절대 위치 동작 명령 전입니다.`,
-        '동작 실행 버튼을 누르면 motion_supervisor에 절대 위치 요청을 보냅니다.',
+        mode === 'recovery'
+          ? `${label} 범위 복귀 명령 전입니다.`
+          : `${label} 절대 위치 동작 명령 전입니다.`,
+        mode === 'recovery'
+          ? '복귀 버튼을 누르면 motion_supervisor에 위치 제한 경계 요청을 보냅니다.'
+          : '동작 실행 버튼을 누르면 motion_supervisor에 절대 위치 요청을 보냅니다.',
         '실제 위치 결과는 위 출력값 표의 결과값(동작 후)에 표시됩니다.',
       ].join('\n');
       return;
@@ -817,6 +868,7 @@ export function createMotionTestController({ el, getLatestState }) {
   function renderCurrentState() {
     const motor = selectedMotor();
     const isActionMode = el.motionTestMode?.value === 'action';
+    const isRecoveryMode = el.motionTestMode?.value === 'recovery';
     const isDynamixelSelected = isDynamixelMotor(motor);
     if (el.motionTestGearRatio) {
       if (isDynamixelSelected) {
@@ -926,6 +978,32 @@ export function createMotionTestController({ el, getLatestState }) {
       );
       el.motionTestRunButton.title = actionDisabled ? reason : '설정한 목표 위치로 동작';
     }
+    const recovery = recoveryTargetForMotor(motor);
+    const recoveryDisabled = (
+      !isRecoveryMode
+      || !motor
+      || plan === null
+      || recovery.boundary === 'inside'
+      || Boolean(actionBlockReason(motor))
+      || Boolean(positionLimitBlockReason(plan))
+      || jogRequestInFlight
+      || motionStopInFlight
+      || motionCommandActive
+    );
+    if (el.motionTestRecoveryButton) {
+      el.motionTestRecoveryButton.disabled = recoveryDisabled;
+      const reason = (
+        !isRecoveryMode ? '범위 복귀 모드를 선택하세요'
+          : jogRequestInFlight ? '동작 명령을 처리하고 있습니다'
+            : motionStopInFlight ? '모터 정지 요청을 처리하고 있습니다'
+              : motionCommandActive ? '현재 동작이 완료될 때까지 기다리거나 동작 정지를 누르세요'
+                : actionBlockReason(motor)
+                  || recovery.message
+      );
+      el.motionTestRecoveryButton.title = recoveryDisabled
+        ? reason
+        : `${recovery.boundary === 'lower' ? '하한' : '상한'} 경계로 복귀`;
+    }
     if (el.motionTestStopButton) {
       el.motionTestStopButton.disabled = (
         motionStopInFlight
@@ -947,7 +1025,7 @@ export function createMotionTestController({ el, getLatestState }) {
       } else if (jogRequestInFlight || motionCommandActive) {
         guideState = 'active';
         guideText = '현재 동작 중입니다 · 완료를 기다리거나 모터 동작 정지를 누르세요';
-      } else if (motor && !isActionMode) {
+      } else if (motor && el.motionTestMode?.value === 'jog') {
         if (!negativeJogDisabled || !positiveJogDisabled) {
           guideState = 'ready';
           guideText = negativeJogDisabled || positiveJogDisabled
@@ -969,6 +1047,16 @@ export function createMotionTestController({ el, getLatestState }) {
             || positionLimitBlockReason(plan)
             || '목표 위치, 감속비, 동작 시간을 확인하세요';
           guideText = `동작 불가: ${reason}`;
+        }
+      } else if (motor && isRecoveryMode) {
+        if (!recoveryDisabled) {
+          guideState = 'ready';
+          guideText = `복귀 준비 완료 · ${recovery.boundary === 'lower' ? '하한' : '상한'} ${formatNumber(recovery.targetDeg, 3)} deg로 이동합니다`;
+        } else {
+          guideState = recovery.boundary === 'inside' ? 'ready' : 'warning';
+          guideText = recovery.boundary === 'inside'
+            ? '현재 위치가 정상 범위 안이므로 복귀할 필요가 없습니다'
+            : `복귀 불가: ${actionBlockReason(motor) || recovery.message}`;
         }
       }
       el.motionTestActionGuide.dataset.state = guideState;
@@ -1076,6 +1164,7 @@ export function createMotionTestController({ el, getLatestState }) {
   async function sendAction() {
     const plan = commandPlan();
     const motorLabelText = actionMotorLabel(plan?.motor);
+    const isRecovery = plan?.mode === 'recovery';
     const blockReason = (
       actionBlockReason(plan?.motor)
       || positionLimitBlockReason(plan)
@@ -1083,7 +1172,7 @@ export function createMotionTestController({ el, getLatestState }) {
     if (!plan || blockReason) {
       lastCommandResult = {
         success: false,
-        message: blockReason || '동작 명령값을 확인하세요',
+        message: blockReason || (isRecovery ? '범위 복귀 조건을 확인하세요' : '동작 명령값을 확인하세요'),
       };
       renderCurrentState();
       return;
@@ -1093,7 +1182,7 @@ export function createMotionTestController({ el, getLatestState }) {
     jogRequestInFlight = true;
     lastCommandResult = {
       success: true,
-      message: `${motorLabelText} 동작 요청 전송 중`,
+      message: `${motorLabelText} ${isRecovery ? '범위 복귀' : '동작'} 요청 전송 중`,
     };
     renderCurrentState();
 
@@ -1104,19 +1193,20 @@ export function createMotionTestController({ el, getLatestState }) {
       const response = await requestAction({
         axis: selectedAxis,
         target_deg: plan.targetMotorDeg,
-        duration_sec: plan.duration?.requestedSec,
+        duration_sec: isRecovery ? undefined : plan.duration?.requestedSec,
+        range_recovery: isRecovery,
       });
       if (lastOutputCapture && Boolean(response?.success)) {
         lastOutputCapture.commandAcceptedAtMs = Date.now();
       }
       lastCommandResult = {
         success: Boolean(response?.success),
-        message: response?.message || `${motorLabelText} 동작 요청 결과 없음`,
+        message: response?.message || `${motorLabelText} ${isRecovery ? '범위 복귀' : '동작'} 요청 결과 없음`,
       };
     } catch (error) {
       lastCommandResult = {
         success: false,
-        message: `${motorLabelText} 동작 요청 실패: ${error?.message || error}`,
+        message: `${motorLabelText} ${isRecovery ? '범위 복귀' : '동작'} 요청 실패: ${error?.message || error}`,
       };
     } finally {
       jogRequestInFlight = false;
@@ -1259,6 +1349,9 @@ export function createMotionTestController({ el, getLatestState }) {
     }
     if (el.motionTestRunButton) {
       el.motionTestRunButton.addEventListener('click', sendAction);
+    }
+    if (el.motionTestRecoveryButton) {
+      el.motionTestRecoveryButton.addEventListener('click', sendAction);
     }
     if (el.motionTestStopButton) {
       el.motionTestStopButton.addEventListener('click', stopMotorMotion);

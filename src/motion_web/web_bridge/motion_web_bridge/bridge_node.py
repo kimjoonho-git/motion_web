@@ -4322,6 +4322,7 @@ class MotionWebBridge(Node):
         axis: Any,
         target_deg: Any,
         duration_sec: Any = None,
+        range_recovery: Any = False,
     ) -> Dict[str, Any]:
         axis_value = self._optional_int(axis, None)
         target_value = self._optional_float(target_deg, None)
@@ -4384,6 +4385,7 @@ class MotionWebBridge(Node):
             'command': 'ac_servo_absolute_move',
             'axis': axis_value,
             'target_deg': target_value,
+            'range_recovery': range_recovery is True,
         }
         if duration_value is not None:
             payload['duration_sec'] = duration_value
@@ -4416,6 +4418,7 @@ class MotionWebBridge(Node):
         axis: Any,
         target_deg: Any,
         duration_sec: Any = None,
+        range_recovery: Any = False,
     ) -> Dict[str, Any]:
         axis_value = self._optional_int(axis, None)
         target_value = self._optional_float(target_deg, None)
@@ -4472,6 +4475,7 @@ class MotionWebBridge(Node):
             'command': 'dynamixel_absolute_move',
             'axis': axis_value,
             'target_deg': target_value,
+            'range_recovery': range_recovery is True,
         }
         if duration_value is not None:
             payload['duration_sec'] = duration_value
@@ -6019,6 +6023,7 @@ def create_app(bridge: MotionWebBridge) -> FastAPI:
             body.get('axis'),
             body.get('target_deg'),
             body.get('duration_sec'),
+            body.get('range_recovery', False),
         )
 
     @app.post('/api/motion-test/dynamixel/action')
@@ -6029,6 +6034,7 @@ def create_app(bridge: MotionWebBridge) -> FastAPI:
             body.get('axis'),
             body.get('target_deg'),
             body.get('duration_sec'),
+            body.get('range_recovery', False),
         )
 
     @app.post('/api/motion-test/ac-servo/control')

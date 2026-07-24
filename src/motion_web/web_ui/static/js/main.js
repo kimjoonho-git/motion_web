@@ -10,29 +10,42 @@ import {
   stopMotionStudio,
   setProjectGeneration,
 } from './api.js?v=20260723-servo-service-split';
-import { getElements } from './dom.js?v=20260723-point-linked-edit';
+import { getElements } from './dom.js?v=20260724-ui-navigation-2';
 import { createMotorEventLogController } from './event_log.js?v=20260721-project-generation';
-import { createMidiMonitorController } from './midi_monitor.js?v=20260723-revision-sync';
-import { createMotionDataController } from './motion_data.js?v=20260723-revision-sync';
-import { createMotionStudioController } from './motion_studio.js?v=20260724-layer-editor-ui-2';
-import { createMotionTestController } from './motion_test.js?v=20260721-project-generation';
-import { createMotorConfigController } from './motor_config.js?v=20260723-header-operation-groups';
-import { createProjectExplorerController } from './project_explorer.js?v=20260723-program-restart-label';
+import { createMidiMonitorController } from './midi_monitor.js?v=20260724-ui-finish-1';
+import { createMotionDataController } from './motion_data.js?v=20260724-ui-navigation-2';
+import { createMotionStudioController } from './motion_studio.js?v=20260724-editor-history-1';
+import { createMotionTestController } from './motion_test.js?v=20260724-range-recovery-1';
+import { createMotorConfigController } from './motor_config.js?v=20260724-ui-finish-1';
+import { createProjectExplorerController } from './project_explorer.js?v=20260724-ui-connect-2';
 import { renderAccess, renderMonitoring } from './monitoring.js?v=20260723-physical-runtime-state';
 import { StatusSocket } from './socket.js';
+import {
+  createWorkspaceRouteState,
+  defaultWorkspaceForGroup,
+  motionTabForWorkspace,
+  MOTION_WORKSPACE_DETAILS,
+  normalizeWorkspaceRoute,
+  workspaceForLegacyNavigation,
+  workspaceGroupFor,
+  workspacePanelFor,
+  workspaceForProjectCategory,
+} from './workspace_navigation.js?v=20260724-ui-navigation-2';
+import { installFeedbackPresentation } from './ui_feedback.js?v=20260724-ui-finish-1';
 
 const el = getElements();
+installFeedbackPresentation(document);
 const appState = {
   latestState: null,
   rawMode: false,
   activeMonitoringFilter: 'all',
   activeMonitoringDetailTab: 'basic',
-  activeWorkspacePanel: 'monitoring',
   emergencyLatched: false,
   configApplyInProgress: false,
   configApplyStartedAtMs: null,
   configApplyReadySinceMs: null,
   configApplyConnectionInterrupted: false,
+  restartCheckMode: '',
   bridgeInstanceId: '',
   restartPreviousBridgeInstanceId: '',
   motorIdentityBlockMessage: '',
@@ -42,8 +55,9 @@ const appState = {
   executionContext: null,
   projectGeneration: null,
 };
+const workspaceRouteState = createWorkspaceRouteState('monitoring');
 const RESTART_READY_STABLE_MS = 3500;
-const IDENTITY_BLOCKED_WORKSPACES = new Set(['manual', 'motion']);
+const IDENTITY_BLOCKED_WORKSPACES = new Set(['manual', 'motion-run']);
 
 function blockWorkspaceForMotorIdentity(workspace) {
   if (!appState.motorIdentityBlockMessage || !IDENTITY_BLOCKED_WORKSPACES.has(workspace)) {
@@ -52,7 +66,7 @@ function blockWorkspaceForMotorIdentity(workspace) {
   window.alert(
     appState.motorIdentityBlockMessage,
   );
-  appState.activeWorkspacePanel = 'config';
+  workspaceRouteState.select('config');
   renderWorkspacePanel();
   return true;
 }
@@ -82,18 +96,46 @@ function studioMotorActionBlockReason() {
 }
 
 function renderWorkspacePanel() {
+  const activeWorkspace = normalizeWorkspaceRoute(workspaceRouteState.current());
+  const activeGroup = workspaceGroupFor(activeWorkspace);
+  const activePanel = workspacePanelFor(activeWorkspace);
   if (el.workspaceTabs) {
+    el.workspaceTabs.querySelectorAll('[data-workspace-group]').forEach((button) => {
+      const active = button.dataset.workspaceGroup === activeGroup;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+    el.workspaceTabs.querySelectorAll('[data-workspace-group-panel]').forEach((panel) => {
+      panel.classList.toggle('hidden', panel.dataset.workspaceGroupPanel !== activeGroup);
+    });
     el.workspaceTabs.querySelectorAll('[data-workspace-tab]').forEach((button) => {
-      const active = button.dataset.workspaceTab === appState.activeWorkspacePanel;
+      const active = button.dataset.workspaceTab === activeWorkspace;
       button.classList.toggle('active', active);
       button.setAttribute('aria-selected', active ? 'true' : 'false');
     });
   }
   if (el.workspacePanels) {
     el.workspacePanels.forEach((panel) => {
-      panel.classList.toggle('hidden', panel.dataset.workspacePanel !== appState.activeWorkspacePanel);
+      panel.classList.toggle('hidden', panel.dataset.workspacePanel !== activePanel);
     });
   }
+  const motionTab = motionTabForWorkspace(activeWorkspace);
+  if (motionTab) {
+    motionData.showTab(motionTab);
+    const details = MOTION_WORKSPACE_DETAILS[activeWorkspace]
+      || MOTION_WORKSPACE_DETAILS['motion-files'];
+    if (el.motionWorkspaceTitle) el.motionWorkspaceTitle.textContent = details[0];
+    if (el.motionWorkspaceSubtitle) el.motionWorkspaceSubtitle.textContent = details[1];
+    el.motionWorkflowGuide?.classList.toggle('hidden', motionTab === 'run');
+  }
+}
+
+function setActiveWorkspace(workspace, motionTab = '') {
+  const target = workspaceForLegacyNavigation(workspace, motionTab);
+  if (blockWorkspaceForMotorIdentity(target)) return '';
+  workspaceRouteState.select(target);
+  renderWorkspacePanel();
+  return target;
 }
 
 function basename(path) {
@@ -480,6 +522,20 @@ function restartReadyState(payload) {
       detail: 'motion_web_bridge 재시작을 기다리는 중',
     };
   }
+  if (appState.restartCheckMode === 'program') {
+    if (!bridgeInstanceChanged) {
+      return {
+        ready: false,
+        title: '프로그램 재시작 확인 중',
+        detail: '새 motion_web_bridge 인스턴스 확인 대기',
+      };
+    }
+    return {
+      ready: true,
+      title: '프로그램 재시작 완료',
+      detail: '웹·Supervisor·모션 실행·MIDI 재연결 확인 · 모터 제어 상태는 변경하지 않음',
+    };
+  }
   const runtime = payload?.service_management?.runtime || {};
   if (runtime.phase === 'motor_manager_start_blocked') {
     return {
@@ -609,17 +665,21 @@ function restartReadyState(payload) {
 
 function updateRestartProgress(payload = null) {
   if (!appState.configApplyInProgress) return;
+  const programRestart = appState.restartCheckMode === 'program';
   const state = restartReadyState(payload);
-  const message = [
-    'motor_manager_node, motion_state_monitor, motion_supervisor, motion_web_bridge 상태를 확인하는 중입니다.',
-    'YAML 등록 수가 아니라 직접 검색되거나 실제 감지된 모터를 기준으로 확인합니다.',
-  ].join(' ');
+  const message = programRestart
+    ? '웹·Supervisor·모션 실행·MIDI가 다시 연결됐는지 확인하는 중입니다.'
+    : [
+      'motor_manager_node, motion_state_monitor, motion_supervisor, motion_web_bridge 상태를 확인하는 중입니다.',
+      'YAML 등록 수가 아니라 직접 검색되거나 실제 감지된 모터를 기준으로 확인합니다.',
+    ].join(' ');
 
   if (state.failed) {
     appState.configApplyInProgress = false;
     appState.configApplyStartedAtMs = null;
     appState.configApplyReadySinceMs = null;
     appState.configApplyConnectionInterrupted = false;
+    appState.restartCheckMode = '';
     appState.restartPreviousBridgeInstanceId = '';
     setRestartOverlay(true, state.title, '노드는 재시작됐지만 연결된 모터를 찾지 못했습니다.', state.detail);
     if (el.bridgeState) el.bridgeState.textContent = state.title;
@@ -640,12 +700,22 @@ function updateRestartProgress(payload = null) {
 
   if (!appState.configApplyReadySinceMs) {
     appState.configApplyReadySinceMs = Date.now();
-    setRestartOverlay(true, '설정 적용·재시작 완료 확인 중', message, state.detail);
+    setRestartOverlay(
+      true,
+      programRestart ? '프로그램 재시작 완료 확인 중' : '설정 적용·재시작 완료 확인 중',
+      message,
+      state.detail,
+    );
     return;
   }
 
   if (Date.now() - appState.configApplyReadySinceMs < RESTART_READY_STABLE_MS) {
-    setRestartOverlay(true, '설정 적용·재시작 완료 확인 중', message, state.detail);
+    setRestartOverlay(
+      true,
+      programRestart ? '프로그램 재시작 완료 확인 중' : '설정 적용·재시작 완료 확인 중',
+      message,
+      state.detail,
+    );
     return;
   }
 
@@ -653,10 +723,22 @@ function updateRestartProgress(payload = null) {
   appState.configApplyStartedAtMs = null;
   appState.configApplyReadySinceMs = null;
   appState.configApplyConnectionInterrupted = false;
+  appState.restartCheckMode = '';
   appState.restartPreviousBridgeInstanceId = '';
-  setRestartOverlay(true, state.title, '설정 적용·재시작과 모터 상태 수신을 확인했습니다.', state.detail);
+  setRestartOverlay(
+    true,
+    state.title,
+    programRestart
+      ? '프로그램 재시작과 웹 자동 재연결을 확인했습니다.'
+      : '설정 적용·재시작과 모터 상태 수신을 확인했습니다.',
+    state.detail,
+  );
   if (el.bridgeState) el.bridgeState.textContent = '연결됨';
-  if (el.summaryText) el.summaryText.textContent = '설정 적용·재시작 완료';
+  if (el.summaryText) {
+    el.summaryText.textContent = programRestart
+      ? '프로그램 재시작 완료'
+      : '설정 적용·재시작 완료';
+  }
   setTimeout(() => {
     if (!appState.configApplyInProgress) {
       setRestartOverlay(false);
@@ -676,6 +758,7 @@ const motorConfig = createMotorConfigController({
     appState.configApplyStartedAtMs = Date.now();
     appState.configApplyReadySinceMs = null;
     appState.configApplyConnectionInterrupted = false;
+    appState.restartCheckMode = 'motor_apply';
     appState.restartPreviousBridgeInstanceId = appState.bridgeInstanceId;
     if (el.bridgeState) el.bridgeState.textContent = '설정 반영 중';
     if (el.summaryText) el.summaryText.textContent = '설정 반영 중입니다. 웹 연결이 자동으로 다시 연결됩니다.';
@@ -691,6 +774,7 @@ const motorConfig = createMotorConfigController({
     appState.configApplyStartedAtMs = null;
     appState.configApplyReadySinceMs = null;
     appState.configApplyConnectionInterrupted = false;
+    appState.restartCheckMode = '';
     appState.restartPreviousBridgeInstanceId = '';
     setRestartOverlay(false);
   },
@@ -723,26 +807,26 @@ const motionStudio = createMotionStudioController({
 });
 const projectExplorer = createProjectExplorerController({
   el,
-  onOpenEditor: (result) => {
-    if (blockWorkspaceForMotorIdentity(result.workspace || 'system')) return;
-    appState.activeWorkspacePanel = result.workspace || 'system';
-    renderWorkspacePanel();
-    if (result.workspace === 'config') motorConfig.fetchRegistry();
-    if (result.workspace === 'motion') {
-      motionData.openProjectFile(result.category, result.file_name);
-      const tab = el.motionTabs?.querySelector(`[data-motion-tab="${result.motion_tab || 'files'}"]`);
-      tab?.click();
+  onOpenEditor: async (result, requestedWorkspace = '') => {
+    const targetRoute = requestedWorkspace || workspaceForProjectCategory(
+      result.category,
+      result.workspace || 'system',
+      result.motion_tab,
+    );
+    const target = setActiveWorkspace(targetRoute);
+    if (!target) return;
+    if (target === 'config') motorConfig.fetchRegistry();
+    if (['motions', 'motion_axis_matching'].includes(result.category)) {
+      await motionData.openProjectFile(result.category, result.file_name);
     }
-    if (result.workspace === 'studio') motionStudio.refresh(false);
+    if (target === 'studio') await motionStudio.refresh(false);
   },
   onManageFile: () => {
-    appState.activeWorkspacePanel = 'system';
-    renderWorkspacePanel();
+    setActiveWorkspace('system');
     document.getElementById('projectFileManager')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   },
   onAddMotionLayer: async (fileName) => {
-    appState.activeWorkspacePanel = 'studio';
-    renderWorkspacePanel();
+    setActiveWorkspace('studio');
     await motionStudio.refresh(false);
     await motionStudio.addMotionFile(fileName);
   },
@@ -759,12 +843,7 @@ const projectExplorer = createProjectExplorerController({
     updateWorkContext();
   },
   onNavigate: (workspace, motionTab) => {
-    if (blockWorkspaceForMotorIdentity(workspace)) return;
-    appState.activeWorkspacePanel = workspace || 'monitoring';
-    renderWorkspacePanel();
-    if (workspace === 'motion' && motionTab) {
-      el.motionTabs?.querySelector(`[data-motion-tab="${motionTab}"]`)?.click();
-    }
+    setActiveWorkspace(workspace || 'monitoring', motionTab);
   },
 });
 
@@ -905,6 +984,7 @@ if (el.programRestartButton) {
     appState.configApplyStartedAtMs = Date.now();
     appState.configApplyReadySinceMs = null;
     appState.configApplyConnectionInterrupted = false;
+    appState.restartCheckMode = 'program';
     appState.restartPreviousBridgeInstanceId = appState.bridgeInstanceId;
     setRestartOverlay(
       true,
@@ -920,6 +1000,7 @@ if (el.programRestartButton) {
       appState.configApplyStartedAtMs = null;
       appState.configApplyReadySinceMs = null;
       appState.configApplyConnectionInterrupted = false;
+      appState.restartCheckMode = '';
       appState.restartPreviousBridgeInstanceId = '';
       setRestartOverlay(false);
       window.alert(error?.message || String(error));
@@ -1085,16 +1166,29 @@ if (el.rows) {
 
 if (el.workspaceTabs) {
   el.workspaceTabs.addEventListener('click', (event) => {
+    const groupButton = event.target.closest('button[data-workspace-group]');
+    if (groupButton) {
+      const group = groupButton.dataset.workspaceGroup || 'operations';
+      if (workspaceGroupFor(workspaceRouteState.current()) === group) return;
+      const target = setActiveWorkspace(
+        workspaceRouteState.forGroup(group) || defaultWorkspaceForGroup(group),
+      );
+      if (!target) return;
+      renderLatestState();
+      if (target === 'log') motorEventLog.activate();
+      if (target === 'studio') motionStudio.refresh(false);
+      if (target === 'config') motorConfig.fetchRegistry();
+      projectExplorer.refresh(true);
+      return;
+    }
     const button = event.target.closest('button[data-workspace-tab]');
     if (!button) return;
-    const workspace = button.dataset.workspaceTab || 'monitoring';
-    if (blockWorkspaceForMotorIdentity(workspace)) return;
-    appState.activeWorkspacePanel = workspace;
-    renderWorkspacePanel();
+    const target = setActiveWorkspace(button.dataset.workspaceTab || 'monitoring');
+    if (!target) return;
     renderLatestState();
-    if (appState.activeWorkspacePanel === 'log') motorEventLog.activate();
-    if (appState.activeWorkspacePanel === 'studio') motionStudio.refresh(false);
-    if (appState.activeWorkspacePanel === 'config') motorConfig.fetchRegistry();
+    if (target === 'log') motorEventLog.activate();
+    if (target === 'studio') motionStudio.refresh(false);
+    if (target === 'config') motorConfig.fetchRegistry();
     projectExplorer.refresh(true);
   });
 }

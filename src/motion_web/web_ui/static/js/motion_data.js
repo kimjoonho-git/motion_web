@@ -384,6 +384,7 @@ export function createMotionDataController({
   let mappingDirty = false;
   let mappingLoadToken = 0;
   let mappingRevision = '';
+  let activeMotionPanel = 'files';
   let motionRunStatus = null;
   let motionRunLastResult = null;
   let motionRunLoading = false;
@@ -1180,16 +1181,13 @@ export function createMotionDataController({
   }
 
   function renderMotionTabs(active = null) {
-    if (!el.motionTabs) return;
-    const current = active || el.motionTabs.querySelector('.active')?.dataset.motionTab || 'files';
-    el.motionTabs.querySelectorAll('[data-motion-tab]').forEach((button) => {
-      const isActive = button.dataset.motionTab === current;
-      button.classList.toggle('active', isActive);
-      button.setAttribute('aria-selected', isActive ? 'true' : 'false');
-    });
+    const next = String(active || activeMotionPanel || 'files');
+    activeMotionPanel = ['files', 'mapping', 'midi', 'run'].includes(next)
+      ? next
+      : 'files';
     if (el.motionPanels) {
       el.motionPanels.forEach((panel) => {
-        panel.classList.toggle('hidden', panel.dataset.motionPanel !== current);
+        panel.classList.toggle('hidden', panel.dataset.motionPanel !== activeMotionPanel);
       });
     }
   }
@@ -1570,8 +1568,7 @@ export function createMotionDataController({
   }
 
   function renderRuntimeMappingState() {
-    const activePanel = el.motionTabs?.querySelector('.active')?.dataset.motionTab;
-    if (activePanel !== 'mapping') return;
+    if (activeMotionPanel !== 'mapping') return;
     const activeElement = document.activeElement;
     if (
       activeElement &&
@@ -2306,14 +2303,6 @@ export function createMotionDataController({
   }
 
   function bindEvents() {
-    if (el.motionTabs) {
-      el.motionTabs.addEventListener('click', (event) => {
-        const button = event.target.closest('[data-motion-tab]');
-        if (!button) return;
-        renderMotionTabs(button.dataset.motionTab || 'files');
-        render();
-      });
-    }
     if (el.motionFileRows) {
       el.motionFileRows.addEventListener('click', (event) => {
         const target = event.target.closest('[data-motion-file-id]');
@@ -2504,5 +2493,9 @@ export function createMotionDataController({
     getWorkContext,
     render,
     renderRuntimeState,
+    showTab: (tab) => {
+      renderMotionTabs(tab);
+      render();
+    },
   };
 }
