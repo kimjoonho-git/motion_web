@@ -1,3 +1,5 @@
+"""Request/response callback boundary contracts without a live ROS graph."""
+
 import json
 from types import SimpleNamespace
 
