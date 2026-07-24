@@ -140,6 +140,44 @@ def test_coordinator_does_not_enable_context_without_supervisor_generation_ack()
     assert 'motor_runtime' in result['failures']
 
 
+def test_range_recovery_flag_is_forwarded_to_motion_supervisor():
+    bridge = make_bridge()
+    published = []
+    bridge._motion_state_motor = lambda _axis: {
+        'controller_index': 0,
+        'motor_type': 'ac_servo',
+        'state': 'detected',
+        'servo_on': True,
+        'fault': False,
+    }
+    bridge._new_project_request_id = lambda _prefix: 'recovery-1'
+    bridge._current_project_generation = lambda: 1
+    bridge._action_request_publisher = type('Publisher', (), {
+        'publish': lambda _self, message: published.append(json.loads(message.data)),
+    })()
+    bridge._wait_for_action_result = lambda _request_id: {
+        'success': True,
+        'message': 'started',
+    }
+    bridge.snapshot = lambda: {}
+
+    result = bridge.request_ac_servo_action(
+        0,
+        -1000.0,
+        range_recovery=True,
+    )
+
+    assert result['success'] is True
+    assert published == [{
+        'request_id': 'recovery-1',
+        'project_generation': 1,
+        'command': 'ac_servo_absolute_move',
+        'axis': 0,
+        'target_deg': -1000.0,
+        'range_recovery': True,
+    }]
+
+
 def test_frequent_status_read_does_not_rehash_project_files():
     bridge = make_bridge()
     calls = []

@@ -157,6 +157,7 @@ export function getElements() {
     motionTestDurationSec: document.getElementById('motionTestDurationSec'),
     motionTestCommandPositionSummary: document.getElementById('motionTestCommandPositionSummary'),
     motionTestRunButton: document.getElementById('motionTestRunButton'),
+    motionTestRecoveryButton: document.getElementById('motionTestRecoveryButton'),
     motionTestStopButton: document.getElementById('motionTestStopButton'),
     motionTestOutputState: document.getElementById('motionTestOutputState'),
     motionTestOutputText: document.getElementById('motionTestOutputText'),

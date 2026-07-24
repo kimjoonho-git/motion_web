@@ -535,6 +535,7 @@
             <div id="motionTestModeButtons" class="segmented-control motion-mode-tabs" role="group" aria-label="동작 테스트 방식">
               <button class="active" type="button" data-motion-test-mode="jog">조그 모드</button>
               <button type="button" data-motion-test-mode="action">동작 모드</button>
+              <button type="button" data-motion-test-mode="recovery">범위 복귀</button>
             </div>
             <div class="motion-test-command-grid">
               <input id="motionTestMode" type="hidden" value="jog">
@@ -554,6 +555,9 @@
                 <span>동작 시간 (초)</span>
                 <input id="motionTestDurationSec" type="number" inputmode="decimal" step="0.01" min="0.02" value="1.00">
               </label>
+              <div class="motion-command-note hidden" data-motion-test-panel="recovery">
+                현재 위치가 설정 범위를 벗어났을 때 가장 가까운 하한 또는 상한 경계로 이동합니다.
+              </div>
             </div>
             <div class="manual-actions" data-motion-test-panel="jog">
               <button id="motionTestJogNegativeButton" class="primary motion-command-button" type="button" disabled>- 방향</button>
@@ -565,6 +569,9 @@
             </details>
             <div class="manual-actions hidden" data-motion-test-panel="action">
               <button id="motionTestRunButton" class="primary motion-command-button" type="button" disabled>동작 실행</button>
+            </div>
+            <div class="manual-actions hidden" data-motion-test-panel="recovery">
+              <button id="motionTestRecoveryButton" class="primary motion-command-button" type="button" disabled>경계 위치로 복귀</button>
             </div>
             <div class="motion-test-stop-bar">
               <div>
@@ -1499,6 +1506,6 @@
       </section>
     </div>
 
-    <script type="module" src="/static/app.js?v=20260724-functional-fix-1"></script>
+    <script type="module" src="/static/app.js?v=20260724-range-recovery-1"></script>
   </body>
 </html>
