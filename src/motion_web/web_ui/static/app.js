@@ -1,1 +1,1 @@
-import './js/main.js?v=20260724-layer-editor-ui-2';
+import './js/main.js?v=20260724-ui-navigation-1';

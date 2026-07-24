@@ -41,7 +41,7 @@ test('every motor configuration action button exists and has a controller handle
 
 test('motor type scans are primary and the full scan remains a sequential option', () => {
   const scanSection = html.match(
-    /<section class="axis-setup-step" aria-label="모터 타입별 검색">([\s\S]*?)<\/section>\s*<section class="axis-settings-panel"/,
+    /<section class="[^"]*\baxis-setup-step\b[^"]*" aria-label="모터 타입별 검색">([\s\S]*?)<\/section>\s*<section class="[^"]*\baxis-settings-panel\b/,
   );
   assert.ok(scanSection, 'primary motor type scan section missing');
   assert.match(scanSection[1], /id="scanButton"[^>]*>AC Servo 검색</);

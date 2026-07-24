@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>모션 녹화 시스템 0.5.0</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260724-layer-editor-ui-2">
+    <link rel="stylesheet" href="/static/styles.css?v=20260724-ui-navigation-1">
   </head>
   <body>
     <main class="shell">
@@ -35,14 +35,31 @@
         긴급정지 잠김 · 모터 동작 명령이 차단되었습니다 · 프로그램 재시작 필요
       </div>
 
-      <nav id="workspaceTabs" class="workspace-tabs" aria-label="작업 화면">
-        <button class="workspace-tab-button" type="button" data-workspace-tab="system">시스템 정보</button>
-        <button class="workspace-tab-button" type="button" data-workspace-tab="config">모터 축 설정</button>
-        <button class="workspace-tab-button active" type="button" data-workspace-tab="monitoring">실시간 모니터링</button>
-        <button class="workspace-tab-button" type="button" data-workspace-tab="manual">동작 테스트</button>
-        <button class="workspace-tab-button" type="button" data-workspace-tab="motion">모션</button>
-        <button class="workspace-tab-button" type="button" data-workspace-tab="studio">모션 스튜디오</button>
-        <button class="workspace-tab-button" type="button" data-workspace-tab="log">로그</button>
+      <nav id="workspaceTabs" class="workspace-navigation" aria-label="작업 화면">
+        <div class="workspace-group-tabs" role="tablist" aria-label="작업 분류">
+          <button class="workspace-group-button active" type="button" role="tab" data-workspace-group="operations">운영</button>
+          <button class="workspace-group-button" type="button" role="tab" data-workspace-group="setup">프로젝트·장비</button>
+          <button class="workspace-group-button" type="button" role="tab" data-workspace-group="creation">모션 제작</button>
+          <button class="workspace-group-button" type="button" role="tab" data-workspace-group="execution">실행·시험</button>
+        </div>
+        <div class="workspace-tabs" data-workspace-group-panel="operations" role="tablist" aria-label="운영 메뉴">
+          <button class="workspace-tab-button active" type="button" role="tab" data-workspace-tab="monitoring">실시간 모니터링</button>
+          <button class="workspace-tab-button" type="button" role="tab" data-workspace-tab="log">로그</button>
+        </div>
+        <div class="workspace-tabs hidden" data-workspace-group-panel="setup" role="tablist" aria-label="프로젝트 및 장비 메뉴">
+          <button class="workspace-tab-button" type="button" role="tab" data-workspace-tab="system">시스템 정보</button>
+          <button class="workspace-tab-button" type="button" role="tab" data-workspace-tab="config">모터축 설정</button>
+        </div>
+        <div class="workspace-tabs hidden" data-workspace-group-panel="creation" role="tablist" aria-label="모션 제작 메뉴">
+          <button class="workspace-tab-button" type="button" role="tab" data-workspace-tab="motion-files">모션 파일</button>
+          <button class="workspace-tab-button" type="button" role="tab" data-workspace-tab="motion-mapping">모션축 설정</button>
+          <button class="workspace-tab-button" type="button" role="tab" data-workspace-tab="motion-midi">MIDI 입력 설정</button>
+          <button class="workspace-tab-button" type="button" role="tab" data-workspace-tab="studio">모션 스튜디오</button>
+        </div>
+        <div class="workspace-tabs hidden" data-workspace-group-panel="execution" role="tablist" aria-label="실행 및 시험 메뉴">
+          <button class="workspace-tab-button" type="button" role="tab" data-workspace-tab="manual">동작 테스트</button>
+          <button class="workspace-tab-button" type="button" role="tab" data-workspace-tab="motion-run">모션 실행</button>
+        </div>
       </nav>
 
       <div class="workspace-layout">
@@ -186,10 +203,10 @@
         </section>
       </section>
 
-      <section class="registration-panel workspace-panel hidden" data-workspace-panel="config" aria-label="모터 축 설정">
+      <section class="registration-panel workspace-panel settings-editor-page hidden" data-workspace-panel="config" aria-label="모터축 설정">
         <div class="section-head workspace-page-head">
-          <strong>모터 관리</strong>
-          <span>설정 파일, 스캔 확인, 축 설정</span>
+          <div><strong>모터축 설정</strong><small>모터 검색 결과와 프로젝트 축 설정을 비교하고 저장합니다</small></div>
+          <span>프로젝트 장비 설정</span>
         </div>
         <div class="workspace-guide" aria-label="모터축 설정 사용 순서">
           <strong>사용 순서</strong>
@@ -217,7 +234,7 @@
           </div>
         </details>
 
-        <section class="axis-setup-step" aria-label="모터 타입별 검색">
+        <section class="axis-setup-step settings-step-card" aria-label="모터 타입별 검색">
           <div class="section-head axis-settings-head">
             <strong>1. 장비 검색</strong>
             <span>AC Servo와 Dynamixel을 각각 독립적으로 검색합니다</span>
@@ -242,9 +259,9 @@
           </details>
         </section>
 
-        <section class="axis-settings-panel" aria-label="모터 축 설정 표">
+        <section class="axis-settings-panel settings-step-card" aria-label="모터 축 설정 표">
           <div class="section-head axis-settings-head">
-            <strong>2. 프로젝트 축 목록</strong>
+            <strong>2. 검색 결과 확인 및 축 편집</strong>
             <span id="axisSummary">설정 파일을 불러오는 중</span>
           </div>
 
@@ -268,7 +285,6 @@
                 <div class="registry-actions">
                   <button id="addAxisButton" class="primary" type="button" disabled>선택 축 추가</button>
                   <button id="updateAxisIdentityButton" type="button" disabled>선택 축 연결정보 변경</button>
-                  <button id="saveAxisConfigButton" class="primary" type="button" disabled>변경 내용 저장</button>
                 </div>
               </div>
               <div class="axis-action-group">
@@ -338,7 +354,20 @@
           </div>
         </section>
 
-        <section class="axis-setup-step axis-apply-step" aria-label="모터 설정 적용">
+        <section class="axis-setup-step settings-step-card settings-commit-card" aria-label="모터 설정 검증 및 저장">
+          <div class="section-head axis-settings-head">
+            <strong>3. 검증 및 저장</strong>
+            <span>편집한 축 구성의 오류를 확인한 뒤 프로젝트 파일에 저장합니다</span>
+          </div>
+          <div class="settings-commit-actions">
+            <div class="registry-message">현재 상태와 설정 상태를 확인하세요. 저장만으로는 모터 제어 시스템이 재시작되지 않습니다.</div>
+            <div class="registry-actions">
+              <button id="saveAxisConfigButton" class="primary" type="button" disabled>변경 내용 검증·저장</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="axis-setup-step axis-apply-step settings-step-card" aria-label="모터 설정 적용">
           <div class="section-head axis-settings-head">
             <strong>4. 실제 시스템 적용</strong>
             <span>저장된 프로젝트 설정을 실행 시스템에 반영</span>
@@ -589,18 +618,16 @@
 
       <section class="motion-data-panel workspace-panel hidden" data-workspace-panel="motion" aria-label="모션 데이터">
         <div class="section-head workspace-page-head">
-          <strong>모션</strong>
-          <span>파일, 축 매핑, 제작, 실행</span>
+          <div><strong id="motionWorkspaceTitle">모션 파일</strong><small id="motionWorkspaceSubtitle">현재 프로젝트의 모션 데이터를 확인하고 분석합니다</small></div>
         </div>
-        <div class="workspace-guide" aria-label="모션 사용 순서">
+        <div id="motionWorkflowGuide" class="workspace-guide" aria-label="모션 사용 순서">
           <strong>사용 순서</strong>
-          <ol><li>모션 파일 준비</li><li>모션축 설정</li><li>MIDI 확인</li><li>모션 실행</li></ol>
+          <ol><li>모션 파일 준비</li><li>모션축 설정</li><li>MIDI 입력 설정(선택)</li><li>실행·시험에서 모션 실행</li></ol>
         </div>
 
-        <div id="motionTabs" class="tabbar motion-tabs" role="tablist" aria-label="모션 화면">
+        <div id="motionTabs" class="motion-route-tabs hidden" role="tablist" aria-label="모션 내부 경로" aria-hidden="true">
           <button class="tab-button active" type="button" data-motion-tab="files">모션 파일</button>
           <button class="tab-button" type="button" data-motion-tab="mapping">모션축 설정</button>
-          <button class="tab-button" type="button" data-motion-tab="editor">모션 제작</button>
           <button class="tab-button" type="button" data-motion-tab="midi">MIDI</button>
           <button class="tab-button" type="button" data-motion-tab="run">모션 동작</button>
         </div>
@@ -706,11 +733,11 @@
           </div>
         </div>
 
-        <div class="motion-tab-panel hidden" data-motion-panel="mapping">
+        <div class="motion-tab-panel settings-editor-page hidden" data-motion-panel="mapping">
           <div class="motion-mapping-layout">
-            <section class="motion-file-subsection" aria-label="모션축 설정 파일">
+            <section class="motion-file-subsection settings-step-card" aria-label="모션축 설정 파일">
               <div class="section-head compact">
-                <strong>현재 프로젝트 모션축 설정</strong>
+                <strong>1. 설정 파일 선택</strong>
                 <span id="motionMappingMessage">현재 매칭 확인 중</span>
               </div>
               <div class="motion-mapping-toolbar">
@@ -723,12 +750,6 @@
                 <div class="registry-actions">
                   <button id="refreshMotionMappingsButton" type="button">목록 새로고침</button>
                   <button id="newMotionMappingButton" type="button">새 매칭 작성</button>
-                  <button id="addMotionIdButton" type="button">모션 ID 추가</button>
-                  <button id="generateMotionIdsButton" type="button">모터축 행 자동 생성</button>
-                  <button id="validateMotionMappingButton" type="button">설정 검증</button>
-                  <button id="saveMotionMappingButton" class="primary" type="button">현재 파일 저장</button>
-                  <button id="resetMotionMappingButton" type="button">저장된 내용으로 되돌리기</button>
-                  <button id="deleteMotionMappingButton" class="danger" type="button" disabled>현재 설정 파일 삭제</button>
                 </div>
               </div>
               <div class="motion-mapping-form">
@@ -748,10 +769,14 @@
               </div>
             </section>
 
-            <section class="motion-file-subsection" aria-label="모션축 설정 표">
+            <section class="motion-file-subsection settings-step-card" aria-label="모션축 설정 표">
               <div class="section-head compact">
-                <strong>모션축 설정</strong>
+                <strong>2. 모션축 편집</strong>
                 <span>모션 ID를 현재 프로젝트의 AC 서보 축 또는 다이나믹셀 ID에 연결</span>
+              </div>
+              <div class="registry-actions settings-step-actions">
+                <button id="addMotionIdButton" type="button">모션 ID 추가</button>
+                <button id="generateMotionIdsButton" type="button">모터축 행 자동 생성</button>
               </div>
               <div class="table-wrap motion-mapping-table-wrap">
                 <table class="motion-mapping-table">
@@ -799,17 +824,35 @@
               </div>
             </section>
 
-            <section class="motion-file-subsection" aria-label="모션축 설정 검증">
+            <section class="motion-file-subsection settings-step-card" aria-label="모션축 설정 검증">
               <div class="section-head compact">
-                <strong>검증 / 계산 미리보기</strong>
+                <strong>3. 검증 및 계산 미리보기</strong>
                 <span>motion_mapping_manager 계산 결과</span>
+              </div>
+              <div class="registry-actions settings-step-actions">
+                <button id="validateMotionMappingButton" class="primary" type="button">설정 검증</button>
               </div>
               <div id="motionMappingValidation" class="motion-value-table">
                 <div class="empty">설정 검증을 누르면 결과가 표시됩니다</div>
               </div>
             </section>
 
-            <section class="motion-file-subsection" aria-label="미사용 모터 축">
+            <section class="motion-file-subsection settings-step-card settings-commit-card" aria-label="모션축 설정 저장">
+              <div class="section-head compact">
+                <strong>4. 저장</strong>
+                <span>검증 결과를 확인하고 현재 프로젝트의 모션축 설정 파일을 저장합니다</span>
+              </div>
+              <div class="settings-commit-actions">
+                <div class="registry-message">저장 후에도 현재 화면에서 계속 편집할 수 있습니다.</div>
+                <div class="registry-actions settings-file-actions">
+                  <button id="saveMotionMappingButton" class="primary" type="button">현재 파일 저장</button>
+                  <button id="resetMotionMappingButton" type="button">저장된 내용으로 되돌리기</button>
+                  <button id="deleteMotionMappingButton" class="danger" type="button" disabled>현재 설정 파일 삭제</button>
+                </div>
+              </div>
+            </section>
+
+            <section class="motion-file-subsection settings-reference-card" aria-label="미사용 모터 축">
               <div class="section-head compact">
                 <strong>미사용 모터축</strong>
                 <span>현재 매핑에서 비어 있는 축</span>
@@ -834,18 +877,14 @@
               </div>
             </section>
 
-            <section class="motion-file-subsection" aria-label="모션축 설정 YAML 원본">
+            <section class="motion-file-subsection settings-reference-card" aria-label="모션축 설정 YAML 원본">
               <div class="section-head compact">
-                <strong>매핑 YAML 원본</strong>
+                <strong>고급: 매핑 YAML 원본</strong>
                 <span>읽기 전용</span>
               </div>
               <pre id="motionMappingRawText" class="motion-file-preview-text">매핑 파일을 선택하거나 저장하면 YAML 원본이 표시됩니다</pre>
             </section>
           </div>
-        </div>
-
-        <div class="motion-tab-panel hidden" data-motion-panel="editor">
-          <div class="registration-placeholder">모션 제작은 향후 각 축별 포인트 기반 모션 생성 기능으로 확장합니다.</div>
         </div>
 
         <div class="motion-tab-panel hidden" data-motion-panel="midi">
@@ -1467,6 +1506,6 @@
       </section>
     </div>
 
-    <script type="module" src="/static/app.js?v=20260724-layer-editor-ui-2"></script>
+    <script type="module" src="/static/app.js?v=20260724-ui-navigation-1"></script>
   </body>
 </html>

@@ -10,16 +10,25 @@ import {
   stopMotionStudio,
   setProjectGeneration,
 } from './api.js?v=20260723-servo-service-split';
-import { getElements } from './dom.js?v=20260723-point-linked-edit';
+import { getElements } from './dom.js?v=20260724-ui-navigation-1';
 import { createMotorEventLogController } from './event_log.js?v=20260721-project-generation';
 import { createMidiMonitorController } from './midi_monitor.js?v=20260723-revision-sync';
-import { createMotionDataController } from './motion_data.js?v=20260723-revision-sync';
+import { createMotionDataController } from './motion_data.js?v=20260724-ui-navigation-1';
 import { createMotionStudioController } from './motion_studio.js?v=20260724-layer-editor-ui-2';
 import { createMotionTestController } from './motion_test.js?v=20260721-project-generation';
 import { createMotorConfigController } from './motor_config.js?v=20260723-header-operation-groups';
 import { createProjectExplorerController } from './project_explorer.js?v=20260723-program-restart-label';
 import { renderAccess, renderMonitoring } from './monitoring.js?v=20260723-physical-runtime-state';
 import { StatusSocket } from './socket.js';
+import {
+  defaultWorkspaceForGroup,
+  motionTabForWorkspace,
+  MOTION_WORKSPACE_DETAILS,
+  normalizeWorkspaceRoute,
+  workspaceForLegacyNavigation,
+  workspaceGroupFor,
+  workspacePanelFor,
+} from './workspace_navigation.js?v=20260724-ui-navigation-1';
 
 const el = getElements();
 const appState = {
@@ -43,7 +52,7 @@ const appState = {
   projectGeneration: null,
 };
 const RESTART_READY_STABLE_MS = 3500;
-const IDENTITY_BLOCKED_WORKSPACES = new Set(['manual', 'motion']);
+const IDENTITY_BLOCKED_WORKSPACES = new Set(['manual', 'motion-run']);
 
 function blockWorkspaceForMotorIdentity(workspace) {
   if (!appState.motorIdentityBlockMessage || !IDENTITY_BLOCKED_WORKSPACES.has(workspace)) {
@@ -82,18 +91,47 @@ function studioMotorActionBlockReason() {
 }
 
 function renderWorkspacePanel() {
+  const activeWorkspace = normalizeWorkspaceRoute(appState.activeWorkspacePanel);
+  const activeGroup = workspaceGroupFor(activeWorkspace);
+  const activePanel = workspacePanelFor(activeWorkspace);
+  appState.activeWorkspacePanel = activeWorkspace;
   if (el.workspaceTabs) {
+    el.workspaceTabs.querySelectorAll('[data-workspace-group]').forEach((button) => {
+      const active = button.dataset.workspaceGroup === activeGroup;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+    el.workspaceTabs.querySelectorAll('[data-workspace-group-panel]').forEach((panel) => {
+      panel.classList.toggle('hidden', panel.dataset.workspaceGroupPanel !== activeGroup);
+    });
     el.workspaceTabs.querySelectorAll('[data-workspace-tab]').forEach((button) => {
-      const active = button.dataset.workspaceTab === appState.activeWorkspacePanel;
+      const active = button.dataset.workspaceTab === activeWorkspace;
       button.classList.toggle('active', active);
       button.setAttribute('aria-selected', active ? 'true' : 'false');
     });
   }
   if (el.workspacePanels) {
     el.workspacePanels.forEach((panel) => {
-      panel.classList.toggle('hidden', panel.dataset.workspacePanel !== appState.activeWorkspacePanel);
+      panel.classList.toggle('hidden', panel.dataset.workspacePanel !== activePanel);
     });
   }
+  const motionTab = motionTabForWorkspace(activeWorkspace);
+  if (motionTab) {
+    motionData.showTab(motionTab);
+    const details = MOTION_WORKSPACE_DETAILS[activeWorkspace]
+      || MOTION_WORKSPACE_DETAILS['motion-files'];
+    if (el.motionWorkspaceTitle) el.motionWorkspaceTitle.textContent = details[0];
+    if (el.motionWorkspaceSubtitle) el.motionWorkspaceSubtitle.textContent = details[1];
+    el.motionWorkflowGuide?.classList.toggle('hidden', motionTab === 'run');
+  }
+}
+
+function setActiveWorkspace(workspace, motionTab = '') {
+  const target = workspaceForLegacyNavigation(workspace, motionTab);
+  if (blockWorkspaceForMotorIdentity(target)) return '';
+  appState.activeWorkspacePanel = target;
+  renderWorkspacePanel();
+  return target;
 }
 
 function basename(path) {
@@ -724,25 +762,20 @@ const motionStudio = createMotionStudioController({
 const projectExplorer = createProjectExplorerController({
   el,
   onOpenEditor: (result) => {
-    if (blockWorkspaceForMotorIdentity(result.workspace || 'system')) return;
-    appState.activeWorkspacePanel = result.workspace || 'system';
-    renderWorkspacePanel();
+    const target = setActiveWorkspace(result.workspace || 'system', result.motion_tab);
+    if (!target) return;
     if (result.workspace === 'config') motorConfig.fetchRegistry();
     if (result.workspace === 'motion') {
       motionData.openProjectFile(result.category, result.file_name);
-      const tab = el.motionTabs?.querySelector(`[data-motion-tab="${result.motion_tab || 'files'}"]`);
-      tab?.click();
     }
     if (result.workspace === 'studio') motionStudio.refresh(false);
   },
   onManageFile: () => {
-    appState.activeWorkspacePanel = 'system';
-    renderWorkspacePanel();
+    setActiveWorkspace('system');
     document.getElementById('projectFileManager')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   },
   onAddMotionLayer: async (fileName) => {
-    appState.activeWorkspacePanel = 'studio';
-    renderWorkspacePanel();
+    setActiveWorkspace('studio');
     await motionStudio.refresh(false);
     await motionStudio.addMotionFile(fileName);
   },
@@ -759,12 +792,7 @@ const projectExplorer = createProjectExplorerController({
     updateWorkContext();
   },
   onNavigate: (workspace, motionTab) => {
-    if (blockWorkspaceForMotorIdentity(workspace)) return;
-    appState.activeWorkspacePanel = workspace || 'monitoring';
-    renderWorkspacePanel();
-    if (workspace === 'motion' && motionTab) {
-      el.motionTabs?.querySelector(`[data-motion-tab="${motionTab}"]`)?.click();
-    }
+    setActiveWorkspace(workspace || 'monitoring', motionTab);
   },
 });
 
@@ -1085,16 +1113,29 @@ if (el.rows) {
 
 if (el.workspaceTabs) {
   el.workspaceTabs.addEventListener('click', (event) => {
+    const groupButton = event.target.closest('button[data-workspace-group]');
+    if (groupButton) {
+      const group = groupButton.dataset.workspaceGroup || 'operations';
+      if (workspaceGroupFor(appState.activeWorkspacePanel) === group) return;
+      const target = setActiveWorkspace(
+        defaultWorkspaceForGroup(group),
+      );
+      if (!target) return;
+      renderLatestState();
+      if (target === 'log') motorEventLog.activate();
+      if (target === 'studio') motionStudio.refresh(false);
+      if (target === 'config') motorConfig.fetchRegistry();
+      projectExplorer.refresh(true);
+      return;
+    }
     const button = event.target.closest('button[data-workspace-tab]');
     if (!button) return;
-    const workspace = button.dataset.workspaceTab || 'monitoring';
-    if (blockWorkspaceForMotorIdentity(workspace)) return;
-    appState.activeWorkspacePanel = workspace;
-    renderWorkspacePanel();
+    const target = setActiveWorkspace(button.dataset.workspaceTab || 'monitoring');
+    if (!target) return;
     renderLatestState();
-    if (appState.activeWorkspacePanel === 'log') motorEventLog.activate();
-    if (appState.activeWorkspacePanel === 'studio') motionStudio.refresh(false);
-    if (appState.activeWorkspacePanel === 'config') motorConfig.fetchRegistry();
+    if (target === 'log') motorEventLog.activate();
+    if (target === 'studio') motionStudio.refresh(false);
+    if (target === 'config') motorConfig.fetchRegistry();
     projectExplorer.refresh(true);
   });
 }

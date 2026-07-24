@@ -2504,5 +2504,9 @@ export function createMotionDataController({
     getWorkContext,
     render,
     renderRuntimeState,
+    showTab: (tab) => {
+      renderMotionTabs(tab);
+      render();
+    },
   };
 }
