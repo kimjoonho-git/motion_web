@@ -23,7 +23,10 @@ from .layer_validation import (
     project_point_curve_frame_mismatches,
     validate_ranges,
 )
+from .operation_state import StudioOperationStateMachine
+from .project_commands import StudioProjectCommands
 from .project_store import DEFAULT_PERIOD_SEC, ProjectStore, normalize_layer
+from .ros_gateway import StudioRosGateway
 from .timeline import (
     layer_conflicts,
     layer_transition_warnings,
@@ -133,8 +136,10 @@ class MotionStudioNode(Node):
         self._record_eligible_motion_ids: set[str] = set()
         self._recorded_motion_ids: set[str] = set()
         self._record_mode = 'record'
-        self._operation_generation = 0
+        self._operation_state = StudioOperationStateMachine()
         self._status = self._empty_status()
+        self._project_commands = StudioProjectCommands(self)
+        self._ros_gateway = StudioRosGateway(self)
 
         self._request_pub = self.create_publisher(String, self.motion_run_request_topic, 10)
         self._midi_request_pub = self.create_publisher(String, self.midi_request_topic, 10)
@@ -198,20 +203,14 @@ class MotionStudioNode(Node):
             payload = json.loads(msg.data)
         except json.JSONDecodeError:
             return
-        request_id = str(payload.get('request_id') or '') if isinstance(payload, dict) else ''
-        if request_id and self._response_generation_matches(payload):
-            with self._lock:
-                self._run_results[request_id] = payload
+        self._gateway().accept_run_response(payload)
 
     def _midi_response_callback(self, msg: String) -> None:
         try:
             payload = json.loads(msg.data)
         except json.JSONDecodeError:
             return
-        request_id = str(payload.get('request_id') or '') if isinstance(payload, dict) else ''
-        if request_id and self._response_generation_matches(payload):
-            with self._lock:
-                self._midi_results[request_id] = payload
+        self._gateway().accept_midi_response(payload)
 
     def _run_status_callback(self, msg: String) -> None:
         try:
@@ -311,60 +310,7 @@ class MotionStudioNode(Node):
         return generation
 
     def _handle(self, command: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        if command == 'status':
-            self._select_workspace(payload)
-            return self.snapshot()
         self._select_workspace(payload)
-        if command == 'list':
-            with self._lock:
-                current_project = self._current_project
-            return {
-                'success': True,
-                'projects': self._store.list_projects(),
-                'mappings': self._store.list_mappings(),
-                'motion_files': self._store.list_motion_files(),
-                'project': current_project,
-                'status': self.snapshot(),
-            }
-        if command == 'open_workspace':
-            with self._lock:
-                self._require_idle_locked()
-            workspace_project_id = str(payload.get('workspace_project_id') or '').strip()
-            if not workspace_project_id:
-                raise ValueError('통합 프로젝트 ID가 필요합니다')
-            mapping = self._store.inspect_mapping(payload.get('mapping_file_id'))
-            summary = next(
-                (
-                    item for item in self._store.list_projects()
-                    if item.get('workspace_project_id') == workspace_project_id
-                ),
-                None,
-            )
-            if summary:
-                project = self._store.load_project(summary['project_id'])
-            else:
-                project = self._store.create_project(
-                    payload.get('name'), mapping['file_id']
-                )
-            project['workspace_project_id'] = workspace_project_id
-            project['name'] = str(payload.get('name') or project['name']).strip() or project['name']
-            project['mapping_file_id'] = mapping['file_id']
-            project['mapping_sha256'] = mapping['sha256']
-            project['layers'] = [
-                dict(layer) for layer in payload.get('layers') or []
-                if isinstance(layer, dict)
-            ]
-            project = self._store.save_project(project)
-            with self._lock:
-                self._current_project = project
-                self._set_status_locked('idle', '통합 프로젝트를 모션 스튜디오에 연결했습니다')
-            result = self._project_result(project, '통합 프로젝트 연결 완료')
-            result.update({
-                'projects': self._store.list_projects(),
-                'mappings': self._store.list_mappings(),
-                'motion_files': self._store.list_motion_files(),
-            })
-            return result
         if command == 'apply_context':
             return self._apply_execution_context(payload)
         if command == 'confirm_context':
@@ -385,7 +331,7 @@ class MotionStudioNode(Node):
             }
         if command == 'invalidate_context':
             with self._lock:
-                self._operation_generation += 1
+                self._operation_machine().cancel()
                 self._store = ProjectStore()
                 self._workspace_project_id = ''
                 self._current_project = None
@@ -407,84 +353,12 @@ class MotionStudioNode(Node):
                 'context_id': '',
                 'status': self.snapshot(),
             }
-        if command == 'create':
-            with self._lock:
-                self._require_idle_locked()
-            project = self._store.create_project(payload.get('name'), payload.get('mapping_file_id'))
-            with self._lock:
-                self._current_project = project
-                self._set_status_locked('idle', '새 모션 프로젝트를 만들었습니다')
-            return {'success': True, 'project': project, 'status': self.snapshot()}
-        if command == 'load':
-            project = self._store.load_project(payload.get('project_id'))
-            with self._lock:
-                self._require_idle_locked()
-                self._current_project = project
-                self._set_status_locked('idle', '모션 프로젝트를 불러왔습니다')
-            return self._project_result(project)
-        if command == 'import_motion_file':
-            with self._lock:
-                self._require_idle_locked()
-            project = self._store.import_motion_file(
-                payload.get('motion_file_id'),
-                payload.get('mapping_file_id'),
-                payload.get('name'),
-            )
-            with self._lock:
-                self._current_project = project
-                self._set_status_locked(
-                    'idle', '모션 파일을 단일 레이어 프로젝트로 가져왔습니다'
-                )
-            return self._project_result(
-                project, '모션 파일 가져오기 완료 · 단일 레이어로 변환했습니다'
-            )
-        if command == 'import_motion_layer':
-            with self._lock:
-                self._require_idle_locked()
-                project = self._require_project_locked()
-                project = self._store.append_motion_file(
-                    project, payload.get('motion_file_id')
-                )
-                self._current_project = project
-                self._set_status_locked('idle', '모션 파일을 현재 프로젝트 레이어로 가져왔습니다')
-            return self._project_result(project, '모션 파일 레이어 가져오기 완료')
-        if command == 'save':
-            with self._lock:
-                self._require_idle_locked()
-                project = self._require_project_locked()
-                if 'name' in payload:
-                    project['name'] = str(payload.get('name') or '').strip() or project['name']
-                if 'transition_safety_level' in payload:
-                    try:
-                        level = int(payload.get('transition_safety_level'))
-                    except (TypeError, ValueError) as exc:
-                        raise ValueError('급변 기준 단계는 1~10이어야 합니다') from exc
-                    if level < 1 or level > 10:
-                        raise ValueError('급변 기준 단계는 1~10이어야 합니다')
-                    project['transition_safety_level'] = level
-                project = self._store.save_project(project)
-                self._current_project = project
-            return self._project_result(project, '프로젝트 저장 완료')
-        if command == 'update_layer':
-            return self._update_layer(payload)
-        if command == 'create_layer':
-            return self._create_layer(payload)
-        if command == 'replace_layer_data':
-            return self._replace_layer_data(payload)
-        if command == 'delete_layer':
-            return self._delete_layer(payload)
-        if command == 'duplicate_layer':
-            return self._duplicate_layer(payload)
-        if command == 'commit_merged_layer':
-            return self._commit_merged_layer(payload)
-        if command == 'delete':
-            with self._lock:
-                self._require_idle_locked()
-                project = self._require_project_locked()
-                self._store.delete_project(project['project_id'])
-                self._current_project = None
-                self._set_status_locked('idle', '프로젝트를 삭제했습니다')
-            return {'success': True, 'message': '프로젝트 삭제 완료'}
+        project_commands = getattr(self, '_project_commands', None)
+        if project_commands is None:
+            project_commands = StudioProjectCommands(self)
+            self._project_commands = project_commands
+        if project_commands.handles(command):
+            return project_commands.handle(command, payload)
         if command == 'record':
             self._require_execution_context()
             return self._start_record(payload)
@@ -649,9 +523,10 @@ class MotionStudioNode(Node):
             self._record_frames = []
             self._record_eligible_motion_ids = set(motion_ids)
             self._recorded_motion_ids = set()
+            operation_generation = self._operation_machine().begin(
+                str(self._status.get('state') or '')
+            )
             self._set_status_locked('initializing', '초기 위치 이동 준비 중')
-            self._operation_generation += 1
-            operation_generation = self._operation_generation
         thread = threading.Thread(
             target=self._prepare_record,
             args=(float(payload.get('initial_move_time_sec') or 5.0), operation_generation),
@@ -820,6 +695,9 @@ class MotionStudioNode(Node):
             file_id = self._store.write_motion_file(
                 f'{project["project_id"]}_preview', motion_file_text(project, frames), hidden=True
             )
+            operation_generation = self._operation_machine().begin(
+                str(self._status.get('state') or '')
+            )
             self._set_status_locked('initializing', '합성 미리보기 초기 위치 이동 중')
             self._status['elapsed_sec'] = 0.0
             self._status['playback_duration_sec'] = max(
@@ -831,8 +709,6 @@ class MotionStudioNode(Node):
             )
             self._status['runtime_progress'] = {}
             self._status['initialization_progress'] = {}
-            self._operation_generation += 1
-            operation_generation = self._operation_generation
         thread = threading.Thread(
             target=self._prepare_playback,
             args=(
@@ -884,12 +760,13 @@ class MotionStudioNode(Node):
                 hidden=True,
             )
             move_time = float(payload.get('initial_move_time_sec') or 5.0)
+            operation_generation = self._operation_machine().begin(
+                str(self._status.get('state') or '')
+            )
             self._set_status_locked('initializing', '초기 위치 이동 중')
             self._status['elapsed_sec'] = 0.0
             self._status['runtime_progress'] = {}
             self._status['initialization_progress'] = {}
-            self._operation_generation += 1
-            operation_generation = self._operation_generation
         threading.Thread(
             target=self._prepare_initial_position,
             args=(project, file_id, motion_ids, move_time, operation_generation),
@@ -983,8 +860,7 @@ class MotionStudioNode(Node):
     def _stop(self) -> Dict[str, Any]:
         with self._lock:
             state = self._status.get('state')
-            self._operation_generation += 1
-            stop_generation = self._operation_generation
+            stop_generation = self._operation_machine().cancel()
             project = None
             completion_message = '모션 스튜디오 정지 완료'
             if state == 'recording':
@@ -1309,13 +1185,7 @@ class MotionStudioNode(Node):
             return False
 
     def _request_run(self, command: str, payload: Dict[str, Any], timeout: float) -> Dict[str, Any]:
-        generation = self._context_generation()
-        request_id = f'studio-run-g{generation}-{time.time_ns()}'
-        self._publish_json(self._request_pub, {
-            'request_id': request_id, 'project_generation': generation,
-            'command': command, 'payload': {**payload, 'project_generation': generation}
-        })
-        return self._wait_for_run_result(request_id, timeout)
+        return self._gateway().request_run(command, payload, timeout)
 
     def _request_run_for_operation(
         self,
@@ -1325,61 +1195,36 @@ class MotionStudioNode(Node):
         operation_generation: int,
         expected_state: str,
     ) -> Dict[str, Any]:
-        """Publish only while the operation is active, atomically with cancellation."""
-        generation = self._context_generation()
-        request_id = f'studio-run-g{generation}-{time.time_ns()}'
-        with self._lock:
-            if (
-                operation_generation != self._operation_generation
-                or self._status.get('state') != expected_state
-            ):
-                return {'success': False, 'message': '사용자가 모션 동작을 정지했습니다'}
-            self._publish_json(self._request_pub, {
-                'request_id': request_id,
-                'project_generation': generation,
-                'command': command,
-                'payload': {**payload, 'project_generation': generation},
-            })
-        return self._wait_for_run_result(request_id, timeout)
+        return self._gateway().request_run_for_operation(
+            command,
+            payload,
+            timeout,
+            operation_generation,
+            expected_state,
+        )
 
     def _wait_for_run_result(self, request_id: str, timeout: float) -> Dict[str, Any]:
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            with self._lock:
-                result = self._run_results.pop(request_id, None)
-            if result is not None:
-                return result
-            time.sleep(0.02)
-        return {'success': False, 'message': 'motion_run_manager 응답 시간 초과'}
+        return self._gateway().wait_for_run_result(request_id, timeout)
 
     def _request_midi(self, command: str, payload: Dict[str, Any], timeout: float) -> Dict[str, Any]:
-        generation = self._context_generation()
-        request_id = f'studio-midi-g{generation}-{time.time_ns()}'
-        payload = dict(payload)
-        payload['project_id'] = self._workspace_project_id
-        payload['project_generation'] = generation
-        self._publish_json(self._midi_request_pub, {
-            'request_id': request_id, 'project_generation': generation,
-            'command': command, 'payload': payload
-        })
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            with self._lock:
-                result = self._midi_results.pop(request_id, None)
-            if result is not None:
-                return result
-            time.sleep(0.02)
-        return {'success': False, 'message': 'midi_control_node 응답 시간 초과'}
+        return self._gateway().request_midi(command, payload, timeout)
+
+    def _gateway(self) -> StudioRosGateway:
+        gateway = getattr(self, '_ros_gateway', None)
+        if gateway is None:
+            gateway = StudioRosGateway(self)
+            self._ros_gateway = gateway
+        return gateway
 
     def _require_active_operation(
         self, operation_generation: int, expected_state: str
     ) -> None:
         with self._lock:
-            if (
-                operation_generation != self._operation_generation
-                or self._status.get('state') != expected_state
-            ):
-                raise RuntimeError('사용자가 모션 동작을 정지했습니다')
+            self._operation_machine().require_active(
+                operation_generation,
+                str(self._status.get('state') or ''),
+                expected_state,
+            )
 
     def _countdown(self, action_label: str, operation_generation: int) -> bool:
         for count in (3, 2, 1):
@@ -1431,8 +1276,24 @@ class MotionStudioNode(Node):
         return self._current_project
 
     def _require_idle_locked(self) -> None:
-        if self._status.get('state') not in {'idle', 'error'}:
-            raise ValueError('녹화 또는 재생 중에는 프로젝트를 변경할 수 없습니다')
+        self._operation_machine().require_idle(
+            str(self._status.get('state') or '')
+        )
+
+    def _operation_machine(self) -> StudioOperationStateMachine:
+        machine = getattr(self, '_operation_state', None)
+        if machine is None:
+            machine = StudioOperationStateMachine()
+            self._operation_state = machine
+        return machine
+
+    @property
+    def _operation_generation(self) -> int:
+        return self._operation_machine().generation
+
+    @_operation_generation.setter
+    def _operation_generation(self, value: int) -> None:
+        self._operation_state = StudioOperationStateMachine(value)
 
     def _set_status_locked(self, state: str, message: str) -> None:
         self._status.update({

@@ -21,6 +21,10 @@ from .curve_engine import (
     render_point_curve,
     scale_time_segment as _scale_segment,
 )
+from .point_curve_operations import (
+    transform_point_curve,
+    validate_point_curve_overlaps,
+)
 from .project_store import DEFAULT_PERIOD_SEC, normalize_layer, unique_motion_ids
 from .timeline import layer_conflicts, layer_transition_warnings, render_project
 
@@ -114,72 +118,6 @@ def _overlapping_curves(
         if curve_start <= end_sec + EPSILON and curve_end >= start_sec - EPSILON:
             result.append(curve)
     return result
-
-
-def _transform_point_curve(
-    curve: Dict[str, Any],
-    operation: str,
-    *,
-    start_sec: float,
-    end_sec: float,
-    delta_sec: float = 0.0,
-    factor: float = 1.0,
-    offset_deg: float = 0.0,
-    value_pivot: float = 0.0,
-) -> tuple[Dict[str, Any], List[tuple[float, float]]]:
-    """Transform point metadata and render matching 20 ms samples."""
-    transformed = copy.deepcopy(curve)
-    normalized_points, _rendered = render_point_curve(
-        transformed.get('points') or [], point_curve_order(transformed)
-    )
-    transformed['points'] = normalized_points
-    for point in transformed['points']:
-        point_time = float(point['time_sec'])
-        if not _inside(point_time, start_sec, end_sec):
-            continue
-        if operation == 'time_shift':
-            target = point_time + delta_sec
-            if target < -EPSILON:
-                raise ValueError('편집 결과가 0초보다 앞으로 이동합니다')
-            point['time_sec'] = _time(target)
-        elif operation == 'time_scale':
-            point['time_sec'] = _time(
-                start_sec + ((point_time - start_sec) * factor)
-            )
-        elif operation == 'value_offset':
-            point['value_deg'] = float(point['value_deg']) + offset_deg
-        elif operation == 'value_scale':
-            point['value_deg'] = value_pivot + (
-                (float(point['value_deg']) - value_pivot) * factor
-            )
-        for handle_name in ('in_handle', 'out_handle'):
-            handle = point.get(handle_name)
-            if not isinstance(handle, dict):
-                continue
-            if operation == 'time_scale' and handle.get('dt_sec') is not None:
-                handle['dt_sec'] = float(handle['dt_sec']) * factor
-            if operation == 'value_scale' and handle.get('dv_deg') is not None:
-                handle['dv_deg'] = float(handle['dv_deg']) * factor
-    normalized_points, rendered = render_point_curve(
-        transformed.get('points') or [], point_curve_order(transformed)
-    )
-    transformed['points'] = normalized_points
-    return transformed, rendered
-
-
-def _validate_point_curve_overlaps(curves: Sequence[Dict[str, Any]]) -> None:
-    by_motion_id: Dict[str, List[tuple[float, float]]] = {}
-    for curve in curves:
-        by_motion_id.setdefault(str(curve.get('motion_id') or ''), []).append(
-            _curve_bounds(curve)
-        )
-    for motion_id, ranges in by_motion_id.items():
-        ordered = sorted(ranges)
-        for previous, following in zip(ordered, ordered[1:]):
-            if following[0] <= previous[1] + EPSILON:
-                raise ValueError(
-                    f'{motion_id}의 포인트 곡선 구간이 이동 후 서로 겹칩니다'
-                )
 
 
 def approximate_motion_points(
@@ -894,7 +832,7 @@ def edit_layer(layer: Dict[str, Any], request: Dict[str, Any]) -> Dict[str, Any]
         transformed_by_id: Dict[str, tuple[Dict[str, Any], List[tuple[float, float]]]] = {}
         for curve in overlapping_curves:
             motion_id = str(curve['motion_id'])
-            transformed_by_id[str(curve['curve_id'])] = _transform_point_curve(
+            transformed_by_id[str(curve['curve_id'])] = transform_point_curve(
                 curve,
                 operation,
                 start_sec=start_sec,
@@ -908,7 +846,7 @@ def edit_layer(layer: Dict[str, Any], request: Dict[str, Any]) -> Dict[str, Any]
         for curve in working.get('point_curves') or []:
             transformed = transformed_by_id.get(str(curve.get('curve_id') or ''))
             updated_curves.append(transformed[0] if transformed else curve)
-        _validate_point_curve_overlaps(updated_curves)
+        validate_point_curve_overlaps(updated_curves)
         working['point_curves'] = updated_curves
         for transformed_curve, rendered in transformed_by_id.values():
             tracks.setdefault(str(transformed_curve['motion_id']), []).extend(rendered)
