@@ -574,6 +574,8 @@ export function renderMonitoring(state, options) {
   const motors = filterMonitoringMotors(registryFilteredMotors, activeMonitoringFilter);
   const columns = monitoringColumnsForFilter(activeMonitoringFilter, rawMode);
   const enabled = Boolean(state.monitoring_enabled);
+  const connectionSummary = state.connection_summary || {};
+  const onlineCount = Number(connectionSummary.online || 0);
 
   renderMonitoringSummary(registryFilteredMotors, el);
   renderMonitoringDetail(

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>모션 녹화 시스템 0.5.0</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260724-system-layout-4">
+    <link rel="stylesheet" href="/static/styles.css?v=20260724-system-layout-5">
   </head>
   <body>
     <main class="shell">
@@ -18,11 +18,13 @@
             <span id="headerProjectName" class="header-project-name" title="현재 프로젝트">프로젝트 없음</span>
             <span id="headerContextState" class="header-context-state waiting" title="저장 설정과 실행 설정 일치 여부">설정 확인 중</span>
           </div>
+          <span class="topbar-operation-divider" aria-hidden="true"></span>
           <div class="topbar-operation-buttons">
             <div class="topbar-operation-group topbar-safety-actions" aria-label="정지 조작">
               <button id="headerMotionStopButton" class="header-motion-stop" type="button" title="전체 모터 동작을 정지하고 서보 ON을 유지합니다">전체 동작 정지</button>
               <button id="headerEmergencyStopButton" class="header-emergency-stop" type="button" aria-keyshortcuts="Control+Shift+E" title="전체 동작을 정지하고 AC 서보를 끈 뒤 명령을 잠급니다 (Ctrl+Shift+E)">긴급 정지</button>
             </div>
+            <span class="topbar-operation-divider" aria-hidden="true"></span>
             <div class="topbar-operation-group topbar-restart-actions" aria-label="재시작 조작">
               <button id="headerProgramRestartButton" type="button" disabled>프로그램 재시작</button>
             </div>
@@ -1531,6 +1533,6 @@
       </section>
     </div>
 
-    <script type="module" src="/static/app.js?v=20260724-system-layout-1"></script>
+    <script type="module" src="/static/app.js?v=20260724-runtime-fix-1"></script>
   </body>
 </html>

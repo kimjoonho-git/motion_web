@@ -1172,7 +1172,7 @@ body {
 .shell {
   width: min(100%, 1680px);
   margin: 0 auto;
-  padding: 20px;
+  padding: 14px 20px 20px;
 }
 
 .topbar {
@@ -1180,7 +1180,7 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 14px;
+  margin-bottom: 10px;
 }
 
 .app-title {
@@ -1192,8 +1192,7 @@ body {
 
 .topbar-operations {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
+  align-items: center;
   justify-content: flex-end;
   gap: 7px;
   min-width: 0;
@@ -1341,7 +1340,7 @@ body.emergency-latched .shell {
 }
 
 h1 {
-  margin: 0 0 4px;
+  margin: 0;
   font-size: 28px;
   line-height: 1.15;
 }

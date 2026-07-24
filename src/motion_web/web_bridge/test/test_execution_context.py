@@ -601,6 +601,7 @@ def test_ac_servo_scan_is_blocked_while_runtime_velocity_is_nonzero(monkeypatch)
             'controller_index': 2,
             'transport': 'ethercat',
             'velocity_deg_s': 1.5,
+            'target_reached': False,
         }],
     }
     bridge._motion_state_received_at = time.time()
@@ -626,6 +627,59 @@ def test_ac_servo_scan_is_blocked_while_runtime_velocity_is_nonzero(monkeypatch)
     assert result['scan_blocked'] is True
     assert '축 2' in result['message']
     assert '움직이는 중' in result['message']
+
+
+def test_ac_servo_scan_ignores_stopped_servo_velocity_quantization_noise():
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._lock = threading.Lock()
+    bridge._motion_state = {
+        'motors': [{
+            'controller_index': 2,
+            'transport': 'ethercat',
+            'velocity_deg_s': 2.1,
+            'target_reached': True,
+        }],
+    }
+    bridge._motion_state_received_at = time.time()
+    bridge._motion_run_lock = threading.Lock()
+    bridge._motion_run_status = {}
+    bridge._motion_studio_lock = threading.Lock()
+    bridge._motion_studio_status = {}
+    bridge.project_repository = type('Repository', (), {
+        'selected_project_id': lambda _self: 'project-a',
+    })()
+    bridge.snapshot = lambda: {}
+    bridge._current_project_generation = lambda: 3
+
+    assert bridge._ethercat_scan_safety_blocker() == ''
+
+
+def test_ac_servo_scan_blocks_clear_motion_even_when_target_is_reached():
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._lock = threading.Lock()
+    bridge._motion_state = {
+        'motors': [{
+            'controller_index': 4,
+            'transport': 'ethercat',
+            'velocity_deg_s': 5.1,
+            'target_reached': True,
+        }],
+    }
+    bridge._motion_state_received_at = time.time()
+    bridge._motion_run_lock = threading.Lock()
+    bridge._motion_run_status = {}
+    bridge._motion_studio_lock = threading.Lock()
+    bridge._motion_studio_status = {}
+    bridge.project_repository = type('Repository', (), {
+        'selected_project_id': lambda _self: 'project-a',
+    })()
+    bridge.snapshot = lambda: {}
+    bridge._current_project_generation = lambda: 3
+
+    blocker = bridge._ethercat_scan_safety_blocker()
+
+    assert '축 4' in blocker
+    assert '움직이는 중' in blocker
 
 
 def test_scan_result_is_discarded_after_a_to_b_to_a_project_switch():

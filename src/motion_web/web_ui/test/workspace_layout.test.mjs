@@ -4,6 +4,7 @@ import test from 'node:test';
 
 const html = readFileSync(new URL('../static/index.html', import.meta.url), 'utf8');
 const main = readFileSync(new URL('../static/js/main.js', import.meta.url), 'utf8');
+const styles = readFileSync(new URL('../static/styles.css', import.meta.url), 'utf8');
 
 function countId(id) {
   return [...html.matchAll(new RegExp(`id=["']${id}["']`, 'g'))].length;
@@ -32,6 +33,19 @@ test('motion screens use workspace routes without obsolete internal tab controls
   for (const panel of ['files', 'mapping', 'midi', 'run']) {
     assert.match(html, new RegExp(`data-motion-panel=["']${panel}["']`));
   }
+});
+
+test('header status and controls share one compact row with separators', () => {
+  const desktopTopbarOperations = styles.match(
+    /\.topbar-operations\s*\{([^}]*)\}/,
+  )?.[1] || '';
+  assert.match(
+    html,
+    /class="topbar-operation-status"[\s\S]*class="topbar-operation-divider"[\s\S]*class="topbar-operation-buttons"/,
+  );
+  assert.equal((html.match(/class="topbar-operation-divider"/g) || []).length, 2);
+  assert.match(desktopTopbarOperations, /align-items: center;/);
+  assert.doesNotMatch(desktopTopbarOperations, /flex-direction: column;/);
 });
 
 test('settings workflows preserve action IDs and expose their defined steps', () => {

@@ -2067,11 +2067,19 @@ class MotionWebBridge(Node):
             velocity = _monitoring_finite_float(
                 motor.get('velocity_deg_s', motor.get('velocity'))
             )
-            # Some disconnected/faulted servo runtimes retain sub-degree
-            # quantization noise.  Treat only a command-scale value as
-            # movement evidence; active motion/studio commands are blocked
-            # separately above.
-            if velocity is not None and abs(velocity) > 1.0:
+            target_reached = motor.get('target_reached') is True
+            # A stopped servo can report roughly 1~2 deg/s of quantization
+            # noise.  Ignore that noise only when the drive also reports that
+            # its target has been reached.  Missing/false target state keeps
+            # the stricter threshold, while clear motion is always blocked.
+            moving = (
+                velocity is not None
+                and (
+                    abs(velocity) > 5.0
+                    or (not target_reached and abs(velocity) > 1.0)
+                )
+            )
+            if moving:
                 moving_axes.append(str(motor.get('controller_index', '?')))
         if moving_axes:
             return (
