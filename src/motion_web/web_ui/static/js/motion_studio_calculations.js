@@ -63,6 +63,19 @@ export function motionStudioLayerMotionIds(layer) {
   ))];
 }
 
+export function motionStudioCanCreatePointCurve(layer, motionId) {
+  const targetId = String(motionId || '').trim();
+  if (!targetId) return false;
+  if ((layer?.point_curves || []).some(
+    (curve) => String(curve?.motion_id || '') === targetId,
+  )) return false;
+  const values = (layer?.frames || [])
+    .filter((frame) => Object.hasOwn(frame?.values || {}, targetId))
+    .map((frame) => Number(frame.values[targetId]));
+  if (!values.length || values.some((value) => !Number.isFinite(value))) return false;
+  return Math.max(...values) - Math.min(...values) < 1e-9;
+}
+
 export function resolveMotionStudioSelectedLayerId(layers, selectedLayerId = '') {
   const available = Array.isArray(layers) ? layers : [];
   if (available.some((layer) => layer.layer_id === selectedLayerId)) return selectedLayerId;

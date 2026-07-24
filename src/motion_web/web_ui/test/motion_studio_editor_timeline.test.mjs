@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
+  motionStudioCanCreatePointCurve,
   motionStudioLayerDataEqual,
   motionStudioLayerDuration,
   motionStudioEditorNextValueScale,
@@ -26,6 +27,29 @@ test('a point click edits points only in point mode so general edits can select 
   assert.equal(motionStudioShouldEditPoint('value_offset', pointTarget), false);
   assert.equal(motionStudioShouldEditPoint('interpolate', pointTarget), false);
   assert.equal(motionStudioShouldEditPoint('point_curve', null), false);
+});
+
+test('a newly added flat axis can start a point curve without converting motion', () => {
+  const flatLayer = {
+    frames: [
+      { time_sec: 0.00, values: { '3-1': 5 } },
+      { time_sec: 0.02, values: { '3-1': 5 } },
+    ],
+    point_curves: [],
+  };
+
+  assert.equal(motionStudioCanCreatePointCurve(flatLayer, '3-1'), true);
+  assert.equal(motionStudioCanCreatePointCurve({
+    ...flatLayer,
+    frames: [
+      { time_sec: 0.00, values: { '3-1': 5 } },
+      { time_sec: 0.02, values: { '3-1': 6 } },
+    ],
+  }, '3-1'), false);
+  assert.equal(motionStudioCanCreatePointCurve({
+    ...flatLayer,
+    point_curves: [{ curve_id: 'curve-a', motion_id: '3-1', points: [] }],
+  }, '3-1'), false);
 });
 
 test('edit ranges allow only point-to-point or motion-to-motion selection', () => {
@@ -108,11 +132,15 @@ test('axis range violations remain visible warnings without blocking edit apply'
     new URL('../static/js/motion_studio.js', import.meta.url),
     'utf8',
   );
+  const graphSource = readFileSync(
+    new URL('../static/js/motion_studio_graph.js', import.meta.url),
+    'utf8',
+  );
   assert.match(source, /previewValidation\.range_warnings/);
   assert.match(source, /축 설정 범위 초과 경고/);
   assert.match(source, /계속 진행 가능/);
   assert.match(
-    source,
+    graphSource,
     /\(displayedValidation\?\.range_warnings \|\| \[\]\)\.map/,
   );
 });

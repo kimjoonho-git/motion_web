@@ -17,6 +17,7 @@ import {
   updateMotionStudioLayer,
 } from './api.js?v=20260722-motor-config-delete';
 import {
+  motionStudioCanCreatePointCurve,
   motionStudioEditorNextValueScale,
   motionStudioEditorValueBounds,
   motionStudioLayerDataEqual,
@@ -32,11 +33,14 @@ import {
   synchronizeMotionStudioEditorTimeline,
 } from './motion_studio_calculations.js?v=20260724-studio-cleanup-1';
 import {
+  drawMotionStudioEditorGraph,
+  drawMotionStudioLayerGraph,
   motionStudioCompositionTracks as compositionTracks,
   motionStudioLayerTracks as layerTracks,
 } from './motion_studio_graph.js?v=20260724-studio-cleanup-1';
 import {
   bindMotionStudioEvent,
+  bindMotionStudioProjectTransportEvents,
   createMotionStudioState,
   renderMotionStudioWorkspace,
   resetMotionStudioProjectState,
@@ -44,6 +48,7 @@ import {
 } from './motion_studio_ui.js?v=20260724-studio-cleanup-1';
 
 export {
+  motionStudioCanCreatePointCurve,
   motionStudioEditorNextValueScale,
   motionStudioEditorValueBounds,
   motionStudioLayerDataEqual,
@@ -433,72 +438,15 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
   }
 
   function drawLayerGraph(tracks, warnings = [], playback = playbackView()) {
-    const canvas = el.studioLayerGraph;
-    if (!canvas) return;
-    const width = Math.max(520, Math.floor(canvas.getBoundingClientRect().width || 760));
-    const height = 320;
-    const ratio = window.devicePixelRatio || 1;
-    canvas.width = Math.floor(width * ratio);
-    canvas.height = Math.floor(height * ratio);
-    const context = canvas.getContext('2d');
-    context.setTransform(ratio, 0, 0, ratio, 0, 0);
-    context.clearRect(0, 0, width, height);
-    const allPoints = [...tracks.values()].flat();
-    if (!allPoints.length) {
-      el.studioLayerPlayhead?.classList.add('hidden');
-      context.fillStyle = '#5d6b78';
-      context.font = '13px sans-serif';
-      context.fillText('그래프 데이터 없음', 16, 28);
-      return;
-    }
-    const padding = { left: 52, right: 18, top: 18, bottom: 34 };
-    const plotWidth = width - padding.left - padding.right;
-    const plotHeight = height - padding.top - padding.bottom;
-    const maxTime = Math.max(...allPoints.map((point) => point.timeSec), 0.02);
-    let minValue = Math.min(...allPoints.map((point) => point.value));
-    let maxValue = Math.max(...allPoints.map((point) => point.value));
-    if (Math.abs(maxValue - minValue) < 1e-9) {
-      minValue -= 1;
-      maxValue += 1;
-    }
-    context.strokeStyle = '#d9e0e7';
-    context.lineWidth = 1;
-    context.strokeRect(padding.left, padding.top, plotWidth, plotHeight);
-    context.fillStyle = '#5d6b78';
-    context.font = '11px sans-serif';
-    context.fillText(`${maxValue.toFixed(2)}°`, 4, padding.top + 4);
-    context.fillText(`${minValue.toFixed(2)}°`, 4, padding.top + plotHeight);
-    context.fillText('0초', padding.left, height - 10);
-    context.fillText(`${maxTime.toFixed(3)}초`, width - padding.right - 58, height - 10);
-    const colors = ['#1f6feb', '#d97706', '#16803c', '#a23ab7', '#d33b3b', '#0f8b8d'];
-    [...tracks.entries()].forEach(([, points], index) => {
-      context.beginPath();
-      context.strokeStyle = colors[index % colors.length];
-      context.lineWidth = 2;
-      points.forEach((point, pointIndex) => {
-        const x = padding.left + ((point.timeSec / maxTime) * plotWidth);
-        const y = padding.top + (((maxValue - point.value) / (maxValue - minValue)) * plotHeight);
-        const previous = pointIndex > 0 ? points[pointIndex - 1] : null;
-        if (!previous || point.timeSec - previous.timeSec > 0.031) context.moveTo(x, y);
-        else context.lineTo(x, y);
-      });
-      context.stroke();
+    drawMotionStudioLayerGraph({
+      canvas: el.studioLayerGraph,
+      playhead: el.studioLayerPlayhead,
+      tracks,
+      warnings,
+      playback,
+      updatePlayhead: updatePlaybackPlayhead,
+      devicePixelRatio: window.devicePixelRatio || 1,
     });
-    context.save();
-    context.strokeStyle = '#d33b3b';
-    context.fillStyle = '#d33b3b';
-    context.setLineDash([4, 3]);
-    warnings.forEach((warning) => {
-      const timeSec = Number(warning.second_time_sec);
-      if (!Number.isFinite(timeSec)) return;
-      const x = padding.left + ((Math.min(maxTime, Math.max(0, timeSec)) / maxTime) * plotWidth);
-      context.beginPath();
-      context.moveTo(x, padding.top);
-      context.lineTo(x, padding.top + plotHeight);
-      context.stroke();
-    });
-    context.restore();
-    updatePlaybackPlayhead(playback);
   }
 
   function editorMotionIds(layer) {
@@ -528,6 +476,15 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     return Boolean(targetId) && editorPointCurves(editor?.original).some(
       (curve) => String(curve.curve_id || '') === targetId,
     );
+  }
+
+  function pointCurveCanBeCreated(editor = state.editor) {
+    const selectedIds = editorSelectedMotionIds();
+    const motionId = String(
+      editor?.pointDraft?.motion_id
+      || (selectedIds.length === 1 ? selectedIds[0] : ''),
+    );
+    return motionStudioCanCreatePointCurve(editor?.working, motionId);
   }
 
   function pointDraftHasUnsavedChanges(editor = state.editor) {
@@ -598,13 +555,14 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     const point = selectedDraftPoint(editor);
     const pointMode = el.studioEditorOperation?.value === 'point_curve';
     const savedPointCurve = pointCurveIsSaved(editor, editor?.pointDraft?.curve_id);
+    const editablePointCurve = savedPointCurve || pointCurveCanBeCreated(editor);
     [el.studioEditorPointTime, el.studioEditorPointValue, el.studioEditorPointMode].forEach((field) => {
-      if (field) field.disabled = !pointMode || !point || !savedPointCurve;
+      if (field) field.disabled = !pointMode || !point || !editablePointCurve;
     });
     if (el.studioEditorPointDeleteButton) {
       const canDeletePoint = pointMode
         && Boolean(point)
-        && savedPointCurve
+        && editablePointCurve
         && (editor?.pointDraft?.points?.length || 0) > 2;
       el.studioEditorPointDeleteButton.disabled = !canDeletePoint;
       el.studioEditorPointDeleteButton.title = canDeletePoint
@@ -623,7 +581,7 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       el.studioEditorCurveDeleteButton.disabled = !pointMode || !editor?.pointDraft?.curve_id;
     }
     if (el.studioEditorPointCurveOrder) {
-      el.studioEditorPointCurveOrder.disabled = !pointMode || !savedPointCurve;
+      el.studioEditorPointCurveOrder.disabled = !pointMode || !editablePointCurve;
       if (document.activeElement !== el.studioEditorPointCurveOrder) {
         el.studioEditorPointCurveOrder.value = String(
           editor?.pointDraft?.interpolation_order || editor?.pointCurveOrder || 3,
@@ -784,6 +742,7 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     const operation = el.studioEditorOperation?.value || 'value_offset';
     const pointMode = operation === 'point_curve';
     const savedPointCurve = pointCurveIsSaved(editor, editor?.pointDraft?.curve_id);
+    const creatablePointCurve = pointMode && pointCurveCanBeCreated(editor);
     const workingPointCurve = Boolean(storedCurveForDraft(editor));
     const hasTransientChange = Boolean(editor?.preview) || pointDraftHasUnsavedChanges(editor);
     if (el.studioEditorUndoButton) {
@@ -795,7 +754,7 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
     if (el.studioEditorUpdateButton) el.studioEditorUpdateButton.disabled = !editor?.preview;
     if (el.studioEditorApplyButton) {
       el.studioEditorApplyButton.disabled = (
-        Boolean(editor?.preview) || !savedPointCurve
+        Boolean(editor?.preview) || (!savedPointCurve && !creatablePointCurve)
       );
     }
     if (el.studioEditorSaveButton) el.studioEditorSaveButton.disabled = Boolean(editor?.preview);
@@ -861,7 +820,9 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
         value_offset: '저장된 포인트 모션 구간과 포인트를 선택한 뒤 모션값을 이동합니다.',
         point_curve: savedPointCurve
           ? '저장된 포인트 모션입니다. 포인트 추가·이동과 탄젠트 편집이 가능합니다.'
-          : '변환된 포인트 모션을 먼저 저장해야 편집할 수 있습니다.',
+          : creatablePointCurve
+            ? '새로 추가한 축입니다. 그래프를 클릭해 포인트를 두 개 이상 만드세요.'
+            : '변환된 포인트 모션을 먼저 저장해야 편집할 수 있습니다.',
       };
       el.studioEditorOperationHelp.textContent = help[operation] || '';
     }
@@ -869,231 +830,16 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
   }
 
   function drawEditorGraph() {
-    const editor = state.editor;
-    const canvas = el.studioEditorGraph;
-    if (!editor || !canvas) return;
-    const selected = new Set(editorSelectedMotionIds());
-    const originalTracks = layerTracks(editor.original);
-    const displayedLayer = editor.preview || editor.working;
-    const workingTracks = layerTracks(displayedLayer);
-    const ids = [...new Set([...originalTracks.keys(), ...workingTracks.keys()])]
-      .filter((motionId) => selected.has(motionId));
-    const draftPreview = (
-      el.studioEditorOperation?.value === 'point_curve'
-      && editor.pointDraft && selected.has(editor.pointDraft.motion_id)
-    ) ? motionStudioPointCurvePreview(
-        editor.pointDraft.points,
-        editor.pointDraft.interpolation_order || editor.pointCurveOrder,
-      ) : [];
-    const width = Math.max(680, Math.floor(canvas.getBoundingClientRect().width || 900));
-    const height = Math.max(210, Math.floor(canvas.getBoundingClientRect().height || 320));
-    const ratio = window.devicePixelRatio || 1;
-    canvas.width = Math.floor(width * ratio);
-    canvas.height = Math.floor(height * ratio);
-    const context = canvas.getContext('2d');
-    context.setTransform(ratio, 0, 0, ratio, 0, 0);
-    context.clearRect(0, 0, width, height);
-    const padding = { left: 62, right: 22, top: 22, bottom: 42 };
-    const plotWidth = width - padding.left - padding.right;
-    const plotHeight = height - padding.top - padding.bottom;
-    const viewStart = Math.max(0, Number(editor.viewStart || 0));
-    const viewEnd = Math.max(viewStart + 0.02, Number(editor.viewEnd || 0.02));
-    const visiblePoints = ids.flatMap((motionId) => [
-      ...(workingTracks.get(motionId) || []), ...(originalTracks.get(motionId) || []),
-    ].filter((point) => point.timeSec >= viewStart - 1e-9 && point.timeSec <= viewEnd + 1e-9))
-      .concat(draftPreview.filter(
-        (point) => point.timeSec >= viewStart - 1e-9 && point.timeSec <= viewEnd + 1e-9,
-      ));
-    const valueSource = visiblePoints.length ? visiblePoints : ids.flatMap((id) => [
-      ...(workingTracks.get(id) || []), ...(originalTracks.get(id) || []),
-    ]);
-    const automaticMinValue = valueSource.length
-      ? Math.min(...valueSource.map((point) => point.value)) : -1;
-    const automaticMaxValue = valueSource.length
-      ? Math.max(...valueSource.map((point) => point.value)) : 1;
-    const { minValue, maxValue } = motionStudioEditorValueBounds(
-      automaticMinValue,
-      automaticMaxValue,
-      editor.valueScale,
-    );
-    const xFor = (timeSec) => padding.left + (((timeSec - viewStart) / (viewEnd - viewStart)) * plotWidth);
-    const yFor = (value) => padding.top + (((maxValue - value) / (maxValue - minValue)) * plotHeight);
-    const timeFor = (x) => viewStart + (((x - padding.left) / plotWidth) * (viewEnd - viewStart));
-    const valueFor = (y) => maxValue - (((y - padding.top) / plotHeight) * (maxValue - minValue));
-    editor.graphMetrics = { padding, plotWidth, plotHeight, width, height, viewStart, viewEnd, minValue, maxValue, xFor, yFor, timeFor, valueFor };
-    context.fillStyle = '#fff'; context.fillRect(0, 0, width, height);
-    editorPointCurves(displayedLayer)
-      .filter((curve) => selected.has(curve.motion_id))
-      .forEach((curve, index) => {
-        const points = curve.points || [];
-        const startSec = Number(points[0]?.time_sec);
-        const endSec = Number(points[points.length - 1]?.time_sec);
-        if (!Number.isFinite(startSec) || !Number.isFinite(endSec)) return;
-        const left = Math.max(viewStart, startSec);
-        const right = Math.min(viewEnd, endSec);
-        if (right < left) return;
-        context.fillStyle = index % 2
-          ? 'rgba(126, 87, 194, 0.08)'
-          : 'rgba(31, 111, 235, 0.08)';
-        context.fillRect(
-          xFor(left),
-          padding.top,
-          Math.max(1, xFor(right) - xFor(left)),
-          plotHeight,
-        );
-        context.fillStyle = '#526579';
-        context.font = '11px sans-serif';
-        context.fillText(
-          `포인트 구간 ${index + 1}`,
-          xFor(left) + 5,
-          padding.top + 14,
-        );
-      });
-    const selectionStartText = el.studioEditorStart?.value?.trim() || '';
-    const selectionEndText = el.studioEditorEnd?.value?.trim() || '';
-    const selectionStart = Number(selectionStartText);
-    const selectionEnd = Number(selectionEndText);
-    if (editor.selectionStage === 1 && Number.isFinite(editor.selectionAnchor)) {
-      const anchor = Math.max(viewStart, Math.min(viewEnd, editor.selectionAnchor));
-      context.strokeStyle = '#1f6feb';
-      context.lineWidth = 2;
-      context.beginPath();
-      context.moveTo(xFor(anchor), padding.top);
-      context.lineTo(xFor(anchor), padding.top + plotHeight);
-      context.stroke();
-    } else if (
-      selectionStartText && selectionEndText
-      && Number.isFinite(selectionStart) && Number.isFinite(selectionEnd)
-    ) {
-      const shadeStart = Math.max(viewStart, Math.min(selectionStart, selectionEnd));
-      const shadeEnd = Math.min(viewEnd, Math.max(selectionStart, selectionEnd));
-      if (shadeEnd >= shadeStart) {
-        context.fillStyle = 'rgba(31, 111, 235, 0.10)';
-        context.fillRect(xFor(shadeStart), padding.top, Math.max(1, xFor(shadeEnd) - xFor(shadeStart)), plotHeight);
-      }
-    }
-    context.strokeStyle = '#d9e0e7'; context.strokeRect(padding.left, padding.top, plotWidth, plotHeight);
-    context.fillStyle = '#5d6b78'; context.font = '11px sans-serif';
-    context.fillText(`${maxValue.toFixed(2)}°`, 6, padding.top + 4);
-    context.fillText(`${minValue.toFixed(2)}°`, 6, padding.top + plotHeight);
-    context.fillText(`${viewStart.toFixed(3)}초`, padding.left, height - 12);
-    context.fillText(`${viewEnd.toFixed(3)}초`, width - padding.right - 66, height - 12);
-    const colors = ['#1f6feb', '#d97706', '#16803c', '#a23ab7', '#d33b3b', '#0f8b8d'];
-    const drawTracks = (tracks, dashed, alpha) => {
-      ids.forEach((motionId, colorIndex) => {
-        const points = tracks.get(motionId) || [];
-        context.beginPath(); context.strokeStyle = colors[colorIndex % colors.length];
-        context.globalAlpha = alpha; context.lineWidth = dashed ? 1.3 : 2.2;
-        context.setLineDash(dashed ? [5, 4] : []);
-        let previous = null;
-        points.forEach((point) => {
-          if (point.timeSec < viewStart - 1e-9 || point.timeSec > viewEnd + 1e-9) return;
-          const x = xFor(point.timeSec); const y = yFor(point.value);
-          if (!previous || point.timeSec - previous.timeSec > 0.031) context.moveTo(x, y);
-          else context.lineTo(x, y);
-          previous = point;
-        });
-        context.stroke();
-      });
-    };
-    drawTracks(originalTracks, true, 0.4); drawTracks(workingTracks, false, 1);
-    context.globalAlpha = 1; context.setLineDash([]);
-    if (draftPreview.length) {
-      const colorIndex = ids.indexOf(editor.pointDraft.motion_id);
-      context.beginPath();
-      context.strokeStyle = colors[(colorIndex < 0 ? 0 : colorIndex) % colors.length];
-      context.lineWidth = 3;
-      context.setLineDash([3, 2]);
-      let started = false;
-      draftPreview.forEach((point) => {
-        if (point.timeSec < viewStart - 1e-9 || point.timeSec > viewEnd + 1e-9) return;
-        const x = xFor(point.timeSec);
-        const y = yFor(point.value);
-        if (!started) {
-          context.moveTo(x, y);
-          started = true;
-        } else {
-          context.lineTo(x, y);
-        }
-      });
-      if (started) context.stroke();
-      context.setLineDash([]);
-    }
-    let displayedCurves = editorPointCurves(displayedLayer).map((curve) => clone(curve));
-    if (editor.pointDraft && el.studioEditorOperation?.value === 'point_curve') {
-      displayedCurves = displayedCurves.filter(
-        (curve) => curve.curve_id !== editor.pointDraft.curve_id,
-      );
-      displayedCurves.push(editor.pointDraft);
-    }
-    editor.pointHitTargets = [];
-    editor.handleHitTargets = [];
-    displayedCurves.filter((curve) => selected.has(curve.motion_id)).forEach((curve) => {
-      const colorIndex = ids.indexOf(curve.motion_id);
-      const color = colors[(colorIndex < 0 ? 0 : colorIndex) % colors.length];
-      (curve.points || []).forEach((point) => {
-        const timeSec = Number(point.time_sec); const value = Number(point.value_deg);
-        if (!Number.isFinite(timeSec) || !Number.isFinite(value)) return;
-        if (timeSec < viewStart - 1e-9 || timeSec > viewEnd + 1e-9) return;
-        const x = xFor(timeSec); const y = yFor(value);
-        const isSelected = point.point_id === editor.selectedPointId
-          && curve.curve_id === editor.pointDraft?.curve_id;
-        context.beginPath(); context.fillStyle = '#fff'; context.strokeStyle = color;
-        context.lineWidth = isSelected ? 3 : 2;
-        context.arc(x, y, isSelected ? 6 : 4.5, 0, Math.PI * 2);
-        context.fill(); context.stroke();
-        editor.pointHitTargets.push({ x, y, curve, point });
-        if (!isSelected) return;
-        const handles = [
-          ['in', point.in_handle], ['out', point.out_handle],
-        ];
-        handles.forEach(([side, handle]) => {
-          const dt = Number(handle?.dt_sec); const dv = Number(handle?.dv_deg);
-          if (!Number.isFinite(dt) || !Number.isFinite(dv) || Math.abs(dt) < 1e-9) return;
-          const handleX = xFor(timeSec + dt); const handleY = yFor(value + dv);
-          context.beginPath(); context.strokeStyle = '#65788a'; context.lineWidth = 1.4;
-          context.moveTo(x, y); context.lineTo(handleX, handleY); context.stroke();
-          context.beginPath(); context.fillStyle = '#1f6feb'; context.strokeStyle = '#fff';
-          context.arc(handleX, handleY, 5, 0, Math.PI * 2); context.fill(); context.stroke();
-          editor.handleHitTargets.push({ x: handleX, y: handleY, side, point });
-        });
-      });
+    drawMotionStudioEditorGraph({
+      editor: state.editor,
+      canvas: el.studioEditorGraph,
+      legend: el.studioEditorLegend,
+      selectedMotionIds: editorSelectedMotionIds(),
+      operation: el.studioEditorOperation?.value || '',
+      selectionStartText: el.studioEditorStart?.value?.trim() || '',
+      selectionEndText: el.studioEditorEnd?.value?.trim() || '',
+      devicePixelRatio: window.devicePixelRatio || 1,
     });
-    const displayedValidation = editor.previewValidation || editor.validation;
-    const issueTimes = [
-      ...(displayedValidation?.conflicts || []).map((item) => Number(item.start_sec)),
-      ...(displayedValidation?.transition_warnings || []).map((item) => Number(item.second_time_sec)),
-      ...(displayedValidation?.range_warnings || []).map((item) => Number(item.time_sec)),
-    ].filter(Number.isFinite);
-    context.strokeStyle = '#d33b3b'; context.setLineDash([4, 3]);
-    issueTimes.forEach((timeSec) => {
-      if (timeSec < viewStart || timeSec > viewEnd) return;
-      const x = xFor(timeSec); context.beginPath();
-      context.moveTo(x, padding.top); context.lineTo(x, padding.top + plotHeight); context.stroke();
-    });
-    context.setLineDash([]);
-    if (editor.cursor) {
-      const { x, y, timeSec, value } = editor.cursor;
-      context.strokeStyle = '#596775'; context.lineWidth = 1; context.setLineDash([3, 3]);
-      context.beginPath(); context.moveTo(x, padding.top); context.lineTo(x, padding.top + plotHeight);
-      context.moveTo(padding.left, y); context.lineTo(padding.left + plotWidth, y); context.stroke();
-      context.setLineDash([]); context.fillStyle = '#263442';
-      context.fillText(`${timeSec.toFixed(3)}초`, Math.min(width - 90, x + 5), height - 24);
-      context.fillText(`${value.toFixed(3)}°`, 5, Math.max(12, Math.min(height - 8, y)));
-      if (editor.cursor.nearest) {
-        const nearest = editor.cursor.nearest;
-        context.beginPath(); context.fillStyle = '#d33b3b';
-        context.arc(xFor(nearest.timeSec), yFor(nearest.value), 4, 0, Math.PI * 2);
-        context.fill();
-      }
-    }
-    if (el.studioEditorLegend) {
-      el.studioEditorLegend.innerHTML = ids.map((motionId, index) => (
-        `<span><i style="background:${colors[index % colors.length]}"></i>${escapeHtml(motionId)}</span>`
-      )).join('') + (editor.preview
-        ? '<span>점선: 저장 원본 · 실선: 결과 미리보기</span>'
-        : '<span>점선: 저장 원본 · 실선: 현재 작업본</span>');
-    }
   }
 
   function renderEditor() {
@@ -1862,54 +1608,48 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
         String(button.dataset.resolvePointCurve || ''),
       );
     });
-    el.studioTransitionSafetyLevel?.addEventListener('change', (event) => {
-      // Capture the user's selection before run() marks the screen busy and
-      // renderControls() redraws the select from the last saved project value.
-      const transitionSafetyLevel = Number(event.currentTarget?.value || 4);
-      run(() => saveMotionStudioProject({
+    bindMotionStudioProjectTransportEvents(el, {
+      // Capture the selection before run() redraws the control from saved state.
+      onTransitionSafetyChange: (transitionSafetyLevel) => run(() => saveMotionStudioProject({
         transition_safety_level: transitionSafetyLevel,
-      }));
+      })),
+      onImportSelectionChange: renderControls,
+      onImport: (motionFileId) => run(() => importMotionStudioFile({
+        motion_file_id: motionFileId,
+      })),
+      onRecord: ({ mode, initialMoveTimeSec }) => {
+        if (!requireMotorActionReady('녹화')) return;
+        showLayerGraph({ composition: true });
+        run(() => startMotionStudioRecord({
+          mode,
+          initial_move_time_sec: initialMoveTimeSec,
+        }));
+      },
+      onInitialize: ({ initialMoveTimeSec }) => {
+        if (!requireMotorActionReady('초기 위치 이동')) return;
+        showLayerGraph({ composition: true });
+        run(() => startMotionStudioInitialization({
+          initial_move_time_sec: initialMoveTimeSec,
+        }));
+      },
+      onPlay: ({ initialMoveTimeSec }) => {
+        if (!requireMotorActionReady('합성 미리보기 재생')) return;
+        showLayerGraph({ composition: true });
+        run(() => startMotionStudioPlayback({
+          initial_move_time_sec: initialMoveTimeSec,
+        }));
+      },
+      // The helper disables duplicate stop clicks before this callback runs.
+      onStop: () => run(stopMotionStudio),
+      onCreateLayer: async () => {
+        const result = await run(() => createMotionStudioLayer());
+        if (!result?.layer_id) return;
+        state.selectedLayerId = result.layer_id;
+        render();
+      },
+      defaultExportName: () => state.project?.name || 'motion',
+      onExport: (name) => run(() => exportMotionStudio(name)),
     });
-    el.studioImportFileSelect?.addEventListener('change', renderControls);
-    el.studioImportButton?.addEventListener('click', () => run(() => importMotionStudioFile({
-      motion_file_id: el.studioImportFileSelect?.value,
-    })));
-    el.studioRecordButton?.addEventListener('click', () => {
-      if (!requireMotorActionReady('녹화')) return;
-      showLayerGraph({ composition: true });
-      run(() => startMotionStudioRecord({
-        mode: el.studioRecordMode?.value || 'record',
-        initial_move_time_sec: Number(el.studioInitialMoveTime?.value || 5),
-      }));
-    });
-    el.studioInitializeButton?.addEventListener('click', () => {
-      if (!requireMotorActionReady('초기 위치 이동')) return;
-      showLayerGraph({ composition: true });
-      run(() => startMotionStudioInitialization({
-        initial_move_time_sec: Number(el.studioInitialMoveTime?.value || 5),
-      }));
-    });
-    el.studioPlayButton?.addEventListener('click', () => {
-      if (!requireMotorActionReady('합성 미리보기 재생')) return;
-      showLayerGraph({ composition: true });
-      run(() => startMotionStudioPlayback({
-        initial_move_time_sec: Number(el.studioInitialMoveTime?.value || 5),
-      }));
-    });
-    el.studioStopButton?.addEventListener('click', () => {
-      // 중복 정지 요청은 즉시 막되, 응답 실패 시 run()의 최종 렌더에서 다시 활성화한다.
-      el.studioStopButton.disabled = true;
-      run(stopMotionStudio);
-    });
-    el.studioCreateLayerButton?.addEventListener('click', async () => {
-      const result = await run(() => createMotionStudioLayer());
-      if (!result?.layer_id) return;
-      state.selectedLayerId = result.layer_id;
-      render();
-    });
-    el.studioExportButton?.addEventListener('click', () => run(() => exportMotionStudio(
-      el.studioExportName?.value || state.project?.name || 'motion',
-    )));
     el.studioLayerRows?.addEventListener('change', (event) => {
       const row = event.target.closest('tr[data-studio-layer-id]');
       if (!row) return;
@@ -2657,7 +2397,10 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
         return;
       }
       if (motionStudioShouldEditPoint(el.studioEditorOperation?.value, pointTarget)) {
-        if (!pointCurveIsSaved(editor, pointTarget.curve.curve_id)) {
+        if (
+          !pointCurveIsSaved(editor, pointTarget.curve.curve_id)
+          && !pointCurveCanBeCreated(editor)
+        ) {
           setPointCurveMode(pointTarget.curve, pointTarget.point.point_id);
           setEditorMessage('변환된 포인트 모션을 먼저 저장해야 편집할 수 있습니다.', true);
           return;
@@ -2677,7 +2420,10 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       }
       discardEditorPreview('편집 구간을 다시 선택하여 결과 미리보기를 취소했습니다.');
       if (el.studioEditorOperation?.value === 'point_curve') {
-        if (!pointCurveIsSaved(editor, editor.pointDraft?.curve_id)) {
+        if (
+          !pointCurveIsSaved(editor, editor.pointDraft?.curve_id)
+          && !pointCurveCanBeCreated(editor)
+        ) {
           setEditorMessage(
             editor.pointDraft
               ? '변환된 포인트 모션을 먼저 저장해야 편집할 수 있습니다.'
@@ -2829,7 +2575,10 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
         y,
       );
       if (pointTarget) {
-        if (!pointCurveIsSaved(editor, pointTarget.curve.curve_id)) {
+        if (
+          !pointCurveIsSaved(editor, pointTarget.curve.curve_id)
+          && !pointCurveCanBeCreated(editor)
+        ) {
           setPointCurveMode(pointTarget.curve, pointTarget.point.point_id);
           setEditorMessage('변환된 포인트 모션을 먼저 저장해야 편집할 수 있습니다.', true);
           return;
@@ -2926,6 +2675,7 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       scaleEditorValues(zoomFactor);
       setEditorView(center - (newSpan * ratio), center + (newSpan * (1 - ratio)));
     }, { passive: false });
+
   }
 
   async function addMotionFile(fileId) {

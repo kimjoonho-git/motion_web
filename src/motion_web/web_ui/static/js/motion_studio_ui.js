@@ -77,3 +77,36 @@ export function bindMotionStudioEvent(target, type, handler, options) {
   target.addEventListener(type, handler, options);
   return () => target.removeEventListener(type, handler, options);
 }
+
+export function bindMotionStudioProjectTransportEvents(el, handlers = {}) {
+  const unbind = [];
+  const bind = (target, type, handler) => {
+    unbind.push(bindMotionStudioEvent(target, type, handler));
+  };
+  bind(el.studioTransitionSafetyLevel, 'change', (event) => {
+    handlers.onTransitionSafetyChange?.(Number(event.currentTarget?.value || 4));
+  });
+  bind(el.studioImportFileSelect, 'change', () => handlers.onImportSelectionChange?.());
+  bind(el.studioImportButton, 'click', () => {
+    handlers.onImport?.(String(el.studioImportFileSelect?.value || ''));
+  });
+  bind(el.studioRecordButton, 'click', () => handlers.onRecord?.({
+    mode: el.studioRecordMode?.value || 'record',
+    initialMoveTimeSec: Number(el.studioInitialMoveTime?.value || 5),
+  }));
+  bind(el.studioInitializeButton, 'click', () => handlers.onInitialize?.({
+    initialMoveTimeSec: Number(el.studioInitialMoveTime?.value || 5),
+  }));
+  bind(el.studioPlayButton, 'click', () => handlers.onPlay?.({
+    initialMoveTimeSec: Number(el.studioInitialMoveTime?.value || 5),
+  }));
+  bind(el.studioStopButton, 'click', () => {
+    el.studioStopButton.disabled = true;
+    handlers.onStop?.();
+  });
+  bind(el.studioCreateLayerButton, 'click', () => handlers.onCreateLayer?.());
+  bind(el.studioExportButton, 'click', () => handlers.onExport?.(
+    el.studioExportName?.value || handlers.defaultExportName?.() || 'motion',
+  ));
+  return () => unbind.forEach((remove) => remove());
+}
