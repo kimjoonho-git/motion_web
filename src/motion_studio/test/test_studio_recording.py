@@ -36,6 +36,30 @@ def test_recording_layer_name_does_not_repeat_after_delete_or_duplicate():
     assert next_numbered_layer_name([{'name': '녹화 1'}, {'name': '녹화 3'}], '녹화') == '녹화 4'
 
 
+def test_terminal_status_clears_playback_and_progress_metadata():
+    node = MotionStudioNode.__new__(MotionStudioNode)
+    node._status = {
+        'state': 'playing',
+        'runtime_progress': {'ratio': 0.5},
+        'initialization_progress': {'ratio': 1.0},
+        'playback_duration_sec': 12.0,
+        'playback_layer_count': 3,
+    }
+    node._current_project = None
+    node._store = type('Store', (), {'summary': staticmethod(lambda project: project)})()
+    node._selected_motion_values_locked = lambda: {}
+    node._recorded_motion_ids = set()
+    node._record_mode = 'record'
+
+    node._set_status_locked('error', '재생 실패')
+
+    assert node._status['message'] == '재생 실패'
+    assert node._status['runtime_progress'] == {}
+    assert node._status['initialization_progress'] == {}
+    assert node._status['playback_duration_sec'] == 0.0
+    assert node._status['playback_layer_count'] == 0
+
+
 def test_layer_duplicate_is_independent_unlocked_and_disabled():
     node = MotionStudioNode.__new__(MotionStudioNode)
     node._lock = threading.RLock()

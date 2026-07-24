@@ -1310,6 +1310,11 @@ class MotionStudioNode(Node):
         })
         if state not in {'recording'}:
             self._status['elapsed_sec'] = 0.0
+        if state in {'idle', 'error'}:
+            self._status['runtime_progress'] = {}
+            self._status['initialization_progress'] = {}
+            self._status['playback_duration_sec'] = 0.0
+            self._status['playback_layer_count'] = 0
         project = self._current_project
         self._status['project'] = (
             self._store.summary(project) if project is not None else None
