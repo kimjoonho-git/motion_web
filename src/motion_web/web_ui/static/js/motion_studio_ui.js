@@ -27,16 +27,24 @@ export function resetMotionStudioProjectState(state) {
   state.project = null;
   state.workspaceProject = null;
   state.status = {};
+  state.midi = {};
   state.composition = {
     conflicts: [], transition_warnings: [], point_curve_mismatches: [], conflict_free: true,
   };
+  state.busy = false;
   state.axisRenderKey = '';
   state.selectedLayerId = '';
   state.layerDetailMode = 'composition';
   state.activeLayerDetailTab = 'graph';
+  state.editor = null;
   state.detailGraph = null;
   state.playbackGraphRenderedAt = 0;
   state.lastPlaybackDisplayState = 'idle';
+  state.playbackClock = null;
+  state.playbackAnimationFrame = 0;
+  state.recordingPreviewKey = '';
+  state.layerManagerTab = 'create';
+  state.mergeLayerIds = new Set();
   state.mergeResultMessage = '';
   state.mergeResultError = false;
   return state;

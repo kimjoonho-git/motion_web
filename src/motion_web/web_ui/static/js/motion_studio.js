@@ -31,13 +31,13 @@ import {
   motionStudioShouldEditPoint,
   resolveMotionStudioSelectedLayerId,
   synchronizeMotionStudioEditorTimeline,
-} from './motion_studio_calculations.js?v=20260724-studio-cleanup-1';
+} from './motion_studio_calculations.js?v=20260724-studio-cleanup-2';
 import {
   drawMotionStudioEditorGraph,
   drawMotionStudioLayerGraph,
   motionStudioCompositionTracks as compositionTracks,
   motionStudioLayerTracks as layerTracks,
-} from './motion_studio_graph.js?v=20260724-studio-cleanup-1';
+} from './motion_studio_graph.js?v=20260724-studio-cleanup-2';
 import {
   bindMotionStudioEvent,
   bindMotionStudioProjectTransportEvents,
@@ -45,7 +45,7 @@ import {
   renderMotionStudioWorkspace,
   resetMotionStudioProjectState,
   setMotionStudioMessage,
-} from './motion_studio_ui.js?v=20260724-studio-cleanup-1';
+} from './motion_studio_ui.js?v=20260724-studio-cleanup-2';
 
 export {
   motionStudioCanCreatePointCurve,
@@ -1586,6 +1586,11 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
   }
 
   function resetProjectState() {
+    if (state.playbackAnimationFrame) {
+      window.cancelAnimationFrame(state.playbackAnimationFrame);
+    }
+    closeLayerEditor();
+    closeLayerManager();
     resetMotionStudioProjectState(state);
     setMessage('현재 프로젝트 모션 스튜디오를 불러오세요');
     render();

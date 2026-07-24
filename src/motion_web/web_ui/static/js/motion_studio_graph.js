@@ -1,7 +1,7 @@
 import {
   motionStudioEditorValueBounds,
   motionStudioPointCurvePreview,
-} from './motion_studio_calculations.js';
+} from './motion_studio_calculations.js?v=20260724-studio-cleanup-2';
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"]/g, (character) => ({
