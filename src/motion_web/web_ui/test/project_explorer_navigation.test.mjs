@@ -28,3 +28,29 @@ test('motion controller owns active panel state without hidden DOM tabs', () => 
   assert.match(motionData, /panel\.dataset\.motionPanel !== activeMotionPanel/);
   assert.doesNotMatch(motionData, /el\.motionTabs/);
 });
+
+test('project transitions reset feature state only after a successful change', () => {
+  assert.match(
+    projectExplorer,
+    /const changed = await run\([\s\S]*?selectProject\(projectId\)[\s\S]*?if \(changed\) await onProjectChange/,
+  );
+  assert.match(
+    projectExplorer,
+    /const created = await run\([\s\S]*?createProject\([\s\S]*?if \(created\) await onProjectChange/,
+  );
+});
+
+test('failed file loads cannot reuse a previous selection or race feature navigation', () => {
+  assert.match(
+    projectExplorer,
+    /async function openFile[\s\S]*?state\.selectedFile = null;[\s\S]*?return false;/,
+  );
+  assert.match(
+    projectExplorer,
+    /const opened = await openFile\(category, fileName\);[\s\S]*?if \(!opened \|\| !state\.selectedFile\) return false;/,
+  );
+  assert.match(projectExplorer, /await onOpenEditor\(result, targetWorkspace\)/);
+  assert.match(main, /onOpenEditor: async \(result, requestedWorkspace = ''\)/);
+  assert.match(main, /await motionData\.openProjectFile\(result\.category, result\.file_name\)/);
+  assert.match(main, /if \(target === 'studio'\) await motionStudio\.refresh\(false\)/);
+});

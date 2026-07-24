@@ -17,7 +17,7 @@ import { createMotionDataController } from './motion_data.js?v=20260724-ui-navig
 import { createMotionStudioController } from './motion_studio.js?v=20260724-layer-editor-ui-2';
 import { createMotionTestController } from './motion_test.js?v=20260721-project-generation';
 import { createMotorConfigController } from './motor_config.js?v=20260724-ui-finish-1';
-import { createProjectExplorerController } from './project_explorer.js?v=20260724-ui-navigation-2';
+import { createProjectExplorerController } from './project_explorer.js?v=20260724-ui-connect-2';
 import { renderAccess, renderMonitoring } from './monitoring.js?v=20260723-physical-runtime-state';
 import { StatusSocket } from './socket.js';
 import {
@@ -764,7 +764,7 @@ const motionStudio = createMotionStudioController({
 });
 const projectExplorer = createProjectExplorerController({
   el,
-  onOpenEditor: (result, requestedWorkspace = '') => {
+  onOpenEditor: async (result, requestedWorkspace = '') => {
     const targetRoute = requestedWorkspace || workspaceForProjectCategory(
       result.category,
       result.workspace || 'system',
@@ -774,9 +774,9 @@ const projectExplorer = createProjectExplorerController({
     if (!target) return;
     if (target === 'config') motorConfig.fetchRegistry();
     if (['motions', 'motion_axis_matching'].includes(result.category)) {
-      motionData.openProjectFile(result.category, result.file_name);
+      await motionData.openProjectFile(result.category, result.file_name);
     }
-    if (target === 'studio') motionStudio.refresh(false);
+    if (target === 'studio') await motionStudio.refresh(false);
   },
   onManageFile: () => {
     setActiveWorkspace('system');

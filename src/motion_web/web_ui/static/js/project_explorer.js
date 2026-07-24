@@ -395,7 +395,7 @@ export function createProjectExplorerController({
   }
 
   async function run(action, successMessage) {
-    if (state.busy) return;
+    if (state.busy) return false;
     state.busy = true;
     renderControls();
     try {
@@ -416,8 +416,10 @@ export function createProjectExplorerController({
         state.projectGeneration = Number(list.project_generation);
       }
       state.runtimeProjectId = list.runtime_project_id || '';
+      return true;
     } catch (error) {
       setMessage(error.message, true);
+      return false;
     } finally {
       state.busy = false;
       render();
@@ -425,14 +427,17 @@ export function createProjectExplorerController({
   }
 
   async function openFile(category, fileName) {
-    if (!state.project || state.busy) return;
+    if (!state.project || state.busy) return false;
     state.busy = true;
+    state.selectedFile = null;
     renderControls();
     try {
       state.selectedFile = await fetchProjectFile(state.project.project_id, category, fileName);
       setMessage(`${fileName} 열기 완료`);
+      return true;
     } catch (error) {
       setMessage(error.message, true);
+      return false;
     } finally {
       state.busy = false;
       render();
@@ -459,14 +464,14 @@ export function createProjectExplorerController({
 
   async function openInFeature(category, fileName, targetWorkspace = '') {
     if (!state.project || state.busy) return false;
-    await openFile(category, fileName);
-    if (!state.selectedFile) return false;
+    const opened = await openFile(category, fileName);
+    if (!opened || !state.selectedFile) return false;
     state.busy = true;
     renderControls();
     try {
       const result = await openProjectFileEditor(state.project.project_id, category, fileName);
       setMessage(result.message || `${fileName} 기능에서 열기 완료`);
-      onOpenEditor(result, targetWorkspace);
+      await onOpenEditor(result, targetWorkspace);
       return true;
     } catch (error) {
       setMessage(error.message, true);
@@ -515,14 +520,20 @@ export function createProjectExplorerController({
         el.projectExplorerSelect.value = state.project?.project_id || '';
         return;
       }
-      await run(() => selectProject(projectId), '프로젝트 선택 완료 · 장비에는 적용되지 않았습니다');
-      await onProjectChange(state.project, state.projectGeneration);
+      const changed = await run(
+        () => selectProject(projectId),
+        '프로젝트 선택 완료 · 장비에는 적용되지 않았습니다',
+      );
+      if (changed) await onProjectChange(state.project, state.projectGeneration);
     });
     el.projectCreateButton?.addEventListener('click', async () => {
       const name = window.prompt('새 프로젝트 이름을 입력하세요', '새 모션 프로젝트');
       if (!name?.trim()) return;
-      await run(() => createProject({ name: name.trim() }), '프로젝트 생성 완료');
-      await onProjectChange(state.project, state.projectGeneration);
+      const created = await run(
+        () => createProject({ name: name.trim() }),
+        '프로젝트 생성 완료',
+      );
+      if (created) await onProjectChange(state.project, state.projectGeneration);
     });
     el.projectDeleteButton?.addEventListener('click', async () => {
       if (!state.project || state.busy) return;
@@ -647,8 +658,8 @@ export function createProjectExplorerController({
         return;
       }
       if (event.target.closest('[data-project-manage]')) {
-        await openFile(category, fileName);
-        if (state.selectedFile) onManageFile(state.selectedFile);
+        const opened = await openFile(category, fileName);
+        if (opened && state.selectedFile) await onManageFile(state.selectedFile);
         return;
       }
       if (event.target.closest('[data-project-open]')) {
@@ -680,7 +691,7 @@ export function createProjectExplorerController({
           state.project.project_id, file.category, file.file_name,
         );
         setMessage(result.message || '기능 탭에 연결했습니다');
-        onOpenEditor(result);
+        await onOpenEditor(result);
       } catch (error) {
         setMessage(error.message, true);
       } finally {
