@@ -2550,8 +2550,9 @@ button[aria-disabled="true"] {
 .studio-editor-overlay.hidden { display: none; }
 
 .studio-editor-dialog {
+  --studio-editor-graph-height: clamp(340px, 46vh, 480px);
   width: min(1420px, 96vw);
-  height: min(900px, 94vh);
+  height: min(980px, 94vh);
   max-height: 94vh;
   overflow: hidden;
   display: flex;
@@ -2725,7 +2726,8 @@ button[aria-disabled="true"] {
 }
 
 .studio-editor-main {
-  grid-template-rows: auto minmax(210px, 1fr) auto auto auto auto;
+  grid-template-rows: auto var(--studio-editor-graph-height) auto auto auto auto;
+  overflow-y: auto;
 }
 
 .studio-editor-operation-panel {
@@ -2891,8 +2893,8 @@ button[aria-disabled="true"] {
 }
 
 .studio-editor-canvas-wrap {
-  min-height: 210px;
-  height: 100%;
+  min-height: var(--studio-editor-graph-height);
+  height: var(--studio-editor-graph-height);
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 8px;

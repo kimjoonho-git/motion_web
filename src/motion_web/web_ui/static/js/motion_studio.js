@@ -18,6 +18,7 @@ import {
 } from './api.js?v=20260722-motor-config-delete';
 import {
   motionStudioCanCreatePointCurve,
+  motionStudioCanvasEventPoint,
   motionStudioEditorNextValueScale,
   motionStudioEditorValueBounds,
   motionStudioLayerDataEqual,
@@ -27,17 +28,18 @@ import {
   motionStudioPointCurveViewEnd,
   motionStudioPointDragStarted,
   motionStudioPointHitTarget,
+  motionStudioRuntimeStatusMessage,
   motionStudioSelectionKindsMatch,
   motionStudioShouldEditPoint,
   resolveMotionStudioSelectedLayerId,
   synchronizeMotionStudioEditorTimeline,
-} from './motion_studio_calculations.js?v=20260724-studio-cleanup-2';
+} from './motion_studio_calculations.js?v=20260724-studio-cleanup-3';
 import {
   drawMotionStudioEditorGraph,
   drawMotionStudioLayerGraph,
   motionStudioCompositionTracks as compositionTracks,
   motionStudioLayerTracks as layerTracks,
-} from './motion_studio_graph.js?v=20260724-studio-cleanup-2';
+} from './motion_studio_graph.js?v=20260724-studio-cleanup-3';
 import {
   bindMotionStudioEvent,
   bindMotionStudioProjectTransportEvents,
@@ -45,10 +47,11 @@ import {
   renderMotionStudioWorkspace,
   resetMotionStudioProjectState,
   setMotionStudioMessage,
-} from './motion_studio_ui.js?v=20260724-studio-cleanup-2';
+} from './motion_studio_ui.js?v=20260724-studio-cleanup-3';
 
 export {
   motionStudioCanCreatePointCurve,
+  motionStudioCanvasEventPoint,
   motionStudioEditorNextValueScale,
   motionStudioEditorValueBounds,
   motionStudioLayerDataEqual,
@@ -58,6 +61,7 @@ export {
   motionStudioPointCurveViewEnd,
   motionStudioPointDragStarted,
   motionStudioPointHitTarget,
+  motionStudioRuntimeStatusMessage,
   motionStudioSelectionKindsMatch,
   motionStudioShouldEditPoint,
   resolveMotionStudioSelectedLayerId,
@@ -1578,6 +1582,12 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
         setMessage(result.message || '통합 프로젝트를 확인하세요', true);
       } else if (showMessage) {
         setMessage('현재 통합 프로젝트를 갱신했습니다');
+      } else if ([
+        '',
+        '프로젝트 상태 확인 중',
+        '현재 프로젝트 모션 스튜디오를 불러오세요',
+      ].includes(String(el.studioMessage?.textContent || '').trim())) {
+        setMessage(state.status?.message || result.message || '현재 통합 프로젝트를 불러왔습니다');
       }
       render();
     } catch (error) {
@@ -2265,7 +2275,9 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       const editor = state.editor; const metrics = editor?.graphMetrics;
       if (!editor || !metrics) return;
       const rect = el.studioEditorGraph.getBoundingClientRect();
-      const x = event.clientX - rect.left; const y = event.clientY - rect.top;
+      const { x, y } = motionStudioCanvasEventPoint(
+        rect, event.clientX, event.clientY, metrics.width, metrics.height,
+      );
       if (editor.draggingPoint) {
         if (!motionStudioPointDragStarted(editor.draggingPoint, x, y)) return;
         if (!editor.draggingPoint.activated) {
@@ -2297,7 +2309,7 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
         return;
       }
       if (editor.panningGraph) {
-        const pixelDelta = event.clientX - editor.panningGraph.startClientX;
+        const pixelDelta = x - editor.panningGraph.startX;
         if (Math.abs(pixelDelta) >= 3) editor.panningGraph.moved = true;
         if (editor.panningGraph.moved) {
           const timeDelta = -(pixelDelta / metrics.plotWidth) * editor.panningGraph.span;
@@ -2375,8 +2387,9 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       event.motionStudioRangeHandled = true;
       const rect = el.studioEditorGraph.getBoundingClientRect();
       const clickPoint = {
-        x: event.clientX - rect.left,
-        y: event.clientY - rect.top,
+        ...motionStudioCanvasEventPoint(
+          rect, event.clientX, event.clientY, metrics.width, metrics.height,
+        ),
         timeStamp: event.timeStamp,
       };
       const { padding } = metrics;
@@ -2562,7 +2575,9 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
       const metrics = editor?.graphMetrics;
       if (!editor || !metrics || event.button !== 0) return;
       const rect = el.studioEditorGraph.getBoundingClientRect();
-      const x = event.clientX - rect.left; const y = event.clientY - rect.top;
+      const { x, y } = motionStudioCanvasEventPoint(
+        rect, event.clientX, event.clientY, metrics.width, metrics.height,
+      );
       const handle = (editor.handleHitTargets || []).find(
         (target) => Math.hypot(target.x - x, target.y - y) <= 9,
       );
@@ -2625,7 +2640,7 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
         && y >= padding.top && y <= padding.top + metrics.plotHeight
       ) {
         editor.panningGraph = {
-          startClientX: event.clientX,
+          startX: x,
           startViewStart: editor.viewStart,
           startViewEnd: editor.viewEnd,
           span: editor.viewEnd - editor.viewStart,
@@ -2690,7 +2705,12 @@ export function createMotionStudioController({ el, getMotorActionBlockReason = (
   }
 
   function renderSnapshot(studioStatus, midiStatus) {
-    if (studioStatus && Object.keys(studioStatus).length) state.status = studioStatus;
+    const previousStatus = state.status;
+    if (studioStatus && Object.keys(studioStatus).length) {
+      state.status = studioStatus;
+      const feedback = motionStudioRuntimeStatusMessage(previousStatus, studioStatus);
+      if (feedback) setMessage(feedback.message, feedback.error);
+    }
     if (midiStatus) state.midi = midiStatus;
     syncPlaybackClock();
     renderAxes(); renderControls();

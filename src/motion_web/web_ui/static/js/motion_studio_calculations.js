@@ -96,6 +96,40 @@ export function motionStudioPointHitTarget(targets, x, y, radius = 14) {
   ) || null;
 }
 
+export function motionStudioCanvasEventPoint(rect, clientX, clientY, width, height) {
+  const displayWidth = Number(rect?.width);
+  const displayHeight = Number(rect?.height);
+  const graphWidth = Number(width);
+  const graphHeight = Number(height);
+  const left = Number(rect?.left) || 0;
+  const top = Number(rect?.top) || 0;
+  return {
+    x: (Number(clientX) - left) * (
+      displayWidth > 0 && graphWidth > 0 ? graphWidth / displayWidth : 1
+    ),
+    y: (Number(clientY) - top) * (
+      displayHeight > 0 && graphHeight > 0 ? graphHeight / displayHeight : 1
+    ),
+  };
+}
+
+export function motionStudioRuntimeStatusMessage(previousStatus, nextStatus) {
+  const previousState = String(previousStatus?.state || '');
+  const nextState = String(nextStatus?.state || '');
+  const previousMessage = String(previousStatus?.message || '');
+  const nextMessage = String(nextStatus?.message || '');
+  const activeStates = new Set(['initializing', 'playing', 'recording', 'stopping']);
+  if (nextState === 'error' && (
+    previousState !== nextState || previousMessage !== nextMessage
+  )) {
+    return { message: nextMessage || '모션 스튜디오 작업에 실패했습니다.', error: true };
+  }
+  if (nextState === 'idle' && activeStates.has(previousState)) {
+    return { message: nextMessage || '모션 스튜디오 작업이 완료되었습니다.', error: false };
+  }
+  return null;
+}
+
 export function motionStudioPointDragStarted(draggingPoint, x, y) {
   if (!draggingPoint) return false;
   if (draggingPoint.moved) return true;

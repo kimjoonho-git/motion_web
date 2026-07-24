@@ -1,7 +1,7 @@
 import {
   motionStudioEditorValueBounds,
   motionStudioPointCurvePreview,
-} from './motion_studio_calculations.js?v=20260724-studio-cleanup-2';
+} from './motion_studio_calculations.js?v=20260724-studio-cleanup-3';
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"]/g, (character) => ({
@@ -196,8 +196,9 @@ export function drawMotionStudioEditorGraph({
       editor.pointDraft.points,
       editor.pointDraft.interpolation_order || editor.pointCurveOrder,
     ) : [];
-  const width = Math.max(680, Math.floor(canvas.getBoundingClientRect().width || 900));
-  const height = Math.max(210, Math.floor(canvas.getBoundingClientRect().height || 320));
+  const canvasRect = canvas.getBoundingClientRect();
+  const width = Math.max(1, Math.floor(canvasRect.width || 900));
+  const height = Math.max(1, Math.floor(canvasRect.height || 320));
   const ratio = devicePixelRatio || 1;
   canvas.width = Math.floor(width * ratio);
   canvas.height = Math.floor(height * ratio);

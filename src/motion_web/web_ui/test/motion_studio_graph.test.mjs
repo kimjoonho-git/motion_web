@@ -33,7 +33,7 @@ test('graph helpers preserve tracks, interpolation, and manual initial values', 
   assert.deepEqual(composed.tracks.get('1-1').map((point) => point.value), [2, 4]);
 });
 
-function graphFixture(width = 600) {
+function graphFixture(width = 600, height = 320) {
   const calls = [];
   const context = new Proxy({}, {
     get(target, property) {
@@ -55,7 +55,7 @@ function graphFixture(width = 600) {
     canvas: {
       width: 0,
       height: 0,
-      getBoundingClientRect: () => ({ width }),
+      getBoundingClientRect: () => ({ width, height }),
       getContext: () => context,
     },
     playhead: { classList: { add: (name) => hidden.push(name) } },
@@ -99,7 +99,7 @@ test('layer graph renderer draws warnings and updates playback', () => {
 });
 
 test('editor graph renderer preserves graph metrics and point hit targets', () => {
-  const fixture = graphFixture(900);
+  const fixture = graphFixture(478, 368);
   const layer = {
     layer_id: 'layer-a',
     frames: [
@@ -137,6 +137,10 @@ test('editor graph renderer preserves graph metrics and point hit targets', () =
   });
 
   assert.equal(rendered, true);
+  assert.equal(fixture.canvas.width, 478);
+  assert.equal(fixture.canvas.height, 368);
+  assert.equal(editor.graphMetrics.width, 478);
+  assert.equal(editor.graphMetrics.height, 368);
   assert.equal(editor.graphMetrics.viewStart, 0);
   assert.equal(editor.graphMetrics.viewEnd, 0.04);
   assert.equal(editor.pointHitTargets.length, 2);

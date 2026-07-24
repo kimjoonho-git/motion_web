@@ -4,6 +4,7 @@ import test from 'node:test';
 
 import {
   motionStudioCanCreatePointCurve,
+  motionStudioCanvasEventPoint,
   motionStudioLayerDataEqual,
   motionStudioLayerDuration,
   motionStudioEditorNextValueScale,
@@ -13,11 +14,59 @@ import {
   motionStudioPointCurveViewEnd,
   motionStudioPointDragStarted,
   motionStudioPointHitTarget,
+  motionStudioRuntimeStatusMessage,
   motionStudioSelectionKindsMatch,
   motionStudioShouldEditPoint,
   resolveMotionStudioSelectedLayerId,
   synchronizeMotionStudioEditorTimeline,
 } from '../static/js/motion_studio.js';
+
+test('canvas pointer coordinates follow the internal graph size on scaled displays', () => {
+  assert.deepEqual(
+    motionStudioCanvasEventPoint(
+      { left: 20, top: 10, width: 480, height: 240 },
+      260,
+      130,
+      960,
+      480,
+    ),
+    { x: 480, y: 240 },
+  );
+  assert.deepEqual(
+    motionStudioCanvasEventPoint(
+      { left: 20, top: 10, width: 0, height: 0 },
+      120,
+      60,
+      960,
+      480,
+    ),
+    { x: 100, y: 50 },
+  );
+});
+
+test('runtime status feedback reports asynchronous failure and active completion', () => {
+  assert.deepEqual(
+    motionStudioRuntimeStatusMessage(
+      { state: 'initializing', message: '초기 위치 이동 중' },
+      { state: 'error', message: '서보가 꺼져 있습니다' },
+    ),
+    { message: '서보가 꺼져 있습니다', error: true },
+  );
+  assert.deepEqual(
+    motionStudioRuntimeStatusMessage(
+      { state: 'playing', message: '재생 중' },
+      { state: 'idle', message: '재생 완료' },
+    ),
+    { message: '재생 완료', error: false },
+  );
+  assert.equal(
+    motionStudioRuntimeStatusMessage(
+      { state: 'idle', message: '대기' },
+      { state: 'idle', message: '대기' },
+    ),
+    null,
+  );
+});
 
 test('a point click edits points only in point mode so general edits can select it', () => {
   const pointTarget = { point: { point_id: 'point_1' } };
