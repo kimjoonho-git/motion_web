@@ -12,6 +12,7 @@ import {
   motionStudioEditorNextValueScale,
   motionStudioEditorValueBounds,
   motionStudioLayerMotionIds,
+  motionStudioMotionAxisRange,
   motionStudioMotionTargetAtTime,
   motionStudioNearestMotionTarget,
   motionStudioPointCurveAtTime,
@@ -20,6 +21,7 @@ import {
   motionStudioPointCurveViewEnd,
   motionStudioPointDragStarted,
   motionStudioPointHitTarget,
+  motionStudioPointRangeReady,
   motionStudioPointRangeTargetsMatch,
   motionStudioRuntimeStatusMessage,
   motionStudioShouldProtectPointAxisSelection,
@@ -98,19 +100,22 @@ test('a newly added flat axis can start a point curve without converting motion'
   }, '3-1'), false);
 });
 
-test('point edits can span point data only on the same Motion ID', () => {
+test('point edit ranges require two points from the same point curve', () => {
   assert.equal(
     motionStudioPointRangeTargetsMatch('1-1', '1-1', 'curve-a', 'curve-a'),
     true,
   );
   assert.equal(
     motionStudioPointRangeTargetsMatch('1-1', '1-1', 'curve-a', 'curve-b'),
-    true,
+    false,
   );
   assert.equal(
     motionStudioPointRangeTargetsMatch('1-1', '1-2', 'curve-a', 'curve-a'),
     false,
   );
+  assert.equal(motionStudioPointRangeReady(1, 1, '1-1', 'curve-a'), false);
+  assert.equal(motionStudioPointRangeReady(1, 1.02, '1-1', 'curve-a'), true);
+  assert.equal(motionStudioPointRangeReady(1, 2, '1-1', ''), false);
 });
 
 test('motion sample clicks resolve without a previous mousemove cursor state', () => {
@@ -169,7 +174,10 @@ test('graph hover and point creation use the same 20 ms motion sample source', (
     /studioEditorGraph\?\.addEventListener\('mousemove'[\s\S]*?studioEditorGraph\?\.addEventListener\('mouseleave'/,
   )?.[0] || '';
   const addPointFlow = source.match(
-    /if \(graphAction === 'add_point'\)[\s\S]*?renderEditor\(\);\n        return;/,
+    /if \(graphAction === 'add_point'\)[\s\S]*?drawEditorGraph\(\);\n        return;/,
+  )?.[0] || '';
+  const confirmPointFlow = source.match(
+    /studioEditorPointAddButton\?\.addEventListener\('click'[\s\S]*?studioEditorPointDeleteButton/,
   )?.[0] || '';
 
   assert.match(hoverFlow, /motionStudioSnapFrameTime\(metrics\.timeFor\(x\)\)/);
@@ -178,6 +186,10 @@ test('graph hover and point creation use the same 20 ms motion sample source', (
   assert.match(addPointFlow, /const timeSec = motionStudioSnapFrameTime/);
   assert.match(addPointFlow, /const graphSample = motionStudioMotionTargetAtTime/);
   assert.match(addPointFlow, /graphSample\?\.value \?\? metrics\.valueFor/);
+  assert.match(addPointFlow, /editor\.pendingPointCandidate =/);
+  assert.doesNotMatch(addPointFlow, /editor\.pointDraft\.points\.push/);
+  assert.match(confirmPointFlow, /editor\.pointDraft\.points\.push\(point\)/);
+  assert.match(confirmPointFlow, /clearPendingPointCandidate\(editor\)/);
 });
 
 test('graph click intent keeps point creation separate from range selection', () => {
@@ -338,7 +350,7 @@ test('primary edit workflow actions stay in the fixed top action area', () => {
   }
 });
 
-test('editor uses three stable columns and a dedicated save confirmation', () => {
+test('editor uses a wide graph column with the inspector below it', () => {
   const html = readFileSync(
     new URL('../static/index.html', import.meta.url),
     'utf8',
@@ -349,21 +361,61 @@ test('editor uses three stable columns and a dedicated save confirmation', () =>
   );
   assert.match(
     html,
-    /studio-editor-layout[\s\S]*?studio-editor-sidebar[\s\S]*?studio-editor-main[\s\S]*?studio-editor-inspector/,
+    /studio-editor-layout[\s\S]*?studio-editor-sidebar[\s\S]*?studio-editor-main[\s\S]*?studioEditorGraph[\s\S]*?studio-editor-inspector/,
   );
   assert.match(html, /id="studioEditorSaveConfirmModal"/);
   assert.match(html, /id="studioEditorDangerZone"/);
   assert.match(html, /id="studioEditorTimeZoomInButton"/);
   assert.match(html, /id="studioEditorValueZoomInButton"/);
+  assert.match(html, /id="studioEditorValueRangeLockButton"[^>]*>축 범위 고정</);
+  assert.match(html, /id="studioEditorPointAddButton"[^>]*>포인트 추가</);
+  assert.match(
+    html,
+    /class="studio-editor-feedback"[\s\S]*?id="studioEditorSelectedPointSummary"[\s\S]*?id="studioEditorSelectedPointStartTime"[\s\S]*?id="studioEditorSelectedPointStartValue"[\s\S]*?id="studioEditorSelectedPointEndTime"[\s\S]*?id="studioEditorSelectedPointEndValue"[\s\S]*?id="studioEditorCursorInfo"[\s\S]*?id="studioEditorMessage"/,
+  );
+  for (const operation of [
+    'time_shift', 'time_scale', 'value_offset', 'value_scale', 'point_curve',
+  ]) {
+    assert.match(html, new RegExp(`data-studio-editor-operation="${operation}"`));
+  }
   assert.equal((html.match(/id="studioEditorCloseButton"/g) || []).length, 1);
   assert.match(
     styles,
-    /grid-template-columns:\s*220px minmax\(0,\s*1fr\) 310px/,
+    /grid-template-columns:\s*210px minmax\(0,\s*1fr\)/,
   );
   assert.match(
     styles,
     /grid-template-rows:\s*auto var\(--studio-editor-graph-height\) auto auto auto/,
   );
+});
+
+test('selected range start and end point values are rendered in the graph summary', () => {
+  const source = readFileSync(
+    new URL('../static/js/motion_studio.js', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    source,
+    /studioEditorSelectedPointSummary\?\.classList\.toggle\('hidden', !startPoint\)/,
+  );
+  assert.match(source, /studioEditorSelectedPointStartTime\.textContent/);
+  assert.match(source, /studioEditorSelectedPointStartValue\.textContent/);
+  assert.match(source, /studioEditorSelectedPointEndTime\.textContent/);
+  assert.match(source, /studioEditorSelectedPointEndValue\.textContent/);
+});
+
+test('editor graph background pans both axes and axis selection resets a fixed value range', () => {
+  const source = readFileSync(
+    new URL('../static/js/motion_studio.js', import.meta.url),
+    'utf8',
+  );
+  assert.match(source, /const pixelDeltaY = y - editor\.panningGraph\.startY/);
+  assert.match(
+    source,
+    /editor\.valueView = \{\s*minValue: editor\.panningGraph\.startMinValue \+ valueDelta,\s*maxValue: editor\.panningGraph\.startMaxValue \+ valueDelta/,
+  );
+  assert.match(source, /resetEditorValueView\(\{ unlock: true \}\)/);
+  assert.match(source, /motionStudioMotionAxisRange\(activeMapping\(\)\?\.rows \|\| \[\]/);
 });
 
 test('editor exposes whole-axis point creation without motion-section conversions', () => {
@@ -377,7 +429,7 @@ test('editor exposes whole-axis point creation without motion-section conversion
   );
   assert.match(
     html,
-    /id="studioEditorCreatePointsButton"[^>]*>선택 축 전체 포인트 생성</,
+    /id="studioEditorCreatePointsButton"[^>]*>전체 포인트 생성</,
   );
   assert.match(
     html,
@@ -402,11 +454,11 @@ test('editor exposes whole-axis point creation without motion-section conversion
   assert.match(source, /const workingPointCurve = Boolean\(storedCurveForDraft\(editor\)\)/);
   assert.match(
     source,
-    /studio-editor-conversion-controls'\)\?\.classList\.toggle\(\s*'hidden',\s*pointMode/,
+    /studio-editor-conversion-controls'\)\?\.classList\.toggle\(\s*'hidden',\s*pointMode \|\| selectedAxisPointBacked/,
   );
 });
 
-test('one point is immediately editable and a second same-axis point expands the range', () => {
+test('range editing stays disabled until two distinct points from one curve are selected', () => {
   const source = readFileSync(
     new URL('../static/js/motion_studio.js', import.meta.url),
     'utf8',
@@ -419,9 +471,11 @@ test('one point is immediately editable and a second same-axis point expands the
   )?.[0] || '';
 
   assert.match(selectionFlow, /setEditorPointRange\(editor, snapped, snapped/);
-  assert.match(selectionFlow, /이 상태로 편집하거나 같은 축의 다른 지점을 선택/);
+  assert.match(selectionFlow, /같은 포인트 곡선의 다른 포인트를 선택/);
+  assert.match(selectionFlow, /Math\.abs\(first - snapped\) < 0\.02/);
   assert.doesNotMatch(selectionFlow, /selectionKind/);
-  assert.match(applyGuard, /Number\.isFinite\(editor\.selectionStartSec\)/);
+  assert.match(applyGuard, /motionStudioPointRangeReady/);
+  assert.match(applyGuard, /서로 다른 포인트 두 개/);
   assert.doesNotMatch(applyGuard, /selectionKind/);
 });
 
@@ -591,6 +645,34 @@ test('editor vertical zoom-out has no fixed scale ceiling', () => {
   assert.deepEqual(first, { minValue: -10, maxValue: 10 });
   assert.equal(veryWide.minValue, -1e13);
   assert.equal(veryWide.maxValue, 1e13);
+});
+
+test('editor vertical view supports unlimited offsets and exact motion-axis locking', () => {
+  assert.deepEqual(
+    motionStudioEditorValueBounds(-10, 10, 1, 123456789),
+    { minValue: 123456779, maxValue: 123456799 },
+  );
+  assert.deepEqual(
+    motionStudioEditorValueBounds(-10, 10, 100, 999, {
+      minValue: -35,
+      maxValue: 45,
+    }),
+    { minValue: -35, maxValue: 45 },
+  );
+  assert.deepEqual(motionStudioMotionAxisRange([{
+    motion_id: '1-2',
+    motion_lower_deg: -35,
+    motion_upper_deg: 45,
+  }], '1-2'), {
+    motionId: '1-2',
+    minValue: -35,
+    maxValue: 45,
+  });
+  assert.equal(motionStudioMotionAxisRange([{
+    motion_id: '1-2',
+    motion_lower_deg: 45,
+    motion_upper_deg: -35,
+  }], '1-2'), null);
 });
 
 test('500 consecutive vertical zoom-outs keep expanding monotonically', () => {

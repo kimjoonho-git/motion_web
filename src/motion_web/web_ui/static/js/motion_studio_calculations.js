@@ -7,7 +7,22 @@ export function motionStudioLayerDuration(layer) {
   );
 }
 
-export function motionStudioEditorValueBounds(minimum, maximum, scale = 1) {
+export function motionStudioEditorValueBounds(
+  minimum,
+  maximum,
+  scale = 1,
+  offset = 0,
+  fixedBounds = null,
+) {
+  const fixedMinimum = Number(fixedBounds?.minValue);
+  const fixedMaximum = Number(fixedBounds?.maxValue);
+  if (
+    Number.isFinite(fixedMinimum)
+    && Number.isFinite(fixedMaximum)
+    && fixedMaximum > fixedMinimum
+  ) {
+    return { minValue: fixedMinimum, maxValue: fixedMaximum };
+  }
   let minValue = Number.isFinite(Number(minimum)) ? Number(minimum) : -1;
   let maxValue = Number.isFinite(Number(maximum)) ? Number(maximum) : 1;
   if (maxValue < minValue) [minValue, maxValue] = [maxValue, minValue];
@@ -19,7 +34,26 @@ export function motionStudioEditorValueBounds(minimum, maximum, scale = 1) {
   const valueScale = Number.isFinite(numericScale) && numericScale > 0 ? numericScale : 1;
   const center = (minValue + maxValue) / 2;
   const halfSpan = ((maxValue - minValue) / 2) * valueScale;
-  return { minValue: center - halfSpan, maxValue: center + halfSpan };
+  const numericOffset = Number(offset);
+  const valueOffset = Number.isFinite(numericOffset) ? numericOffset : 0;
+  return {
+    minValue: center - halfSpan + valueOffset,
+    maxValue: center + halfSpan + valueOffset,
+  };
+}
+
+export function motionStudioMotionAxisRange(rows, motionId) {
+  const targetId = String(motionId || '').trim();
+  if (!targetId) return null;
+  const row = (Array.isArray(rows) ? rows : []).find(
+    (candidate) => String(candidate?.motion_id || '').trim() === targetId,
+  );
+  const minValue = Number(row?.motion_lower_deg);
+  const maxValue = Number(row?.motion_upper_deg);
+  if (!Number.isFinite(minValue) || !Number.isFinite(maxValue) || maxValue <= minValue) {
+    return null;
+  }
+  return { motionId: targetId, minValue, maxValue };
 }
 
 export function motionStudioEditorNextValueScale(currentScale, factor) {
@@ -87,12 +121,32 @@ export function resolveMotionStudioSelectedLayerId(layers, selectedLayerId = '')
 export function motionStudioPointRangeTargetsMatch(
   firstMotionId,
   secondMotionId,
-  _firstCurveId,
-  _secondCurveId,
+  firstCurveId,
+  secondCurveId,
 ) {
   const first = String(firstMotionId || '');
   const second = String(secondMotionId || '');
-  return Boolean(first) && first === second;
+  const firstCurve = String(firstCurveId || '');
+  const secondCurve = String(secondCurveId || '');
+  return Boolean(first)
+    && first === second
+    && Boolean(firstCurve)
+    && firstCurve === secondCurve;
+}
+
+export function motionStudioPointRangeReady(
+  startSec,
+  endSec,
+  motionId,
+  curveId,
+) {
+  const start = Number(startSec);
+  const end = Number(endSec);
+  return Number.isFinite(start)
+    && Number.isFinite(end)
+    && Math.abs(end - start) >= 0.02 - 1e-9
+    && Boolean(String(motionId || ''))
+    && Boolean(String(curveId || ''));
 }
 
 export function motionStudioCanSwitchPointDraftCurve(

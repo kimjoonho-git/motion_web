@@ -146,4 +146,38 @@ test('editor graph renderer preserves graph metrics and point hit targets', () =
   assert.equal(editor.pointHitTargets.length, 2);
   assert.match(legend.innerHTML, /1-1/);
   assert.match(legend.innerHTML, /현재 작업본/);
+
+  editor.valueView = { minValue: -100, maxValue: -50 };
+  drawMotionStudioEditorGraph({
+    editor,
+    canvas: fixture.canvas,
+    selectedMotionIds: ['1-1'],
+  });
+  assert.equal(editor.graphMetrics.minValue, -100);
+  assert.equal(editor.graphMetrics.maxValue, -50);
+
+  editor.valueRangeLock = { motionId: '1-1', minValue: -35, maxValue: 45 };
+  drawMotionStudioEditorGraph({
+    editor,
+    canvas: fixture.canvas,
+    selectedMotionIds: ['1-1'],
+  });
+  assert.equal(editor.graphMetrics.minValue, -35);
+  assert.equal(editor.graphMetrics.maxValue, 45);
+
+  editor.valueRangeLock = null;
+  editor.valueView = null;
+  editor.pendingPointCandidate = {
+    motionId: '1-1',
+    timeSec: 0.03,
+    valueDeg: 1.5,
+  };
+  drawMotionStudioEditorGraph({
+    editor,
+    canvas: fixture.canvas,
+    selectedMotionIds: ['1-1'],
+  });
+  assert.ok(fixture.calls.some(
+    (call) => call[0] === 'fillText' && call[1] === '추가 후보',
+  ));
 });

@@ -59,32 +59,32 @@ export function motionStudioEditorInspectorState({
   if (preview) return {
     key: 'preview',
     label: '미리보기 중',
-    guide: '결과를 확인한 뒤 작업본에 반영하거나 실행 취소하세요.',
+    guide: '결과 확인 후 반영 또는 실행 취소',
   };
   if (pointDraftUnsaved && !savedPointCurve) return {
     key: 'unsaved-point',
     label: '저장 전 포인트',
-    guide: '포인트 생성 결과를 작업본에 반영하고 저장해야 편집이 활성화됩니다.',
+    guide: '작업본 반영·저장 후 편집 가능',
   };
   if (pointSelected) return {
     key: 'point',
     label: '포인트 선택',
-    guide: '시간·모션값·탄젠트·곡선 차수를 조정할 수 있습니다.',
+    guide: '시간·모션값·탄젠트·곡선 조정',
   };
   if (savedPointCurve) return {
     key: 'saved-point',
     label: '저장된 포인트',
-    guide: '포인트 한 개 또는 같은 축의 두 포인트를 선택해 편집할 수 있습니다.',
+    guide: '같은 포인트 곡선의 포인트 2개 선택',
   };
   if (rangeSelected) return {
     key: 'point-range',
     label: '포인트 범위',
-    guide: '선택한 포인트를 함께 편집할 수 있습니다.',
+    guide: '선택 포인트 함께 편집',
   };
   return {
     key: 'none',
     label: '선택 없음',
-    guide: '일반 모션은 축 전체 포인트를 생성한 뒤 편집할 수 있습니다.',
+    guide: '축 전체 포인트 생성 후 편집 가능',
   };
 }
 

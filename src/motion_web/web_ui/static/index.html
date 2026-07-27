@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>모션 녹화 시스템 0.5.0</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260727-popup-common-3">
+    <link rel="stylesheet" href="/static/styles.css?v=20260727-editor-compact-feedback-1">
   </head>
   <body>
     <main class="shell">
@@ -1287,7 +1287,7 @@
               <button id="studioEditorRedoButton" type="button" disabled>다시 실행</button>
             </div>
             <div class="studio-editor-preview-actions">
-              <span>현재 기능의 결과를 확인한 뒤 작업본에 반영하세요</span>
+              <span>미리보기 후 반영</span>
               <button id="studioEditorApplyButton" type="button">변경 미리보기</button>
               <button id="studioEditorUpdateButton" class="primary" type="button" disabled>작업본 반영</button>
             </div>
@@ -1336,76 +1336,103 @@
                   <button id="studioEditorValueZoomInButton" type="button">확대</button>
                   <button id="studioEditorValueZoomOutButton" type="button">축소</button>
                 </div>
+                <button id="studioEditorValueRangeLockButton" type="button" aria-pressed="false">축 범위 고정</button>
                 <button id="studioEditorFitSelectionButton" type="button">선택 포인트 맞춤</button>
                 <button id="studioEditorFitAllButton" type="button">전체 맞춤</button>
               </div>
               <div class="studio-editor-canvas-wrap"><canvas id="studioEditorGraph" height="430"></canvas></div>
               <div id="studioEditorLegend" class="studio-layer-graph-legend"></div>
-              <div id="studioEditorCursorInfo" class="studio-editor-cursor-info">그래프 위에 마우스를 올리세요</div>
-              <div id="studioEditorMessage" class="registry-message">결과를 미리 본 뒤 편집 반영하여 작업본에 누적하세요.</div>
-            </div>
-            <aside id="studioEditorInspector" class="studio-editor-inspector">
-              <div class="studio-editor-inspector-head">
-                <strong>편집 인스펙터</strong>
-                <span id="studioEditorInspectorState" class="status-chip off">선택 없음</span>
+              <div class="studio-editor-feedback">
+                <div id="studioEditorSelectedPointSummary" class="studio-editor-selected-point hidden" aria-live="polite">
+                  <strong id="studioEditorSelectedPointTitle">선택 포인트</strong>
+                  <span class="studio-editor-selected-point-values">
+                    <small>시작</small>
+                    <b id="studioEditorSelectedPointStartTime">-</b>
+                    <b id="studioEditorSelectedPointStartValue">-</b>
+                  </span>
+                  <i aria-hidden="true">→</i>
+                  <span id="studioEditorSelectedPointEnd" class="studio-editor-selected-point-values">
+                    <small>끝</small>
+                    <b id="studioEditorSelectedPointEndTime">선택 필요</b>
+                    <b id="studioEditorSelectedPointEndValue">-</b>
+                  </span>
+                </div>
+                <div class="studio-editor-feedback-text">
+                  <div id="studioEditorCursorInfo" class="studio-editor-cursor-info">그래프 위에 마우스를 올리세요</div>
+                  <span aria-hidden="true">·</span>
+                  <div id="studioEditorMessage" class="registry-message">편집 결과가 여기에 표시됩니다.</div>
+                </div>
               </div>
-              <section class="studio-editor-operation-panel">
-                <strong id="studioEditorOperationTitle">포인트 편집</strong>
-                <p id="studioEditorSelectionGuide" class="studio-editor-selection-guide">일반 모션은 축 전체에 포인트를 생성한 뒤 편집할 수 있습니다.</p>
-                <div class="studio-editor-conversion-controls">
-                  <strong>선택 축 포인트 생성</strong>
-                  <label class="compact-field studio-editor-inspector-field"><span>근사 정밀도</span>
-                    <select id="studioEditorApproximationTolerance">
-                      <option value="0.5">부드럽게 (0.5°)</option>
-                      <option value="0.1" selected>표준 (0.1°)</option>
-                      <option value="0.02">정밀하게 (0.02°)</option>
-                    </select>
-                  </label>
-                  <label class="compact-field studio-editor-inspector-field"><span>근사 곡선</span>
-                    <select id="studioEditorApproximationOrder">
-                      <option value="1">1차 (직선)</option>
-                      <option value="3" selected>3차 (부드럽게)</option>
-                      <option value="5">5차 (더 부드럽게)</option>
-                    </select>
-                  </label>
-                  <label class="compact-field studio-editor-inspector-field"><span>최대 포인트</span>
-                    <input id="studioEditorApproximationMaximumPoints" type="number" min="3" max="200" step="1" value="200">
-                  </label>
-                  <button id="studioEditorCreatePointsButton" type="button">선택 축 전체 포인트 생성</button>
-                  <small>선택한 Motion ID의 전체 20ms 모션 데이터를 편집 가능한 포인트로 생성합니다.</small>
+              <aside id="studioEditorInspector" class="studio-editor-inspector">
+                <div class="studio-editor-inspector-head">
+                  <strong>편집 인스펙터</strong>
+                  <span id="studioEditorInspectorState" class="status-chip off">선택 없음</span>
                 </div>
-                <div class="studio-editor-operations">
-                  <label class="compact-field studio-editor-operation-field"><span>편집 기능</span><select id="studioEditorOperation">
-                    <option value="time_scale">시간 배율</option>
-                    <option value="value_scale">모션값 배율</option>
-                    <option value="time_shift">시간 이동</option>
-                    <option value="value_offset">모션값 이동</option>
-                    <option value="point_curve">포인트 곡선</option>
-                  </select></label>
-                  <label class="compact-field hidden" data-studio-editor-value="offset"><span>이동값(°)</span><input id="studioEditorOffset" type="number" step="0.1" value="0"></label>
-                  <label class="compact-field" data-studio-editor-value="factor"><span id="studioEditorFactorLabel">시간 배율</span><input id="studioEditorFactor" type="number" min="0.01" max="100" step="0.01" value="1.00"></label>
-                  <label class="compact-field hidden" data-studio-editor-value="delta"><span>이동값(ms)</span><input id="studioEditorDelta" type="number" step="20" value="0"></label>
-                  <div id="studioEditorPointControls" class="studio-editor-point-controls hidden" data-studio-editor-value="points">
-                    <span>포인트 추가·드래그 / 배경 드래그로 시간축 이동</span>
-                    <label class="compact-field"><span>곡선 방식</span><select id="studioEditorPointCurveOrder">
-                      <option value="1">직선</option><option value="3" selected>3차 곡선</option><option value="5">5차 곡선</option>
-                    </select></label>
-                    <label class="compact-field"><span>시간축 끝(초)</span><input id="studioEditorPointTimelineEnd" type="number" min="0.02" step="0.02" value="10.00"></label>
-                    <label class="compact-field"><span>시간(초)</span><input id="studioEditorPointTime" type="number" min="0" step="0.02" disabled></label>
-                    <label class="compact-field"><span>모션값(°)</span><input id="studioEditorPointValue" type="number" step="0.01" disabled></label>
-                    <label class="compact-field"><span>탄젠트</span><select id="studioEditorPointMode" disabled>
-                      <option value="auto">자동</option><option value="smooth">부드럽게</option><option value="broken">분리</option>
-                    </select></label>
-                  </div>
+                <div class="studio-editor-inspector-content">
+                  <section class="studio-editor-operation-panel">
+                    <div class="studio-editor-operation-summary">
+                      <strong id="studioEditorOperationTitle">포인트 편집</strong>
+                      <p id="studioEditorSelectionGuide" class="studio-editor-selection-guide">축 전체 포인트 생성 후 편집 가능</p>
+                    </div>
+                    <div class="studio-editor-conversion-controls">
+                      <label class="compact-field studio-editor-inspector-field"><span>정밀도</span>
+                        <select id="studioEditorApproximationTolerance">
+                          <option value="0.5">부드럽게 (0.5°)</option>
+                          <option value="0.1" selected>표준 (0.1°)</option>
+                          <option value="0.02">정밀하게 (0.02°)</option>
+                        </select>
+                      </label>
+                      <label class="compact-field studio-editor-inspector-field"><span>곡선</span>
+                        <select id="studioEditorApproximationOrder">
+                          <option value="1">1차 (직선)</option>
+                          <option value="3" selected>3차 (부드럽게)</option>
+                          <option value="5">5차 (더 부드럽게)</option>
+                        </select>
+                      </label>
+                      <label class="compact-field studio-editor-inspector-field"><span>포인트 수</span>
+                        <input id="studioEditorApproximationMaximumPoints" type="number" min="3" max="200" step="1" value="200">
+                      </label>
+                      <button id="studioEditorCreatePointsButton" type="button">전체 포인트 생성</button>
+                    </div>
+                    <div class="studio-editor-operations hidden">
+                      <select id="studioEditorOperation" class="hidden" aria-hidden="true" tabindex="-1">
+                        <option value="time_scale">시간 배율</option>
+                        <option value="value_scale">모션값 배율</option>
+                        <option value="time_shift">시간 이동</option>
+                        <option value="value_offset">모션값 이동</option>
+                        <option value="point_curve">포인트 곡선</option>
+                      </select>
+                      <div class="studio-editor-operation-choices" role="radiogroup" aria-label="편집 기능">
+                        <button type="button" data-studio-editor-operation="time_shift" aria-pressed="false">시간 이동</button>
+                        <button type="button" data-studio-editor-operation="time_scale" aria-pressed="true">시간 배율</button>
+                        <button type="button" data-studio-editor-operation="value_offset" aria-pressed="false">모션값 이동</button>
+                        <button type="button" data-studio-editor-operation="value_scale" aria-pressed="false">모션값 배율</button>
+                        <button class="studio-editor-point-operation" type="button" data-studio-editor-operation="point_curve" aria-pressed="false">포인트 곡선</button>
+                      </div>
+                      <label class="compact-field hidden" data-studio-editor-value="offset"><span>이동값(°)</span><input id="studioEditorOffset" type="number" step="0.1" value="0"></label>
+                      <label class="compact-field" data-studio-editor-value="factor"><span id="studioEditorFactorLabel">시간 배율</span><input id="studioEditorFactor" type="number" min="0.01" max="100" step="0.01" value="1.00"></label>
+                      <label class="compact-field hidden" data-studio-editor-value="delta"><span>이동값(ms)</span><input id="studioEditorDelta" type="number" step="20" value="0"></label>
+                      <div id="studioEditorPointControls" class="studio-editor-point-controls hidden" data-studio-editor-value="points">
+                        <button id="studioEditorPointAddButton" class="primary" type="button" disabled>포인트 추가</button>
+                        <label class="compact-field"><span>곡선</span><select id="studioEditorPointCurveOrder">
+                          <option value="1">직선</option><option value="3" selected>3차 곡선</option><option value="5">5차 곡선</option>
+                        </select></label>
+                        <label class="compact-field"><span>끝(초)</span><input id="studioEditorPointTimelineEnd" type="number" min="0.02" step="0.02" value="10.00"></label>
+                        <label class="compact-field"><span>시간(초)</span><input id="studioEditorPointTime" type="number" min="0" step="0.02" disabled></label>
+                        <label class="compact-field"><span>모션값(°)</span><input id="studioEditorPointValue" type="number" step="0.01" disabled></label>
+                        <label class="compact-field"><span>탄젠트</span><select id="studioEditorPointMode" disabled>
+                          <option value="auto">자동</option><option value="smooth">부드럽게</option><option value="broken">분리</option>
+                        </select></label>
+                      </div>
+                    </div>
+                    <div id="studioEditorOperationHelp" class="studio-editor-operation-help hidden">선택한 포인트의 시간을 조절합니다.</div>
+                  </section>
+                  <section id="studioEditorDangerZone" class="studio-editor-danger-zone hidden">
+                    <button id="studioEditorPointDeleteButton" class="off" type="button" disabled>포인트 삭제</button>
+                  </section>
                 </div>
-                <div id="studioEditorOperationHelp" class="studio-editor-operation-help">선택한 포인트의 시간을 조절합니다.</div>
-              </section>
-              <section id="studioEditorDangerZone" class="studio-editor-danger-zone hidden">
-                <strong>포인트 관리</strong>
-                <small>선택한 포인트에 적용합니다.</small>
-                <button id="studioEditorPointDeleteButton" class="off" type="button" disabled>포인트 삭제</button>
-              </section>
-            </aside>
+              </aside>
+            </div>
           </div>
         </section>
       </div>
@@ -1538,6 +1565,6 @@
       </div>
     </div>
 
-    <script type="module" src="/static/app.js?v=20260727-point-editor-simple-1"></script>
+    <script type="module" src="/static/app.js?v=20260727-editor-compact-feedback-1"></script>
   </body>
 </html>
