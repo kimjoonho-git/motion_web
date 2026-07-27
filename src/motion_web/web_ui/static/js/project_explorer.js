@@ -12,10 +12,10 @@ import {
   openProjectFileEditor,
   projectFileDownloadUrl,
   renameProjectFile,
-  saveProjectFile,
   saveProjectMemo,
   selectProject,
 } from './api.js?v=20260722-motor-config-delete';
+import { showConfirm, showPrompt } from './ui_dialogs.js?v=20260727-popup-common-3';
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (character) => ({
@@ -54,7 +54,8 @@ export function createProjectExplorerController({
   onProjectChange = async () => {},
 }) {
   const state = {
-    projects: [], project: null, tree: [], selectedFile: null, busy: false, projectRoot: '',
+    projects: [], project: null, tree: [], selectedFile: null, projectInfoFile: null,
+    fileActionMenuOpen: false, busy: false, projectRoot: '',
     copySourceProjectId: '', copySourceTree: [], runtimeProjectId: '', memoDraft: '', memoDirty: false,
     memoError: '',
     projectGeneration: null,
@@ -243,26 +244,50 @@ export function createProjectExplorerController({
   }
 
   function renderEditor() {
-    const file = state.selectedFile;
-    const readOnly = Boolean(file?.read_only);
+    const file = state.projectInfoFile;
     if (el.projectFileEditorTitle) {
       el.projectFileEditorTitle.textContent = file
-        ? (file.relative_path || `${file.category} / ${file.file_name}`)
-        : '파일을 선택하세요';
+        ? (file.relative_path || file.file_name || 'project.json')
+        : 'project.json';
     }
     if (el.projectFileEditor) {
       el.projectFileEditor.value = file?.content || '';
-      el.projectFileEditor.disabled = !file || state.busy;
-      el.projectFileEditor.readOnly = readOnly;
+      el.projectFileEditor.disabled = !file;
+      el.projectFileEditor.readOnly = true;
     }
     if (el.projectFileInfo) {
       el.projectFileInfo.textContent = file
-        ? `${readOnly ? '읽기 전용 · ' : ''}${formatBytes(file.size)} · SHA-256 ${String(file.sha256 || '').slice(0, 12)}…`
-        : '프로젝트 파일은 편집해도 실제 장비에 자동 적용되지 않습니다.';
+        ? (
+          file.load_error
+            ? `읽기 실패 · ${file.load_error}`
+            : `읽기 전용 · ${formatBytes(file.size)} · SHA-256 ${String(file.sha256 || '').slice(0, 12)}…`
+        )
+        : '프로젝트 선택 필요';
     }
-    const disabled = !file || state.busy || readOnly;
+  }
+
+  function closeFileActionMenu() {
+    state.fileActionMenuOpen = false;
+    el.projectFileActionMenu?.classList.add('hidden');
+  }
+
+  function renderFileActionMenu() {
+    const file = state.selectedFile;
+    const disabled = !file || state.busy || Boolean(file.read_only);
+    if (el.projectFileActionTitle) {
+      el.projectFileActionTitle.textContent = file?.file_name || '프로젝트 파일';
+    }
+    const activeLabels = {
+      motor_axes: '현재 모터축 설정으로 선택',
+      motion_axis_matching: '현재 모션축 설정으로 선택',
+      motions: '현재 모션 파일로 선택',
+      layers: '현재 레이어로 선택',
+    };
+    if (el.projectFileActivateButton) {
+      el.projectFileActivateButton.textContent =
+        activeLabels[file?.category] || '현재 파일로 선택';
+    }
     for (const button of [
-      el.projectFileSaveButton,
       el.projectFileOpenEditorButton,
       el.projectFileRenameButton,
       el.projectFileActivateButton,
@@ -271,6 +296,30 @@ export function createProjectExplorerController({
     ]) {
       if (button) button.disabled = disabled;
     }
+    el.projectFileActionMenu?.classList.toggle(
+      'hidden',
+      !state.fileActionMenuOpen || disabled,
+    );
+  }
+
+  function openFileActionMenu(anchorRect) {
+    if (!el.projectFileActionMenu || !state.selectedFile) return;
+    state.fileActionMenuOpen = true;
+    renderFileActionMenu();
+    const menu = el.projectFileActionMenu;
+    const margin = 8;
+    const width = menu.offsetWidth;
+    const height = menu.offsetHeight;
+    const left = Math.min(
+      Math.max(anchorRect.right - width, margin),
+      Math.max(window.innerWidth - width - margin, margin),
+    );
+    const below = anchorRect.bottom + 4;
+    const top = below + height <= window.innerHeight - margin
+      ? below
+      : Math.max(anchorRect.top - height - 4, margin);
+    menu.style.left = `${Math.round(left)}px`;
+    menu.style.top = `${Math.round(top)}px`;
   }
 
   function renderSetupProgress() {
@@ -315,7 +364,7 @@ export function createProjectExplorerController({
         || !memoSupported() || !state.memoDirty;
     }
     if (el.projectUsbHelp && state.projectRoot) {
-      el.projectUsbHelp.textContent = `USB 프로젝트 폴더 복사 위치: ${state.projectRoot}`;
+      el.projectUsbHelp.textContent = `프로젝트 저장 위치 · ${state.projectRoot}`;
     }
   }
 
@@ -326,14 +375,14 @@ export function createProjectExplorerController({
     if (el.projectMemoCount) el.projectMemoCount.textContent = `${state.memoDraft.length} / 4000`;
     if (el.projectMemoStatus) {
       const status = !state.project
-        ? '프로젝트를 선택하면 메모를 입력할 수 있습니다'
+        ? '프로젝트 선택 필요'
         : !memoSupported()
-          ? '메모 저장 기능을 사용하려면 프로그램 재시작이 필요합니다'
+          ? '프로그램 재시작 필요'
           : state.memoError
-            ? `저장 실패: ${state.memoError}`
+            ? `저장 실패 · ${state.memoError}`
             : state.memoDirty
-              ? '저장하지 않은 변경이 있습니다'
-              : 'project.json에 저장됨';
+              ? '저장되지 않음'
+              : 'project.json · 저장됨';
       el.projectMemoStatus.textContent = status;
       el.projectMemoStatus.classList.toggle('unsaved', state.memoDirty);
       el.projectMemoStatus.classList.toggle('error-text', Boolean(state.memoError)
@@ -348,6 +397,25 @@ export function createProjectExplorerController({
     renderSetupProgress();
     renderControls();
     renderProjectMemo();
+    renderFileActionMenu();
+  }
+
+  async function loadProjectInfoFile(projectId, relativePath = 'project.json') {
+    if (!projectId) {
+      state.projectInfoFile = null;
+      return;
+    }
+    try {
+      state.projectInfoFile = await fetchReadOnlyProjectFile(projectId, relativePath);
+    } catch (error) {
+      state.projectInfoFile = {
+        file_name: relativePath.split('/').pop() || 'project.json',
+        relative_path: relativePath,
+        content: '',
+        load_error: error.message || String(error),
+        read_only: true,
+      };
+    }
   }
 
   async function loadProject(projectId, select = false) {
@@ -358,6 +426,8 @@ export function createProjectExplorerController({
     state.project = payload.project || null;
     state.tree = payload.tree || [];
     state.selectedFile = null;
+    closeFileActionMenu();
+    await loadProjectInfoFile(state.project?.project_id);
     if (!preserveMemoDraft) loadMemoDraft();
     render();
   }
@@ -381,6 +451,8 @@ export function createProjectExplorerController({
         state.project = null;
         state.tree = [];
         state.selectedFile = null;
+        state.projectInfoFile = null;
+        closeFileActionMenu();
         loadMemoDraft();
       }
       if (!silent || el.projectExplorerMessage?.textContent.includes('불러오는 중')) {
@@ -409,6 +481,9 @@ export function createProjectExplorerController({
         if (changedProject) loadMemoDraft();
       }
       if (payload.tree) state.tree = payload.tree;
+      if (state.project?.project_id) {
+        await loadProjectInfoFile(state.project.project_id);
+      }
       setMessage(successMessage);
       const list = await fetchProjects();
       state.projects = list.projects || [];
@@ -449,11 +524,11 @@ export function createProjectExplorerController({
     state.busy = true;
     renderControls();
     try {
-      state.selectedFile = await fetchReadOnlyProjectFile(
+      state.projectInfoFile = await fetchReadOnlyProjectFile(
         state.project.project_id, relativePath,
       );
       setMessage(`${relativePath} 원문 열기 완료 · 읽기 전용`);
-      onManageFile(state.selectedFile);
+      onManageFile(state.projectInfoFile);
     } catch (error) {
       setMessage(error.message, true);
     } finally {
@@ -501,6 +576,7 @@ export function createProjectExplorerController({
         const payload = await saveProjectMemo(state.project.project_id, state.memoDraft);
         state.project = payload.project;
         loadMemoDraft();
+        await loadProjectInfoFile(state.project?.project_id);
         const list = await fetchProjects();
         state.projects = list.projects || [];
         state.runtimeProjectId = list.runtime_project_id || '';
@@ -516,7 +592,10 @@ export function createProjectExplorerController({
     el.projectExplorerSelect?.addEventListener('change', async () => {
       const projectId = el.projectExplorerSelect.value;
       if (!projectId) return;
-      if (state.memoDirty && !window.confirm('저장하지 않은 프로젝트 메모가 있습니다. 변경을 버리고 다른 프로젝트로 이동할까요?')) {
+      if (state.memoDirty && !await showConfirm(
+        '저장하지 않은 프로젝트 메모가 있습니다. 변경을 버리고 다른 프로젝트로 이동할까요?',
+        { title: '프로젝트 전환', confirmLabel: '변경 버리기', tone: 'warning' },
+      )) {
         el.projectExplorerSelect.value = state.project?.project_id || '';
         return;
       }
@@ -527,7 +606,11 @@ export function createProjectExplorerController({
       if (changed) await onProjectChange(state.project, state.projectGeneration);
     });
     el.projectCreateButton?.addEventListener('click', async () => {
-      const name = window.prompt('새 프로젝트 이름을 입력하세요', '새 모션 프로젝트');
+      const name = await showPrompt('새 프로젝트 이름을 입력하세요', {
+        title: '새 프로젝트',
+        defaultValue: '새 모션 프로젝트',
+        confirmLabel: '생성',
+      });
       if (!name?.trim()) return;
       const created = await run(
         () => createProject({ name: name.trim() }),
@@ -538,9 +621,14 @@ export function createProjectExplorerController({
     el.projectDeleteButton?.addEventListener('click', async () => {
       if (!state.project || state.busy) return;
       const expected = String(state.project.name || '');
-      const entered = window.prompt(
+      const entered = await showPrompt(
         `프로젝트와 관련 파일을 복구할 수 없도록 영구 삭제합니다.\n확인하려면 프로젝트 이름을 입력하세요.\n\n${expected}`,
-        '',
+        {
+          title: '프로젝트 영구 삭제',
+          defaultValue: '',
+          confirmLabel: '삭제',
+          tone: 'danger',
+        },
       );
       if (entered !== expected) {
         if (entered !== null) setMessage('프로젝트 이름이 일치하지 않아 삭제하지 않았습니다', true);
@@ -557,6 +645,8 @@ export function createProjectExplorerController({
         state.project = null;
         state.tree = [];
         state.selectedFile = null;
+        state.projectInfoFile = null;
+        closeFileActionMenu();
         state.copySourceProjectId = '';
         state.copySourceTree = [];
         loadMemoDraft();
@@ -658,8 +748,9 @@ export function createProjectExplorerController({
         return;
       }
       if (event.target.closest('[data-project-manage]')) {
+        const anchorRect = event.target.closest('[data-project-manage]').getBoundingClientRect();
         const opened = await openFile(category, fileName);
-        if (opened && state.selectedFile) await onManageFile(state.selectedFile);
+        if (opened && state.selectedFile) openFileActionMenu(anchorRect);
         return;
       }
       if (event.target.closest('[data-project-open]')) {
@@ -670,20 +761,10 @@ export function createProjectExplorerController({
       const button = event.target.closest('[data-setup-workspace]');
       if (button) onNavigate(button.dataset.setupWorkspace, button.dataset.setupMotionTab);
     });
-    el.projectFileSaveButton?.addEventListener('click', async () => {
-      const file = state.selectedFile;
-      if (!file || !state.project) return;
-      await run(async () => {
-        const saved = await saveProjectFile(
-          state.project.project_id, file.category, file.file_name, el.projectFileEditor.value,
-        );
-        state.selectedFile = saved;
-        return fetchProject(state.project.project_id);
-      }, `${file.file_name} 저장 완료 · 장비에는 적용되지 않았습니다`);
-    });
     el.projectFileOpenEditorButton?.addEventListener('click', async () => {
       const file = state.selectedFile;
       if (!file || !state.project || state.busy) return;
+      closeFileActionMenu();
       state.busy = true;
       renderControls();
       try {
@@ -702,7 +783,12 @@ export function createProjectExplorerController({
     el.projectFileRenameButton?.addEventListener('click', async () => {
       const file = state.selectedFile;
       if (!file || !state.project) return;
-      const newName = window.prompt('새 파일명을 입력하세요', file.file_name);
+      closeFileActionMenu();
+      const newName = await showPrompt('새 파일명을 입력하세요', {
+        title: '파일명 변경',
+        defaultValue: file.file_name,
+        confirmLabel: '변경',
+      });
       if (!newName?.trim() || newName.trim() === file.file_name) return;
       await run(
         () => renameProjectFile(state.project.project_id, file.category, file.file_name, newName.trim()),
@@ -714,6 +800,7 @@ export function createProjectExplorerController({
     el.projectFileActivateButton?.addEventListener('click', async () => {
       const file = state.selectedFile;
       if (!file || !state.project) return;
+      closeFileActionMenu();
       await run(
         () => activateProjectFile(state.project.project_id, file.category, file.file_name),
         '프로젝트의 현재 파일로 선택했습니다 · 실제 장비에는 적용되지 않았습니다',
@@ -722,6 +809,7 @@ export function createProjectExplorerController({
     el.projectFileExportButton?.addEventListener('click', () => {
       const file = state.selectedFile;
       if (!file || !state.project) return;
+      closeFileActionMenu();
       const anchor = document.createElement('a');
       anchor.href = projectFileDownloadUrl(state.project.project_id, file.category, file.file_name);
       anchor.download = file.file_name;
@@ -730,7 +818,11 @@ export function createProjectExplorerController({
     el.projectFileDeleteButton?.addEventListener('click', async () => {
       const file = state.selectedFile;
       if (!file || !state.project) return;
-      if (!window.confirm(`${file.file_name} 파일을 프로젝트 휴지통으로 이동할까요?`)) return;
+      closeFileActionMenu();
+      if (!await showConfirm(
+        `${file.file_name} 파일을 프로젝트 휴지통으로 이동할까요?`,
+        { title: '파일 삭제', confirmLabel: '삭제', tone: 'danger' },
+      )) return;
       await run(
         () => deleteProjectFile(state.project.project_id, file.category, file.file_name),
         '파일을 프로젝트 휴지통으로 이동했습니다',
@@ -738,6 +830,20 @@ export function createProjectExplorerController({
       state.selectedFile = null;
       render();
     });
+    document.addEventListener('pointerdown', (event) => {
+      if (
+        state.fileActionMenuOpen
+        && !event.target.closest('#projectFileActionMenu')
+        && !event.target.closest('[data-project-manage]')
+      ) {
+        closeFileActionMenu();
+      }
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') closeFileActionMenu();
+    });
+    window.addEventListener('resize', closeFileActionMenu);
+    window.addEventListener('scroll', closeFileActionMenu, true);
   }
 
   return { bindEvents, refresh };

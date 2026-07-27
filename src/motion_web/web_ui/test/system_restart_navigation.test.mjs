@@ -17,21 +17,19 @@ test('program and motor-control restart actions keep distinct API routes', () =>
   );
 });
 
-test('header restart controls delegate to the guarded system controls', () => {
-  assert.match(html, /id="headerMotorControlRestartButton"[\s\S]*?id="headerProgramRestartButton"/);
+test('program restart stays in the header and motor restart stays in motor management', () => {
+  assert.doesNotMatch(html, /id="headerMotorControlRestartButton"/);
+  assert.match(html, /id="headerProgramRestartButton"/);
   assert.match(html, /id="programRestartButton"[^>]*>프로그램 재시작</);
   assert.match(
     html,
-    /id="motorControlRestartButton"[^>]*>모터 제어 시스템 재시작</,
+    /class="motor-readiness-overview"[\s\S]*?id="motorControlRestartButton"[^>]*>모터 제어 재시작</,
   );
   assert.match(
     main,
     /headerProgramRestartButton\.addEventListener\('click'[\s\S]*?programRestartButton\.click\(\)/,
   );
-  assert.match(
-    main,
-    /headerMotorControlRestartButton\.addEventListener\('click'[\s\S]*?motorControlRestartButton\.click\(\)/,
-  );
+  assert.doesNotMatch(main, /headerMotorControlRestartButton/);
 });
 
 test('restart controls require confirmation and invoke only their matching operation', () => {
@@ -42,10 +40,10 @@ test('restart controls require confirmation and invoke only their matching opera
     /if \(el\.motorControlRestartButton\) \{([\s\S]*?)\n\}\n\nif \(el\.headerProgramRestartButton\)/,
   )?.[1] || '';
 
-  assert.match(programHandler, /window\.confirm/);
+  assert.match(programHandler, /await appDialogs\.confirm/);
   assert.match(programHandler, /restartManagedProgram\(\)/);
   assert.doesNotMatch(programHandler, /restartMotorControlSystem\(\)/);
-  assert.match(motorHandler, /window\.confirm/);
+  assert.match(motorHandler, /await appDialogs\.confirm/);
   assert.match(motorHandler, /restartMotorControlSystem\(\)/);
   assert.doesNotMatch(motorHandler, /restartManagedProgram\(\)/);
 });
@@ -54,7 +52,7 @@ test('program restart readiness does not require motor runtime state', () => {
   assert.match(main, /restartCheckMode: ''/);
   assert.match(
     main,
-    /if \(appState\.restartCheckMode === 'program'\)[\s\S]*?title: '프로그램 재시작 완료'[\s\S]*?const runtime = payload\?\.service_management\?\.runtime/,
+    /if \(restartMode === 'program'\)[\s\S]*?title: '프로그램 재시작 완료'[\s\S]*?const runtime = payload\?\.service_management\?\.runtime/,
   );
   assert.match(
     main,
@@ -64,4 +62,17 @@ test('program restart readiness does not require motor runtime state', () => {
     main,
     /onConfigApplyStart:[\s\S]*?restartCheckMode = 'motor_apply'/,
   );
+});
+
+test('motor-control restart waits for a new motor status and has a timeout', () => {
+  assert.match(
+    main,
+    /restartCheckMode = 'motor_control'[\s\S]*?restartPreviousMotorStatusAt[\s\S]*?restartMotorControlSystem\(\)/,
+  );
+  assert.match(
+    main,
+    /restartMode === 'motor_control'[\s\S]*?새로운 motor_status 수신 대기/,
+  );
+  assert.match(main, /RESTART_TIMEOUT_MS = 45000/);
+  assert.match(main, /startRestartProgressPolling\(\)/);
 });

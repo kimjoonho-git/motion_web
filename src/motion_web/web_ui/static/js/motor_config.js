@@ -42,6 +42,7 @@ import {
   modelTextFromDevice,
   runtimeIsDynamixel,
 } from './motor_type_dynamixel.js';
+import { showConfirm, showPrompt } from './ui_dialogs.js?v=20260727-popup-common-3';
 
 export function isEditableMotorConfigPath(pathValue) {
   const path = String(pathValue || '');
@@ -99,6 +100,7 @@ export function motorConfigApplyIdentityBlock(identityError, scanAvailable, alia
 
 export function createMotorConfigController({
   el,
+  operationProgress,
   getLatestState,
   renderLatestState,
   onWorkContextChange,
@@ -106,6 +108,7 @@ export function createMotorConfigController({
   onConfigApplyStart,
   onConfigApplyComplete,
   onIdentityStatusChange,
+  onAcServoControl,
 }) {
   let activeRegistrationTab = 'ac_servo';
   let latestScan = null;
@@ -164,30 +167,19 @@ export function createMotorConfigController({
     }
   }
 
-  function closeScanProgressPopup() {
-    stopScanProgressPolling();
-    el.motorScanProgressModal?.classList.add('hidden');
-    document.body.classList.remove('modal-open');
-  }
-
-  function clearScanProgressPopup() {
-    el.motorScanProgressList?.replaceChildren();
-  }
-
   function appendScanProgressLine(message, state = '') {
-    if (!el.motorScanProgressList) return;
     const fullMessage = String(message || '');
     const displayMessage = conciseMotorScanMessage(fullMessage);
-    const line = document.createElement('div');
-    line.className = `motor-scan-progress-line${state ? ` is-${state}` : ''}`;
-    line.textContent = displayMessage;
-    if (displayMessage !== fullMessage) line.title = fullMessage;
-    el.motorScanProgressList.appendChild(line);
-    el.motorScanProgressList.scrollTop = el.motorScanProgressList.scrollHeight;
+    const normalizedState = {
+      failed: 'failure',
+      warning: 'partial',
+      done: 'success',
+    }[state] || 'running';
+    operationProgress?.appendLog(displayMessage, normalizedState);
   }
 
   async function pollScanProgress() {
-    if (!el.motorScanProgressModal || el.motorScanProgressModal.classList.contains('hidden')) return;
+    if (!operationProgress?.activeId().startsWith('scan:')) return;
     try {
       const payload = await fetchMotorScanProgress();
       const progress = payload?.progress || {};
@@ -197,9 +189,7 @@ export function createMotorConfigController({
       if (!scanProgressActiveId) {
         scanProgressActiveId = scanId;
         scanProgressRenderedCount = 0;
-        if (el.motorScanProgressState) {
-          el.motorScanProgressState.title = `스캔 ID ${scanId}`;
-        }
+        operationProgress.update({ detail: `스캔 ID ${scanId}` });
       }
       const events = Array.isArray(progress.events) ? progress.events : [];
       events.slice(scanProgressRenderedCount).forEach((event) => {
@@ -214,12 +204,9 @@ export function createMotorConfigController({
         appendScanProgressLine(String(event.message || phase || '스캔 진행 중'), lineState);
       });
       scanProgressRenderedCount = events.length;
-      if (el.motorScanProgressState) {
-        el.motorScanProgressState.textContent = progress.running
-          ? '실시간 스캔 진행 중'
-          : '스캔 종료';
-        el.motorScanProgressState.dataset.state = progress.running ? 'running' : 'done';
-      }
+      operationProgress.update({
+        phase: progress.running ? '실시간 스캔 진행 중' : '스캔 종료 확인',
+      });
       if (!progress.running && scanProgressActiveId) stopScanProgressPolling();
     } catch (error) {
       if (!error?.staleProjectResponse) {
@@ -228,20 +215,21 @@ export function createMotorConfigController({
     }
   }
 
-  async function openScanProgressPopup(title) {
+  async function openScanProgressPopup(id, title) {
     stopScanProgressPolling();
     scanProgressBaselineId = '';
     scanProgressActiveId = '';
     scanProgressRenderedCount = 0;
-    if (el.motorScanProgressTitle) el.motorScanProgressTitle.textContent = title;
-    if (el.motorScanProgressState) {
-      el.motorScanProgressState.textContent = '스캔 요청 준비 중';
-      el.motorScanProgressState.dataset.state = 'running';
-    }
-    if (el.motorScanProgressList) el.motorScanProgressList.replaceChildren();
+    const started = operationProgress?.begin({
+      id,
+      title,
+      message: '물리 모터 검색을 실행하고 있습니다.',
+      detail: '새 스캔 요청 준비',
+      phase: '스캔 요청 준비 중',
+      mode: 'log',
+    });
+    if (!started) return false;
     appendScanProgressLine('새 직접 스캔 요청을 전송합니다', 'running');
-    el.motorScanProgressModal?.classList.remove('hidden');
-    document.body.classList.add('modal-open');
     try {
       const payload = await fetchMotorScanProgress();
       scanProgressBaselineId = String(payload?.progress?.scan_id || '');
@@ -249,6 +237,7 @@ export function createMotorConfigController({
       scanProgressBaselineId = '';
     }
     scanProgressTimer = window.setInterval(pollScanProgress, 100);
+    return true;
   }
 
   async function finishScanProgressPopup(success, fallbackMessage, outcome = '') {
@@ -256,11 +245,13 @@ export function createMotorConfigController({
     if (!scanProgressActiveId && fallbackMessage) {
       appendScanProgressLine(fallbackMessage, success ? 'done' : 'failed');
     }
-    if (el.motorScanProgressState) {
-      const partial = outcome === 'partial';
-      el.motorScanProgressState.textContent = success ? '스캔 완료' : (partial ? '스캔 부분 완료' : '스캔 실패');
-      el.motorScanProgressState.dataset.state = success ? 'done' : (partial ? 'warning' : 'failed');
-    }
+    const partial = outcome === 'partial';
+    operationProgress?.finish({
+      outcome: success ? 'success' : (partial ? 'partial' : 'failure'),
+      title: success ? '모터 검색 완료' : (partial ? '모터 검색 부분 완료' : '모터 검색 실패'),
+      message: fallbackMessage,
+      detail: scanProgressActiveId ? `스캔 ID ${scanProgressActiveId}` : '스캔 결과 확인',
+    });
     stopScanProgressPolling();
   }
 
@@ -769,12 +760,6 @@ export function createMotorConfigController({
     if (el.updateConfigTableButton) {
       el.updateConfigTableButton.disabled = !hasConfigTableDrafts();
       el.updateConfigTableButton.textContent = '표 변경값을 초안에 반영';
-    }
-    if (el.saveConfigTableButton) {
-      el.saveConfigTableButton.disabled = hasConfigTableDrafts() || !hasMotorConfigTableSaveChanges();
-      el.saveConfigTableButton.textContent = hasConfigTableDrafts()
-        ? '초안 반영 필요'
-        : '설정 파일 저장';
     }
   }
 
@@ -1616,6 +1601,393 @@ export function createMotorConfigController({
     return ['설정됨', 'matched'];
   }
 
+  function finiteRuntimeNumber(value) {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  function rowDeviceIdentity(row) {
+    const runtime = row.runtimeMotor || {};
+    if (rowMotorType(row) === 'ac_servo') {
+      const model = firstDefined(
+        row.scanRow?.driver_model,
+        row.scanRow?.device_name,
+        row.motor?.identity?.driver_model,
+        driverLabel(row),
+      );
+      const serial = firstDefined(
+        row.scanRow?.serial_number,
+        runtime.serial_number,
+      );
+      return {
+        title: model || 'AC 서보',
+        detail: serial === null || serial === undefined || serial === ''
+          ? 'Serial 미수신'
+          : `Serial ${serial}`,
+      };
+    }
+    if (rowMotorType(row) === 'dynamixel') {
+      const model = firstDefined(
+        row.scanDevice?.model_name,
+        row.scanDevice?.model_number,
+        runtime.model_name,
+        driverLabel(row),
+      );
+      const firmware = firstDefined(row.scanDevice?.firmware_version, runtime.firmware_version);
+      return {
+        title: model ? `Dynamixel ${model}` : 'Dynamixel',
+        detail: firmware === null || firmware === undefined
+          ? `${axisIdLabel(row)} · FW 미수신`
+          : `${axisIdLabel(row)} · FW ${firmware}`,
+      };
+    }
+    return { title: driverLabel(row), detail: axisIdLabel(row) };
+  }
+
+  function rowConnectionIdentity(row) {
+    if (rowMotorType(row) === 'ac_servo') {
+      return {
+        title: `${axisIdLabel(row)} · Slave ${displayText(acIdentityValue(row, 'slave_position'))}`,
+        detail: `EEPROM ${displayText(directScanAliasValue(row))} · Station ${displayText(acIdentityValue(row, 'rotary_alias'))}`,
+      };
+    }
+    const motor = row.motor || row.proposedMotor;
+    const port = firstDefined(
+      row.scanDevice?.port,
+      motor?.identity?.serial_port,
+      motor?.config?.serial_port,
+      row.runtimeMotor?.serial_port,
+    );
+    return {
+      title: axisIdLabel(row),
+      detail: port ? String(port) : '직렬 포트 미수신',
+    };
+  }
+
+  function rowMappingView(row) {
+    const runtime = row.runtimeMotor;
+    if (!row.motor || row.motor.deleted || !row.motor.enabled) {
+      return { text: '미사용 축', detail: '모션 적용 제외', className: 'unknown', ready: false };
+    }
+    if (!runtime) {
+      return { text: '확인 불가', detail: '실행 상태 미수신', className: 'review', ready: false };
+    }
+    if (runtime.motion_axis_configured === true && runtime.motion_id) {
+      return {
+        text: '매칭됨',
+        detail: `Motion ${runtime.motion_id}`,
+        className: 'matched',
+        ready: true,
+      };
+    }
+    if (runtime.motion_axis_configured === true) {
+      return { text: '매칭 오류', detail: 'Motion ID 중복·누락', className: 'duplicate', ready: false };
+    }
+    return { text: '미매칭', detail: '모션축 설정 필요', className: 'review', ready: false };
+  }
+
+  function rowDriveView(row) {
+    const runtime = row.runtimeMotor;
+    const driveName = rowMotorType(row) === 'dynamixel' ? '토크' : '서보';
+    if (!runtime) {
+      return { text: `${driveName} 확인 불가`, detail: '실행 상태 미수신', className: 'review', ready: false };
+    }
+    if (runtime.fault) {
+      return { text: '오류 발생', detail: runtime.error_text || runtime.error || '장치 오류 확인', className: 'duplicate', ready: false };
+    }
+    const ready = runtime.servo_on === true;
+    return {
+      text: `${driveName} ${ready ? 'ON' : 'OFF'}`,
+      detail: rowMotorType(row) === 'dynamixel'
+        ? 'Torque Enable 상태'
+        : '서보 드라이버 상태',
+      className: ready ? 'matched' : 'review',
+      ready,
+    };
+  }
+
+  function rowMotionPermissionView(row, mapping, drive) {
+    const runtime = row.runtimeMotor;
+    const latest = getLatestState?.() || {};
+    const context = latest.execution_context || {};
+    if (!row.motor || row.motor.deleted || !row.motor.enabled) {
+      return { text: '사용 안 함', detail: '프로젝트에서 비활성', className: 'unknown', ready: false };
+    }
+    if (!runtime || runtime.state !== 'detected') {
+      return { text: '동작 차단', detail: '모터 연결 확인 필요', className: 'duplicate', ready: false };
+    }
+    if (runtime.fault) {
+      return { text: '동작 차단', detail: '장치 오류 해제 필요', className: 'duplicate', ready: false };
+    }
+    const current = finiteRuntimeNumber(firstDefined(runtime.position_deg, runtime.position));
+    const lower = finiteRuntimeNumber(runtime.lower);
+    const upper = finiteRuntimeNumber(runtime.upper);
+    if (current === null) {
+      return { text: '동작 차단', detail: '현재 위치 미수신', className: 'duplicate', ready: false };
+    }
+    if (lower === null || upper === null || lower > upper) {
+      return { text: '동작 차단', detail: 'lower / upper 확인 필요', className: 'duplicate', ready: false };
+    }
+    if (current < lower || current > upper) {
+      return { text: '범위 복귀만', detail: `${lower.toFixed(1)}° ~ ${upper.toFixed(1)}°`, className: 'review', ready: false };
+    }
+    if (!drive.ready) {
+      return { text: '동작 대기', detail: `${rowMotorType(row) === 'dynamixel' ? '토크' : '서보'} ON 필요`, className: 'review', ready: false };
+    }
+    if (!context.ready) {
+      return { text: '동작 대기', detail: '실행 설정 적용 필요', className: 'review', ready: false };
+    }
+    return { text: '조그·동작 가능', detail: '현재 조건 충족', className: 'matched', ready: true };
+  }
+
+  function rowMotionRunView(row, mapping, permission) {
+    const run = getLatestState?.()?.motion_run_status || {};
+    if (!mapping.ready) {
+      return { text: '실행 불가', detail: mapping.detail, className: 'review', ready: false };
+    }
+    if (!permission.ready) {
+      return { text: '실행 대기', detail: permission.detail, className: 'review', ready: false };
+    }
+    if (run.active || run.running) {
+      return { text: '모션 실행 중', detail: '현재 실행 상태', className: 'configured', ready: true };
+    }
+    return {
+      text: '실행 가능',
+      detail: '축별 실행 이력은 미지원',
+      className: 'matched',
+      ready: true,
+    };
+  }
+
+  function rowOverallView(row, mapping, drive, permission, motionRun) {
+    if (!row.motor || row.motor.deleted || !row.motor.enabled) {
+      return { text: '관리 제외', detail: '미사용 축', className: 'unknown', ready: false };
+    }
+    if (row.runtimeMotor?.fault) {
+      return { text: '오류', detail: '오류 팝업에서 확인', className: 'duplicate', ready: false };
+    }
+    const physicalMatched = rowMotorType(row) === 'ac_servo'
+      ? Boolean(row.scanRow)
+      : rowMotorType(row) === 'dynamixel'
+        ? Boolean(row.scanDevice)
+        : false;
+    if (!physicalMatched) {
+      return { text: '물리 확인 필요', detail: '장비 검색 후 판정', className: 'review', ready: false };
+    }
+    if (permission.text === '범위 복귀만') {
+      return { text: '복귀 필요', detail: '경계 복귀 후 재확인', className: 'review', ready: false };
+    }
+    if (mapping.ready && drive.ready && permission.ready && motionRun.ready) {
+      return { text: '구동 준비', detail: '실물 검증 미확인', className: 'matched', ready: true };
+    }
+    return { text: '준비 중', detail: permission.detail || mapping.detail, className: 'review', ready: false };
+  }
+
+  function motorStatusTypeKey(motor) {
+    const type = String(motor?.motor_type || motor?.motor_type_label || '').toLowerCase();
+    const transport = String(motor?.transport || motor?.transport_label || '').toLowerCase();
+    if (type.includes('dynamixel')) return 'dynamixel';
+    if (type.includes('cubemars')) return 'cubemars';
+    if (
+      type.includes('ac_servo') ||
+      type.includes('ac servo') ||
+      type.includes('minas') ||
+      transport.includes('ethercat')
+    ) return 'ac_servo';
+    return 'unknown';
+  }
+
+  function motorStatusTypeLabel(key) {
+    if (key === 'ac_servo') return 'AC 서보';
+    if (key === 'dynamixel') return 'Dynamixel';
+    if (key === 'cubemars') return 'CubeMars';
+    return '기타·확인 불가';
+  }
+
+  function countMotorsByStatusType(motors, predicate = () => true) {
+    const counts = new Map();
+    motors.filter(predicate).forEach((motor) => {
+      const key = motorStatusTypeKey(motor);
+      counts.set(key, (counts.get(key) || 0) + 1);
+    });
+    return counts;
+  }
+
+  function physicalScanStatus(typeKey) {
+    if (typeKey === 'ac_servo') {
+      const scan = latestScan?.ethercat_scan;
+      if (!scan || scan.skipped) return { code: 'unknown', text: '미확인', count: null };
+      const count = Array.isArray(scan.slaves) ? scan.slaves.length : 0;
+      if (scan.available && scan.complete) return { code: count > 0 ? 'good' : 'off', text: `${formatInt(count)}축`, count };
+      if (scan.available && count > 0) return { code: 'warning', text: `부분 ${formatInt(count)}축`, count };
+      return { code: 'error', text: '검증 불가', count: null };
+    }
+    if (typeKey === 'dynamixel') {
+      const scan = latestScan?.dynamixel_scan;
+      if (!scan || scan.skipped) return { code: 'unknown', text: '미확인', count: null };
+      const count = Array.isArray(scan.devices) ? scan.devices.length : 0;
+      if (scan.available && scan.complete) return { code: count > 0 ? 'good' : 'off', text: `${formatInt(count)}축`, count };
+      if (scan.available && count > 0) return { code: 'warning', text: `부분 ${formatInt(count)}축`, count };
+      return { code: 'error', text: '검증 불가', count: null };
+    }
+    if (typeKey === 'cubemars') return { code: 'unknown', text: '검색 미지원', count: null };
+    return { code: 'unknown', text: '미확인', count: null };
+  }
+
+  function statusCell(text, code = '') {
+    return `<span class="motor-status-value${code ? ` ${escapeHtml(code)}` : ''}">${displayText(text)}</span>`;
+  }
+
+  function renderMotorTypeStatus(rowViews, changed) {
+    if (!el.motorTypeRows) return;
+    const latest = getLatestState?.() || {};
+    const runtime = runtimeMotors();
+    const projectMotors = selectActiveVisibleRegistryMotors(savedRegistry);
+    const projectCounts = countMotorsByStatusType(projectMotors);
+    const runtimeCounts = countMotorsByStatusType(runtime);
+    const feedbackCounts = countMotorsByStatusType(
+      runtime,
+      (motor) => motor.connection_connected === true ||
+        (!Object.prototype.hasOwnProperty.call(motor, 'connection_connected') && motor.state === 'detected'),
+    );
+    const driveCounts = countMotorsByStatusType(runtime, (motor) => motor.servo_on === true);
+    const faultCounts = countMotorsByStatusType(
+      runtime,
+      (motor) => Boolean(motor.fault) || Number(motor.errorcode || 0) !== 0,
+    );
+    const scope = latest.project_scope || {};
+    const runtimeMatchesProject = scope.runtime_matches_selected === true;
+    const runtimeApplied = runtimeMatchesProject && scope.motor_config_applied === true;
+    const types = new Set(['ac_servo', 'dynamixel']);
+    [...projectMotors, ...runtime].forEach((motor) => types.add(motorStatusTypeKey(motor)));
+    const orderedTypes = ['ac_servo', 'dynamixel', 'cubemars', 'unknown']
+      .filter((key) => types.has(key));
+
+    const html = orderedTypes.map((typeKey) => {
+      const physical = physicalScanStatus(typeKey);
+      const typeRows = rowViews.filter(
+        (view) => view.row.motor &&
+          !view.row.motor.deleted &&
+          view.row.motor.enabled &&
+          motorStatusTypeKey(view.row.motor) === typeKey,
+      );
+      const physicalConfirmed = physical.count !== null;
+      const controllable = physicalConfirmed && runtimeApplied && !changed
+        ? typeRows.filter((view) => {
+          const matchedByScan = typeKey === 'ac_servo'
+            ? Boolean(view.row.scanRow)
+            : typeKey === 'dynamixel'
+              ? Boolean(view.row.scanDevice)
+              : false;
+          return matchedByScan && view.overall.ready;
+        }).length
+        : null;
+      const appliedText = !runtimeMatchesProject
+        ? '다른 프로젝트'
+        : !runtimeApplied
+          ? '미적용'
+          : `${formatInt(runtimeCounts.get(typeKey) || 0)}축`;
+      const appliedCode = runtimeApplied ? 'good' : 'warning';
+      const feedbackCount = feedbackCounts.get(typeKey) || 0;
+      const driveCount = driveCounts.get(typeKey) || 0;
+      const faultCount = faultCounts.get(typeKey) || 0;
+      const controllableText = controllable === null
+        ? (physical.code === 'error' ? '검증 불가' : '미확인')
+        : `${formatInt(controllable)}축`;
+      const controllableCode = controllable === null
+        ? (physical.code === 'error' ? 'error' : 'unknown')
+        : controllable > 0 ? 'good' : 'off';
+      return `
+        <tr>
+          <th scope="row">${displayText(motorStatusTypeLabel(typeKey))}</th>
+          <td>${statusCell(`${formatInt(projectCounts.get(typeKey) || 0)}축`, 'configured')}</td>
+          <td>${statusCell(physical.text, physical.code)}</td>
+          <td>${statusCell(appliedText, appliedCode)}</td>
+          <td>${statusCell(`${formatInt(feedbackCount)}축`, feedbackCount > 0 ? 'received' : 'off')}</td>
+          <td>${statusCell(`${formatInt(faultCount)}축`, faultCount > 0 ? 'error' : 'good')}</td>
+          <td>${statusCell(`${formatInt(driveCount)}축`, driveCount > 0 ? 'good' : 'off')}</td>
+          <td>${statusCell(controllableText, controllableCode)}</td>
+        </tr>
+      `;
+    }).join('');
+    if (el.motorTypeRows.innerHTML !== html) el.motorTypeRows.innerHTML = html;
+
+    if (el.motorTypeSummaryDetail) {
+      const summary = getDiscoverySummary();
+      el.motorTypeSummaryDetail.textContent = summary.hasDirectScan
+        ? `최근 물리 검색 결과 · 감지 ${formatInt(summary.discoveredCount)}축`
+        : '물리 감지 미확인 · 장비 검색 후 판정';
+    }
+  }
+
+  function renderMotorReadiness(rows, rowViews, changed) {
+    const latest = getLatestState?.() || {};
+    const configuredRows = rowViews.filter(
+      (view) => view.row.motor && !view.row.motor.deleted && view.row.motor.enabled,
+    );
+    const runtimeFresh = latest.motion_state_age_sec === null ||
+      latest.motion_state_age_sec === undefined ||
+      Number(latest.motion_state_age_sec) <= 2;
+    const runtimeResponding = Array.isArray(latest.motors);
+    const serviceReady = runtimeFresh && (
+      runtimeResponding || Boolean(latest.service_management?.motor_managed)
+    );
+    const connectionReady = configuredRows.length > 0 && configuredRows.every((view) => (
+      view.row.runtimeMotor?.state === 'detected' &&
+      (rowMotorType(view.row) === 'ac_servo'
+        ? Boolean(view.row.scanRow)
+        : rowMotorType(view.row) === 'dynamixel'
+          ? Boolean(view.row.scanDevice)
+          : false)
+    ));
+    const configurationReady = configuredRows.length > 0 && !changed;
+    const applicationReady = configurationReady && selectedMotorConfigAlreadyApplied() && !configApplyPending;
+    const mappingReady = configuredRows.length > 0 && configuredRows.every((view) => view.mapping.ready);
+    const driveReady = configuredRows.length > 0 && configuredRows.every((view) => view.drive.ready);
+    const faults = configuredRows.filter((view) => Boolean(view.row.runtimeMotor?.fault)).length;
+    const readyAxes = configuredRows.filter((view) => view.overall.ready).length;
+    const steps = [
+      { key: 'service', ready: serviceReady, text: serviceReady ? '서비스 응답 정상' : '모터 제어 재시작·응답 확인', next: '모터 제어 서비스를 시작하거나 재시작하세요.' },
+      { key: 'connection', ready: connectionReady, text: connectionReady ? '등록 축 연결됨' : '모터 전원·연결 및 검색 필요', next: '모터 전원을 확인한 뒤 장비 검색을 실행하세요.' },
+      { key: 'configuration', ready: configurationReady, text: configurationReady ? '축 설정 저장됨' : '축 설정 저장 필요', next: '검색 결과를 확인하고 모터축 설정을 저장하세요.' },
+      { key: 'application', ready: applicationReady, text: applicationReady ? '실행 시스템 적용됨' : '설정 적용 필요', next: '설정 적용 및 재시작을 실행하세요.' },
+      { key: 'mapping', ready: mappingReady, text: mappingReady ? '모션축 매칭됨' : '모션축 매칭 필요', next: '모션축 설정에서 각 모터축의 Motion ID를 연결하세요.' },
+      { key: 'drive', ready: driveReady, text: driveReady ? '서보·토크 준비됨' : '서보·토크 상태 확인', next: 'AC 서보를 켜고 Dynamixel 토크 상태를 확인하세요.' },
+      { key: 'verification', ready: false, text: '실물 조그·동작 확인 필요', next: '실제 장비에서 조그와 동작 모드를 확인하세요.' },
+    ];
+    const currentIndex = steps.findIndex((step) => !step.ready);
+
+    if (el.motorReadinessSteps) {
+      steps.forEach((step, index) => {
+        const item = el.motorReadinessSteps.querySelector(`[data-motor-readiness-step="${step.key}"]`);
+        if (!item) return;
+        const state = step.ready ? 'complete' : index === currentIndex
+          ? (faults > 0 ? 'error' : 'current')
+          : 'pending';
+        item.dataset.state = state;
+        const detail = item.querySelector('small');
+        if (detail) detail.textContent = step.text;
+      });
+    }
+    if (el.motorReadinessHeadline) {
+      el.motorReadinessHeadline.textContent = faults > 0
+        ? `오류 ${formatInt(faults)}축 확인 필요`
+        : readyAxes === configuredRows.length && configuredRows.length > 0
+          ? '구동 준비 · 실물 검증 미확인'
+          : '준비 작업 진행 중';
+    }
+    if (el.motorReadinessAxisCount) {
+      el.motorReadinessAxisCount.textContent = `${formatInt(readyAxes)}/${formatInt(configuredRows.length)}축`;
+    }
+    if (el.motorReadinessCurrentStep) {
+      el.motorReadinessCurrentStep.textContent = `${currentIndex + 1}단계 · ${steps[currentIndex]?.text || '확인 완료'}`;
+    }
+    if (el.motorReadinessFaultCount) el.motorReadinessFaultCount.textContent = `${formatInt(faults)}축`;
+    if (el.motorReadinessNextAction) {
+      el.motorReadinessNextAction.textContent = steps[currentIndex]?.next || '현재 조건에서 추가 작업이 없습니다.';
+    }
+  }
+
   function rowById(rowId) {
     return axisRowsData().find((row) => row.id === rowId) || null;
   }
@@ -2018,6 +2390,15 @@ export function createMotorConfigController({
           const slaveView = acIdentityView(row, 'slave_position');
           const axisValue = rowAxisRaw(row);
           const editable = !(row.motor && row.motor.deleted);
+          const identity = rowDeviceIdentity(row);
+          const connection = rowConnectionIdentity(row);
+          const mapping = rowMappingView(row);
+          const drive = rowDriveView(row);
+          const permission = rowMotionPermissionView(row, mapping, drive);
+          const motionRun = rowMotionRunView(row, mapping, permission);
+          const overall = rowOverallView(row, mapping, drive, permission, motionRun);
+          const showAcServoControls = rowMotorType(row) === 'ac_servo' &&
+            Boolean(row.motor && !row.motor.deleted && row.motor.enabled);
           return {
             row,
             selected,
@@ -2041,6 +2422,14 @@ export function createMotorConfigController({
             axisValue,
             editable,
             onOff,
+            identity,
+            connection,
+            mapping,
+            drive,
+            permission,
+            motionRun,
+            overall,
+            showAcServoControls,
           };
         });
       const renderSignature = JSON.stringify(rowViews.map((view) => ({
@@ -2067,6 +2456,14 @@ export function createMotorConfigController({
         runtimeText: view.runtimeText,
         runtimeClass: view.runtimeClass,
         onOff: view.onOff,
+        identity: view.identity,
+        connection: view.connection,
+        mapping: view.mapping,
+        drive: view.drive,
+        permission: view.permission,
+        motionRun: view.motionRun,
+        overall: view.overall,
+        showAcServoControls: view.showAcServoControls,
       })));
 
       if (renderSignature !== lastAxisRenderSignature) {
@@ -2078,24 +2475,38 @@ export function createMotorConfigController({
           return `
             <tr class="${view.selected ? 'selected-row' : ''}" data-axis-row="${escapeHtml(row.id)}">
               <td><input type="checkbox" data-axis-select="${escapeHtml(row.id)}"${view.selected ? ' checked' : ''}></td>
-              <td><input class="axis-edit-input axis-number-input mono" data-axis-edit="axis" data-axis-row-id="${escapeHtml(row.id)}" type="number" min="0" step="1" value="${escapeHtml(view.axisValue ?? '')}"${disabled}></td>
-              <td class="axis-id-cell mono">${displayText(view.idText)}</td>
-              <td class="mono">${displayText(view.projectAlias)}</td>
-              <td class="mono${view.eepromMismatch ? ' identity-mismatch' : ''}">${displayText(view.directScanAlias)}</td>
-              <td class="mono${view.rotaryMismatch ? ' identity-mismatch' : ''}">${displayText(view.rotaryAlias)}</td>
-              <td class="mono${view.slaveMismatch ? ' identity-mismatch' : ''}">${displayText(view.slavePosition)}</td>
-              <td>${displayText(view.typeText)}</td>
-              <td><input class="axis-edit-input axis-name-input" data-axis-edit="name" data-axis-row-id="${escapeHtml(row.id)}" value="${escapeHtml(view.name === '-' ? '' : view.name)}"${disabled}></td>
-              <td>${displayText(driverLabel(row))}</td>
-              <td><span class="match-state ${escapeHtml(view.settingClass)}">${displayText(view.settingText)}</span></td>
-              <td><span class="match-state ${escapeHtml(view.scanClass)}">${displayText(view.scanText)}</span></td>
-              <td><span class="match-state ${escapeHtml(view.runtimeClass)}">${displayText(view.runtimeText)}</span></td>
-              <td class="mono">${displayText(view.onOff)}</td>
+              <td class="axis-combined-cell">
+                <input class="axis-edit-input axis-number-input mono" aria-label="축 번호" data-axis-edit="axis" data-axis-row-id="${escapeHtml(row.id)}" type="number" min="0" step="1" value="${escapeHtml(view.axisValue ?? '')}"${disabled}>
+                <input class="axis-edit-input axis-name-input" aria-label="축 이름" data-axis-edit="name" data-axis-row-id="${escapeHtml(row.id)}" value="${escapeHtml(view.name === '-' ? '' : view.name)}"${disabled}>
+              </td>
+              <td class="axis-status-stack"><strong>${displayText(view.identity.title)}</strong><small>${displayText(view.identity.detail)}</small></td>
+              <td class="axis-status-stack mono"><strong>${displayText(view.connection.title)}</strong><small>${displayText(view.connection.detail)}</small></td>
+              <td class="axis-status-stack">
+                <span class="match-state ${escapeHtml(view.settingClass)}">${displayText(view.settingText)}</span>
+                <small>${displayText(view.runtimeText)}</small>
+              </td>
+              <td class="axis-status-stack"><span class="match-state ${escapeHtml(view.mapping.className)}">${displayText(view.mapping.text)}</span><small>${displayText(view.mapping.detail)}</small></td>
+              <td class="axis-status-stack">
+                <span class="match-state ${escapeHtml(view.drive.className)}">${displayText(view.drive.text)}</span>
+                <small>${displayText(view.drive.detail)}</small>
+                ${view.showAcServoControls ? `
+                  <div class="axis-inline-actions">
+                    <button type="button" data-axis-servo-action="servo_on" data-axis-servo-index="${escapeHtml(view.axisValue ?? '')}">ON</button>
+                    <button type="button" data-axis-servo-action="servo_off" data-axis-servo-index="${escapeHtml(view.axisValue ?? '')}">OFF</button>
+                    <button type="button" data-axis-servo-action="fault_reset" data-axis-servo-index="${escapeHtml(view.axisValue ?? '')}">오류 초기화</button>
+                  </div>
+                ` : ''}
+              </td>
+              <td class="axis-status-stack"><span class="match-state ${escapeHtml(view.permission.className)}">${displayText(view.permission.text)}</span><small>${displayText(view.permission.detail)}</small></td>
+              <td class="axis-status-stack"><span class="match-state ${escapeHtml(view.motionRun.className)}">${displayText(view.motionRun.text)}</span><small>${displayText(view.motionRun.detail)}</small></td>
+              <td class="axis-status-stack"><span class="match-state ${escapeHtml(view.overall.className)}">${displayText(view.overall.text)}</span><small>${displayText(view.overall.detail)}</small></td>
             </tr>
           `;
         }).join('')
-          : '<tr><td colspan="14" class="empty">설정 파일을 불러오거나 모터 스캔을 실행하세요</td></tr>';
+          : '<tr><td colspan="10" class="empty">설정 파일을 불러오거나 모터 스캔을 실행하세요</td></tr>';
       }
+      renderMotorReadiness(rows, rowViews, changed);
+      renderMotorTypeStatus(rowViews, changed);
     }
 
     renderAxisButtons(rows);
@@ -2174,10 +2585,11 @@ export function createMotorConfigController({
       return false;
     }
     const fileName = pathBasename(motorConfigFilePath);
-    const confirmed = window.confirm(
+    const confirmed = await showConfirm(
       `${fileName} 파일을 현재 프로젝트의 휴지통으로 이동할까요?\n\n`
       + '프로젝트의 모터축 설정 목록에서는 제거됩니다.\n'
       + '현재 실행 중인 모터 제어 설정은 자동으로 변경되거나 재시작되지 않습니다.',
+      { title: '모터축 설정 파일 삭제', confirmLabel: '휴지통으로 이동', tone: 'danger' },
     );
     if (!confirmed) {
       setAxisMessage('모터축 설정 파일 삭제 취소');
@@ -2223,7 +2635,10 @@ export function createMotorConfigController({
   }
 
   async function loadProjectRegistry() {
-    closeScanProgressPopup();
+    stopScanProgressPolling();
+    if (operationProgress?.activeId().startsWith('scan:')) {
+      operationProgress.close({ force: true });
+    }
     projectLoadToken += 1;
     const expectedToken = projectLoadToken;
     savedRegistry = normalizeAxisRegistry({});
@@ -2514,7 +2929,7 @@ export function createMotorConfigController({
     const recoveryWarning = recoveryMessage
       ? `복구 적용 안내:\n${recoveryMessage}\n\n`
       : '';
-    const confirmed = window.confirm(
+    const confirmed = await showConfirm(
       recoveryWarning
       + '주의: 설정 적용 중 motor_manager_node를 재시작합니다.\n\n'
       + '재시작 중에는 AC 서보 / 다이나믹셀 통신이 잠시 끊기거나 재초기화될 수 있습니다.\n'
@@ -2522,7 +2937,8 @@ export function createMotorConfigController({
       + '이때 중력, 외력, 기구 하중 때문에 의도하지 않은 움직임이 발생할 수 있습니다.\n\n'
       + '기구를 안전하게 지지하고, 작업자 접근을 막고, 움직여도 위험하지 않은 상태에서만 진행하세요.\n'
       + '웹 연결은 잠깐 끊긴 뒤 자동으로 다시 연결됩니다.\n\n'
-      + '위 위험을 확인했고 설정을 적용하기 위해 노드를 재시작할까요?'
+      + '위 위험을 확인했고 설정을 적용하기 위해 노드를 재시작할까요?',
+      { title: '설정 적용·재시작', confirmLabel: '적용·재시작', tone: 'danger' },
     );
     if (!confirmed) {
       setAxisMessage('설정 적용 취소');
@@ -2687,7 +3103,7 @@ export function createMotorConfigController({
     renderAxisSettings();
   }
 
-  function updateSelectedAxisIdentity() {
+  async function updateSelectedAxisIdentity() {
     const selectedRows = selectedAxisRows();
     const projectRows = selectedRows.filter(
       (row) => row.motor?.transport === 'ethercat' && !row.motor.deleted,
@@ -2716,11 +3132,12 @@ export function createMotorConfigController({
     const changeText = changes.map(([label, before, after]) => (
       `${label}: ${before ?? '미등록'} → ${after ?? '확인 불가'}`
     )).join('\n');
-    const confirmed = window.confirm(
+    const confirmed = await showConfirm(
       `Control Index ${formatInt(motorAxisValue(motor))}의 연결값을 변경합니다.\n\n`
       + `${changeText}\n\n`
       + '이 검색 장비가 프로젝트의 해당 축이 맞는지 확인했습니까?\n'
       + '확인 후에도 변경 내용 저장을 눌러야 프로젝트 파일에 반영됩니다.',
+      { title: 'AC Servo 연결정보 반영', confirmLabel: '연결정보 반영', tone: 'warning' },
     );
     if (!confirmed) {
       setAxisMessage('연결정보 반영 취소');
@@ -2763,10 +3180,15 @@ export function createMotorConfigController({
     }
     const scanRow = selectedRows[0].scanRow;
     const currentAlias = Number(scanRow.ethercat_alias);
-    const input = window.prompt(
+    const input = await showPrompt(
       `Slave Position ${formatInt(scanRow.slave_position)}의 새 EEPROM Alias를 입력하세요.\n`
       + '범위: 0~65535 (0은 Alias 제거)',
-      String(currentAlias),
+      {
+        title: 'EEPROM Alias 변경',
+        defaultValue: String(currentAlias),
+        confirmLabel: '다음',
+        tone: 'danger',
+      },
     );
     if (input === null) return false;
     const text = String(input).trim();
@@ -2781,7 +3203,7 @@ export function createMotorConfigController({
       window.alert('새 EEPROM Alias가 현재 값과 같습니다.');
       return false;
     }
-    const confirmed = window.confirm(
+    const confirmed = await showConfirm(
       '실제 서보 드라이버의 SII EEPROM 값을 변경합니다.\n\n'
       + `Slave Position: ${formatInt(scanRow.slave_position)}\n`
       + `Serial Number: ${formatInt(scanRow.serial_number)}\n`
@@ -2789,6 +3211,7 @@ export function createMotorConfigController({
       + '프로젝트 파일은 자동 변경되지 않습니다.\n'
       + '쓰기 후 서보 드라이버 제어 전원을 재투입하고 다시 검색해야 합니다.\n'
       + '선택한 실제 장비와 새 Alias를 확인했습니까?',
+      { title: 'EEPROM Alias 쓰기', confirmLabel: '실제 장비에 쓰기', tone: 'danger' },
     );
     if (!confirmed) {
       setAxisMessage('EEPROM Alias 쓰기 취소');
@@ -2984,7 +3407,10 @@ export function createMotorConfigController({
     if (!originalText) return;
     const expectedToken = projectLoadToken;
     if (el.scanResult) el.scanResult.textContent = 'AC 서보 검색 중';
-    await openScanProgressPopup('AC 서보 직접 스캔');
+    if (!await openScanProgressPopup('scan:ac-servo', 'AC Servo 검색')) {
+      finishScanRequest(el.scanButton, originalText);
+      return;
+    }
     try {
       const payload = await requestAcServoScan();
       if (expectedToken !== projectLoadToken) return;
@@ -3011,7 +3437,10 @@ export function createMotorConfigController({
     if (!originalText) return;
     const expectedToken = projectLoadToken;
     if (el.dynamixelScanResult) el.dynamixelScanResult.textContent = '다이나믹셀 연결 확인 중';
-    await openScanProgressPopup('Dynamixel 직접 스캔');
+    if (!await openScanProgressPopup('scan:dynamixel', 'Dynamixel 검색')) {
+      finishScanRequest(el.dynamixelScanButton, originalText);
+      return;
+    }
     try {
       const payload = await requestDynamixelScan();
       if (expectedToken !== projectLoadToken) return;
@@ -3035,7 +3464,10 @@ export function createMotorConfigController({
     if (!originalText) return;
     const expectedToken = projectLoadToken;
     if (el.scanAllResult) el.scanAllResult.textContent = 'AC 서보와 다이나믹셀을 검색하고 있습니다';
-    await openScanProgressPopup('전체 모터 직접 스캔');
+    if (!await openScanProgressPopup('scan:all', '전체 모터 검색')) {
+      finishScanRequest(el.scanAllButton, originalText);
+      return;
+    }
     try {
       const payload = await requestMotorScan();
       if (expectedToken !== projectLoadToken) return;
@@ -3118,7 +3550,7 @@ export function createMotorConfigController({
 
     if (el.axisRows) {
       el.axisRows.addEventListener('pointerdown', (event) => {
-        if (event.target.closest('[data-axis-edit]')) return;
+        if (event.target.closest('[data-axis-edit], button')) return;
         if (event.button !== undefined && event.button !== 0) return;
         const row = event.target.closest('tr[data-axis-row]');
         if (!row) return;
@@ -3131,6 +3563,23 @@ export function createMotorConfigController({
         const input = event.target.closest('[data-axis-edit]');
         if (!input) return;
         handleAxisEdit(input);
+      });
+
+      el.axisRows.addEventListener('click', async (event) => {
+        const button = event.target.closest('button[data-axis-servo-action]');
+        if (!button || !onAcServoControl) return;
+        event.stopPropagation();
+        const axis = Number(button.dataset.axisServoIndex);
+        if (!Number.isInteger(axis) || axis < 0) {
+          setAxisMessage('AC 서보 제어 축 번호를 확인할 수 없습니다.', true);
+          return;
+        }
+        button.disabled = true;
+        try {
+          await onAcServoControl(button.dataset.axisServoAction || '', axis);
+        } finally {
+          button.disabled = false;
+        }
       });
     }
 
@@ -3167,7 +3616,6 @@ export function createMotorConfigController({
     if (el.toggleAxisButton) el.toggleAxisButton.addEventListener('click', toggleSelectedAxis);
     if (el.sortAxisButton) el.sortAxisButton.addEventListener('click', sortAxisNumbers);
     if (el.saveAxisConfigButton) el.saveAxisConfigButton.addEventListener('click', saveAxisConfig);
-    if (el.saveConfigTableButton) el.saveConfigTableButton.addEventListener('click', saveAxisConfig);
     if (el.applyAxisConfigButton) el.applyAxisConfigButton.addEventListener('click', applyConfigRestart);
     if (el.updateConfigTableButton) el.updateConfigTableButton.addEventListener('click', applyConfigTableUpdates);
     if (el.motorConfigFileNameInput) {
@@ -3186,12 +3634,6 @@ export function createMotorConfigController({
     if (el.scanAllButton) el.scanAllButton.addEventListener('click', scanAllMotors);
     if (el.scanButton) el.scanButton.addEventListener('click', scanMotors);
     if (el.dynamixelScanButton) el.dynamixelScanButton.addEventListener('click', scanDynamixel);
-    if (el.motorScanProgressCloseButton) {
-      el.motorScanProgressCloseButton.addEventListener('click', closeScanProgressPopup);
-    }
-    if (el.motorScanProgressClearButton) {
-      el.motorScanProgressClearButton.addEventListener('click', clearScanProgressPopup);
-    }
   }
 
   return {

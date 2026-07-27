@@ -1,1 +1,1 @@
-import './js/main.js?v=20260724-range-recovery-1';
+import './js/main.js?v=20260727-editor-compact-feedback-1';

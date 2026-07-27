@@ -1,7 +1,7 @@
 import {
   motionStudioEditorValueBounds,
   motionStudioPointCurvePreview,
-} from './motion_studio_calculations.js?v=20260724-studio-cleanup-3';
+} from './motion_studio_calculations.js?v=20260727-editor-point-confirm-1';
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"]/g, (character) => ({
@@ -227,6 +227,8 @@ export function drawMotionStudioEditorGraph({
     automaticMinValue,
     automaticMaxValue,
     editor.valueScale,
+    editor.valueOffset,
+    editor.valueRangeLock || editor.valueView,
   );
   const xFor = (timeSec) => padding.left
     + (((timeSec - viewStart) / (viewEnd - viewStart)) * plotWidth);
@@ -263,7 +265,7 @@ export function drawMotionStudioEditorGraph({
       );
       context.fillStyle = '#526579';
       context.font = '11px sans-serif';
-      context.fillText(`포인트 구간 ${index + 1}`, xFor(left) + 5, padding.top + 14);
+      context.fillText(`포인트 데이터 ${index + 1}`, xFor(left) + 5, padding.top + 14);
     });
   const selectionStart = Number(selectionStartText);
   const selectionEnd = Number(selectionEndText);
@@ -418,6 +420,33 @@ export function drawMotionStudioEditorGraph({
     context.stroke();
   });
   context.setLineDash([]);
+  const candidate = editor.pendingPointCandidate;
+  if (
+    candidate
+    && selected.has(String(candidate.motionId || ''))
+    && Number.isFinite(Number(candidate.timeSec))
+    && Number.isFinite(Number(candidate.valueDeg))
+    && candidate.timeSec >= viewStart - 1e-9
+    && candidate.timeSec <= viewEnd + 1e-9
+  ) {
+    const candidateX = xFor(candidate.timeSec);
+    const candidateY = yFor(candidate.valueDeg);
+    context.beginPath();
+    context.fillStyle = '#fff';
+    context.strokeStyle = '#d97706';
+    context.lineWidth = 2;
+    context.setLineDash([3, 2]);
+    context.arc(candidateX, candidateY, 7, 0, Math.PI * 2);
+    context.fill();
+    context.stroke();
+    context.setLineDash([]);
+    context.fillStyle = '#8a4b08';
+    context.fillText(
+      '추가 후보',
+      Math.min(width - 60, candidateX + 10),
+      Math.max(14, candidateY - 9),
+    );
+  }
   if (editor.cursor) {
     const { x, y, timeSec, value } = editor.cursor;
     context.strokeStyle = '#596775';

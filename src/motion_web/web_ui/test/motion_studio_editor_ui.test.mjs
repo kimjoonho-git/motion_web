@@ -48,7 +48,7 @@ test('inspector state follows preview, point, range, and empty selections', () =
   );
   assert.equal(
     motionStudioEditorInspectorState({ rangeSelected: true }).key,
-    'motion-range',
+    'point-range',
   );
   assert.equal(motionStudioEditorInspectorState().key, 'none');
 });

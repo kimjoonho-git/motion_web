@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>모션 녹화 시스템 0.5.0</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260724-ui-finish-1">
+    <link rel="stylesheet" href="/static/styles.css?v=20260727-editor-compact-feedback-1">
   </head>
   <body>
     <main class="shell">
@@ -18,6 +18,7 @@
             <span id="headerProjectName" class="header-project-name" title="현재 프로젝트">프로젝트 없음</span>
             <span id="headerContextState" class="header-context-state waiting" title="저장 설정과 실행 설정 일치 여부">설정 확인 중</span>
           </div>
+          <span class="topbar-operation-divider" aria-hidden="true"></span>
           <div class="topbar-operation-buttons">
             <div class="topbar-operation-group topbar-safety-actions" aria-label="정지 조작">
               <button id="headerMotionStopButton" class="header-motion-stop" type="button" title="전체 모터 동작을 정지하고 서보 ON을 유지합니다">전체 동작 정지</button>
@@ -25,7 +26,6 @@
             </div>
             <span class="topbar-operation-divider" aria-hidden="true"></span>
             <div class="topbar-operation-group topbar-restart-actions" aria-label="재시작 조작">
-              <button id="headerMotorControlRestartButton" class="header-motor-restart" type="button" title="Motor Manager와 EtherCAT 통신을 재시작합니다" disabled>모터 제어 재시작</button>
               <button id="headerProgramRestartButton" type="button" disabled>프로그램 재시작</button>
             </div>
           </div>
@@ -48,7 +48,7 @@
         </div>
         <div class="workspace-tabs hidden" data-workspace-group-panel="setup" role="tablist" aria-label="프로젝트 및 장비 메뉴">
           <button class="workspace-tab-button" type="button" role="tab" data-workspace-tab="system">시스템 정보</button>
-          <button class="workspace-tab-button" type="button" role="tab" data-workspace-tab="config">모터축 설정</button>
+          <button class="workspace-tab-button" type="button" role="tab" data-workspace-tab="config">모터 관리</button>
         </div>
         <div class="workspace-tabs hidden" data-workspace-group-panel="creation" role="tablist" aria-label="모션 제작 메뉴">
           <button class="workspace-tab-button" type="button" role="tab" data-workspace-tab="motion-files">모션 파일</button>
@@ -67,11 +67,14 @@
           <div class="project-sidebar-head">
             <div>
               <strong>현재 프로젝트</strong>
-              <span id="projectExplorerMessage">변경은 시스템 정보에서만 가능합니다</span>
+              <span id="projectExplorerMessage"></span>
             </div>
             <button id="projectExplorerRefreshButton" class="icon-button" type="button" title="새로고침" aria-label="프로젝트 새로고침">↻</button>
           </div>
           <div id="projectExplorerCurrentName" class="project-current-display">선택된 프로젝트 없음</div>
+          <select id="projectExplorerSelect" class="wide-select project-sidebar-select" aria-label="현재 프로젝트 변경">
+            <option value="">프로젝트 선택</option>
+          </select>
           <aside id="projectExplorerTree" class="project-explorer-tree" aria-label="프로젝트 파일">
             <div class="empty">프로젝트를 만들거나 선택하세요</div>
           </aside>
@@ -83,180 +86,216 @@
 
       <section class="system-panel workspace-panel hidden" data-workspace-panel="system" aria-label="시스템 정보">
         <div class="section-head system-page-head workspace-page-head">
-          <div><strong>시스템 정보</strong><small>현재 프로젝트, 실행 상태, 적용 파일을 한곳에서 확인합니다</small></div>
+          <div><strong>시스템 정보</strong></div>
           <span id="summaryText">모션 상태 수신 대기</span>
         </div>
 
-        <section class="system-overview-card" aria-label="시스템 운영 상태">
-          <div class="section-head compact">
-            <strong>운영 상태</strong>
-            <span>실시간 연결·모터·설정 요약</span>
-          </div>
-          <div class="status-strip system-status-primary" aria-label="핵심 상태">
-            <div><span>프로그램 실행</span><strong id="serviceMode">확인 중</strong></div>
-            <div><span>웹 브리지</span><strong id="bridgeState">연결 중</strong></div>
-            <div><span>모니터링</span><strong id="monitoringState">확인 중</strong></div>
-            <div><span>온라인 모터</span><strong id="onlineMotorCount">0</strong></div>
-            <div><span>프로젝트 실행 설정</span><strong id="executionContextState">확인 중</strong></div>
-          </div>
-          <div class="status-strip system-status-secondary" aria-label="세부 상태">
-            <div><span>등록 모터</span><strong id="knownMotorCount">0 / 50</strong></div>
-            <div><span>실행 설정</span><strong id="configState">불러오는 중</strong></div>
-            <div><span>접속 주소</span><strong id="accessUrl">-</strong></div>
-            <div><span>마지막 갱신</span><strong id="lastUpdate">-</strong></div>
-          </div>
-        </section>
-
-        <div class="system-dashboard-grid">
-          <section class="project-system-manager system-project-card" aria-label="현재 프로젝트 선택">
+        <div class="system-runtime-grid">
+          <section class="system-overview-card" aria-label="시스템 운영 상태">
             <div class="section-head compact">
-              <strong>현재 프로젝트</strong>
-              <span>프로젝트 변경은 이 화면에서만 가능</span>
+              <strong>운영 상태</strong>
             </div>
-            <select id="projectExplorerSelect" class="wide-select" aria-label="현재 프로젝트">
-              <option value="">프로젝트 선택</option>
-            </select>
-            <div class="project-context-compare">
-              <div><span>화면에서 선택</span><strong id="projectSelectedStatus">선택 없음</strong></div>
-              <div><span>모터에 적용·실행 중</span><strong id="projectRuntimeStatus">적용 정보 없음</strong></div>
+            <div class="status-strip system-status-primary" aria-label="핵심 상태">
+              <div><span>프로그램 실행</span><strong id="serviceMode">확인 중</strong></div>
+              <div><span>웹 브리지</span><strong id="bridgeState">연결 중</strong></div>
+              <div><span>모니터링</span><strong id="monitoringState">확인 중</strong></div>
+              <div><span>프로젝트 실행 설정</span><strong id="executionContextState">확인 중</strong></div>
+              <div><span>런타임 오류</span><strong id="systemFaultCount">0축</strong></div>
+            </div>
+            <div class="status-strip system-status-secondary" aria-label="세부 상태">
+              <div><span>접속 주소</span><strong id="accessUrl">-</strong></div>
+              <div><span>마지막 갱신</span><strong id="lastUpdate">-</strong></div>
             </div>
           </section>
 
           <section class="project-system-manager system-program-card" aria-label="프로그램 상태 및 재시작">
             <div class="section-head compact">
               <strong>프로그램 상태 및 복구</strong>
-              <span id="programHealthDetail">웹 연결과 자동실행 상태를 확인합니다</span>
+              <span id="programHealthDetail">자동 실행 · 모터 상태 수신</span>
             </div>
             <div class="registry-actions system-program-actions">
-              <button id="programStatusRefreshButton" type="button">상태 다시 확인</button>
+              <button id="programStatusRefreshButton" type="button">프로그램 상태 확인</button>
               <button id="programPageReloadButton" type="button">화면 갱신</button>
               <button id="programRestartButton" type="button" disabled>프로그램 재시작</button>
-              <button id="motorControlRestartButton" class="danger" type="button" disabled>모터 제어 시스템 재시작</button>
             </div>
-            <div class="registry-message axis-apply-warning system-restart-warning">프로그램 재시작은 서보 상태를 유지합니다. 모터 제어 시스템 재시작은 서보가 OFF됐다가 자동 ON될 수 있으므로 장비가 안전할 때만 사용하세요.</div>
+            <div class="registry-message axis-apply-warning system-restart-warning">프로그램 재시작 · 서보 상태 유지 │ 모터 제어 재시작 · AC Servo OFF → 자동 ON 가능</div>
           </section>
         </div>
 
-        <section class="project-system-manager system-project-memo" aria-label="프로젝트 메모">
-          <div class="section-head compact">
-            <div>
+        <div class="system-project-grid">
+          <section class="project-system-manager system-project-tools" aria-label="프로젝트 생성 및 파일 관리">
+            <div class="section-head compact">
+              <strong>프로젝트 관리 도구</strong>
+            </div>
+            <div class="system-project-tools-body">
+              <div class="project-sidebar-actions">
+                <button id="projectCreateButton" type="button">새 프로젝트</button>
+                <button id="projectUsbRescanButton" type="button">프로젝트 목록 갱신</button>
+                <button id="projectDeleteButton" class="danger" type="button" disabled>현재 프로젝트 삭제</button>
+              </div>
+              <div id="projectUsbHelp" class="project-usb-help">프로젝트 저장 위치 확인 중</div>
+              <div class="project-import-row">
+                <select id="projectImportCategory" class="compact-select" aria-label="가져올 파일 종류">
+                  <option value="motor_axes">모터축 설정</option><option value="motion_axis_matching">모션축 설정</option><option value="motions">모션 파일</option><option value="layers">레이어</option>
+                </select>
+                <button id="projectImportFileButton" type="button" disabled>파일 가져오기</button>
+                <input id="projectImportFileInput" type="file" class="hidden" accept=".yaml,.yml,.json">
+              </div>
+              <div class="project-copy-box">
+                <strong>다른 프로젝트에서 복사</strong>
+                <select id="projectCopySourceProject" class="wide-select" aria-label="원본 프로젝트"><option value="">원본 프로젝트 선택</option></select>
+                <select id="projectCopySourceFile" class="wide-select" aria-label="복사할 파일" disabled><option value="">파일 선택</option></select>
+                <button id="projectCopyFileButton" type="button" disabled>현재 프로젝트로 복사</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="project-system-manager system-project-memo" aria-label="프로젝트 메모">
+            <div class="section-head compact">
               <strong>프로젝트 메모</strong>
-              <span>장비 구성, 작업 목적, 확인 사항 등을 자유롭게 기록합니다</span>
+              <span id="projectMemoCount">0 / 4000</span>
             </div>
-            <span id="projectMemoCount">0 / 4000</span>
-          </div>
-          <textarea id="projectMemoInput" maxlength="4000" rows="6" placeholder="현재 프로젝트에 남길 정보를 입력하세요" disabled></textarea>
-          <div class="system-project-memo-footer">
-            <span id="projectMemoStatus">프로젝트를 선택하면 메모를 입력할 수 있습니다</span>
-            <button id="projectMemoSaveButton" class="primary" type="button" disabled>메모 저장</button>
-          </div>
-        </section>
+            <textarea id="projectMemoInput" maxlength="4000" rows="6" placeholder="프로젝트 메모" disabled></textarea>
+            <div class="system-project-memo-footer">
+              <span id="projectMemoStatus">프로젝트 선택 필요</span>
+              <button id="projectMemoSaveButton" class="primary" type="button" disabled>메모 저장</button>
+            </div>
+          </section>
+        </div>
 
-        <details class="project-system-manager system-project-tools" aria-label="프로젝트 생성 및 파일 관리">
-          <summary class="section-head compact"><strong>프로젝트 관리 도구</strong><span>생성·가져오기·복사·삭제</span></summary>
-          <div class="system-project-tools-body">
-            <div class="project-sidebar-actions">
-              <button id="projectCreateButton" type="button">새 프로젝트</button>
-              <button id="projectUsbRescanButton" type="button">USB 프로젝트 검색</button>
-              <button id="projectDeleteButton" class="danger" type="button" disabled>현재 프로젝트 삭제</button>
+        <section id="projectFileManager" class="project-explorer-panel system-project-info-file" aria-label="프로젝트 정보 파일">
+          <div class="section-head compact system-project-info-head">
+            <div>
+              <strong>프로젝트 정보 파일</strong>
+              <span id="projectFileEditorTitle">project.json</span>
             </div>
-            <div id="projectUsbHelp" class="project-usb-help">USB의 프로젝트 폴더를 motion_projects에 복사한 뒤 검색하세요.</div>
-            <div class="project-import-row">
-              <select id="projectImportCategory" class="compact-select" aria-label="가져올 파일 종류">
-                <option value="motor_axes">모터축 설정</option><option value="motion_axis_matching">모션축 설정</option><option value="motions">모션 파일</option><option value="layers">레이어</option>
-              </select>
-              <button id="projectImportFileButton" type="button" disabled>파일 가져오기</button>
-              <input id="projectImportFileInput" type="file" class="hidden" accept=".yaml,.yml,.json">
-            </div>
-            <div class="project-copy-box">
-              <strong>다른 프로젝트에서 복사</strong>
-              <select id="projectCopySourceProject" class="wide-select" aria-label="원본 프로젝트"><option value="">원본 프로젝트 선택</option></select>
-              <select id="projectCopySourceFile" class="wide-select" aria-label="복사할 파일" disabled><option value="">파일 선택</option></select>
-              <button id="projectCopyFileButton" type="button" disabled>현재 프로젝트로 복사</button>
-            </div>
-          </div>
-        </details>
-
-        <section id="projectFileManager" class="project-explorer-panel" aria-label="선택한 프로젝트 파일 관리">
-          <div class="section-head compact">
-            <strong>선택한 파일 관리</strong>
-            <span>편집 파일은 ⋮, 읽기 전용 파일은 파일명을 눌러 엽니다</span>
+            <span id="projectFileInfo">프로젝트 선택 필요</span>
           </div>
           <div class="project-file-manager-layout">
             <section class="project-file-editor-panel">
-              <div class="section-head compact">
-                <strong id="projectFileEditorTitle">파일을 선택하세요</strong>
-                <span id="projectFileInfo">프로젝트 파일은 편집해도 실제 장비에 자동 적용되지 않습니다.</span>
-              </div>
-              <textarea id="projectFileEditor" class="project-file-editor" spellcheck="false" disabled></textarea>
-              <div class="registry-actions">
-                <button id="projectFileSaveButton" class="primary" type="button" disabled>파일 저장</button>
-                <button id="projectFileOpenEditorButton" type="button" disabled>기능 탭에서 열기</button>
-                <button id="projectFileRenameButton" type="button" disabled>이름 변경</button>
-                <button id="projectFileActivateButton" type="button" disabled>현재 파일로 선택</button>
-                <button id="projectFileExportButton" type="button" disabled>외부로 내보내기</button>
-                <button id="projectFileDeleteButton" class="off" type="button" disabled>삭제</button>
-              </div>
-              <div class="registry-message">프로젝트에서 파일을 선택하는 동작과 실제 모터 시스템에 설정을 적용하는 동작은 분리되어 있습니다.</div>
+              <textarea id="projectFileEditor" class="project-file-editor" spellcheck="false" readonly disabled></textarea>
             </section>
           </div>
         </section>
       </section>
 
-      <section class="registration-panel workspace-panel settings-editor-page hidden" data-workspace-panel="config" aria-label="모터축 설정">
+      <section class="registration-panel workspace-panel settings-editor-page hidden" data-workspace-panel="config" aria-label="모터 관리">
         <div class="section-head workspace-page-head">
-          <div><strong>모터축 설정</strong><small>모터 검색 결과와 프로젝트 축 설정을 비교하고 저장합니다</small></div>
-          <span>프로젝트 장비 설정</span>
+          <div><strong>모터 관리</strong><small>연결 확인부터 모션 실행 준비까지 한 화면에서 관리합니다</small></div>
+          <div class="registry-actions">
+            <button id="motorStatusRefreshButton" type="button">모터 상태 확인</button>
+          </div>
         </div>
-        <div class="workspace-guide" aria-label="모터축 설정 사용 순서">
-          <strong>사용 순서</strong>
-          <ol><li>모터 검색</li><li>차이 확인·편집</li><li>변경 내용 저장</li><li>설정 적용·재시작</li></ol>
-        </div>
+
+        <section class="motor-readiness-overview" aria-label="모터 준비 전체 흐름">
+          <div class="motor-readiness-summary">
+            <div>
+              <span>전체 준비 상태</span>
+              <strong id="motorReadinessHeadline">상태 확인 중</strong>
+            </div>
+            <div>
+              <span>준비 축</span>
+              <strong id="motorReadinessAxisCount">0/0축</strong>
+            </div>
+            <div>
+              <span>현재 단계</span>
+              <strong id="motorReadinessCurrentStep">확인 중</strong>
+            </div>
+            <div>
+              <span>오류</span>
+              <strong id="motorReadinessFaultCount">0축</strong>
+            </div>
+          </div>
+          <ol id="motorReadinessSteps" class="motor-readiness-steps">
+            <li data-motor-readiness-step="service"><span>1</span><strong>서비스·전원</strong><small>확인 중</small></li>
+            <li data-motor-readiness-step="connection"><span>2</span><strong>물리 연결·식별</strong><small>확인 중</small></li>
+            <li data-motor-readiness-step="configuration"><span>3</span><strong>모터축 설정</strong><small>확인 중</small></li>
+            <li data-motor-readiness-step="application"><span>4</span><strong>저장·실행 적용</strong><small>확인 중</small></li>
+            <li data-motor-readiness-step="mapping"><span>5</span><strong>모션축 매칭</strong><small>확인 중</small></li>
+            <li data-motor-readiness-step="drive"><span>6</span><strong>서보·토크 준비</strong><small>확인 중</small></li>
+            <li data-motor-readiness-step="verification"><span>7</span><strong>조그·동작 검증</strong><small>실물 확인 필요</small></li>
+          </ol>
+          <div class="motor-readiness-next">
+            <div>
+              <span>다음 작업</span>
+              <strong id="motorReadinessNextAction">현재 상태를 확인하고 있습니다.</strong>
+            </div>
+            <div class="motor-readiness-control-groups">
+              <div class="motor-readiness-control-group">
+                <span>장비 제어</span>
+                <div class="registry-actions">
+                  <button id="allAcServoOnButton" class="primary" type="button" disabled>전체 AC 서보 켜기</button>
+                  <button id="allAcServoOffButton" class="off" type="button" disabled>전체 AC 서보 끄기</button>
+                </div>
+              </div>
+              <div class="motor-readiness-control-group motor-readiness-system-group">
+                <span>시스템</span>
+                <div class="registry-actions">
+                  <button id="motorControlRestartButton" class="danger" type="button" disabled>모터 제어 재시작</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="registry-message">
+            Dynamixel · Torque Enable/Disable · 동작 명령 시 Torque Enable
+          </div>
+        </section>
 
         <section class="type-summary" aria-label="모터 종류 요약">
           <div class="section-head">
             <strong>현재 실행 장비 상태</strong>
-            <span>프로젝트 파일과 별도 · 전체 / 온라인</span>
+            <span id="motorTypeSummaryDetail">물리 감지는 최근 장비 검색 결과를 기준으로 합니다</span>
           </div>
-          <div id="motorTypeRows" class="type-grid">
-            <div class="empty">모터 종류 정보 없음</div>
+          <div class="motor-type-status-wrap">
+            <table class="motor-type-status-table">
+              <thead>
+                <tr>
+                  <th>모터 종류</th>
+                  <th title="현재 선택 프로젝트에 저장된 활성 모터축">프로젝트 설정</th>
+                  <th title="최근 장비 검색에서 실제 응답한 장치">물리 감지</th>
+                  <th title="현재 실행 시스템에 실제 적용된 모터축">실행 적용</th>
+                  <th title="motor_manager 상태 메시지에 포함된 축 수이며 물리 연결 수가 아닙니다">런타임 보고 축</th>
+                  <th>오류</th>
+                  <th>서보·토크 ON</th>
+                  <th title="물리 감지, 실행 적용, 모션 매칭, 위치 범위 및 구동 조건을 충족한 축">제어 가능</th>
+                </tr>
+              </thead>
+              <tbody id="motorTypeRows">
+                <tr><td colspan="8" class="empty">장비 상태를 확인하고 있습니다</td></tr>
+              </tbody>
+            </table>
           </div>
         </section>
 
-        <details class="settings-panel" aria-label="모터 설정 파일" open>
-          <summary class="section-head">
+        <section class="settings-panel motor-config-file-panel" aria-label="모터 설정 파일">
+          <div class="section-head">
             <strong>현재 프로젝트 모터축 설정</strong>
             <span id="motorConfigState">불러오지 않음</span>
-          </summary>
-          <div class="registry-actions">
-            <button id="reloadMotorConfigButton" type="button">설정 다시 불러오기</button>
-            <button id="deleteMotorConfigButton" class="danger" type="button" disabled>현재 설정 파일 휴지통으로 이동</button>
           </div>
-        </details>
+          <div class="registry-actions settings-file-actions">
+            <button id="reloadMotorConfigButton" type="button">설정 불러오기</button>
+            <button id="deleteMotorConfigButton" class="danger" type="button" disabled>설정 삭제</button>
+          </div>
+        </section>
 
         <section class="axis-setup-step settings-step-card" aria-label="모터 타입별 검색">
           <div class="section-head axis-settings-head">
             <strong>1. 장비 검색</strong>
-            <span>AC Servo와 Dynamixel을 각각 독립적으로 검색합니다</span>
           </div>
           <div class="axis-scan-grid">
-            <section class="scan-panel axis-type-scan" aria-label="AC Servo 검색">
-              <button id="scanButton" class="primary" type="button">AC Servo 검색</button>
-              <span id="scanResult">EtherCAT 재검색 후 실제 Slave를 확인합니다</span>
+            <section class="axis-type-scan" aria-label="전체 모터 검색">
+              <button id="scanAllButton" class="primary" type="button">전체 모터 검색</button>
+              <span id="scanAllResult">대기</span>
             </section>
-            <section class="scan-panel axis-type-scan" aria-label="Dynamixel 검색">
+            <section class="axis-type-scan" aria-label="AC Servo 검색">
+              <button id="scanButton" class="primary" type="button">AC Servo 검색</button>
+              <span id="scanResult">대기</span>
+            </section>
+            <section class="axis-type-scan" aria-label="Dynamixel 검색">
               <button id="dynamixelScanButton" class="primary" type="button">Dynamixel 검색</button>
-              <span id="dynamixelScanResult">직렬 포트에서 Protocol 2.0, ID 0~252를 확인합니다</span>
+              <span id="dynamixelScanResult">대기</span>
             </section>
           </div>
-          <details class="axis-full-scan-tools">
-            <summary>전체 모터 순차 검색</summary>
-            <p>AC Servo 검색이 끝난 다음 Dynamixel 검색을 실행합니다. 한 타입만 성공하면 부분 완료로 표시합니다.</p>
-            <div class="scan-panel axis-primary-scan">
-              <button id="scanAllButton" type="button">전체 모터 검색</button>
-              <span id="scanAllResult">검색 전 · 새로 발견된 축은 자동으로 선택됩니다</span>
-            </div>
-          </details>
         </section>
 
         <section class="axis-settings-panel settings-step-card" aria-label="모터 축 설정 표">
@@ -267,8 +306,8 @@
 
           <div id="axisSettingsTabs" class="tabbar axis-settings-tabs" role="tablist" aria-label="모터 축 설정 화면">
             <button class="tab-button active" type="button" data-axis-settings-tab="current">축 목록 편집</button>
-            <button class="tab-button" type="button" data-axis-settings-tab="table">고급 설정 표</button>
-            <button class="tab-button" type="button" data-axis-settings-tab="raw">고급 원본 보기</button>
+            <button class="tab-button" type="button" data-axis-settings-tab="table">상세 설정 표</button>
+            <button class="tab-button" type="button" data-axis-settings-tab="raw">원본 보기</button>
           </div>
 
           <div class="axis-settings-tab-panel" data-axis-settings-panel="current">
@@ -279,66 +318,57 @@
               <small id="axisWorkflowNext">다음 작업을 확인하고 있습니다.</small>
             </div>
             <div id="axisActionMessage" class="registry-message">전체 모터 검색을 실행하면 신규 축이 자동 선택됩니다</div>
-            <div class="axis-action-groups">
-              <div class="axis-action-group axis-action-primary">
-                <strong>기본 작업</strong>
-                <div class="registry-actions">
-                  <button id="addAxisButton" class="primary" type="button" disabled>선택 축 추가</button>
-                  <button id="updateAxisIdentityButton" type="button" disabled>선택 축 연결정보 변경</button>
-                </div>
+            <div class="axis-edit-toolbar">
+              <div class="registry-actions axis-edit-main-actions">
+                <button id="addAxisButton" class="primary" type="button" disabled>선택 축 추가</button>
+                <button id="updateAxisIdentityButton" type="button" disabled>선택 축 연결정보 변경</button>
+                <button id="toggleAxisButton" type="button" disabled>선택 축 사용상태 변경</button>
               </div>
-              <div class="axis-action-group">
-                <strong>축 편집</strong>
-                <div class="registry-actions">
-                  <button id="deleteAxisButton" type="button" disabled>선택 축 삭제</button>
-                  <button id="toggleAxisButton" type="button" disabled>선택 축 사용상태 변경</button>
-                  <button id="sortAxisButton" type="button" disabled>축 번호 정렬</button>
-                </div>
+              <div class="registry-actions axis-edit-list-actions">
+                <button id="sortAxisButton" type="button" disabled>축 번호 정렬</button>
+              </div>
+              <div class="registry-actions axis-edit-danger-actions">
+                <button id="deleteAxisButton" class="danger" type="button" disabled>선택 축 삭제</button>
               </div>
             </div>
-            <details class="axis-hardware-tools">
-              <summary>고급 장비 설정</summary>
-              <p>실제 서보 드라이버 또는 프로젝트 전체 설정을 변경합니다. 필요한 경우에만 사용하세요.</p>
-              <div class="registry-actions">
-                <button id="writeEthercatAliasButton" type="button" disabled>EEPROM Alias 변경</button>
-              </div>
-            </details>
             <div class="matching-table-wrap">
               <table class="matching-table">
                 <thead>
                   <tr>
                     <th>선택</th>
-                    <th title="프로그램에서 명령을 보내는 고유 논리 축 번호">Control Index</th>
-                    <th>ID</th>
-                    <th title="현재 프로젝트 파일에 저장된 값">프로젝트 Alias</th>
-                    <th title="이번 검색에서 서보드라이버 SII EEPROM으로부터 직접 읽은 값">직접 스캔 Alias</th>
-                    <th title="ESC 레지스터 0x0012에서 읽은 현재 적용 주소">Station Alias</th>
-                    <th title="현재 EtherCAT 배선 순서에서 검색된 위치">Slave Position</th>
-                    <th>모터 종류</th>
-                    <th>이름</th>
-                    <th>드라이버 / 모델</th>
-                    <th>설정 상태</th>
-                    <th>검색 결과</th>
-                    <th>실행 상태</th>
-                    <th>사용 상태</th>
+                    <th>축·이름</th>
+                    <th>실제 장치 식별</th>
+                    <th>연결 정보</th>
+                    <th>설정·실행 적용</th>
+                    <th>모션 매칭</th>
+                    <th>서보·토크</th>
+                    <th>조그·동작</th>
+                    <th>모션 실행</th>
+                    <th>최종 상태</th>
                   </tr>
                 </thead>
                 <tbody id="axisRows">
                   <tr>
-                    <td colspan="14" class="empty">설정 파일을 불러오거나 모터 스캔을 실행하세요</td>
+                    <td colspan="10" class="empty">설정 파일을 불러오거나 모터 스캔을 실행하세요</td>
                   </tr>
                 </tbody>
               </table>
             </div>
+            <details class="axis-hardware-tools">
+              <summary>고급 장비 설정</summary>
+              <p>AC Servo · EtherCAT EEPROM Alias</p>
+              <div class="registry-actions">
+                <button id="writeEthercatAliasButton" type="button" disabled>EEPROM Alias 변경</button>
+              </div>
+            </details>
           </div>
 
           <div class="axis-settings-tab-panel hidden" data-axis-settings-panel="table">
-            <div class="registry-message">표에서 필요한 항목을 수정한 뒤 표 업데이트를 누르고, 확인 후 파일 저장을 누르세요.</div>
+            <div class="registry-message">값 수정 → 초안 반영 → 변경 내용 검증 후 저장</div>
             <div id="motorConfigTablePath" class="registry-message config-file-path">설정 파일: -</div>
-            <div class="registry-message">파일 이름 변경·가져오기·내보내기·삭제는 왼쪽 프로젝트 파일의 ⋮ 버튼에서 관리합니다.</div>
+            <div class="registry-message">파일 관리 · 프로젝트 파일 ⋮</div>
             <div class="registry-actions">
               <button id="updateConfigTableButton" type="button" disabled>표 변경값을 초안에 반영</button>
-              <button id="saveConfigTableButton" class="primary" type="button" disabled>설정 파일 저장</button>
             </div>
             <div class="config-profile-help">
               <strong>프로파일 값 기준</strong>
@@ -354,27 +384,23 @@
           </div>
         </section>
 
-        <section class="axis-setup-step settings-step-card settings-commit-card" aria-label="모터 설정 검증 및 저장">
+        <section class="axis-setup-step settings-step-card settings-final-card" aria-label="모터 설정 저장 및 실행 적용">
           <div class="section-head axis-settings-head">
-            <strong>3. 검증 및 저장</strong>
-            <span>편집한 축 구성의 오류를 확인한 뒤 프로젝트 파일에 저장합니다</span>
+            <strong>3. 저장·실행 적용</strong>
+            <span>프로젝트 설정 저장 → 실행 설정 적용</span>
           </div>
-          <div class="settings-commit-actions">
-            <div class="registry-message">현재 상태와 설정 상태를 확인하세요. 저장만으로는 모터 제어 시스템이 재시작되지 않습니다.</div>
-            <div class="registry-actions">
+          <div class="registry-message settings-final-note">
+            저장 · 프로젝트 파일 │ 적용 · 실행 설정 · motor_manager 재시작
+          </div>
+          <div class="settings-final-actions">
+            <div class="settings-final-action">
+              <span>프로젝트 설정</span>
               <button id="saveAxisConfigButton" class="primary" type="button" disabled>변경 내용 검증 후 저장</button>
             </div>
-          </div>
-        </section>
-
-        <section class="axis-setup-step axis-apply-step settings-step-card" aria-label="모터 설정 적용">
-          <div class="section-head axis-settings-head">
-            <strong>4. 실제 시스템 적용</strong>
-            <span>저장된 프로젝트 설정을 실행 시스템에 반영</span>
-          </div>
-          <div class="registry-message axis-apply-warning">주의: 이 버튼을 누를 때만 제어 노드가 재시작됩니다. 검색이나 파일 저장만으로는 서보 상태를 변경하지 않습니다.</div>
-          <div class="registry-actions">
-            <button id="applyAxisConfigButton" class="danger" type="button" disabled>설정 적용 및 재시작</button>
+            <div class="settings-final-action settings-final-apply">
+              <span>실행 설정</span>
+              <button id="applyAxisConfigButton" class="danger" type="button" disabled>설정 적용 및 재시작</button>
+            </div>
           </div>
         </section>
       </section>
@@ -495,15 +521,8 @@
                 <button id="selectedAcServoFaultResetButton" type="button" disabled>오류 초기화</button>
               </div>
             </div>
-            <div class="servo-action-group">
-              <span>전체 AC 서보</span>
-              <div class="manual-actions servo-control-actions">
-                <button id="allAcServoOnButton" class="primary" type="button" disabled>전체 켜기</button>
-                <button id="allAcServoOffButton" class="off" type="button" disabled>전체 끄기</button>
-              </div>
-            </div>
           </div>
-          <div id="acServoControlMessage" class="registry-message">AC 서보 축을 선택하거나 전체 AC 서보 명령을 사용하세요</div>
+          <div id="acServoControlMessage" class="registry-message">선택 축을 제어합니다. 전체 AC 서보 명령과 축별 상태 관리는 모터 관리 화면에 있습니다.</div>
         </section>
 
         <div class="motion-test-grid">
@@ -1240,7 +1259,7 @@
           <section class="studio-layer-manager-panel hidden" data-layer-manager-panel="merge">
             <div class="studio-layer-manager-guide">
               <strong>레이어 합치기</strong>
-              <span>합칠 레이어를 2개 이상 선택하면 충돌과 급변을 검사한 뒤 새 레이어를 만듭니다.</span>
+              <span>모든 모션축에 포인트가 생성된 레이어만 선택할 수 있습니다. 같은 Motion ID의 시간이 겹치면 합치지 않습니다.</span>
             </div>
             <div class="table-wrap studio-layer-manager-table-wrap">
               <table class="studio-layer-manager-table">
@@ -1268,7 +1287,7 @@
               <button id="studioEditorRedoButton" type="button" disabled>다시 실행</button>
             </div>
             <div class="studio-editor-preview-actions">
-              <span>현재 기능의 결과를 확인한 뒤 작업본에 반영하세요</span>
+              <span>미리보기 후 반영</span>
               <button id="studioEditorApplyButton" type="button">변경 미리보기</button>
               <button id="studioEditorUpdateButton" class="primary" type="button" disabled>작업본 반영</button>
             </div>
@@ -1317,85 +1336,103 @@
                   <button id="studioEditorValueZoomInButton" type="button">확대</button>
                   <button id="studioEditorValueZoomOutButton" type="button">축소</button>
                 </div>
-                <button id="studioEditorFitSelectionButton" type="button">선택 구간 맞춤</button>
+                <button id="studioEditorValueRangeLockButton" type="button" aria-pressed="false">축 범위 고정</button>
+                <button id="studioEditorFitSelectionButton" type="button">선택 포인트 맞춤</button>
                 <button id="studioEditorFitAllButton" type="button">전체 맞춤</button>
               </div>
               <div class="studio-editor-canvas-wrap"><canvas id="studioEditorGraph" height="430"></canvas></div>
               <div id="studioEditorLegend" class="studio-layer-graph-legend"></div>
-              <div id="studioEditorCursorInfo" class="studio-editor-cursor-info">그래프 위에 마우스를 올리세요</div>
-              <div id="studioEditorMessage" class="registry-message">결과를 미리 본 뒤 편집 반영하여 작업본에 누적하세요.</div>
-            </div>
-            <aside id="studioEditorInspector" class="studio-editor-inspector">
-              <div class="studio-editor-inspector-head">
-                <strong>편집 인스펙터</strong>
-                <span id="studioEditorInspectorState" class="status-chip off">선택 없음</span>
+              <div class="studio-editor-feedback">
+                <div id="studioEditorSelectedPointSummary" class="studio-editor-selected-point hidden" aria-live="polite">
+                  <strong id="studioEditorSelectedPointTitle">선택 포인트</strong>
+                  <span class="studio-editor-selected-point-values">
+                    <small>시작</small>
+                    <b id="studioEditorSelectedPointStartTime">-</b>
+                    <b id="studioEditorSelectedPointStartValue">-</b>
+                  </span>
+                  <i aria-hidden="true">→</i>
+                  <span id="studioEditorSelectedPointEnd" class="studio-editor-selected-point-values">
+                    <small>끝</small>
+                    <b id="studioEditorSelectedPointEndTime">선택 필요</b>
+                    <b id="studioEditorSelectedPointEndValue">-</b>
+                  </span>
+                </div>
+                <div class="studio-editor-feedback-text">
+                  <div id="studioEditorCursorInfo" class="studio-editor-cursor-info">그래프 위에 마우스를 올리세요</div>
+                  <span aria-hidden="true">·</span>
+                  <div id="studioEditorMessage" class="registry-message">편집 결과가 여기에 표시됩니다.</div>
+                </div>
               </div>
-              <section class="studio-editor-operation-panel">
-                <strong id="studioEditorOperationTitle">선택 구간 편집</strong>
-                <p id="studioEditorSelectionGuide" class="studio-editor-selection-guide">그래프에서 모션점이나 포인트를 선택하세요.</p>
-                <div id="studioEditorScopeControls" class="studio-editor-scope-controls">
-                  <strong>편집 구간</strong>
-                  <label class="compact-field studio-editor-range-field"><span>시작(초)</span><input id="studioEditorStart" type="number" min="0" step="0.02" placeholder="선택" value=""></label>
-                  <label class="compact-field studio-editor-range-field"><span>끝(초)</span><input id="studioEditorEnd" type="number" min="0" step="0.02" placeholder="선택" value=""></label>
-                  <button id="studioEditorSelectWholeRangeButton" type="button">레이어 전체 구간</button>
-                  <small>그래프에서 시작점과 끝점을 클릭하거나 시간을 직접 입력하세요.</small>
+              <aside id="studioEditorInspector" class="studio-editor-inspector">
+                <div class="studio-editor-inspector-head">
+                  <strong>편집 인스펙터</strong>
+                  <span id="studioEditorInspectorState" class="status-chip off">선택 없음</span>
                 </div>
-                <div class="studio-editor-conversion-controls">
-                  <strong>구간 종류 변환</strong>
-                  <label class="compact-field studio-editor-inspector-field"><span>근사 정밀도</span>
-                    <select id="studioEditorApproximationTolerance">
-                      <option value="0.5">부드럽게 (0.5°)</option>
-                      <option value="0.1" selected>표준 (0.1°)</option>
-                      <option value="0.02">정밀하게 (0.02°)</option>
-                    </select>
-                  </label>
-                  <label class="compact-field studio-editor-inspector-field"><span>근사 곡선</span>
-                    <select id="studioEditorApproximationOrder">
-                      <option value="1">1차 (직선)</option>
-                      <option value="3" selected>3차 (부드럽게)</option>
-                      <option value="5">5차 (더 부드럽게)</option>
-                    </select>
-                  </label>
-                  <label class="compact-field studio-editor-inspector-field"><span>최대 포인트</span>
-                    <input id="studioEditorApproximationMaximumPoints" type="number" min="3" max="200" step="1" value="50">
-                  </label>
-                  <button id="studioEditorConvertToPointsButton" type="button">일반 모션 → 포인트 모션</button>
-                  <small>일반 모션은 직접 편집할 수 없습니다. 변환 결과를 저장한 뒤 포인트 편집이 활성화됩니다.</small>
+                <div class="studio-editor-inspector-content">
+                  <section class="studio-editor-operation-panel">
+                    <div class="studio-editor-operation-summary">
+                      <strong id="studioEditorOperationTitle">포인트 편집</strong>
+                      <p id="studioEditorSelectionGuide" class="studio-editor-selection-guide">축 전체 포인트 생성 후 편집 가능</p>
+                    </div>
+                    <div class="studio-editor-conversion-controls">
+                      <label class="compact-field studio-editor-inspector-field"><span>정밀도</span>
+                        <select id="studioEditorApproximationTolerance">
+                          <option value="0.5">부드럽게 (0.5°)</option>
+                          <option value="0.1" selected>표준 (0.1°)</option>
+                          <option value="0.02">정밀하게 (0.02°)</option>
+                        </select>
+                      </label>
+                      <label class="compact-field studio-editor-inspector-field"><span>곡선</span>
+                        <select id="studioEditorApproximationOrder">
+                          <option value="1">1차 (직선)</option>
+                          <option value="3" selected>3차 (부드럽게)</option>
+                          <option value="5">5차 (더 부드럽게)</option>
+                        </select>
+                      </label>
+                      <label class="compact-field studio-editor-inspector-field"><span>포인트 수</span>
+                        <input id="studioEditorApproximationMaximumPoints" type="number" min="3" max="200" step="1" value="200">
+                      </label>
+                      <button id="studioEditorCreatePointsButton" type="button">전체 포인트 생성</button>
+                    </div>
+                    <div class="studio-editor-operations hidden">
+                      <select id="studioEditorOperation" class="hidden" aria-hidden="true" tabindex="-1">
+                        <option value="time_scale">시간 배율</option>
+                        <option value="value_scale">모션값 배율</option>
+                        <option value="time_shift">시간 이동</option>
+                        <option value="value_offset">모션값 이동</option>
+                        <option value="point_curve">포인트 곡선</option>
+                      </select>
+                      <div class="studio-editor-operation-choices" role="radiogroup" aria-label="편집 기능">
+                        <button type="button" data-studio-editor-operation="time_shift" aria-pressed="false">시간 이동</button>
+                        <button type="button" data-studio-editor-operation="time_scale" aria-pressed="true">시간 배율</button>
+                        <button type="button" data-studio-editor-operation="value_offset" aria-pressed="false">모션값 이동</button>
+                        <button type="button" data-studio-editor-operation="value_scale" aria-pressed="false">모션값 배율</button>
+                        <button class="studio-editor-point-operation" type="button" data-studio-editor-operation="point_curve" aria-pressed="false">포인트 곡선</button>
+                      </div>
+                      <label class="compact-field hidden" data-studio-editor-value="offset"><span>이동값(°)</span><input id="studioEditorOffset" type="number" step="0.1" value="0"></label>
+                      <label class="compact-field" data-studio-editor-value="factor"><span id="studioEditorFactorLabel">시간 배율</span><input id="studioEditorFactor" type="number" min="0.01" max="100" step="0.01" value="1.00"></label>
+                      <label class="compact-field hidden" data-studio-editor-value="delta"><span>이동값(ms)</span><input id="studioEditorDelta" type="number" step="20" value="0"></label>
+                      <div id="studioEditorPointControls" class="studio-editor-point-controls hidden" data-studio-editor-value="points">
+                        <button id="studioEditorPointAddButton" class="primary" type="button" disabled>포인트 추가</button>
+                        <label class="compact-field"><span>곡선</span><select id="studioEditorPointCurveOrder">
+                          <option value="1">직선</option><option value="3" selected>3차 곡선</option><option value="5">5차 곡선</option>
+                        </select></label>
+                        <label class="compact-field"><span>끝(초)</span><input id="studioEditorPointTimelineEnd" type="number" min="0.02" step="0.02" value="10.00"></label>
+                        <label class="compact-field"><span>시간(초)</span><input id="studioEditorPointTime" type="number" min="0" step="0.02" disabled></label>
+                        <label class="compact-field"><span>모션값(°)</span><input id="studioEditorPointValue" type="number" step="0.01" disabled></label>
+                        <label class="compact-field"><span>탄젠트</span><select id="studioEditorPointMode" disabled>
+                          <option value="auto">자동</option><option value="smooth">부드럽게</option><option value="broken">분리</option>
+                        </select></label>
+                      </div>
+                    </div>
+                    <div id="studioEditorOperationHelp" class="studio-editor-operation-help hidden">선택한 포인트의 시간을 조절합니다.</div>
+                  </section>
+                  <section id="studioEditorDangerZone" class="studio-editor-danger-zone hidden">
+                    <button id="studioEditorPointDeleteButton" class="off" type="button" disabled>포인트 삭제</button>
+                  </section>
                 </div>
-                <div class="studio-editor-operations">
-                  <label class="compact-field studio-editor-operation-field"><span>편집 기능</span><select id="studioEditorOperation">
-                    <option value="time_scale">시간 배율</option>
-                    <option value="value_scale">모션값 배율</option>
-                    <option value="time_shift">시간 이동</option>
-                    <option value="value_offset">모션값 이동</option>
-                    <option value="point_curve">포인트 곡선</option>
-                  </select></label>
-                  <label class="compact-field hidden" data-studio-editor-value="offset"><span>이동값(°)</span><input id="studioEditorOffset" type="number" step="0.1" value="0"></label>
-                  <label class="compact-field" data-studio-editor-value="factor"><span id="studioEditorFactorLabel">시간 배율</span><input id="studioEditorFactor" type="number" min="0.01" max="100" step="0.01" value="1.00"></label>
-                  <label class="compact-field hidden" data-studio-editor-value="delta"><span>이동값(ms)</span><input id="studioEditorDelta" type="number" step="20" value="0"></label>
-                  <div id="studioEditorPointControls" class="studio-editor-point-controls hidden" data-studio-editor-value="points">
-                    <span>포인트 추가·드래그 / 배경 드래그로 시간축 이동</span>
-                    <label class="compact-field"><span>구간 곡선</span><select id="studioEditorPointCurveOrder">
-                      <option value="1">직선</option><option value="3" selected>3차 곡선</option><option value="5">5차 곡선</option>
-                    </select></label>
-                    <label class="compact-field"><span>시간축 끝(초)</span><input id="studioEditorPointTimelineEnd" type="number" min="0.02" step="0.02" value="10.00"></label>
-                    <label class="compact-field"><span>시간(초)</span><input id="studioEditorPointTime" type="number" min="0" step="0.02" disabled></label>
-                    <label class="compact-field"><span>모션값(°)</span><input id="studioEditorPointValue" type="number" step="0.01" disabled></label>
-                    <label class="compact-field"><span>탄젠트</span><select id="studioEditorPointMode" disabled>
-                      <option value="auto">자동</option><option value="smooth">부드럽게</option><option value="broken">분리</option>
-                    </select></label>
-                  </div>
-                </div>
-                <div id="studioEditorOperationHelp" class="studio-editor-operation-help">시작점을 기준으로 선택 구간의 시간을 배율만큼 줄이거나 늘립니다.</div>
-              </section>
-              <section id="studioEditorDangerZone" class="studio-editor-danger-zone hidden">
-                <strong>구간 관리</strong>
-                <small>선택한 포인트 또는 곡선 구간에 적용되는 위험 작업입니다.</small>
-                <button id="studioEditorPointDeleteButton" class="off" type="button" disabled>포인트 삭제</button>
-                <button id="studioEditorCurveDetachButton" type="button" disabled>포인트 모션 → 일반 모션</button>
-                <button id="studioEditorCurveDeleteButton" class="off" type="button" disabled>곡선 구간 삭제</button>
-              </section>
-            </aside>
+              </aside>
+            </div>
           </div>
         </section>
       </div>
@@ -1470,13 +1507,49 @@
       </div>
     </main>
 
-    <div id="restartOverlay" class="restart-overlay hidden" role="status" aria-live="polite" aria-modal="true">
-      <div class="restart-dialog">
-        <div class="restart-spinner" aria-hidden="true"></div>
-        <strong id="restartOverlayTitle">설정 적용·재시작 중입니다</strong>
-        <p id="restartOverlayMessage">motor_manager_node, motion_state_monitor, motion_supervisor, motion_web_bridge가 다시 시작될 때까지 기다려 주세요.</p>
-        <div id="restartOverlayDetail" class="restart-detail">모터 상태 수신을 기다리는 중</div>
-      </div>
+    <div id="projectFileActionMenu" class="project-file-action-menu hidden" role="menu" aria-label="프로젝트 파일 관리">
+      <strong id="projectFileActionTitle">프로젝트 파일</strong>
+      <button id="projectFileOpenEditorButton" type="button" role="menuitem" disabled>기능 탭에서 열기</button>
+      <button id="projectFileRenameButton" type="button" role="menuitem" disabled>이름 변경</button>
+      <button id="projectFileActivateButton" type="button" role="menuitem" disabled>현재 설정으로 선택</button>
+      <button id="projectFileExportButton" type="button" role="menuitem" disabled>외부로 내보내기</button>
+      <div class="project-file-action-divider"></div>
+      <button id="projectFileDeleteButton" class="off" type="button" role="menuitem" disabled>휴지통으로 이동</button>
+    </div>
+
+    <div id="operationProgressModal" class="operation-progress-overlay hidden" role="dialog" aria-live="polite" aria-modal="true" aria-labelledby="operationProgressTitle">
+      <section class="operation-progress-dialog">
+        <div class="operation-progress-head">
+          <div id="operationProgressSpinner" class="operation-progress-spinner" aria-hidden="true"></div>
+          <div>
+            <strong id="operationProgressTitle">작업 진행 중</strong>
+            <span id="operationProgressElapsed">경과 0.0초</span>
+          </div>
+          <b id="operationProgressState" data-state="running">진행 중</b>
+        </div>
+        <p id="operationProgressMessage">작업 상태를 확인하고 있습니다.</p>
+        <div id="operationProgressDetail" class="operation-progress-detail">응답 대기</div>
+        <div id="operationProgressLog" class="operation-progress-log hidden" aria-label="작업 진행 기록"></div>
+        <div class="operation-progress-actions">
+          <button id="operationProgressClearButton" class="hidden" type="button" disabled>내용 지우기</button>
+          <button id="operationProgressCloseButton" class="primary" type="button" disabled>확인</button>
+        </div>
+      </section>
+    </div>
+
+    <div id="appDialogModal" class="app-dialog-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="appDialogTitle">
+      <section class="app-dialog">
+        <strong id="appDialogTitle">확인</strong>
+        <p id="appDialogMessage"></p>
+        <label id="appDialogInputWrap" class="app-dialog-input hidden">
+          <span>입력값</span>
+          <input id="appDialogInput" type="text" autocomplete="off">
+        </label>
+        <div class="app-dialog-actions">
+          <button id="appDialogCancelButton" type="button">취소</button>
+          <button id="appDialogConfirmButton" class="primary" type="button">확인</button>
+        </div>
+      </section>
     </div>
 
     <div id="motorErrorPopup" class="motor-error-popup hidden" role="alertdialog" aria-live="assertive" aria-modal="true" aria-labelledby="motorErrorTitle">
@@ -1492,20 +1565,6 @@
       </div>
     </div>
 
-    <div id="motorScanProgressModal" class="motor-scan-progress-overlay hidden" role="dialog" aria-live="polite" aria-modal="true" aria-labelledby="motorScanProgressTitle">
-      <section class="motor-scan-progress-dialog">
-        <div class="motor-scan-progress-header">
-          <strong id="motorScanProgressTitle">모터 직접 스캔</strong>
-          <span id="motorScanProgressState" data-state="running">스캔 준비 중</span>
-        </div>
-        <div id="motorScanProgressList" class="motor-scan-progress-list" aria-label="실시간 모터 스캔 내용"></div>
-        <div class="motor-scan-progress-actions">
-          <button id="motorScanProgressClearButton" type="button">내용 지우기</button>
-          <button id="motorScanProgressCloseButton" type="button" class="primary">닫기</button>
-        </div>
-      </section>
-    </div>
-
-    <script type="module" src="/static/app.js?v=20260724-range-recovery-1"></script>
+    <script type="module" src="/static/app.js?v=20260727-editor-compact-feedback-1"></script>
   </body>
 </html>

@@ -593,6 +593,87 @@ def test_ac_servo_scan_temporarily_releases_and_restores_motor_service(monkeypat
     ]
 
 
+def test_ethercat_release_waits_until_slaves_leave_operational_state(monkeypatch):
+    calls = []
+    slave_outputs = iter([
+        '0  0:0  OP  +  Drive\\n',
+        '0  0:0  PREOP  +  Drive\\n',
+    ])
+
+    def run(command, **_kwargs):
+        calls.append(command)
+        if command == ['ethercat', 'master']:
+            return type('Result', (), {
+                'returncode': 0,
+                'stdout': 'Phase: Idle\\nActive: no\\n',
+                'stderr': '',
+            })()
+        return type('Result', (), {
+            'returncode': 0,
+            'stdout': next(slave_outputs),
+            'stderr': '',
+        })()
+
+    monkeypatch.setattr('motion_web_bridge.bridge_node.subprocess.run', run)
+    monkeypatch.setattr('motion_web_bridge.bridge_node.time.sleep', lambda _sec: None)
+
+    MotionWebBridge._wait_for_ethercat_release(1.0)
+
+    assert calls.count(['ethercat', 'slaves']) == 2
+
+
+def test_motor_runtime_recovery_requires_fresh_online_feedback():
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._lock = threading.Lock()
+    bridge._motion_state_received_at = time.time() + 1.0
+    bridge._motion_state = {
+        'motors': [{
+            'controller_index': 0,
+            'transport': 'ethercat',
+            'connection_connected': True,
+            'fault': False,
+        }],
+    }
+
+    result = bridge._wait_for_motor_runtime_recovery([0], timeout_sec=0.1)
+
+    assert result['recovered'] is True
+    assert result['online_axes'] == [0]
+
+
+def test_execution_context_blocks_control_when_one_axis_is_offline():
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._execution_context_lock = threading.Lock()
+    bridge._execution_context_status = {'ready': True, 'context_id': 'ctx'}
+    bridge._lock = threading.Lock()
+    bridge._motion_state_received_at = time.time()
+    bridge._motion_state = {
+        'motors': [
+            {
+                'controller_index': 0,
+                'connection_state': 'online',
+                'connection_connected': True,
+                'fault': False,
+            },
+            {
+                'controller_index': 1,
+                'connection_state': 'offline',
+                'connection_connected': False,
+                'fault': False,
+            },
+        ],
+    }
+    bridge.project_repository = type('Repository', (), {
+        'selected_project_id': lambda _self: '',
+    })()
+
+    status = bridge.execution_context_status(validate_files=False)
+
+    assert status['ready'] is True
+    assert status['control_allowed'] is False
+    assert '1' in status['control_block_reason']
+
+
 def test_ac_servo_scan_is_blocked_while_runtime_velocity_is_nonzero(monkeypatch):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge._lock = threading.Lock()
@@ -600,7 +681,11 @@ def test_ac_servo_scan_is_blocked_while_runtime_velocity_is_nonzero(monkeypatch)
         'motors': [{
             'controller_index': 2,
             'transport': 'ethercat',
+            'connection_state': 'online',
+            'connection_connected': True,
+            'fault': False,
             'velocity_deg_s': 1.5,
+            'target_reached': False,
         }],
     }
     bridge._motion_state_received_at = time.time()
@@ -626,6 +711,91 @@ def test_ac_servo_scan_is_blocked_while_runtime_velocity_is_nonzero(monkeypatch)
     assert result['scan_blocked'] is True
     assert '축 2' in result['message']
     assert '움직이는 중' in result['message']
+
+
+def test_ac_servo_scan_ignores_stopped_servo_velocity_quantization_noise():
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._lock = threading.Lock()
+    bridge._motion_state = {
+        'motors': [{
+            'controller_index': 2,
+            'transport': 'ethercat',
+            'connection_state': 'online',
+            'connection_connected': True,
+            'fault': False,
+            'velocity_deg_s': 2.1,
+            'target_reached': True,
+        }],
+    }
+    bridge._motion_state_received_at = time.time()
+    bridge._motion_run_lock = threading.Lock()
+    bridge._motion_run_status = {}
+    bridge._motion_studio_lock = threading.Lock()
+    bridge._motion_studio_status = {}
+    bridge.project_repository = type('Repository', (), {
+        'selected_project_id': lambda _self: 'project-a',
+    })()
+    bridge.snapshot = lambda: {}
+    bridge._current_project_generation = lambda: 3
+
+    assert bridge._ethercat_scan_safety_blocker() == ''
+
+
+def test_ac_servo_scan_blocks_clear_motion_even_when_target_is_reached():
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._lock = threading.Lock()
+    bridge._motion_state = {
+        'motors': [{
+            'controller_index': 4,
+            'transport': 'ethercat',
+            'connection_state': 'online',
+            'connection_connected': True,
+            'fault': False,
+            'velocity_deg_s': 5.1,
+            'target_reached': True,
+        }],
+    }
+    bridge._motion_state_received_at = time.time()
+    bridge._motion_run_lock = threading.Lock()
+    bridge._motion_run_status = {}
+    bridge._motion_studio_lock = threading.Lock()
+    bridge._motion_studio_status = {}
+    bridge.project_repository = type('Repository', (), {
+        'selected_project_id': lambda _self: 'project-a',
+    })()
+    bridge.snapshot = lambda: {}
+    bridge._current_project_generation = lambda: 3
+
+    blocker = bridge._ethercat_scan_safety_blocker()
+
+    assert '축 4' in blocker
+    assert '움직이는 중' in blocker
+
+
+def test_ac_servo_scan_ignores_stale_velocity_when_axis_is_bus_down():
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._lock = threading.Lock()
+    bridge._motion_state = {
+        'motors': [{
+            'controller_index': 0,
+            'transport': 'ethercat',
+            'connection_state': 'bus_down',
+            'connection_connected': False,
+            'fault': True,
+            'velocity_deg_s': 6.0,
+            'target_reached': False,
+        }],
+    }
+    bridge._motion_state_received_at = time.time()
+    bridge._motion_run_lock = threading.Lock()
+    bridge._motion_run_status = {}
+    bridge._motion_studio_lock = threading.Lock()
+    bridge._motion_studio_status = {}
+    bridge.project_repository = type('Repository', (), {
+        'selected_project_id': lambda _self: 'project-a',
+    })()
+
+    assert bridge._ethercat_scan_safety_blocker() == ''
 
 
 def test_scan_result_is_discarded_after_a_to_b_to_a_project_switch():
@@ -766,6 +936,16 @@ def test_ready_context_is_not_reapplied_during_an_active_operation():
 
 def test_record_prepares_unified_project_before_requesting_operation():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._lock = threading.Lock()
+    bridge._motion_state_received_at = time.time()
+    bridge._motion_state = {
+        'motors': [{
+            'controller_index': 0,
+            'connection_state': 'online',
+            'connection_connected': True,
+            'fault': False,
+        }],
+    }
     calls = []
     bridge.prepare_unified_motion_studio = lambda: calls.append('prepare') or {
         'success': True,

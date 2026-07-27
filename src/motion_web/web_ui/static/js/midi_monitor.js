@@ -9,6 +9,7 @@ import {
   selectMidiBank,
   updateMidiBank,
 } from './api.js?v=20260722-motor-config-delete';
+import { showConfirm } from './ui_dialogs.js?v=20260727-popup-common-3';
 
 const MIDI_MAX = 16383;
 const CHANNEL_COUNT = 8;
@@ -520,7 +521,10 @@ export function createMidiMonitorController({ el, onMappingFileSaved }) {
   async function removeBank() {
     if (!activeBankId || banks.length <= 1) return;
     const bankName = bankNameDraft || activeBankId;
-    if (!window.confirm(`'${bankName}' 뱅크를 삭제할까요?`)) return;
+    if (!await showConfirm(
+      `'${bankName}' 뱅크를 삭제할까요?`,
+      { title: 'MIDI 뱅크 삭제', confirmLabel: '삭제', tone: 'danger' },
+    )) return;
     loading = true;
     render();
     try {
@@ -534,7 +538,10 @@ export function createMidiMonitorController({ el, onMappingFileSaved }) {
   }
 
   async function loadBanksFile() {
-    if (!window.confirm('현재 메모리의 MIDI 뱅크를 파일에 저장된 내용으로 바꿀까요?')) return;
+    if (!await showConfirm(
+      '현재 메모리의 MIDI 뱅크를 파일에 저장된 내용으로 바꿀까요?',
+      { title: 'MIDI 설정 불러오기', confirmLabel: '불러오기' },
+    )) return;
     loading = true;
     render();
     try {
@@ -548,7 +555,10 @@ export function createMidiMonitorController({ el, onMappingFileSaved }) {
   }
 
   async function resetRuntimeValues() {
-    if (!window.confirm('MIDI 실시간 값과 셀렉트를 초기화하고 전동 페이더를 0으로 이동할까요? 저장 파일은 변경되지 않습니다.')) return;
+    if (!await showConfirm(
+      'MIDI 실시간 값과 셀렉트를 초기화하고 전동 페이더를 0으로 이동할까요? 저장 파일은 변경되지 않습니다.',
+      { title: 'MIDI 상태 초기화', confirmLabel: '초기화', tone: 'warning' },
+    )) return;
     loading = true;
     render();
     try {

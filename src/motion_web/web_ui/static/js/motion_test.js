@@ -12,6 +12,7 @@ import {
   requestDynamixelJog,
   requestMotionSafetyStop,
 } from './api.js?v=20260722-motor-config-delete';
+import { showConfirm } from './ui_dialogs.js?v=20260727-popup-common-3';
 
 const DEFAULT_MAX_JOG_DELTA_DEG = 360.0;
 const MOTION_DONE_VELOCITY_DEG_SEC = 0.05;
@@ -1232,8 +1233,9 @@ export function createMotionTestController({ el, getLatestState }) {
     }
     if (action === 'servo_off') {
       const targetText = scope === 'all' ? '전체 AC 서보' : '선택 축 AC 서보';
-      const confirmed = window.confirm(
+      const confirmed = await showConfirm(
         `${targetText} 서보 끄기 명령을 보냅니다.\n서보가 꺼지면 부하가 풀릴 수 있습니다. 계속할까요?`,
+        { title: 'AC Servo 끄기', confirmLabel: '서보 끄기', tone: 'danger' },
       );
       if (!confirmed) {
         if (el.acServoControlMessage) {
@@ -1399,6 +1401,10 @@ export function createMotionTestController({ el, getLatestState }) {
     resetProjectState,
     renderLatestState,
     selectAxis,
+    controlAcServo: async (action, axis) => {
+      selectAxis(axis);
+      await sendAcServoControl(action, 'selected');
+    },
     getSelectedAxis: () => selectedAxis,
   };
 }

@@ -20,6 +20,7 @@ import {
   formatNumber,
   normalizeMotorTypeKey,
 } from './format.js?v=20260718-korean-ui';
+import { showConfirm, showPrompt } from './ui_dialogs.js?v=20260727-popup-common-3';
 
 const MOTION_FILE_SIZE_LIMIT_BYTES = 10 * 1024 * 1024;
 const MOTOR_AXIS_ANGLE_ALERT_DEG = 360.0;
@@ -426,10 +427,11 @@ export function createMotionDataController({
     return true;
   }
 
-  function confirmDiscardMappingChanges(action) {
+  async function confirmDiscardMappingChanges(action) {
     if (!mappingDirty) return true;
-    return window.confirm(
+    return showConfirm(
       `저장하지 않은 모션축 설정 변경이 있습니다.\n변경 내용을 버리고 ${action}하시겠습니까?`,
+      { title: '저장하지 않은 변경', confirmLabel: '변경 버리기', tone: 'warning' },
     );
   }
 
@@ -1637,8 +1639,13 @@ export function createMotionDataController({
     return defaultMotionAxisRow(motionId, motorAxis);
   }
 
-  function addMotionId() {
-    const motionId = String(window.prompt('추가할 모션 ID를 입력하세요', '1-1') || '').trim();
+  async function addMotionId() {
+    const entered = await showPrompt('추가할 모션 ID를 입력하세요', {
+      title: 'Motion ID 추가',
+      defaultValue: '1-1',
+      confirmLabel: '추가',
+    });
+    const motionId = String(entered || '').trim();
     if (!motionId) return;
     if (mappingDraft.mappings.some((row) => String(row.motion_id) === motionId)) {
       setMappingMessage(`이미 존재하는 모션 ID입니다: ${motionId}`);
@@ -1800,13 +1807,13 @@ export function createMotionDataController({
     }
   }
 
-  function newMappingDraft() {
+  async function newMappingDraft() {
     const hasExistingDraft = Boolean(
       selectedMappingId
       || mappingDraft.motion_file_id
       || mappingDraft.mappings?.length,
     );
-    if (hasExistingDraft && !confirmDiscardMappingChanges('새 매칭을 작성')) return;
+    if (hasExistingDraft && !await confirmDiscardMappingChanges('새 매칭을 작성')) return;
     const enteredName = String(el.motionMappingName?.value || '').trim();
     if (!enteredName) {
       setMappingMessage('매핑 이름을 먼저 입력한 뒤 새 매칭 작성을 누르세요');
@@ -1915,9 +1922,10 @@ export function createMotionDataController({
 
   async function resetCurrentMapping() {
     const label = selectedMappingId || mappingDraft.name || '현재 모션축 설정';
-    const confirmed = window.confirm(
+    const confirmed = await showConfirm(
       `${label}의 저장하지 않은 편집 내용을 버립니다.\n`
       + '저장된 파일이 있으면 디스크에서 다시 불러옵니다.',
+      { title: '모션축 설정 되돌리기', confirmLabel: '편집 내용 버리기', tone: 'warning' },
     );
     if (!confirmed) return;
     if (selectedMappingId) {
@@ -1936,8 +1944,9 @@ export function createMotionDataController({
 
   async function deleteCurrentMapping() {
     if (!selectedMappingId) return;
-    const confirmed = window.confirm(
+    const confirmed = await showConfirm(
       `선택한 모션축 설정 파일을 현재 프로젝트 휴지통으로 이동합니다.\n${selectedMappingId}`,
+      { title: '모션축 설정 파일 삭제', confirmLabel: '휴지통으로 이동', tone: 'danger' },
     );
     if (!confirmed) return;
     mappingLoading = true;
@@ -2183,7 +2192,10 @@ export function createMotionDataController({
 
   async function deleteSelectedFile() {
     if (!selectedFileId) return;
-    const confirmed = window.confirm(`선택한 모션 파일을 삭제합니다.\n${selectedFileId}`);
+    const confirmed = await showConfirm(
+      `선택한 모션 파일을 삭제합니다.\n${selectedFileId}`,
+      { title: '모션 파일 삭제', confirmLabel: '삭제', tone: 'danger' },
+    );
     if (!confirmed) return;
     loading = true;
     setMessage('파일 삭제 중');
@@ -2239,10 +2251,11 @@ export function createMotionDataController({
 
   async function initializeCurrentMotionRun() {
     const hasMotionFile = Boolean(motionRunPayload().motion_file_id);
-    const confirmed = window.confirm(
+    const confirmed = await showConfirm(
       hasMotionFile
         ? '매핑된 축을 초기 위치로 이동합니다.'
         : '모션 파일이 없습니다.\n\n첫 프레임 방식 축은 모션 0°로 이동합니다.\n수동 방식 축은 설정한 초기위치로 이동합니다.\n계속할까요?',
+      { title: '초기 위치 이동', confirmLabel: '이동 시작', tone: 'warning' },
     );
     if (!confirmed) return;
     motionRunLoading = true;
@@ -2264,9 +2277,16 @@ export function createMotionDataController({
 
   async function startCurrentMotionRun(runMode = 'once') {
     const continuous = runMode === 'continuous';
-    const confirmed = window.confirm(continuous
-      ? '초기 위치 이동이 완료된 상태에서 연속 모션을 시작합니다. 정지 버튼을 누를 때까지 반복합니다.'
-      : '현재 선택된 모션 파일과 매핑 파일로 모션을 1회 시작합니다.');
+    const confirmed = await showConfirm(
+      continuous
+        ? '초기 위치 이동이 완료된 상태에서 연속 모션을 시작합니다. 정지 버튼을 누를 때까지 반복합니다.'
+        : '현재 선택된 모션 파일과 매핑 파일로 모션을 1회 시작합니다.',
+      {
+        title: continuous ? '연속 모션 시작' : '모션 1회 시작',
+        confirmLabel: '모션 시작',
+        tone: 'warning',
+      },
+    );
     if (!confirmed) return;
     motionRunLoading = true;
     setMotionRunMessage('모션 시작 요청 중');
@@ -2397,8 +2417,8 @@ export function createMotionDataController({
       });
     }
     if (el.motionMappingSelect) {
-      el.motionMappingSelect.addEventListener('change', () => {
-        if (!confirmDiscardMappingChanges('다른 매칭 파일을 불러오기')) {
+      el.motionMappingSelect.addEventListener('change', async () => {
+        if (!await confirmDiscardMappingChanges('다른 매칭 파일을 불러오기')) {
           renderMappingSelect();
           return;
         }
@@ -2406,8 +2426,8 @@ export function createMotionDataController({
       });
     }
     if (el.refreshMotionMappingsButton) {
-      el.refreshMotionMappingsButton.addEventListener('click', () => {
-        if (confirmDiscardMappingChanges('목록을 새로고침')) loadMappings();
+      el.refreshMotionMappingsButton.addEventListener('click', async () => {
+        if (await confirmDiscardMappingChanges('목록을 새로고침')) loadMappings();
       });
     }
     if (el.newMotionMappingButton) {
