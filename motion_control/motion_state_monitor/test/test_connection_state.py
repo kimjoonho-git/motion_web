@@ -413,6 +413,102 @@ Identity:
         self.assertEqual([row['controller_index'] for row in rows], list(range(5)))
         self.assertEqual([row['match_state'] for row in rows], ['configured'] * 5)
 
+    def test_runtime_motor_keeps_configured_slave_identity_for_scan_matching(self):
+        self.monitor._motor_metadata = {
+            0: {
+                'display_name': 'Axis 0',
+                'motor_type': 'minas',
+                'motor_type_label': 'AC Servo',
+                'transport': 'ethercat',
+                'transport_label': 'EtherCAT',
+                'alias': 0,
+                'ethercat_master_index': 0,
+                'slave_position': 0,
+            },
+        }
+        self.monitor._metadata_for = lambda axis: self.monitor._motor_metadata[axis]
+        runtime = [{
+            'controller_index': 0,
+            'display_name': 'Axis 0',
+            'motor_type': 'minas',
+            'transport': 'ethercat',
+            'alias': 0,
+            'state': 'detected',
+            'connection_state': 'online',
+            'connection_connected': True,
+        }]
+
+        axes = self.monitor._configured_axis_list(runtime)
+        rows = self.monitor._build_matching_rows(
+            [{
+                'master_index': 0,
+                'slave_position': 0,
+                'ethercat_alias': 0,
+                'rotary_alias': 0,
+            }],
+            axes,
+        )
+
+        self.assertEqual(axes[0]['slave_position'], 0)
+        self.assertEqual(rows[0]['controller_index'], 0)
+        self.assertEqual(rows[0]['match_state'], 'matched')
+
+    def test_ethercat_bus_poll_reports_powered_off_slaves_as_missing(self):
+        responses = iter([
+            SimpleNamespace(
+                returncode=0,
+                stdout='Phase: Operation\nActive: yes\n  Link: UP\n',
+                stderr='',
+            ),
+            SimpleNamespace(returncode=0, stdout='', stderr=''),
+        ])
+
+        with patch(
+            'motion_state_monitor.monitor_node.subprocess.run',
+            side_effect=lambda *_args, **_kwargs: next(responses),
+        ):
+            self.monitor._poll_ethercat_bus_status()
+
+        self.assertTrue(self.monitor._ethercat_status['master_active'])
+        self.assertTrue(self.monitor._ethercat_status['link_up'])
+        self.assertEqual(self.monitor._ethercat_status['slaves_responding'], 0)
+        self.assertEqual(
+            self.monitor._ethercat_axis_state({'alias': 0, 'slave_position': 0}),
+            '',
+        )
+
+    def test_ethercat_bus_poll_tracks_each_slave_operational_state(self):
+        responses = iter([
+            SimpleNamespace(
+                returncode=0,
+                stdout='Phase: Operation\nActive: yes\n  Link: UP\n',
+                stderr='',
+            ),
+            SimpleNamespace(
+                returncode=0,
+                stdout=(
+                    '0  0:0  OP  +  Drive A\n'
+                    '1  101:0  PREOP  +  Drive B\n'
+                ),
+                stderr='',
+            ),
+        ])
+
+        with patch(
+            'motion_state_monitor.monitor_node.subprocess.run',
+            side_effect=lambda *_args, **_kwargs: next(responses),
+        ):
+            self.monitor._poll_ethercat_bus_status()
+
+        self.assertEqual(
+            self.monitor._ethercat_axis_state({'alias': 0, 'slave_position': 0}),
+            'OP',
+        )
+        self.assertEqual(
+            self.monitor._ethercat_axis_state({'alias': 101, 'slave_position': 0}),
+            'PREOP',
+        )
+
     def test_runtime_motor_state_is_tagged_with_owning_project(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

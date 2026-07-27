@@ -154,6 +154,10 @@ class MotionStateMonitor(Node):
 
         period_sec = 1.0 / max(self.publish_hz, 0.1)
         self._timer = self.create_timer(period_sec, self._publish_motion_state)
+        self._ethercat_poll_timer = self.create_timer(
+            0.5,
+            self._poll_ethercat_bus_status,
+        )
 
         self.get_logger().info(
             f'motion_state_monitor started: input={self.input_topic}, '
@@ -943,6 +947,11 @@ class MotionStateMonitor(Node):
             age = now - float(motor.get('last_seen_at', now))
             motor['age_sec'] = round(age, 3)
             transport = str(motor.get('transport', '')).lower()
+            ethercat_axis_state = (
+                self._ethercat_axis_state(motor)
+                if transport == 'ethercat' and ethercat_available
+                else ''
+            )
             if not self.monitoring_enabled:
                 state = 'monitoring_off'
                 reason = 'monitoring_disabled'
@@ -958,6 +967,18 @@ class MotionStateMonitor(Node):
             elif transport == 'ethercat' and ethercat_down:
                 state = 'ethercat_down'
                 reason = 'ethercat_bus_down'
+                source = 'bus_status'
+            elif transport == 'ethercat' and ethercat_available and not ethercat_axis_state:
+                state = 'ethercat_down'
+                reason = 'ethercat_axis_missing'
+                source = 'bus_status'
+            elif (
+                transport == 'ethercat'
+                and ethercat_available
+                and ethercat_axis_state not in {'OP', 'SAFEOP'}
+            ):
+                state = 'ethercat_down'
+                reason = 'ethercat_axis_not_operational'
                 source = 'bus_status'
             elif age >= self.disconnected_timeout_sec:
                 state = 'disconnected'
@@ -1075,6 +1096,8 @@ class MotionStateMonitor(Node):
             'runtime_feedback_fresh': '모터 런타임 피드백이 정상 수신 중입니다.',
             'communication_unavailable': '제어 노드가 이 축의 통신 불가를 보고했습니다.',
             'ethercat_bus_down': 'EtherCAT Master 또는 물리 링크가 내려가 있습니다.',
+            'ethercat_axis_missing': 'EtherCAT 버스에서 설정된 Slave를 찾지 못했습니다.',
+            'ethercat_axis_not_operational': 'EtherCAT Slave가 운전 가능 상태가 아닙니다.',
             'feedback_timeout': '마지막 모터 피드백 이후 연결 제한 시간을 초과했습니다.',
             'feedback_stale': '모터 피드백 갱신이 지연되고 있습니다.',
             'monitoring_disabled': '모터 상태 모니터링이 꺼져 있습니다.',
@@ -1086,6 +1109,102 @@ class MotionStateMonitor(Node):
             'scan_failed': '통신 버스 검색에 실패하여 연결 여부를 확정할 수 없습니다.',
         }
         return messages.get(reason, '모터 연결 상태를 확인할 수 없습니다.')
+
+    def _poll_ethercat_bus_status(self) -> None:
+        now = time.time()
+        try:
+            master = subprocess.run(
+                ['ethercat', 'master'],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=2.0,
+            )
+            slaves = subprocess.run(
+                ['ethercat', 'slaves'],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=2.0,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            self._ethercat_status = {
+                'available': False,
+                'last_seen_at': now,
+                'error': str(exc),
+            }
+            self._last_ethercat_status_at = now
+            return
+
+        if master.returncode != 0 or slaves.returncode != 0:
+            self._ethercat_status = {
+                'available': False,
+                'last_seen_at': now,
+                'error': (
+                    master.stderr.strip()
+                    or slaves.stderr.strip()
+                    or master.stdout.strip()
+                    or slaves.stdout.strip()
+                ),
+            }
+            self._last_ethercat_status_at = now
+            return
+
+        phase_match = re.search(
+            r'^\s*Phase:\s*(.+?)\s*$',
+            master.stdout,
+            re.MULTILINE | re.IGNORECASE,
+        )
+        states_by_position: Dict[str, str] = {}
+        states_by_alias: Dict[str, str] = {}
+        for match in re.finditer(
+            r'^\s*(\d+)\s+(\d+):\d+\s+([A-Z]+)\b',
+            slaves.stdout,
+            re.MULTILINE | re.IGNORECASE,
+        ):
+            position, alias, state = match.groups()
+            states_by_position[position] = state.upper()
+            if int(alias) > 0:
+                states_by_alias[alias] = state.upper()
+
+        self._ethercat_status = {
+            'available': True,
+            'last_seen_at': now,
+            'master_active': bool(re.search(
+                r'^\s*Active:\s*yes\s*$',
+                master.stdout,
+                re.MULTILINE | re.IGNORECASE,
+            )),
+            'link_up': bool(re.search(
+                r'^\s*Link:\s*UP\s*$',
+                master.stdout,
+                re.MULTILINE | re.IGNORECASE,
+            )),
+            'slaves_responding': len(states_by_position),
+            'phase': phase_match.group(1).strip() if phase_match else '',
+            'state_text': ', '.join(
+                f'{position}:{state}'
+                for position, state in sorted(
+                    states_by_position.items(),
+                    key=lambda item: int(item[0]),
+                )
+            ),
+            'states_by_position': states_by_position,
+            'states_by_alias': states_by_alias,
+        }
+        self._last_ethercat_status_at = now
+
+    def _ethercat_axis_state(self, motor: Dict[str, Any]) -> str:
+        status = self._ethercat_status if isinstance(self._ethercat_status, dict) else {}
+        alias = self._parse_int(motor.get('alias'))
+        if alias is not None and alias > 0:
+            return str((status.get('states_by_alias') or {}).get(str(alias)) or '')
+        position = self._parse_int(motor.get('slave_position'))
+        if position is None:
+            return ''
+        return str(
+            (status.get('states_by_position') or {}).get(str(position)) or ''
+        )
 
     def _build_scan_connection_rows(
         self,
@@ -1295,6 +1414,16 @@ class MotionStateMonitor(Node):
                 'driver_name': motor.get('driver_name', ''),
                 'rated_power_w': motor.get('rated_power_w'),
                 'ethercat_alias': motor.get('alias'),
+                'ethercat_master_index': motor.get(
+                    'ethercat_master_index',
+                    axes_by_index.get(controller_index, {}).get(
+                        'ethercat_master_index', 0
+                    ),
+                ),
+                'slave_position': motor.get(
+                    'slave_position',
+                    axes_by_index.get(controller_index, {}).get('slave_position'),
+                ),
                 'state': motor.get('state', 'unknown'),
                 'state_detail': motor.get('state_detail', ''),
                 'connection_state': motor.get('connection_state', 'unknown'),
