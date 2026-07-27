@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 const html = readFileSync(new URL('../static/index.html', import.meta.url), 'utf8');
 const dom = readFileSync(new URL('../static/js/dom.js', import.meta.url), 'utf8');
 const controller = readFileSync(new URL('../static/js/motor_config.js', import.meta.url), 'utf8');
+const main = readFileSync(new URL('../static/js/main.js', import.meta.url), 'utf8');
 const api = readFileSync(new URL('../static/js/api.js', import.meta.url), 'utf8');
 
 const actions = {
@@ -38,6 +39,28 @@ test('every motor configuration action button exists and has a controller handle
   assert.match(controller, /reloadMotorConfigButton\.addEventListener\('click', \(\) => fetchRegistry\(\)\)/);
 });
 
+test('program and motor status refresh actions are clearly separated', () => {
+  assert.match(
+    html,
+    /id="programStatusRefreshButton"[^>]*>프로그램 상태 확인</,
+  );
+  assert.match(
+    html,
+    /id="motorStatusRefreshButton"[^>]*>모터 상태 확인</,
+  );
+  assert.match(
+    dom,
+    /motorStatusRefreshButton: document\.getElementById\('motorStatusRefreshButton'\)/,
+  );
+  assert.match(
+    main,
+    /motorStatusRefreshButton\.addEventListener\('click', \(\) => \{\s*fetchStatus\(el\.motorStatusRefreshButton\)/,
+  );
+  assert.match(html, /id="statusCheckOverlay"/);
+  assert.match(html, /id="statusCheckCloseButton"[^>]*disabled/);
+  assert.match(main, /function statusCheckResult\(triggerButton, payload\)/);
+});
+
 test('motor type scans and the full scan are directly available without nested controls', () => {
   const scanSection = html.match(
     /<section class="[^"]*\baxis-setup-step\b[^"]*" aria-label="모터 타입별 검색">([\s\S]*?)<\/section>\s*<section class="[^"]*\baxis-settings-panel\b/,
@@ -57,6 +80,14 @@ test('motor type scans and the full scan are directly available without nested c
   assert.doesNotMatch(scanSection[1], /직렬 포트에서 Protocol/);
   assert.match(controller, /let scanRequestRunning = false/);
   assert.match(controller, /\[el\.scanButton, el\.dynamixelScanButton, el\.scanAllButton\]/);
+  assert.match(
+    controller,
+    /motorScanProgressCloseButton\) el\.motorScanProgressCloseButton\.disabled = true/,
+  );
+  assert.match(
+    controller,
+    /motorScanProgressCloseButton\) el\.motorScanProgressCloseButton\.disabled = false/,
+  );
   assert.match(controller, /scanResult\.textContent = `\$\{resultState\} · \$\{formatInt\(slaves\.length\)\}축`/);
   assert.match(controller, /dynamixelScanResult\.textContent = `\$\{resultState\} · \$\{formatInt\(devices\.length\)\}개`/);
   assert.doesNotMatch(controller, /검색된 축: \$\{slaveText\}/);

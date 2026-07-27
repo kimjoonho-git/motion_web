@@ -166,6 +166,7 @@ export function createMotorConfigController({
   }
 
   function closeScanProgressPopup() {
+    if (el.motorScanProgressState?.dataset.state === 'running') return;
     stopScanProgressPolling();
     el.motorScanProgressModal?.classList.add('hidden');
     document.body.classList.remove('modal-open');
@@ -240,6 +241,8 @@ export function createMotorConfigController({
       el.motorScanProgressState.dataset.state = 'running';
     }
     if (el.motorScanProgressList) el.motorScanProgressList.replaceChildren();
+    if (el.motorScanProgressCloseButton) el.motorScanProgressCloseButton.disabled = true;
+    if (el.motorScanProgressClearButton) el.motorScanProgressClearButton.disabled = true;
     appendScanProgressLine('새 직접 스캔 요청을 전송합니다', 'running');
     el.motorScanProgressModal?.classList.remove('hidden');
     document.body.classList.add('modal-open');
@@ -262,6 +265,8 @@ export function createMotorConfigController({
       el.motorScanProgressState.textContent = success ? '스캔 완료' : (partial ? '스캔 부분 완료' : '스캔 실패');
       el.motorScanProgressState.dataset.state = success ? 'done' : (partial ? 'warning' : 'failed');
     }
+    if (el.motorScanProgressCloseButton) el.motorScanProgressCloseButton.disabled = false;
+    if (el.motorScanProgressClearButton) el.motorScanProgressClearButton.disabled = false;
     stopScanProgressPolling();
   }
 

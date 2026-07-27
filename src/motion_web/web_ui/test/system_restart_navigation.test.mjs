@@ -52,7 +52,7 @@ test('program restart readiness does not require motor runtime state', () => {
   assert.match(main, /restartCheckMode: ''/);
   assert.match(
     main,
-    /if \(appState\.restartCheckMode === 'program'\)[\s\S]*?title: '프로그램 재시작 완료'[\s\S]*?const runtime = payload\?\.service_management\?\.runtime/,
+    /if \(restartMode === 'program'\)[\s\S]*?title: '프로그램 재시작 완료'[\s\S]*?const runtime = payload\?\.service_management\?\.runtime/,
   );
   assert.match(
     main,
@@ -62,4 +62,17 @@ test('program restart readiness does not require motor runtime state', () => {
     main,
     /onConfigApplyStart:[\s\S]*?restartCheckMode = 'motor_apply'/,
   );
+});
+
+test('motor-control restart waits for a new motor status and has a timeout', () => {
+  assert.match(
+    main,
+    /restartCheckMode = 'motor_control'[\s\S]*?restartPreviousMotorStatusAt[\s\S]*?restartMotorControlSystem\(\)/,
+  );
+  assert.match(
+    main,
+    /restartMode === 'motor_control'[\s\S]*?새로운 motor_status 수신 대기/,
+  );
+  assert.match(main, /RESTART_TIMEOUT_MS = 45000/);
+  assert.match(main, /startRestartProgressPolling\(\)/);
 });

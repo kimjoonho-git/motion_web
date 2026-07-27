@@ -1,1 +1,1 @@
-import './js/main.js?v=20260724-runtime-fix-1';
+import './js/main.js?v=20260727-operation-progress';

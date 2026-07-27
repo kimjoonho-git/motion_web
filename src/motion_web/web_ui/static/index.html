@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>모션 녹화 시스템 0.5.0</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260724-system-layout-5">
+    <link rel="stylesheet" href="/static/styles.css?v=20260727-operation-progress">
   </head>
   <body>
     <main class="shell">
@@ -114,7 +114,7 @@
               <span id="programHealthDetail">자동 실행 · 모터 상태 수신</span>
             </div>
             <div class="registry-actions system-program-actions">
-              <button id="programStatusRefreshButton" type="button">상태 다시 확인</button>
+              <button id="programStatusRefreshButton" type="button">프로그램 상태 확인</button>
               <button id="programPageReloadButton" type="button">화면 갱신</button>
               <button id="programRestartButton" type="button" disabled>프로그램 재시작</button>
             </div>
@@ -182,7 +182,9 @@
       <section class="registration-panel workspace-panel settings-editor-page hidden" data-workspace-panel="config" aria-label="모터 관리">
         <div class="section-head workspace-page-head">
           <div><strong>모터 관리</strong><small>연결 확인부터 모션 실행 준비까지 한 화면에서 관리합니다</small></div>
-          <span>장비 준비·설정·검증</span>
+          <div class="registry-actions">
+            <button id="motorStatusRefreshButton" type="button">모터 상태 확인</button>
+          </div>
         </div>
 
         <section class="motor-readiness-overview" aria-label="모터 준비 전체 흐름">
@@ -1506,6 +1508,18 @@
       </div>
     </div>
 
+    <div id="statusCheckOverlay" class="restart-overlay hidden" role="dialog" aria-live="polite" aria-modal="true" aria-labelledby="statusCheckTitle">
+      <div class="restart-dialog status-check-dialog">
+        <div id="statusCheckSpinner" class="restart-spinner" aria-hidden="true"></div>
+        <strong id="statusCheckTitle">상태 확인 중</strong>
+        <p id="statusCheckMessage">최신 상태를 요청하고 있습니다.</p>
+        <div id="statusCheckDetail" class="restart-detail">응답 대기</div>
+        <div class="status-check-actions">
+          <button id="statusCheckCloseButton" type="button" disabled>확인</button>
+        </div>
+      </div>
+    </div>
+
     <div id="motorErrorPopup" class="motor-error-popup hidden" role="alertdialog" aria-live="assertive" aria-modal="true" aria-labelledby="motorErrorTitle">
       <div class="motor-error-dialog">
         <div class="motor-error-header">
@@ -1533,6 +1547,6 @@
       </section>
     </div>
 
-    <script type="module" src="/static/app.js?v=20260724-runtime-fix-1"></script>
+    <script type="module" src="/static/app.js?v=20260727-operation-progress"></script>
   </body>
 </html>

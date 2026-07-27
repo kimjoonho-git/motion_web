@@ -1122,9 +1122,56 @@ class MotionWebBridge(Node):
                     'message': '저장 설정이 변경되어 실행 컨텍스트 재적용 대기 중',
                     'stored_context_id': current.get('context_id', ''),
                 })
-        status['control_allowed'] = bool(status.get('ready'))
+        runtime_blocker = (
+            self._motor_runtime_control_blocker()
+            if status.get('ready')
+            else ''
+        )
+        status['control_allowed'] = bool(status.get('ready') and not runtime_blocker)
+        status['control_block_reason'] = runtime_blocker
         status['stored_equals_runtime'] = bool(status.get('ready'))
         return status
+
+    def _motor_runtime_control_blocker(self) -> str:
+        lock = getattr(self, '_lock', None)
+        if lock is None:
+            motion_state = copy.deepcopy(getattr(self, '_motion_state', None))
+            received_at = getattr(self, '_motion_state_received_at', None)
+        else:
+            with lock:
+                motion_state = copy.deepcopy(getattr(self, '_motion_state', None))
+                received_at = getattr(self, '_motion_state_received_at', None)
+        if not isinstance(motion_state, dict) or received_at is None:
+            return '모터 상태를 아직 수신하지 못했습니다'
+        if time.time() - float(received_at) > 1.0:
+            return '모터 상태 수신이 중단되었습니다'
+
+        motors = [
+            motor for motor in motion_state.get('motors') or []
+            if isinstance(motor, dict)
+        ]
+        if not motors:
+            return '실행할 모터축이 없습니다'
+
+        unavailable = []
+        faulted = []
+        for motor in motors:
+            try:
+                axis = int(motor.get('controller_index'))
+            except (TypeError, ValueError):
+                axis = '?'
+            if motor.get('fault') is True:
+                faulted.append(str(axis))
+            if (
+                motor.get('connection_connected') is not True
+                or str(motor.get('connection_state') or '') != 'online'
+            ):
+                unavailable.append(str(axis))
+        if unavailable:
+            return f'온라인이 아닌 축이 있습니다: {", ".join(unavailable)}'
+        if faulted:
+            return f'오류 축이 있습니다: {", ".join(faulted)}'
+        return ''
 
     def _set_execution_context_status(self, **values: Any) -> None:
         with self._execution_context_lock:
@@ -2008,9 +2055,16 @@ class MotionWebBridge(Node):
             }
 
         was_active = self._managed_user_service_active(motor_service)
+        expected_online_axes = self._expected_online_ethercat_axes()
         stopped = False
         result: Dict[str, Any]
         restore_error = ''
+        recovery: Dict[str, Any] = {
+            'required': bool(expected_online_axes),
+            'expected_axes': expected_online_axes,
+            'online_axes': [],
+            'recovered': not expected_online_axes,
+        }
         try:
             if was_active:
                 self._run_managed_user_service('stop', motor_service)
@@ -2031,11 +2085,23 @@ class MotionWebBridge(Node):
             if was_active and stopped:
                 try:
                     self._run_managed_user_service('start', motor_service)
+                    if expected_online_axes:
+                        recovery = self._wait_for_motor_runtime_recovery(
+                            expected_online_axes,
+                            timeout_sec=12.0,
+                        )
+                        if not recovery.get('recovered'):
+                            restore_error = (
+                                'Motor Manager 재시작 후 전체 축 온라인 복구 실패: '
+                                f'{len(recovery.get("online_axes") or [])}/'
+                                f'{len(expected_online_axes)}축'
+                            )
                 except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
                     restore_error = str(exc)
 
         result['motor_service_was_active'] = was_active
         result['motor_service_restored'] = bool(was_active and not restore_error)
+        result['motor_runtime_recovery'] = recovery
         if restore_error:
             result['success'] = False
             result['restore_error'] = restore_error
@@ -2063,6 +2129,12 @@ class MotionWebBridge(Node):
             if not isinstance(motor, dict):
                 continue
             if str(motor.get('transport') or '').lower() != 'ethercat':
+                continue
+            if (
+                motor.get('connection_connected') is not True
+                or str(motor.get('connection_state') or '') != 'online'
+                or motor.get('fault') is True
+            ):
                 continue
             velocity = _monitoring_finite_float(
                 motor.get('velocity_deg_s', motor.get('velocity'))
@@ -2119,34 +2191,124 @@ class MotionWebBridge(Node):
         deadline = time.time() + timeout_sec
         last_output = ''
         while time.time() < deadline:
-            completed = subprocess.run(
+            master = subprocess.run(
                 ['ethercat', 'master'],
                 check=False,
                 capture_output=True,
                 text=True,
                 timeout=2.0,
             )
-            last_output = completed.stderr.strip() or completed.stdout.strip()
-            if completed.returncode == 0:
+            last_output = master.stderr.strip() or master.stdout.strip()
+            if master.returncode == 0:
                 claimed = bool(
                     re.search(
                         r'^\s*Phase:\s*Operation\s*$',
-                        completed.stdout,
+                        master.stdout,
                         re.MULTILINE | re.IGNORECASE,
                     )
                     or re.search(
                         r'^\s*Active:\s*yes\s*$',
-                        completed.stdout,
+                        master.stdout,
                         re.MULTILINE | re.IGNORECASE,
                     )
                 )
                 if not claimed:
-                    return
+                    slaves = subprocess.run(
+                        ['ethercat', 'slaves'],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                        timeout=2.0,
+                    )
+                    last_output = slaves.stderr.strip() or slaves.stdout.strip()
+                    active_slave = bool(
+                        slaves.returncode == 0
+                        and re.search(
+                            r'^\s*\d+\s+\S+\s+(?:SAFEOP|OP)\b',
+                            slaves.stdout,
+                            re.MULTILINE | re.IGNORECASE,
+                        )
+                    )
+                    if slaves.returncode == 0 and not active_slave:
+                        return
             time.sleep(0.05)
         raise RuntimeError(
-            'Motor Manager 정지 후에도 EtherCAT Master 사용 상태가 해제되지 않았습니다'
+            'Motor Manager 정지 후에도 EtherCAT Master 또는 Slave 운전 상태가 해제되지 않았습니다'
             + (f': {last_output}' if last_output else '')
         )
+
+    def _expected_online_ethercat_axes(self) -> List[int]:
+        with self._lock:
+            motion_state = copy.deepcopy(self._motion_state)
+            received_at = self._motion_state_received_at
+        if (
+            not isinstance(motion_state, dict)
+            or received_at is None
+            or time.time() - float(received_at) > 1.0
+        ):
+            return []
+        axes = []
+        for motor in motion_state.get('motors') or []:
+            if not isinstance(motor, dict):
+                continue
+            if str(motor.get('transport') or '').lower() != 'ethercat':
+                continue
+            if motor.get('connection_connected') is not True:
+                continue
+            try:
+                axes.append(int(motor.get('controller_index')))
+            except (TypeError, ValueError):
+                continue
+        return sorted(set(axes))
+
+    def _wait_for_motor_runtime_recovery(
+        self,
+        expected_axes: List[int],
+        timeout_sec: float,
+    ) -> Dict[str, Any]:
+        expected = sorted(set(int(axis) for axis in expected_axes))
+        started_at = time.time()
+        online_axes: List[int] = []
+        while time.time() - started_at < timeout_sec:
+            with self._lock:
+                motion_state = copy.deepcopy(self._motion_state)
+                received_at = self._motion_state_received_at
+            online_axes = []
+            if (
+                isinstance(motion_state, dict)
+                and received_at is not None
+                and float(received_at) >= started_at
+            ):
+                for motor in motion_state.get('motors') or []:
+                    if not isinstance(motor, dict):
+                        continue
+                    if str(motor.get('transport') or '').lower() != 'ethercat':
+                        continue
+                    if motor.get('connection_connected') is not True:
+                        continue
+                    if motor.get('fault') is True:
+                        continue
+                    try:
+                        online_axes.append(int(motor.get('controller_index')))
+                    except (TypeError, ValueError):
+                        continue
+                online_axes = sorted(set(online_axes))
+                if all(axis in online_axes for axis in expected):
+                    return {
+                        'required': True,
+                        'expected_axes': expected,
+                        'online_axes': online_axes,
+                        'recovered': True,
+                        'duration_sec': round(time.time() - started_at, 3),
+                    }
+            time.sleep(0.05)
+        return {
+            'required': True,
+            'expected_axes': expected,
+            'online_axes': online_axes,
+            'recovered': False,
+            'duration_sec': round(time.time() - started_at, 3),
+        }
 
     def _call_scan_service_locked(
         self,
@@ -3138,9 +3300,15 @@ class MotionWebBridge(Node):
         return self._request_motion_run('check', payload, timeout_sec=3.0)
 
     def motion_run_initialize(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        blocker = self._motor_runtime_control_blocker()
+        if blocker:
+            return {'success': False, 'message': f'초기 위치 이동 불가: {blocker}'}
         return self._request_motion_run('initialize', payload, timeout_sec=2.0)
 
     def motion_run_start(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        blocker = self._motor_runtime_control_blocker()
+        if blocker:
+            return {'success': False, 'message': f'모션 실행 불가: {blocker}'}
         return self._request_motion_run('start', payload, timeout_sec=2.0)
 
     def motion_run_stop(self) -> Dict[str, Any]:
@@ -3523,6 +3691,13 @@ class MotionWebBridge(Node):
         prepared = self.prepare_unified_motion_studio()
         if prepared.get('success') is False:
             return prepared
+        if command in {'record', 'play', 'initialize'}:
+            blocker = self._motor_runtime_control_blocker()
+            if blocker:
+                return {
+                    'success': False,
+                    'message': f'모션 스튜디오 동작 불가: {blocker}',
+                }
         return self.request_motion_studio(command, payload or {})
 
     def import_motion_studio_layer(self, payload: Dict[str, Any]) -> Dict[str, Any]:

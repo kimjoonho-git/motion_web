@@ -5271,6 +5271,16 @@ th {
   line-height: 1.45;
 }
 
+.status-check-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+
+.status-check-dialog {
+  width: min(480px, 100%);
+}
+
 .restart-spinner {
   width: 42px;
   height: 42px;
