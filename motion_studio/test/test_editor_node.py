@@ -80,32 +80,7 @@ def test_editor_allows_unregistered_target_for_axis_copy():
     assert [frame['values']['9-9'] for frame in result['layer']['frames']] == [10.0, 20.0]
 
 
-def test_editor_returns_spike_correction_preview_report():
-    editor = MotionStudioEditorNode.__new__(MotionStudioEditorNode)
-    layer = base_layer()
-    layer['frames'] = [
-        {'frame': index + 1, 'time_sec': index * 0.02, 'values': {'1-1': value}}
-        for index, value in enumerate([0.0, 1.0, 2.0, 4.0, 4.0, 5.0, 6.0])
-    ]
-
-    result = editor._handle('edit', {
-        'layer': layer,
-        'project': {},
-        'operation': 'repair_spikes',
-        'motion_ids': ['1-1'],
-        'start_sec': 0.0,
-        'end_sec': 0.12,
-        'spike_detection_threshold_deg': 0.1,
-        'spike_maximum_correction_deg': 2.0,
-        'mapping_rows': [],
-    })
-
-    assert result['success'] is True
-    assert result['operation_report']['changed_count'] == 1
-    assert result['operation_report']['changed'][0]['time_sec'] == 0.06
-
-
-def test_editor_returns_manual_point_conversion_approximation_report():
+def test_editor_returns_axis_point_creation_approximation_report():
     editor = MotionStudioEditorNode.__new__(MotionStudioEditorNode)
     layer = base_layer()
     layer['frames'] = [
@@ -116,7 +91,7 @@ def test_editor_returns_manual_point_conversion_approximation_report():
     result = editor._handle('edit', {
         'layer': layer,
         'project': {},
-        'operation': 'convert_motion_to_point_curve',
+        'operation': 'create_axis_point_curve',
         'motion_ids': ['1-1'],
         'selection_kind': 'motion',
         'start_sec': 0.0,
@@ -129,7 +104,7 @@ def test_editor_returns_manual_point_conversion_approximation_report():
     })
 
     assert result['success'] is True
-    assert result['operation_report']['operation'] == 'convert_motion_to_point_curve'
+    assert result['operation_report']['operation'] == 'create_axis_point_curve'
     assert result['operation_report']['interpolation_order'] == 3
     assert result['operation_report']['source_sample_count'] == 5
     assert result['operation_report']['point_count'] >= 3
@@ -142,7 +117,7 @@ def test_editor_warns_but_does_not_block_values_outside_axis_range():
     result = editor._handle('edit', {
         'layer': base_layer(),
         'project': {},
-        'operation': 'convert_motion_to_point_curve',
+        'operation': 'create_axis_point_curve',
         'motion_ids': ['1-1'],
         'selection_kind': 'motion',
         'start_sec': 0.02,
@@ -186,7 +161,7 @@ def test_point_approximation_results_are_isolated_between_projects():
         return editor._handle('edit', {
             'layer': layer,
             'project': {'project_id': project_id, 'layers': [layer]},
-            'operation': 'convert_motion_to_point_curve',
+                'operation': 'create_axis_point_curve',
             'motion_ids': ['1-1'],
             'selection_kind': 'motion',
             'start_sec': 0.0,

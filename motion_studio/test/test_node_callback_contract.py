@@ -77,7 +77,7 @@ def test_studio_request_callback_rejects_previous_project_generation():
     assert '현재 프로젝트 세대와 다른 요청' in response['message']
 
 
-def test_editor_request_callback_returns_correlated_edit_result():
+def test_editor_request_callback_returns_correlated_point_creation_result():
     editor = MotionStudioEditorNode.__new__(MotionStudioEditorNode)
     editor._response_pub = CapturePublisher()
     editor.get_logger = quiet_logger
@@ -87,11 +87,8 @@ def test_editor_request_callback_returns_correlated_edit_result():
         'project_generation': 8,
         'command': 'edit',
         'payload': {
-            'operation': 'value_offset',
+            'operation': 'create_axis_point_curve',
             'motion_ids': ['1-1'],
-            'start_sec': 0.02,
-            'end_sec': 0.04,
-            'offset_deg': 1.0,
             'layer': {
                 'layer_id': 'layer-a',
                 'name': '프로젝트 A',
@@ -113,4 +110,5 @@ def test_editor_request_callback_returns_correlated_edit_result():
     assert response['project_generation'] == 8
     assert [
         frame['values']['1-1'] for frame in response['layer']['frames']
-    ] == [2.0, 3.0]
+    ] == [1.0, 2.0]
+    assert response['layer']['point_curves'][0]['motion_id'] == '1-1'

@@ -18,7 +18,7 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
 
-from .layer_editor import collect_merged_point_curves
+from .layer_editor import merge_layers
 from .layer_validation import (
     point_curve_frame_mismatches,
     project_point_curve_frame_mismatches,
@@ -500,7 +500,7 @@ class MotionStudioNode(Node):
         raise ValueError(
             f'{action} 차단: {first["layer_name"]}의 {first["motion_id"]} '
             '포인트 곡선과 20ms 프레임이 다릅니다. '
-            '포인트 기준 재계산 또는 현재 프레임 유지를 선택하세요'
+            '포인트 기준으로 다시 계산하세요'
         )
 
     def _start_record(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -1105,6 +1105,16 @@ class MotionStudioNode(Node):
                 raise ValueError('합칠 원본 레이어를 찾을 수 없습니다')
             if any(item.get('locked') for item in sources):
                 raise ValueError('잠긴 레이어는 합치기에 사용할 수 없습니다')
+            inconsistent = [
+                str(item.get('name') or item.get('layer_id') or '')
+                for item in sources
+                if point_curve_frame_mismatches(item)
+            ]
+            if inconsistent:
+                raise ValueError(
+                    '포인트와 20ms 프레임이 다른 레이어를 먼저 다시 계산하세요: '
+                    + ', '.join(inconsistent)
+                )
             provided = payload.get('layer')
             if not isinstance(provided, dict):
                 raise ValueError('계산 노드가 만든 합성 미리보기 데이터가 필요합니다')
@@ -1118,12 +1128,13 @@ class MotionStudioNode(Node):
                 if expected != int(item.get('edit_revision') or 0):
                     raise ValueError('합성 미리보기 이후 원본 레이어가 변경되었습니다')
             mapping = self._store.mapping_check(project)
-            authoritative_preview = copy.deepcopy(provided)
-            # The project is the source of truth at commit time.  This also
-            # protects point data when editor and studio nodes briefly run
-            # different builds during a restart.
-            authoritative_preview['point_curves'] = collect_merged_point_curves(sources)
-            merged = normalize_layer(authoritative_preview)
+            merged = merge_layers(
+                project,
+                source_ids,
+                name=payload.get('name') or provided.get('name') or '합친 레이어',
+                motion_ranges_deg=self._motion_ranges(mapping),
+                initial_motion_values_deg=self._manual_initial_values(mapping),
+            )
             if set(merged.get('source_layer_ids') or []) != source_ids:
                 raise ValueError('합성 결과의 원본 레이어 정보가 일치하지 않습니다')
             range_issues = validate_ranges(merged, self._motion_ranges(mapping))
