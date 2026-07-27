@@ -15,7 +15,6 @@ from .layer_editor import (
     approximate_motion_points,
     edit_layer,
     merge_layers,
-    spike_correction_report,
 )
 from .layer_validation import point_curve_frame_mismatches, validate_ranges
 from .timeline import layer_conflicts, layer_transition_warnings
@@ -82,33 +81,19 @@ class MotionStudioEditorNode(Node):
         ranges = self._ranges(payload)
         if command == 'edit':
             operation_report = None
-            if str(payload.get('operation') or '') == 'repair_spikes':
-                operation_report = spike_correction_report(
-                    payload.get('layer') or {},
-                    payload.get('motion_ids') or [],
-                    payload.get('start_sec', 0.0),
-                    payload.get('end_sec', 0.0),
-                    payload.get('spike_detection_threshold_deg', 0.1),
-                    payload.get('spike_maximum_correction_deg', 1.0),
-                )
-            if str(payload.get('operation') or '') == 'convert_motion_to_point_curve':
+            if str(payload.get('operation') or '') == 'create_axis_point_curve':
                 selected = {
                     str(value) for value in payload.get('motion_ids') or [] if str(value)
                 }
                 if len(selected) == 1:
                     motion_id = next(iter(selected))
-                    start_sec = float(payload.get('start_sec') or 0.0)
-                    end_sec = float(payload.get('end_sec') or start_sec)
                     samples = sorted(
                         (
                             float(frame.get('time_sec') or 0.0),
                             float((frame.get('values') or {})[motion_id]),
                         )
                         for frame in (payload.get('layer') or {}).get('frames') or []
-                        if (
-                            motion_id in (frame.get('values') or {})
-                            and start_sec <= float(frame.get('time_sec') or 0.0) <= end_sec
-                        )
+                        if motion_id in (frame.get('values') or {})
                     )
                     _points, operation_report = approximate_motion_points(
                         samples,

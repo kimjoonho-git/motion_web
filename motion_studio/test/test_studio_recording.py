@@ -102,7 +102,7 @@ def test_layer_duplicate_is_independent_unlocked_and_disabled():
     assert project['layers'][0]['frames'][0]['values']['1-1'] == 0.0
 
 
-def test_merge_commit_restores_source_points_when_editor_preview_omits_them():
+def test_merge_commit_rebuilds_all_source_points_when_editor_preview_omits_them():
     node = MotionStudioNode.__new__(MotionStudioNode)
     node._lock = threading.RLock()
     point_curve = {
@@ -125,9 +125,17 @@ def test_merge_commit_restores_source_points_when_editor_preview_omits_them():
             ],
         },
         {
-            'layer_id': 'source-b', 'name': '일반 원본',
+            'layer_id': 'source-b', 'name': '둘째 포인트 원본',
             'enabled': True, 'locked': False, 'edit_revision': 1,
-            'point_curves': [],
+            'point_curves': [{
+                'curve_id': 'curve-source-b',
+                'motion_id': '2-1',
+                'interpolation_order': 1,
+                'points': [
+                    {'point_id': 'point-b-start', 'time_sec': 0.06, 'value_deg': 2.0},
+                    {'point_id': 'point-b-end', 'time_sec': 0.08, 'value_deg': 3.0},
+                ],
+            }],
             'frames': [
                 {'frame': 3, 'time_sec': 0.06, 'values': {'2-1': 2.0}},
                 {'frame': 4, 'time_sec': 0.08, 'values': {'2-1': 3.0}},
@@ -179,11 +187,9 @@ def test_merge_commit_restores_source_points_when_editor_preview_omits_them():
 
     merged = result['project']['layers'][-1]
     assert merged['name'] == '방어 병합'
-    assert len(merged['point_curves']) == 1
-    assert merged['point_curves'][0]['curve_id'] == 'curve-source'
-    assert [
-        point['point_id'] for point in merged['point_curves'][0]['points']
-    ] == ['point-start', 'point-end']
+    assert {
+        curve['curve_id'] for curve in merged['point_curves']
+    } == {'curve-source', 'curve-source-b'}
     assert project['layers'][0]['point_curves'] == [point_curve]
 
 

@@ -313,6 +313,7 @@ def render_project(
     motion_ranges_deg: Mapping[str, Sequence[float]] | None = None,
     initial_motion_values_deg: Mapping[str, float] | None = None,
     ensure_zero_frame: bool = True,
+    require_safe_transitions: bool = True,
 ) -> List[Dict[str, Any]]:
     selected = unique_motion_ids(motion_ids or project_motion_ids(project))
     if not selected:
@@ -321,9 +322,10 @@ def render_project(
     if not math.isclose(period, DEFAULT_PERIOD_SEC, abs_tol=1e-9):
         raise ValueError('only 0.02 second motion projects are supported')
     require_conflict_free_layers(project)
-    require_safe_layer_transitions(
-        project, motion_ranges_deg, initial_motion_values_deg
-    )
+    if require_safe_transitions:
+        require_safe_layer_transitions(
+            project, motion_ranges_deg, initial_motion_values_deg
+        )
     layers = [_layer_segments(layer, period) for layer in _enabled_layers(project)]
     duration = _composition_duration(project)
     sample_count = max(1, int(math.ceil(duration / period)))

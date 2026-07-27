@@ -4,8 +4,8 @@ from motion_studio.curve_engine import interpolation_ratio, render_point_curve
 from motion_studio.layer_editor import (
     approximate_motion_points,
     edit_layer,
+    layer_point_coverage_issues,
     merge_layers,
-    spike_correction_report,
 )
 from motion_studio.layer_validation import point_curve_frame_mismatches
 
@@ -36,159 +36,29 @@ def values(result, motion_id='1-1'):
     ]
 
 
-def spike_layer(*track_values):
-    return {
-        'layer_id': 'spikes', 'name': '튀짐', 'enabled': True, 'locked': False,
-        'frames': [
-            {
-                'frame': index + 1,
-                'time_sec': round(index * 0.02, 2),
-                'values': {'1-1': value},
-            }
-            for index, value in enumerate(track_values)
-        ],
-    }
-
-
-def spike_request(**overrides):
-    return {
-        'operation': 'repair_spikes',
-        'motion_ids': ['1-1'],
-        'start_sec': 0.0,
-        'end_sec': 0.12,
-        'spike_detection_threshold_deg': 0.1,
-        'spike_maximum_correction_deg': 2.0,
-        **overrides,
-    }
-
-
-def test_repair_spikes_changes_only_an_isolated_interior_frame():
-    source = spike_layer(0.0, 1.0, 2.0, 4.0, 4.0, 5.0, 6.0)
-    report = spike_correction_report(
-        source, ['1-1'], 0.0, 0.12, 0.1, 2.0,
-    )
-    result = edit_layer(source, spike_request())
-
-    assert report['changed_count'] == 1
-    assert report['excluded_count'] == 0
-    changed = report['changed'][0]
-    assert changed['motion_id'] == '1-1'
-    assert {
-        key: changed[key] for key in (
-            'time_sec', 'before_deg', 'after_deg', 'change_deg', 'correction_deg'
-        )
-    } == pytest.approx({
-        'time_sec': 0.06,
-        'before_deg': 4.0,
-        'after_deg': 3.0,
-        'change_deg': -1.0,
-        'correction_deg': 1.0,
+def create_all_axis_points(source):
+    result = source
+    motion_ids = sorted({
+        motion_id
+        for frame in source.get('frames') or []
+        for motion_id in (frame.get('values') or {})
     })
-    assert values(result) == pytest.approx([0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+    for motion_id in motion_ids:
+        result = edit_layer(result, {
+            'operation': 'create_axis_point_curve',
+            'motion_ids': [motion_id],
+            'curve_id': f'curve-{source["layer_id"]}-{motion_id}',
+            'approximation_tolerance_deg': 0.000001,
+            'approximation_maximum_points': 200,
+            'approximation_interpolation_order': 1,
+        })
+    assert layer_point_coverage_issues(result) == []
+    return result
 
 
-def test_repair_spikes_excludes_values_over_the_maximum_and_changes_nothing():
-    source = spike_layer(0.0, 1.0, 2.0, 4.0, 4.0, 5.0, 6.0)
-    report = spike_correction_report(
-        source, ['1-1'], 0.0, 0.12, 0.1, 0.5,
-    )
-    result = edit_layer(source, spike_request(spike_maximum_correction_deg=0.5))
-
-    assert report['changed_count'] == 0
-    assert report['excluded_count'] == 1
-    assert report['excluded'][0]['reason'] == 'maximum_correction'
-    assert values(result) == pytest.approx([0.0, 1.0, 2.0, 4.0, 4.0, 5.0, 6.0])
-    assert result['edit_revision'] == 0
-
-
-def test_repair_spikes_excludes_consecutive_candidates():
-    source = spike_layer(0.0, 1.0, 5.0, -1.0, 4.0, 5.0, 6.0)
-    report = spike_correction_report(
-        source, ['1-1'], 0.0, 0.12, 0.1, 10.0,
-    )
-
-    assert report['changed_count'] == 0
-    assert report['excluded_count'] == 3
-    assert {item['reason'] for item in report['excluded']} == {'consecutive_candidates'}
-
-
-def test_repair_spikes_preserves_a_smooth_accelerating_curve():
-    source = spike_layer(0.0, 0.1, 0.4, 0.9, 1.6, 2.5, 3.6)
-    report = spike_correction_report(
-        source, ['1-1'], 0.0, 0.12, 0.1, 1.0,
-    )
-
-    assert report['changed_count'] == 0
-    assert report['excluded_count'] == 0
-
-
-def test_repair_spikes_rejects_point_curve_ranges_without_removing_points():
-    source = edit_layer(spike_layer(0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0), {
-        'operation': 'point_curve',
-        'motion_ids': ['1-1'],
-        'curve_id': 'editable',
-        'interpolation_order': 3,
-        'points': [
-            {'point_id': 'p1', 'time_sec': 0.02, 'value_deg': 1.0},
-            {'point_id': 'p2', 'time_sec': 0.10, 'value_deg': 5.0},
-        ],
-    })
-
-    with pytest.raises(ValueError, match='포인트와 탄젠트를 직접 수정'):
-        edit_layer(source, spike_request())
-    assert len(source['point_curves']) == 1
-
-
-def test_offset_and_scale_touch_only_selected_axis_and_range():
-    offset = edit_layer(layer(), request('value_offset', offset_deg=-10))
-    assert values(offset) == [10.0, 10.0, 20.0, 40.0]
-    assert values(offset, '1-2') == [0.0, 2.0, 4.0, 6.0]
-
-    scaled = edit_layer(layer(), request('value_scale', factor=0.5))
-    assert values(scaled) == [10.0, 20.0, 25.0, 40.0]
-
-
-def test_delete_selected_axis_data_only_in_range():
-    result = edit_layer(layer(), request('delete_data'))
-    assert values(result) == [10.0, 40.0]
-    assert values(result, '1-2') == [0.0, 2.0, 4.0, 6.0]
-
-
-def test_delete_to_sample_before_layer_end_removes_trailing_frame_too():
-    source = layer()
-    result = edit_layer(source, {
-        'operation': 'delete_data',
-        'motion_ids': ['1-1', '1-2'],
-        'start_sec': 0.06,
-        'end_sec': 0.06,
-    })
-
-    assert result['frames'][-1]['time_sec'] == 0.04
-
-
-def test_delete_not_near_layer_end_preserves_later_frames():
-    source = layer()
-    result = edit_layer(source, {
-        'operation': 'delete_data',
-        'motion_ids': ['1-1', '1-2'],
-        'start_sec': 0.02,
-        'end_sec': 0.04,
-    })
-
-    assert [frame['time_sec'] for frame in result['frames']] == [0.06, 0.08]
-
-
-def test_multiple_axes_are_edited_together_with_one_request():
-    result = edit_layer(layer(), {
-        'operation': 'value_offset',
-        'motion_ids': ['1-1', '1-2'],
-        'start_sec': 0.04,
-        'end_sec': 0.06,
-        'offset_deg': 5.0,
-    })
-
-    assert values(result) == [10.0, 25.0, 35.0, 40.0]
-    assert values(result, '1-2') == [0.0, 7.0, 9.0, 6.0]
+def test_general_motion_cannot_be_edited_before_points_are_created():
+    with pytest.raises(ValueError, match='포인트가 없는 모션은 편집할 수 없습니다'):
+        edit_layer(layer(), request('value_offset', offset_deg=-10))
 
 
 def test_add_axis_fills_layer_time_range_at_20ms_without_changing_existing_axes():
@@ -296,102 +166,6 @@ def test_copy_axis_rejects_missing_source_or_existing_target():
 def test_edit_range_without_selected_axis_data_is_rejected():
     with pytest.raises(ValueError, match='편집 구간에 모션 데이터가 없습니다'):
         edit_layer(layer(), request('value_offset', start_sec=1.0, end_sec=2.0, offset_deg=1.0))
-
-
-def test_time_shift_rejects_overlap_with_unchanged_data():
-    with pytest.raises(ValueError, match='데이터가 겹칩니다'):
-        edit_layer(layer(), request('time_shift', delta_sec=0.02))
-
-
-def test_time_scale_keeps_later_data_at_original_time_and_detects_overlap():
-    with pytest.raises(ValueError, match='데이터가 겹칩니다'):
-        edit_layer(layer(), request('time_scale', factor=2.0))
-
-    result = edit_layer(layer(), request('time_scale', start_sec=0.02, end_sec=0.08, factor=2.0))
-    assert result['frames'][-1]['time_sec'] == 0.14
-    assert len(values(result)) == 7
-
-    spaced = layer()
-    spaced['frames'].append(
-        {'frame': 5, 'time_sec': 0.30, 'values': {'1-1': 50.0}}
-    )
-    result = edit_layer(spaced, request('time_scale', start_sec=0.02, end_sec=0.08, factor=2.0))
-    assert result['frames'][-1]['time_sec'] == 0.30
-    assert values(result)[-1] == 50.0
-
-
-def test_time_and_motion_scale_use_selected_start_as_anchor():
-    source = {
-        'layer_id': 'anchor', 'name': '기준점', 'enabled': True, 'locked': False,
-        'frames': [
-            {'frame': 1, 'time_sec': 1.00, 'values': {'1-1': 10.0}},
-            {'frame': 2, 'time_sec': 2.00, 'values': {'1-1': 20.0}},
-        ],
-    }
-    time_scaled = edit_layer(source, {
-        'operation': 'time_scale', 'motion_ids': ['1-1'],
-        'start_sec': 1.00, 'end_sec': 2.00, 'factor': 0.90,
-    })
-    assert time_scaled['frames'][0]['time_sec'] == 1.00
-    assert time_scaled['frames'][-1]['time_sec'] == 1.90
-
-    motion_scaled = edit_layer(source, {
-        'operation': 'value_scale', 'motion_ids': ['1-1'],
-        'start_sec': 1.00, 'end_sec': 2.00, 'factor': 1.10,
-    })
-    assert values(motion_scaled) == [10.0, 21.0]
-
-
-def test_time_and_motion_move_shift_the_whole_selected_range():
-    source = {
-        'layer_id': 'move', 'name': '이동', 'enabled': True, 'locked': False,
-        'frames': [
-            {'frame': 1, 'time_sec': 1.00, 'values': {'1-1': 10.0}},
-            {'frame': 2, 'time_sec': 2.00, 'values': {'1-1': 20.0}},
-        ],
-    }
-    time_moved = edit_layer(source, {
-        'operation': 'time_shift', 'motion_ids': ['1-1'],
-        'start_sec': 1.00, 'end_sec': 2.00, 'delta_sec': -0.300,
-    })
-    assert [frame['time_sec'] for frame in time_moved['frames']] == [0.70, 1.70]
-
-    motion_moved = edit_layer(source, {
-        'operation': 'value_offset', 'motion_ids': ['1-1'],
-        'start_sec': 1.00, 'end_sec': 2.00, 'offset_deg': -10.0,
-    })
-    assert values(motion_moved) == [0.0, 10.0]
-
-
-@pytest.mark.parametrize('order, first_value', [
-    (1, 2.5),
-    (3, 1.5625),
-    (5, 1.03515625),
-])
-def test_manual_interpolation_rebuilds_selected_gap_at_20ms(order, first_value):
-    source = {
-        'layer_id': 'gap', 'name': '빈 구간', 'enabled': True, 'locked': False,
-        'frames': [
-            {'frame': 1, 'time_sec': 0.02, 'values': {'1-1': 0.0}},
-            {'frame': 2, 'time_sec': 0.10, 'values': {'1-1': 10.0}},
-        ],
-    }
-    result = edit_layer(source, {
-        'operation': 'interpolate', 'motion_ids': ['1-1'],
-        'start_sec': 0.02, 'end_sec': 0.10, 'interpolation_order': order,
-    })
-    assert [frame['time_sec'] for frame in result['frames']] == [0.02, 0.04, 0.06, 0.08, 0.10]
-    assert values(result)[0] == 0.0
-    assert values(result)[1] == pytest.approx(first_value)
-    assert values(result)[2] == pytest.approx(5.0)
-    assert values(result)[-1] == 10.0
-
-
-def test_manual_interpolation_requires_real_boundary_points():
-    with pytest.raises(ValueError, match='시작점과 끝점에는 실제 모션 데이터'):
-        edit_layer(layer(), request(
-            'interpolate', start_sec=0.08, end_sec=0.10, interpolation_order=3,
-        ))
 
 
 def test_user_point_curve_is_saved_and_rendered_without_marking_recorded_frames():
@@ -547,25 +321,51 @@ def test_point_to_point_partial_edit_moves_only_existing_point_controls():
     assert point_curve_frame_mismatches(result) == []
 
 
-def test_motion_point_selection_is_locked_until_point_conversion():
-    with pytest.raises(ValueError, match='일반 모션은 직접 편집할 수 없습니다'):
-        edit_layer(linked_point_curve_layer(), {
-            'operation': 'time_scale', 'motion_ids': ['1-1'],
-            'start_sec': 1.2, 'end_sec': 1.8, 'factor': 0.5,
-            'selection_kind': 'motion',
-        })
+def test_single_point_selection_uses_zero_as_time_and_value_scale_pivot():
+    time_scaled = edit_layer(linked_point_curve_layer(), {
+        'operation': 'time_scale', 'motion_ids': ['1-1'],
+        'start_sec': 1.5, 'end_sec': 1.5, 'factor': 0.8,
+        'selection_kind': 'point',
+    })
+    assert [
+        point['time_sec'] for point in time_scaled['point_curves'][0]['points']
+    ] == [1.0, 1.2, 2.0]
+    assert point_curve_frame_mismatches(time_scaled) == []
+
+    value_scaled = edit_layer(linked_point_curve_layer(), {
+        'operation': 'value_scale', 'motion_ids': ['1-1'],
+        'start_sec': 1.5, 'end_sec': 1.5, 'factor': 0.5,
+        'selection_kind': 'point',
+    })
+    assert [
+        point['value_deg'] for point in value_scaled['point_curves'][0]['points']
+    ] == [10.0, 15.0, 20.0]
+    assert point_curve_frame_mismatches(value_scaled) == []
 
 
-def test_point_selection_requires_two_real_point_controls():
-    with pytest.raises(ValueError, match='포인트 두 개'):
-        edit_layer(linked_point_curve_layer(), {
-            'operation': 'value_scale', 'motion_ids': ['1-1'],
-            'start_sec': 1.2, 'end_sec': 1.8, 'factor': 0.5,
-            'selection_kind': 'point',
-        })
+def test_single_point_selection_supports_time_and_value_translation():
+    shifted = edit_layer(linked_point_curve_layer(), {
+        'operation': 'time_shift', 'motion_ids': ['1-1'],
+        'start_sec': 1.5, 'end_sec': 1.5, 'delta_sec': 0.2,
+        'selection_kind': 'point',
+    })
+    assert [
+        point['time_sec'] for point in shifted['point_curves'][0]['points']
+    ] == [1.0, 1.7, 2.0]
+
+    offset = edit_layer(linked_point_curve_layer(), {
+        'operation': 'value_offset', 'motion_ids': ['1-1'],
+        'start_sec': 1.5, 'end_sec': 1.5, 'offset_deg': -5.0,
+        'selection_kind': 'point',
+    })
+    assert [
+        point['value_deg'] for point in offset['point_curves'][0]['points']
+    ] == [10.0, 25.0, 20.0]
+    assert point_curve_frame_mismatches(shifted) == []
+    assert point_curve_frame_mismatches(offset) == []
 
 
-def test_recorded_motion_is_approximated_only_when_conversion_is_requested():
+def test_recorded_motion_creates_points_for_the_entire_axis():
     source = {
         'layer_id': 'recorded', 'name': 'MIDI 녹화',
         'enabled': True, 'locked': False,
@@ -579,11 +379,8 @@ def test_recorded_motion_is_approximated_only_when_conversion_is_requested():
         ],
     }
     converted = edit_layer(source, {
-        'operation': 'convert_motion_to_point_curve',
+        'operation': 'create_axis_point_curve',
         'motion_ids': ['1-1'],
-        'selection_kind': 'motion',
-        'start_sec': 0.0,
-        'end_sec': 0.08,
         'approximation_tolerance_deg': 0.01,
         'approximation_maximum_points': 20,
         'curve_id': 'curve_fitted',
@@ -635,7 +432,7 @@ def test_automatic_approximation_rechecks_the_selected_curve_order(
     assert {point['tangent_mode'] for point in points} == {'auto'}
 
 
-def test_conversion_stores_the_selected_approximation_curve_order():
+def test_point_creation_stores_the_selected_approximation_curve_order():
     source = {
         'layer_id': 'recorded-order', 'name': '차수 선택',
         'enabled': True, 'locked': False,
@@ -650,11 +447,8 @@ def test_conversion_stores_the_selected_approximation_curve_order():
     }
 
     converted = edit_layer(source, {
-        'operation': 'convert_motion_to_point_curve',
+        'operation': 'create_axis_point_curve',
         'motion_ids': ['1-1'],
-        'selection_kind': 'motion',
-        'start_sec': 0.0,
-        'end_sec': 0.4,
         'approximation_tolerance_deg': 0.1,
         'approximation_maximum_points': 50,
         'approximation_interpolation_order': 3,
@@ -665,65 +459,19 @@ def test_conversion_stores_the_selected_approximation_curve_order():
     assert point_curve_frame_mismatches(converted) == []
 
 
-def test_point_motion_can_be_baked_back_to_locked_general_motion():
-    source = linked_point_curve_layer()
-    result = edit_layer(source, {
-        'operation': 'convert_point_curve_to_motion',
-        'curve_id': 'curve_linked',
-    })
-
-    assert result['point_curves'] == []
-    assert result['frames'] == source['frames']
-
-
-def test_multiple_point_and_general_ranges_coexist_and_convert_independently():
-    source = {
-        'layer_id': 'mixed', 'name': '혼합 구간',
-        'enabled': True, 'locked': False,
-        'frames': [
-            {
-                'frame': index + 1,
-                'time_sec': index * 0.02,
-                'values': {'1-1': float(index % 4)},
-            }
-            for index in range(16)
-        ],
-    }
-    first = edit_layer(source, {
-        'operation': 'convert_motion_to_point_curve',
-        'motion_ids': ['1-1'], 'start_sec': 0.0, 'end_sec': 0.08,
-        'curve_id': 'point_range_1',
-        'approximation_tolerance_deg': 0.01,
-    })
-    mixed = edit_layer(first, {
-        'operation': 'convert_motion_to_point_curve',
-        'motion_ids': ['1-1'], 'start_sec': 0.16, 'end_sec': 0.24,
-        'curve_id': 'point_range_2',
-        'approximation_tolerance_deg': 0.01,
-    })
-
-    assert [
-        curve['curve_id'] for curve in mixed['point_curves']
-    ] == ['point_range_1', 'point_range_2']
-    baked = edit_layer(mixed, {
-        'operation': 'convert_point_curve_to_motion',
-        'curve_id': 'point_range_1',
-    })
-    assert [
-        curve['curve_id'] for curve in baked['point_curves']
-    ] == ['point_range_2']
-    assert point_curve_frame_mismatches(baked) == []
-
-
-def test_detach_point_curve_keeps_rendered_frames():
-    source = linked_point_curve_layer()
-    result = edit_layer(source, {
-        'operation': 'detach_point_curve',
-        'curve_id': 'curve_linked',
-    })
-
-    assert result['point_curves'] == []
-    assert result['frames'] == source['frames']
+@pytest.mark.parametrize('operation', [
+    'convert_motion_to_point_curve',
+    'convert_point_curve_to_motion',
+    'detach_point_curve',
+    'delete_point_curve',
+])
+def test_removed_motion_section_operations_are_rejected(operation):
+    with pytest.raises(ValueError, match='지원하지 않는 레이어 편집 기능'):
+        edit_layer(linked_point_curve_layer(), {
+            'operation': operation,
+            'motion_ids': ['1-1'],
+            'curve_id': 'curve_linked',
+        })
 
 
 def test_point_curves_for_same_axis_cannot_overlap():
@@ -795,13 +543,12 @@ def test_point_curve_frame_mismatch_is_reported_and_user_choices_resolve_it():
     assert point_curve_frame_mismatches(point_based) == []
     assert values(point_based)[1] != 99.0
 
-    frame_based = edit_layer(inconsistent, {
-        'operation': 'resolve_point_curve_consistency',
-        'strategy': 'frames',
-        'curve_ids': ['curve_user'],
-    })
-    assert frame_based['point_curves'] == []
-    assert values(frame_based)[1] == 99.0
+    with pytest.raises(ValueError, match='포인트 기준 재계산만 지원'):
+        edit_layer(inconsistent, {
+            'operation': 'resolve_point_curve_consistency',
+            'strategy': 'frames',
+            'curve_ids': ['curve_user'],
+        })
 
 
 def test_merge_creates_one_layer_and_preserves_sources():
@@ -814,6 +561,8 @@ def test_merge_creates_one_layer_and_preserves_sources():
         {'frame': 3, 'time_sec': 0.06, 'values': {'1-2': 2.0}},
         {'frame': 4, 'time_sec': 0.08, 'values': {'1-2': 3.0}},
     ]
+    first = create_all_axis_points(first)
+    second = create_all_axis_points(second)
     project = {'period_sec': 0.02, 'transition_safety_level': 10, 'layers': [first, second]}
 
     merged = merge_layers(project, ['a', 'b'], name='하나')
@@ -919,7 +668,13 @@ def test_merged_point_curves_remain_isolated_between_two_projects():
     assert first['frames'] != second['frames']
 
 
-def test_merge_reports_exact_overlap_and_transition_stop_reason():
+def test_merge_requires_points_and_rejects_exact_time_overlap_but_allows_jump():
+    with pytest.raises(ValueError, match='모션 데이터 없음'):
+        merge_layers({'layers': [
+            {'layer_id': 'empty-a', 'name': '빈 레이어 A', 'frames': []},
+            {'layer_id': 'empty-b', 'name': '빈 레이어 B', 'frames': []},
+        ]}, ['empty-a', 'empty-b'])
+
     first = {
         'layer_id': 'a', 'name': '앞 레이어', 'frames': [
             {'frame': 1, 'time_sec': 0.02, 'values': {'1-1': 0.0}},
@@ -932,6 +687,11 @@ def test_merge_reports_exact_overlap_and_transition_stop_reason():
             {'frame': 2, 'time_sec': 0.06, 'values': {'1-1': 2.0}},
         ],
     }
+    with pytest.raises(ValueError, match='전체 모션축에 포인트를 먼저 생성'):
+        merge_layers({'layers': [first, overlap]}, ['a', 'b'])
+
+    first = create_all_axis_points(first)
+    overlap = create_all_axis_points(overlap)
     with pytest.raises(ValueError, match=r'합치기 중단 · 시간 충돌.*1-1.*0\.040~0\.040초'):
         merge_layers({'layers': [first, overlap]}, ['a', 'b'])
 
@@ -941,8 +701,9 @@ def test_merge_reports_exact_overlap_and_transition_stop_reason():
             {'frame': 4, 'time_sec': 0.08, 'values': {'1-1': 21.0}},
         ],
     }
-    with pytest.raises(ValueError, match=r'합치기 중단 · 모션 급변.*1-1.*1\.000° → 20\.000°'):
-        merge_layers(
-            {'transition_safety_level': 4, 'layers': [first, jump]},
-            ['a', 'c'],
-        )
+    jump = create_all_axis_points(jump)
+    merged = merge_layers(
+        {'transition_safety_level': 4, 'layers': [first, jump]},
+        ['a', 'c'],
+    )
+    assert values(merged) == [0.0, 1.0, 20.0, 21.0]

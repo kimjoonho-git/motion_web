@@ -26,6 +26,7 @@ def transform_point_curve(
     end_sec: float,
     delta_sec: float = 0.0,
     factor: float = 1.0,
+    time_pivot: float = 0.0,
     offset_deg: float = 0.0,
     value_pivot: float = 0.0,
 ) -> tuple[Dict[str, Any], List[tuple[float, float]]]:
@@ -46,7 +47,7 @@ def transform_point_curve(
             point['time_sec'] = frame_time(target)
         elif operation == 'time_scale':
             point['time_sec'] = frame_time(
-                start_sec + ((point_time - start_sec) * factor)
+                time_pivot + ((point_time - time_pivot) * factor)
             )
         elif operation == 'value_offset':
             point['value_deg'] = float(point['value_deg']) + offset_deg
