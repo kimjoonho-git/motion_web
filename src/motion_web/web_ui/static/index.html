@@ -1259,7 +1259,7 @@
           <section class="studio-layer-manager-panel hidden" data-layer-manager-panel="merge">
             <div class="studio-layer-manager-guide">
               <strong>레이어 합치기</strong>
-              <span>합칠 레이어를 2개 이상 선택하면 충돌과 급변을 검사한 뒤 새 레이어를 만듭니다.</span>
+              <span>모든 모션축에 포인트가 생성된 레이어만 선택할 수 있습니다. 같은 Motion ID의 시간이 겹치면 합치지 않습니다.</span>
             </div>
             <div class="table-wrap studio-layer-manager-table-wrap">
               <table class="studio-layer-manager-table">
@@ -1336,7 +1336,7 @@
                   <button id="studioEditorValueZoomInButton" type="button">확대</button>
                   <button id="studioEditorValueZoomOutButton" type="button">축소</button>
                 </div>
-                <button id="studioEditorFitSelectionButton" type="button">선택 구간 맞춤</button>
+                <button id="studioEditorFitSelectionButton" type="button">선택 포인트 맞춤</button>
                 <button id="studioEditorFitAllButton" type="button">전체 맞춤</button>
               </div>
               <div class="studio-editor-canvas-wrap"><canvas id="studioEditorGraph" height="430"></canvas></div>
@@ -1350,17 +1350,10 @@
                 <span id="studioEditorInspectorState" class="status-chip off">선택 없음</span>
               </div>
               <section class="studio-editor-operation-panel">
-                <strong id="studioEditorOperationTitle">선택 구간 편집</strong>
-                <p id="studioEditorSelectionGuide" class="studio-editor-selection-guide">그래프에서 모션점이나 포인트를 선택하세요.</p>
-                <div id="studioEditorScopeControls" class="studio-editor-scope-controls">
-                  <strong>편집 구간</strong>
-                  <label class="compact-field studio-editor-range-field"><span>시작(초)</span><input id="studioEditorStart" type="number" min="0" step="0.02" placeholder="선택" value=""></label>
-                  <label class="compact-field studio-editor-range-field"><span>끝(초)</span><input id="studioEditorEnd" type="number" min="0" step="0.02" placeholder="선택" value=""></label>
-                  <button id="studioEditorSelectWholeRangeButton" type="button">레이어 전체 구간</button>
-                  <small>그래프에서 시작점과 끝점을 클릭하거나 시간을 직접 입력하세요.</small>
-                </div>
+                <strong id="studioEditorOperationTitle">포인트 편집</strong>
+                <p id="studioEditorSelectionGuide" class="studio-editor-selection-guide">일반 모션은 축 전체에 포인트를 생성한 뒤 편집할 수 있습니다.</p>
                 <div class="studio-editor-conversion-controls">
-                  <strong>구간 종류 변환</strong>
+                  <strong>선택 축 포인트 생성</strong>
                   <label class="compact-field studio-editor-inspector-field"><span>근사 정밀도</span>
                     <select id="studioEditorApproximationTolerance">
                       <option value="0.5">부드럽게 (0.5°)</option>
@@ -1376,10 +1369,10 @@
                     </select>
                   </label>
                   <label class="compact-field studio-editor-inspector-field"><span>최대 포인트</span>
-                    <input id="studioEditorApproximationMaximumPoints" type="number" min="3" max="200" step="1" value="50">
+                    <input id="studioEditorApproximationMaximumPoints" type="number" min="3" max="200" step="1" value="200">
                   </label>
-                  <button id="studioEditorConvertToPointsButton" type="button">일반 모션 → 포인트 모션</button>
-                  <small>일반 모션은 직접 편집할 수 없습니다. 변환 결과를 저장한 뒤 포인트 편집이 활성화됩니다.</small>
+                  <button id="studioEditorCreatePointsButton" type="button">선택 축 전체 포인트 생성</button>
+                  <small>선택한 Motion ID의 전체 20ms 모션 데이터를 편집 가능한 포인트로 생성합니다.</small>
                 </div>
                 <div class="studio-editor-operations">
                   <label class="compact-field studio-editor-operation-field"><span>편집 기능</span><select id="studioEditorOperation">
@@ -1394,7 +1387,7 @@
                   <label class="compact-field hidden" data-studio-editor-value="delta"><span>이동값(ms)</span><input id="studioEditorDelta" type="number" step="20" value="0"></label>
                   <div id="studioEditorPointControls" class="studio-editor-point-controls hidden" data-studio-editor-value="points">
                     <span>포인트 추가·드래그 / 배경 드래그로 시간축 이동</span>
-                    <label class="compact-field"><span>구간 곡선</span><select id="studioEditorPointCurveOrder">
+                    <label class="compact-field"><span>곡선 방식</span><select id="studioEditorPointCurveOrder">
                       <option value="1">직선</option><option value="3" selected>3차 곡선</option><option value="5">5차 곡선</option>
                     </select></label>
                     <label class="compact-field"><span>시간축 끝(초)</span><input id="studioEditorPointTimelineEnd" type="number" min="0.02" step="0.02" value="10.00"></label>
@@ -1405,14 +1398,12 @@
                     </select></label>
                   </div>
                 </div>
-                <div id="studioEditorOperationHelp" class="studio-editor-operation-help">시작점을 기준으로 선택 구간의 시간을 배율만큼 줄이거나 늘립니다.</div>
+                <div id="studioEditorOperationHelp" class="studio-editor-operation-help">선택한 포인트의 시간을 조절합니다.</div>
               </section>
               <section id="studioEditorDangerZone" class="studio-editor-danger-zone hidden">
-                <strong>구간 관리</strong>
-                <small>선택한 포인트 또는 곡선 구간에 적용되는 위험 작업입니다.</small>
+                <strong>포인트 관리</strong>
+                <small>선택한 포인트에 적용합니다.</small>
                 <button id="studioEditorPointDeleteButton" class="off" type="button" disabled>포인트 삭제</button>
-                <button id="studioEditorCurveDetachButton" type="button" disabled>포인트 모션 → 일반 모션</button>
-                <button id="studioEditorCurveDeleteButton" class="off" type="button" disabled>곡선 구간 삭제</button>
               </section>
             </aside>
           </div>
@@ -1547,6 +1538,6 @@
       </div>
     </div>
 
-    <script type="module" src="/static/app.js?v=20260727-popup-common-3"></script>
+    <script type="module" src="/static/app.js?v=20260727-point-editor-simple-1"></script>
   </body>
 </html>

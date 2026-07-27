@@ -4,19 +4,26 @@ import test from 'node:test';
 
 import {
   motionStudioCanCreatePointCurve,
+  motionStudioCanSwitchPointDraftCurve,
   motionStudioCanvasEventPoint,
+  motionStudioEditorGraphClickAction,
   motionStudioLayerDataEqual,
   motionStudioLayerDuration,
   motionStudioEditorNextValueScale,
   motionStudioEditorValueBounds,
   motionStudioLayerMotionIds,
+  motionStudioMotionTargetAtTime,
+  motionStudioNearestMotionTarget,
+  motionStudioPointCurveAtTime,
+  motionStudioPointCurveOrder,
   motionStudioPointCurvePreview,
   motionStudioPointCurveViewEnd,
   motionStudioPointDragStarted,
   motionStudioPointHitTarget,
+  motionStudioPointRangeTargetsMatch,
   motionStudioRuntimeStatusMessage,
-  motionStudioSelectionKindsMatch,
-  motionStudioShouldEditPoint,
+  motionStudioShouldProtectPointAxisSelection,
+  motionStudioSnapFrameTime,
   resolveMotionStudioSelectedLayerId,
   synchronizeMotionStudioEditorTimeline,
 } from '../static/js/motion_studio.js';
@@ -68,16 +75,6 @@ test('runtime status feedback reports asynchronous failure and active completion
   );
 });
 
-test('a point click edits points only in point mode so general edits can select it', () => {
-  const pointTarget = { point: { point_id: 'point_1' } };
-
-  assert.equal(motionStudioShouldEditPoint('point_curve', pointTarget), true);
-  assert.equal(motionStudioShouldEditPoint('time_shift', pointTarget), false);
-  assert.equal(motionStudioShouldEditPoint('value_offset', pointTarget), false);
-  assert.equal(motionStudioShouldEditPoint('interpolate', pointTarget), false);
-  assert.equal(motionStudioShouldEditPoint('point_curve', null), false);
-});
-
 test('a newly added flat axis can start a point curve without converting motion', () => {
   const flatLayer = {
     frames: [
@@ -101,12 +98,216 @@ test('a newly added flat axis can start a point curve without converting motion'
   }, '3-1'), false);
 });
 
-test('edit ranges allow only point-to-point or motion-to-motion selection', () => {
-  assert.equal(motionStudioSelectionKindsMatch('point', 'point'), true);
-  assert.equal(motionStudioSelectionKindsMatch('motion', 'motion'), true);
-  assert.equal(motionStudioSelectionKindsMatch('point', 'motion'), false);
-  assert.equal(motionStudioSelectionKindsMatch('motion', 'point'), false);
-  assert.equal(motionStudioSelectionKindsMatch('', 'point'), false);
+test('point edits can span point data only on the same Motion ID', () => {
+  assert.equal(
+    motionStudioPointRangeTargetsMatch('1-1', '1-1', 'curve-a', 'curve-a'),
+    true,
+  );
+  assert.equal(
+    motionStudioPointRangeTargetsMatch('1-1', '1-1', 'curve-a', 'curve-b'),
+    true,
+  );
+  assert.equal(
+    motionStudioPointRangeTargetsMatch('1-1', '1-2', 'curve-a', 'curve-a'),
+    false,
+  );
+});
+
+test('motion sample clicks resolve without a previous mousemove cursor state', () => {
+  const tracks = new Map([
+    ['1-1', [{ timeSec: 0.02, value: 1 }, { timeSec: 0.04, value: 2 }]],
+    ['1-2', [{ timeSec: 0.02, value: 10 }]],
+  ]);
+  const metrics = {
+    xFor: (timeSec) => timeSec * 1000,
+    yFor: (value) => value * 10,
+  };
+
+  assert.deepEqual(
+    motionStudioNearestMotionTarget(tracks, ['1-1'], metrics, 42, 21),
+    { motionId: '1-1', timeSec: 0.04, value: 2 },
+  );
+  assert.equal(
+    motionStudioNearestMotionTarget(tracks, ['1-1'], metrics, 200, 200),
+    null,
+  );
+  assert.equal(
+    motionStudioNearestMotionTarget(tracks, ['1-2'], metrics, 42, 21),
+    null,
+  );
+});
+
+test('graph cursor time and value resolve to the selected 20 ms motion sample', () => {
+  assert.equal(motionStudioSnapFrameTime(6.341), 6.34);
+  assert.equal(motionStudioSnapFrameTime(6.349), 6.34);
+  assert.equal(motionStudioSnapFrameTime(6.351), 6.36);
+
+  const tracks = new Map([
+    ['1-1', [
+      { timeSec: 6.32, value: 2 },
+      { timeSec: 6.34, value: 4 },
+    ]],
+    ['1-2', [{ timeSec: 6.34, value: 10 }]],
+  ]);
+  assert.deepEqual(
+    motionStudioMotionTargetAtTime(tracks, ['1-1', '1-2'], 6.34, 9),
+    { motionId: '1-2', timeSec: 6.34, value: 10 },
+  );
+  assert.deepEqual(
+    motionStudioMotionTargetAtTime(tracks, ['1-1'], 6.34, 9),
+    { motionId: '1-1', timeSec: 6.34, value: 4 },
+  );
+  assert.equal(motionStudioMotionTargetAtTime(tracks, ['1-1'], 6.36, 4), null);
+});
+
+test('graph hover and point creation use the same 20 ms motion sample source', () => {
+  const source = readFileSync(
+    new URL('../static/js/motion_studio.js', import.meta.url),
+    'utf8',
+  );
+  const hoverFlow = source.match(
+    /studioEditorGraph\?\.addEventListener\('mousemove'[\s\S]*?studioEditorGraph\?\.addEventListener\('mouseleave'/,
+  )?.[0] || '';
+  const addPointFlow = source.match(
+    /if \(graphAction === 'add_point'\)[\s\S]*?renderEditor\(\);\n        return;/,
+  )?.[0] || '';
+
+  assert.match(hoverFlow, /motionStudioSnapFrameTime\(metrics\.timeFor\(x\)\)/);
+  assert.match(hoverFlow, /motionStudioMotionTargetAtTime/);
+  assert.match(hoverFlow, /const value = nearest \? nearest\.value : rawValue/);
+  assert.match(addPointFlow, /const timeSec = motionStudioSnapFrameTime/);
+  assert.match(addPointFlow, /const graphSample = motionStudioMotionTargetAtTime/);
+  assert.match(addPointFlow, /graphSample\?\.value \?\? metrics\.valueFor/);
+});
+
+test('graph click intent keeps point creation separate from range selection', () => {
+  const pointTarget = {
+    curve: { curve_id: 'curve-active', motion_id: '1-2' },
+    point: { point_id: 'point-a', time_sec: 3.0 },
+  };
+  const motionTarget = { motionId: '1-2', timeSec: 3.0, value: 4.0 };
+  const activeRegion = { curve_id: 'curve-active', motion_id: '1-2' };
+  const otherRegion = { curve_id: 'curve-other', motion_id: '1-2' };
+
+  assert.equal(motionStudioEditorGraphClickAction({
+    operation: 'point_curve',
+    pointTarget,
+  }), 'edit_point');
+  assert.equal(motionStudioEditorGraphClickAction({
+    operation: 'time_shift',
+    pointTarget,
+  }), 'select_point');
+  assert.equal(motionStudioEditorGraphClickAction({
+    operation: 'point_curve',
+    motionTarget,
+    pointRegion: activeRegion,
+    activeCurveId: 'curve-active',
+  }), 'add_point');
+  assert.equal(motionStudioEditorGraphClickAction({
+    operation: 'point_curve',
+    motionTarget,
+    pointRegion: otherRegion,
+    activeCurveId: 'curve-active',
+  }), 'select_curve');
+  assert.equal(motionStudioEditorGraphClickAction({
+    operation: 'point_curve',
+    motionTarget,
+    pointRegion: null,
+    activeCurveId: 'curve-active',
+  }), 'add_point');
+  assert.equal(motionStudioEditorGraphClickAction({
+    operation: 'point_curve',
+    motionTarget: null,
+    pointRegion: null,
+    activeCurveId: 'curve-active',
+  }), 'add_point');
+  assert.equal(motionStudioEditorGraphClickAction({
+    operation: 'time_shift',
+    motionTarget,
+    pointRegion: activeRegion,
+  }), 'select_curve');
+  assert.equal(motionStudioEditorGraphClickAction({
+    operation: 'time_shift',
+    motionTarget,
+    pointRegion: null,
+  }), 'select_motion');
+});
+
+test('point regions resolve by time for one selected axis without requiring a nearby sample', () => {
+  const curves = [
+    {
+      curve_id: 'curve-a',
+      motion_id: '1-1',
+      points: [{ time_sec: 1.0 }, { time_sec: 2.0 }],
+    },
+    {
+      curve_id: 'curve-b',
+      motion_id: '1-2',
+      points: [{ time_sec: 1.0 }, { time_sec: 2.0 }],
+    },
+  ];
+
+  assert.equal(
+    motionStudioPointCurveAtTime(curves, ['1-1'], 1.5)?.curve_id,
+    'curve-a',
+  );
+  assert.equal(
+    motionStudioPointCurveAtTime(curves, ['1-1', '1-2'], 1.5),
+    null,
+  );
+  assert.equal(
+    motionStudioPointCurveAtTime(
+      curves,
+      ['1-1', '1-2'],
+      1.5,
+      { motionId: '1-2' },
+    )?.curve_id,
+    'curve-b',
+  );
+  assert.equal(motionStudioPointCurveAtTime(curves, ['1-1'], 3.0), null);
+});
+
+test('unsaved point drafts block curve and axis switches without blocking same-curve edits', () => {
+  assert.equal(
+    motionStudioCanSwitchPointDraftCurve('curve-a', 'curve-a', true),
+    true,
+  );
+  assert.equal(
+    motionStudioCanSwitchPointDraftCurve('curve-a', 'curve-b', true),
+    false,
+  );
+  assert.equal(
+    motionStudioCanSwitchPointDraftCurve('curve-a', 'curve-b', false),
+    true,
+  );
+  assert.equal(motionStudioCanSwitchPointDraftCurve('', 'curve-b', true), true);
+  assert.equal(motionStudioShouldProtectPointAxisSelection(true, true, false), true);
+  assert.equal(motionStudioShouldProtectPointAxisSelection(true, false, true), true);
+  assert.equal(motionStudioShouldProtectPointAxisSelection(true, false, false), false);
+  assert.equal(motionStudioShouldProtectPointAxisSelection(false, true, true), false);
+});
+
+test('each layer editor session starts without a general-motion range mode', () => {
+  const source = readFileSync(
+    new URL('../static/js/motion_studio.js', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(
+    source,
+    /function openLayerEditor\(layer\)[\s\S]*?const operation = 'time_scale';/,
+  );
+  assert.match(
+    source,
+    /const graphAction = motionStudioEditorGraphClickAction\([\s\S]*?graphAction !== 'select_point'/,
+  );
+  assert.match(source, /function selectPointCurveFromGraph[\s\S]*?pointDraftHasUnsavedChanges/);
+  assert.match(
+    source,
+    /function protectPointDraftAxisSelection[\s\S]*?selectOnlyEditorAxis\(editor\.pointDraft\.motion_id\)/,
+  );
+  assert.doesNotMatch(source, /function setMotionRangeMode/);
+  assert.doesNotMatch(source, /cursorMatchesClick/);
 });
 
 test('primary edit workflow actions stay in the fixed top action area', () => {
@@ -165,7 +366,7 @@ test('editor uses three stable columns and a dedicated save confirmation', () =>
   );
 });
 
-test('motion types expose explicit conversion and destructive delete actions', () => {
+test('editor exposes whole-axis point creation without motion-section conversions', () => {
   const html = readFileSync(
     new URL('../static/index.html', import.meta.url),
     'utf8',
@@ -176,33 +377,52 @@ test('motion types expose explicit conversion and destructive delete actions', (
   );
   assert.match(
     html,
-    /id="studioEditorConvertToPointsButton"[^>]*>일반 모션 → 포인트 모션</,
+    /id="studioEditorCreatePointsButton"[^>]*>선택 축 전체 포인트 생성</,
   );
   assert.match(
     html,
     /id="studioEditorApproximationOrder">[\s\S]*?<option value="1">[\s\S]*?<option value="3" selected>[\s\S]*?<option value="5">/,
   );
-  assert.match(
-    html,
-    /id="studioEditorCurveDetachButton"[^>]*>포인트 모션 → 일반 모션</,
-  );
-  assert.match(html, /id="studioEditorCurveDeleteButton"[^>]*>곡선 구간 삭제</);
-  assert.match(source, /applyEditorOperation\('convert_motion_to_point_curve', false\)/);
-  assert.match(source, /applyEditorOperation\('convert_point_curve_to_motion', false\)/);
+  assert.doesNotMatch(html, /studioEditorScopeControls/);
+  assert.doesNotMatch(html, /studioEditorCurveDetachButton/);
+  assert.doesNotMatch(html, /studioEditorCurveDeleteButton/);
+  assert.match(source, /applyEditorOperation\('create_axis_point_curve'\)/);
+  assert.doesNotMatch(source, /convert_motion_to_point_curve/);
+  assert.doesNotMatch(source, /convert_point_curve_to_motion/);
   assert.match(source, /points \|\| \[\]\)\.length <= 2/);
-  assert.match(source, /selection_kind: editor\.selectionKind \|\| 'motion'/);
+  assert.doesNotMatch(source, /selection_kind:/);
+  assert.doesNotMatch(source, /replace_overlapping_point_curves:/);
   assert.match(source, /approximation_interpolation_order: Number\(/);
   assert.match(source, /pointCurveIsSaved/);
-  assert.match(source, /먼저 저장해야 편집할 수 있습니다/);
+  assert.match(source, /전체에 포인트를 생성하고 저장한 뒤 편집/);
   assert.match(
     source,
-    /const activeCurveId = editor\.pointDraft\?\.curve_id \|\| editor\.pendingCurveId \|\| ''/,
+    /const activeCurveId = appliedOperation === 'create_axis_point_curve'/,
   );
   assert.match(source, /const workingPointCurve = Boolean\(storedCurveForDraft\(editor\)\)/);
   assert.match(
     source,
-    /studio-editor-operations'\)\?\.classList\.toggle\(\s*'hidden',\s*!workingPointCurve/,
+    /studio-editor-conversion-controls'\)\?\.classList\.toggle\(\s*'hidden',\s*pointMode/,
   );
+});
+
+test('one point is immediately editable and a second same-axis point expands the range', () => {
+  const source = readFileSync(
+    new URL('../static/js/motion_studio.js', import.meta.url),
+    'utf8',
+  );
+  const selectionFlow = source.match(
+    /if \(editor\.selectionStage === 0\)[\s\S]*?renderEditorControls\(\);\n      drawEditorGraph\(\);/,
+  )?.[0] || '';
+  const applyGuard = source.match(
+    /async function applyEditorOperation[\s\S]*?if \(operation === 'point_curve'/,
+  )?.[0] || '';
+
+  assert.match(selectionFlow, /setEditorPointRange\(editor, snapped, snapped/);
+  assert.match(selectionFlow, /이 상태로 편집하거나 같은 축의 다른 지점을 선택/);
+  assert.doesNotMatch(selectionFlow, /selectionKind/);
+  assert.match(applyGuard, /Number\.isFinite\(editor\.selectionStartSec\)/);
+  assert.doesNotMatch(applyGuard, /selectionKind/);
 });
 
 test('axis range violations remain visible warnings without blocking edit apply', () => {
@@ -262,7 +482,7 @@ test('linear point curves do not become dirty only from legacy tangent naming', 
   assert.match(dirtyCheck, /point\.tangent_mode = 'auto'/);
 });
 
-test('whole-layer range selection is grouped with range inputs, not axis management', () => {
+test('general-motion range controls are absent from the simplified editor', () => {
   const html = readFileSync(
     new URL('../static/index.html', import.meta.url),
     'utf8',
@@ -270,13 +490,11 @@ test('whole-layer range selection is grouped with range inputs, not axis managem
   const sidebar = html.match(
     /<aside class="studio-editor-sidebar">[\s\S]*?<\/aside>/,
   )?.[0] || '';
-  const scope = html.match(
-    /<div id="studioEditorScopeControls"[\s\S]*?<\/div>/,
-  )?.[0] || '';
   assert.doesNotMatch(sidebar, /studioEditorSelectWholeRangeButton/);
-  assert.match(scope, /studioEditorStart/);
-  assert.match(scope, /studioEditorEnd/);
-  assert.match(scope, /studioEditorSelectWholeRangeButton/);
+  assert.doesNotMatch(html, /studioEditorScopeControls/);
+  assert.doesNotMatch(html, /studioEditorStart/);
+  assert.doesNotMatch(html, /studioEditorEnd/);
+  assert.doesNotMatch(html, /studioEditorSelectWholeRangeButton/);
 });
 
 test('point hit target is forgiving and a click does not become a drag', () => {
@@ -311,6 +529,45 @@ test('point draft renders a visible curve before server apply', () => {
     assert.deepEqual(preview.at(-1), { timeSec: 5, value: 10 });
     assert.equal(Math.abs(preview[Math.floor(preview.length / 2)].value - 5) < 1e-9, true);
   }
+});
+
+test('point curve order uses one validated value for display, draft, and preview', () => {
+  assert.equal(motionStudioPointCurveOrder('3', 1), 3);
+  assert.equal(motionStudioPointCurveOrder(undefined, 5), 5);
+  assert.equal(motionStudioPointCurveOrder(2, 1), 1);
+  assert.equal(motionStudioPointCurveOrder(2, 2), 3);
+
+  const source = readFileSync(
+    new URL('../static/js/motion_studio.js', import.meta.url),
+    'utf8',
+  );
+  const loadDraft = source.match(
+    /function loadPointDraft[\s\S]*?\n  }\n\n  function selectOnlyEditorAxis/,
+  )?.[0] || '';
+  const syncControls = source.match(
+    /function syncPointControls[\s\S]*?\n  }\n\n  function editorSelectedMotionIds/,
+  )?.[0] || '';
+  assert.match(loadDraft, /studioEditorPointCurveOrder\.value = String\(editor\.pointCurveOrder\)/);
+  assert.doesNotMatch(syncControls, /activeElement !== el\.studioEditorPointCurveOrder/);
+});
+
+test('adding a point keeps a cubic preview geometrically different from straight lines', () => {
+  const points = [
+    { point_id: 'start', time_sec: 0, value_deg: 0, tangent_mode: 'auto' },
+    { point_id: 'added', time_sec: 1, value_deg: 10, tangent_mode: 'auto' },
+    { point_id: 'end', time_sec: 2, value_deg: 0, tangent_mode: 'auto' },
+  ];
+  const straight = motionStudioPointCurvePreview(points, 1);
+  const cubic = motionStudioPointCurvePreview(points, 3);
+  const straightByTime = new Map(straight.map((point) => [point.timeSec.toFixed(6), point.value]));
+  const maximumDifference = Math.max(...cubic.map((point) => (
+    Math.abs(point.value - straightByTime.get(point.timeSec.toFixed(6)))
+  )));
+
+  assert.equal(cubic.length, straight.length);
+  assert.equal(maximumDifference > 0.5, true);
+  assert.deepEqual(cubic[0], { timeSec: 0, value: 0 });
+  assert.deepEqual(cubic.at(-1), { timeSec: 2, value: 0 });
 });
 
 function layer(...times) {
@@ -376,6 +633,8 @@ test('editor timeline shrinks when an edit removes trailing data', () => {
   assert.equal(editor.viewEnd, 11.12);
   assert.equal(editor.selectionStage, 0);
   assert.equal(editor.selectionAnchor, null);
+  assert.equal(editor.selectionMotionId, '');
+  assert.equal(editor.selectionCurveId, '');
 });
 
 test('editor timeline expands when an edit creates later data', () => {

@@ -1,1 +1,1 @@
-import './js/main.js?v=20260727-popup-common-3';
+import './js/main.js?v=20260727-point-editor-simple-1';

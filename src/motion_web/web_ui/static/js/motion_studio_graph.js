@@ -1,7 +1,7 @@
 import {
   motionStudioEditorValueBounds,
   motionStudioPointCurvePreview,
-} from './motion_studio_calculations.js?v=20260724-studio-cleanup-3';
+} from './motion_studio_calculations.js?v=20260727-point-editor-simple-1';
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"]/g, (character) => ({
@@ -263,7 +263,7 @@ export function drawMotionStudioEditorGraph({
       );
       context.fillStyle = '#526579';
       context.font = '11px sans-serif';
-      context.fillText(`포인트 구간 ${index + 1}`, xFor(left) + 5, padding.top + 14);
+      context.fillText(`포인트 데이터 ${index + 1}`, xFor(left) + 5, padding.top + 14);
     });
   const selectionStart = Number(selectionStartText);
   const selectionEnd = Number(selectionEndText);

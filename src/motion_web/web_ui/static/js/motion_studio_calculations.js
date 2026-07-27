@@ -44,6 +44,8 @@ export function synchronizeMotionStudioEditorTimeline(editor, layer, previousLay
   editor.viewEnd = Math.max(0.02, duration);
   editor.selectionStage = 0;
   editor.selectionAnchor = null;
+  editor.selectionMotionId = '';
+  editor.selectionCurveId = '';
   return true;
 }
 
@@ -82,18 +84,148 @@ export function resolveMotionStudioSelectedLayerId(layers, selectedLayerId = '')
   return String(available[0]?.layer_id || '');
 }
 
-export function motionStudioShouldEditPoint(operation, pointTarget) {
-  return operation === 'point_curve' && Boolean(pointTarget);
+export function motionStudioPointRangeTargetsMatch(
+  firstMotionId,
+  secondMotionId,
+  _firstCurveId,
+  _secondCurveId,
+) {
+  const first = String(firstMotionId || '');
+  const second = String(secondMotionId || '');
+  return Boolean(first) && first === second;
 }
 
-export function motionStudioSelectionKindsMatch(firstKind, secondKind) {
-  return ['point', 'motion'].includes(firstKind) && firstKind === secondKind;
+export function motionStudioCanSwitchPointDraftCurve(
+  activeCurveId,
+  targetCurveId,
+  hasUnsavedChanges,
+) {
+  const active = String(activeCurveId || '');
+  const target = String(targetCurveId || '');
+  return !active || active === target || !hasUnsavedChanges;
+}
+
+export function motionStudioShouldProtectPointAxisSelection(
+  hasPointDraft,
+  pointMode,
+  hasUnsavedChanges,
+) {
+  return Boolean(hasPointDraft) && (Boolean(pointMode) || Boolean(hasUnsavedChanges));
+}
+
+export function motionStudioPointCurveAtTime(
+  curves,
+  selectedMotionIds,
+  timeSec,
+  motionTarget = null,
+) {
+  const selected = new Set(selectedMotionIds || []);
+  const targetMotionId = String(motionTarget?.motionId || '');
+  const candidateMotionIds = targetMotionId
+    ? new Set([targetMotionId])
+    : (selected.size === 1 ? selected : new Set());
+  if (!candidateMotionIds.size || !Number.isFinite(Number(timeSec))) return null;
+  return (Array.isArray(curves) ? curves : []).find((curve) => {
+    if (!candidateMotionIds.has(String(curve?.motion_id || ''))) return false;
+    const points = curve?.points || [];
+    const startSec = Number(points[0]?.time_sec);
+    const endSec = Number(points[points.length - 1]?.time_sec);
+    return Number.isFinite(startSec)
+      && Number.isFinite(endSec)
+      && Number(timeSec) >= startSec - 1e-9
+      && Number(timeSec) <= endSec + 1e-9;
+  }) || null;
+}
+
+export function motionStudioEditorGraphClickAction({
+  operation = '',
+  pointTarget = null,
+  motionTarget = null,
+  pointRegion = null,
+  activeCurveId = '',
+} = {}) {
+  const pointMode = operation === 'point_curve';
+  if (pointTarget) return pointMode ? 'edit_point' : 'select_point';
+  const regionCurveId = String(pointRegion?.curve_id || '');
+  const activeId = String(activeCurveId || '');
+  if (pointMode) {
+    if (pointRegion && (!activeId || regionCurveId !== activeId)) {
+      return 'select_curve';
+    }
+    return 'add_point';
+  }
+  if (pointRegion) return 'select_curve';
+  if (motionTarget) return 'select_motion';
+  return 'none';
 }
 
 export function motionStudioPointHitTarget(targets, x, y, radius = 14) {
   return (Array.isArray(targets) ? targets : []).find(
     (target) => Math.hypot(Number(target.x) - x, Number(target.y) - y) <= radius,
   ) || null;
+}
+
+export function motionStudioNearestMotionTarget(
+  tracks,
+  selectedMotionIds,
+  metrics,
+  x,
+  y,
+  radius = 18,
+) {
+  if (!(tracks instanceof Map) || !metrics) return null;
+  const selected = new Set(selectedMotionIds || []);
+  let nearest = null;
+  let nearestDistance = Number(radius);
+  for (const [motionId, points] of tracks.entries()) {
+    if (!selected.has(motionId)) continue;
+    for (const point of points || []) {
+      const pointX = Number(metrics.xFor?.(point.timeSec));
+      const pointY = Number(metrics.yFor?.(point.value));
+      if (!Number.isFinite(pointX) || !Number.isFinite(pointY)) continue;
+      const distance = Math.hypot(pointX - Number(x), pointY - Number(y));
+      if (distance >= nearestDistance) continue;
+      nearestDistance = distance;
+      nearest = { motionId, ...point };
+    }
+  }
+  return nearest;
+}
+
+export function motionStudioSnapFrameTime(timeSec, periodSec = 0.02) {
+  const time = Number(timeSec);
+  const period = Number(periodSec);
+  if (!Number.isFinite(time) || !Number.isFinite(period) || period <= 0) return 0;
+  return Math.max(0, Math.round(time / period) * period);
+}
+
+export function motionStudioMotionTargetAtTime(
+  tracks,
+  selectedMotionIds,
+  timeSec,
+  preferredValue = Number.NaN,
+  toleranceSec = 1e-7,
+) {
+  if (!(tracks instanceof Map)) return null;
+  const selected = new Set(selectedMotionIds || []);
+  const targetTime = Number(timeSec);
+  const preferred = Number(preferredValue);
+  if (!Number.isFinite(targetTime)) return null;
+  let nearest = null;
+  let nearestValueDistance = Number.POSITIVE_INFINITY;
+  for (const [motionId, points] of tracks.entries()) {
+    if (!selected.has(motionId)) continue;
+    for (const point of points || []) {
+      if (Math.abs(Number(point.timeSec) - targetTime) > toleranceSec) continue;
+      const valueDistance = Number.isFinite(preferred)
+        ? Math.abs(Number(point.value) - preferred)
+        : 0;
+      if (nearest && valueDistance >= nearestValueDistance) continue;
+      nearestValueDistance = valueDistance;
+      nearest = { motionId, ...point };
+    }
+  }
+  return nearest;
 }
 
 export function motionStudioCanvasEventPoint(rect, clientX, clientY, width, height) {
@@ -152,6 +284,13 @@ export function motionStudioPointCurveViewEnd(
   );
 }
 
+export function motionStudioPointCurveOrder(value, fallback = 3) {
+  const order = Number(value);
+  if ([1, 3, 5].includes(order)) return order;
+  const fallbackOrder = Number(fallback);
+  return [1, 3, 5].includes(fallbackOrder) ? fallbackOrder : 3;
+}
+
 export function motionStudioPointCurvePreview(rawPoints, interpolationOrder = 3) {
   const points = (Array.isArray(rawPoints) ? rawPoints : [])
     .map((point) => ({
@@ -162,8 +301,7 @@ export function motionStudioPointCurvePreview(rawPoints, interpolationOrder = 3)
     .filter((point) => Number.isFinite(point.time_sec) && Number.isFinite(point.value_deg))
     .sort((first, second) => first.time_sec - second.time_sec);
   if (points.length < 2) return [];
-  const order = [1, 3, 5].includes(Number(interpolationOrder))
-    ? Number(interpolationOrder) : 3;
+  const order = motionStudioPointCurveOrder(interpolationOrder);
   const automaticSlope = (index) => {
     const before = points[Math.max(0, index - 1)];
     const after = points[Math.min(points.length - 1, index + 1)];

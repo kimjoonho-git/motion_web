@@ -63,8 +63,8 @@ export function motionStudioEditorInspectorState({
   };
   if (pointDraftUnsaved && !savedPointCurve) return {
     key: 'unsaved-point',
-    label: '저장 전 포인트 모션',
-    guide: '포인트 변환 결과를 작업본에 반영하고 저장해야 포인트 편집이 활성화됩니다.',
+    label: '저장 전 포인트',
+    guide: '포인트 생성 결과를 작업본에 반영하고 저장해야 편집이 활성화됩니다.',
   };
   if (pointSelected) return {
     key: 'point',
@@ -73,18 +73,18 @@ export function motionStudioEditorInspectorState({
   };
   if (savedPointCurve) return {
     key: 'saved-point',
-    label: '저장된 포인트 구간',
-    guide: '포인트 두 개를 선택해 시간과 모션값을 편집할 수 있습니다.',
+    label: '저장된 포인트',
+    guide: '포인트 한 개 또는 같은 축의 두 포인트를 선택해 편집할 수 있습니다.',
   };
   if (rangeSelected) return {
-    key: 'motion-range',
-    label: '일반 모션 구간',
-    guide: '선택 구간을 포인트 모션으로 변환할 수 있습니다.',
+    key: 'point-range',
+    label: '포인트 범위',
+    guide: '선택한 포인트를 함께 편집할 수 있습니다.',
   };
   return {
     key: 'none',
     label: '선택 없음',
-    guide: '그래프에서 모션점이나 포인트를 선택하세요.',
+    guide: '일반 모션은 축 전체 포인트를 생성한 뒤 편집할 수 있습니다.',
   };
 }
 
