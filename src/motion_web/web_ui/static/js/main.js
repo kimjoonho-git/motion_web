@@ -10,15 +10,17 @@ import {
   stopMotionStudio,
   setProjectGeneration,
 } from './api.js?v=20260723-servo-service-split';
-import { getElements } from './dom.js?v=20260727-operation-progress';
-import { createMotorEventLogController } from './event_log.js?v=20260721-project-generation';
-import { createMidiMonitorController } from './midi_monitor.js?v=20260724-ui-finish-1';
-import { createMotionDataController } from './motion_data.js?v=20260724-ui-navigation-2';
-import { createMotionStudioController } from './motion_studio.js?v=20260724-editor-history-1';
-import { createMotionTestController } from './motion_test.js?v=20260724-motor-management-1';
-import { createMotorConfigController } from './motor_config.js?v=20260724-motor-management-layout-2';
-import { createProjectExplorerController } from './project_explorer.js?v=20260724-system-layout-1';
+import { getElements } from './dom.js?v=20260727-popup-common-3';
+import { createMotorEventLogController } from './event_log.js?v=20260727-popup-common-3';
+import { createMidiMonitorController } from './midi_monitor.js?v=20260727-popup-common-3';
+import { createMotionDataController } from './motion_data.js?v=20260727-popup-common-3';
+import { createMotionStudioController } from './motion_studio.js?v=20260727-popup-common-3';
+import { createMotionTestController } from './motion_test.js?v=20260727-popup-common-3';
+import { createMotorConfigController } from './motor_config.js?v=20260727-popup-common-3';
+import { createProjectExplorerController } from './project_explorer.js?v=20260727-popup-common-3';
 import { renderAccess, renderMonitoring } from './monitoring.js?v=20260724-runtime-fix-1';
+import { createOperationProgressManager } from './operation_progress.js?v=20260727-popup-common-3';
+import { installDialogManager } from './ui_dialogs.js?v=20260727-popup-common-3';
 import { StatusSocket } from './socket.js';
 import {
   createWorkspaceRouteState,
@@ -34,6 +36,14 @@ import {
 import { installFeedbackPresentation } from './ui_feedback.js?v=20260724-ui-finish-1';
 
 const el = getElements();
+const operationProgress = createOperationProgressManager({ el });
+const appDialogs = installDialogManager({ el });
+window.alert = (message) => {
+  void appDialogs.alert(message, {
+    title: '알림',
+    tone: /실패|오류|위험|중단/.test(String(message || '')) ? 'danger' : 'info',
+  });
+};
 installFeedbackPresentation(document);
 const appState = {
   latestState: null,
@@ -369,12 +379,32 @@ function axisListText(motors) {
 }
 
 function setRestartOverlay(visible, title = '', message = '', detail = '') {
-  if (!el.restartOverlay) return;
-  el.restartOverlay.classList.toggle('hidden', !visible);
-  document.body.classList.toggle('ui-locked', visible);
-  if (el.restartOverlayTitle && title) el.restartOverlayTitle.textContent = title;
-  if (el.restartOverlayMessage && message) el.restartOverlayMessage.textContent = message;
-  if (el.restartOverlayDetail && detail) el.restartOverlayDetail.textContent = detail;
+  if (!visible) {
+    operationProgress.close({ force: true });
+    return;
+  }
+  const id = `restart:${appState.restartCheckMode || 'system'}`;
+  if (operationProgress.activeId() !== id) {
+    operationProgress.begin({
+      id,
+      title,
+      message,
+      detail,
+      phase: '진행 중',
+      mode: 'standard',
+    });
+    return;
+  }
+  operationProgress.update({ title, message, detail, phase: '진행 중' });
+}
+
+function finishRestartOverlay({
+  outcome = 'success',
+  title,
+  message,
+  detail,
+} = {}) {
+  operationProgress.finish({ outcome, title, message, detail });
 }
 
 function stopRestartProgressPolling() {
@@ -406,13 +436,34 @@ function setStatusCheckPopup({
   message = '',
   detail = '',
 } = {}) {
-  if (!el.statusCheckOverlay) return;
-  el.statusCheckOverlay.classList.toggle('hidden', !visible);
-  el.statusCheckSpinner?.classList.toggle('hidden', !running);
-  if (el.statusCheckTitle && title) el.statusCheckTitle.textContent = title;
-  if (el.statusCheckMessage && message) el.statusCheckMessage.textContent = message;
-  if (el.statusCheckDetail && detail) el.statusCheckDetail.textContent = detail;
-  if (el.statusCheckCloseButton) el.statusCheckCloseButton.disabled = running;
+  if (!visible) {
+    operationProgress.close({ force: true });
+    return;
+  }
+  const id = title.includes('모터') ? 'status:motor' : 'status:program';
+  if (running) {
+    operationProgress.begin({
+      id,
+      title,
+      message,
+      detail,
+      phase: '확인 중',
+      mode: 'compact',
+    });
+    return;
+  }
+  operationProgress.finish({
+    outcome: title.includes('실패')
+      ? 'failure'
+      : title.includes('취소')
+        ? 'cancelled'
+        : message.includes('지연')
+          ? 'partial'
+          : 'success',
+    title,
+    message,
+    detail,
+  });
 }
 
 function formatStatusHex(value) {
@@ -768,6 +819,12 @@ function updateRestartProgress(payload = null) {
     ].join(' ');
 
   if (state.failed) {
+    finishRestartOverlay({
+      outcome: state.title.includes('시간 초과') ? 'timeout' : 'failure',
+      title: state.title,
+      message: '재시작 완료 조건을 확인하지 못했습니다.',
+      detail: state.detail,
+    });
     stopRestartProgressPolling();
     appState.configApplyInProgress = false;
     appState.configApplyStartedAtMs = null;
@@ -777,12 +834,8 @@ function updateRestartProgress(payload = null) {
     appState.restartPreviousBridgeInstanceId = '';
     appState.restartPreviousMotorStatusAt = null;
     appState.restartRequestAccepted = false;
-    setRestartOverlay(true, state.title, '노드는 재시작됐지만 연결된 모터를 찾지 못했습니다.', state.detail);
     if (el.bridgeState) el.bridgeState.textContent = state.title;
     if (el.summaryText) el.summaryText.textContent = state.detail;
-    setTimeout(() => {
-      if (!appState.configApplyInProgress) setRestartOverlay(false);
-    }, 5000);
     return;
   }
 
@@ -832,16 +885,16 @@ function updateRestartProgress(payload = null) {
   appState.restartPreviousBridgeInstanceId = '';
   appState.restartPreviousMotorStatusAt = null;
   appState.restartRequestAccepted = false;
-  setRestartOverlay(
-    true,
-    state.title,
-    programRestart
+  finishRestartOverlay({
+    outcome: 'success',
+    title: state.title,
+    message: programRestart
       ? '프로그램 재시작과 웹 자동 재연결을 확인했습니다.'
       : motorControlRestart
         ? 'Motor Manager 실행과 새로운 모터 상태 수신을 확인했습니다.'
-      : '설정 적용·재시작과 모터 상태 수신을 확인했습니다.',
-    state.detail,
-  );
+        : '설정 적용·재시작과 모터 상태 수신을 확인했습니다.',
+    detail: state.detail,
+  });
   if (el.bridgeState) el.bridgeState.textContent = '연결됨';
   if (el.summaryText) {
     el.summaryText.textContent = programRestart
@@ -850,17 +903,13 @@ function updateRestartProgress(payload = null) {
         ? '모터 제어 재시작 완료'
       : '설정 적용·재시작 완료';
   }
-  setTimeout(() => {
-    if (!appState.configApplyInProgress) {
-      setRestartOverlay(false);
-    }
-  }, 800);
 }
 
 let motionTest = null;
 
 const motorConfig = createMotorConfigController({
   el,
+  operationProgress,
   getRawMode: () => appState.rawMode,
   getLatestState: () => appState.latestState,
   renderLatestState,
@@ -1176,13 +1225,6 @@ if (el.motorStatusRefreshButton) {
   });
 }
 
-if (el.statusCheckCloseButton) {
-  el.statusCheckCloseButton.addEventListener('click', () => {
-    if (el.statusCheckCloseButton.disabled) return;
-    setStatusCheckPopup({ visible: false });
-  });
-}
-
 if (el.programPageReloadButton) {
   el.programPageReloadButton.addEventListener('click', () => {
     window.location.reload();
@@ -1191,10 +1233,11 @@ if (el.programPageReloadButton) {
 
 if (el.programRestartButton) {
   el.programRestartButton.addEventListener('click', async () => {
-    const confirmed = window.confirm(
+    const confirmed = await appDialogs.confirm(
       '프로그램을 재시작합니다.\n\n'
       + 'Motor Manager와 EtherCAT은 계속 실행되며 현재 서보 ON/OFF 상태를 유지합니다.\n'
       + '모션 녹화·재생이 정지된 상태인지 확인했습니까?',
+      { title: '프로그램 재시작', confirmLabel: '재시작', tone: 'warning' },
     );
     if (!confirmed) return;
     appState.configApplyInProgress = true;
@@ -1233,10 +1276,11 @@ if (el.programRestartButton) {
 
 if (el.motorControlRestartButton) {
   el.motorControlRestartButton.addEventListener('click', async () => {
-    const confirmed = window.confirm(
+    const confirmed = await appDialogs.confirm(
       '모터 제어 시스템을 재시작합니다.\n\n'
       + 'Motor Manager와 EtherCAT 통신이 중단되며 AC Servo가 OFF됐다가 자동 ON될 수 있습니다.\n'
       + '모든 모션이 정지됐고 장비가 안전한지 확인했습니까?',
+      { title: '모터 제어 재시작', confirmLabel: '재시작', tone: 'danger' },
     );
     if (!confirmed) return;
     appState.configApplyInProgress = true;

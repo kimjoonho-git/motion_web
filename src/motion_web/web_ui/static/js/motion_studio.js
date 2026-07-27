@@ -54,6 +54,7 @@ import {
   renderMotionStudioEditorPresentation,
   requestMotionStudioEditorSave,
 } from './motion_studio_editor_ui.js?v=20260724-studio-editor-ui';
+import { showConfirm } from './ui_dialogs.js?v=20260727-popup-common-3';
 
 export {
   motionStudioCanCreatePointCurve,
@@ -1144,7 +1145,10 @@ export function createMotionStudioController({
     if (
       operation === 'delete_data'
       && confirmDelete
-      && !window.confirm('선택한 축의 선택 구간 데이터를 삭제할까요?')
+      && !await showConfirm(
+        '선택한 축의 선택 구간 데이터를 삭제할까요?',
+        { title: '선택 구간 데이터 삭제', confirmLabel: '삭제', tone: 'danger' },
+      )
     ) return;
     const payload = {
       layer: editor.working,
@@ -1525,7 +1529,11 @@ export function createMotionStudioController({
     const question = pointBased
       ? `'${layer.name}'의 포인트·탄젠트를 기준으로 20ms 프레임을 다시 계산할까요?`
       : `'${layer.name}'의 현재 20ms 프레임을 유지하고 불일치한 포인트 편집 정보를 제거할까요?`;
-    if (!window.confirm(question)) return null;
+    if (!await showConfirm(question, {
+      title: '포인트 곡선 불일치 정리',
+      confirmLabel: pointBased ? '다시 계산' : '현재 프레임 유지',
+      tone: 'warning',
+    })) return null;
     return run(async () => {
       const calculated = await editMotionStudioLayer({
         layer,
@@ -1827,7 +1835,10 @@ export function createMotionStudioController({
     });
     el.studioSelectedLayerCopyButton?.addEventListener('click', async () => {
       const layer = selectedLayer();
-      if (!layer || !window.confirm(`선택한 '${layer.name}'을 복사할까요?\n복사본은 재생 미선택 상태로 생성됩니다.`)) return;
+      if (!layer || !await showConfirm(
+        `선택한 '${layer.name}'을 복사할까요?\n복사본은 재생 미선택 상태로 생성됩니다.`,
+        { title: '레이어 복사', confirmLabel: '복사' },
+      )) return;
       const result = await run(() => duplicateMotionStudioLayer(layer.layer_id));
       if (!result?.layer_id) return;
       state.selectedLayerId = result.layer_id;
@@ -1846,7 +1857,10 @@ export function createMotionStudioController({
     });
     el.studioSelectedLayerDeleteButton?.addEventListener('click', async () => {
       const layer = selectedLayer();
-      if (!layer || !window.confirm(`레이어 '${layer.name}'을 삭제할까요?`)) return;
+      if (!layer || !await showConfirm(
+        `레이어 '${layer.name}'을 삭제할까요?`,
+        { title: '레이어 삭제', confirmLabel: '삭제', tone: 'danger' },
+      )) return;
       let failureMessage = '';
       const result = await run(async () => {
         try {
@@ -1888,7 +1902,10 @@ export function createMotionStudioController({
       const layerIds = [...state.mergeLayerIds];
       if (layerIds.length < 2) return;
       const name = nextMergedLayerName();
-      if (!window.confirm(`선택한 ${layerIds.length}개 레이어를 '${name}'로 합칠까요?\n원본과 결과는 재생 선택 상태를 변경하지 않습니다.`)) return;
+      if (!await showConfirm(
+        `선택한 ${layerIds.length}개 레이어를 '${name}'로 합칠까요?\n원본과 결과는 재생 선택 상태를 변경하지 않습니다.`,
+        { title: '레이어 합치기', confirmLabel: '합치기', tone: 'warning' },
+      )) return;
       state.mergeResultMessage = `${layerIds.length}개 레이어 충돌 검사 중…`;
       state.mergeResultError = false;
       renderMergeControl();
@@ -2077,17 +2094,18 @@ export function createMotionStudioController({
       setEditorMessage('포인트를 작업본에서 제거했습니다 · 결과 계산 전에는 저장되지 않습니다.');
       renderEditor();
     });
-    el.studioEditorCurveDetachButton?.addEventListener('click', () => {
+    el.studioEditorCurveDetachButton?.addEventListener('click', async () => {
       const editor = state.editor;
       const curve = storedCurveForDraft(editor);
       if (!curve) return;
-      if (!window.confirm(
+      if (!await showConfirm(
         '현재 20ms 그래프를 그대로 유지하고 일반 모션으로 변환할까요? '
         + '저장 후에는 다시 포인트 모션으로 변환하기 전까지 편집할 수 없습니다.',
+        { title: '일반 모션으로 변환', confirmLabel: '변환', tone: 'warning' },
       )) return;
       applyEditorOperation('convert_point_curve_to_motion', false);
     });
-    el.studioEditorCurveDeleteButton?.addEventListener('click', () => {
+    el.studioEditorCurveDeleteButton?.addEventListener('click', async () => {
       const editor = state.editor;
       if (!editor?.pointDraft?.curve_id) return;
       const stored = editorPointCurves(editor.working).some(
@@ -2098,8 +2116,9 @@ export function createMotionStudioController({
         setEditorMessage('저장 전 포인트 곡선을 취소했습니다.'); renderEditor();
         return;
       }
-      if (!window.confirm(
+      if (!await showConfirm(
         '선택한 포인트와 해당 곡선 구간의 그래프 데이터를 모두 삭제할까요?',
+        { title: '포인트 곡선 삭제', confirmLabel: '삭제', tone: 'danger' },
       )) return;
       applyEditorOperation('delete_point_curve', false);
     });
@@ -2151,7 +2170,7 @@ export function createMotionStudioController({
     });
     el.studioEditorApplyButton?.addEventListener('click', () => applyEditorOperation());
     el.studioEditorUpdateButton?.addEventListener('click', updateEditorWorkingCopy);
-    const discardEditor = () => {
+    const discardEditor = async () => {
       if (
         (
           state.editor?.preview
@@ -2164,7 +2183,10 @@ export function createMotionStudioController({
           )
           || pointDraftHasUnsavedChanges(state.editor)
         )
-        && !window.confirm('저장하지 않은 편집 내용과 결과 미리보기를 버리고 닫을까요?')
+        && !await showConfirm(
+          '저장하지 않은 편집 내용과 결과 미리보기를 버리고 닫을까요?',
+          { title: '레이어 편집 닫기', confirmLabel: '변경 버리기', tone: 'warning' },
+        )
       ) return;
       closeLayerEditor();
     };

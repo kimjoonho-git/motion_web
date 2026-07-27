@@ -15,6 +15,7 @@ import {
   saveProjectMemo,
   selectProject,
 } from './api.js?v=20260722-motor-config-delete';
+import { showConfirm, showPrompt } from './ui_dialogs.js?v=20260727-popup-common-3';
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (character) => ({
@@ -591,7 +592,10 @@ export function createProjectExplorerController({
     el.projectExplorerSelect?.addEventListener('change', async () => {
       const projectId = el.projectExplorerSelect.value;
       if (!projectId) return;
-      if (state.memoDirty && !window.confirm('저장하지 않은 프로젝트 메모가 있습니다. 변경을 버리고 다른 프로젝트로 이동할까요?')) {
+      if (state.memoDirty && !await showConfirm(
+        '저장하지 않은 프로젝트 메모가 있습니다. 변경을 버리고 다른 프로젝트로 이동할까요?',
+        { title: '프로젝트 전환', confirmLabel: '변경 버리기', tone: 'warning' },
+      )) {
         el.projectExplorerSelect.value = state.project?.project_id || '';
         return;
       }
@@ -602,7 +606,11 @@ export function createProjectExplorerController({
       if (changed) await onProjectChange(state.project, state.projectGeneration);
     });
     el.projectCreateButton?.addEventListener('click', async () => {
-      const name = window.prompt('새 프로젝트 이름을 입력하세요', '새 모션 프로젝트');
+      const name = await showPrompt('새 프로젝트 이름을 입력하세요', {
+        title: '새 프로젝트',
+        defaultValue: '새 모션 프로젝트',
+        confirmLabel: '생성',
+      });
       if (!name?.trim()) return;
       const created = await run(
         () => createProject({ name: name.trim() }),
@@ -613,9 +621,14 @@ export function createProjectExplorerController({
     el.projectDeleteButton?.addEventListener('click', async () => {
       if (!state.project || state.busy) return;
       const expected = String(state.project.name || '');
-      const entered = window.prompt(
+      const entered = await showPrompt(
         `프로젝트와 관련 파일을 복구할 수 없도록 영구 삭제합니다.\n확인하려면 프로젝트 이름을 입력하세요.\n\n${expected}`,
-        '',
+        {
+          title: '프로젝트 영구 삭제',
+          defaultValue: '',
+          confirmLabel: '삭제',
+          tone: 'danger',
+        },
       );
       if (entered !== expected) {
         if (entered !== null) setMessage('프로젝트 이름이 일치하지 않아 삭제하지 않았습니다', true);
@@ -771,7 +784,11 @@ export function createProjectExplorerController({
       const file = state.selectedFile;
       if (!file || !state.project) return;
       closeFileActionMenu();
-      const newName = window.prompt('새 파일명을 입력하세요', file.file_name);
+      const newName = await showPrompt('새 파일명을 입력하세요', {
+        title: '파일명 변경',
+        defaultValue: file.file_name,
+        confirmLabel: '변경',
+      });
       if (!newName?.trim() || newName.trim() === file.file_name) return;
       await run(
         () => renameProjectFile(state.project.project_id, file.category, file.file_name, newName.trim()),
@@ -802,7 +819,10 @@ export function createProjectExplorerController({
       const file = state.selectedFile;
       if (!file || !state.project) return;
       closeFileActionMenu();
-      if (!window.confirm(`${file.file_name} 파일을 프로젝트 휴지통으로 이동할까요?`)) return;
+      if (!await showConfirm(
+        `${file.file_name} 파일을 프로젝트 휴지통으로 이동할까요?`,
+        { title: '파일 삭제', confirmLabel: '삭제', tone: 'danger' },
+      )) return;
       await run(
         () => deleteProjectFile(state.project.project_id, file.category, file.file_name),
         '파일을 프로젝트 휴지통으로 이동했습니다',

@@ -42,6 +42,7 @@ import {
   modelTextFromDevice,
   runtimeIsDynamixel,
 } from './motor_type_dynamixel.js';
+import { showConfirm, showPrompt } from './ui_dialogs.js?v=20260727-popup-common-3';
 
 export function isEditableMotorConfigPath(pathValue) {
   const path = String(pathValue || '');
@@ -99,6 +100,7 @@ export function motorConfigApplyIdentityBlock(identityError, scanAvailable, alia
 
 export function createMotorConfigController({
   el,
+  operationProgress,
   getLatestState,
   renderLatestState,
   onWorkContextChange,
@@ -165,31 +167,19 @@ export function createMotorConfigController({
     }
   }
 
-  function closeScanProgressPopup() {
-    if (el.motorScanProgressState?.dataset.state === 'running') return;
-    stopScanProgressPolling();
-    el.motorScanProgressModal?.classList.add('hidden');
-    document.body.classList.remove('modal-open');
-  }
-
-  function clearScanProgressPopup() {
-    el.motorScanProgressList?.replaceChildren();
-  }
-
   function appendScanProgressLine(message, state = '') {
-    if (!el.motorScanProgressList) return;
     const fullMessage = String(message || '');
     const displayMessage = conciseMotorScanMessage(fullMessage);
-    const line = document.createElement('div');
-    line.className = `motor-scan-progress-line${state ? ` is-${state}` : ''}`;
-    line.textContent = displayMessage;
-    if (displayMessage !== fullMessage) line.title = fullMessage;
-    el.motorScanProgressList.appendChild(line);
-    el.motorScanProgressList.scrollTop = el.motorScanProgressList.scrollHeight;
+    const normalizedState = {
+      failed: 'failure',
+      warning: 'partial',
+      done: 'success',
+    }[state] || 'running';
+    operationProgress?.appendLog(displayMessage, normalizedState);
   }
 
   async function pollScanProgress() {
-    if (!el.motorScanProgressModal || el.motorScanProgressModal.classList.contains('hidden')) return;
+    if (!operationProgress?.activeId().startsWith('scan:')) return;
     try {
       const payload = await fetchMotorScanProgress();
       const progress = payload?.progress || {};
@@ -199,9 +189,7 @@ export function createMotorConfigController({
       if (!scanProgressActiveId) {
         scanProgressActiveId = scanId;
         scanProgressRenderedCount = 0;
-        if (el.motorScanProgressState) {
-          el.motorScanProgressState.title = `스캔 ID ${scanId}`;
-        }
+        operationProgress.update({ detail: `스캔 ID ${scanId}` });
       }
       const events = Array.isArray(progress.events) ? progress.events : [];
       events.slice(scanProgressRenderedCount).forEach((event) => {
@@ -216,12 +204,9 @@ export function createMotorConfigController({
         appendScanProgressLine(String(event.message || phase || '스캔 진행 중'), lineState);
       });
       scanProgressRenderedCount = events.length;
-      if (el.motorScanProgressState) {
-        el.motorScanProgressState.textContent = progress.running
-          ? '실시간 스캔 진행 중'
-          : '스캔 종료';
-        el.motorScanProgressState.dataset.state = progress.running ? 'running' : 'done';
-      }
+      operationProgress.update({
+        phase: progress.running ? '실시간 스캔 진행 중' : '스캔 종료 확인',
+      });
       if (!progress.running && scanProgressActiveId) stopScanProgressPolling();
     } catch (error) {
       if (!error?.staleProjectResponse) {
@@ -230,22 +215,21 @@ export function createMotorConfigController({
     }
   }
 
-  async function openScanProgressPopup(title) {
+  async function openScanProgressPopup(id, title) {
     stopScanProgressPolling();
     scanProgressBaselineId = '';
     scanProgressActiveId = '';
     scanProgressRenderedCount = 0;
-    if (el.motorScanProgressTitle) el.motorScanProgressTitle.textContent = title;
-    if (el.motorScanProgressState) {
-      el.motorScanProgressState.textContent = '스캔 요청 준비 중';
-      el.motorScanProgressState.dataset.state = 'running';
-    }
-    if (el.motorScanProgressList) el.motorScanProgressList.replaceChildren();
-    if (el.motorScanProgressCloseButton) el.motorScanProgressCloseButton.disabled = true;
-    if (el.motorScanProgressClearButton) el.motorScanProgressClearButton.disabled = true;
+    const started = operationProgress?.begin({
+      id,
+      title,
+      message: '물리 모터 검색을 실행하고 있습니다.',
+      detail: '새 스캔 요청 준비',
+      phase: '스캔 요청 준비 중',
+      mode: 'log',
+    });
+    if (!started) return false;
     appendScanProgressLine('새 직접 스캔 요청을 전송합니다', 'running');
-    el.motorScanProgressModal?.classList.remove('hidden');
-    document.body.classList.add('modal-open');
     try {
       const payload = await fetchMotorScanProgress();
       scanProgressBaselineId = String(payload?.progress?.scan_id || '');
@@ -253,6 +237,7 @@ export function createMotorConfigController({
       scanProgressBaselineId = '';
     }
     scanProgressTimer = window.setInterval(pollScanProgress, 100);
+    return true;
   }
 
   async function finishScanProgressPopup(success, fallbackMessage, outcome = '') {
@@ -260,13 +245,13 @@ export function createMotorConfigController({
     if (!scanProgressActiveId && fallbackMessage) {
       appendScanProgressLine(fallbackMessage, success ? 'done' : 'failed');
     }
-    if (el.motorScanProgressState) {
-      const partial = outcome === 'partial';
-      el.motorScanProgressState.textContent = success ? '스캔 완료' : (partial ? '스캔 부분 완료' : '스캔 실패');
-      el.motorScanProgressState.dataset.state = success ? 'done' : (partial ? 'warning' : 'failed');
-    }
-    if (el.motorScanProgressCloseButton) el.motorScanProgressCloseButton.disabled = false;
-    if (el.motorScanProgressClearButton) el.motorScanProgressClearButton.disabled = false;
+    const partial = outcome === 'partial';
+    operationProgress?.finish({
+      outcome: success ? 'success' : (partial ? 'partial' : 'failure'),
+      title: success ? '모터 검색 완료' : (partial ? '모터 검색 부분 완료' : '모터 검색 실패'),
+      message: fallbackMessage,
+      detail: scanProgressActiveId ? `스캔 ID ${scanProgressActiveId}` : '스캔 결과 확인',
+    });
     stopScanProgressPolling();
   }
 
@@ -2600,10 +2585,11 @@ export function createMotorConfigController({
       return false;
     }
     const fileName = pathBasename(motorConfigFilePath);
-    const confirmed = window.confirm(
+    const confirmed = await showConfirm(
       `${fileName} 파일을 현재 프로젝트의 휴지통으로 이동할까요?\n\n`
       + '프로젝트의 모터축 설정 목록에서는 제거됩니다.\n'
       + '현재 실행 중인 모터 제어 설정은 자동으로 변경되거나 재시작되지 않습니다.',
+      { title: '모터축 설정 파일 삭제', confirmLabel: '휴지통으로 이동', tone: 'danger' },
     );
     if (!confirmed) {
       setAxisMessage('모터축 설정 파일 삭제 취소');
@@ -2649,7 +2635,10 @@ export function createMotorConfigController({
   }
 
   async function loadProjectRegistry() {
-    closeScanProgressPopup();
+    stopScanProgressPolling();
+    if (operationProgress?.activeId().startsWith('scan:')) {
+      operationProgress.close({ force: true });
+    }
     projectLoadToken += 1;
     const expectedToken = projectLoadToken;
     savedRegistry = normalizeAxisRegistry({});
@@ -2940,7 +2929,7 @@ export function createMotorConfigController({
     const recoveryWarning = recoveryMessage
       ? `복구 적용 안내:\n${recoveryMessage}\n\n`
       : '';
-    const confirmed = window.confirm(
+    const confirmed = await showConfirm(
       recoveryWarning
       + '주의: 설정 적용 중 motor_manager_node를 재시작합니다.\n\n'
       + '재시작 중에는 AC 서보 / 다이나믹셀 통신이 잠시 끊기거나 재초기화될 수 있습니다.\n'
@@ -2948,7 +2937,8 @@ export function createMotorConfigController({
       + '이때 중력, 외력, 기구 하중 때문에 의도하지 않은 움직임이 발생할 수 있습니다.\n\n'
       + '기구를 안전하게 지지하고, 작업자 접근을 막고, 움직여도 위험하지 않은 상태에서만 진행하세요.\n'
       + '웹 연결은 잠깐 끊긴 뒤 자동으로 다시 연결됩니다.\n\n'
-      + '위 위험을 확인했고 설정을 적용하기 위해 노드를 재시작할까요?'
+      + '위 위험을 확인했고 설정을 적용하기 위해 노드를 재시작할까요?',
+      { title: '설정 적용·재시작', confirmLabel: '적용·재시작', tone: 'danger' },
     );
     if (!confirmed) {
       setAxisMessage('설정 적용 취소');
@@ -3113,7 +3103,7 @@ export function createMotorConfigController({
     renderAxisSettings();
   }
 
-  function updateSelectedAxisIdentity() {
+  async function updateSelectedAxisIdentity() {
     const selectedRows = selectedAxisRows();
     const projectRows = selectedRows.filter(
       (row) => row.motor?.transport === 'ethercat' && !row.motor.deleted,
@@ -3142,11 +3132,12 @@ export function createMotorConfigController({
     const changeText = changes.map(([label, before, after]) => (
       `${label}: ${before ?? '미등록'} → ${after ?? '확인 불가'}`
     )).join('\n');
-    const confirmed = window.confirm(
+    const confirmed = await showConfirm(
       `Control Index ${formatInt(motorAxisValue(motor))}의 연결값을 변경합니다.\n\n`
       + `${changeText}\n\n`
       + '이 검색 장비가 프로젝트의 해당 축이 맞는지 확인했습니까?\n'
       + '확인 후에도 변경 내용 저장을 눌러야 프로젝트 파일에 반영됩니다.',
+      { title: 'AC Servo 연결정보 반영', confirmLabel: '연결정보 반영', tone: 'warning' },
     );
     if (!confirmed) {
       setAxisMessage('연결정보 반영 취소');
@@ -3189,10 +3180,15 @@ export function createMotorConfigController({
     }
     const scanRow = selectedRows[0].scanRow;
     const currentAlias = Number(scanRow.ethercat_alias);
-    const input = window.prompt(
+    const input = await showPrompt(
       `Slave Position ${formatInt(scanRow.slave_position)}의 새 EEPROM Alias를 입력하세요.\n`
       + '범위: 0~65535 (0은 Alias 제거)',
-      String(currentAlias),
+      {
+        title: 'EEPROM Alias 변경',
+        defaultValue: String(currentAlias),
+        confirmLabel: '다음',
+        tone: 'danger',
+      },
     );
     if (input === null) return false;
     const text = String(input).trim();
@@ -3207,7 +3203,7 @@ export function createMotorConfigController({
       window.alert('새 EEPROM Alias가 현재 값과 같습니다.');
       return false;
     }
-    const confirmed = window.confirm(
+    const confirmed = await showConfirm(
       '실제 서보 드라이버의 SII EEPROM 값을 변경합니다.\n\n'
       + `Slave Position: ${formatInt(scanRow.slave_position)}\n`
       + `Serial Number: ${formatInt(scanRow.serial_number)}\n`
@@ -3215,6 +3211,7 @@ export function createMotorConfigController({
       + '프로젝트 파일은 자동 변경되지 않습니다.\n'
       + '쓰기 후 서보 드라이버 제어 전원을 재투입하고 다시 검색해야 합니다.\n'
       + '선택한 실제 장비와 새 Alias를 확인했습니까?',
+      { title: 'EEPROM Alias 쓰기', confirmLabel: '실제 장비에 쓰기', tone: 'danger' },
     );
     if (!confirmed) {
       setAxisMessage('EEPROM Alias 쓰기 취소');
@@ -3410,7 +3407,10 @@ export function createMotorConfigController({
     if (!originalText) return;
     const expectedToken = projectLoadToken;
     if (el.scanResult) el.scanResult.textContent = 'AC 서보 검색 중';
-    await openScanProgressPopup('AC 서보 직접 스캔');
+    if (!await openScanProgressPopup('scan:ac-servo', 'AC Servo 검색')) {
+      finishScanRequest(el.scanButton, originalText);
+      return;
+    }
     try {
       const payload = await requestAcServoScan();
       if (expectedToken !== projectLoadToken) return;
@@ -3437,7 +3437,10 @@ export function createMotorConfigController({
     if (!originalText) return;
     const expectedToken = projectLoadToken;
     if (el.dynamixelScanResult) el.dynamixelScanResult.textContent = '다이나믹셀 연결 확인 중';
-    await openScanProgressPopup('Dynamixel 직접 스캔');
+    if (!await openScanProgressPopup('scan:dynamixel', 'Dynamixel 검색')) {
+      finishScanRequest(el.dynamixelScanButton, originalText);
+      return;
+    }
     try {
       const payload = await requestDynamixelScan();
       if (expectedToken !== projectLoadToken) return;
@@ -3461,7 +3464,10 @@ export function createMotorConfigController({
     if (!originalText) return;
     const expectedToken = projectLoadToken;
     if (el.scanAllResult) el.scanAllResult.textContent = 'AC 서보와 다이나믹셀을 검색하고 있습니다';
-    await openScanProgressPopup('전체 모터 직접 스캔');
+    if (!await openScanProgressPopup('scan:all', '전체 모터 검색')) {
+      finishScanRequest(el.scanAllButton, originalText);
+      return;
+    }
     try {
       const payload = await requestMotorScan();
       if (expectedToken !== projectLoadToken) return;
@@ -3628,12 +3634,6 @@ export function createMotorConfigController({
     if (el.scanAllButton) el.scanAllButton.addEventListener('click', scanAllMotors);
     if (el.scanButton) el.scanButton.addEventListener('click', scanMotors);
     if (el.dynamixelScanButton) el.dynamixelScanButton.addEventListener('click', scanDynamixel);
-    if (el.motorScanProgressCloseButton) {
-      el.motorScanProgressCloseButton.addEventListener('click', closeScanProgressPopup);
-    }
-    if (el.motorScanProgressClearButton) {
-      el.motorScanProgressClearButton.addEventListener('click', clearScanProgressPopup);
-    }
   }
 
   return {

@@ -40,10 +40,10 @@ test('restart controls require confirmation and invoke only their matching opera
     /if \(el\.motorControlRestartButton\) \{([\s\S]*?)\n\}\n\nif \(el\.headerProgramRestartButton\)/,
   )?.[1] || '';
 
-  assert.match(programHandler, /window\.confirm/);
+  assert.match(programHandler, /await appDialogs\.confirm/);
   assert.match(programHandler, /restartManagedProgram\(\)/);
   assert.doesNotMatch(programHandler, /restartMotorControlSystem\(\)/);
-  assert.match(motorHandler, /window\.confirm/);
+  assert.match(motorHandler, /await appDialogs\.confirm/);
   assert.match(motorHandler, /restartMotorControlSystem\(\)/);
   assert.doesNotMatch(motorHandler, /restartManagedProgram\(\)/);
 });

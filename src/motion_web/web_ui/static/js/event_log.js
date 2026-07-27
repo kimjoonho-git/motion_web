@@ -3,6 +3,7 @@ import {
   deleteMotorEventLogFile,
   fetchMotorEvents,
 } from './api.js?v=20260722-motor-config-delete';
+import { showConfirm } from './ui_dialogs.js?v=20260727-popup-common-3';
 
 const CATEGORY_LABELS = {
   error: '모터 에러',
@@ -167,8 +168,9 @@ export function createMotorEventLogController({ el }) {
   }
 
   async function clearAll() {
-    const confirmed = window.confirm(
-      '현재 프로젝트에 저장된 모터 동작 로그를 모두 삭제합니다.\n삭제한 로그는 복구할 수 없습니다.'
+    const confirmed = await showConfirm(
+      '현재 프로젝트에 저장된 모터 동작 로그를 모두 삭제합니다.\n삭제한 로그는 복구할 수 없습니다.',
+      { title: '전체 로그 삭제', confirmLabel: '삭제', tone: 'danger' },
     );
     if (!confirmed) return;
     if (el.clearMotorEventLogButton) el.clearMotorEventLogButton.disabled = true;
@@ -189,7 +191,10 @@ export function createMotorEventLogController({ el }) {
   async function deleteSelectedFile() {
     if (activeFile === 'all') return;
     const fileName = activeFile;
-    if (!window.confirm(`${fileName} 로그 파일을 삭제할까요?\n삭제한 로그는 복구할 수 없습니다.`)) return;
+    if (!await showConfirm(
+      `${fileName} 로그 파일을 삭제할까요?\n삭제한 로그는 복구할 수 없습니다.`,
+      { title: '로그 파일 삭제', confirmLabel: '삭제', tone: 'danger' },
+    )) return;
     if (el.deleteMotorEventLogFileButton) el.deleteMotorEventLogFileButton.disabled = true;
     try {
       await deleteMotorEventLogFile(fileName);
