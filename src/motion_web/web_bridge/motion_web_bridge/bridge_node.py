@@ -20,6 +20,7 @@ import yaml
 from ament_index_python.packages import get_package_share_directory
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
+from rcl_interfaces.srv import GetParameters
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
@@ -386,6 +387,8 @@ class MotionWebBridge(Node):
         self._event_log_lock = threading.RLock()
         self._scan_progress_lock = threading.RLock()
         self._motor_scan_request_lock = threading.Lock()
+        self._motor_lifecycle_lock = threading.Lock()
+        self._motor_operation_recovery_lock = threading.Lock()
         self._scan_progress: Dict[str, Any] = {
             'scan_id': '',
             'events': [],
@@ -422,6 +425,10 @@ class MotionWebBridge(Node):
         self._scan_client = self.create_client(Trigger, self.scan_service)
         self._scan_ac_servo_client = self.create_client(Trigger, self.scan_ac_servo_service)
         self._scan_dynamixel_client = self.create_client(Trigger, self.scan_dynamixel_service)
+        self._motor_parameters_client = self.create_client(
+            GetParameters,
+            '/motor_manager_node/get_parameters',
+        )
         self._jog_request_publisher = self.create_publisher(String, self.jog_request_topic, 10)
         self._safety_request_publisher = self.create_publisher(
             String, self.safety_request_topic, 10
@@ -994,6 +1001,11 @@ class MotionWebBridge(Node):
         # The coordinator and explicit context endpoints still perform the
         # full validation; a status frame only reports that validated result.
         execution_context = self.execution_context_status(validate_files=False)
+        motor_operation = self._reconcile_motor_operation_status(
+            runtime_status,
+            motion_state,
+            execution_context,
+        )
         selected_project_id = self.project_repository.selected_project_id()
         runtime_project_id = self._runtime_project_id_from_path(selected_project_id)
         stored_context = execution_context.get('context')
@@ -1058,9 +1070,367 @@ class MotionWebBridge(Node):
             'motion_studio': motion_studio,
             'safety_status': safety_status,
             'execution_context': execution_context,
+            'motor_operation': motor_operation,
             'project_scope': project_scope,
             'motion_state': motion_state,
         }
+
+    def _reconcile_motor_operation_status(
+        self,
+        runtime_status: Dict[str, Any],
+        motion_state: Any,
+        execution_context: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        repository = getattr(self, 'project_repository', None)
+        if repository is None or not hasattr(repository, 'motor_operation_status'):
+            return {}
+        operation = repository.motor_operation_status()
+        if not operation:
+            return {}
+        operation_id = str(operation.get('operation_id') or '')
+        status = str(operation.get('status') or '')
+        operation_type = str(operation.get('type') or '')
+        started_at = float(operation.get('started_at') or 0.0)
+        bridge_restarted = float(
+            getattr(self, '_bridge_started_at', 0.0) or 0.0
+        ) > started_at
+        if (
+            operation_type == 'ac_servo_scan'
+            and status in {'running', 'timeout'}
+            and bridge_restarted
+        ):
+            return self._schedule_interrupted_scan_recovery(operation)
+        if status == 'timeout':
+            if operation_type == 'motor_apply':
+                return self._rollback_failed_motor_apply(
+                    operation,
+                    status='timeout',
+                    error=str(
+                        operation.get('error')
+                        or '모터 설정 적용 제한시간을 초과했습니다'
+                    ),
+                )
+            try:
+                return repository.finish_motor_operation(
+                    operation_id,
+                    'timeout',
+                    phase='timeout',
+                    error=str(operation.get('error') or '모터 작업 제한시간을 초과했습니다'),
+                )
+            except ValueError:
+                return operation
+        if status != 'running':
+            return operation
+        # Scan operations own their preparation/scanning/restoring phases.
+        # Applying restart/apply readiness rules here can terminate a scan
+        # while it temporarily stops Motor Manager for EtherCAT ownership.
+        if operation_type in {'ac_servo_scan', 'motor_scan'}:
+            return operation
+
+        state_payload = motion_state if isinstance(motion_state, dict) else {}
+        last_motor_status_at = self._optional_float(
+            state_payload.get('last_motor_status_at'), None
+        )
+        fresh_feedback = bool(
+            last_motor_status_at is not None and last_motor_status_at > started_at
+        )
+        runtime_ready = runtime_status.get('phase') == 'ready'
+        readiness = (
+            self._motor_operation_runtime_readiness(operation, state_payload)
+            if runtime_ready and fresh_feedback
+            else {'ready': False, 'failed': False, 'error': ''}
+        )
+        if readiness.get('failed') is True:
+            error = str(readiness.get('error') or 'Motor Manager 실행 검증 실패')
+            if operation_type == 'motor_apply':
+                return self._rollback_failed_motor_apply(
+                    operation,
+                    status='failure',
+                    error=error,
+                )
+            return repository.finish_motor_operation(
+                operation_id,
+                'failure',
+                phase='failed',
+                error=error,
+            )
+        if operation_type == 'motor_apply':
+            if (
+                bridge_restarted
+                and runtime_ready
+                and fresh_feedback
+                and readiness.get('ready') is True
+                and execution_context.get('ready') is True
+            ):
+                return repository.finish_motor_operation(
+                    operation_id,
+                    'success',
+                    phase='completed',
+                    message='모터 설정 적용·재시작 완료',
+                )
+            if (
+                bridge_restarted
+                and runtime_status.get('phase') in {
+                    'motor_manager_start_blocked',
+                    'motor_manager_disabled',
+                    'runtime_config_mismatch',
+                }
+            ):
+                return self._rollback_failed_motor_apply(
+                    operation,
+                    status='failure',
+                    error=str(
+                        runtime_status.get('message')
+                        or 'Motor Manager 시작 실패'
+                    ),
+                )
+        elif (
+            operation_type == 'motor_restart'
+            and runtime_ready
+            and fresh_feedback
+            and readiness.get('ready') is True
+        ):
+            return repository.finish_motor_operation(
+                operation_id,
+                'success',
+                phase='completed',
+                message='모터 제어 재시작 완료',
+            )
+        return operation
+
+    def _motor_operation_runtime_readiness(
+        self,
+        operation: Dict[str, Any],
+        motion_state: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        details = operation.get('details')
+        details = dict(details) if isinstance(details, dict) else {}
+        expected_file = str(details.get('runtime_file') or '').strip()
+        if not expected_file:
+            return {
+                'ready': False,
+                'failed': True,
+                'error': '검증할 Motor Manager 실행 설정 경로가 없습니다',
+            }
+        verified_file = str(
+            details.get('verified_motor_config_file') or ''
+        ).strip()
+        actual_file = verified_file
+        if not actual_file:
+            actual_file = self._read_motor_manager_config_file(timeout_sec=0.5)
+            if not actual_file:
+                return {'ready': False, 'failed': False, 'error': ''}
+            try:
+                matches = (
+                    Path(actual_file).expanduser().resolve()
+                    == Path(expected_file).expanduser().resolve()
+                )
+            except (OSError, ValueError):
+                matches = False
+            if not matches:
+                return {
+                    'ready': False,
+                    'failed': True,
+                    'error': (
+                        'Motor Manager 실행 설정 불일치 · '
+                        f'기대 {expected_file} · 실제 {actual_file}'
+                    ),
+                }
+            try:
+                self.project_repository.update_motor_operation(
+                    str(operation.get('operation_id') or ''),
+                    str(operation.get('phase') or 'verifying'),
+                    details={'verified_motor_config_file': actual_file},
+                )
+            except ValueError:
+                pass
+
+        expected_axes = details.get('expected_axes')
+        if not isinstance(expected_axes, list):
+            expected_axes = []
+        try:
+            expected = sorted(set(int(axis) for axis in expected_axes))
+        except (TypeError, ValueError):
+            expected = []
+        if not expected:
+            return {
+                'ready': False,
+                'failed': True,
+                'error': '검증할 설정 대상 모터축이 없습니다',
+            }
+        motors = motion_state.get('motors')
+        motors = motors if isinstance(motors, list) else []
+        by_axis = {}
+        for motor in motors:
+            if not isinstance(motor, dict):
+                continue
+            try:
+                by_axis[int(motor.get('controller_index'))] = motor
+            except (TypeError, ValueError):
+                continue
+        pending = []
+        for axis in expected:
+            motor = by_axis.get(axis)
+            if (
+                motor is None
+                or motor.get('connection_connected') is not True
+                or str(motor.get('connection_state') or '') != 'online'
+                or motor.get('fault') is True
+            ):
+                pending.append(axis)
+        return {
+            'ready': not pending,
+            'failed': False,
+            'error': '',
+            'expected_axes': expected,
+            'pending_axes': pending,
+            'actual_config_file': actual_file,
+        }
+
+    def _read_motor_manager_config_file(self, timeout_sec: float = 0.5) -> str:
+        client = getattr(self, '_motor_parameters_client', None)
+        if client is None or not client.wait_for_service(timeout_sec=0.1):
+            return ''
+        request = GetParameters.Request()
+        request.names = ['config_file']
+        future = client.call_async(request)
+        deadline = time.time() + max(float(timeout_sec), 0.1)
+        while not future.done() and time.time() < deadline:
+            time.sleep(0.01)
+        if not future.done():
+            return ''
+        response = future.result()
+        values = getattr(response, 'values', None)
+        if not values:
+            return ''
+        return str(getattr(values[0], 'string_value', '') or '').strip()
+
+    def _rollback_failed_motor_apply(
+        self,
+        operation: Dict[str, Any],
+        *,
+        status: str,
+        error: str,
+    ) -> Dict[str, Any]:
+        operation_id = str(operation.get('operation_id') or '')
+        details = operation.get('details')
+        details = dict(details) if isinstance(details, dict) else {}
+        previous_runtime = details.get('previous_runtime')
+        previous_runtime = (
+            dict(previous_runtime)
+            if isinstance(previous_runtime, dict) else {}
+        )
+        completed = self.project_repository.finish_motor_operation(
+            operation_id,
+            status,
+            phase='rollback_requested',
+            error=error,
+        )
+        self.project_repository.restore_motor_runtime_target(previous_runtime)
+        if (
+            os.environ.get('MOTION_CONTROL_SERVICE_UNIT')
+            == 'motion-control.service'
+            and os.environ.get('MOTION_MOTOR_SERVICE_UNIT')
+            == 'motion-motor.service'
+        ):
+            try:
+                self._schedule_managed_service_restart(
+                    'motion-motor.service',
+                    'motion-control.service',
+                )
+            except (OSError, ValueError) as exc:
+                completed = self.project_repository.finish_motor_operation(
+                    operation_id,
+                    status,
+                    phase='rollback_schedule_failed',
+                    error=f'{error} · 이전 실행 설정 재시작 요청 실패: {exc}',
+                )
+        return completed
+
+    def _schedule_interrupted_scan_recovery(
+        self,
+        operation: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        lock = getattr(self, '_motor_operation_recovery_lock', None)
+        if lock is None:
+            lock = threading.Lock()
+            self._motor_operation_recovery_lock = lock
+        if not lock.acquire(blocking=False):
+            return self.project_repository.motor_operation_status()
+        operation_id = str(operation.get('operation_id') or '')
+        try:
+            updated = self.project_repository.update_motor_operation(
+                operation_id,
+                'restoring_after_bridge_restart',
+                message='중단된 AC Servo 검색의 Motor Manager 복구 중',
+                timeout_sec=20.0,
+            )
+        except ValueError:
+            lock.release()
+            return self.project_repository.motor_operation_status()
+        threading.Thread(
+            target=self._recover_interrupted_scan,
+            args=(updated,),
+            name='interrupted-ac-servo-scan-recovery',
+            daemon=True,
+        ).start()
+        return updated
+
+    def _recover_interrupted_scan(self, operation: Dict[str, Any]) -> None:
+        lock = getattr(self, '_motor_operation_recovery_lock', None)
+        operation_id = str(operation.get('operation_id') or '')
+        details = operation.get('details')
+        details = dict(details) if isinstance(details, dict) else {}
+        was_active = details.get('motor_service_was_active') is True
+        expected_axes = details.get('expected_axes')
+        expected_axes = list(expected_axes) if isinstance(expected_axes, list) else []
+        try:
+            if not was_active:
+                self.project_repository.finish_motor_operation(
+                    operation_id,
+                    'failure',
+                    phase='interrupted',
+                    error='브리지 종료로 AC Servo 검색 결과를 확인할 수 없습니다',
+                )
+                return
+            self._run_managed_user_service('start', 'motion-motor.service')
+            recovery = self._wait_for_motor_runtime_recovery(
+                expected_axes,
+                timeout_sec=12.0,
+                motor_service='motion-motor.service',
+            )
+            if recovery.get('recovered') is True:
+                self.project_repository.finish_motor_operation(
+                    operation_id,
+                    'failure',
+                    phase='interrupted_recovered',
+                    error=(
+                        '브리지 종료로 AC Servo 검색 결과를 확인할 수 없습니다. '
+                        'Motor Manager는 검색 전 실행 상태로 복구했습니다'
+                    ),
+                    details={'recovery': recovery},
+                )
+            else:
+                self.project_repository.finish_motor_operation(
+                    operation_id,
+                    'failure',
+                    phase='restore_failed',
+                    error='중단된 AC Servo 검색 후 Motor Manager 복구에 실패했습니다',
+                    details={'recovery': recovery},
+                )
+        except (OSError, RuntimeError, subprocess.TimeoutExpired, ValueError) as exc:
+            try:
+                self.project_repository.finish_motor_operation(
+                    operation_id,
+                    'failure',
+                    phase='restore_failed',
+                    error=f'중단된 AC Servo 검색 복구 실패: {exc}',
+                )
+            except ValueError:
+                pass
+        finally:
+            if lock is not None and lock.locked():
+                lock.release()
 
     def _monitoring_mapping_rows_for_context(
         self,
@@ -1492,11 +1862,28 @@ class MotionWebBridge(Node):
             self._execution_context_apply_lock.release()
 
     def _runtime_service_status(self, motion_state: Any) -> Dict[str, Any]:
-        runtime_config = str(os.environ.get('MOTOR_CONFIG_FILE') or '').strip()
+        runtime_path = Path(getattr(self, 'applied_motor_config_file', Path()))
+        runtime_config = str(runtime_path) if runtime_path.is_file() else ''
+        repository = getattr(self, 'project_repository', None)
+        runtime_target = (
+            repository.motor_runtime_state()
+            if repository is not None and hasattr(repository, 'motor_runtime_state')
+            else {}
+        )
+        target_config = str(runtime_target.get('config_file') or '')
+        runtime_target_matches_process = bool(
+            runtime_target.get('valid') is True
+            and runtime_config
+            and Path(target_config).resolve() == runtime_path.resolve()
+        )
         start_block_reason = str(
             os.environ.get('MOTOR_START_BLOCK_REASON') or ''
         ).strip()
-        motor_manager_expected = bool(runtime_config) and not start_block_reason
+        motor_manager_expected = (
+            bool(runtime_config)
+            and runtime_target_matches_process
+            and not start_block_reason
+        )
         runtime_config_path = runtime_config or str(
             self.workspace_root / 'config' / 'bootstrap_motor_config.yaml'
         )
@@ -1513,6 +1900,9 @@ class MotionWebBridge(Node):
         if start_block_reason:
             runtime_phase = 'motor_manager_start_blocked'
             runtime_message = start_block_reason
+        elif runtime_target.get('valid') is True and not runtime_target_matches_process:
+            runtime_phase = 'runtime_config_mismatch'
+            runtime_message = 'Motor Manager 실행 설정과 적용 대상 설정이 다릅니다'
         elif not motor_manager_expected:
             runtime_phase = 'motor_manager_disabled'
             runtime_message = '모터 실행 설정이 없어 motor_manager_node를 시작하지 않았습니다'
@@ -1535,6 +1925,8 @@ class MotionWebBridge(Node):
                 os.environ.get('ROS_LOCALHOST_ONLY') or ''
             ) == '1',
             'runtime_config_file': runtime_config_path,
+            'runtime_target_file': target_config,
+            'runtime_target_matches_process': runtime_target_matches_process,
             'motor_count': motor_count,
             'last_motor_status_at': last_motor_status_at,
             'motor_feedback_age_sec': (
@@ -2027,11 +2419,25 @@ class MotionWebBridge(Node):
         *,
         release_ethercat: bool = False,
     ) -> Dict[str, Any]:
+        lifecycle_lock = getattr(self, '_motor_lifecycle_lock', None)
+        if lifecycle_lock is None:
+            lifecycle_lock = threading.Lock()
+            self._motor_lifecycle_lock = lifecycle_lock
+        if not lifecycle_lock.acquire(blocking=False):
+            return {
+                'success': False,
+                'message': '다른 모터 설정·검색·재시작 작업이 진행 중입니다',
+                'scan': None,
+                'project_id': self.project_repository.selected_project_id(),
+                'project_generation': self._current_project_generation(),
+                **self.snapshot(),
+            }
         scan_lock = getattr(self, '_motor_scan_request_lock', None)
         if scan_lock is None:
             scan_lock = threading.Lock()
             self._motor_scan_request_lock = scan_lock
         if not scan_lock.acquire(blocking=False):
+            lifecycle_lock.release()
             return {
                 'success': False,
                 'message': '다른 모터 검색이 진행 중입니다. 완료 후 다시 시도하세요',
@@ -2040,22 +2446,79 @@ class MotionWebBridge(Node):
                 'project_generation': self._current_project_generation(),
                 **self.snapshot(),
             }
+        operation: Dict[str, Any] = {}
+        result: Dict[str, Any]
         try:
+            operation = self.project_repository.begin_motor_operation(
+                'ac_servo_scan' if release_ethercat else 'motor_scan',
+                'preparing',
+                timeout_sec=timeout_sec + (20.0 if release_ethercat else 5.0),
+                details={
+                    'service_name': service_name,
+                    'project_id': self.project_repository.selected_project_id(),
+                },
+            )
+            operation_id = str(operation.get('operation_id') or '')
             if release_ethercat:
-                return self._call_ethercat_scan_service_locked(
+                result = self._call_ethercat_scan_service_locked(
                     client,
                     service_name,
                     timeout_sec,
+                    operation_id=operation_id,
                 )
-            return self._call_scan_service_locked(client, service_name, timeout_sec)
+            else:
+                self.project_repository.update_motor_operation(
+                    operation_id,
+                    'scanning',
+                    message='모터 물리 검색 진행 중',
+                )
+                result = self._call_scan_service_locked(client, service_name, timeout_sec)
+            current = self.project_repository.motor_operation_status()
+            if (
+                current.get('operation_id') == operation_id
+                and current.get('status') == 'running'
+            ):
+                self.project_repository.finish_motor_operation(
+                    operation_id,
+                    'success' if result.get('success') is True else 'failure',
+                    phase='completed' if result.get('success') is True else 'failed',
+                    message=str(result.get('message') or ''),
+                    error='' if result.get('success') is True else str(result.get('message') or ''),
+                )
+            return result
+        except ValueError as exc:
+            return {
+                'success': False,
+                'message': str(exc),
+                'scan': None,
+                'project_id': self.project_repository.selected_project_id(),
+                'project_generation': self._current_project_generation(),
+                **self.snapshot(),
+            }
+        except Exception as exc:
+            operation_id = str(operation.get('operation_id') or '')
+            if operation_id:
+                try:
+                    self.project_repository.finish_motor_operation(
+                        operation_id,
+                        'failure',
+                        phase='failed',
+                        error=str(exc),
+                    )
+                except ValueError:
+                    pass
+            raise
         finally:
             scan_lock.release()
+            lifecycle_lock.release()
 
     def _call_ethercat_scan_service_locked(
         self,
         client,
         service_name: str,
         timeout_sec: float,
+        *,
+        operation_id: str = '',
     ) -> Dict[str, Any]:
         """Release the persistent EtherCAT owner for one physical scan.
 
@@ -2070,7 +2533,9 @@ class MotionWebBridge(Node):
         if motor_service != 'motion-motor.service':
             return self._call_scan_service_locked(client, service_name, timeout_sec)
 
-        blocker = self._ethercat_scan_safety_blocker()
+        blocker = self._ethercat_scan_safety_blocker(
+            require_fresh_motor_state=False,
+        )
         if blocker:
             return {
                 'success': False,
@@ -2083,21 +2548,68 @@ class MotionWebBridge(Node):
             }
 
         was_active = self._managed_user_service_active(motor_service)
-        expected_online_axes = self._expected_online_ethercat_axes()
-        stopped = False
+        if was_active:
+            blocker = self._ethercat_scan_safety_blocker(
+                require_fresh_motor_state=True,
+            )
+            if blocker:
+                return {
+                    'success': False,
+                    'message': f'AC Servo 검색 미실행: {blocker}',
+                    'scan': None,
+                    'scan_blocked': True,
+                    'project_id': self.project_repository.selected_project_id(),
+                    'project_generation': self._current_project_generation(),
+                    **self.snapshot(),
+                }
+
+        expected_online_axes = self._expected_runtime_ethercat_axes()
+        if operation_id:
+            self.project_repository.update_motor_operation(
+                operation_id,
+                'preparing',
+                details={
+                    'motor_service_was_active': was_active,
+                    'expected_axes': expected_online_axes,
+                },
+            )
+        if was_active and not expected_online_axes:
+            return {
+                'success': False,
+                'message': (
+                    'AC Servo 검색 미실행: 실행 설정에서 복구 대상 EtherCAT 축을 '
+                    '확인할 수 없습니다'
+                ),
+                'scan': None,
+                'scan_blocked': True,
+                'project_id': self.project_repository.selected_project_id(),
+                'project_generation': self._current_project_generation(),
+                **self.snapshot(),
+            }
         result: Dict[str, Any]
         restore_error = ''
         recovery: Dict[str, Any] = {
-            'required': bool(expected_online_axes),
+            'required': bool(was_active),
             'expected_axes': expected_online_axes,
             'online_axes': [],
-            'recovered': not expected_online_axes,
+            'recovered': not was_active,
         }
         try:
             if was_active:
+                if operation_id:
+                    self.project_repository.update_motor_operation(
+                        operation_id,
+                        'stopping_runtime',
+                        message='Motor Manager 정지 및 EtherCAT 소유권 해제 중',
+                    )
                 self._run_managed_user_service('stop', motor_service)
-                stopped = True
                 self._wait_for_ethercat_release(timeout_sec=5.0)
+            if operation_id:
+                self.project_repository.update_motor_operation(
+                    operation_id,
+                    'scanning',
+                    message='AC Servo 물리 검색 진행 중',
+                )
             result = self._call_scan_service_locked(client, service_name, timeout_sec)
         except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
             result = {
@@ -2110,20 +2622,32 @@ class MotionWebBridge(Node):
                 **self.snapshot(),
             }
         finally:
-            if was_active and stopped:
+            if was_active:
                 try:
-                    self._run_managed_user_service('start', motor_service)
-                    if expected_online_axes:
-                        recovery = self._wait_for_motor_runtime_recovery(
-                            expected_online_axes,
-                            timeout_sec=12.0,
-                        )
-                        if not recovery.get('recovered'):
-                            restore_error = (
-                                'Motor Manager 재시작 후 전체 축 온라인 복구 실패: '
-                                f'{len(recovery.get("online_axes") or [])}/'
-                                f'{len(expected_online_axes)}축'
+                    if operation_id:
+                        try:
+                            self.project_repository.update_motor_operation(
+                                operation_id,
+                                'restoring',
+                                message='검색 전 Motor Manager 실행 상태 복구 중',
                             )
+                        except ValueError:
+                            # Runtime restoration is a safety action and must
+                            # not depend on operation bookkeeping still being
+                            # writable/running.
+                            pass
+                    self._run_managed_user_service('start', motor_service)
+                    recovery = self._wait_for_motor_runtime_recovery(
+                        expected_online_axes,
+                        timeout_sec=12.0,
+                        motor_service=motor_service,
+                    )
+                    if not recovery.get('recovered'):
+                        restore_error = (
+                            'Motor Manager 재시작 후 서비스·모터 상태 복구 실패: '
+                            f'{len(recovery.get("online_axes") or [])}/'
+                            f'{len(expected_online_axes)}축'
+                        )
                 except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
                     restore_error = str(exc)
 
@@ -2139,8 +2663,12 @@ class MotionWebBridge(Node):
             )
         return result
 
-    def _ethercat_scan_safety_blocker(self) -> str:
-        blocker = self._project_change_blocker()
+    def _ethercat_scan_safety_blocker(
+        self,
+        *,
+        require_fresh_motor_state: bool = True,
+    ) -> str:
+        blocker = self._project_change_blocker(ignore_motor_lifecycle=True)
         if blocker:
             return blocker
 
@@ -2148,16 +2676,24 @@ class MotionWebBridge(Node):
             motion_state = copy.deepcopy(self._motion_state)
             received_at = self._motion_state_received_at
         if not isinstance(motion_state, dict) or received_at is None:
-            return ''
+            return (
+                '최신 모터 상태를 확인할 수 없습니다'
+                if require_fresh_motor_state else ''
+            )
         if time.time() - float(received_at) > 1.0:
-            return ''
+            return (
+                '최신 모터 상태가 중단되어 정지 여부를 확인할 수 없습니다'
+                if require_fresh_motor_state else ''
+            )
 
         moving_axes = []
+        observed_axes = []
         for motor in motion_state.get('motors') or []:
             if not isinstance(motor, dict):
                 continue
             if str(motor.get('transport') or '').lower() != 'ethercat':
                 continue
+            observed_axes.append(str(motor.get('controller_index', '?')))
             if (
                 motor.get('connection_connected') is not True
                 or str(motor.get('connection_state') or '') != 'online'
@@ -2181,6 +2717,8 @@ class MotionWebBridge(Node):
             )
             if moving:
                 moving_axes.append(str(motor.get('controller_index', '?')))
+        if require_fresh_motor_state and not observed_axes:
+            return '최신 모터 상태에서 AC Servo 축을 확인할 수 없습니다'
         if moving_axes:
             return (
                 f'AC Servo 축 {", ".join(moving_axes)}이 움직이는 중입니다. '
@@ -2265,7 +2803,22 @@ class MotionWebBridge(Node):
             + (f': {last_output}' if last_output else '')
         )
 
-    def _expected_online_ethercat_axes(self) -> List[int]:
+    def _expected_runtime_ethercat_axes(self) -> List[int]:
+        repository = getattr(self, 'project_repository', None)
+        runtime = (
+            repository.applied_runtime_motor_config()
+            if repository is not None
+            and hasattr(repository, 'applied_runtime_motor_config')
+            else None
+        )
+        if runtime is not None:
+            return self._configured_axes_from_runtime_file(
+                runtime,
+                transport='ethercat',
+            )
+
+        # Compatibility fallback for an unmanaged/legacy launch with no
+        # durable runtime target.
         with self._lock:
             motion_state = copy.deepcopy(self._motion_state)
             received_at = self._motion_state_received_at
@@ -2289,15 +2842,58 @@ class MotionWebBridge(Node):
                 continue
         return sorted(set(axes))
 
+    @staticmethod
+    def _configured_axes_from_runtime_file(
+        runtime: Path | str,
+        *,
+        transport: str = '',
+    ) -> List[int]:
+        try:
+            payload = yaml.safe_load(
+                Path(runtime).read_text(encoding='utf-8')
+            ) or {}
+            axes = [
+                int(slave['controller_index'])
+                for master in payload.get('masters') or []
+                if isinstance(master, dict)
+                and (
+                    not transport
+                    or str(master.get('type') or '').lower() == transport.lower()
+                )
+                for slave in master.get('slaves') or []
+                if isinstance(slave, dict) and 'controller_index' in slave
+            ]
+            return sorted(set(axes))
+        except (OSError, TypeError, ValueError, yaml.YAMLError):
+            return []
+
     def _wait_for_motor_runtime_recovery(
         self,
         expected_axes: List[int],
         timeout_sec: float,
+        motor_service: str = '',
     ) -> Dict[str, Any]:
         expected = sorted(set(int(axis) for axis in expected_axes))
         started_at = time.time()
         online_axes: List[int] = []
+        if not expected:
+            return {
+                'required': True,
+                'expected_axes': [],
+                'online_axes': [],
+                'recovered': False,
+                'service_active': (
+                    not motor_service
+                    or self._managed_user_service_active(motor_service)
+                ),
+                'duration_sec': 0.0,
+                'error': '복구 대상 EtherCAT 축을 확인할 수 없습니다',
+            }
         while time.time() - started_at < timeout_sec:
+            service_active = (
+                not motor_service
+                or self._managed_user_service_active(motor_service)
+            )
             with self._lock:
                 motion_state = copy.deepcopy(self._motion_state)
                 received_at = self._motion_state_received_at
@@ -2321,12 +2917,13 @@ class MotionWebBridge(Node):
                     except (TypeError, ValueError):
                         continue
                 online_axes = sorted(set(online_axes))
-                if all(axis in online_axes for axis in expected):
+                if service_active and all(axis in online_axes for axis in expected):
                     return {
                         'required': True,
                         'expected_axes': expected,
                         'online_axes': online_axes,
                         'recovered': True,
+                        'service_active': True,
                         'duration_sec': round(time.time() - started_at, 3),
                     }
             time.sleep(0.05)
@@ -2335,6 +2932,10 @@ class MotionWebBridge(Node):
             'expected_axes': expected,
             'online_axes': online_axes,
             'recovered': False,
+            'service_active': (
+                not motor_service
+                or self._managed_user_service_active(motor_service)
+            ),
             'duration_sec': round(time.time() - started_at, 3),
         }
 
@@ -2387,15 +2988,67 @@ class MotionWebBridge(Node):
             scan = json.loads(response.message)
         except json.JSONDecodeError:
             self.get_logger().warn('Invalid scan JSON received.')
+        message = self._scan_result_message(
+            bool(response.success),
+            scan,
+            str(response.message or ''),
+        )
 
         return {
             'success': bool(response.success),
-            'message': response.message,
+            'message': message,
             'scan': scan,
             'project_id': scan_project_id,
             'project_generation': scan_generation,
             **self.snapshot(),
         }
+
+    @staticmethod
+    def _scan_result_message(
+        success: bool,
+        scan: Any,
+        fallback: str,
+    ) -> str:
+        """Keep scan evidence in ``scan`` and expose only a concise UI message."""
+        if not isinstance(scan, dict):
+            return fallback
+
+        parts = ['모터 검색 완료' if success else '모터 검색 실패']
+        ethercat = scan.get('ethercat_scan')
+        if not isinstance(ethercat, dict):
+            physical = scan.get('physical_scan')
+            if isinstance(physical, dict):
+                ethercat = physical.get('ethercat')
+        if isinstance(ethercat, dict) and ethercat.get('skipped') is not True:
+            try:
+                parts.append(f'AC Servo {int(ethercat.get("slaves_count") or 0)}축')
+            except (TypeError, ValueError):
+                pass
+
+        dynamixel = scan.get('dynamixel_scan')
+        if not isinstance(dynamixel, dict):
+            physical = scan.get('physical_scan')
+            if isinstance(physical, dict):
+                dynamixel = physical.get('dynamixel')
+        if isinstance(dynamixel, dict) and dynamixel.get('skipped') is not True:
+            try:
+                parts.append(f'Dynamixel {int(dynamixel.get("devices_count") or 0)}축')
+            except (TypeError, ValueError):
+                pass
+
+        scan_id = str(scan.get('scan_id') or '').strip()
+        if scan_id:
+            parts.append(f'scan_id {scan_id}')
+        errors = scan.get('scan_errors')
+        if not success and isinstance(errors, list):
+            concise_errors = [
+                str(error).strip()
+                for error in errors[:2]
+                if str(error).strip()
+            ]
+            if concise_errors:
+                parts.append(', '.join(concise_errors))
+        return ' · '.join(parts)
 
     def list_motion_projects(self) -> Dict[str, Any]:
         result = self.project_repository.list_projects()
@@ -2407,8 +3060,7 @@ class MotionWebBridge(Node):
         return result
 
     def _runtime_project_id(self) -> str:
-        selected_project_id = self.project_repository.selected_project_id()
-        project_id = self._runtime_project_id_from_path(selected_project_id)
+        project_id = self._runtime_project_id_from_path()
         if not project_id:
             return ''
         try:
@@ -2417,8 +3069,8 @@ class MotionWebBridge(Node):
             return ''
         return project_id
 
-    def _runtime_project_id_from_path(self, selected_project_id: str) -> str:
-        """Compare selected/runtime ownership without parsing project YAML.
+    def _runtime_project_id_from_path(self, selected_project_id: str = '') -> str:
+        """Resolve launch-time runtime ownership without parsing project YAML.
 
         This helper is used only on high-frequency, read-only status paths.
         Project mutation and execution-context paths continue to call
@@ -2434,15 +3086,13 @@ class MotionWebBridge(Node):
         if len(parts) < 2:
             return ''
         project_id = str(parts[0])
-        if project_id != str(selected_project_id or ''):
-            return ''
         return project_id
 
     def _selected_project_owns_runtime(self) -> bool:
         selected = self.project_repository.selected_project_id()
         return bool(
             selected
-            and selected == self._runtime_project_id_from_path(selected)
+            and selected == self._runtime_project_id_from_path()
         )
 
     def _current_project_generation(self) -> int:
@@ -2546,7 +3196,23 @@ class MotionWebBridge(Node):
             with scan_progress_lock:
                 self._scan_progress = empty_scan_progress
 
-    def _project_change_blocker(self) -> str:
+    def _project_change_blocker(self, *, ignore_motor_lifecycle: bool = False) -> str:
+        lifecycle_lock = getattr(self, '_motor_lifecycle_lock', None)
+        if (
+            not ignore_motor_lifecycle
+            and lifecycle_lock is not None
+            and lifecycle_lock.locked()
+        ):
+            return '모터 설정·검색·재시작 작업이 진행 중이므로 프로젝트를 변경할 수 없습니다'
+        repository = getattr(self, 'project_repository', None)
+        if (
+            not ignore_motor_lifecycle
+            and repository is not None
+            and hasattr(repository, 'motor_operation_status')
+        ):
+            operation = repository.motor_operation_status()
+            if operation.get('status') == 'running':
+                return '모터 설정·검색·재시작 작업이 진행 중이므로 프로젝트를 변경할 수 없습니다'
         run_lock = getattr(self, '_motion_run_lock', None)
         if run_lock is None:
             run_status = getattr(self, '_motion_run_status', {})
@@ -3096,15 +3762,58 @@ class MotionWebBridge(Node):
                 **self.snapshot(),
             }
 
+        try:
+            self._ensure_project_change_allowed()
+        except ValueError as exc:
+            return {
+                'success': False,
+                'message': str(exc),
+                **self.snapshot(),
+            }
+        lifecycle_lock = getattr(self, '_motor_lifecycle_lock', None)
+        if lifecycle_lock is None:
+            lifecycle_lock = threading.Lock()
+            self._motor_lifecycle_lock = lifecycle_lock
+        if not lifecycle_lock.acquire(blocking=False):
+            return {
+                'success': False,
+                'message': '다른 모터 설정·검색·재시작 작업이 진행 중입니다',
+                **self.snapshot(),
+            }
         project_id = self.project_repository.selected_project_id()
         if not project_id:
+            lifecycle_lock.release()
             return {
                 'success': False,
                 'message': '적용할 프로젝트를 먼저 선택하세요',
                 **self.snapshot(),
             }
+        operation: Dict[str, Any] = {}
+        previous_runtime = self.project_repository.motor_runtime_target_snapshot()
         try:
+            operation = self.project_repository.begin_motor_operation(
+                'motor_apply',
+                'preparing',
+                timeout_sec=45.0,
+                details={
+                    'project_id': project_id,
+                    'previous_runtime': previous_runtime,
+                },
+            )
             prepared = self.project_repository.prepare_runtime_motor_config(project_id)
+            expected_axes = self._configured_axes_from_runtime_file(
+                prepared['runtime_file']
+            )
+            if not expected_axes:
+                raise ValueError('적용할 모터 실행 설정에서 대상 축을 확인할 수 없습니다')
+            self.project_repository.update_motor_operation(
+                str(operation['operation_id']),
+                'prepared',
+                details={
+                    'runtime_file': str(prepared['runtime_file']),
+                    'expected_axes': expected_axes,
+                },
+            )
             self.project_repository.mark_runtime_motor_config_applied(project_id)
             managed_service = str(
                 os.environ.get('MOTION_CONTROL_SERVICE_UNIT') or ''
@@ -3138,13 +3847,33 @@ class MotionWebBridge(Node):
                     stderr=subprocess.DEVNULL,
                 )
                 restart_mode = 'legacy_script'
+            self.project_repository.update_motor_operation(
+                str(operation['operation_id']),
+                'restart_requested',
+                message='새 모터 설정으로 서비스 재시작 요청 완료',
+                details={'runtime_file': str(prepared['runtime_file'])},
+            )
         except (OSError, ValueError, yaml.YAMLError) as exc:
+            operation_id = str(operation.get('operation_id') or '')
+            if operation_id:
+                try:
+                    self.project_repository.finish_motor_operation(
+                        operation_id,
+                        'failure',
+                        phase='failed',
+                        error=str(exc),
+                    )
+                except ValueError:
+                    pass
+            self.project_repository.restore_motor_runtime_target(previous_runtime)
             return {
                 'success': False,
                 'message': f'프로젝트 설정을 적용할 수 없습니다: {exc}',
                 'restart_script': str(self.restart_script),
                 **self.snapshot(),
             }
+        finally:
+            lifecycle_lock.release()
 
         return {
             'success': True,
@@ -3152,6 +3881,7 @@ class MotionWebBridge(Node):
             'restart_script': str(self.restart_script),
             'restart_mode': restart_mode,
             'runtime_config': prepared,
+            'motor_operation': self.project_repository.motor_operation_status(),
             **self.snapshot(),
         }
 
@@ -3208,7 +3938,7 @@ class MotionWebBridge(Node):
                 ),
                 **self.snapshot(),
             }
-        runtime_config = self.project_repository.applied_runtime_motor_config()
+        runtime_config = self.project_repository.selected_runtime_motor_config()
         if runtime_config is None:
             return {
                 'success': False,
@@ -3218,15 +3948,57 @@ class MotionWebBridge(Node):
                 ),
                 **self.snapshot(),
             }
+        expected_axes = self._configured_axes_from_runtime_file(runtime_config)
+        if not expected_axes:
+            return {
+                'success': False,
+                'message': '현재 모터 실행 설정에서 대상 축을 확인할 수 없습니다',
+                **self.snapshot(),
+            }
         self._ensure_project_change_allowed()
+        lifecycle_lock = getattr(self, '_motor_lifecycle_lock', None)
+        if lifecycle_lock is None:
+            lifecycle_lock = threading.Lock()
+            self._motor_lifecycle_lock = lifecycle_lock
+        if not lifecycle_lock.acquire(blocking=False):
+            return {
+                'success': False,
+                'message': '다른 모터 설정·검색·재시작 작업이 진행 중입니다',
+                **self.snapshot(),
+            }
         try:
+            operation = self.project_repository.begin_motor_operation(
+                'motor_restart',
+                'restart_requested',
+                timeout_sec=45.0,
+                details={
+                    'project_id': self.project_repository.selected_project_id(),
+                    'runtime_file': str(runtime_config),
+                    'expected_axes': expected_axes,
+                },
+            )
             self._schedule_managed_service_restart(motor_service)
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
+            operation_id = str(
+                locals().get('operation', {}).get('operation_id') or ''
+            )
+            if operation_id:
+                try:
+                    self.project_repository.finish_motor_operation(
+                        operation_id,
+                        'failure',
+                        phase='failed',
+                        error=str(exc),
+                    )
+                except ValueError:
+                    pass
             return {
                 'success': False,
                 'message': f'모터 제어 시스템 재시작 요청에 실패했습니다: {exc}',
                 **self.snapshot(),
             }
+        finally:
+            lifecycle_lock.release()
         return {
             'success': True,
             'message': (
@@ -3234,6 +4006,7 @@ class MotionWebBridge(Node):
                 'AC Servo가 OFF됐다가 자동 ON될 수 있습니다'
             ),
             'restart_mode': 'motor_service',
+            'motor_operation': self.project_repository.motor_operation_status(),
             **self.snapshot(),
         }
 

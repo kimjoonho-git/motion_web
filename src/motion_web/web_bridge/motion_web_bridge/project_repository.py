@@ -24,6 +24,12 @@ MAX_TEXT_BYTES = 10 * 1024 * 1024
 DEFAULT_MOTOR_FILE = 'motor_axes.yaml'
 DEFAULT_MOTION_AXIS_FILE = 'motion_axes.yaml'
 SERVO_ALARM_POLICY_FILE = 'servo_alarm_policy.json'
+MOTOR_RUNTIME_TARGET_FIELDS = {
+    'target_project_id',
+    'config_sha256',
+    'project_generation',
+    'applied_at',
+}
 PROJECT_CATEGORIES = {
     'motor_axes': {'.yaml', '.yml'},
     'motion_axis_matching': {'.yaml', '.yml'},
@@ -55,19 +61,41 @@ class ProjectRepository:
         self.root = Path(root).expanduser().resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self.selection_file = self.root / '.selected_project.json'
+        self.motor_runtime_file = self.root / '.motor_runtime.json'
         self._migrate_generated_empty_mappings()
         self._migrate_generated_empty_motor_configs()
         self._migrate_internal_backups()
         self._remove_empty_no_project_workspace()
-        self._normalize_selection_boundary()
+        self._migrate_legacy_motor_runtime_state()
 
-    def _normalize_selection_boundary(self) -> None:
-        """Never retain an applied runtime belonging to another project."""
+    def _migrate_legacy_motor_runtime_state(self) -> None:
+        """Separate the applied motor target from the editor selection.
+
+        Older releases stored both identities in ``.selected_project.json``.
+        Project selection is an editing action and must not erase or retarget
+        the already running Motor Manager.  Migrate only a runtime file whose
+        ownership and location can be proven inside this repository.
+        """
         selection = self._read_selection()
-        selected = str(selection.get('project_id') or '').strip()
         applied = str(selection.get('applied_project_id') or '').strip()
-        if not applied or applied == selected:
+        if not applied:
             return
+        if self.motor_runtime_state().get('valid') is not True:
+            try:
+                project_dir = self._project_dir(applied)
+                runtime = project_dir / 'runtime' / 'applied_motor_config.yaml'
+                content = runtime.read_bytes()
+            except (OSError, ValueError):
+                return
+            existing = self._read_motor_runtime_payload()
+            self._write_motor_runtime_state({
+                **existing,
+                'version': 1,
+                'target_project_id': applied,
+                'config_sha256': _sha256(content),
+                'project_generation': self.project_generation(),
+                'applied_at': time.time(),
+            })
         selection.pop('applied_project_id', None)
         self._atomic_write(
             self.selection_file,
@@ -347,8 +375,6 @@ class ProjectRepository:
     def select_project(self, project_id: Any) -> Dict[str, Any]:
         project_dir = self._project_dir(project_id)
         selection = self._read_selection()
-        if str(selection.get('project_id') or '') != project_dir.name:
-            selection.pop('applied_project_id', None)
         selection['project_id'] = project_dir.name
         self._atomic_write(
             self.selection_file,
@@ -433,14 +459,15 @@ class ProjectRepository:
         encoded = json.dumps(
             identity, ensure_ascii=False, sort_keys=True, separators=(',', ':')
         ).encode('utf-8')
-        selection = self._read_selection()
         motor_name = files['motor_axes']['name']
         motor_source = (
             project_dir / 'motor_axes' / motor_name if motor_name else None
         )
+        runtime_state = self.motor_runtime_state()
         motor_applied = bool(
             motor_source is not None
-            and selection.get('applied_project_id') == project_dir.name
+            and runtime_state.get('valid') is True
+            and runtime_state.get('target_project_id') == project_dir.name
             and self._motor_runtime_matches(project_dir, motor_source)
         )
         return {
@@ -461,31 +488,246 @@ class ProjectRepository:
         runtime = project_dir / 'runtime' / 'applied_motor_config.yaml'
         if not runtime.is_file():
             raise ValueError('적용할 런타임 모터축 설정 파일이 없습니다')
+        runtime_content = runtime.read_bytes()
+        existing = self._read_motor_runtime_payload()
+        self._write_motor_runtime_state({
+            **existing,
+            'version': 1,
+            'target_project_id': project_dir.name,
+            'config_sha256': _sha256(runtime_content),
+            'project_generation': self.project_generation(),
+            'applied_at': time.time(),
+        })
         selection = self._read_selection()
-        selection['applied_project_id'] = project_dir.name
-        self._atomic_write(
-            self.selection_file,
-            json.dumps(selection, ensure_ascii=False) + '\n',
-        )
+        if 'applied_project_id' in selection:
+            selection.pop('applied_project_id', None)
+            self._atomic_write(
+                self.selection_file,
+                json.dumps(selection, ensure_ascii=False) + '\n',
+            )
         return runtime
 
-    def applied_runtime_motor_config(self) -> Optional[Path]:
-        """Resolve the managed service config strictly inside its project folder."""
-        selection = self._read_selection()
-        project_id = str(selection.get('applied_project_id') or '').strip()
-        if project_id != self.selected_project_id():
-            return None
-        if not project_id or project_id != Path(project_id).name:
-            return None
+    def motor_runtime_state(self) -> Dict[str, Any]:
+        """Return the durable motor target plus strict file validation."""
+        payload = self._read_motor_runtime_payload()
+        if not payload:
+            return {}
+        operation = payload.get('operation')
+        operation_payload = dict(operation) if isinstance(operation, dict) else {}
+        project_id = str(payload.get('target_project_id') or '').strip()
+        if not project_id:
+            return {
+                **payload,
+                'operation': operation_payload,
+                'valid': False,
+                'validation_error': 'motor runtime target is not configured',
+            }
+        if project_id != Path(project_id).name:
+            return {**payload, 'valid': False, 'validation_error': 'invalid project id'}
         try:
             project_dir = self._project_dir(project_id)
-        except (FileNotFoundError, ValueError):
+            runtime = project_dir / 'runtime' / 'applied_motor_config.yaml'
+            content = runtime.read_bytes()
+        except (OSError, ValueError) as exc:
+            return {**payload, 'valid': False, 'validation_error': str(exc)}
+        expected_sha = str(payload.get('config_sha256') or '').strip()
+        actual_sha = _sha256(content)
+        valid = bool(expected_sha and expected_sha == actual_sha)
+        return {
+            **payload,
+            'operation': operation_payload,
+            'config_file': str(runtime),
+            'actual_config_sha256': actual_sha,
+            'valid': valid,
+            'validation_error': '' if valid else 'runtime config sha256 mismatch',
+        }
+
+    def motor_runtime_target_snapshot(self) -> Dict[str, Any]:
+        """Return only a verified target suitable for transactional rollback."""
+        state = self.motor_runtime_state()
+        if state.get('valid') is not True:
+            return {}
+        return {
+            key: state[key]
+            for key in MOTOR_RUNTIME_TARGET_FIELDS
+            if key in state
+        }
+
+    def restore_motor_runtime_target(
+        self,
+        target: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Restore a previous target without discarding the current operation."""
+        payload = self._read_motor_runtime_payload() or {'version': 1}
+        for key in MOTOR_RUNTIME_TARGET_FIELDS:
+            payload.pop(key, None)
+        if isinstance(target, dict):
+            payload.update({
+                key: target[key]
+                for key in MOTOR_RUNTIME_TARGET_FIELDS
+                if key in target
+            })
+        payload['version'] = 1
+        self._write_motor_runtime_state(payload)
+        return self.motor_runtime_state()
+
+    def _read_motor_runtime_payload(self) -> Dict[str, Any]:
+        try:
+            payload = json.loads(self.motor_runtime_file.read_text(encoding='utf-8'))
+        except (OSError, ValueError, json.JSONDecodeError):
+            return {}
+        if not isinstance(payload, dict) or payload.get('version') != 1:
+            return {}
+        return dict(payload)
+
+    def _write_motor_runtime_state(self, payload: Dict[str, Any]) -> None:
+        self._atomic_write(
+            self.motor_runtime_file,
+            json.dumps(payload, ensure_ascii=False, indent=2) + '\n',
+        )
+
+    def begin_motor_operation(
+        self,
+        operation_type: str,
+        phase: str,
+        *,
+        timeout_sec: float,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        payload = self._read_motor_runtime_payload() or {'version': 1}
+        current = payload.get('operation')
+        now = time.time()
+        if (
+            isinstance(current, dict)
+            and current.get('status') == 'running'
+            and float(current.get('deadline_at') or 0.0) > now
+        ):
+            raise ValueError('다른 모터 설정·검색·재시작 작업이 진행 중입니다')
+        operation = {
+            'operation_id': f'motor-{uuid.uuid4().hex}',
+            'type': str(operation_type),
+            'phase': str(phase),
+            'status': 'running',
+            'started_at': now,
+            'updated_at': now,
+            'deadline_at': now + max(float(timeout_sec), 1.0),
+            'message': '',
+            'error': '',
+            'details': dict(details or {}),
+        }
+        payload['operation'] = operation
+        self._write_motor_runtime_state(payload)
+        return dict(operation)
+
+    def update_motor_operation(
+        self,
+        operation_id: str,
+        phase: str,
+        *,
+        message: str = '',
+        details: Optional[Dict[str, Any]] = None,
+        timeout_sec: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        payload = self._read_motor_runtime_payload()
+        operation = payload.get('operation')
+        if (
+            not isinstance(operation, dict)
+            or operation.get('operation_id') != operation_id
+            or operation.get('status') != 'running'
+        ):
+            raise ValueError('진행 중인 모터 작업이 일치하지 않습니다')
+        operation = dict(operation)
+        operation['phase'] = str(phase)
+        operation['updated_at'] = time.time()
+        if timeout_sec is not None:
+            operation['deadline_at'] = operation['updated_at'] + max(
+                float(timeout_sec), 1.0
+            )
+        if message:
+            operation['message'] = str(message)
+        if details:
+            merged = dict(operation.get('details') or {})
+            merged.update(details)
+            operation['details'] = merged
+        payload['operation'] = operation
+        self._write_motor_runtime_state(payload)
+        return dict(operation)
+
+    def finish_motor_operation(
+        self,
+        operation_id: str,
+        status: str,
+        *,
+        phase: str,
+        message: str = '',
+        error: str = '',
+        details: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        if status not in {'success', 'failure', 'timeout', 'cancelled'}:
+            raise ValueError('올바르지 않은 모터 작업 종료 상태입니다')
+        payload = self._read_motor_runtime_payload()
+        operation = payload.get('operation')
+        if not isinstance(operation, dict) or operation.get('operation_id') != operation_id:
+            raise ValueError('종료할 모터 작업이 일치하지 않습니다')
+        operation = dict(operation)
+        operation.update({
+            'phase': str(phase),
+            'status': status,
+            'updated_at': time.time(),
+            'finished_at': time.time(),
+            'message': str(message),
+            'error': str(error),
+        })
+        if details:
+            merged = dict(operation.get('details') or {})
+            merged.update(details)
+            operation['details'] = merged
+        payload['operation'] = operation
+        self._write_motor_runtime_state(payload)
+        return dict(operation)
+
+    def motor_operation_status(self) -> Dict[str, Any]:
+        payload = self._read_motor_runtime_payload()
+        operation = payload.get('operation')
+        if not isinstance(operation, dict):
+            return {}
+        result = dict(operation)
+        if (
+            result.get('status') == 'running'
+            and float(result.get('deadline_at') or 0.0) <= time.time()
+        ):
+            result.update({
+                'status': 'timeout',
+                'phase': 'timeout',
+                'error': '모터 작업 제한시간을 초과했습니다',
+            })
+        return result
+
+    def applied_runtime_motor_config(self) -> Optional[Path]:
+        """Resolve the exact applied target independently from editor selection."""
+        state = self.motor_runtime_state()
+        if state.get('valid') is not True:
             return None
-        runtime = project_dir / 'runtime' / 'applied_motor_config.yaml'
-        return runtime if runtime.is_file() else None
+        return Path(str(state['config_file']))
+
+    def selected_runtime_motor_config(self) -> Optional[Path]:
+        """Return the runtime only when it belongs to the selected project."""
+        state = self.motor_runtime_state()
+        if (
+            state.get('valid') is not True
+            or state.get('target_project_id') != self.selected_project_id()
+        ):
+            return None
+        return Path(str(state['config_file']))
 
     def delete_project(self, project_id: Any) -> Dict[str, Any]:
         project_dir = self._project_dir(project_id)
+        runtime_target = self.motor_runtime_state()
+        if runtime_target.get('target_project_id') == project_dir.name:
+            raise ValueError(
+                '현재 모터 실행 설정이 사용하는 프로젝트는 삭제할 수 없습니다. '
+                '다른 프로젝트의 모터 설정을 적용한 후 다시 시도하세요'
+            )
         manifest = self._read_manifest(project_dir)
         project_name = str(manifest.get('name') or project_dir.name)
 
@@ -512,8 +754,6 @@ class ProjectRepository:
         selection = dict(original_selection)
         if selection.get('project_id') == project_dir.name:
             selection.pop('project_id', None)
-        if selection.get('applied_project_id') == project_dir.name:
-            selection.pop('applied_project_id', None)
         if selection:
             self._atomic_write(
                 self.selection_file,
@@ -524,7 +764,6 @@ class ProjectRepository:
                 self.selection_file.unlink()
             except FileNotFoundError:
                 pass
-
         # Rename inside the repository first so a partially removed project
         # can never be listed or opened. Report success only after rmtree has
         # removed the complete directory tree.
@@ -1258,11 +1497,11 @@ class ProjectRepository:
         except (OSError, yaml.YAMLError, AttributeError):
             pass
         runtime_state = manifest.get('runtime_state') or {}
-        selection = self._read_selection()
+        runtime_target = self.motor_runtime_state()
         applied = bool(
             motor_sha
-            and selection.get('project_id') == project_dir.name
-            and selection.get('applied_project_id') == project_dir.name
+            and runtime_target.get('valid') is True
+            and runtime_target.get('target_project_id') == project_dir.name
             and self._motor_runtime_matches(project_dir, motor_path)
         )
         return {

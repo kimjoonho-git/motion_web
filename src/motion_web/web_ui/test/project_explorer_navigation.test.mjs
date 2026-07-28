@@ -30,6 +30,11 @@ test('motion controller owns active panel state without hidden DOM tabs', () => 
 });
 
 test('project transitions reset feature state only after a successful change', () => {
+  assert.match(projectExplorer, /canChangeProject = \(\) => true/);
+  assert.match(
+    projectExplorer,
+    /if \(!canChangeProject\(\)\)[\s\S]*?프로젝트 변경은 프로젝트·장비 > 시스템 정보에서만 가능합니다/,
+  );
   assert.match(
     projectExplorer,
     /const changed = await run\([\s\S]*?selectProject\(projectId\)[\s\S]*?if \(changed\) await onProjectChange/,

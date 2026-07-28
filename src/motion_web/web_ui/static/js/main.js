@@ -17,12 +17,13 @@ import { createMotionDataController } from './motion_data.js?v=20260727-popup-co
 import { createMotionStudioController } from './motion_studio.js?v=20260727-editor-compact-feedback-1';
 import { createMotionTestController } from './motion_test.js?v=20260728-servo-alarm-2';
 import { createMotorConfigController } from './motor_config.js?v=20260727-popup-common-3';
-import { createProjectExplorerController } from './project_explorer.js?v=20260727-popup-common-3';
+import { createProjectExplorerController } from './project_explorer.js?v=20260728-project-selection-scope-1';
 import { renderAccess, renderMonitoring } from './monitoring.js?v=20260724-runtime-fix-1';
 import { createOperationProgressManager } from './operation_progress.js?v=20260728-restart-guard-1';
 import { installDialogManager } from './ui_dialogs.js?v=20260727-popup-common-3';
 import { StatusSocket } from './socket.js';
 import {
+  canChangeProjectInWorkspace,
   createWorkspaceRouteState,
   defaultWorkspaceForGroup,
   motionTabForWorkspace,
@@ -32,7 +33,7 @@ import {
   workspaceGroupFor,
   workspacePanelFor,
   workspaceForProjectCategory,
-} from './workspace_navigation.js?v=20260724-ui-navigation-2';
+} from './workspace_navigation.js?v=20260728-project-selection-scope-1';
 import { installFeedbackPresentation } from './ui_feedback.js?v=20260724-ui-finish-1';
 import { createServoAlarmController } from './servo_alarm.js?v=20260728-servo-alarm-2';
 
@@ -118,6 +119,14 @@ function renderWorkspacePanel() {
   const activeWorkspace = normalizeWorkspaceRoute(workspaceRouteState.current());
   const activeGroup = workspaceGroupFor(activeWorkspace);
   const activePanel = workspacePanelFor(activeWorkspace);
+  const projectSelectionAllowed = canChangeProjectInWorkspace(activeWorkspace);
+  if (el.projectExplorerSelect) {
+    el.projectExplorerSelect.disabled = !projectSelectionAllowed;
+    el.projectExplorerSelect.classList.toggle('hidden', !projectSelectionAllowed);
+    el.projectExplorerSelect.title = projectSelectionAllowed
+      ? '현재 프로젝트 변경'
+      : '프로젝트 변경은 프로젝트·장비 > 시스템 정보에서만 가능합니다';
+  }
   if (el.workspaceTabs) {
     el.workspaceTabs.querySelectorAll('[data-workspace-group]').forEach((button) => {
       const active = button.dataset.workspaceGroup === activeGroup;
@@ -680,6 +689,39 @@ function restartReadyState(payload) {
       detail: 'motion_web_bridge 재시작을 기다리는 중',
     };
   }
+  const expectedMotorOperation = {
+    motor_apply: 'motor_apply',
+    motor_control: 'motor_restart',
+  }[restartMode] || '';
+  const motorOperation = payload?.motor_operation || {};
+  if (
+    expectedMotorOperation
+    && motorOperation.type === expectedMotorOperation
+  ) {
+    const operationStatus = String(motorOperation.status || '');
+    const operationDetail = motorOperation.error
+      || motorOperation.message
+      || `작업 단계 · ${motorOperation.phase || '확인 중'}`;
+    if (['failure', 'timeout', 'cancelled'].includes(operationStatus)) {
+      return {
+        ready: false,
+        failed: true,
+        title: operationStatus === 'timeout'
+          ? '모터 작업 확인 시간 초과'
+          : '모터 작업 실패',
+        detail: operationDetail,
+      };
+    }
+    if (operationStatus === 'running') {
+      return {
+        ready: false,
+        title: restartMode === 'motor_apply'
+          ? '설정 적용·재시작 확인 중'
+          : '모터 제어 재시작 확인 중',
+        detail: operationDetail,
+      };
+    }
+  }
   if (restartMode === 'motor_control' && !appState.restartRequestAccepted) {
     return {
       ready: false,
@@ -819,11 +861,22 @@ function restartReadyState(payload) {
   const faultMotors = motors.filter((motor) => Boolean(motor.fault));
   const discovery = motorConfig?.getDiscoverySummary?.() || {};
   if (restartMode === 'motor_control') {
+    if (disconnectedMotors.length > 0 || faultMotors.length > 0) {
+      return {
+        ready: false,
+        failed: true,
+        title: '모터 제어 재시작 후 축 상태 확인 실패',
+        detail: [
+          `런타임 보고 ${motors.length}축`,
+          `온라인 ${connectedMotors.length}축`,
+          `미연결 ${disconnectedMotors.length}축`,
+          `오류 ${faultMotors.length}축`,
+        ].join(' · '),
+      };
+    }
     return {
       ready: true,
-      title: connectedMotors.length > 0
-        ? '모터 제어 재시작 완료'
-        : '모터 제어 재시작 완료 · 모터 미연결',
+      title: '모터 제어 재시작 완료',
       detail: [
         `런타임 보고 ${motors.length}축`,
         `온라인 ${connectedMotors.length}축`,
@@ -1003,6 +1056,7 @@ const motionStudio = createMotionStudioController({
 });
 const projectExplorer = createProjectExplorerController({
   el,
+  canChangeProject: () => canChangeProjectInWorkspace(workspaceRouteState.current()),
   onOpenEditor: async (result, requestedWorkspace = '') => {
     const targetRoute = requestedWorkspace || workspaceForProjectCategory(
       result.category,

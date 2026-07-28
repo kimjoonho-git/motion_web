@@ -99,3 +99,21 @@ test('restart status polling has an HTTP deadline and can stop completion monito
     /완료 확인만 중단했습니다\. 이미 요청된 서비스 재시작은 취소되지 않습니다\./,
   );
 });
+
+test('motor apply and restart use the backend motor operation state', () => {
+  assert.match(main, /const expectedMotorOperation = \{/);
+  assert.match(main, /motor_apply: 'motor_apply'/);
+  assert.match(main, /motor_control: 'motor_restart'/);
+  assert.match(main, /const motorOperation = payload\?\.motor_operation \|\| \{\}/);
+  assert.match(main, /\['failure', 'timeout', 'cancelled'\]\.includes\(operationStatus\)/);
+  assert.match(main, /operationStatus === 'running'/);
+});
+
+test('motor-control restart never reports disconnected or fault axes as complete', () => {
+  assert.match(
+    main,
+    /restartMode === 'motor_control'[\s\S]*?disconnectedMotors\.length > 0 \|\| faultMotors\.length > 0/,
+  );
+  assert.match(main, /모터 제어 재시작 후 축 상태 확인 실패/);
+  assert.doesNotMatch(main, /모터 제어 재시작 완료 · 모터 미연결/);
+});

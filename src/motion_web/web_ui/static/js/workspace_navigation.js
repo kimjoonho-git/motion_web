@@ -44,10 +44,15 @@ export const MOTION_WORKSPACE_DETAILS = Object.freeze({
 });
 
 const WORKSPACE_ROUTES = new Set(Object.values(WORKSPACE_GROUPS).flat());
+export const PROJECT_SELECTION_WORKSPACE = 'system';
 
 export function normalizeWorkspaceRoute(route) {
   const value = String(route || '').trim();
   return WORKSPACE_ROUTES.has(value) ? value : WORKSPACE_DEFAULTS.operations;
+}
+
+export function canChangeProjectInWorkspace(route) {
+  return normalizeWorkspaceRoute(route) === PROJECT_SELECTION_WORKSPACE;
 }
 
 export function workspaceGroupFor(route) {

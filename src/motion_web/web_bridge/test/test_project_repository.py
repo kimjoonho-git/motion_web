@@ -1,7 +1,9 @@
 import json
+import hashlib
 import os
 import shutil
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -588,7 +590,7 @@ def test_internal_motor_config_backups_move_to_project_runtime_history(tmp_path)
     )
 
 
-def test_runtime_from_another_project_is_hidden_at_the_project_boundary(tmp_path):
+def test_runtime_owner_remains_visible_when_another_project_is_selected(tmp_path):
     repository = ProjectRepository(tmp_path / 'projects')
     runtime_id = repository.create_project('runtime')['project']['project_id']
     selected_id = repository.create_project('editor')['project']['project_id']
@@ -604,13 +606,13 @@ def test_runtime_from_another_project_is_hidden_at_the_project_boundary(tmp_path
     listed = bridge.list_motion_projects()
 
     assert listed['selected_project_id'] == selected_id
-    assert listed['runtime_project_id'] == ''
+    assert listed['runtime_project_id'] == runtime_id
     assert next(
         item for item in listed['projects'] if item['project_id'] == runtime_id
-    )['runtime_active'] is False
+    )['runtime_active'] is True
 
 
-def test_project_switch_discards_the_previous_applied_runtime(tmp_path):
+def test_project_switch_preserves_the_independent_applied_runtime(tmp_path):
     workspace = tmp_path / 'workspace'
     repository = ProjectRepository(workspace / 'motion_projects')
     runtime_id = repository.create_project('runtime')['project']['project_id']
@@ -623,7 +625,7 @@ def test_project_switch_discards_the_previous_applied_runtime(tmp_path):
         '  profile_velocity: 18000\n  profile_acceleration: 180000\n'
         '  profile_deceleration: 180000\n',
     )
-    prepared = repository.prepare_runtime_motor_config(runtime_id)
+    repository.prepare_runtime_motor_config(runtime_id)
     repository.mark_runtime_motor_config_applied(runtime_id)
 
     editor_id = repository.create_project('editor')['project']['project_id']
@@ -636,13 +638,276 @@ def test_project_switch_discards_the_previous_applied_runtime(tmp_path):
     )
     assert selection['project_id'] == editor_id
     assert 'applied_project_id' not in selection
-    assert repository.applied_runtime_motor_config() is None
-    assert resolve_applied_motor_config(workspace) is None
+    runtime = repository.applied_runtime_motor_config()
+    assert runtime is not None
+    assert runtime.parent.parent.name == runtime_id
+    assert repository.selected_runtime_motor_config() is None
+    assert resolve_applied_motor_config(workspace) == runtime
+    runtime_state = json.loads(
+        (workspace / 'motion_projects' / '.motor_runtime.json').read_text(
+            encoding='utf-8'
+        )
+    )
+    assert runtime_state['target_project_id'] == runtime_id
     previous = next(
         item for item in repository.list_projects()['projects']
         if item['project_id'] == runtime_id
     )
-    assert previous['setup_status']['motor_applied'] is False
+    assert previous['setup_status']['motor_applied'] is True
+
+
+def test_repository_migrates_legacy_applied_runtime_without_changing_selection(
+    tmp_path,
+):
+    root = tmp_path / 'projects'
+    repository = ProjectRepository(root)
+    runtime_id = repository.create_project('runtime')['project']['project_id']
+    repository.save_file(
+        runtime_id,
+        'motor_axes',
+        'motor_axes.yaml',
+        'period: 1000000\nmasters:\n- id: 0\n  type: ethercat\n  slaves:\n'
+        '  - controller_index: 0\n    driver_id: 0\ndrivers:\n- id: 0\n  type: minas\n'
+        '  profile_velocity: 18000\n  profile_acceleration: 180000\n'
+        '  profile_deceleration: 180000\n',
+    )
+    repository.prepare_runtime_motor_config(runtime_id)
+    editor_id = repository.create_project('editor')['project']['project_id']
+    selection_file = root / '.selected_project.json'
+    selection = json.loads(selection_file.read_text(encoding='utf-8'))
+    selection['project_id'] = editor_id
+    selection['applied_project_id'] = runtime_id
+    selection_file.write_text(json.dumps(selection), encoding='utf-8')
+
+    migrated = ProjectRepository(root)
+
+    assert migrated.selected_project_id() == editor_id
+    assert migrated.applied_runtime_motor_config() is not None
+    assert migrated.motor_runtime_state()['target_project_id'] == runtime_id
+    assert 'applied_project_id' not in json.loads(
+        selection_file.read_text(encoding='utf-8')
+    )
+
+
+def test_repository_repairs_corrupt_runtime_state_before_removing_legacy_target(
+    tmp_path,
+):
+    root = tmp_path / 'projects'
+    repository = ProjectRepository(root)
+    runtime_id = repository.create_project('runtime')['project']['project_id']
+    repository.save_file(
+        runtime_id,
+        'motor_axes',
+        'motor_axes.yaml',
+        'period: 1000000\nmasters:\n- id: 0\n  type: ethercat\n  slaves:\n'
+        '  - controller_index: 0\n    driver_id: 0\ndrivers:\n- id: 0\n'
+        '  type: minas\n  profile_velocity: 18000\n'
+        '  profile_acceleration: 180000\n  profile_deceleration: 180000\n',
+    )
+    repository.prepare_runtime_motor_config(runtime_id)
+    selection_file = root / '.selected_project.json'
+    selection = json.loads(selection_file.read_text(encoding='utf-8'))
+    selection['applied_project_id'] = runtime_id
+    selection_file.write_text(json.dumps(selection), encoding='utf-8')
+    (root / '.motor_runtime.json').write_text('{broken', encoding='utf-8')
+
+    migrated = ProjectRepository(root)
+
+    assert migrated.motor_runtime_state()['valid'] is True
+    assert migrated.motor_runtime_state()['target_project_id'] == runtime_id
+    assert 'applied_project_id' not in json.loads(
+        selection_file.read_text(encoding='utf-8')
+    )
+
+
+def test_applied_runtime_rejects_modified_runtime_content(tmp_path):
+    workspace = tmp_path / 'workspace'
+    repository = ProjectRepository(workspace / 'motion_projects')
+    project_id = repository.create_project('runtime integrity')['project']['project_id']
+    repository.save_file(
+        project_id,
+        'motor_axes',
+        'motor_axes.yaml',
+        'period: 1000000\nmasters:\n- id: 0\n  type: ethercat\n  slaves:\n'
+        '  - controller_index: 0\n    driver_id: 0\ndrivers:\n- id: 0\n  type: minas\n'
+        '  profile_velocity: 18000\n  profile_acceleration: 180000\n'
+        '  profile_deceleration: 180000\n',
+    )
+    prepared = repository.prepare_runtime_motor_config(project_id)
+    repository.mark_runtime_motor_config_applied(project_id)
+    runtime = Path(prepared['runtime_file'])
+    runtime.write_text(runtime.read_text(encoding='utf-8') + '# changed\n', encoding='utf-8')
+
+    state = repository.motor_runtime_state()
+
+    assert state['valid'] is False
+    assert 'sha256 mismatch' in state['validation_error']
+    assert repository.applied_runtime_motor_config() is None
+    assert resolve_applied_motor_config(workspace) is None
+
+
+def test_motor_operation_is_persistent_and_rejects_concurrent_work(tmp_path):
+    root = tmp_path / 'projects'
+    repository = ProjectRepository(root)
+
+    started = repository.begin_motor_operation(
+        'motor_scan',
+        'preparing',
+        timeout_sec=30.0,
+        details={'project_id': 'project-a'},
+    )
+    with pytest.raises(ValueError, match='다른 모터'):
+        repository.begin_motor_operation(
+            'motor_restart',
+            'preparing',
+            timeout_sec=30.0,
+        )
+
+    restarted = ProjectRepository(root)
+    restored = restarted.motor_operation_status()
+    assert restored['operation_id'] == started['operation_id']
+    assert restored['status'] == 'running'
+
+    updated = restarted.update_motor_operation(
+        started['operation_id'],
+        'scanning',
+        message='검색 중',
+    )
+    assert updated['phase'] == 'scanning'
+    completed = restarted.finish_motor_operation(
+        started['operation_id'],
+        'success',
+        phase='completed',
+        message='검색 완료',
+    )
+    assert completed['status'] == 'success'
+    assert ProjectRepository(root).motor_operation_status()['status'] == 'success'
+
+
+def test_marking_runtime_preserves_the_active_motor_operation(tmp_path):
+    repository = ProjectRepository(tmp_path / 'projects')
+    project_id = repository.create_project('operation apply')['project']['project_id']
+    repository.save_file(
+        project_id,
+        'motor_axes',
+        'motor_axes.yaml',
+        'period: 1000000\nmasters:\n- id: 0\n  type: ethercat\n  slaves:\n'
+        '  - controller_index: 0\n    driver_id: 0\ndrivers:\n- id: 0\n  type: minas\n'
+        '  profile_velocity: 18000\n  profile_acceleration: 180000\n'
+        '  profile_deceleration: 180000\n',
+    )
+    operation = repository.begin_motor_operation(
+        'motor_apply',
+        'preparing',
+        timeout_sec=45.0,
+    )
+    repository.prepare_runtime_motor_config(project_id)
+    repository.mark_runtime_motor_config_applied(project_id)
+
+    restored = repository.motor_operation_status()
+
+    assert restored['operation_id'] == operation['operation_id']
+    assert restored['status'] == 'running'
+    assert repository.motor_runtime_state()['target_project_id'] == project_id
+
+
+def test_runtime_target_rollback_preserves_the_failed_operation(tmp_path):
+    repository = ProjectRepository(tmp_path / 'projects')
+
+    def prepare_project(name, axis):
+        project_id = repository.create_project(name)['project']['project_id']
+        repository.save_file(
+            project_id,
+            'motor_axes',
+            'motor_axes.yaml',
+            'period: 1000000\nmasters:\n- id: 0\n  type: ethercat\n  slaves:\n'
+            f'  - controller_index: {axis}\n    driver_id: {axis}\ndrivers:\n'
+            f'- id: {axis}\n  type: minas\n  profile_velocity: 18000\n'
+            '  profile_acceleration: 180000\n  profile_deceleration: 180000\n',
+        )
+        repository.prepare_runtime_motor_config(project_id)
+        return project_id
+
+    previous_id = prepare_project('previous runtime', 0)
+    repository.mark_runtime_motor_config_applied(previous_id)
+    previous = repository.motor_runtime_target_snapshot()
+    next_id = prepare_project('next runtime', 1)
+    operation = repository.begin_motor_operation(
+        'motor_apply',
+        'preparing',
+        timeout_sec=45.0,
+        details={'previous_runtime': previous},
+    )
+    repository.mark_runtime_motor_config_applied(next_id)
+    repository.finish_motor_operation(
+        operation['operation_id'],
+        'failure',
+        phase='failed',
+        error='restart failed',
+    )
+
+    repository.restore_motor_runtime_target(previous)
+
+    state = repository.motor_runtime_state()
+    assert state['target_project_id'] == previous_id
+    assert state['valid'] is True
+    assert repository.motor_operation_status()['status'] == 'failure'
+
+
+def test_timed_out_motor_apply_restores_previous_target_and_requests_restart(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / 'projects'
+    repository = ProjectRepository(root)
+
+    def prepare_project(name, axis):
+        project_id = repository.create_project(name)['project']['project_id']
+        repository.save_file(
+            project_id,
+            'motor_axes',
+            'motor_axes.yaml',
+            'period: 1000000\nmasters:\n- id: 0\n  type: ethercat\n  slaves:\n'
+            f'  - controller_index: {axis}\n    driver_id: {axis}\ndrivers:\n'
+            f'- id: {axis}\n  type: minas\n  profile_velocity: 18000\n'
+            '  profile_acceleration: 180000\n  profile_deceleration: 180000\n',
+        )
+        repository.prepare_runtime_motor_config(project_id)
+        return project_id
+
+    previous_id = prepare_project('previous', 0)
+    repository.mark_runtime_motor_config_applied(previous_id)
+    previous = repository.motor_runtime_target_snapshot()
+    next_id = prepare_project('next', 1)
+    operation = repository.begin_motor_operation(
+        'motor_apply',
+        'restart_requested',
+        timeout_sec=1.0,
+        details={'previous_runtime': previous},
+    )
+    repository.mark_runtime_motor_config_applied(next_id)
+    runtime_file = root / '.motor_runtime.json'
+    runtime_payload = json.loads(runtime_file.read_text(encoding='utf-8'))
+    runtime_payload['operation']['deadline_at'] = time.time() - 1.0
+    runtime_file.write_text(json.dumps(runtime_payload), encoding='utf-8')
+
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge.project_repository = repository
+    bridge._bridge_started_at = operation['started_at'] + 1.0
+    scheduled = []
+    bridge._schedule_managed_service_restart = (
+        lambda *services: scheduled.append(services)
+    )
+    monkeypatch.setenv('MOTION_CONTROL_SERVICE_UNIT', 'motion-control.service')
+    monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
+
+    result = bridge._reconcile_motor_operation_status({}, {}, {})
+
+    assert result['status'] == 'timeout'
+    assert result['phase'] == 'rollback_requested'
+    assert repository.motor_runtime_state()['target_project_id'] == previous_id
+    assert scheduled == [
+        ('motion-motor.service', 'motion-control.service'),
+    ]
 
 
 def test_service_entrypoint_never_loads_runtime_from_another_project(tmp_path):
@@ -657,6 +922,49 @@ def test_service_entrypoint_never_loads_runtime_from_another_project(tmp_path):
         json.dumps({
             'project_id': selected_id,
             'applied_project_id': previous_id,
+        }),
+        encoding='utf-8',
+    )
+
+    assert resolve_applied_motor_config(workspace) is None
+
+
+def test_service_entrypoint_loads_independent_motor_runtime_after_project_switch(
+    tmp_path,
+):
+    workspace = tmp_path / 'workspace'
+    projects = workspace / 'motion_projects'
+    runtime = projects / 'runtime-project' / 'runtime' / 'applied_motor_config.yaml'
+    runtime.parent.mkdir(parents=True)
+    content = b'masters: []\n'
+    runtime.write_bytes(content)
+    (projects / '.selected_project.json').write_text(
+        json.dumps({'project_id': 'editor-project'}),
+        encoding='utf-8',
+    )
+    (projects / '.motor_runtime.json').write_text(
+        json.dumps({
+            'version': 1,
+            'target_project_id': 'runtime-project',
+            'config_sha256': hashlib.sha256(content).hexdigest(),
+        }),
+        encoding='utf-8',
+    )
+
+    assert resolve_applied_motor_config(workspace) == runtime
+
+
+def test_service_entrypoint_rejects_motor_runtime_sha_mismatch(tmp_path):
+    workspace = tmp_path / 'workspace'
+    projects = workspace / 'motion_projects'
+    runtime = projects / 'runtime-project' / 'runtime' / 'applied_motor_config.yaml'
+    runtime.parent.mkdir(parents=True)
+    runtime.write_text('masters: []\n', encoding='utf-8')
+    (projects / '.motor_runtime.json').write_text(
+        json.dumps({
+            'version': 1,
+            'target_project_id': 'runtime-project',
+            'config_sha256': '0' * 64,
         }),
         encoding='utf-8',
     )
@@ -765,6 +1073,57 @@ def test_motor_service_entrypoint_starts_only_applied_motor_runtime(
     assert captured['environment']['MOTOR_CONFIG_FILE'] == str(runtime)
 
 
+def test_motor_service_entrypoint_fails_configuration_without_runtime(
+    tmp_path, monkeypatch
+):
+    workspace = tmp_path / 'workspace'
+    (workspace / 'motion_projects').mkdir(parents=True)
+    monkeypatch.setenv('MOTION_WORKSPACE', str(workspace))
+
+    with pytest.raises(SystemExit) as failure:
+        service_entrypoint.motor_main()
+
+    assert failure.value.code == service_entrypoint.MOTOR_CONFIG_ERROR_EXIT
+
+
+def test_motor_service_print_config_is_safe_without_runtime(
+    tmp_path, monkeypatch, capsys
+):
+    workspace = tmp_path / 'workspace'
+    (workspace / 'motion_projects').mkdir(parents=True)
+    monkeypatch.setenv('MOTION_WORKSPACE', str(workspace))
+    monkeypatch.setattr(service_entrypoint.sys, 'argv', ['motion_motor_service', '--print-config'])
+
+    service_entrypoint.motor_main()
+
+    assert capsys.readouterr().out == '\n'
+
+
+def test_service_installer_validates_motor_runtime_before_stopping_services():
+    installer = (
+        Path(__file__).resolve().parents[1]
+        / 'deploy'
+        / 'install_user_service.sh'
+    ).read_text(encoding='utf-8')
+
+    preflight = 'MOTOR_CONFIG="$("${MOTOR_SERVICE_EXECUTABLE}" --print-config)"'
+    render_control = (
+        '"${CONTROL_TEMPLATE}" > "${INSTALL_TMP}/motion-control.service"'
+    )
+    stop_motor = 'systemctl --user stop motion-motor.service'
+    assert installer.index(preflight) < installer.index(stop_motor)
+    assert installer.index(render_control) < installer.index(stop_motor)
+    assert installer.index('SERVICES_STOPPED=true') < installer.index(stop_motor)
+    assert (
+        'systemctl --user is-active --quiet motion-motor.service'
+        in installer
+    )
+    assert 'restore_previous_install_on_error' in installer
+    assert 'motion-control.service.previous' in installer
+    assert 'motion-motor.service.previous' in installer
+    assert 'exit 78' in installer
+
+
 def test_managed_service_restores_last_applied_config_after_project_edit(tmp_path):
     workspace = tmp_path / 'workspace'
     repository = ProjectRepository(workspace / 'motion_projects')
@@ -804,7 +1163,14 @@ def test_runtime_status_reports_ready_motor_feedback(tmp_path, monkeypatch):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge.workspace_root = tmp_path
     runtime = tmp_path / 'runtime.yaml'
-    monkeypatch.setenv('MOTOR_CONFIG_FILE', str(runtime))
+    runtime.write_text('masters: []\n', encoding='utf-8')
+    bridge.applied_motor_config_file = runtime
+    bridge.project_repository = type('Repository', (), {
+        'motor_runtime_state': lambda _self: {
+            'valid': True,
+            'config_file': str(runtime),
+        },
+    })()
 
     status = bridge._runtime_service_status({
         'generated_at': 100.0,
@@ -815,6 +1181,326 @@ def test_runtime_status_reports_ready_motor_feedback(tmp_path, monkeypatch):
     assert status['phase'] == 'ready'
     assert status['motor_manager_expected'] is True
     assert status['motor_count'] == 1
+
+
+def test_runtime_status_rejects_process_and_target_config_mismatch(tmp_path):
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge.workspace_root = tmp_path
+    running = tmp_path / 'project-a' / 'runtime' / 'applied_motor_config.yaml'
+    target = tmp_path / 'project-b' / 'runtime' / 'applied_motor_config.yaml'
+    running.parent.mkdir(parents=True)
+    target.parent.mkdir(parents=True)
+    running.write_text('masters: []\n', encoding='utf-8')
+    target.write_text('masters: []\n', encoding='utf-8')
+    bridge.applied_motor_config_file = running
+    bridge.project_repository = type('Repository', (), {
+        'motor_runtime_state': lambda _self: {
+            'valid': True,
+            'config_file': str(target),
+        },
+    })()
+
+    status = bridge._runtime_service_status({
+        'generated_at': 100.0,
+        'last_motor_status_at': 99.9,
+        'motors': [{'controller_index': 0}],
+    })
+
+    assert status['phase'] == 'runtime_config_mismatch'
+    assert status['motor_manager_expected'] is False
+    assert status['runtime_target_matches_process'] is False
+
+
+def test_restarted_bridge_completes_persisted_motor_apply_operation(tmp_path):
+    repository = ProjectRepository(tmp_path / 'projects')
+    runtime = tmp_path / 'runtime.yaml'
+    runtime.write_text('masters: []\n', encoding='utf-8')
+    operation = repository.begin_motor_operation(
+        'motor_apply',
+        'restart_requested',
+        timeout_sec=45.0,
+        details={
+            'runtime_file': str(runtime),
+            'expected_axes': [0],
+        },
+    )
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge.project_repository = repository
+    bridge._bridge_started_at = operation['started_at'] + 1.0
+    bridge._read_motor_manager_config_file = (
+        lambda **_kwargs: str(runtime)
+    )
+
+    result = bridge._reconcile_motor_operation_status(
+        {'phase': 'ready'},
+        {
+            'last_motor_status_at': operation['started_at'] + 2.0,
+            'motors': [{
+                'controller_index': 0,
+                'connection_state': 'online',
+                'connection_connected': True,
+                'fault': False,
+            }],
+        },
+        {'ready': True},
+    )
+
+    assert result['status'] == 'success'
+    assert result['phase'] == 'completed'
+    assert ProjectRepository(tmp_path / 'projects').motor_operation_status()['status'] == 'success'
+
+
+def test_motor_restart_success_uses_terminal_completed_phase(tmp_path):
+    repository = ProjectRepository(tmp_path / 'projects')
+    runtime = tmp_path / 'runtime.yaml'
+    runtime.write_text('masters: []\n', encoding='utf-8')
+    operation = repository.begin_motor_operation(
+        'motor_restart',
+        'restart_requested',
+        timeout_sec=45.0,
+        details={
+            'runtime_file': str(runtime),
+            'expected_axes': [0],
+        },
+    )
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge.project_repository = repository
+    bridge._bridge_started_at = operation['started_at'] - 1.0
+    bridge._read_motor_manager_config_file = lambda **_kwargs: str(runtime)
+
+    result = bridge._reconcile_motor_operation_status(
+        {'phase': 'ready'},
+        {
+            'last_motor_status_at': operation['started_at'] + 1.0,
+            'motors': [{
+                'controller_index': 0,
+                'connection_state': 'online',
+                'connection_connected': True,
+                'fault': False,
+            }],
+        },
+        {'ready': True},
+    )
+
+    assert result['status'] == 'success'
+    assert result['phase'] == 'completed'
+
+
+def test_motor_restart_waits_for_every_configured_axis_to_be_online(tmp_path):
+    repository = ProjectRepository(tmp_path / 'projects')
+    runtime = tmp_path / 'runtime.yaml'
+    runtime.write_text('masters: []\n', encoding='utf-8')
+    operation = repository.begin_motor_operation(
+        'motor_restart',
+        'restart_requested',
+        timeout_sec=45.0,
+        details={
+            'runtime_file': str(runtime),
+            'expected_axes': [0, 1],
+        },
+    )
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge.project_repository = repository
+    bridge._bridge_started_at = operation['started_at'] - 1.0
+    bridge._read_motor_manager_config_file = (
+        lambda **_kwargs: str(runtime)
+    )
+
+    result = bridge._reconcile_motor_operation_status(
+        {'phase': 'ready'},
+        {
+            'last_motor_status_at': operation['started_at'] + 1.0,
+            'motors': [
+                {
+                    'controller_index': 0,
+                    'connection_state': 'online',
+                    'connection_connected': True,
+                    'fault': False,
+                },
+                {
+                    'controller_index': 1,
+                    'connection_state': 'offline',
+                    'connection_connected': False,
+                    'fault': False,
+                },
+            ],
+        },
+        {'ready': True},
+    )
+
+    assert result['status'] == 'running'
+    assert repository.motor_operation_status()['status'] == 'running'
+
+
+def test_motor_restart_fails_when_motor_manager_uses_another_config(tmp_path):
+    repository = ProjectRepository(tmp_path / 'projects')
+    expected = tmp_path / 'expected.yaml'
+    actual = tmp_path / 'actual.yaml'
+    expected.write_text('masters: []\n', encoding='utf-8')
+    actual.write_text('masters: []\n', encoding='utf-8')
+    operation = repository.begin_motor_operation(
+        'motor_restart',
+        'restart_requested',
+        timeout_sec=45.0,
+        details={
+            'runtime_file': str(expected),
+            'expected_axes': [0],
+        },
+    )
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge.project_repository = repository
+    bridge._bridge_started_at = operation['started_at'] - 1.0
+    bridge._read_motor_manager_config_file = (
+        lambda **_kwargs: str(actual)
+    )
+
+    result = bridge._reconcile_motor_operation_status(
+        {'phase': 'ready'},
+        {
+            'last_motor_status_at': operation['started_at'] + 1.0,
+            'motors': [{
+                'controller_index': 0,
+                'connection_state': 'online',
+                'connection_connected': True,
+                'fault': False,
+            }],
+        },
+        {'ready': True},
+    )
+
+    assert result['status'] == 'failure'
+    assert result['phase'] == 'failed'
+    assert '실행 설정 불일치' in result['error']
+
+
+def test_motor_manager_config_is_read_from_ros_parameter_service():
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+
+    class Future:
+        def done(self):
+            return True
+
+        def result(self):
+            value = type('Value', (), {'string_value': '/runtime/applied.yaml'})()
+            return type('Response', (), {'values': [value]})()
+
+    class Client:
+        def wait_for_service(self, **_kwargs):
+            return True
+
+        def call_async(self, request):
+            assert request.names == ['config_file']
+            return Future()
+
+    bridge._motor_parameters_client = Client()
+
+    assert (
+        bridge._read_motor_manager_config_file()
+        == '/runtime/applied.yaml'
+    )
+
+
+def test_restarted_bridge_schedules_interrupted_ac_servo_scan_recovery(tmp_path):
+    repository = ProjectRepository(tmp_path / 'projects')
+    operation = repository.begin_motor_operation(
+        'ac_servo_scan',
+        'preparing',
+        timeout_sec=30.0,
+    )
+    repository.update_motor_operation(
+        operation['operation_id'],
+        'scanning',
+        details={
+            'motor_service_was_active': True,
+            'expected_axes': [0, 1],
+        },
+    )
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge.project_repository = repository
+    bridge._bridge_started_at = operation['started_at'] + 1.0
+    scheduled = []
+
+    def schedule(payload):
+        scheduled.append(dict(payload))
+        return dict(payload)
+
+    bridge._schedule_interrupted_scan_recovery = schedule
+
+    result = bridge._reconcile_motor_operation_status(
+        {'phase': 'waiting_motor_feedback'},
+        {},
+        {'ready': False},
+    )
+
+    assert result['status'] == 'running'
+    assert scheduled[0]['operation_id'] == operation['operation_id']
+
+
+def test_active_ac_servo_scan_is_not_reconciled_as_motor_restart(tmp_path):
+    repository = ProjectRepository(tmp_path / 'projects')
+    operation = repository.begin_motor_operation(
+        'ac_servo_scan',
+        'stopping_runtime',
+        timeout_sec=30.0,
+        details={
+            'motor_service_was_active': True,
+            'expected_axes': [0],
+        },
+    )
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge.project_repository = repository
+    bridge._bridge_started_at = operation['started_at'] - 1.0
+    bridge._read_motor_manager_config_file = lambda **_kwargs: (
+        pytest.fail('scan must not use restart runtime-file readiness')
+    )
+
+    result = bridge._reconcile_motor_operation_status(
+        {'phase': 'ready'},
+        {
+            'last_motor_status_at': operation['started_at'] + 1.0,
+            'motors': [],
+        },
+        {'ready': True},
+    )
+
+    assert result['status'] == 'running'
+    assert result['phase'] == 'stopping_runtime'
+
+
+def test_interrupted_ac_servo_scan_restores_motor_service_and_records_failure(
+    tmp_path
+):
+    repository = ProjectRepository(tmp_path / 'projects')
+    operation = repository.begin_motor_operation(
+        'ac_servo_scan',
+        'scanning',
+        timeout_sec=30.0,
+        details={
+            'motor_service_was_active': True,
+            'expected_axes': [0],
+        },
+    )
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge.project_repository = repository
+    actions = []
+    bridge._run_managed_user_service = (
+        lambda action, service: actions.append((action, service))
+    )
+    bridge._wait_for_motor_runtime_recovery = lambda *_args, **_kwargs: {
+        'required': True,
+        'expected_axes': [0],
+        'online_axes': [0],
+        'recovered': True,
+        'service_active': True,
+    }
+
+    bridge._recover_interrupted_scan(operation)
+
+    completed = repository.motor_operation_status()
+    assert actions == [('start', 'motion-motor.service')]
+    assert completed['status'] == 'failure'
+    assert completed['phase'] == 'interrupted_recovered'
+    assert '검색 결과를 확인할 수 없습니다' in completed['error']
 
 
 def test_runtime_status_reports_ethercat_start_block_instead_of_waiting_forever(
@@ -885,6 +1571,52 @@ def test_web_apply_requests_managed_service_restart_without_second_launch(
     assert repository.applied_runtime_motor_config().is_file()
 
 
+def test_web_apply_schedule_failure_restores_previous_runtime(
+    tmp_path, monkeypatch
+):
+    workspace = tmp_path / 'workspace'
+    repository = ProjectRepository(workspace / 'motion_projects')
+
+    def prepare_project(name, axis):
+        project_id = repository.create_project(name)['project']['project_id']
+        repository.save_file(
+            project_id,
+            'motor_axes',
+            'motor_axes.yaml',
+            'period: 1000000\nmasters:\n- id: 0\n  type: ethercat\n  slaves:\n'
+            f'  - controller_index: {axis}\n    driver_id: {axis}\ndrivers:\n'
+            f'- id: {axis}\n  type: minas\n  profile_velocity: 18000\n'
+            '  profile_acceleration: 180000\n  profile_deceleration: 180000\n',
+        )
+        repository.prepare_runtime_motor_config(project_id)
+        return project_id
+
+    previous_id = prepare_project('previous', 0)
+    repository.mark_runtime_motor_config_applied(previous_id)
+    next_id = prepare_project('next', 1)
+    restart_script = workspace / 'scripts' / 'restart_motion_monitor.sh'
+    restart_script.parent.mkdir(parents=True)
+    restart_script.write_text('#!/bin/bash\n', encoding='utf-8')
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge.project_repository = repository
+    bridge.restart_script = restart_script
+    bridge.workspace_root = workspace
+    bridge.snapshot = lambda: {}
+    monkeypatch.setenv('MOTION_CONTROL_SERVICE_UNIT', 'motion-control.service')
+    monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
+    monkeypatch.setattr(
+        'motion_web_bridge.bridge_node.subprocess.Popen',
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError('schedule failed')),
+    )
+
+    result = bridge.apply_motor_config()
+
+    assert result['success'] is False
+    assert repository.motor_runtime_state()['target_project_id'] == previous_id
+    assert repository.motor_runtime_state()['target_project_id'] != next_id
+    assert repository.motor_operation_status()['status'] == 'failure'
+
+
 def test_user_can_request_managed_program_restart_from_web(monkeypatch):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge._motion_run_lock = threading.Lock()
@@ -924,11 +1656,32 @@ def test_user_can_restart_only_motor_control_service_from_web(monkeypatch):
     bridge._motion_run_status = {'state': 'idle'}
     bridge._motion_studio_status = {'state': 'idle'}
     bridge.snapshot = lambda: {}
-    bridge.project_repository = type(
-        'Repository',
-        (),
-        {'applied_runtime_motor_config': lambda _self: Path('/runtime/applied.yaml')},
-    )()
+    operation = {}
+
+    class Repository:
+        def selected_runtime_motor_config(self):
+            return Path('/runtime/applied.yaml')
+
+        def selected_project_id(self):
+            return 'project-a'
+
+        def begin_motor_operation(self, operation_type, phase, **_kwargs):
+            operation.update({
+                'operation_id': 'restart-1',
+                'type': operation_type,
+                'phase': phase,
+                'status': 'running',
+            })
+            return dict(operation)
+
+        def motor_operation_status(self):
+            return dict(operation)
+
+        def finish_motor_operation(self, *_args, **_kwargs):
+            raise AssertionError('successful scheduling must remain pending verification')
+
+    bridge.project_repository = Repository()
+    bridge._configured_axes_from_runtime_file = lambda _runtime: [0]
     commands = []
     monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
     monkeypatch.setattr(
@@ -952,7 +1705,7 @@ def test_motor_control_restart_rejects_project_without_applied_motor_config(monk
     bridge.project_repository = type(
         'Repository',
         (),
-        {'applied_runtime_motor_config': lambda _self: None},
+        {'selected_runtime_motor_config': lambda _self: None},
     )()
     commands = []
     monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
@@ -983,6 +1736,38 @@ def test_project_change_is_blocked_during_motion_operations(run_state, studio_st
         bridge._ensure_project_change_allowed()
 
 
+def test_project_change_is_blocked_during_motor_lifecycle_operation():
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_run_lock = threading.Lock()
+    bridge._motion_studio_lock = threading.Lock()
+    bridge._motion_run_status = {'state': 'idle'}
+    bridge._motion_studio_status = {'state': 'idle'}
+    bridge._motor_lifecycle_lock = threading.Lock()
+    bridge._motor_lifecycle_lock.acquire()
+
+    with pytest.raises(ValueError, match='모터 설정·검색·재시작 작업'):
+        bridge._ensure_project_change_allowed()
+
+
+def test_project_change_is_blocked_by_persisted_motor_operation():
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_run_lock = threading.Lock()
+    bridge._motion_studio_lock = threading.Lock()
+    bridge._motion_run_status = {'state': 'idle'}
+    bridge._motion_studio_status = {'state': 'idle'}
+    bridge._motor_lifecycle_lock = threading.Lock()
+    bridge.project_repository = type('Repository', (), {
+        'motor_operation_status': lambda _self: {
+            'operation_id': 'apply-1',
+            'status': 'running',
+            'type': 'motor_apply',
+        },
+    })()
+
+    with pytest.raises(ValueError, match='모터 설정·검색·재시작 작업'):
+        bridge._ensure_project_change_allowed()
+
+
 def test_copy_file_between_projects_is_a_physical_independent_copy(tmp_path):
     repository = ProjectRepository(tmp_path / 'projects')
     source_id = repository.create_project('source')['project']['project_id']
@@ -999,6 +1784,28 @@ def test_copy_file_between_projects_is_a_physical_independent_copy(tmp_path):
     changed = MOTION_TEXT.replace('[1, 0.0, "1-1", 0.0]', '[1, 0.0, "1-1", 10.0]')
     repository.save_file(source_id, 'motions', 'wave.json', changed)
     assert copied.read_text(encoding='utf-8') == MOTION_TEXT + '\n'
+
+
+def test_delete_project_rejects_the_active_motor_runtime_owner(tmp_path):
+    repository = ProjectRepository(tmp_path / 'projects')
+    project_id = repository.create_project('running')['project']['project_id']
+    repository.save_file(
+        project_id,
+        'motor_axes',
+        'motor_axes.yaml',
+        'period: 1000000\nmasters:\n- id: 0\n  type: ethercat\n  slaves:\n'
+        '  - controller_index: 0\n    driver_id: 0\ndrivers:\n- id: 0\n  type: minas\n'
+        '  profile_velocity: 18000\n  profile_acceleration: 180000\n'
+        '  profile_deceleration: 180000\n',
+    )
+    repository.prepare_runtime_motor_config(project_id)
+    repository.mark_runtime_motor_config_applied(project_id)
+
+    with pytest.raises(ValueError, match='모터 실행 설정이 사용하는 프로젝트'):
+        repository.delete_project(project_id)
+
+    assert (tmp_path / 'projects' / project_id).is_dir()
+    assert repository.applied_runtime_motor_config() is not None
 
 
 def test_delete_project_permanently_removes_folder_and_older_archives(tmp_path):

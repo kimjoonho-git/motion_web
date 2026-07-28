@@ -12,6 +12,40 @@ MOTOR_SERVICE_RUNNER="${SCRIPT_DIR}/run_motor_user_service.sh"
 USER_UNIT_DIR="${HOME}/.config/systemd/user"
 CONTROL_UNIT_FILE="${USER_UNIT_DIR}/motion-control.service"
 MOTOR_UNIT_FILE="${USER_UNIT_DIR}/motion-motor.service"
+INSTALL_TMP=""
+SERVICES_STOPPED=false
+INSTALL_COMPLETE=false
+CONTROL_WAS_ACTIVE=false
+MOTOR_WAS_ACTIVE=false
+
+cleanup_install_tmp() {
+  if [[ -n "${INSTALL_TMP}" && -d "${INSTALL_TMP}" ]]; then
+    rm -rf -- "${INSTALL_TMP}"
+  fi
+}
+
+restore_previous_install_on_error() {
+  local status=$?
+  if [[ "${INSTALL_COMPLETE}" != true && "${SERVICES_STOPPED}" == true ]]; then
+    if [[ -f "${INSTALL_TMP}/motion-control.service.previous" ]]; then
+      cp -p "${INSTALL_TMP}/motion-control.service.previous" "${CONTROL_UNIT_FILE}" || true
+    fi
+    if [[ -f "${INSTALL_TMP}/motion-motor.service.previous" ]]; then
+      cp -p "${INSTALL_TMP}/motion-motor.service.previous" "${MOTOR_UNIT_FILE}" || true
+    fi
+    systemctl --user daemon-reload 2>/dev/null || true
+    if [[ "${MOTOR_WAS_ACTIVE}" == true ]]; then
+      systemctl --user start motion-motor.service 2>/dev/null || true
+    fi
+    if [[ "${CONTROL_WAS_ACTIVE}" == true ]]; then
+      systemctl --user start motion-control.service 2>/dev/null || true
+    fi
+  fi
+  cleanup_install_tmp
+  exit "${status}"
+}
+
+trap restore_previous_install_on_error EXIT
 
 if [[ ! -x "${SERVICE_EXECUTABLE}" ]]; then
   echo "설치 실행 파일이 없습니다: ${SERVICE_EXECUTABLE}" >&2
@@ -32,26 +66,60 @@ if [[ ! -f "${MOTOR_SERVICE_RUNNER}" ]]; then
   exit 1
 fi
 
-# Stop every existing state, including activating/auto-restart loops, so the
-# newly rendered unit is guaranteed to start with the updated ExecStart.
-systemctl --user stop motion-control.service 2>/dev/null || true
-systemctl --user stop motion-motor.service 2>/dev/null || true
+# Resolve the durable runtime target before stopping an already healthy Motor
+# Manager.  An upgrade with missing/invalid state must fail closed instead of
+# turning a running motor service into an unrecoverable stopped service.
+MOTOR_CONFIG="$("${MOTOR_SERVICE_EXECUTABLE}" --print-config)"
+if systemctl --user is-active --quiet motion-motor.service && [[ -z "${MOTOR_CONFIG}" ]]; then
+  echo "설치 중단 · 실행 중인 Motor Manager의 검증된 실행 설정을 확인할 수 없습니다." >&2
+  echo "현재 프로젝트의 모터 설정을 다시 적용한 후 설치를 재시도하세요." >&2
+  exit 78
+fi
 
 mkdir -p "${USER_UNIT_DIR}"
+INSTALL_TMP="$(mktemp -d "${USER_UNIT_DIR}/.motion-install.XXXXXX")"
+if [[ -f "${CONTROL_UNIT_FILE}" ]]; then
+  cp -p "${CONTROL_UNIT_FILE}" "${INSTALL_TMP}/motion-control.service.previous"
+fi
+if [[ -f "${MOTOR_UNIT_FILE}" ]]; then
+  cp -p "${MOTOR_UNIT_FILE}" "${INSTALL_TMP}/motion-motor.service.previous"
+fi
+CONTROL_WAS_ACTIVE="$(systemctl --user is-active --quiet motion-control.service && echo true || echo false)"
+MOTOR_WAS_ACTIVE="$(systemctl --user is-active --quiet motion-motor.service && echo true || echo false)"
+
 sed \
   -e "s|@WORKSPACE@|${WORKSPACE//&/\\&}|g" \
   -e "s|@SERVICE_EXECUTABLE@|${SERVICE_EXECUTABLE//&/\\&}|g" \
   -e "s|@SERVICE_RUNNER@|${SERVICE_RUNNER//&/\\&}|g" \
-  "${CONTROL_TEMPLATE}" > "${CONTROL_UNIT_FILE}"
+  "${CONTROL_TEMPLATE}" > "${INSTALL_TMP}/motion-control.service"
 sed \
   -e "s|@WORKSPACE@|${WORKSPACE//&/\\&}|g" \
   -e "s|@MOTOR_SERVICE_RUNNER@|${MOTOR_SERVICE_RUNNER//&/\\&}|g" \
-  "${MOTOR_TEMPLATE}" > "${MOTOR_UNIT_FILE}"
+  "${MOTOR_TEMPLATE}" > "${INSTALL_TMP}/motion-motor.service"
+chmod 0644 \
+  "${INSTALL_TMP}/motion-control.service" \
+  "${INSTALL_TMP}/motion-motor.service"
+
+# Stop every existing state, including activating/auto-restart loops, so the
+# newly rendered unit is guaranteed to start with the updated ExecStart.
+SERVICES_STOPPED=true
+systemctl --user stop motion-control.service 2>/dev/null || true
+systemctl --user stop motion-motor.service 2>/dev/null || true
+
+mv "${INSTALL_TMP}/motion-control.service" "${CONTROL_UNIT_FILE}"
+mv "${INSTALL_TMP}/motion-motor.service" "${MOTOR_UNIT_FILE}"
 
 systemctl --user daemon-reload
 systemctl --user enable motion-motor.service motion-control.service
-systemctl --user start motion-motor.service
+if [[ -n "${MOTOR_CONFIG}" ]]; then
+  systemctl --user start motion-motor.service
+else
+  echo "검증된 모터 실행 설정 없음 · motion-motor.service 시작 보류"
+fi
 systemctl --user start motion-control.service
+INSTALL_COMPLETE=true
+cleanup_install_tmp
+trap - EXIT
 
 echo "motion-motor.service 및 motion-control.service 설치·자동실행 등록 완료"
 echo "웹 주소: http://localhost:8000"
