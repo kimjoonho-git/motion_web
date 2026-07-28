@@ -7,6 +7,7 @@ export function getElements() {
     programStatusRefreshButton: document.getElementById('programStatusRefreshButton'),
     motorStatusRefreshButton: document.getElementById('motorStatusRefreshButton'),
     programPageReloadButton: document.getElementById('programPageReloadButton'),
+    desktopShortcutButton: document.getElementById('desktopShortcutButton'),
     programRestartButton: document.getElementById('programRestartButton'),
     motorControlRestartButton: document.getElementById('motorControlRestartButton'),
     headerProgramRestartButton: document.getElementById('headerProgramRestartButton'),

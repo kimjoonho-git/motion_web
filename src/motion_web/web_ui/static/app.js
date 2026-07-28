@@ -1,1 +1,1 @@
-import './js/main.js?v=20260728-editor-zero-axis-1';
+import './js/main.js?v=20260728-desktop-shortcut-1';

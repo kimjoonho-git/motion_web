@@ -1,4 +1,5 @@
 import {
+  createDesktopShortcut,
   fetchStatusSnapshot,
   getProjectGeneration,
   requestEmergencySafetyStop,
@@ -9,8 +10,8 @@ import {
   stopMotionRun,
   stopMotionStudio,
   setProjectGeneration,
-} from './api.js?v=20260728-restart-guard-1';
-import { getElements } from './dom.js?v=20260728-servo-alarm-2';
+} from './api.js?v=20260728-desktop-shortcut-1';
+import { getElements } from './dom.js?v=20260728-desktop-shortcut-1';
 import { createMotorEventLogController } from './event_log.js?v=20260727-popup-common-3';
 import { createMidiMonitorController } from './midi_monitor.js?v=20260727-popup-common-3';
 import { createMotionDataController } from './motion_data.js?v=20260727-popup-common-3';
@@ -1297,6 +1298,32 @@ if (el.motorStatusRefreshButton) {
 if (el.programPageReloadButton) {
   el.programPageReloadButton.addEventListener('click', () => {
     window.location.reload();
+  });
+}
+
+if (el.desktopShortcutButton) {
+  el.desktopShortcutButton.addEventListener('click', async () => {
+    const originalText = el.desktopShortcutButton.textContent;
+    el.desktopShortcutButton.disabled = true;
+    el.desktopShortcutButton.textContent = '바로가기 만드는 중';
+    try {
+      const payload = await createDesktopShortcut();
+      if (payload?.success === false) {
+        throw new Error(payload.message || '바탕화면 바로가기 생성 실패');
+      }
+      await appDialogs.alert(payload?.message || '바탕화면 바로가기를 만들었습니다.', {
+        title: '바탕화면 바로가기',
+        tone: 'info',
+      });
+    } catch (error) {
+      await appDialogs.alert(error?.message || String(error), {
+        title: '바탕화면 바로가기 생성 실패',
+        tone: 'danger',
+      });
+    } finally {
+      el.desktopShortcutButton.disabled = false;
+      el.desktopShortcutButton.textContent = originalText;
+    }
   });
 }
 

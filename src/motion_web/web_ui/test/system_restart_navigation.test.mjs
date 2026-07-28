@@ -17,6 +17,27 @@ test('program and motor-control restart actions keep distinct API routes', () =>
   );
 });
 
+test('system information creates only the packaged desktop shortcut', () => {
+  assert.match(
+    html,
+    /id="desktopShortcutButton"[^>]*>바탕화면 바로가기 만들기</,
+  );
+  assert.match(
+    api,
+    /createDesktopShortcut[\s\S]*?\/api\/system\/desktop-shortcut/,
+  );
+  assert.match(
+    main,
+    /desktopShortcutButton\.addEventListener\('click'[\s\S]*?createDesktopShortcut\(\)/,
+  );
+  const shortcutStart = main.indexOf("el.desktopShortcutButton.addEventListener('click'");
+  const shortcutEnd = main.indexOf("if (el.programRestartButton)", shortcutStart);
+  const shortcutHandler = main.slice(shortcutStart, shortcutEnd);
+  assert.ok(shortcutStart > 0 && shortcutEnd > shortcutStart);
+  assert.doesNotMatch(shortcutHandler, /restartManagedProgram\(\)/);
+  assert.doesNotMatch(shortcutHandler, /restartMotorControlSystem\(\)/);
+});
+
 test('program restart stays in the header and motor restart stays in motor management', () => {
   assert.doesNotMatch(html, /id="headerMotorControlRestartButton"/);
   assert.match(html, /id="headerProgramRestartButton"/);

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=모션 프로그램 열기
+Comment=모션 제어 웹 화면을 엽니다
+Exec=xdg-open http://localhost:8000
+Icon=applications-internet
+Terminal=false
+Categories=Utility;
+StartupNotify=true

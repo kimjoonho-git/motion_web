@@ -123,6 +123,11 @@ export async function restartManagedProgram() {
   return readJson(response);
 }
 
+export async function createDesktopShortcut() {
+  const response = await projectFetch('/api/system/desktop-shortcut', { method: 'POST' });
+  return readJson(response);
+}
+
 export async function restartMotorControlSystem() {
   const response = await projectFetch('/api/system/motor-control/restart', { method: 'POST' });
   return readJson(response);
