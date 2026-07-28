@@ -27,6 +27,15 @@ from std_srvs.srv import SetBool, Trigger
 
 from .ethercat_alias_manager import EthercatAliasError, EthercatAliasManager
 from .project_repository import ProjectRepository
+from .servo_alarm_policy import (
+    CATALOG_VERSION as SERVO_ALARM_CATALOG_VERSION,
+    catalog_payload,
+    configured_counts,
+    effective_grade_map,
+    GRADE_DEFINITIONS,
+    normalize_overrides,
+    policy_revision,
+)
 
 
 DYNAMIXEL_BAUDRATE = 1000000
@@ -1212,6 +1221,25 @@ class MotionWebBridge(Node):
                 raise ValueError(
                     '최종 모터 명령 노드가 프로젝트 세대 전환을 확인하지 않았습니다'
                 )
+        policy_result = self.publish_servo_alarm_policy()
+        if policy_result.get('success') is not True:
+            self._set_execution_context_status(
+                state='waiting_motor_runtime',
+                ready=False,
+                project_id=str(project_id),
+                context_id='',
+                message='선택 프로젝트의 서보 에러 정책 적용 대기',
+                nodes={},
+                failures={
+                    'servo_alarm_policy': str(
+                        policy_result.get('message') or '응답 없음'
+                    ),
+                },
+            )
+            raise ValueError(
+                '최종 모터 명령 노드가 서보 에러 정책을 확인하지 않았습니다: '
+                f'{policy_result.get("message") or "응답 없음"}'
+            )
         self._supervisor_project_generation = generation
 
     def _invalidate_execution_nodes(self, context_id: str = '') -> None:
@@ -2661,8 +2689,103 @@ class MotionWebBridge(Node):
         finally:
             if changing_project:
                 self._execution_context_apply_lock.release()
+        policy_result = self.publish_servo_alarm_policy()
+        if policy_result.get('success') is not True:
+            raise ValueError(
+                '선택 프로젝트의 서보 에러 정책을 적용하지 못했습니다: '
+                f'{policy_result.get("message") or "응답 없음"}'
+            )
         result['execution_context'] = self._reconcile_execution_context()
         return result
+
+    def servo_alarm_policy(self) -> Dict[str, Any]:
+        project_id = self.project_repository.selected_project_id()
+        stored = self.project_repository.load_servo_alarm_policy(project_id)
+        overrides = normalize_overrides(stored.get('overrides'))
+        return self._servo_alarm_policy_payload(project_id, overrides)
+
+    def _servo_alarm_policy_payload(
+        self,
+        project_id: str,
+        overrides: Dict[str, int],
+    ) -> Dict[str, Any]:
+        catalog = catalog_payload(overrides)
+        effective_grades = effective_grade_map(overrides)
+        return {
+            'success': True,
+            'project_id': project_id,
+            'project_generation': self._current_project_generation(),
+            'catalog_version': SERVO_ALARM_CATALOG_VERSION,
+            'grade_definitions': GRADE_DEFINITIONS,
+            'overrides': overrides,
+            'effective_grades': effective_grades,
+            'policy_revision': policy_revision(
+                effective_grades,
+                SERVO_ALARM_CATALOG_VERSION,
+            ),
+            'counts': configured_counts(catalog),
+            'catalog': catalog,
+        }
+
+    def save_servo_alarm_policy(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        project_id = self.project_repository.selected_project_id()
+        if not project_id:
+            raise ValueError('서보 에러 등급을 저장할 프로젝트를 먼저 선택하세요')
+        self._ensure_project_change_allowed()
+        overrides = normalize_overrides(payload.get('overrides'))
+        previous = self.servo_alarm_policy()
+        candidate = self._servo_alarm_policy_payload(project_id, overrides)
+        published = self.publish_servo_alarm_policy(candidate)
+        if published.get('success') is not True:
+            raise ValueError(
+                '서보 에러 등급을 Supervisor에 적용하지 못해 저장하지 않았습니다: '
+                f'{published.get("message") or "응답 없음"}'
+            )
+        try:
+            saved = self.project_repository.save_servo_alarm_policy(
+                project_id,
+                overrides,
+            )
+        except Exception:
+            self.publish_servo_alarm_policy(previous)
+            raise
+        return {
+            **candidate,
+            'message': '현재 프로젝트의 서보 에러 등급을 저장하고 적용했습니다',
+            'saved': saved,
+            'supervisor_applied': True,
+            'supervisor_message': published.get('message', ''),
+        }
+
+    def publish_servo_alarm_policy(
+        self,
+        policy: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        policy = policy or self.servo_alarm_policy()
+        request_id = self._new_project_request_id('servo-alarm-policy')
+        payload = {
+            'request_id': request_id,
+            'project_generation': self._current_project_generation(),
+            'project_id': policy.get('project_id', ''),
+            'command': 'servo_alarm_policy_update',
+            'catalog_version': policy['catalog_version'],
+            'grades': policy['effective_grades'],
+            'policy_revision': policy['policy_revision'],
+        }
+        publisher = getattr(self, '_safety_request_publisher', None)
+        if publisher is None:
+            return {'success': False, 'message': '서보 에러 정책 전송 경로가 없습니다'}
+        publisher.publish(
+            String(data=json.dumps(payload, ensure_ascii=False, separators=(',', ':')))
+        )
+        result = self._wait_for_jog_result(request_id, timeout_sec=1.0)
+        if not isinstance(result, dict):
+            return {'success': False, 'message': 'Supervisor 정책 적용 응답이 없습니다'}
+        return {
+            'success': bool(result.get('success')),
+            'message': str(result.get('message') or ''),
+            'request_id': request_id,
+        }
 
     def import_motion_project_file(
         self, project_id: Any, payload: Dict[str, Any]
@@ -3082,6 +3205,16 @@ class MotionWebBridge(Node):
                 'message': (
                     'Motor Manager 분리 서비스가 설치되지 않았습니다. '
                     '최초 설치를 다시 실행하세요'
+                ),
+                **self.snapshot(),
+            }
+        runtime_config = self.project_repository.applied_runtime_motor_config()
+        if runtime_config is None:
+            return {
+                'success': False,
+                'message': (
+                    '현재 프로젝트의 모터축 설정이 적용되지 않았습니다. '
+                    '모터 관리에서 설정 적용·재시작을 먼저 실행하세요'
                 ),
                 **self.snapshot(),
             }
@@ -5831,6 +5964,17 @@ def create_app(bridge: MotionWebBridge) -> FastAPI:
     @app.delete('/api/motor-events/files/{file_name}')
     async def delete_motor_event_file(file_name: str):
         return project_call(bridge.delete_motor_event_file, file_name)
+
+    @app.get('/api/servo-alarm-policy')
+    async def servo_alarm_policy():
+        return project_call(bridge.servo_alarm_policy)
+
+    @app.put('/api/servo-alarm-policy')
+    async def save_servo_alarm_policy(request: Request):
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail='request body must be an object')
+        return project_call(bridge.save_servo_alarm_policy, body)
 
     @app.post('/api/monitoring/enabled')
     async def set_monitoring(request: Request):

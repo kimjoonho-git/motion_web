@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import { createOperationProgressManager } from '../static/js/operation_progress.js';
@@ -78,6 +79,7 @@ test('common operation popup blocks closing until the operation finishes', () =>
   assert.equal(progress.isRunning(), true);
   assert.equal(el.operationProgressModal.classList.contains('hidden'), false);
   assert.equal(el.operationProgressCloseButton.disabled, true);
+  assert.equal(el.operationProgressCloseButton.textContent, '진행 중');
   assert.equal(progress.close(), false);
 
   currentTime = 2500;
@@ -92,6 +94,7 @@ test('common operation popup blocks closing until the operation finishes', () =>
   });
   assert.equal(progress.isRunning(), false);
   assert.equal(el.operationProgressCloseButton.disabled, false);
+  assert.equal(el.operationProgressCloseButton.textContent, '완료');
   assert.equal(progress.close(), true);
   assert.equal(el.operationProgressModal.classList.contains('hidden'), true);
 });
@@ -108,6 +111,31 @@ test('a second blocking operation cannot replace a running operation', () => {
   assert.equal(progress.activeId(), 'restart:program');
 });
 
+test('cancelable restart closes only its completion monitoring', () => {
+  const el = fixture();
+  let cancelled = 0;
+  const progress = createOperationProgressManager({
+    el,
+    setTimer: () => 1,
+    clearTimer: () => {},
+  });
+
+  assert.equal(progress.begin({
+    id: 'restart:motor_control',
+    title: '모터 제어 재시작',
+    cancelable: true,
+    onCancel: () => {
+      cancelled += 1;
+    },
+  }), true);
+  assert.equal(el.operationProgressCloseButton.disabled, false);
+  assert.equal(el.operationProgressCloseButton.textContent, '확인 중단');
+  assert.equal(progress.close(), true);
+  assert.equal(cancelled, 1);
+  assert.equal(progress.activeId(), '');
+  assert.equal(el.operationProgressModal.classList.contains('hidden'), true);
+});
+
 test('manager initialization clears a restored blocking overlay state', () => {
   const el = fixture();
   el.operationProgressModal.classList.names.delete('hidden');
@@ -119,4 +147,20 @@ test('manager initialization clears a restored blocking overlay state', () => {
   });
   assert.equal(el.operationProgressModal.classList.contains('hidden'), true);
   assert.equal(document.body.classList.contains('operation-modal-open'), false);
+});
+
+test('scan log scrolls without clipping the completion action footer', () => {
+  const styles = readFileSync(new URL('../static/styles.css', import.meta.url), 'utf8');
+  assert.match(
+    styles,
+    /\.operation-progress-dialog\s*\{[^}]*display:\s*flex;[^}]*flex-direction:\s*column;/s,
+  );
+  assert.match(
+    styles,
+    /\.operation-progress-log\s*\{[^}]*flex:\s*1 1 260px;[^}]*min-height:\s*0;[^}]*overflow:\s*auto;/s,
+  );
+  assert.match(
+    styles,
+    /\.operation-progress-actions\s*\{[^}]*flex:\s*0 0 auto;/s,
+  );
 });

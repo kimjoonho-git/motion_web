@@ -33,12 +33,12 @@ test('program restart stays in the header and motor restart stays in motor manag
 });
 
 test('restart controls require confirmation and invoke only their matching operation', () => {
-  const programHandler = main.match(
-    /if \(el\.programRestartButton\) \{([\s\S]*?)\n\}\n\nif \(el\.motorControlRestartButton\)/,
-  )?.[1] || '';
-  const motorHandler = main.match(
-    /if \(el\.motorControlRestartButton\) \{([\s\S]*?)\n\}\n\nif \(el\.headerProgramRestartButton\)/,
-  )?.[1] || '';
+  const programStart = main.indexOf("el.programRestartButton.addEventListener('click'");
+  const motorStart = main.indexOf("el.motorControlRestartButton.addEventListener('click'");
+  const headerStart = main.indexOf("el.headerProgramRestartButton.addEventListener('click'");
+  assert.ok(programStart > 0 && motorStart > programStart && headerStart > motorStart);
+  const programHandler = main.slice(programStart, motorStart);
+  const motorHandler = main.slice(motorStart, headerStart);
 
   assert.match(programHandler, /await appDialogs\.confirm/);
   assert.match(programHandler, /restartManagedProgram\(\)/);
@@ -75,4 +75,27 @@ test('motor-control restart waits for a new motor status and has a timeout', () 
   );
   assert.match(main, /RESTART_TIMEOUT_MS = 45000/);
   assert.match(main, /startRestartProgressPolling\(\)/);
+});
+
+test('motor-control restart requires the selected project motor config to be applied', () => {
+  assert.match(
+    main,
+    /motorConfigApplied = Boolean\(payload\?\.project_scope\?\.motor_config_applied\)/,
+  );
+  assert.match(
+    main,
+    /motorControlRestartButton\.disabled = !\(motorManaged && motorConfigApplied\)/,
+  );
+  assert.match(main, /현재 프로젝트의 모터축 설정을 먼저 적용하세요/);
+});
+
+test('restart status polling has an HTTP deadline and can stop completion monitoring', () => {
+  assert.match(api, /fetchStatusSnapshot\(timeoutMs = 5000\)/);
+  assert.match(api, /controller\.abort\(\)/);
+  assert.match(main, /cancelable: true/);
+  assert.match(main, /onCancel: cancelRestartCompletionCheck/);
+  assert.match(
+    main,
+    /완료 확인만 중단했습니다\. 이미 요청된 서비스 재시작은 취소되지 않습니다\./,
+  );
 });

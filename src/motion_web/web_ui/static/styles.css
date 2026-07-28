@@ -5353,6 +5353,8 @@ th {
 }
 
 .operation-progress-dialog {
+  display: flex;
+  flex-direction: column;
   width: min(720px, 100%);
   max-height: min(760px, calc(100vh - 40px));
   overflow: hidden;
@@ -5424,7 +5426,8 @@ th {
 }
 
 .operation-progress-log {
-  min-height: 260px;
+  flex: 1 1 260px;
+  min-height: 0;
   max-height: min(560px, 65vh);
   overflow: auto;
   padding: 14px 18px;
@@ -5470,6 +5473,7 @@ th {
 }
 
 .operation-progress-actions {
+  flex: 0 0 auto;
   display: flex;
   gap: 8px;
   justify-content: flex-end;
@@ -5565,6 +5569,214 @@ th {
   color: var(--ink);
   font-weight: 700;
   overflow-wrap: anywhere;
+}
+
+.servo-alarm-panel {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+}
+
+.servo-alarm-runtime-banner {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: center;
+  gap: 10px 18px;
+  min-height: 56px;
+  padding: 12px 16px;
+  border: 1px solid #b8c7d8;
+  border-left: 6px solid #718096;
+  border-radius: 8px;
+  background: #f7f9fc;
+}
+
+.servo-alarm-runtime-banner.ready {
+  border-color: #9fd3b0;
+  border-left-color: #23834b;
+  background: #f3fbf6;
+}
+
+.servo-alarm-runtime-banner.grade-1 {
+  border-color: #e7c66a;
+  border-left-color: #bd8300;
+  background: #fffbeb;
+}
+
+.servo-alarm-runtime-banner.grade-2 {
+  border-color: #efac72;
+  border-left-color: #d15d00;
+  background: #fff6ed;
+}
+
+.servo-alarm-runtime-banner.grade-3 {
+  border-color: #ef9999;
+  border-left-color: #c62828;
+  background: #fff2f2;
+}
+
+.servo-alarm-runtime-banner strong {
+  font-size: 15px;
+}
+
+.servo-alarm-runtime-banner span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.servo-alarm-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.servo-alarm-summary-grid > div {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 3px 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.servo-alarm-summary-grid span,
+.servo-alarm-summary-grid small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.servo-alarm-summary-grid strong {
+  grid-row: span 2;
+  align-self: center;
+  font-size: 18px;
+}
+
+.servo-alarm-catalog-card {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.servo-alarm-catalog-card > .section-head {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+#servoAlarmStatus[data-tone="ready"] {
+  color: #247447;
+}
+
+#servoAlarmStatus[data-tone="warning"] {
+  color: #9a6700;
+}
+
+#servoAlarmStatus[data-tone="danger"] {
+  color: #b42318;
+}
+
+.servo-alarm-table-wrap {
+  max-height: calc(100vh - 365px);
+  min-height: 360px;
+  overflow: auto;
+}
+
+.servo-alarm-table {
+  min-width: 1080px;
+}
+
+.servo-alarm-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #edf3f8;
+}
+
+.servo-alarm-table th:nth-child(1) {
+  width: 90px;
+}
+
+.servo-alarm-table th:nth-child(2) {
+  width: 250px;
+}
+
+.servo-alarm-table th:nth-child(3) {
+  width: 100px;
+}
+
+.servo-alarm-table th:nth-child(4) {
+  width: 245px;
+}
+
+.servo-alarm-table th:nth-child(5) {
+  width: 180px;
+}
+
+.servo-alarm-table td {
+  vertical-align: middle;
+  line-height: 1.4;
+}
+
+.servo-alarm-table td:first-child strong,
+.servo-alarm-table td:first-child small {
+  display: block;
+}
+
+.servo-alarm-table td:first-child small {
+  margin-top: 3px;
+  color: #526b86;
+  font-size: 10px;
+}
+
+.servo-alarm-table tr[data-grade="1"] td:first-child {
+  border-left: 4px solid #bd8300;
+}
+
+.servo-alarm-table tr[data-grade="2"] td:first-child {
+  border-left: 4px solid #d15d00;
+}
+
+.servo-alarm-table tr[data-grade="3"] td:first-child {
+  border-left: 4px solid #c62828;
+}
+
+.servo-alarm-grade {
+  display: inline-flex;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.servo-alarm-grade.grade-1 {
+  color: #7a5500;
+  background: #fff2c2;
+}
+
+.servo-alarm-grade.grade-2 {
+  color: #9d4200;
+  background: #ffe2c7;
+}
+
+.servo-alarm-grade.grade-3 {
+  color: #9e2222;
+  background: #ffd8d8;
+}
+
+.servo-alarm-grade-select {
+  width: 100%;
+  min-width: 210px;
+}
+
+@media (max-width: 1000px) {
+  .servo-alarm-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .servo-alarm-runtime-banner {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
 }
 
 body.operation-modal-open {

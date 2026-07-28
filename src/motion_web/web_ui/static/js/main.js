@@ -9,17 +9,17 @@ import {
   stopMotionRun,
   stopMotionStudio,
   setProjectGeneration,
-} from './api.js?v=20260723-servo-service-split';
-import { getElements } from './dom.js?v=20260727-editor-compact-feedback-1';
+} from './api.js?v=20260728-restart-guard-1';
+import { getElements } from './dom.js?v=20260728-servo-alarm-2';
 import { createMotorEventLogController } from './event_log.js?v=20260727-popup-common-3';
 import { createMidiMonitorController } from './midi_monitor.js?v=20260727-popup-common-3';
 import { createMotionDataController } from './motion_data.js?v=20260727-popup-common-3';
 import { createMotionStudioController } from './motion_studio.js?v=20260727-editor-compact-feedback-1';
-import { createMotionTestController } from './motion_test.js?v=20260727-popup-common-3';
+import { createMotionTestController } from './motion_test.js?v=20260728-servo-alarm-2';
 import { createMotorConfigController } from './motor_config.js?v=20260727-popup-common-3';
 import { createProjectExplorerController } from './project_explorer.js?v=20260727-popup-common-3';
 import { renderAccess, renderMonitoring } from './monitoring.js?v=20260724-runtime-fix-1';
-import { createOperationProgressManager } from './operation_progress.js?v=20260727-popup-common-3';
+import { createOperationProgressManager } from './operation_progress.js?v=20260728-restart-guard-1';
 import { installDialogManager } from './ui_dialogs.js?v=20260727-popup-common-3';
 import { StatusSocket } from './socket.js';
 import {
@@ -34,6 +34,7 @@ import {
   workspaceForProjectCategory,
 } from './workspace_navigation.js?v=20260724-ui-navigation-2';
 import { installFeedbackPresentation } from './ui_feedback.js?v=20260724-ui-finish-1';
+import { createServoAlarmController } from './servo_alarm.js?v=20260728-servo-alarm-2';
 
 const el = getElements();
 const operationProgress = createOperationProgressManager({ el });
@@ -87,6 +88,10 @@ function blockWorkspaceForMotorIdentity(workspace) {
 
 function studioMotorActionBlockReason() {
   if (appState.emergencyLatched) return '긴급정지 잠김 상태입니다. 프로그램 재시작이 필요합니다.';
+  const safety = appState.latestState?.safety_status || {};
+  if (safety.commands_blocked) {
+    return safety.message || '서보 에러로 모터 동작이 제한된 상태입니다.';
+  }
   if (appState.motorIdentityBlockMessage) return appState.motorIdentityBlockMessage;
   if (!appState.executionContext?.ready) {
     return appState.executionContext?.message || '현재 프로젝트 실행 설정 적용 대기 중입니다.';
@@ -207,6 +212,7 @@ function renderLatestState(nextState = null) {
   motorConfig.renderRuntimeState();
   motionTest.renderLatestState();
   motionData.renderRuntimeState();
+  servoAlarm?.renderRuntimeState();
   updateWorkContext();
   updateMotorErrorPopup(appState.latestState);
   enforceEmergencyUi();
@@ -253,11 +259,13 @@ function acceptProjectPayload(payload) {
     midiMonitor.resetProjectState();
     motionStudio.resetProjectState();
     motorEventLog.resetProjectState();
+    servoAlarm?.resetProjectState();
     Promise.resolve().then(async () => {
       await projectExplorer.refresh(true);
       await motorConfig.loadProjectRegistry();
       await motionData.fetchFiles();
       await motionStudio.refresh(false);
+      await servoAlarm?.refresh();
       updateWorkContext();
     }).catch(() => {});
   }
@@ -305,6 +313,7 @@ function renderServiceManagement(payload) {
   if (incomingBridgeInstanceId) appState.bridgeInstanceId = incomingBridgeInstanceId;
   const managed = Boolean(payload?.service_management?.managed);
   const motorManaged = Boolean(payload?.service_management?.motor_managed);
+  const motorConfigApplied = Boolean(payload?.project_scope?.motor_config_applied);
   if (el.serviceMode) {
     el.serviceMode.textContent = managed
       ? (motorManaged ? '분리 자동 실행 · 자동 복구' : '분리 서비스 설치 필요')
@@ -312,7 +321,12 @@ function renderServiceManagement(payload) {
     el.serviceMode.classList.toggle('warning-text', !managed || !motorManaged);
   }
   if (el.programRestartButton) el.programRestartButton.disabled = !(managed && motorManaged);
-  if (el.motorControlRestartButton) el.motorControlRestartButton.disabled = !motorManaged;
+  if (el.motorControlRestartButton) {
+    el.motorControlRestartButton.disabled = !(motorManaged && motorConfigApplied);
+    el.motorControlRestartButton.title = motorConfigApplied
+      ? '현재 프로젝트의 모터 제어 서비스를 재시작합니다'
+      : '현재 프로젝트의 모터축 설정을 먼저 적용하세요';
+  }
   if (el.headerProgramRestartButton) {
     el.headerProgramRestartButton.disabled = !(managed && motorManaged);
   }
@@ -392,6 +406,8 @@ function setRestartOverlay(visible, title = '', message = '', detail = '') {
       detail,
       phase: '진행 중',
       mode: 'standard',
+      cancelable: true,
+      onCancel: cancelRestartCompletionCheck,
     });
     return;
   }
@@ -411,6 +427,27 @@ function stopRestartProgressPolling() {
   if (appState.restartProgressTimer !== null) {
     window.clearTimeout(appState.restartProgressTimer);
     appState.restartProgressTimer = null;
+  }
+}
+
+function clearRestartTracking() {
+  stopRestartProgressPolling();
+  appState.configApplyInProgress = false;
+  appState.configApplyStartedAtMs = null;
+  appState.configApplyReadySinceMs = null;
+  appState.configApplyConnectionInterrupted = false;
+  appState.restartCheckMode = '';
+  appState.restartPreviousBridgeInstanceId = '';
+  appState.restartPreviousMotorStatusAt = null;
+  appState.restartRequestAccepted = false;
+}
+
+function cancelRestartCompletionCheck() {
+  if (!appState.configApplyInProgress) return;
+  clearRestartTracking();
+  if (el.bridgeState) el.bridgeState.textContent = '재시작 확인 중단';
+  if (el.summaryText) {
+    el.summaryText.textContent = '완료 확인만 중단했습니다. 이미 요청된 서비스 재시작은 취소되지 않습니다.';
   }
 }
 
@@ -473,6 +510,13 @@ function formatStatusHex(value) {
 }
 
 function motorErrorDetected(motor) {
+  const rawErrorCode = Number(motor?.errorcode_raw);
+  const communicationUnavailable = rawErrorCode === 0xFFFF
+    || (
+      String(motor?.state || '') === 'disconnected'
+      && /communication unavailable/i.test(String(motor?.error_text || ''))
+    );
+  if (communicationUnavailable) return false;
   const errorCode = Number(motor?.errorcode ?? 0);
   const statusword = Number(motor?.statusword ?? 0);
   const statusText = String(motor?.status_text || '');
@@ -501,6 +545,7 @@ function motorErrorTitle(motor) {
 }
 
 function motorErrorDetailRows(motor) {
+  const alarm = servoAlarm?.entryForCode(motor?.errorcode);
   const rows = [
     ['상태', motor?.status_text || motor?.state || '-'],
     ['오류', motor?.error_text || (Number(motor?.errorcode || 0) === 0 ? '고장 상태' : `오류 ${motor.errorcode}`)],
@@ -509,6 +554,11 @@ function motorErrorDetailRows(motor) {
   const errorCode = motor?.errorcode_raw ?? motor?.errorcode;
   if (errorCode !== null && errorCode !== undefined) {
     rows.push(['오류 코드', formatStatusHex(errorCode)]);
+  }
+  if (alarm) {
+    rows.push(['에러 내용', `${alarm.code_label} · ${alarm.name}`]);
+    rows.push(['적용 등급', `${alarm.effective_grade || alarm.default_grade}등급 · ${alarm.action}`]);
+    rows.push(['사용자 대처', alarm.guidance]);
   }
   return rows;
 }
@@ -825,15 +875,7 @@ function updateRestartProgress(payload = null) {
       message: '재시작 완료 조건을 확인하지 못했습니다.',
       detail: state.detail,
     });
-    stopRestartProgressPolling();
-    appState.configApplyInProgress = false;
-    appState.configApplyStartedAtMs = null;
-    appState.configApplyReadySinceMs = null;
-    appState.configApplyConnectionInterrupted = false;
-    appState.restartCheckMode = '';
-    appState.restartPreviousBridgeInstanceId = '';
-    appState.restartPreviousMotorStatusAt = null;
-    appState.restartRequestAccepted = false;
+    clearRestartTracking();
     if (el.bridgeState) el.bridgeState.textContent = state.title;
     if (el.summaryText) el.summaryText.textContent = state.detail;
     return;
@@ -876,15 +918,7 @@ function updateRestartProgress(payload = null) {
     return;
   }
 
-  appState.configApplyInProgress = false;
-  stopRestartProgressPolling();
-  appState.configApplyStartedAtMs = null;
-  appState.configApplyReadySinceMs = null;
-  appState.configApplyConnectionInterrupted = false;
-  appState.restartCheckMode = '';
-  appState.restartPreviousBridgeInstanceId = '';
-  appState.restartPreviousMotorStatusAt = null;
-  appState.restartRequestAccepted = false;
+  clearRestartTracking();
   finishRestartOverlay({
     outcome: 'success',
     title: state.title,
@@ -906,6 +940,7 @@ function updateRestartProgress(payload = null) {
 }
 
 let motionTest = null;
+let servoAlarm = null;
 
 const motorConfig = createMotorConfigController({
   el,
@@ -935,15 +970,7 @@ const motorConfig = createMotorConfigController({
     startRestartProgressPolling();
   },
   onConfigApplyComplete: () => {
-    stopRestartProgressPolling();
-    appState.configApplyInProgress = false;
-    appState.configApplyStartedAtMs = null;
-    appState.configApplyReadySinceMs = null;
-    appState.configApplyConnectionInterrupted = false;
-    appState.restartCheckMode = '';
-    appState.restartPreviousBridgeInstanceId = '';
-    appState.restartPreviousMotorStatusAt = null;
-    appState.restartRequestAccepted = false;
+    clearRestartTracking();
     setRestartOverlay(false);
   },
   onIdentityStatusChange: (message) => {
@@ -1006,9 +1033,11 @@ const projectExplorer = createProjectExplorerController({
     midiMonitor.resetProjectState();
     motionStudio.resetProjectState();
     motorEventLog.resetProjectState();
+    servoAlarm?.resetProjectState();
     await motorConfig.loadProjectRegistry();
     await motionData.fetchFiles();
     await motionStudio.refresh(false);
+    await servoAlarm?.refresh();
     updateWorkContext();
   },
   onNavigate: (workspace, motionTab) => {
@@ -1017,6 +1046,10 @@ const projectExplorer = createProjectExplorerController({
 });
 
 const motorEventLog = createMotorEventLogController({ el });
+servoAlarm = createServoAlarmController({
+  el,
+  getLatestState: () => appState.latestState,
+});
 
 function statusCheckResult(triggerButton, payload) {
   if (triggerButton === el.programStatusRefreshButton) {
@@ -1259,15 +1292,7 @@ if (el.programRestartButton) {
       const payload = await restartManagedProgram();
       if (payload?.success === false) throw new Error(payload.message || '재시작 요청 실패');
     } catch (error) {
-      appState.configApplyInProgress = false;
-      appState.configApplyStartedAtMs = null;
-      appState.configApplyReadySinceMs = null;
-      appState.configApplyConnectionInterrupted = false;
-      appState.restartCheckMode = '';
-      appState.restartPreviousBridgeInstanceId = '';
-      appState.restartPreviousMotorStatusAt = null;
-      appState.restartRequestAccepted = false;
-      stopRestartProgressPolling();
+      clearRestartTracking();
       setRestartOverlay(false);
       window.alert(error?.message || String(error));
     }
@@ -1308,13 +1333,7 @@ if (el.motorControlRestartButton) {
       appState.restartRequestAccepted = true;
       window.setTimeout(() => fetchStatus(), 1500);
     } catch (error) {
-      appState.configApplyInProgress = false;
-      appState.configApplyStartedAtMs = null;
-      appState.configApplyReadySinceMs = null;
-      appState.restartCheckMode = '';
-      appState.restartPreviousMotorStatusAt = null;
-      appState.restartRequestAccepted = false;
-      stopRestartProgressPolling();
+      clearRestartTracking();
       setRestartOverlay(false);
       window.alert(error?.message || String(error));
     } finally {
@@ -1460,6 +1479,7 @@ if (el.workspaceTabs) {
       if (target === 'log') motorEventLog.activate();
       if (target === 'studio') motionStudio.refresh(false);
       if (target === 'config') motorConfig.fetchRegistry();
+      if (target === 'servo-errors') servoAlarm.refresh();
       projectExplorer.refresh(true);
       return;
     }
@@ -1471,6 +1491,7 @@ if (el.workspaceTabs) {
     if (target === 'log') motorEventLog.activate();
     if (target === 'studio') motionStudio.refresh(false);
     if (target === 'config') motorConfig.fetchRegistry();
+    if (target === 'servo-errors') servoAlarm.refresh();
     projectExplorer.refresh(true);
   });
 }
@@ -1481,6 +1502,7 @@ motionData.bindEvents();
 motionStudio.bindEvents();
 projectExplorer.bindEvents();
 motorEventLog.bindEvents();
+servoAlarm.bindEvents();
 motorConfig.renderRegistrationTabs();
 renderWorkspacePanel();
 updateWorkContext();
@@ -1490,3 +1512,4 @@ motorConfig.fetchRegistry();
 motionData.fetchFiles();
 motionStudio.refresh(false);
 projectExplorer.refresh(true);
+servoAlarm.refresh();

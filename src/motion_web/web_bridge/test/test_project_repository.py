@@ -924,6 +924,11 @@ def test_user_can_restart_only_motor_control_service_from_web(monkeypatch):
     bridge._motion_run_status = {'state': 'idle'}
     bridge._motion_studio_status = {'state': 'idle'}
     bridge.snapshot = lambda: {}
+    bridge.project_repository = type(
+        'Repository',
+        (),
+        {'applied_runtime_motor_config': lambda _self: Path('/runtime/applied.yaml')},
+    )()
     commands = []
     monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
     monkeypatch.setattr(
@@ -939,6 +944,28 @@ def test_user_can_restart_only_motor_control_service_from_web(monkeypatch):
         '/usr/bin/systemctl', '--user', 'restart', '--no-block',
         'motion-motor.service',
     ]
+
+
+def test_motor_control_restart_rejects_project_without_applied_motor_config(monkeypatch):
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge.snapshot = lambda: {}
+    bridge.project_repository = type(
+        'Repository',
+        (),
+        {'applied_runtime_motor_config': lambda _self: None},
+    )()
+    commands = []
+    monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
+    monkeypatch.setattr(
+        'motion_web_bridge.bridge_node.subprocess.Popen',
+        lambda command, **kwargs: commands.append((command, kwargs)),
+    )
+
+    result = bridge.restart_motor_control_system()
+
+    assert result['success'] is False
+    assert '설정 적용·재시작' in result['message']
+    assert commands == []
 
 
 @pytest.mark.parametrize(

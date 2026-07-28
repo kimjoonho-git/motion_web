@@ -15,6 +15,7 @@ import {
 test('workspace routes resolve their group and shared motion panel', () => {
   assert.equal(workspaceGroupFor('monitoring'), 'operations');
   assert.equal(workspaceGroupFor('config'), 'setup');
+  assert.equal(workspaceGroupFor('servo-errors'), 'setup');
   assert.equal(workspaceGroupFor('motion-midi'), 'creation');
   assert.equal(workspaceGroupFor('motion-run'), 'execution');
   assert.equal(workspacePanelFor('motion-files'), 'motion');

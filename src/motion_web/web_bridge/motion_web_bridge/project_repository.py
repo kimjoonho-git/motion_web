@@ -23,6 +23,7 @@ PROJECT_VERSION = 1
 MAX_TEXT_BYTES = 10 * 1024 * 1024
 DEFAULT_MOTOR_FILE = 'motor_axes.yaml'
 DEFAULT_MOTION_AXIS_FILE = 'motion_axes.yaml'
+SERVO_ALARM_POLICY_FILE = 'servo_alarm_policy.json'
 PROJECT_CATEGORIES = {
     'motor_axes': {'.yaml', '.yml'},
     'motion_axis_matching': {'.yaml', '.yml'},
@@ -245,6 +246,46 @@ class ProjectRepository:
             'projects': projects,
             'selected_project_id': selected,
             'project_root': str(self.root),
+        }
+
+    def load_servo_alarm_policy(self, project_id: Any = None) -> Dict[str, Any]:
+        target_id = str(project_id or self.selected_project_id() or '').strip()
+        if not target_id:
+            return {'version': 1, 'overrides': {}}
+        project_dir = self._project_dir(target_id)
+        path = project_dir / SERVO_ALARM_POLICY_FILE
+        if not path.is_file():
+            return {'version': 1, 'overrides': {}}
+        try:
+            payload = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f'서보 에러 정책 파일을 읽을 수 없습니다: {exc}') from exc
+        if not isinstance(payload, dict):
+            raise ValueError('서보 에러 정책 파일 형식이 올바르지 않습니다')
+        return payload
+
+    def save_servo_alarm_policy(
+        self,
+        project_id: Any,
+        overrides: Dict[str, int],
+    ) -> Dict[str, Any]:
+        project_dir = self._project_dir(project_id)
+        if self.selected_project_id() != project_dir.name:
+            raise ValueError('현재 선택 프로젝트의 서보 에러 등급만 저장할 수 있습니다')
+        payload = {
+            'version': 1,
+            'updated_at': time.time(),
+            'overrides': dict(overrides),
+        }
+        content = json.dumps(payload, ensure_ascii=False, indent=2) + '\n'
+        path = project_dir / SERVO_ALARM_POLICY_FILE
+        self._atomic_write(path, content)
+        return {
+            'success': True,
+            'project_id': project_dir.name,
+            'file': str(path),
+            'sha256': _sha256(content.encode('utf-8')),
+            **payload,
         }
 
     def create_project(self, name: Any) -> Dict[str, Any]:

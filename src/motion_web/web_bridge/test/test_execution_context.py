@@ -31,6 +31,9 @@ class ContextRepository:
             },
         }
 
+    def load_servo_alarm_policy(self, _project_id):
+        return {'version': 1, 'overrides': {}}
+
 
 def make_bridge():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
@@ -65,6 +68,13 @@ def make_bridge():
     bridge._motion_studio_results = {}
     bridge._motion_studio_status = {}
     bridge._motion_studio_editor_results = {}
+    bridge._safety_request_publisher = type('Publisher', (), {
+        'publish': lambda _self, _message: None,
+    })()
+    bridge._wait_for_jog_result = lambda request_id, **_kwargs: {
+        'success': True,
+        'request_id': request_id,
+    }
     bridge._runtime_project_id = lambda: 'project-1'
     bridge._runtime_service_status = lambda _state: {
         'phase': 'ready', 'message': 'motor runtime ready',

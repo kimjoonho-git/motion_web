@@ -34,7 +34,13 @@ export function createOperationProgressManager({
 
   function setRunning(running) {
     el?.operationProgressSpinner?.classList.toggle('hidden', !running);
-    if (el?.operationProgressCloseButton) el.operationProgressCloseButton.disabled = running;
+    if (el?.operationProgressCloseButton) {
+      const cancelable = running && Boolean(active?.cancelable);
+      el.operationProgressCloseButton.disabled = running && !cancelable;
+      el.operationProgressCloseButton.textContent = running
+        ? (cancelable ? '확인 중단' : '진행 중')
+        : '완료';
+    }
     if (el?.operationProgressClearButton) el.operationProgressClearButton.disabled = running;
   }
 
@@ -69,6 +75,8 @@ export function createOperationProgressManager({
     detail = '요청 준비 중',
     phase = '진행 중',
     mode = 'standard',
+    cancelable = false,
+    onCancel = null,
   }) {
     const operationId = String(id || '').trim();
     if (!operationId) throw new Error('operation progress id is required');
@@ -79,6 +87,8 @@ export function createOperationProgressManager({
       status: 'running',
       running: true,
       startedAt: now(),
+      cancelable: Boolean(cancelable),
+      onCancel: typeof onCancel === 'function' ? onCancel : null,
     };
     clearLog({ force: true });
     setLogVisible(mode === 'log');
@@ -135,10 +145,12 @@ export function createOperationProgressManager({
   }
 
   function close({ force = false } = {}) {
-    if (active?.running && !force) return false;
+    if (active?.running && !force && !active.cancelable) return false;
+    const onCancel = active?.running && !force ? active.onCancel : null;
     stopElapsedTimer();
     active = null;
     setVisible(false);
+    onCancel?.();
     return true;
   }
 
