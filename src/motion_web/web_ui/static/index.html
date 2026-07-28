@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>모션 녹화 시스템 0.5.0</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260728-servo-alarm-3">
+    <link rel="stylesheet" href="/static/styles.css?v=20260728-point-range-actions-1">
   </head>
   <body>
     <main class="shell">
@@ -1479,6 +1479,14 @@
                       </div>
                     </div>
                     <div id="studioEditorOperationHelp" class="studio-editor-operation-help hidden">선택한 포인트의 시간을 조절합니다.</div>
+                    <div id="studioEditorRangeActions" class="studio-editor-range-actions hidden">
+                      <strong>선택 구간</strong>
+                      <label class="compact-field"><span>복사 시작(초)</span>
+                        <input id="studioEditorRangeCopyTarget" type="number" min="0" step="0.02" value="0.00">
+                      </label>
+                      <button id="studioEditorRangeCopyButton" type="button">구간 복사</button>
+                      <button id="studioEditorRangeDeleteButton" class="off" type="button">구간 삭제</button>
+                    </div>
                   </section>
                   <section id="studioEditorDangerZone" class="studio-editor-danger-zone hidden">
                     <button id="studioEditorPointDeleteButton" class="off" type="button" disabled>포인트 삭제</button>
@@ -1618,6 +1626,6 @@
       </div>
     </div>
 
-    <script type="module" src="/static/app.js?v=20260728-motor-restart-lifecycle-2"></script>
+    <script type="module" src="/static/app.js?v=20260728-editor-zero-axis-1"></script>
   </body>
 </html>

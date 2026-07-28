@@ -3097,6 +3097,33 @@ button[aria-disabled="true"] {
   min-width: 0;
 }
 
+.studio-editor-range-actions {
+  grid-column: 2;
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: 7px;
+  border-top: 1px solid var(--line);
+}
+
+.studio-editor-range-actions > strong {
+  align-self: center;
+  margin-right: 4px;
+  font-size: 12px;
+}
+
+.studio-editor-range-actions .compact-field {
+  display: grid;
+  gap: 3px;
+  width: 135px;
+}
+
+.studio-editor-range-actions input {
+  box-sizing: border-box;
+  width: 100%;
+}
+
 .studio-editor-operation-choices {
   display: inline-flex;
   align-items: center;
@@ -3308,6 +3335,10 @@ button[aria-disabled="true"] {
 
   .studio-editor-operation-panel {
     grid-template-columns: 1fr;
+  }
+
+  .studio-editor-range-actions {
+    grid-column: 1;
   }
 
   .studio-editor-primary-actions span {

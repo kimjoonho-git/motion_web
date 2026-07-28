@@ -19,8 +19,11 @@ import {
   motionStudioPointCurveOrder,
   motionStudioPointCurvePreview,
   motionStudioPointCurveViewEnd,
+  motionStudioCopyPointRange,
+  motionStudioDeletePointRange,
   motionStudioPointDragStarted,
   motionStudioPointHitTarget,
+  motionStudioPointRangePoints,
   motionStudioPointRangeReady,
   motionStudioPointRangeTargetsMatch,
   motionStudioRuntimeStatusMessage,
@@ -116,6 +119,75 @@ test('point edit ranges require two points from the same point curve', () => {
   assert.equal(motionStudioPointRangeReady(1, 1, '1-1', 'curve-a'), false);
   assert.equal(motionStudioPointRangeReady(1, 1.02, '1-1', 'curve-a'), true);
   assert.equal(motionStudioPointRangeReady(1, 2, '1-1', ''), false);
+  const curve = {
+    curve_id: 'curve-a',
+    motion_id: '1-1',
+    points: [
+      { point_id: 'a', time_sec: 1, value_deg: 10 },
+      { point_id: 'b', time_sec: 1.02, value_deg: 11 },
+    ],
+  };
+  assert.equal(motionStudioPointRangeReady(1, 1.02, '1-1', 'curve-a', curve), true);
+  assert.equal(motionStudioPointRangeReady(1, 2, '1-1', 'curve-a', curve), false);
+  assert.deepEqual(
+    motionStudioPointRangePoints(curve, 1, 1.02, '1-1', 'curve-a')
+      .map((point) => point.point_id),
+    ['a', 'b'],
+  );
+});
+
+test('point range copy preserves shape metadata and blocks time collisions', () => {
+  const curve = {
+    curve_id: 'curve-a',
+    motion_id: '1-1',
+    points: [
+      {
+        point_id: 'a',
+        time_sec: 0,
+        value_deg: 1,
+        tangent_mode: 'smooth',
+        out_handle: { dt_sec: 0.01, dv_deg: 0.5 },
+      },
+      {
+        point_id: 'b',
+        time_sec: 0.04,
+        value_deg: 3,
+        tangent_mode: 'broken',
+        in_handle: { dt_sec: -0.01, dv_deg: -0.5 },
+      },
+      { point_id: 'c', time_sec: 0.10, value_deg: 2 },
+    ],
+  };
+  const copied = motionStudioCopyPointRange(curve, 0, 0.04, 0.20);
+  assert.equal(copied.ok, true);
+  assert.deepEqual(copied.points.map((point) => point.time_sec), [0.2, 0.24]);
+  assert.deepEqual(copied.points[0].out_handle, { dt_sec: 0.01, dv_deg: 0.5 });
+  assert.equal(copied.points[1].tangent_mode, 'broken');
+  assert.deepEqual(
+    motionStudioCopyPointRange(curve, 0, 0.04, 0.10),
+    { ok: false, reason: 'time_conflict' },
+  );
+});
+
+test('point range deletion removes the inclusive range and keeps two curve points', () => {
+  const curve = {
+    curve_id: 'curve-a',
+    motion_id: '1-1',
+    points: [
+      { point_id: 'a', time_sec: 0, value_deg: 1 },
+      { point_id: 'b', time_sec: 0.02, value_deg: 2 },
+      { point_id: 'c', time_sec: 0.04, value_deg: 3 },
+      { point_id: 'd', time_sec: 0.06, value_deg: 4 },
+    ],
+  };
+  const deleted = motionStudioDeletePointRange(curve, 0.02, 0.04);
+  assert.equal(deleted.ok, true);
+  assert.equal(deleted.deletedCount, 2);
+  assert.deepEqual(deleted.points.map((point) => point.point_id), ['a', 'd']);
+  assert.deepEqual(
+    motionStudioDeletePointRange(curve, 0, 0.04),
+    { ok: false, reason: 'minimum_points' },
+  );
 });
 
 test('motion sample clicks resolve without a previous mousemove cursor state', () => {
@@ -307,7 +379,11 @@ test('each layer editor session starts without a general-motion range mode', () 
 
   assert.match(
     source,
-    /function openLayerEditor\(layer\)[\s\S]*?const operation = 'time_scale';/,
+    /let preferredEditorEditOperation = 'time_scale'/,
+  );
+  assert.match(
+    source,
+    /function openLayerEditor\(layer\)[\s\S]*?const operation = preferredEditorEditOperation;/,
   );
   assert.match(
     source,
@@ -474,9 +550,72 @@ test('range editing stays disabled until two distinct points from one curve are 
   assert.match(selectionFlow, /같은 포인트 곡선의 다른 포인트를 선택/);
   assert.match(selectionFlow, /Math\.abs\(first - snapped\) < 0\.02/);
   assert.doesNotMatch(selectionFlow, /selectionKind/);
-  assert.match(applyGuard, /motionStudioPointRangeReady/);
+  assert.match(applyGuard, /selectedEditorPointRange/);
   assert.match(applyGuard, /서로 다른 포인트 두 개/);
   assert.doesNotMatch(applyGuard, /selectionKind/);
+});
+
+test('point range actions reset stale selection and use the point-curve apply path', () => {
+  const html = readFileSync(
+    new URL('../static/index.html', import.meta.url),
+    'utf8',
+  );
+  const source = readFileSync(
+    new URL('../static/js/motion_studio.js', import.meta.url),
+    'utf8',
+  );
+  const addFlow = source.match(
+    /studioEditorPointAddButton\?\.addEventListener\('click'[\s\S]*?studioEditorPointDeleteButton/,
+  )?.[0] || '';
+  const deleteFlow = source.match(
+    /studioEditorPointDeleteButton\?\.addEventListener\('click'[\s\S]*?studioEditorRangeCopyButton/,
+  )?.[0] || '';
+  const rangeFlow = source.match(
+    /studioEditorRangeCopyButton\?\.addEventListener\('click'[\s\S]*?studioEditorRangeDeleteButton[\s\S]*?\n    \}\);/,
+  )?.[0] || '';
+
+  assert.match(html, /id="studioEditorRangeCopyTarget"[^>]*step="0\.02"/);
+  assert.match(html, /id="studioEditorRangeCopyButton"[^>]*>구간 복사</);
+  assert.match(html, /id="studioEditorRangeDeleteButton"[^>]*>구간 삭제</);
+  assert.match(addFlow, /clearEditorPointRange\(editor\)/);
+  assert.match(deleteFlow, /clearEditorPointRange\(editor\)/);
+  assert.match(rangeFlow, /motionStudioCopyPointRange/);
+  assert.match(rangeFlow, /motionStudioDeletePointRange/);
+  assert.match(rangeFlow, /activatePointDraftMutation/);
+});
+
+test('temporary point editing restores the last selected range edit operation', () => {
+  const source = readFileSync(
+    new URL('../static/js/motion_studio.js', import.meta.url),
+    'utf8',
+  );
+  const openFlow = source.match(
+    /function openLayerEditor[\s\S]*?function closeLayerEditor/,
+  )?.[0] || '';
+  const pointModeFlow = source.match(
+    /function enterEditorPointMode[\s\S]*?function activatePointDraftMutation/,
+  )?.[0] || '';
+  const applyFlow = source.match(
+    /function updateEditorWorkingCopy[\s\S]*?async function previewEditorAxisAddition/,
+  )?.[0] || '';
+  const curveSelectionFlow = source.match(
+    /if \(graphAction === 'select_curve'\)[\s\S]*?discardEditorPreview/,
+  )?.[0] || '';
+
+  assert.match(openFlow, /preferredEditOperation: operation/);
+  assert.match(openFlow, /pointModeReturnOperation: ''/);
+  assert.match(openFlow, /const operation = preferredEditorEditOperation/);
+  assert.match(source, /preferredEditorEditOperation = operation/);
+  assert.match(pointModeFlow, /editor\.pointModeReturnOperation = currentOperation/);
+  assert.match(pointModeFlow, /function restoreEditorEditOperation/);
+  assert.match(applyFlow, /editor\.previewOperation \|\| editor\.operationReport/);
+  assert.match(applyFlow, /appliedOperation === 'point_curve'/);
+  assert.match(applyFlow, /restoreEditorEditOperation\(editor\)/);
+  assert.match(curveSelectionFlow, /activatePointMode/);
+  assert.match(
+    curveSelectionFlow,
+    /pointRegion\.points\?\.\[0\]\?\.point_id \|\| '',\s+activatePointMode/,
+  );
 });
 
 test('axis range violations remain visible warnings without blocking edit apply', () => {
