@@ -10,6 +10,7 @@ import pytest
 import yaml
 
 from motion_web_bridge import service_entrypoint
+from motion_web_bridge.motor_restart_coordinator import MotorRestartCoordinator
 from motion_web_bridge.project_repository import ProjectRepository
 from motion_web_bridge.bridge_node import MotionWebBridge
 from motion_web_bridge.service_entrypoint import (
@@ -1309,6 +1310,11 @@ def test_motor_restart_success_uses_terminal_completed_phase(tmp_path):
             'expected_axes': [0],
         },
     )
+    operation = repository.update_motor_operation(
+        operation['operation_id'],
+        'verifying',
+        details={'restart_observed_at': operation['started_at'] + 1.0},
+    )
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge.project_repository = repository
     bridge._bridge_started_at = operation['started_at'] - 1.0
@@ -1319,7 +1325,7 @@ def test_motor_restart_success_uses_terminal_completed_phase(tmp_path):
             'runtime_target_matches_process': True,
         },
         {
-            'last_motor_status_at': operation['started_at'] + 1.0,
+            'last_motor_status_at': operation['started_at'] + 2.0,
             'motors': [{
                 'controller_index': 0,
                 'connection_state': 'online',
@@ -1332,6 +1338,49 @@ def test_motor_restart_success_uses_terminal_completed_phase(tmp_path):
 
     assert result['status'] == 'success'
     assert result['phase'] == 'completed'
+
+
+def test_motor_restart_does_not_complete_before_service_restart_is_observed(
+    tmp_path,
+):
+    repository = ProjectRepository(tmp_path / 'projects')
+    runtime = tmp_path / 'runtime.yaml'
+    runtime.write_text('masters: []\n', encoding='utf-8')
+    operation = repository.begin_motor_operation(
+        'motor_restart',
+        'restart_requested',
+        timeout_sec=45.0,
+        details={
+            'runtime_file': str(runtime),
+            'expected_axes': [0],
+            'service_main_pid_before': 100,
+            'service_invocation_id_before': 'before',
+        },
+    )
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge.project_repository = repository
+    bridge._bridge_started_at = operation['started_at'] - 1.0
+
+    result = bridge._reconcile_motor_operation_status(
+        {
+            'phase': 'ready',
+            'runtime_config_file': str(runtime),
+            'runtime_target_matches_process': True,
+        },
+        {
+            'last_motor_status_at': operation['started_at'] + 10.0,
+            'motors': [{
+                'controller_index': 0,
+                'connection_state': 'online',
+                'connection_connected': True,
+                'fault': False,
+            }],
+        },
+        {'ready': True},
+    )
+
+    assert result['status'] == 'running'
+    assert result['phase'] == 'restart_requested'
 
 
 def test_motor_restart_waits_for_every_configured_axis_to_be_online(tmp_path):
@@ -1347,6 +1396,11 @@ def test_motor_restart_waits_for_every_configured_axis_to_be_online(tmp_path):
             'expected_axes': [0, 1],
         },
     )
+    operation = repository.update_motor_operation(
+        operation['operation_id'],
+        'verifying',
+        details={'restart_observed_at': operation['started_at'] + 1.0},
+    )
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge.project_repository = repository
     bridge._bridge_started_at = operation['started_at'] - 1.0
@@ -1357,7 +1411,7 @@ def test_motor_restart_waits_for_every_configured_axis_to_be_online(tmp_path):
             'runtime_target_matches_process': True,
         },
         {
-            'last_motor_status_at': operation['started_at'] + 1.0,
+            'last_motor_status_at': operation['started_at'] + 2.0,
             'motors': [
                 {
                     'controller_index': 0,
@@ -1395,6 +1449,11 @@ def test_motor_restart_fails_when_motor_manager_uses_another_config(tmp_path):
             'expected_axes': [0],
         },
     )
+    operation = repository.update_motor_operation(
+        operation['operation_id'],
+        'verifying',
+        details={'restart_observed_at': operation['started_at'] + 1.0},
+    )
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge.project_repository = repository
     bridge._bridge_started_at = operation['started_at'] - 1.0
@@ -1405,7 +1464,7 @@ def test_motor_restart_fails_when_motor_manager_uses_another_config(tmp_path):
             'runtime_target_matches_process': False,
         },
         {
-            'last_motor_status_at': operation['started_at'] + 1.0,
+            'last_motor_status_at': operation['started_at'] + 2.0,
             'motors': [{
                 'controller_index': 0,
                 'connection_state': 'online',
@@ -1682,12 +1741,13 @@ def test_user_can_restart_only_motor_control_service_from_web(monkeypatch):
         def selected_project_id(self):
             return 'project-a'
 
-        def begin_motor_operation(self, operation_type, phase, **_kwargs):
+        def begin_motor_operation(self, operation_type, phase, **kwargs):
             operation.update({
                 'operation_id': 'restart-1',
                 'type': operation_type,
                 'phase': phase,
                 'status': 'running',
+                'details': dict(kwargs.get('details') or {}),
             })
             return dict(operation)
 
@@ -1699,21 +1759,80 @@ def test_user_can_restart_only_motor_control_service_from_web(monkeypatch):
 
     bridge.project_repository = Repository()
     bridge._configured_axes_from_runtime_file = lambda _runtime: [0]
-    commands = []
+    calls = []
+
+    class Coordinator:
+        def begin(self, *, project_id, runtime_file, expected_axes):
+            calls.append((project_id, runtime_file, expected_axes))
+            return bridge.project_repository.begin_motor_operation(
+                'motor_restart',
+                'restart_requested',
+                timeout_sec=45.0,
+                details={
+                    'project_id': project_id,
+                    'runtime_file': str(runtime_file),
+                    'expected_axes': expected_axes,
+                },
+            )
+
+    bridge.motor_restart_coordinator = Coordinator()
     monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
-    monkeypatch.setattr(
-        'motion_web_bridge.bridge_node.subprocess.Popen',
-        lambda command, **kwargs: commands.append((command, kwargs)),
-    )
 
     result = bridge.restart_motor_control_system()
 
     assert result['success'] is True
     assert result['restart_mode'] == 'motor_service'
-    assert commands[0][0][4:] == [
-        '/usr/bin/systemctl', '--user', 'restart', '--no-block',
-        'motion-motor.service',
-    ]
+    assert calls == [('project-a', Path('/runtime/applied.yaml'), [0])]
+
+
+def test_motor_restart_worker_records_new_service_generation_before_verifying(
+    tmp_path,
+    monkeypatch,
+):
+    repository = ProjectRepository(tmp_path / 'projects')
+    operation = repository.begin_motor_operation(
+        'motor_restart',
+        'restart_requested',
+        timeout_sec=45.0,
+        details={
+            'runtime_file': '/runtime/applied.yaml',
+            'expected_axes': [0],
+            'service_main_pid_before': 100,
+            'service_invocation_id_before': 'before',
+        },
+    )
+    actions = []
+    coordinator = MotorRestartCoordinator(
+        repository,
+        lambda *_args: {'ready': False, 'failed': False},
+        restart_service=lambda service: actions.append(('restart', service)),
+        service_identity=lambda _service: {
+            'active_state': 'active',
+            'sub_state': 'running',
+            'main_pid': 200,
+            'invocation_id': 'after',
+            'started_monotonic': 2000,
+        },
+        sleep=lambda _seconds: None,
+    )
+
+    coordinator._restart_worker(
+        operation['operation_id'],
+        {
+            'active_state': 'active',
+            'main_pid': 100,
+            'invocation_id': 'before',
+            'started_monotonic': 1000,
+        },
+    )
+
+    status = repository.motor_operation_status()
+    assert actions == [('restart', 'motion-motor.service')]
+    assert status['status'] == 'running'
+    assert status['phase'] == 'verifying'
+    assert status['details']['service_main_pid_after'] == 200
+    assert status['details']['service_invocation_id_after'] == 'after'
+    assert status['details']['restart_observed_at'] > 0
 
 
 def test_motor_control_restart_rejects_project_without_applied_motor_config(monkeypatch):

@@ -64,14 +64,14 @@ test('program restart readiness does not require motor runtime state', () => {
   );
 });
 
-test('motor-control restart waits for a new motor status and has a timeout', () => {
+test('motor-control restart waits for its backend operation and has a timeout', () => {
   assert.match(
     main,
-    /restartCheckMode = 'motor_control'[\s\S]*?restartPreviousMotorStatusAt[\s\S]*?restartMotorControlSystem\(\)/,
+    /restartCheckMode = 'motor_control'[\s\S]*?restartOperationId = ''[\s\S]*?restartMotorControlSystem\(\)/,
   );
   assert.match(
     main,
-    /restartMode === 'motor_control'[\s\S]*?새로운 motor_status 수신 대기/,
+    /restartMode === 'motor_control'[\s\S]*?trackedMotorRestartState/,
   );
   assert.match(main, /RESTART_TIMEOUT_MS = 45000/);
   assert.match(main, /startRestartProgressPolling\(\)/);
@@ -84,9 +84,10 @@ test('motor-control restart requires the selected project motor config to be app
   );
   assert.match(
     main,
-    /motorControlRestartButton\.disabled = !\(motorManaged && motorConfigApplied\)/,
+    /motorControlRestartButton\.disabled = \([\s\S]*?motorOperationRunning[\s\S]*?configApplyInProgress/,
   );
   assert.match(main, /현재 프로젝트의 모터축 설정을 먼저 적용하세요/);
+  assert.match(main, /모터 설정·검색·재시작 작업이 진행 중입니다/);
 });
 
 test('restart status polling has an HTTP deadline and can stop completion monitoring', () => {
@@ -101,19 +102,23 @@ test('restart status polling has an HTTP deadline and can stop completion monito
 });
 
 test('motor apply and restart use the backend motor operation state', () => {
-  assert.match(main, /const expectedMotorOperation = \{/);
-  assert.match(main, /motor_apply: 'motor_apply'/);
-  assert.match(main, /motor_control: 'motor_restart'/);
   assert.match(main, /const motorOperation = payload\?\.motor_operation \|\| \{\}/);
+  assert.match(main, /trackedMotorRestartState\([\s\S]*?appState\.restartOperationId/);
+  assert.match(
+    main,
+    /payload\?\.motor_operation\?\.operation_id[\s\S]*?appState\.restartOperationId = operationId/,
+  );
+  assert.match(main, /motorOperation\.type === 'motor_apply'/);
   assert.match(main, /\['failure', 'timeout', 'cancelled'\]\.includes\(operationStatus\)/);
   assert.match(main, /operationStatus === 'running'/);
 });
 
-test('motor-control restart never reports disconnected or fault axes as complete', () => {
-  assert.match(
-    main,
-    /restartMode === 'motor_control'[\s\S]*?disconnectedMotors\.length > 0 \|\| faultMotors\.length > 0/,
-  );
-  assert.match(main, /모터 제어 재시작 후 축 상태 확인 실패/);
-  assert.doesNotMatch(main, /모터 제어 재시작 완료 · 모터 미연결/);
+test('motor-control UI projects backend completion without duplicating motor checks', () => {
+  const motorBranchStart = main.indexOf("if (restartMode === 'motor_control')");
+  const motorBranchEnd = main.indexOf("} else if (", motorBranchStart);
+  const motorBranch = main.slice(motorBranchStart, motorBranchEnd);
+
+  assert.match(motorBranch, /tracked\.state === 'success'/);
+  assert.match(motorBranch, /ready: true/);
+  assert.doesNotMatch(motorBranch, /state\.motors|faultMotors|disconnectedMotors/);
 });

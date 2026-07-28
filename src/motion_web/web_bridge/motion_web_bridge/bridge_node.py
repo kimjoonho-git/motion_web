@@ -26,6 +26,7 @@ from std_msgs.msg import String
 from std_srvs.srv import SetBool, Trigger
 
 from .ethercat_alias_manager import EthercatAliasError, EthercatAliasManager
+from .motor_restart_coordinator import MotorRestartCoordinator
 from .project_repository import ProjectRepository
 from .servo_alarm_policy import (
     CATALOG_VERSION as SERVO_ALARM_CATALOG_VERSION,
@@ -309,6 +310,10 @@ class MotionWebBridge(Node):
             ).value)
         ).expanduser()
         self.project_repository = ProjectRepository(self.motion_projects_dir)
+        self.motor_restart_coordinator = MotorRestartCoordinator(
+            self.project_repository,
+            self._motor_operation_runtime_readiness,
+        )
         self._bind_selected_project_sources()
         default_event_log_dir = self.workspace_root / 'log' / 'motor_events'
         self.event_log_dir = Path(
@@ -1152,11 +1157,18 @@ class MotionWebBridge(Node):
             return operation
 
         state_payload = motion_state if isinstance(motion_state, dict) else {}
+        if operation_type == 'motor_restart':
+            return self._motor_restart_lifecycle().reconcile(
+                operation,
+                runtime_status,
+                state_payload,
+            )
         last_motor_status_at = self._optional_float(
             state_payload.get('last_motor_status_at'), None
         )
         fresh_feedback = bool(
-            last_motor_status_at is not None and last_motor_status_at > started_at
+            last_motor_status_at is not None
+            and last_motor_status_at > started_at
         )
         runtime_ready = runtime_status.get('phase') == 'ready'
         readiness = (
@@ -1212,19 +1224,17 @@ class MotionWebBridge(Node):
                         or 'Motor Manager 시작 실패'
                     ),
                 )
-        elif (
-            operation_type == 'motor_restart'
-            and runtime_ready
-            and fresh_feedback
-            and readiness.get('ready') is True
-        ):
-            return repository.finish_motor_operation(
-                operation_id,
-                'success',
-                phase='completed',
-                message='모터 제어 재시작 완료',
-            )
         return operation
+
+    def _motor_restart_lifecycle(self) -> MotorRestartCoordinator:
+        coordinator = getattr(self, 'motor_restart_coordinator', None)
+        if coordinator is None:
+            coordinator = MotorRestartCoordinator(
+                self.project_repository,
+                self._motor_operation_runtime_readiness,
+            )
+            self.motor_restart_coordinator = coordinator
+        return coordinator
 
     def _motor_operation_runtime_readiness(
         self,
@@ -4115,18 +4125,12 @@ class MotionWebBridge(Node):
                 **self.snapshot(),
             }
         try:
-            operation = self.project_repository.begin_motor_operation(
-                'motor_restart',
-                'restart_requested',
-                timeout_sec=45.0,
-                details={
-                    'project_id': self.project_repository.selected_project_id(),
-                    'runtime_file': str(runtime_config),
-                    'expected_axes': expected_axes,
-                },
+            operation = self._motor_restart_lifecycle().begin(
+                project_id=self.project_repository.selected_project_id(),
+                runtime_file=runtime_config,
+                expected_axes=expected_axes,
             )
-            self._schedule_managed_service_restart(motor_service)
-        except (OSError, ValueError) as exc:
+        except (OSError, RuntimeError, ValueError) as exc:
             operation_id = str(
                 locals().get('operation', {}).get('operation_id') or ''
             )
