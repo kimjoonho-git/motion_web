@@ -784,6 +784,52 @@ def test_motor_operation_is_persistent_and_rejects_concurrent_work(tmp_path):
     assert ProjectRepository(root).motor_operation_status()['status'] == 'success'
 
 
+def test_motor_operation_supports_terminal_partial_status(tmp_path):
+    repository = ProjectRepository(tmp_path / 'projects')
+    operation = repository.begin_motor_operation(
+        'full_scan',
+        'scanning',
+        timeout_sec=30.0,
+    )
+
+    completed = repository.finish_motor_operation(
+        operation['operation_id'],
+        'partial',
+        phase='partial',
+        message='EtherCAT 성공 · Dynamixel 실패',
+    )
+
+    assert completed['status'] == 'partial'
+    assert completed['phase'] == 'partial'
+    assert repository.motor_operation_status()['status'] == 'partial'
+
+
+def test_motor_operation_mutations_share_repository_runtime_lock(tmp_path):
+    repository = ProjectRepository(tmp_path / 'projects')
+    started = threading.Event()
+    finished = threading.Event()
+
+    def begin():
+        started.set()
+        repository.begin_motor_operation(
+            'motor_restart',
+            'preparing',
+            timeout_sec=30.0,
+        )
+        finished.set()
+
+    repository._motor_runtime_lock.acquire()
+    worker = threading.Thread(target=begin)
+    worker.start()
+    assert started.wait(timeout=1.0)
+    assert finished.wait(timeout=0.05) is False
+    repository._motor_runtime_lock.release()
+    worker.join(timeout=1.0)
+
+    assert finished.is_set()
+    assert repository.motor_operation_status()['type'] == 'motor_restart'
+
+
 def test_marking_runtime_preserves_the_active_motor_operation(tmp_path):
     repository = ProjectRepository(tmp_path / 'projects')
     project_id = repository.create_project('operation apply')['project']['project_id']
@@ -1227,12 +1273,12 @@ def test_restarted_bridge_completes_persisted_motor_apply_operation(tmp_path):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge.project_repository = repository
     bridge._bridge_started_at = operation['started_at'] + 1.0
-    bridge._read_motor_manager_config_file = (
-        lambda **_kwargs: str(runtime)
-    )
-
     result = bridge._reconcile_motor_operation_status(
-        {'phase': 'ready'},
+        {
+            'phase': 'ready',
+            'runtime_config_file': str(runtime),
+            'runtime_target_matches_process': True,
+        },
         {
             'last_motor_status_at': operation['started_at'] + 2.0,
             'motors': [{
@@ -1266,10 +1312,12 @@ def test_motor_restart_success_uses_terminal_completed_phase(tmp_path):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge.project_repository = repository
     bridge._bridge_started_at = operation['started_at'] - 1.0
-    bridge._read_motor_manager_config_file = lambda **_kwargs: str(runtime)
-
     result = bridge._reconcile_motor_operation_status(
-        {'phase': 'ready'},
+        {
+            'phase': 'ready',
+            'runtime_config_file': str(runtime),
+            'runtime_target_matches_process': True,
+        },
         {
             'last_motor_status_at': operation['started_at'] + 1.0,
             'motors': [{
@@ -1302,12 +1350,12 @@ def test_motor_restart_waits_for_every_configured_axis_to_be_online(tmp_path):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge.project_repository = repository
     bridge._bridge_started_at = operation['started_at'] - 1.0
-    bridge._read_motor_manager_config_file = (
-        lambda **_kwargs: str(runtime)
-    )
-
     result = bridge._reconcile_motor_operation_status(
-        {'phase': 'ready'},
+        {
+            'phase': 'ready',
+            'runtime_config_file': str(runtime),
+            'runtime_target_matches_process': True,
+        },
         {
             'last_motor_status_at': operation['started_at'] + 1.0,
             'motors': [
@@ -1350,12 +1398,12 @@ def test_motor_restart_fails_when_motor_manager_uses_another_config(tmp_path):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge.project_repository = repository
     bridge._bridge_started_at = operation['started_at'] - 1.0
-    bridge._read_motor_manager_config_file = (
-        lambda **_kwargs: str(actual)
-    )
-
     result = bridge._reconcile_motor_operation_status(
-        {'phase': 'ready'},
+        {
+            'phase': 'ready',
+            'runtime_config_file': str(actual),
+            'runtime_target_matches_process': False,
+        },
         {
             'last_motor_status_at': operation['started_at'] + 1.0,
             'motors': [{
@@ -1371,33 +1419,6 @@ def test_motor_restart_fails_when_motor_manager_uses_another_config(tmp_path):
     assert result['status'] == 'failure'
     assert result['phase'] == 'failed'
     assert '실행 설정 불일치' in result['error']
-
-
-def test_motor_manager_config_is_read_from_ros_parameter_service():
-    bridge = MotionWebBridge.__new__(MotionWebBridge)
-
-    class Future:
-        def done(self):
-            return True
-
-        def result(self):
-            value = type('Value', (), {'string_value': '/runtime/applied.yaml'})()
-            return type('Response', (), {'values': [value]})()
-
-    class Client:
-        def wait_for_service(self, **_kwargs):
-            return True
-
-        def call_async(self, request):
-            assert request.names == ['config_file']
-            return Future()
-
-    bridge._motor_parameters_client = Client()
-
-    assert (
-        bridge._read_motor_manager_config_file()
-        == '/runtime/applied.yaml'
-    )
 
 
 def test_restarted_bridge_schedules_interrupted_ac_servo_scan_recovery(tmp_path):
@@ -1450,10 +1471,6 @@ def test_active_ac_servo_scan_is_not_reconciled_as_motor_restart(tmp_path):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge.project_repository = repository
     bridge._bridge_started_at = operation['started_at'] - 1.0
-    bridge._read_motor_manager_config_file = lambda **_kwargs: (
-        pytest.fail('scan must not use restart runtime-file readiness')
-    )
-
     result = bridge._reconcile_motor_operation_status(
         {'phase': 'ready'},
         {

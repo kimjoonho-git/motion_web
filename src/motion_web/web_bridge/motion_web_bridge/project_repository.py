@@ -11,8 +11,10 @@ import hashlib
 import json
 import re
 import shutil
+import threading
 import time
 import uuid
+from functools import wraps
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -54,6 +56,15 @@ def _sha256(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
+def _motor_runtime_locked(method):
+    @wraps(method)
+    def guarded(self, *args, **kwargs):
+        with self._motor_runtime_lock:
+            return method(self, *args, **kwargs)
+
+    return guarded
+
+
 class ProjectRepository:
     """Manage project metadata and independent, reusable project files."""
 
@@ -62,12 +73,14 @@ class ProjectRepository:
         self.root.mkdir(parents=True, exist_ok=True)
         self.selection_file = self.root / '.selected_project.json'
         self.motor_runtime_file = self.root / '.motor_runtime.json'
+        self._motor_runtime_lock = threading.RLock()
         self._migrate_generated_empty_mappings()
         self._migrate_generated_empty_motor_configs()
         self._migrate_internal_backups()
         self._remove_empty_no_project_workspace()
         self._migrate_legacy_motor_runtime_state()
 
+    @_motor_runtime_locked
     def _migrate_legacy_motor_runtime_state(self) -> None:
         """Separate the applied motor target from the editor selection.
 
@@ -480,6 +493,7 @@ class ProjectRepository:
             'created_at': time.time(),
         }
 
+    @_motor_runtime_locked
     def mark_runtime_motor_config_applied(self, project_id: Any) -> Path:
         """Remember only which project runtime file the managed service must run."""
         project_dir = self._project_dir(project_id)
@@ -507,6 +521,7 @@ class ProjectRepository:
             )
         return runtime
 
+    @_motor_runtime_locked
     def motor_runtime_state(self) -> Dict[str, Any]:
         """Return the durable motor target plus strict file validation."""
         payload = self._read_motor_runtime_payload()
@@ -542,6 +557,7 @@ class ProjectRepository:
             'validation_error': '' if valid else 'runtime config sha256 mismatch',
         }
 
+    @_motor_runtime_locked
     def motor_runtime_target_snapshot(self) -> Dict[str, Any]:
         """Return only a verified target suitable for transactional rollback."""
         state = self.motor_runtime_state()
@@ -553,6 +569,7 @@ class ProjectRepository:
             if key in state
         }
 
+    @_motor_runtime_locked
     def restore_motor_runtime_target(
         self,
         target: Optional[Dict[str, Any]],
@@ -571,6 +588,7 @@ class ProjectRepository:
         self._write_motor_runtime_state(payload)
         return self.motor_runtime_state()
 
+    @_motor_runtime_locked
     def _read_motor_runtime_payload(self) -> Dict[str, Any]:
         try:
             payload = json.loads(self.motor_runtime_file.read_text(encoding='utf-8'))
@@ -580,12 +598,14 @@ class ProjectRepository:
             return {}
         return dict(payload)
 
+    @_motor_runtime_locked
     def _write_motor_runtime_state(self, payload: Dict[str, Any]) -> None:
         self._atomic_write(
             self.motor_runtime_file,
             json.dumps(payload, ensure_ascii=False, indent=2) + '\n',
         )
 
+    @_motor_runtime_locked
     def begin_motor_operation(
         self,
         operation_type: str,
@@ -619,6 +639,7 @@ class ProjectRepository:
         self._write_motor_runtime_state(payload)
         return dict(operation)
 
+    @_motor_runtime_locked
     def update_motor_operation(
         self,
         operation_id: str,
@@ -653,6 +674,7 @@ class ProjectRepository:
         self._write_motor_runtime_state(payload)
         return dict(operation)
 
+    @_motor_runtime_locked
     def finish_motor_operation(
         self,
         operation_id: str,
@@ -663,7 +685,13 @@ class ProjectRepository:
         error: str = '',
         details: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        if status not in {'success', 'failure', 'timeout', 'cancelled'}:
+        if status not in {
+            'success',
+            'partial',
+            'failure',
+            'timeout',
+            'cancelled',
+        }:
             raise ValueError('올바르지 않은 모터 작업 종료 상태입니다')
         payload = self._read_motor_runtime_payload()
         operation = payload.get('operation')
@@ -686,6 +714,7 @@ class ProjectRepository:
         self._write_motor_runtime_state(payload)
         return dict(operation)
 
+    @_motor_runtime_locked
     def motor_operation_status(self) -> Dict[str, Any]:
         payload = self._read_motor_runtime_payload()
         operation = payload.get('operation')

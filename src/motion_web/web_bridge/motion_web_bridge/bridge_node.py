@@ -20,7 +20,6 @@ import yaml
 from ament_index_python.packages import get_package_share_directory
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
-from rcl_interfaces.srv import GetParameters
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
@@ -389,6 +388,7 @@ class MotionWebBridge(Node):
         self._motor_scan_request_lock = threading.Lock()
         self._motor_lifecycle_lock = threading.Lock()
         self._motor_operation_recovery_lock = threading.Lock()
+        self._motor_operation_reconcile_lock = threading.Lock()
         self._scan_progress: Dict[str, Any] = {
             'scan_id': '',
             'events': [],
@@ -425,10 +425,6 @@ class MotionWebBridge(Node):
         self._scan_client = self.create_client(Trigger, self.scan_service)
         self._scan_ac_servo_client = self.create_client(Trigger, self.scan_ac_servo_service)
         self._scan_dynamixel_client = self.create_client(Trigger, self.scan_dynamixel_service)
-        self._motor_parameters_client = self.create_client(
-            GetParameters,
-            '/motor_manager_node/get_parameters',
-        )
         self._jog_request_publisher = self.create_publisher(String, self.jog_request_topic, 10)
         self._safety_request_publisher = self.create_publisher(
             String, self.safety_request_topic, 10
@@ -523,6 +519,9 @@ class MotionWebBridge(Node):
         )
         self._startup_project_context_timer = self.create_timer(
             1.0, self._schedule_execution_context_reconcile
+        )
+        self._motor_operation_reconcile_timer = self.create_timer(
+            0.2, self._motor_operation_reconcile_callback
         )
 
         self.get_logger().info(
@@ -971,6 +970,30 @@ class MotionWebBridge(Node):
         with self._motion_studio_editor_lock:
             return self._motion_studio_editor_results.pop(request_id, None)
 
+    def _motor_operation_reconcile_callback(self) -> None:
+        lock = getattr(self, '_motor_operation_reconcile_lock', None)
+        if lock is None:
+            lock = threading.Lock()
+            self._motor_operation_reconcile_lock = lock
+        if not lock.acquire(blocking=False):
+            return
+        try:
+            with self._lock:
+                motion_state = copy.deepcopy(self._motion_state)
+            runtime_status = self._runtime_service_status(motion_state)
+            execution_context = self.execution_context_status(validate_files=False)
+            self._reconcile_motor_operation_status(
+                runtime_status,
+                motion_state,
+                execution_context,
+            )
+        except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
+            self.get_logger().error(
+                f'Motor operation reconcile failed: {exc}'
+            )
+        finally:
+            lock.release()
+
     def snapshot(self) -> Dict[str, Any]:
         with self._lock:
             motion_state = copy.deepcopy(self._motion_state)
@@ -1001,11 +1024,7 @@ class MotionWebBridge(Node):
         # The coordinator and explicit context endpoints still perform the
         # full validation; a status frame only reports that validated result.
         execution_context = self.execution_context_status(validate_files=False)
-        motor_operation = self._reconcile_motor_operation_status(
-            runtime_status,
-            motion_state,
-            execution_context,
-        )
+        motor_operation = self.project_repository.motor_operation_status()
         selected_project_id = self.project_repository.selected_project_id()
         runtime_project_id = self._runtime_project_id_from_path(selected_project_id)
         stored_context = execution_context.get('context')
@@ -1095,7 +1114,7 @@ class MotionWebBridge(Node):
             getattr(self, '_bridge_started_at', 0.0) or 0.0
         ) > started_at
         if (
-            operation_type == 'ac_servo_scan'
+            operation_type in {'ac_servo_scan', 'full_scan'}
             and status in {'running', 'timeout'}
             and bridge_restarted
         ):
@@ -1124,7 +1143,12 @@ class MotionWebBridge(Node):
         # Scan operations own their preparation/scanning/restoring phases.
         # Applying restart/apply readiness rules here can terminate a scan
         # while it temporarily stops Motor Manager for EtherCAT ownership.
-        if operation_type in {'ac_servo_scan', 'motor_scan'}:
+        if operation_type in {
+            'ac_servo_scan',
+            'dynamixel_scan',
+            'full_scan',
+            'motor_scan',
+        }:
             return operation
 
         state_payload = motion_state if isinstance(motion_state, dict) else {}
@@ -1136,7 +1160,11 @@ class MotionWebBridge(Node):
         )
         runtime_ready = runtime_status.get('phase') == 'ready'
         readiness = (
-            self._motor_operation_runtime_readiness(operation, state_payload)
+            self._motor_operation_runtime_readiness(
+                operation,
+                state_payload,
+                runtime_status,
+            )
             if runtime_ready and fresh_feedback
             else {'ready': False, 'failed': False, 'error': ''}
         )
@@ -1202,6 +1230,7 @@ class MotionWebBridge(Node):
         self,
         operation: Dict[str, Any],
         motion_state: Dict[str, Any],
+        runtime_status: Dict[str, Any],
     ) -> Dict[str, Any]:
         details = operation.get('details')
         details = dict(details) if isinstance(details, dict) else {}
@@ -1217,11 +1246,15 @@ class MotionWebBridge(Node):
         ).strip()
         actual_file = verified_file
         if not actual_file:
-            actual_file = self._read_motor_manager_config_file(timeout_sec=0.5)
+            actual_file = str(
+                runtime_status.get('runtime_config_file') or ''
+            ).strip()
             if not actual_file:
                 return {'ready': False, 'failed': False, 'error': ''}
             try:
                 matches = (
+                    runtime_status.get('runtime_target_matches_process') is True
+                    and
                     Path(actual_file).expanduser().resolve()
                     == Path(expected_file).expanduser().resolve()
                 )
@@ -1286,24 +1319,6 @@ class MotionWebBridge(Node):
             'pending_axes': pending,
             'actual_config_file': actual_file,
         }
-
-    def _read_motor_manager_config_file(self, timeout_sec: float = 0.5) -> str:
-        client = getattr(self, '_motor_parameters_client', None)
-        if client is None or not client.wait_for_service(timeout_sec=0.1):
-            return ''
-        request = GetParameters.Request()
-        request.names = ['config_file']
-        future = client.call_async(request)
-        deadline = time.time() + max(float(timeout_sec), 0.1)
-        while not future.done() and time.time() < deadline:
-            time.sleep(0.01)
-        if not future.done():
-            return ''
-        response = future.result()
-        values = getattr(response, 'values', None)
-        if not values:
-            return ''
-        return str(getattr(values[0], 'string_value', '') or '').strip()
 
     def _rollback_failed_motor_apply(
         self,
@@ -2347,6 +2362,7 @@ class MotionWebBridge(Node):
             self.scan_service,
             timeout_sec,
             release_ethercat=True,
+            operation_type='full_scan',
         )
 
     def scan_ac_servo_motors(self, timeout_sec: float = 10.0) -> Dict[str, Any]:
@@ -2355,6 +2371,7 @@ class MotionWebBridge(Node):
             self.scan_ac_servo_service,
             timeout_sec,
             release_ethercat=True,
+            operation_type='ac_servo_scan',
         )
 
     def scan_dynamixel_motors(self, timeout_sec: float = 20.0) -> Dict[str, Any]:
@@ -2362,6 +2379,7 @@ class MotionWebBridge(Node):
             self._scan_dynamixel_client,
             self.scan_dynamixel_service,
             timeout_sec,
+            operation_type='dynamixel_scan',
         )
 
     def read_ethercat_aliases(self) -> Dict[str, Any]:
@@ -2418,6 +2436,7 @@ class MotionWebBridge(Node):
         timeout_sec: float,
         *,
         release_ethercat: bool = False,
+        operation_type: str = 'motor_scan',
     ) -> Dict[str, Any]:
         lifecycle_lock = getattr(self, '_motor_lifecycle_lock', None)
         if lifecycle_lock is None:
@@ -2450,7 +2469,7 @@ class MotionWebBridge(Node):
         result: Dict[str, Any]
         try:
             operation = self.project_repository.begin_motor_operation(
-                'ac_servo_scan' if release_ethercat else 'motor_scan',
+                operation_type,
                 'preparing',
                 timeout_sec=timeout_sec + (20.0 if release_ethercat else 5.0),
                 details={
@@ -2474,17 +2493,34 @@ class MotionWebBridge(Node):
                 )
                 result = self._call_scan_service_locked(client, service_name, timeout_sec)
             current = self.project_repository.motor_operation_status()
+            outcome = self._scan_operation_outcome(
+                result.get('scan'),
+                operation_type=operation_type,
+                fallback_success=result.get('success') is True,
+            )
+            result['partial'] = outcome == 'partial'
+            result['success'] = outcome == 'success'
             if (
                 current.get('operation_id') == operation_id
                 and current.get('status') == 'running'
             ):
-                self.project_repository.finish_motor_operation(
+                current = self.project_repository.finish_motor_operation(
                     operation_id,
-                    'success' if result.get('success') is True else 'failure',
-                    phase='completed' if result.get('success') is True else 'failed',
+                    outcome,
+                    phase={
+                        'success': 'completed',
+                        'partial': 'partial',
+                        'failure': 'failed',
+                    }[outcome],
                     message=str(result.get('message') or ''),
-                    error='' if result.get('success') is True else str(result.get('message') or ''),
+                    error=(
+                        ''
+                        if outcome in {'success', 'partial'}
+                        else str(result.get('message') or '')
+                    ),
                 )
+            result.update(self.snapshot())
+            result['motor_operation'] = current
             return result
         except ValueError as exc:
             return {
@@ -2563,17 +2599,19 @@ class MotionWebBridge(Node):
                     **self.snapshot(),
                 }
 
-        expected_online_axes = self._expected_runtime_ethercat_axes()
+        expected_ethercat_axes = self._expected_runtime_ethercat_axes()
+        expected_recovery_axes = self._expected_runtime_axes()
         if operation_id:
             self.project_repository.update_motor_operation(
                 operation_id,
                 'preparing',
                 details={
                     'motor_service_was_active': was_active,
-                    'expected_axes': expected_online_axes,
+                    'expected_axes': expected_recovery_axes,
+                    'expected_ethercat_axes': expected_ethercat_axes,
                 },
             )
-        if was_active and not expected_online_axes:
+        if was_active and not expected_ethercat_axes:
             return {
                 'success': False,
                 'message': (
@@ -2586,11 +2624,24 @@ class MotionWebBridge(Node):
                 'project_generation': self._current_project_generation(),
                 **self.snapshot(),
             }
+        if was_active and not expected_recovery_axes:
+            return {
+                'success': False,
+                'message': (
+                    'AC Servo 검색 미실행: 실행 설정에서 복구 대상 전체 모터축을 '
+                    '확인할 수 없습니다'
+                ),
+                'scan': None,
+                'scan_blocked': True,
+                'project_id': self.project_repository.selected_project_id(),
+                'project_generation': self._current_project_generation(),
+                **self.snapshot(),
+            }
         result: Dict[str, Any]
         restore_error = ''
         recovery: Dict[str, Any] = {
             'required': bool(was_active),
-            'expected_axes': expected_online_axes,
+            'expected_axes': expected_recovery_axes,
             'online_axes': [],
             'recovered': not was_active,
         }
@@ -2638,7 +2689,7 @@ class MotionWebBridge(Node):
                             pass
                     self._run_managed_user_service('start', motor_service)
                     recovery = self._wait_for_motor_runtime_recovery(
-                        expected_online_axes,
+                        expected_recovery_axes,
                         timeout_sec=12.0,
                         motor_service=motor_service,
                     )
@@ -2646,7 +2697,7 @@ class MotionWebBridge(Node):
                         restore_error = (
                             'Motor Manager 재시작 후 서비스·모터 상태 복구 실패: '
                             f'{len(recovery.get("online_axes") or [])}/'
-                            f'{len(expected_online_axes)}축'
+                            f'{len(expected_recovery_axes)}축'
                         )
                 except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
                     restore_error = str(exc)
@@ -2842,6 +2893,38 @@ class MotionWebBridge(Node):
                 continue
         return sorted(set(axes))
 
+    def _expected_runtime_axes(self) -> List[int]:
+        repository = getattr(self, 'project_repository', None)
+        runtime = (
+            repository.applied_runtime_motor_config()
+            if repository is not None
+            and hasattr(repository, 'applied_runtime_motor_config')
+            else None
+        )
+        if runtime is not None:
+            return self._configured_axes_from_runtime_file(runtime)
+
+        with self._lock:
+            motion_state = copy.deepcopy(self._motion_state)
+            received_at = self._motion_state_received_at
+        if (
+            not isinstance(motion_state, dict)
+            or received_at is None
+            or time.time() - float(received_at) > 1.0
+        ):
+            return []
+        axes = []
+        for motor in motion_state.get('motors') or []:
+            if not isinstance(motor, dict):
+                continue
+            if motor.get('connection_connected') is not True:
+                continue
+            try:
+                axes.append(int(motor.get('controller_index')))
+            except (TypeError, ValueError):
+                continue
+        return sorted(set(axes))
+
     @staticmethod
     def _configured_axes_from_runtime_file(
         runtime: Path | str,
@@ -2905,8 +2988,6 @@ class MotionWebBridge(Node):
             ):
                 for motor in motion_state.get('motors') or []:
                     if not isinstance(motor, dict):
-                        continue
-                    if str(motor.get('transport') or '').lower() != 'ethercat':
                         continue
                     if motor.get('connection_connected') is not True:
                         continue
@@ -3013,23 +3094,41 @@ class MotionWebBridge(Node):
         if not isinstance(scan, dict):
             return fallback
 
-        parts = ['모터 검색 완료' if success else '모터 검색 실패']
         ethercat = scan.get('ethercat_scan')
         if not isinstance(ethercat, dict):
             physical = scan.get('physical_scan')
             if isinstance(physical, dict):
                 ethercat = physical.get('ethercat')
-        if isinstance(ethercat, dict) and ethercat.get('skipped') is not True:
-            try:
-                parts.append(f'AC Servo {int(ethercat.get("slaves_count") or 0)}축')
-            except (TypeError, ValueError):
-                pass
 
         dynamixel = scan.get('dynamixel_scan')
         if not isinstance(dynamixel, dict):
             physical = scan.get('physical_scan')
             if isinstance(physical, dict):
                 dynamixel = physical.get('dynamixel')
+        requested = [
+            item
+            for item in (ethercat, dynamixel)
+            if isinstance(item, dict) and item.get('skipped') is not True
+        ]
+        partial = bool(
+            not success
+            and any(item.get('complete') is True for item in requested)
+            and any(item.get('complete') is not True for item in requested)
+        )
+        parts = [
+            (
+                '모터 검색 완료'
+                if success
+                else '모터 검색 부분 완료'
+                if partial
+                else '모터 검색 실패'
+            )
+        ]
+        if isinstance(ethercat, dict) and ethercat.get('skipped') is not True:
+            try:
+                parts.append(f'AC Servo {int(ethercat.get("slaves_count") or 0)}축')
+            except (TypeError, ValueError):
+                pass
         if isinstance(dynamixel, dict) and dynamixel.get('skipped') is not True:
             try:
                 parts.append(f'Dynamixel {int(dynamixel.get("devices_count") or 0)}축')
@@ -3042,13 +3141,62 @@ class MotionWebBridge(Node):
         errors = scan.get('scan_errors')
         if not success and isinstance(errors, list):
             concise_errors = [
-                str(error).strip()
+                str(
+                    error.get('message')
+                    if isinstance(error, dict)
+                    else error
+                ).strip()
                 for error in errors[:2]
-                if str(error).strip()
+                if str(
+                    error.get('message')
+                    if isinstance(error, dict)
+                    else error
+                ).strip()
             ]
             if concise_errors:
                 parts.append(', '.join(concise_errors))
         return ' · '.join(parts)
+
+    @staticmethod
+    def _scan_operation_outcome(
+        scan: Any,
+        *,
+        operation_type: str,
+        fallback_success: bool,
+    ) -> str:
+        if not isinstance(scan, dict):
+            return 'success' if fallback_success else 'failure'
+
+        ethercat = scan.get('ethercat_scan')
+        dynamixel = scan.get('dynamixel_scan')
+        physical = scan.get('physical_scan')
+        if isinstance(physical, dict):
+            if not isinstance(ethercat, dict):
+                ethercat = physical.get('ethercat')
+            if not isinstance(dynamixel, dict):
+                dynamixel = physical.get('dynamixel')
+
+        if operation_type == 'full_scan':
+            requested = [ethercat, dynamixel]
+        elif operation_type == 'ac_servo_scan':
+            requested = [ethercat]
+        elif operation_type == 'dynamixel_scan':
+            requested = [dynamixel]
+        else:
+            requested = [
+                item
+                for item in (ethercat, dynamixel)
+                if isinstance(item, dict) and item.get('skipped') is not True
+            ]
+        requested = [item for item in requested if isinstance(item, dict)]
+        if not requested:
+            return 'success' if fallback_success else 'failure'
+        completed = [item.get('complete') is True for item in requested]
+        if all(completed):
+            return 'success'
+        if any(completed):
+            return 'partial'
+        return 'failure'
 
     def list_motion_projects(self) -> Dict[str, Any]:
         result = self.project_repository.list_projects()

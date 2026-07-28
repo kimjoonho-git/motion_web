@@ -177,22 +177,31 @@
 - 설치 보호 · 검증된 실행 설정이 없으면 실행 중 Motor Manager를 정지하기 전에 설치 중단
 - UI 상태 · 로컬 추측보다 백엔드 `motor_operation` 상태를 우선 표시
 - 프로젝트 변경 · `프로젝트·장비 > 시스템 정보`에서만 허용
+- 상태 조회 · `snapshot()`은 읽기 전용, 0.2초 단일 조정기만 작업 상태 변경
+- 상태 기록 · 저장소의 모터 런타임 읽기·수정·쓰기를 단일 재진입 잠금으로 직렬화
+- 검색 종류 · 전체·AC Servo·Dynamixel 검색을 각각 `full_scan`·`ac_servo_scan`·`dynamixel_scan`으로 기록
+- 부분 완료 · 장치 종류별 결과를 합산해 `success`·`partial`·`failure`로 종료
+- 혼합 구성 복구 · EtherCAT 검색 후 설정된 전체 운용 축이 online인지 확인
 - 보호 범위 · `src/motion_system` 수정 없음
 
 ## 2026-07-28 검증 결과
 
-- 코드 검증 · 백엔드 162개 통과
+- 코드 검증 · 백엔드 169개 통과
 - 코드 검증 · Web UI 22개 테스트 파일 통과
 - 코드 검증 · 검색 작업과 설정 적용·재시작 작업의 상태 전이 분리 확인
 - 코드 검증 · 상태 기록 실패 중에도 Motor Manager 복구 실행 확인
 - 코드 검증 · 설치 실패 시 기존 unit·기존 실행 상태 복구 경로 확인
+- 코드 검증 · 상태 조회 무변경, 저장소 동시 변경 직렬화, 혼합 전송 복구 전체 축 확인
 - 빌드 검증 · `motion_web_bridge`, `motion_web_ui` 통과
 - 실행 검증 · `motion-control.service`, `motion-motor.service` active
 - 실행 검증 · 선택·실행 프로젝트 일치, 실행 컨텍스트 ready, 중복 Motor Manager 없음
-- 실행 검증 · 모터 제어 재시작 `success/completed`, 실제 `config_file` 일치, 5축 online
+- 실행 검증 · 첫 재시작에서 ROS 실행기 내부 서비스 동기 대기로 인한 잘못된 timeout 검출
+- 실행 검증 · 중복 ROS 파라미터 조회 경로 제거 후 최종 재시작 0.10초 내 `success/completed`
+- 실행 검증 · 실제 실행 설정 일치, 5축 online, error code 0
+- 실행 검증 · 전체 검색 응답과 저장 작업 상태 모두 `full_scan`·`partial`로 종료
 - 실물 검증 · AC Servo 5축 `ethercat rescan`, SII·Alias 읽기 성공
-- 실물 검증 · scan_id `1785206218244-1`, 검색 단계 이벤트와 5개 Slave 응답 확인
-- 실물 검증 · 검색 후 5축 OP·online·fault 없음, Motor Manager 동일 설정 복구
+- 실물 검증 · scan_id `1785210738020-1`, 검색 단계 이벤트와 5개 Slave 응답 확인
+- 실물 검증 · 검색 후 5축 OP·online·fault 없음·error code 0, Motor Manager 동일 설정 복구
+- 실물 검증 불가 · Dynamixel 직렬 포트 없음, 전체 검색은 계약에 따라 부분 완료
 - 실물 미검증 · 검색 중 브리지 프로세스 강제 종료 복구는 자동 테스트만 수행
 - 실물 미검증 · 설치 중 강제 실패 복구는 자동 테스트만 수행
-- 실물 미검증 · Dynamixel 장비 미연결
