@@ -17,6 +17,7 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Int8MultiArray, String
 
 from motion_supervisor.command_arbiter import CommandArbiter, CommandOwner
+from motion_supervisor.servo_alarm_guard import ServoAlarmGuard
 
 
 ID_CONTROLWORD = 0
@@ -155,6 +156,7 @@ class MotionSupervisor(Node):
         self._midi_active_until = 0.0
         self._last_motion_run_command_at = 0.0
         self._emergency_latched = False
+        self._servo_alarm_guard = ServoAlarmGuard()
         self._motion_stop_block_until = 0.0
         self._command_lock = threading.RLock()
         self._command_arbiter = CommandArbiter()
@@ -269,6 +271,7 @@ class MotionSupervisor(Node):
             return
         self._latest_state = state if isinstance(state, dict) else None
         self._latest_state_at = time.time()
+        self._evaluate_servo_alarms()
         self._clear_completed_jogs()
         self._clear_completed_actions()
         self._release_manual_owner_if_idle()
@@ -288,6 +291,9 @@ class MotionSupervisor(Node):
             midi_command_active=time.monotonic() < self._midi_active_until,
             emergency_latched=self._emergency_latched,
         )
+        alarm_reason = self._servo_alarm_block_reason()
+        if reason is None and alarm_reason:
+            reason = alarm_reason
         if reason is None and time.monotonic() < self._motion_stop_block_until:
             reason = 'motion stop is settling'
         if reason:
@@ -308,8 +314,19 @@ class MotionSupervisor(Node):
             )
             return
         with self._command_lock:
-            if self._emergency_latched or time.monotonic() < self._motion_stop_block_until:
+            alarm_state = self._servo_alarm_guard_instance().snapshot()
+            if (
+                self._emergency_latched
+                or alarm_state['grade3_latched']
+                or alarm_state['grade'] >= 2
+                or time.monotonic() < self._motion_stop_block_until
+            ):
                 return
+            for slot in self._servo_alarm_guard_instance().blocked_slots(
+                msg.controller_index
+            ):
+                msg.number_of_target_interfaces[slot] = 0
+                msg.target_interface_id[slot].data = []
             self._last_motion_run_command_at = time.monotonic()
             self._command_pub.publish(msg)
 
@@ -327,10 +344,19 @@ class MotionSupervisor(Node):
                 request, False, '이전 프로젝트 세대의 MIDI 명령을 폐기했습니다'
             )
             return
-        if self._emergency_latched:
+        if (
+            self._emergency_latched
+            or self._servo_alarm_guard_instance().snapshot()['grade3_latched']
+        ):
             self._publish_midi_position_result(
                 request, False, 'emergency stop is latched; restart the full program'
             )
+            return
+        alarm_reason = self._servo_alarm_block_reason(
+            self._optional_int(request.get('axis'))
+        )
+        if alarm_reason:
+            self._publish_midi_position_result(request, False, alarm_reason)
             return
         if time.monotonic() < self._motion_stop_block_until:
             self._publish_midi_position_result(request, False, 'motion stop is settling')
@@ -439,6 +465,8 @@ class MotionSupervisor(Node):
             motor = self._motor_for_axis(axis, motors) if axis is not None else None
             if axis is None:
                 error = 'axis is required'
+            elif self._servo_alarm_block_reason(axis):
+                error = self._servo_alarm_block_reason(axis)
             elif target_position is None:
                 error = 'target_deg is required'
             elif axis in commanded_axes:
@@ -544,9 +572,21 @@ class MotionSupervisor(Node):
             # All accepted axes are published atomically in one MotorStatus,
             # preventing depth-1 QoS from dropping an earlier per-axis command.
             with self._command_lock:
-                if self._emergency_latched or time.monotonic() < self._motion_stop_block_until:
+                alarm_axes = [
+                    axis for axis in commanded_axes
+                    if self._servo_alarm_block_reason(axis)
+                ]
+                if (
+                    self._emergency_latched
+                    or time.monotonic() < self._motion_stop_block_until
+                    or alarm_axes
+                ):
                     self._command_arbiter_instance().release(CommandOwner.MIDI)
-                    message = 'motor command blocked by safety stop'
+                    message = (
+                        self._servo_alarm_block_reason(alarm_axes[0])
+                        if alarm_axes
+                        else 'motor command blocked by safety stop'
+                    )
                     return False, message, [
                         self._midi_target_result(target, False, message)
                         for target in requests
@@ -684,8 +724,18 @@ class MotionSupervisor(Node):
             success, message = self._handle_safety_stop(emergency=False)
         elif not self._request_generation_is_current(request):
             success, message = False, '이전 프로젝트 세대의 수동 명령을 폐기했습니다'
-        elif self._emergency_latched:
+        elif (
+            self._emergency_latched
+            or self._servo_alarm_guard_instance().snapshot()['grade3_latched']
+        ):
             success, message = False, 'emergency stop is latched; restart the full program'
+        elif (
+            command != 'ac_servo_control'
+            and self._servo_alarm_block_reason(self._optional_int(request.get('axis')))
+        ):
+            success, message = False, self._servo_alarm_block_reason(
+                self._optional_int(request.get('axis'))
+            )
         elif time.monotonic() < self._motion_stop_block_until:
             success, message = False, 'motion stop is settling'
         elif command == 'ac_servo_control' and (
@@ -730,7 +780,9 @@ class MotionSupervisor(Node):
             return
         request_id = str(request.get('request_id') or '')
         command = str(request.get('command') or '')
-        if command == 'safety_emergency_stop':
+        if command == 'servo_alarm_policy_update':
+            success, message = self._apply_servo_alarm_policy(request)
+        elif command == 'safety_emergency_stop':
             success, message = self._handle_safety_stop(emergency=True)
         elif command == 'safety_motion_stop' and not self._emergency_latched:
             success, message = self._handle_safety_stop(emergency=False)
@@ -753,8 +805,15 @@ class MotionSupervisor(Node):
             success, message = self._apply_project_generation_boundary(request)
         elif not self._request_generation_is_current(request):
             success, message = False, '이전 프로젝트 세대의 동작 명령을 폐기했습니다'
-        elif self._emergency_latched:
+        elif (
+            self._emergency_latched
+            or self._servo_alarm_guard_instance().snapshot()['grade3_latched']
+        ):
             success, message = False, 'emergency stop is latched; restart the full program'
+        elif self._servo_alarm_block_reason(self._optional_int(request.get('axis'))):
+            success, message = False, self._servo_alarm_block_reason(
+                self._optional_int(request.get('axis'))
+            )
         elif time.monotonic() < self._motion_stop_block_until:
             success, message = False, 'motion stop is settling'
         elif command in ('ac_servo_absolute_move', 'dynamixel_absolute_move'):
@@ -781,6 +840,7 @@ class MotionSupervisor(Node):
         if generation < current:
             return False, '이전 프로젝트 세대 경계를 폐기했습니다'
         self._project_generation = generation
+        self._servo_alarm_guard_instance().reset_project_policy()
         if bool(getattr(self, '_emergency_latched', False)):
             return True, f'프로젝트 세대 {generation} 명령 경계 적용 · 긴급정지 유지'
 
@@ -810,6 +870,58 @@ class MotionSupervisor(Node):
             )
         self._publish_safety_status()
         return True, f'프로젝트 세대 {generation} 명령 경계 적용'
+
+    def _apply_servo_alarm_policy(
+        self, request: Dict[str, Any]
+    ) -> tuple[bool, str]:
+        if not self._request_generation_is_current(request):
+            return False, '이전 프로젝트 세대의 서보 에러 정책을 폐기했습니다'
+        grades = request.get('grades')
+        if not isinstance(grades, dict):
+            return False, '서보 에러 등급 정보가 필요합니다'
+        success, message = self._servo_alarm_guard_instance().apply_policy(
+            grades,
+            project_id=str(request.get('project_id') or ''),
+            catalog_version=int(request.get('catalog_version') or 0),
+            revision=str(request.get('policy_revision') or ''),
+        )
+        if not success:
+            return False, message
+        self._evaluate_servo_alarms()
+        self._publish_safety_status()
+        return True, message
+
+    def _evaluate_servo_alarms(self) -> None:
+        state = self._latest_state if isinstance(self._latest_state, dict) else {}
+        motors = [
+            motor for motor in state.get('motors') or []
+            if isinstance(motor, dict)
+        ]
+        playback_active = (
+            self._command_arbiter_instance().snapshot().owner is CommandOwner.PLAYBACK
+            or time.monotonic() - self._last_motion_run_command_at
+            < MOTION_RUN_ACTIVE_GRACE_SEC
+        )
+        result = self._servo_alarm_guard_instance().evaluate(
+            motors,
+            is_ac_servo=self._is_ac_servo,
+            axis_value=self._optional_int,
+            playback_active=playback_active,
+        )
+        if result.stop_required:
+            self._handle_safety_stop(emergency=False)
+        if result.changed:
+            self._publish_safety_status()
+
+    def _servo_alarm_block_reason(self, axis: Optional[int] = None) -> str:
+        return self._servo_alarm_guard_instance().block_reason(axis)
+
+    def _servo_alarm_guard_instance(self) -> ServoAlarmGuard:
+        guard = getattr(self, '_servo_alarm_guard', None)
+        if guard is None:
+            guard = ServoAlarmGuard()
+            self._servo_alarm_guard = guard
+        return guard
 
     def _request_generation_is_current(self, request: Dict[str, Any]) -> bool:
         try:
@@ -1867,6 +1979,9 @@ class MotionSupervisor(Node):
         target_position: float,
         controlword: int,
     ) -> tuple[bool, str]:
+        alarm_reason = self._servo_alarm_block_reason(axis)
+        if alarm_reason:
+            return False, alarm_reason
         limit_error = self._target_position_limit_error(motor, target_position)
         if limit_error:
             return False, limit_error
@@ -1879,7 +1994,10 @@ class MotionSupervisor(Node):
         command.controlword[axis] = int(controlword)
         command.position[axis] = float(target_position)
         with self._command_lock:
-            if self._emergency_latched:
+            if (
+                self._emergency_latched
+                or self._servo_alarm_guard_instance().snapshot()['grade3_latched']
+            ):
                 return False, 'emergency stop is latched; restart the full program'
             if time.monotonic() < self._motion_stop_block_until:
                 return False, 'motion stop is settling'
@@ -1923,6 +2041,12 @@ class MotionSupervisor(Node):
             return False, 'AC Servo axis not found'
 
         if action == 'servo_on':
+            blocked = [
+                axis for axis in axes
+                if self._servo_alarm_block_reason(axis)
+            ]
+            if blocked:
+                return False, self._servo_alarm_block_reason(blocked[0])
             fault_axes = [
                 axis for axis in axes
                 if bool((self._motor_for_axis(axis, motors) or {}).get('fault', False))
@@ -2006,8 +2130,14 @@ class MotionSupervisor(Node):
             command.target_interface_id[axis] = Int8MultiArray(data=[ID_CONTROLWORD])
             command.controlword[axis] = int(controlword)
         with self._command_lock:
-            if self._emergency_latched:
+            if (
+                self._emergency_latched
+                or self._servo_alarm_guard_instance().snapshot()['grade3_latched']
+            ):
                 return
+            if int(controlword) not in (CW_DISABLE_OPERATION_MINAS, CW_FAULT_RESET_MINAS):
+                if any(self._servo_alarm_block_reason(axis) for axis in axes):
+                    return
             if time.monotonic() < self._motion_stop_block_until:
                 return
             self._command_pub.publish(command)
@@ -2109,18 +2239,39 @@ class MotionSupervisor(Node):
             not self._emergency_latched
             and time.monotonic() < self._motion_stop_block_until
         )
+        alarm_state = self._servo_alarm_guard_instance().snapshot()
+        servo_grade = alarm_state['grade']
+        servo_grade3_latched = alarm_state['grade3_latched']
+        servo_blocked = bool(servo_grade >= 2 or servo_grade3_latched)
+        if servo_grade3_latched:
+            message = '3등급 서보 에러 · 프로그램 재시작 필요'
+        elif servo_grade >= 2:
+            message = '2등급 서보 에러 · 전체 모터 동작 차단'
+        elif alarm_state['blocked_axes']:
+            axes = self._axis_list_text(alarm_state['blocked_axes'])
+            message = f'1등급 서보 에러 · {axes} 동작 차단'
+        elif self._emergency_latched:
+            message = '긴급정지 잠김 · 상위 프로그램 재시작 필요'
+        elif settling:
+            message = '전체 동작 정지 처리 중'
+        else:
+            message = '동작 가능'
         payload = {
             'emergency_latched': bool(self._emergency_latched),
             'motion_stop_settling': settling,
-            'commands_blocked': bool(self._emergency_latched or settling),
-            'command_owner': self._command_arbiter_instance().snapshot().owner.value,
-            'message': (
-                '긴급정지 잠김 · 상위 프로그램 재시작 필요'
-                if self._emergency_latched
-                else '전체 동작 정지 처리 중'
-                if settling
-                else '동작 가능'
+            'commands_blocked': bool(
+                self._emergency_latched or settling or servo_blocked
             ),
+            'servo_alarm_grade': servo_grade,
+            'servo_alarm_grade3_latched': servo_grade3_latched,
+            'servo_alarm_blocked_axes': alarm_state['blocked_axes'],
+            'servo_alarm_recovery_hold_axes': alarm_state['recovery_hold_axes'],
+            'servo_alarm_active': alarm_state['active'],
+            'servo_alarm_policy_project_id': alarm_state['policy_project_id'],
+            'servo_alarm_policy_version': alarm_state['policy_version'],
+            'servo_alarm_policy_revision': alarm_state['policy_revision'],
+            'command_owner': self._command_arbiter_instance().snapshot().owner.value,
+            'message': message,
             'stamp': time.time(),
         }
         publisher.publish(String(data=json.dumps(payload, ensure_ascii=False)))

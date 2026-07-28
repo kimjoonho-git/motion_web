@@ -6,6 +6,7 @@ from motion_control_msgs.msg import MotorStatus
 from std_msgs.msg import Int8MultiArray, String
 
 from motion_supervisor.command_arbiter import CommandArbiter, CommandOwner
+from motion_supervisor.servo_alarm_guard import ServoAlarmGuard, policy_revision
 from motion_supervisor.supervisor_node import MotionSupervisor, motion_run_rejection_reason
 
 
@@ -452,6 +453,83 @@ def test_runtime_callback_acquires_playback_owner_before_final_publish():
     assert supervisor._command_arbiter.snapshot().owner is CommandOwner.PLAYBACK
 
 
+@pytest.mark.parametrize(
+    ('blocked_axes', 'controller_indexes', 'expected_interfaces'),
+    [
+        ({0}, [1], [2]),
+        ({1}, [1], [0]),
+        ({2}, [0, 2, 5], [2, 0, 2]),
+        ({0, 5}, [2, 5], [2, 0]),
+    ],
+)
+def test_grade1_playback_filter_uses_controller_index_not_array_slot(
+    blocked_axes,
+    controller_indexes,
+    expected_interfaces,
+):
+    supervisor = MotionSupervisor.__new__(MotionSupervisor)
+    supervisor._active_jogs = {}
+    supervisor._active_actions = {}
+    supervisor._midi_active_until = 0.0
+    supervisor._last_motion_run_command_at = 0.0
+    supervisor._emergency_latched = False
+    supervisor._servo_alarm_guard = ServoAlarmGuard()
+    grades = {'16': 1}
+    success, _ = supervisor._servo_alarm_guard.apply_policy(
+        grades,
+        project_id='test',
+        catalog_version=1,
+        revision=policy_revision(grades, 1),
+    )
+    assert success is True
+    supervisor._servo_alarm_guard.evaluate(
+        [
+            {
+                'controller_index': axis,
+                'motor_type': 'ac_servo',
+                'errorcode': 16,
+                'errorcode_raw': 16,
+                'fault': True,
+            }
+            for axis in blocked_axes
+        ],
+        is_ac_servo=MotionSupervisor._is_ac_servo,
+        axis_value=MotionSupervisor._optional_int,
+        playback_active=False,
+    )
+    supervisor._motion_stop_block_until = 0.0
+    supervisor._command_lock = threading.RLock()
+    supervisor._command_arbiter = CommandArbiter()
+    supervisor._project_generation = 1
+    supervisor._command_pub = CapturePublisher()
+    supervisor.get_logger = lambda: QuietLogger()
+    supervisor._current_motors = lambda: [
+        {'controller_index': axis} for axis in controller_indexes
+    ]
+    command = MotorStatus()
+    size = len(controller_indexes)
+    command.controller_index = list(controller_indexes)
+    command.number_of_target_interfaces = [2] * size
+    command.target_interface_id = [
+        Int8MultiArray(data=[0, 1]) for _ in range(size)
+    ]
+    command.controlword = [1] * size
+    command.statusword = [0] * size
+    command.errorcode = [0] * size
+    command.position = [5.0] * size
+    command.velocity = [0.0] * size
+    command.effort = [0.0] * size
+
+    supervisor._motion_run_command_callback(command)
+
+    published = supervisor._command_pub.messages[-1]
+    assert list(published.number_of_target_interfaces) == expected_interfaces
+    for slot, interface_count in enumerate(expected_interfaces):
+        assert list(published.target_interface_id[slot].data) == (
+            [0, 1] if interface_count else []
+        )
+
+
 def test_failed_manual_request_releases_ownership():
     supervisor = MotionSupervisor.__new__(MotionSupervisor)
     supervisor._emergency_latched = False
@@ -680,3 +758,126 @@ def test_dedicated_safety_callback_latches_emergency_and_reports_result():
     assert supervisor._emergency_latched is True
     assert results[0][0] == 'emergency-1'
     assert results[0][1] is True
+
+
+def servo_alarm_supervisor():
+    supervisor = MotionSupervisor.__new__(MotionSupervisor)
+    supervisor._latest_state = {'motors': []}
+    supervisor._latest_state_at = 1.0
+    supervisor._servo_alarm_guard = ServoAlarmGuard()
+    grades = {'16': 1, '24': 2, '98': 3}
+    success, _ = supervisor._servo_alarm_guard.apply_policy(
+        grades,
+        project_id='test',
+        catalog_version=1,
+        revision=policy_revision(grades, 1),
+    )
+    assert success is True
+    supervisor._last_motion_run_command_at = 0.0
+    supervisor._command_arbiter = CommandArbiter()
+    supervisor._publish_safety_status = lambda: None
+    supervisor._handle_safety_stop = lambda emergency: (True, 'stopped')
+    return supervisor
+
+
+def ac_servo_alarm(axis, code, *, raw=None):
+    return {
+        'controller_index': axis,
+        'motor_type': 'ac_servo',
+        'errorcode': code,
+        'errorcode_raw': code if raw is None else raw,
+        'fault': True,
+    }
+
+
+def test_grade1_blocks_only_the_faulted_axis():
+    supervisor = servo_alarm_supervisor()
+    supervisor._latest_state = {
+        'motors': [
+            ac_servo_alarm(0, 16),
+            {
+                'controller_index': 1,
+                'motor_type': 'ac_servo',
+                'errorcode': 0,
+                'fault': False,
+            },
+        ],
+    }
+
+    supervisor._evaluate_servo_alarms()
+
+    assert supervisor._servo_alarm_guard.snapshot()['grade'] == 1
+    assert supervisor._servo_alarm_block_reason(0)
+    assert supervisor._servo_alarm_block_reason(1) == ''
+    assert supervisor._servo_alarm_block_reason() == ''
+
+
+def test_grade1_axis_does_not_rejoin_an_active_playback_mid_motion():
+    supervisor = servo_alarm_supervisor()
+    supervisor._latest_state = {'motors': [ac_servo_alarm(0, 16)]}
+    supervisor._evaluate_servo_alarms()
+    supervisor._command_arbiter.acquire(CommandOwner.PLAYBACK, lease_sec=1.0)
+
+    supervisor._latest_state = {'motors': []}
+    supervisor._evaluate_servo_alarms()
+
+    alarm_state = supervisor._servo_alarm_guard.snapshot()
+    assert alarm_state['active'] == []
+    assert alarm_state['blocked_axes'] == [0]
+    assert alarm_state['recovery_hold_axes'] == [0]
+
+    supervisor._command_arbiter.release(CommandOwner.PLAYBACK)
+    supervisor._evaluate_servo_alarms()
+
+    alarm_state = supervisor._servo_alarm_guard.snapshot()
+    assert alarm_state['blocked_axes'] == []
+    assert alarm_state['grade'] == 0
+
+
+def test_grade2_clears_after_live_alarm_is_healthy_without_auto_resume():
+    supervisor = servo_alarm_supervisor()
+    stops = []
+    supervisor._handle_safety_stop = lambda emergency: (
+        stops.append(emergency) is None,
+        'stopped',
+    )
+    supervisor._latest_state = {'motors': [ac_servo_alarm(0, 24)]}
+    supervisor._evaluate_servo_alarms()
+
+    assert supervisor._servo_alarm_guard.snapshot()['grade'] == 2
+    assert stops == [False]
+
+    supervisor._latest_state = {'motors': []}
+    supervisor._evaluate_servo_alarms()
+    supervisor._servo_alarm_guard._clear_since -= 1.0
+    supervisor._evaluate_servo_alarms()
+
+    assert supervisor._servo_alarm_guard.snapshot()['grade'] == 0
+    assert supervisor._servo_alarm_block_reason() == ''
+    assert stops == [False]
+
+
+def test_grade3_remains_latched_after_live_alarm_disappears():
+    supervisor = servo_alarm_supervisor()
+    supervisor._latest_state = {'motors': [ac_servo_alarm(0, 98)]}
+    supervisor._evaluate_servo_alarms()
+    supervisor._latest_state = {'motors': []}
+    supervisor._evaluate_servo_alarms()
+
+    alarm_state = supervisor._servo_alarm_guard.snapshot()
+    assert alarm_state['grade3_latched'] is True
+    assert alarm_state['grade'] == 3
+    assert '프로그램 재시작' in supervisor._servo_alarm_block_reason()
+
+
+def test_unavailable_ffff_sdo_value_is_not_panasonic_alarm():
+    supervisor = servo_alarm_supervisor()
+    supervisor._latest_state = {
+        'motors': [ac_servo_alarm(0, 0, raw=0xFFFF)],
+    }
+
+    supervisor._evaluate_servo_alarms()
+
+    alarm_state = supervisor._servo_alarm_guard.snapshot()
+    assert alarm_state['active'] == []
+    assert alarm_state['grade'] == 0
