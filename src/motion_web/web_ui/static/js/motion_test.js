@@ -480,6 +480,29 @@ export function createMotionTestController({ el, getLatestState }) {
   let servoControlInFlight = false;
   let motionStopInFlight = false;
 
+  function servoAlarmBlockReason(motor) {
+    const safety = getLatestState()?.safety_status || {};
+    if (safety.commands_blocked) {
+      return safety.message || '서보 에러로 전체 모터 동작이 차단되었습니다';
+    }
+    const axis = numericValue(motor?.controller_index, null);
+    const blockedAxes = Array.isArray(safety.servo_alarm_blocked_axes)
+      ? safety.servo_alarm_blocked_axes.map(Number)
+      : [];
+    if (axis !== null && blockedAxes.includes(axis)) {
+      return `1등급 서보 에러로 축 ${axis} 동작이 차단되었습니다`;
+    }
+    return '';
+  }
+
+  function runtimeJogBlockReason(motor) {
+    return servoAlarmBlockReason(motor) || jogBlockReason(motor);
+  }
+
+  function runtimeActionBlockReason(motor) {
+    return servoAlarmBlockReason(motor) || actionBlockReason(motor);
+  }
+
   function selectedMotor() {
     return motorByAxis(getLatestState(), selectedAxis);
   }
@@ -915,7 +938,7 @@ export function createMotionTestController({ el, getLatestState }) {
     const commonJogDisabled = (
       el.motionTestMode?.value !== 'jog'
       || !motor
-      || Boolean(jogBlockReason(motor))
+      || Boolean(runtimeJogBlockReason(motor))
       || jogRequestInFlight
       || motionStopInFlight
       || motionCommandActive
@@ -937,7 +960,7 @@ export function createMotionTestController({ el, getLatestState }) {
           : jogRequestInFlight ? '동작 명령을 처리하고 있습니다'
             : motionStopInFlight ? '모터 정지 요청을 처리하고 있습니다'
               : motionCommandActive ? '현재 동작이 완료될 때까지 기다리거나 동작 정지를 누르세요'
-                : jogBlockReason(motor)
+                : runtimeJogBlockReason(motor)
                   || (negativeJogPlan === null ? '조그 이동량과 현재 위치를 확인하세요' : '')
                   || positionLimitBlockReason(negativeJogPlan)
       );
@@ -950,7 +973,7 @@ export function createMotionTestController({ el, getLatestState }) {
           : jogRequestInFlight ? '동작 명령을 처리하고 있습니다'
             : motionStopInFlight ? '모터 정지 요청을 처리하고 있습니다'
               : motionCommandActive ? '현재 동작이 완료될 때까지 기다리거나 동작 정지를 누르세요'
-                : jogBlockReason(motor)
+                : runtimeJogBlockReason(motor)
                   || (positiveJogPlan === null ? '조그 이동량과 현재 위치를 확인하세요' : '')
                   || positionLimitBlockReason(positiveJogPlan)
       );
@@ -960,7 +983,7 @@ export function createMotionTestController({ el, getLatestState }) {
       !isActionMode
       || !motor
       || plan === null
-      || Boolean(actionBlockReason(motor))
+      || Boolean(runtimeActionBlockReason(motor))
       || Boolean(positionLimitBlockReason(plan))
       || jogRequestInFlight
       || motionStopInFlight
@@ -973,7 +996,7 @@ export function createMotionTestController({ el, getLatestState }) {
           : jogRequestInFlight ? '동작 명령을 처리하고 있습니다'
             : motionStopInFlight ? '모터 정지 요청을 처리하고 있습니다'
               : motionCommandActive ? '현재 동작이 완료될 때까지 기다리거나 동작 정지를 누르세요'
-                : actionBlockReason(motor)
+                : runtimeActionBlockReason(motor)
                   || (plan === null ? '목표 위치, 감속비, 동작 시간을 확인하세요' : '')
                   || positionLimitBlockReason(plan)
       );
@@ -985,7 +1008,7 @@ export function createMotionTestController({ el, getLatestState }) {
       || !motor
       || plan === null
       || recovery.boundary === 'inside'
-      || Boolean(actionBlockReason(motor))
+      || Boolean(runtimeActionBlockReason(motor))
       || Boolean(positionLimitBlockReason(plan))
       || jogRequestInFlight
       || motionStopInFlight
@@ -998,7 +1021,7 @@ export function createMotionTestController({ el, getLatestState }) {
           : jogRequestInFlight ? '동작 명령을 처리하고 있습니다'
             : motionStopInFlight ? '모터 정지 요청을 처리하고 있습니다'
               : motionCommandActive ? '현재 동작이 완료될 때까지 기다리거나 동작 정지를 누르세요'
-                : actionBlockReason(motor)
+                : runtimeActionBlockReason(motor)
                   || recovery.message
       );
       el.motionTestRecoveryButton.title = recoveryDisabled
@@ -1033,7 +1056,7 @@ export function createMotionTestController({ el, getLatestState }) {
             ? '조그 준비 완료 · 위치 제한 안에서 활성화된 방향을 사용하세요'
             : '조그 준비 완료 · 이동량을 확인하고 방향 버튼을 누르세요';
         } else {
-          const reason = jogBlockReason(motor)
+          const reason = runtimeJogBlockReason(motor)
             || positionLimitBlockReason(negativeJogPlan)
             || positionLimitBlockReason(positiveJogPlan)
             || '조그 이동량과 현재 위치를 확인하세요';
@@ -1044,7 +1067,7 @@ export function createMotionTestController({ el, getLatestState }) {
           guideState = 'ready';
           guideText = '동작 준비 완료 · 목표 위치와 동작 시간을 확인하고 실행하세요';
         } else {
-          const reason = actionBlockReason(motor)
+          const reason = runtimeActionBlockReason(motor)
             || positionLimitBlockReason(plan)
             || '목표 위치, 감속비, 동작 시간을 확인하세요';
           guideText = `동작 불가: ${reason}`;
@@ -1057,7 +1080,7 @@ export function createMotionTestController({ el, getLatestState }) {
           guideState = recovery.boundary === 'inside' ? 'ready' : 'warning';
           guideText = recovery.boundary === 'inside'
             ? '현재 위치가 정상 범위 안이므로 복귀할 필요가 없습니다'
-            : `복귀 불가: ${actionBlockReason(motor) || recovery.message}`;
+            : `복귀 불가: ${runtimeActionBlockReason(motor) || recovery.message}`;
         }
       }
       el.motionTestActionGuide.dataset.state = guideState;
@@ -1118,7 +1141,7 @@ export function createMotionTestController({ el, getLatestState }) {
       : '';
     const blockReason = (
       jogLimitReason
-      || jogBlockReason(motor)
+      || runtimeJogBlockReason(motor)
       || positionLimitBlockReason(plan)
     );
     if (!plan || blockReason) {

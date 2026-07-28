@@ -9,20 +9,22 @@ import {
   stopMotionRun,
   stopMotionStudio,
   setProjectGeneration,
-} from './api.js?v=20260723-servo-service-split';
-import { getElements } from './dom.js?v=20260727-editor-compact-feedback-1';
+} from './api.js?v=20260728-restart-guard-1';
+import { getElements } from './dom.js?v=20260728-servo-alarm-2';
 import { createMotorEventLogController } from './event_log.js?v=20260727-popup-common-3';
 import { createMidiMonitorController } from './midi_monitor.js?v=20260727-popup-common-3';
 import { createMotionDataController } from './motion_data.js?v=20260727-popup-common-3';
-import { createMotionStudioController } from './motion_studio.js?v=20260727-editor-compact-feedback-1';
-import { createMotionTestController } from './motion_test.js?v=20260727-popup-common-3';
+import { createMotionStudioController } from './motion_studio.js?v=20260728-editor-zero-axis-1';
+import { createMotionTestController } from './motion_test.js?v=20260728-servo-alarm-2';
 import { createMotorConfigController } from './motor_config.js?v=20260727-popup-common-3';
-import { createProjectExplorerController } from './project_explorer.js?v=20260727-popup-common-3';
+import { createProjectExplorerController } from './project_explorer.js?v=20260728-project-selection-scope-1';
 import { renderAccess, renderMonitoring } from './monitoring.js?v=20260724-runtime-fix-1';
-import { createOperationProgressManager } from './operation_progress.js?v=20260727-popup-common-3';
+import { createOperationProgressManager } from './operation_progress.js?v=20260728-restart-guard-1';
 import { installDialogManager } from './ui_dialogs.js?v=20260727-popup-common-3';
 import { StatusSocket } from './socket.js';
+import { trackedMotorRestartState } from './restart_tracking.js?v=20260728-motor-restart-generation-1';
 import {
+  canChangeProjectInWorkspace,
   createWorkspaceRouteState,
   defaultWorkspaceForGroup,
   motionTabForWorkspace,
@@ -32,8 +34,9 @@ import {
   workspaceGroupFor,
   workspacePanelFor,
   workspaceForProjectCategory,
-} from './workspace_navigation.js?v=20260724-ui-navigation-2';
+} from './workspace_navigation.js?v=20260728-project-selection-scope-1';
 import { installFeedbackPresentation } from './ui_feedback.js?v=20260724-ui-finish-1';
+import { createServoAlarmController } from './servo_alarm.js?v=20260728-servo-alarm-2';
 
 const el = getElements();
 const operationProgress = createOperationProgressManager({ el });
@@ -58,8 +61,7 @@ const appState = {
   restartCheckMode: '',
   bridgeInstanceId: '',
   restartPreviousBridgeInstanceId: '',
-  restartPreviousMotorStatusAt: null,
-  restartRequestAccepted: false,
+  restartOperationId: '',
   restartProgressTimer: null,
   motorIdentityBlockMessage: '',
   motorErrorActiveKeys: new Set(),
@@ -87,6 +89,10 @@ function blockWorkspaceForMotorIdentity(workspace) {
 
 function studioMotorActionBlockReason() {
   if (appState.emergencyLatched) return '긴급정지 잠김 상태입니다. 프로그램 재시작이 필요합니다.';
+  const safety = appState.latestState?.safety_status || {};
+  if (safety.commands_blocked) {
+    return safety.message || '서보 에러로 모터 동작이 제한된 상태입니다.';
+  }
   if (appState.motorIdentityBlockMessage) return appState.motorIdentityBlockMessage;
   if (!appState.executionContext?.ready) {
     return appState.executionContext?.message || '현재 프로젝트 실행 설정 적용 대기 중입니다.';
@@ -113,6 +119,14 @@ function renderWorkspacePanel() {
   const activeWorkspace = normalizeWorkspaceRoute(workspaceRouteState.current());
   const activeGroup = workspaceGroupFor(activeWorkspace);
   const activePanel = workspacePanelFor(activeWorkspace);
+  const projectSelectionAllowed = canChangeProjectInWorkspace(activeWorkspace);
+  if (el.projectExplorerSelect) {
+    el.projectExplorerSelect.disabled = !projectSelectionAllowed;
+    el.projectExplorerSelect.classList.toggle('hidden', !projectSelectionAllowed);
+    el.projectExplorerSelect.title = projectSelectionAllowed
+      ? '현재 프로젝트 변경'
+      : '프로젝트 변경은 프로젝트·장비 > 시스템 정보에서만 가능합니다';
+  }
   if (el.workspaceTabs) {
     el.workspaceTabs.querySelectorAll('[data-workspace-group]').forEach((button) => {
       const active = button.dataset.workspaceGroup === activeGroup;
@@ -207,6 +221,7 @@ function renderLatestState(nextState = null) {
   motorConfig.renderRuntimeState();
   motionTest.renderLatestState();
   motionData.renderRuntimeState();
+  servoAlarm?.renderRuntimeState();
   updateWorkContext();
   updateMotorErrorPopup(appState.latestState);
   enforceEmergencyUi();
@@ -253,11 +268,13 @@ function acceptProjectPayload(payload) {
     midiMonitor.resetProjectState();
     motionStudio.resetProjectState();
     motorEventLog.resetProjectState();
+    servoAlarm?.resetProjectState();
     Promise.resolve().then(async () => {
       await projectExplorer.refresh(true);
       await motorConfig.loadProjectRegistry();
       await motionData.fetchFiles();
       await motionStudio.refresh(false);
+      await servoAlarm?.refresh();
       updateWorkContext();
     }).catch(() => {});
   }
@@ -305,6 +322,8 @@ function renderServiceManagement(payload) {
   if (incomingBridgeInstanceId) appState.bridgeInstanceId = incomingBridgeInstanceId;
   const managed = Boolean(payload?.service_management?.managed);
   const motorManaged = Boolean(payload?.service_management?.motor_managed);
+  const motorConfigApplied = Boolean(payload?.project_scope?.motor_config_applied);
+  const motorOperationRunning = payload?.motor_operation?.status === 'running';
   if (el.serviceMode) {
     el.serviceMode.textContent = managed
       ? (motorManaged ? '분리 자동 실행 · 자동 복구' : '분리 서비스 설치 필요')
@@ -312,7 +331,18 @@ function renderServiceManagement(payload) {
     el.serviceMode.classList.toggle('warning-text', !managed || !motorManaged);
   }
   if (el.programRestartButton) el.programRestartButton.disabled = !(managed && motorManaged);
-  if (el.motorControlRestartButton) el.motorControlRestartButton.disabled = !motorManaged;
+  if (el.motorControlRestartButton) {
+    el.motorControlRestartButton.disabled = (
+      !(motorManaged && motorConfigApplied)
+      || motorOperationRunning
+      || appState.configApplyInProgress
+    );
+    el.motorControlRestartButton.title = motorOperationRunning
+      ? '모터 설정·검색·재시작 작업이 진행 중입니다'
+      : motorConfigApplied
+        ? '현재 프로젝트의 모터 제어 서비스를 재시작합니다'
+        : '현재 프로젝트의 모터축 설정을 먼저 적용하세요';
+  }
   if (el.headerProgramRestartButton) {
     el.headerProgramRestartButton.disabled = !(managed && motorManaged);
   }
@@ -392,6 +422,8 @@ function setRestartOverlay(visible, title = '', message = '', detail = '') {
       detail,
       phase: '진행 중',
       mode: 'standard',
+      cancelable: true,
+      onCancel: cancelRestartCompletionCheck,
     });
     return;
   }
@@ -411,6 +443,26 @@ function stopRestartProgressPolling() {
   if (appState.restartProgressTimer !== null) {
     window.clearTimeout(appState.restartProgressTimer);
     appState.restartProgressTimer = null;
+  }
+}
+
+function clearRestartTracking() {
+  stopRestartProgressPolling();
+  appState.configApplyInProgress = false;
+  appState.configApplyStartedAtMs = null;
+  appState.configApplyReadySinceMs = null;
+  appState.configApplyConnectionInterrupted = false;
+  appState.restartCheckMode = '';
+  appState.restartPreviousBridgeInstanceId = '';
+  appState.restartOperationId = '';
+}
+
+function cancelRestartCompletionCheck() {
+  if (!appState.configApplyInProgress) return;
+  clearRestartTracking();
+  if (el.bridgeState) el.bridgeState.textContent = '재시작 확인 중단';
+  if (el.summaryText) {
+    el.summaryText.textContent = '완료 확인만 중단했습니다. 이미 요청된 서비스 재시작은 취소되지 않습니다.';
   }
 }
 
@@ -473,6 +525,13 @@ function formatStatusHex(value) {
 }
 
 function motorErrorDetected(motor) {
+  const rawErrorCode = Number(motor?.errorcode_raw);
+  const communicationUnavailable = rawErrorCode === 0xFFFF
+    || (
+      String(motor?.state || '') === 'disconnected'
+      && /communication unavailable/i.test(String(motor?.error_text || ''))
+    );
+  if (communicationUnavailable) return false;
   const errorCode = Number(motor?.errorcode ?? 0);
   const statusword = Number(motor?.statusword ?? 0);
   const statusText = String(motor?.status_text || '');
@@ -501,6 +560,7 @@ function motorErrorTitle(motor) {
 }
 
 function motorErrorDetailRows(motor) {
+  const alarm = servoAlarm?.entryForCode(motor?.errorcode);
   const rows = [
     ['상태', motor?.status_text || motor?.state || '-'],
     ['오류', motor?.error_text || (Number(motor?.errorcode || 0) === 0 ? '고장 상태' : `오류 ${motor.errorcode}`)],
@@ -509,6 +569,11 @@ function motorErrorDetailRows(motor) {
   const errorCode = motor?.errorcode_raw ?? motor?.errorcode;
   if (errorCode !== null && errorCode !== undefined) {
     rows.push(['오류 코드', formatStatusHex(errorCode)]);
+  }
+  if (alarm) {
+    rows.push(['에러 내용', `${alarm.code_label} · ${alarm.name}`]);
+    rows.push(['적용 등급', `${alarm.effective_grade || alarm.default_grade}등급 · ${alarm.action}`]);
+    rows.push(['사용자 대처', alarm.guidance]);
   }
   return rows;
 }
@@ -630,12 +695,61 @@ function restartReadyState(payload) {
       detail: 'motion_web_bridge 재시작을 기다리는 중',
     };
   }
-  if (restartMode === 'motor_control' && !appState.restartRequestAccepted) {
+  const motorOperation = payload?.motor_operation || {};
+  if (restartMode === 'motor_control') {
+    const tracked = trackedMotorRestartState(
+      motorOperation,
+      appState.restartOperationId,
+    );
+    if (['failure', 'timeout', 'cancelled'].includes(tracked.state)) {
+      return {
+        ready: false,
+        failed: true,
+        title: tracked.state === 'timeout'
+          ? '모터 작업 확인 시간 초과'
+          : '모터 작업 실패',
+        detail: tracked.detail,
+      };
+    }
+    if (tracked.state === 'success') {
+      return {
+        ready: true,
+        title: '모터 제어 재시작 완료',
+        detail: tracked.detail,
+      };
+    }
     return {
       ready: false,
-      title: '모터 제어 재시작 요청 중',
-      detail: '재시작 요청 응답 대기',
+      title: appState.restartOperationId
+        ? '모터 제어 재시작 확인 중'
+        : '모터 제어 재시작 요청 중',
+      detail: tracked.detail,
     };
+  } else if (
+    restartMode === 'motor_apply'
+    && motorOperation.type === 'motor_apply'
+  ) {
+    const operationStatus = String(motorOperation.status || '');
+    const operationDetail = motorOperation.error
+      || motorOperation.message
+      || `작업 단계 · ${motorOperation.phase || '확인 중'}`;
+    if (['failure', 'timeout', 'cancelled'].includes(operationStatus)) {
+      return {
+        ready: false,
+        failed: true,
+        title: operationStatus === 'timeout'
+          ? '모터 작업 확인 시간 초과'
+          : '모터 작업 실패',
+        detail: operationDetail,
+      };
+    }
+    if (operationStatus === 'running') {
+      return {
+        ready: false,
+        title: '설정 적용·재시작 확인 중',
+        detail: operationDetail,
+      };
+    }
   }
   if (restartMode === 'program') {
     if (!bridgeInstanceChanged) {
@@ -714,19 +828,6 @@ function restartReadyState(payload) {
       detail: `마지막 motor_status age ${Math.max(generatedAt - lastMotorStatusAt, 0).toFixed(2)}초`,
     };
   }
-  if (
-    restartMode === 'motor_control'
-    && appState.restartPreviousMotorStatusAt !== null
-    && Number.isFinite(Number(appState.restartPreviousMotorStatusAt))
-    && lastMotorStatusAt <= Number(appState.restartPreviousMotorStatusAt)
-  ) {
-    return {
-      ready: false,
-      title: '모터 제어 재시작 확인 중',
-      detail: '재시작 이후의 새로운 motor_status 수신 대기',
-    };
-  }
-
   const motors = Array.isArray(state.motors) ? state.motors : [];
   if (motors.length === 0) {
     return {
@@ -768,20 +869,6 @@ function restartReadyState(payload) {
   const disconnectedMotors = motors.filter((motor) => connectionState(motor) !== 'online');
   const faultMotors = motors.filter((motor) => Boolean(motor.fault));
   const discovery = motorConfig?.getDiscoverySummary?.() || {};
-  if (restartMode === 'motor_control') {
-    return {
-      ready: true,
-      title: connectedMotors.length > 0
-        ? '모터 제어 재시작 완료'
-        : '모터 제어 재시작 완료 · 모터 미연결',
-      detail: [
-        `런타임 보고 ${motors.length}축`,
-        `온라인 ${connectedMotors.length}축`,
-        `미연결 ${disconnectedMotors.length}축`,
-        `오류 ${faultMotors.length}축`,
-      ].join(' · '),
-    };
-  }
   if (connectedMotors.length === 0) {
     return {
       ready: false,
@@ -825,15 +912,7 @@ function updateRestartProgress(payload = null) {
       message: '재시작 완료 조건을 확인하지 못했습니다.',
       detail: state.detail,
     });
-    stopRestartProgressPolling();
-    appState.configApplyInProgress = false;
-    appState.configApplyStartedAtMs = null;
-    appState.configApplyReadySinceMs = null;
-    appState.configApplyConnectionInterrupted = false;
-    appState.restartCheckMode = '';
-    appState.restartPreviousBridgeInstanceId = '';
-    appState.restartPreviousMotorStatusAt = null;
-    appState.restartRequestAccepted = false;
+    clearRestartTracking();
     if (el.bridgeState) el.bridgeState.textContent = state.title;
     if (el.summaryText) el.summaryText.textContent = state.detail;
     return;
@@ -876,15 +955,7 @@ function updateRestartProgress(payload = null) {
     return;
   }
 
-  appState.configApplyInProgress = false;
-  stopRestartProgressPolling();
-  appState.configApplyStartedAtMs = null;
-  appState.configApplyReadySinceMs = null;
-  appState.configApplyConnectionInterrupted = false;
-  appState.restartCheckMode = '';
-  appState.restartPreviousBridgeInstanceId = '';
-  appState.restartPreviousMotorStatusAt = null;
-  appState.restartRequestAccepted = false;
+  clearRestartTracking();
   finishRestartOverlay({
     outcome: 'success',
     title: state.title,
@@ -906,6 +977,7 @@ function updateRestartProgress(payload = null) {
 }
 
 let motionTest = null;
+let servoAlarm = null;
 
 const motorConfig = createMotorConfigController({
   el,
@@ -922,8 +994,6 @@ const motorConfig = createMotorConfigController({
     appState.configApplyConnectionInterrupted = false;
     appState.restartCheckMode = 'motor_apply';
     appState.restartPreviousBridgeInstanceId = appState.bridgeInstanceId;
-    appState.restartPreviousMotorStatusAt = null;
-    appState.restartRequestAccepted = false;
     if (el.bridgeState) el.bridgeState.textContent = '설정 반영 중';
     if (el.summaryText) el.summaryText.textContent = '설정 반영 중입니다. 웹 연결이 자동으로 다시 연결됩니다.';
     setRestartOverlay(
@@ -935,15 +1005,7 @@ const motorConfig = createMotorConfigController({
     startRestartProgressPolling();
   },
   onConfigApplyComplete: () => {
-    stopRestartProgressPolling();
-    appState.configApplyInProgress = false;
-    appState.configApplyStartedAtMs = null;
-    appState.configApplyReadySinceMs = null;
-    appState.configApplyConnectionInterrupted = false;
-    appState.restartCheckMode = '';
-    appState.restartPreviousBridgeInstanceId = '';
-    appState.restartPreviousMotorStatusAt = null;
-    appState.restartRequestAccepted = false;
+    clearRestartTracking();
     setRestartOverlay(false);
   },
   onIdentityStatusChange: (message) => {
@@ -976,6 +1038,7 @@ const motionStudio = createMotionStudioController({
 });
 const projectExplorer = createProjectExplorerController({
   el,
+  canChangeProject: () => canChangeProjectInWorkspace(workspaceRouteState.current()),
   onOpenEditor: async (result, requestedWorkspace = '') => {
     const targetRoute = requestedWorkspace || workspaceForProjectCategory(
       result.category,
@@ -1006,9 +1069,11 @@ const projectExplorer = createProjectExplorerController({
     midiMonitor.resetProjectState();
     motionStudio.resetProjectState();
     motorEventLog.resetProjectState();
+    servoAlarm?.resetProjectState();
     await motorConfig.loadProjectRegistry();
     await motionData.fetchFiles();
     await motionStudio.refresh(false);
+    await servoAlarm?.refresh();
     updateWorkContext();
   },
   onNavigate: (workspace, motionTab) => {
@@ -1017,6 +1082,10 @@ const projectExplorer = createProjectExplorerController({
 });
 
 const motorEventLog = createMotorEventLogController({ el });
+servoAlarm = createServoAlarmController({
+  el,
+  getLatestState: () => appState.latestState,
+});
 
 function statusCheckResult(triggerButton, payload) {
   if (triggerButton === el.programStatusRefreshButton) {
@@ -1246,8 +1315,6 @@ if (el.programRestartButton) {
     appState.configApplyConnectionInterrupted = false;
     appState.restartCheckMode = 'program';
     appState.restartPreviousBridgeInstanceId = appState.bridgeInstanceId;
-    appState.restartPreviousMotorStatusAt = null;
-    appState.restartRequestAccepted = false;
     setRestartOverlay(
       true,
       '프로그램 재시작 중입니다',
@@ -1259,15 +1326,7 @@ if (el.programRestartButton) {
       const payload = await restartManagedProgram();
       if (payload?.success === false) throw new Error(payload.message || '재시작 요청 실패');
     } catch (error) {
-      appState.configApplyInProgress = false;
-      appState.configApplyStartedAtMs = null;
-      appState.configApplyReadySinceMs = null;
-      appState.configApplyConnectionInterrupted = false;
-      appState.restartCheckMode = '';
-      appState.restartPreviousBridgeInstanceId = '';
-      appState.restartPreviousMotorStatusAt = null;
-      appState.restartRequestAccepted = false;
-      stopRestartProgressPolling();
+      clearRestartTracking();
       setRestartOverlay(false);
       window.alert(error?.message || String(error));
     }
@@ -1289,8 +1348,7 @@ if (el.motorControlRestartButton) {
     appState.configApplyConnectionInterrupted = false;
     appState.restartCheckMode = 'motor_control';
     appState.restartPreviousBridgeInstanceId = '';
-    appState.restartPreviousMotorStatusAt = Number(appState.latestState?.last_motor_status_at) || null;
-    appState.restartRequestAccepted = false;
+    appState.restartOperationId = '';
     setRestartOverlay(
       true,
       '모터 제어 재시작 중입니다',
@@ -1304,17 +1362,13 @@ if (el.motorControlRestartButton) {
     try {
       const payload = await restartMotorControlSystem();
       if (payload?.success === false) throw new Error(payload.message || '재시작 요청 실패');
-      appState.restartPreviousMotorStatusAt = Number(appState.latestState?.last_motor_status_at) || null;
-      appState.restartRequestAccepted = true;
+      const operationId = String(payload?.motor_operation?.operation_id || '').trim();
+      if (!operationId) throw new Error('모터 제어 재시작 작업 ID를 받지 못했습니다');
+      appState.restartOperationId = operationId;
+      updateRestartProgress(payload);
       window.setTimeout(() => fetchStatus(), 1500);
     } catch (error) {
-      appState.configApplyInProgress = false;
-      appState.configApplyStartedAtMs = null;
-      appState.configApplyReadySinceMs = null;
-      appState.restartCheckMode = '';
-      appState.restartPreviousMotorStatusAt = null;
-      appState.restartRequestAccepted = false;
-      stopRestartProgressPolling();
+      clearRestartTracking();
       setRestartOverlay(false);
       window.alert(error?.message || String(error));
     } finally {
@@ -1460,6 +1514,7 @@ if (el.workspaceTabs) {
       if (target === 'log') motorEventLog.activate();
       if (target === 'studio') motionStudio.refresh(false);
       if (target === 'config') motorConfig.fetchRegistry();
+      if (target === 'servo-errors') servoAlarm.refresh();
       projectExplorer.refresh(true);
       return;
     }
@@ -1471,6 +1526,7 @@ if (el.workspaceTabs) {
     if (target === 'log') motorEventLog.activate();
     if (target === 'studio') motionStudio.refresh(false);
     if (target === 'config') motorConfig.fetchRegistry();
+    if (target === 'servo-errors') servoAlarm.refresh();
     projectExplorer.refresh(true);
   });
 }
@@ -1481,6 +1537,7 @@ motionData.bindEvents();
 motionStudio.bindEvents();
 projectExplorer.bindEvents();
 motorEventLog.bindEvents();
+servoAlarm.bindEvents();
 motorConfig.renderRegistrationTabs();
 renderWorkspacePanel();
 updateWorkContext();
@@ -1490,3 +1547,4 @@ motorConfig.fetchRegistry();
 motionData.fetchFiles();
 motionStudio.refresh(false);
 projectExplorer.refresh(true);
+servoAlarm.refresh();

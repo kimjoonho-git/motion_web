@@ -3,14 +3,41 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import sys
 from pathlib import Path
 from typing import Optional
 
 
+MOTOR_CONFIG_ERROR_EXIT = 78
+
+
 def resolve_applied_motor_config(workspace: Path) -> Optional[Path]:
     projects_root = (workspace / 'motion_projects').resolve()
+    runtime_state_file = projects_root / '.motor_runtime.json'
+    try:
+        runtime_state = json.loads(runtime_state_file.read_text(encoding='utf-8'))
+    except (OSError, ValueError, json.JSONDecodeError):
+        runtime_state = None
+    if isinstance(runtime_state, dict) and runtime_state.get('version') == 1:
+        project_id = str(runtime_state.get('target_project_id') or '').strip()
+        expected_sha = str(runtime_state.get('config_sha256') or '').strip()
+        if project_id and project_id == Path(project_id).name and expected_sha:
+            candidate = (
+                projects_root / project_id / 'runtime' / 'applied_motor_config.yaml'
+            ).resolve()
+            try:
+                candidate.relative_to(projects_root)
+                actual_sha = hashlib.sha256(candidate.read_bytes()).hexdigest()
+            except (OSError, ValueError):
+                return None
+            return candidate if actual_sha == expected_sha else None
+        return None
+
+    # One-release compatibility for workspaces not yet opened by
+    # ProjectRepository.  Repository initialization migrates this field to the
+    # independent motor runtime record.
     selection_file = projects_root / '.selected_project.json'
     try:
         payload = json.loads(selection_file.read_text(encoding='utf-8'))
@@ -86,12 +113,15 @@ def motor_main() -> None:
         os.environ.get('MOTION_WORKSPACE') or Path.cwd()
     ).expanduser().resolve()
     runtime_config = resolve_applied_motor_config(workspace)
+    if '--print-config' in sys.argv:
+        print(str(runtime_config) if runtime_config else '')
+        return
     if runtime_config is None:
         print(
-            '적용된 프로젝트 모터 설정이 없어 Motor Manager를 시작하지 않습니다.',
+            'Motor Manager 시작 실패: 검증된 모터 실행 설정이 없습니다.',
             flush=True,
         )
-        return
+        raise SystemExit(MOTOR_CONFIG_ERROR_EXIT)
 
     runner = workspace / 'src' / 'motion_web' / 'web_bridge' / 'deploy' / 'run_motor_service.sh'
     if not runner.is_file():

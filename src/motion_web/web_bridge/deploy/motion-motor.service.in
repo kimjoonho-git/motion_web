@@ -10,6 +10,7 @@ Environment="MOTION_WORKSPACE=@WORKSPACE@"
 Environment="ROS_LOCALHOST_ONLY=1"
 ExecStart=/bin/bash @MOTOR_SERVICE_RUNNER@
 Restart=on-failure
+RestartPreventExitStatus=78
 RestartSec=3
 KillMode=control-group
 KillSignal=SIGINT

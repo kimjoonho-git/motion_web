@@ -7,6 +7,7 @@ import {
   motionStudioCompositionTracks,
   motionStudioLayerTracks,
   motionStudioSampleTrack,
+  motionStudioZeroAxisY,
 } from '../static/js/motion_studio_graph.js';
 
 test('graph helpers preserve tracks, interpolation, and manual initial values', () => {
@@ -98,6 +99,14 @@ test('layer graph renderer draws warnings and updates playback', () => {
   assert.deepEqual(playbackCalls, [playback]);
 });
 
+test('zero-degree time axis follows the visible value range', () => {
+  assert.equal(motionStudioZeroAxisY(-10, 10, 20, 200), 120);
+  assert.equal(motionStudioZeroAxisY(0, 10, 20, 200), 220);
+  assert.equal(motionStudioZeroAxisY(-10, 0, 20, 200), 20);
+  assert.equal(motionStudioZeroAxisY(1, 10, 20, 200), null);
+  assert.equal(motionStudioZeroAxisY(-10, -1, 20, 200), null);
+});
+
 test('editor graph renderer preserves graph metrics and point hit targets', () => {
   const fixture = graphFixture(478, 368);
   const layer = {
@@ -143,9 +152,13 @@ test('editor graph renderer preserves graph metrics and point hit targets', () =
   assert.equal(editor.graphMetrics.height, 368);
   assert.equal(editor.graphMetrics.viewStart, 0);
   assert.equal(editor.graphMetrics.viewEnd, 0.04);
+  assert.equal(editor.graphMetrics.minValue, 0);
   assert.equal(editor.pointHitTargets.length, 2);
   assert.match(legend.innerHTML, /1-1/);
   assert.match(legend.innerHTML, /현재 작업본/);
+  assert.ok(fixture.calls.some(
+    (call) => call[0] === 'fillText' && call[1] === '0°',
+  ));
 
   editor.valueView = { minValue: -100, maxValue: -50 };
   drawMotionStudioEditorGraph({

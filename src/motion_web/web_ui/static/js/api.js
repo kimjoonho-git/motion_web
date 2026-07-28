@@ -14,13 +14,34 @@ export function getProjectGeneration() {
 
 async function projectFetch(input, options = {}) {
   const expectedGeneration = getProjectGeneration();
-  const headers = new Headers(options.headers || {});
+  const { timeoutMs = 0, ...requestOptions } = options;
+  const headers = new Headers(requestOptions.headers || {});
   if (expectedGeneration !== null) {
     headers.set('X-Project-Generation', String(expectedGeneration));
   }
-  const response = await window.fetch(input, { ...options, headers });
-  response.projectGenerationExpected = expectedGeneration;
-  return response;
+  const timeout = Number(timeoutMs);
+  const controller = Number.isFinite(timeout) && timeout > 0 && !requestOptions.signal
+    ? new AbortController()
+    : null;
+  const timer = controller
+    ? window.setTimeout(() => controller.abort(), timeout)
+    : null;
+  try {
+    const response = await window.fetch(input, {
+      ...requestOptions,
+      headers,
+      signal: controller?.signal || requestOptions.signal,
+    });
+    response.projectGenerationExpected = expectedGeneration;
+    return response;
+  } catch (error) {
+    if (controller?.signal.aborted) {
+      throw new Error(`상태 응답 시간 초과 · ${Math.round(timeout / 1000)}초`);
+    }
+    throw error;
+  } finally {
+    if (timer !== null) window.clearTimeout(timer);
+  }
 }
 
 async function readJson(response) {
@@ -78,8 +99,22 @@ async function readJson(response) {
   return payload;
 }
 
-export async function fetchStatusSnapshot() {
-  const response = await projectFetch('/api/status');
+export async function fetchStatusSnapshot(timeoutMs = 5000) {
+  const response = await projectFetch('/api/status', { timeoutMs });
+  return readJson(response);
+}
+
+export async function fetchServoAlarmPolicy() {
+  const response = await projectFetch('/api/servo-alarm-policy');
+  return readJson(response);
+}
+
+export async function saveServoAlarmPolicy(overrides) {
+  const response = await projectFetch('/api/servo-alarm-policy', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ overrides }),
+  });
   return readJson(response);
 }
 

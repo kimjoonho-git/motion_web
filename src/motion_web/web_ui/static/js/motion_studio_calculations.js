@@ -139,14 +139,128 @@ export function motionStudioPointRangeReady(
   endSec,
   motionId,
   curveId,
+  curve = null,
 ) {
   const start = Number(startSec);
   const end = Number(endSec);
-  return Number.isFinite(start)
+  const basicRangeReady = Number.isFinite(start)
     && Number.isFinite(end)
     && Math.abs(end - start) >= 0.02 - 1e-9
     && Boolean(String(motionId || ''))
     && Boolean(String(curveId || ''));
+  if (!basicRangeReady || !curve) return basicRangeReady;
+  if (
+    String(curve.motion_id || '') !== String(motionId || '')
+    || String(curve.curve_id || '') !== String(curveId || '')
+  ) return false;
+  const points = Array.isArray(curve.points) ? curve.points : [];
+  return points.some(
+    (point) => Math.abs(Number(point.time_sec) - start) < 1e-7,
+  ) && points.some(
+    (point) => Math.abs(Number(point.time_sec) - end) < 1e-7,
+  );
+}
+
+export function motionStudioPointRangePoints(
+  curve,
+  startSec,
+  endSec,
+  motionId,
+  curveId,
+) {
+  if (!motionStudioPointRangeReady(
+    startSec,
+    endSec,
+    motionId,
+    curveId,
+    curve,
+  )) return [];
+  const start = Math.min(Number(startSec), Number(endSec));
+  const end = Math.max(Number(startSec), Number(endSec));
+  return (curve.points || [])
+    .filter((point) => {
+      const timeSec = Number(point.time_sec);
+      return Number.isFinite(timeSec)
+        && timeSec >= start - 1e-9
+        && timeSec <= end + 1e-9;
+    })
+    .sort((first, second) => Number(first.time_sec) - Number(second.time_sec));
+}
+
+export function motionStudioCopyPointRange(
+  curve,
+  startSec,
+  endSec,
+  targetStartSec,
+) {
+  const sourcePoints = motionStudioPointRangePoints(
+    curve,
+    startSec,
+    endSec,
+    curve?.motion_id,
+    curve?.curve_id,
+  );
+  if (sourcePoints.length < 2) return { ok: false, reason: 'invalid_range' };
+  const requestedTargetStart = Number(targetStartSec);
+  if (!Number.isFinite(requestedTargetStart) || requestedTargetStart < 0) {
+    return { ok: false, reason: 'invalid_target' };
+  }
+  const targetStart = motionStudioSnapFrameTime(requestedTargetStart);
+  const sourceStart = Number(sourcePoints[0].time_sec);
+  const copiedPoints = sourcePoints.map((point) => ({
+    ...JSON.parse(JSON.stringify(point)),
+    time_sec: motionStudioSnapFrameTime(
+      targetStart + (Number(point.time_sec) - sourceStart),
+    ),
+  }));
+  if (copiedPoints.some(
+    (point, index) => copiedPoints.slice(index + 1).some(
+      (candidate) => Math.abs(
+        Number(candidate.time_sec) - Number(point.time_sec),
+      ) < 0.01,
+    ),
+  )) {
+    return { ok: false, reason: 'time_conflict' };
+  }
+  const existingTimes = (curve?.points || []).map((point) => Number(point.time_sec));
+  if (copiedPoints.some(
+    (point) => existingTimes.some(
+      (timeSec) => Math.abs(timeSec - Number(point.time_sec)) < 0.01,
+    ),
+  )) {
+    return { ok: false, reason: 'time_conflict' };
+  }
+  return {
+    ok: true,
+    points: copiedPoints,
+    startSec: Number(copiedPoints[0].time_sec),
+    endSec: Number(copiedPoints[copiedPoints.length - 1].time_sec),
+  };
+}
+
+export function motionStudioDeletePointRange(
+  curve,
+  startSec,
+  endSec,
+) {
+  const selectedPoints = motionStudioPointRangePoints(
+    curve,
+    startSec,
+    endSec,
+    curve?.motion_id,
+    curve?.curve_id,
+  );
+  if (selectedPoints.length < 2) return { ok: false, reason: 'invalid_range' };
+  const selectedIds = new Set(selectedPoints.map((point) => String(point.point_id || '')));
+  const remainingPoints = (curve?.points || []).filter(
+    (point) => !selectedIds.has(String(point.point_id || '')),
+  );
+  if (remainingPoints.length < 2) return { ok: false, reason: 'minimum_points' };
+  return {
+    ok: true,
+    points: JSON.parse(JSON.stringify(remainingPoints)),
+    deletedCount: selectedPoints.length,
+  };
 }
 
 export function motionStudioCanSwitchPointDraftCurve(

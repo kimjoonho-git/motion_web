@@ -52,6 +52,7 @@ export function createProjectExplorerController({
   onAddMotionLayer = async () => {},
   onNavigate = () => {},
   onProjectChange = async () => {},
+  canChangeProject = () => true,
 }) {
   const state = {
     projects: [], project: null, tree: [], selectedFile: null, projectInfoFile: null,
@@ -345,6 +346,14 @@ export function createProjectExplorerController({
 
   function renderControls() {
     const hasProject = Boolean(state.project);
+    const projectSelectionAllowed = Boolean(canChangeProject());
+    if (el.projectExplorerSelect) {
+      el.projectExplorerSelect.disabled = state.busy || !projectSelectionAllowed;
+      el.projectExplorerSelect.classList.toggle('hidden', !projectSelectionAllowed);
+      el.projectExplorerSelect.title = projectSelectionAllowed
+        ? '현재 프로젝트 변경'
+        : '프로젝트 변경은 프로젝트·장비 > 시스템 정보에서만 가능합니다';
+    }
     if (el.projectImportFileButton) el.projectImportFileButton.disabled = state.busy || !hasProject;
     if (el.projectDeleteButton) el.projectDeleteButton.disabled = state.busy || !hasProject;
     if (el.projectCopySourceProject) el.projectCopySourceProject.disabled = state.busy || !hasProject;
@@ -590,6 +599,12 @@ export function createProjectExplorerController({
       }
     });
     el.projectExplorerSelect?.addEventListener('change', async () => {
+      if (!canChangeProject()) {
+        el.projectExplorerSelect.value = state.project?.project_id || '';
+        setMessage('프로젝트 변경은 프로젝트·장비 > 시스템 정보에서만 가능합니다');
+        renderControls();
+        return;
+      }
       const projectId = el.projectExplorerSelect.value;
       if (!projectId) return;
       if (state.memoDirty && !await showConfirm(

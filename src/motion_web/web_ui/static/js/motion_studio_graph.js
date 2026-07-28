@@ -13,6 +13,45 @@ function pointCurves(layer) {
   return Array.isArray(layer?.point_curves) ? layer.point_curves : [];
 }
 
+export function motionStudioZeroAxisY(minValue, maxValue, top, plotHeight) {
+  const minimum = Number(minValue);
+  const maximum = Number(maxValue);
+  const plotTop = Number(top);
+  const height = Number(plotHeight);
+  if (
+    !Number.isFinite(minimum)
+    || !Number.isFinite(maximum)
+    || !Number.isFinite(plotTop)
+    || !Number.isFinite(height)
+    || maximum <= minimum
+    || height <= 0
+    || minimum > 0
+    || maximum < 0
+  ) return null;
+  return plotTop + ((maximum / (maximum - minimum)) * height);
+}
+
+function drawZeroValueAxis(context, padding, plotWidth, plotHeight, minValue, maxValue) {
+  const y = motionStudioZeroAxisY(
+    minValue,
+    maxValue,
+    padding.top,
+    plotHeight,
+  );
+  if (!Number.isFinite(y)) return;
+  context.save();
+  context.strokeStyle = '#8fa0b1';
+  context.lineWidth = 0.8;
+  context.beginPath();
+  context.moveTo(padding.left, y);
+  context.lineTo(padding.left + plotWidth, y);
+  context.stroke();
+  context.fillStyle = '#65788a';
+  context.font = '10px sans-serif';
+  context.fillText('0°', Math.max(4, padding.left - 25), y - 4);
+  context.restore();
+}
+
 export function motionStudioLayerTracks(layer) {
   const tracks = new Map();
   for (const frame of layer?.frames || []) {
@@ -125,8 +164,8 @@ export function drawMotionStudioLayerGraph({
   const plotWidth = width - padding.left - padding.right;
   const plotHeight = height - padding.top - padding.bottom;
   const maxTime = Math.max(...allPoints.map((point) => point.timeSec), 0.02);
-  let minValue = Math.min(...allPoints.map((point) => point.value));
-  let maxValue = Math.max(...allPoints.map((point) => point.value));
+  let minValue = Math.min(0, ...allPoints.map((point) => point.value));
+  let maxValue = Math.max(0, ...allPoints.map((point) => point.value));
   if (Math.abs(maxValue - minValue) < 1e-9) {
     minValue -= 1;
     maxValue += 1;
@@ -134,6 +173,7 @@ export function drawMotionStudioLayerGraph({
   context.strokeStyle = '#d9e0e7';
   context.lineWidth = 1;
   context.strokeRect(padding.left, padding.top, plotWidth, plotHeight);
+  drawZeroValueAxis(context, padding, plotWidth, plotHeight, minValue, maxValue);
   context.fillStyle = '#5d6b78';
   context.font = '11px sans-serif';
   context.fillText(`${maxValue.toFixed(2)}°`, 4, padding.top + 4);
@@ -220,9 +260,9 @@ export function drawMotionStudioEditorGraph({
     ...(workingTracks.get(id) || []), ...(originalTracks.get(id) || []),
   ]);
   const automaticMinValue = valueSource.length
-    ? Math.min(...valueSource.map((point) => point.value)) : -1;
+    ? Math.min(0, ...valueSource.map((point) => point.value)) : -1;
   const automaticMaxValue = valueSource.length
-    ? Math.max(...valueSource.map((point) => point.value)) : 1;
+    ? Math.max(0, ...valueSource.map((point) => point.value)) : 1;
   const { minValue, maxValue } = motionStudioEditorValueBounds(
     automaticMinValue,
     automaticMaxValue,
@@ -295,6 +335,7 @@ export function drawMotionStudioEditorGraph({
   }
   context.strokeStyle = '#d9e0e7';
   context.strokeRect(padding.left, padding.top, plotWidth, plotHeight);
+  drawZeroValueAxis(context, padding, plotWidth, plotHeight, minValue, maxValue);
   context.fillStyle = '#5d6b78';
   context.font = '11px sans-serif';
   context.fillText(`${maxValue.toFixed(2)}°`, 6, padding.top + 4);
