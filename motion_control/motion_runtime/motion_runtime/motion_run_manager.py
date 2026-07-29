@@ -18,6 +18,13 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Int8MultiArray, String
 
+from .motion_automation_store import (
+    MotionAutomationStore,
+    REPEAT_MODES,
+    default_automation_state,
+    normalize_automation_state,
+)
+
 
 ID_CONTROLWORD = 0
 ID_TARGET_POSITION = 1
@@ -119,6 +126,28 @@ class MotionRunManager(Node):
         self._run_lock = threading.RLock()
         self._run_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
+        self._graceful_stop_event = threading.Event()
+        self._automation_store = MotionAutomationStore(self.motion_projects_dir)
+        self._automation_state = default_automation_state()
+        self._automation_runtime: Dict[str, Any] = {
+            'state': 'off',
+            'message': '',
+            'resume_pending': False,
+            'stop_after_cycle': False,
+        }
+        self._automation_project_id = ''
+        self._automation_resume_pending = False
+        self._automation_resume_started_at: Optional[float] = None
+        self._automation_last_attempt_at = 0.0
+        self.automation_startup_timeout_sec = max(
+            float(
+                self.declare_parameter(
+                    'automation_startup_timeout_sec',
+                    120.0,
+                ).value
+            ),
+            1.0,
+        )
         self.ac_target_tolerance_deg = max(
             float(self.declare_parameter('ac_target_tolerance_deg', AC_TARGET_TOLERANCE_DEG).value),
             0.0,
@@ -185,6 +214,7 @@ class MotionRunManager(Node):
         )
         self._action_request_pub = self.create_publisher(String, self.action_request_topic, 10)
         self._status_timer = self.create_timer(0.5, self._publish_status)
+        self._automation_timer = self.create_timer(1.0, self._automation_tick)
 
         self.get_logger().info(
             f'motion_run_manager started: state={self.motion_state_topic}, '
@@ -279,6 +309,16 @@ class MotionRunManager(Node):
                     self.motion_files_dir = self.motion_projects_dir
                     self.mappings_dir = self.motion_projects_dir
                     self._status = self._empty_status()
+                    self._automation_project_id = ''
+                    self._automation_state = default_automation_state()
+                    self._automation_runtime = {
+                        'state': 'off',
+                        'message': '',
+                        'resume_pending': False,
+                        'stop_after_cycle': False,
+                    }
+                    self._automation_resume_pending = False
+                    self._automation_resume_started_at = None
                 response = {
                     'success': True,
                     'message': '모션 실행 프로젝트 메모리 폐기',
@@ -288,6 +328,14 @@ class MotionRunManager(Node):
                 }
             elif command == 'status':
                 response = {'success': True, 'message': 'motion run status', 'status': self.status()}
+            elif command == 'automation_configure':
+                self._require_execution_context(payload)
+                response = self._configure_automation(payload)
+            elif command == 'automation_start':
+                self._require_execution_context(payload)
+                response = self._start_automation(payload)
+            elif command == 'automation_disable':
+                response = self._disable_automation(payload)
             elif command == 'check':
                 self._require_execution_context(payload)
                 response = self._handle_check(payload)
@@ -357,6 +405,8 @@ class MotionRunManager(Node):
             self._execution_context = next_context
             if not same_context:
                 self._execution_context_ready = False
+        if not same_context:
+            self._load_automation_project(project_id)
         return {
             'success': True,
             'message': '모션 실행 컨텍스트 적용 확인 완료',
@@ -369,6 +419,19 @@ class MotionRunManager(Node):
             if not context_id or context_id != self._execution_context.get('context_id'):
                 raise ValueError('확인하려는 실행 컨텍스트가 적용된 설정과 다릅니다')
             self._execution_context_ready = True
+            automation = dict(
+                getattr(self, '_automation_state', default_automation_state())
+            )
+            if automation.get('enabled') and automation.get('armed'):
+                self._automation_resume_pending = True
+                self._automation_resume_started_at = time.monotonic()
+                self._automation_runtime = {
+                    **self._automation_runtime,
+                    'state': 'waiting',
+                    'message': '프로그램 시작 후 자동 반복 준비 중',
+                    'resume_pending': True,
+                    'stop_after_cycle': False,
+                }
         return {
             'success': True,
             'message': '모션 실행 허용',
@@ -397,6 +460,314 @@ class MotionRunManager(Node):
             with self._run_lock:
                 self._execution_context_ready = False
             raise ValueError('모션축 설정 파일이 변경되어 실행 컨텍스트 재적용이 필요합니다')
+
+    def _load_automation_project(self, project_id: str) -> None:
+        try:
+            state = self._automation_store.load(project_id)
+            error = ''
+        except ValueError as exc:
+            state = default_automation_state()
+            error = str(exc)
+        with self._run_lock:
+            self._automation_project_id = project_id
+            self._automation_state = state
+            self._automation_resume_pending = False
+            self._automation_resume_started_at = None
+            self._automation_runtime = {
+                'state': (
+                    'blocked'
+                    if error
+                    else ('ready' if state.get('enabled') else 'off')
+                ),
+                'message': error,
+                'resume_pending': False,
+                'stop_after_cycle': False,
+            }
+        self._graceful_stop_event.clear()
+
+    def _save_automation(
+        self,
+        values: Dict[str, Any],
+        *,
+        runtime_state: Optional[str] = None,
+        runtime_message: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        with self._run_lock:
+            project_id = self._automation_project_id
+            candidate = {**self._automation_state, **values}
+        if not project_id:
+            raise ValueError('자동 반복을 저장할 현재 프로젝트가 없습니다')
+        saved = self._automation_store.save(project_id, candidate)
+        with self._run_lock:
+            self._automation_state = saved
+            if runtime_state is not None:
+                self._automation_runtime['state'] = runtime_state
+            if runtime_message is not None:
+                self._automation_runtime['message'] = runtime_message
+        return dict(saved)
+
+    def _configure_automation(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        with self._run_lock:
+            current = dict(self._automation_state)
+        candidate = normalize_automation_state({
+            **current,
+            'enabled': bool(payload.get('enabled', current.get('enabled', False))),
+            'repeat_mode': payload.get(
+                'repeat_mode',
+                current.get('repeat_mode', 'direct'),
+            ),
+            'dwell_sec': payload.get('dwell_sec', current.get('dwell_sec', 0.0)),
+        })
+        if not candidate['enabled']:
+            return self._disable_automation(payload)
+        saved = self._save_automation(
+            {
+                **candidate,
+                'enabled': True,
+                'last_error': '',
+            },
+            runtime_state='running' if current.get('armed') else 'ready',
+            runtime_message=(
+                '현재 실행에는 기존 설정을 유지하고 다음 시작부터 적용합니다'
+                if current.get('armed')
+                else '자동 반복 사용'
+            ),
+        )
+        return {
+            'success': True,
+            'message': '자동 반복 설정 저장 완료',
+            'automation': self._automation_snapshot(),
+            'settings': saved,
+            'status': self.status(),
+        }
+
+    def _start_automation(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        with self._run_lock:
+            configured = dict(self._automation_state)
+        if not configured.get('enabled'):
+            return {
+                'success': False,
+                'message': '자동 반복 사용을 먼저 켜세요',
+                'automation': self._automation_snapshot(),
+                'status': self.status(),
+            }
+        motion_file_id = str(payload.get('motion_file_id') or '').strip()
+        mapping_file_id = str(payload.get('mapping_file_id') or '').strip()
+        if not motion_file_id or not mapping_file_id:
+            return {
+                'success': False,
+                'message': '재생 등록된 모션 파일과 모션축 설정이 필요합니다',
+                'automation': self._automation_snapshot(),
+                'status': self.status(),
+            }
+        project_id, motions_dir, mappings_dir = self._project_asset_dirs(payload)
+        motion_path = self._motion_file_path(motion_file_id, motions_dir)
+        mapping_path = self._mapping_file_path(mapping_file_id, mappings_dir)
+        saved = self._save_automation(
+            {
+                'enabled': True,
+                'armed': True,
+                'repeat_mode': configured.get('repeat_mode', 'direct'),
+                'dwell_sec': configured.get('dwell_sec', 0.0),
+                'motion_file_id': motion_path.name,
+                'mapping_file_id': mapping_path.name,
+                'motion_sha256': hashlib.sha256(motion_path.read_bytes()).hexdigest(),
+                'mapping_sha256': hashlib.sha256(mapping_path.read_bytes()).hexdigest(),
+                'last_error': '',
+            },
+            runtime_state='checking',
+            runtime_message='자동 반복 시작 검사 중',
+        )
+        request_payload = {
+            **payload,
+            'project_id': project_id,
+            'motion_file_id': saved['motion_file_id'],
+            'mapping_file_id': saved['mapping_file_id'],
+            'run_mode': 'continuous',
+            'automation_run': True,
+            'repeat_mode': saved['repeat_mode'],
+            'dwell_sec': saved['dwell_sec'],
+        }
+        try:
+            result = self._start_thread('run', request_payload)
+        except Exception as exc:
+            self._automation_failure(str(exc))
+            return {
+                'success': False,
+                'message': str(exc),
+                'automation': self._automation_snapshot(),
+                'status': self.status(),
+            }
+        if not result.get('success'):
+            self._automation_failure(str(result.get('message') or '자동 반복 시작 실패'))
+            result['automation'] = self._automation_snapshot()
+            result['status'] = self.status()
+            return result
+        with self._run_lock:
+            self._automation_resume_pending = False
+            self._automation_runtime = {
+                **self._automation_runtime,
+                'state': 'starting',
+                'message': '초기위치 이동 후 자동 반복을 시작합니다',
+                'resume_pending': False,
+                'stop_after_cycle': False,
+            }
+        result['automation'] = self._automation_snapshot()
+        return result
+
+    def _disable_automation(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        project_id = str(payload.get('project_id') or '').strip()
+        with self._run_lock:
+            automation_project_id = self._automation_project_id
+        if not project_id or project_id != automation_project_id:
+            raise ValueError('현재 프로젝트의 자동 반복 설정만 해제할 수 있습니다')
+        current_status = self.status()
+        active = (
+            bool(current_status.get('automation_run'))
+            and current_status.get('state')
+            in {'initializing', 'initialized', 'running', 'waiting', 'verifying'}
+        )
+        self._save_automation(
+            {
+                'enabled': False,
+                'armed': False,
+                'last_error': '',
+            },
+            runtime_state='stop_requested' if active else 'off',
+            runtime_message=(
+                '현재 단계 완료 후 자동 반복을 정지합니다'
+                if active
+                else '자동 반복 사용 안 함'
+            ),
+        )
+        with self._run_lock:
+            self._automation_resume_pending = False
+            self._automation_resume_started_at = None
+            self._automation_runtime['resume_pending'] = False
+            self._automation_runtime['stop_after_cycle'] = active
+        if active:
+            self._graceful_stop_event.set()
+        else:
+            self._graceful_stop_event.clear()
+        return {
+            'success': True,
+            'message': (
+                '현재 단계 완료 후 자동 반복 정지'
+                if active
+                else '자동 반복 사용 안 함'
+            ),
+            'automation': self._automation_snapshot(),
+            'status': self.status(),
+        }
+
+    def _automation_failure(self, message: str) -> None:
+        text = str(message or '자동 반복 실행 실패')
+        try:
+            self._save_automation(
+                {
+                    'armed': False,
+                    'last_error': text,
+                },
+                runtime_state='blocked',
+                runtime_message=text,
+            )
+        except ValueError:
+            with self._run_lock:
+                self._automation_runtime.update({
+                    'state': 'blocked',
+                    'message': text,
+                })
+        with self._run_lock:
+            self._automation_resume_pending = False
+            self._automation_runtime['resume_pending'] = False
+
+    def _automation_snapshot(self) -> Dict[str, Any]:
+        with self._run_lock:
+            return {
+                **self._automation_state,
+                **self._automation_runtime,
+                'project_id': self._automation_project_id,
+            }
+
+    def _automation_tick(self) -> None:
+        with self._run_lock:
+            pending = self._automation_resume_pending
+            ready = self._execution_context_ready
+            context = dict(self._execution_context)
+            state = dict(self._automation_state)
+            thread_running = self._run_thread is not None and self._run_thread.is_alive()
+            started_at = self._automation_resume_started_at
+            last_attempt = self._automation_last_attempt_at
+        if not pending or not ready or thread_running:
+            return
+        now = time.monotonic()
+        if now - last_attempt < 1.0:
+            return
+        with self._run_lock:
+            self._automation_last_attempt_at = now
+        if started_at is not None and now - started_at > self.automation_startup_timeout_sec:
+            self._automation_failure('자동 반복 시작 대기 시간 초과')
+            return
+        try:
+            self._verify_automation_files(context, state)
+            payload = {
+                'project_id': context.get('project_id'),
+                'project_generation': context.get('project_generation'),
+                'context_id': context.get('context_id'),
+                'motion_file_id': state.get('motion_file_id'),
+                'mapping_file_id': state.get('mapping_file_id'),
+                'run_mode': 'continuous',
+                'automation_run': True,
+                'repeat_mode': state.get('repeat_mode', 'direct'),
+                'dwell_sec': state.get('dwell_sec', 0.0),
+            }
+            result = self._start_thread('run', payload)
+        except Exception as exc:
+            with self._run_lock:
+                still_pending = self._automation_resume_pending
+            if not still_pending:
+                return
+            with self._run_lock:
+                self._automation_runtime.update({
+                    'state': 'waiting',
+                    'message': f'자동 반복 시작 대기: {exc}',
+                    'resume_pending': True,
+                })
+            return
+        if result.get('success'):
+            with self._run_lock:
+                self._automation_resume_pending = False
+                self._automation_runtime.update({
+                    'state': 'starting',
+                    'message': '재시작 후 자동 반복 시작',
+                    'resume_pending': False,
+                })
+        else:
+            with self._run_lock:
+                self._automation_runtime.update({
+                    'state': 'waiting',
+                    'message': f"자동 반복 시작 대기: {result.get('message') or '준비되지 않음'}",
+                    'resume_pending': True,
+                })
+
+    def _verify_automation_files(
+        self,
+        context: Dict[str, Any],
+        state: Dict[str, Any],
+    ) -> None:
+        project_id, motions_dir, mappings_dir = self._project_asset_dirs(context)
+        if project_id != self._automation_project_id:
+            raise ValueError('자동 반복 프로젝트가 현재 프로젝트와 다릅니다')
+        motion_path = self._motion_file_path(state.get('motion_file_id'), motions_dir)
+        mapping_path = self._mapping_file_path(state.get('mapping_file_id'), mappings_dir)
+        motion_sha = hashlib.sha256(motion_path.read_bytes()).hexdigest()
+        mapping_sha = hashlib.sha256(mapping_path.read_bytes()).hexdigest()
+        if motion_sha != state.get('motion_sha256'):
+            self._automation_failure('자동 반복 모션 파일이 시작 당시와 다릅니다')
+            raise ValueError('자동 반복 모션 파일이 시작 당시와 다릅니다')
+        if mapping_sha != state.get('mapping_sha256'):
+            self._automation_failure('자동 반복 모션축 설정이 시작 당시와 다릅니다')
+            raise ValueError('자동 반복 모션축 설정이 시작 당시와 다릅니다')
 
     def _handle_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         try:
@@ -454,6 +825,8 @@ class MotionRunManager(Node):
                     'message': ownership_error,
                     'status': self.status(),
                 }
+            initialization_reused = False
+            initialization_reuse_reason = ''
             if mode == 'initialize':
                 plan = self._build_plan(payload, initialization_only=True)
                 target = self._run_initialization
@@ -480,9 +853,18 @@ class MotionRunManager(Node):
                         'status': self.status(),
                         'summary': plan['summary'],
                     }
-                target = self._run_initialization_then_motion
-                target_args = (initialization_plan, plan)
+                (
+                    initialization_reused,
+                    initialization_reuse_reason,
+                ) = self._verified_initialization_reuse(initialization_plan)
+                if initialization_reused:
+                    target = self._run_motion
+                    target_args = (plan,)
+                else:
+                    target = self._run_initialization_then_motion
+                    target_args = (initialization_plan, plan)
             self._stop_event.clear()
+            self._graceful_stop_event.clear()
             self._run_thread = threading.Thread(
                 target=target,
                 args=target_args,
@@ -496,18 +878,120 @@ class MotionRunManager(Node):
                 'initial position move started'
                 if mode == 'initialize'
                 else (
-                    'initial position move and continuous motion run started'
-                    if plan.get('run_mode') == 'continuous'
-                    else 'initial position move and single motion run started'
+                    (
+                        'verified initial position reused and continuous motion run started'
+                        if plan.get('run_mode') == 'continuous'
+                        else 'verified initial position reused and single motion run started'
+                    )
+                    if initialization_reused
+                    else (
+                        'initial position move and continuous motion run started'
+                        if plan.get('run_mode') == 'continuous'
+                        else 'initial position move and single motion run started'
+                    )
                 )
             ),
+            'initialization_reused': initialization_reused,
+            'initialization_reuse_reason': initialization_reuse_reason,
             'status': self.status(),
             'summary': plan['summary'],
         }
 
-    def _handle_stop(self) -> Dict[str, Any]:
-        self._stop_event.set()
+    def _verified_initialization_reuse(
+        self,
+        initialization_plan: Dict[str, Any],
+    ) -> tuple[bool, str]:
+        """Reuse only a matching initialization that live feedback still proves.
+
+        This keeps ``start`` safe for direct Motion Run callers while allowing
+        Motion Studio's explicit initialize/countdown/start workflow to avoid
+        moving to the same initial position twice.
+        """
         current = self.status()
+        if str(current.get('state') or '') != 'initialized':
+            return False, '직전 실행 상태가 초기 위치 이동 완료가 아닙니다'
+
+        for key in (
+            'project_id',
+            'motion_file_id',
+            'mapping_file_id',
+            'request_source',
+        ):
+            if str(current.get(key) or '') != str(initialization_plan.get(key) or ''):
+                return False, f'직전 초기화의 {key}가 현재 실행과 다릅니다'
+
+        expected_axes = {
+            int(axis['motor_axis']): axis
+            for axis in initialization_plan.get('axes', [])
+        }
+        initialized_axes = {
+            int(axis['motor_axis']): axis
+            for axis in current.get('axes', [])
+            if isinstance(axis, dict) and axis.get('motor_axis') is not None
+        }
+        if not expected_axes or set(expected_axes) != set(initialized_axes):
+            return False, '직전 초기화 대상 축이 현재 실행 대상과 다릅니다'
+
+        for motor_axis, expected in expected_axes.items():
+            initialized = initialized_axes[motor_axis]
+            if str(initialized.get('motion_id') or '') != str(
+                expected.get('motion_id') or ''
+            ):
+                return False, f'Axis {motor_axis}의 모션축이 직전 초기화와 다릅니다'
+            expected_target = float(expected['initial_motor_target_deg'])
+            initialized_target = self._finite_float(
+                initialized.get('initial_motor_target_deg')
+            )
+            if (
+                initialized_target is None
+                or not math.isclose(
+                    initialized_target,
+                    expected_target,
+                    rel_tol=0.0,
+                    abs_tol=1e-6,
+                )
+            ):
+                return False, f'Axis {motor_axis}의 초기 목표가 직전 초기화와 다릅니다'
+
+        motors = self._current_motors()
+        if not motors:
+            return False, '현재 모터 피드백을 확인할 수 없습니다'
+        for motor_axis, axis_plan in expected_axes.items():
+            motor = self._motor_for_axis(motor_axis, motors)
+            motor_error = self._motor_ready_error(
+                motor or {'controller_index': motor_axis}
+            )
+            if motor_error:
+                return False, motor_error
+            current_position = self._motor_position_deg(motor)
+            if current_position is None:
+                return False, f'Axis {motor_axis} 현재 위치를 확인할 수 없습니다'
+            target = float(axis_plan['initial_motor_target_deg'])
+            tolerance = self._target_tolerance_deg(axis_plan)
+            if abs(current_position - target) > tolerance:
+                return (
+                    False,
+                    f'Axis {motor_axis}가 초기 위치에서 벗어났습니다: '
+                    f'현재 {current_position:.3f}°, 목표 {target:.3f}°',
+                )
+        return True, '직전 초기화와 현재 모터 위치가 일치합니다'
+
+    def _handle_stop(self) -> Dict[str, Any]:
+        current = self.status()
+        if current.get('automation_run'):
+            try:
+                self._save_automation(
+                    {
+                        'armed': False,
+                        'last_error': '사용자가 모션을 즉시 정지했습니다',
+                    },
+                    runtime_state='stopped',
+                    runtime_message='사용자가 모션을 즉시 정지했습니다',
+                )
+            except ValueError:
+                pass
+        self._stop_event.set()
+        self._graceful_stop_event.clear()
         if current.get('state') in ('initializing', 'running', 'verifying'):
             self._update_status({
                 'state': 'stopping',
@@ -574,6 +1058,12 @@ class MotionRunManager(Node):
                 'initial_started_at': initial_started_at,
                 'initial_finished_at': None,
             }
+            if plan.get('automation_run'):
+                with self._run_lock:
+                    self._automation_runtime.update({
+                        'state': 'initializing',
+                        'message': '자동 반복 초기위치 이동 중',
+                    })
             self._set_status(status)
             self._run_initial_position_stream(
                 motors,
@@ -604,6 +1094,12 @@ class MotionRunManager(Node):
                 'initial_started_at': initial_started_at,
                 'initial_finished_at': initial_finished_at,
             }
+            if plan.get('automation_run'):
+                with self._run_lock:
+                    self._automation_runtime.update({
+                        'state': 'initialized',
+                        'message': '자동 반복 초기위치 이동 완료',
+                    })
             self._set_status(status)
         except InterruptedError:
             status = self._status_from_plan('stopped', '초기 위치 이동 정지', plan)
@@ -618,6 +1114,8 @@ class MotionRunManager(Node):
             status['phase_finished_at'] = time.time()
             status['lifecycle'] = self._current_lifecycle()
             self._set_status(status)
+            if plan.get('automation_run'):
+                self._automation_failure(str(exc))
 
     def _run_initialization_then_motion(
         self,
@@ -629,17 +1127,42 @@ class MotionRunManager(Node):
             return
         if self.status().get('state') != 'initialized':
             return
-        self._run_motion(motion_plan)
+        if (
+            motion_plan.get('automation_run')
+            and self._graceful_stop_event.is_set()
+        ):
+            self._finish_cycle_stop(
+                motion_plan,
+                time.time(),
+                0,
+                '초기위치 이동 완료 후 자동 반복 정지',
+            )
+            return
+        if motion_plan.get('repeat_mode') == 'reinitialize':
+            self._run_motion(motion_plan, initialization_plan)
+        else:
+            self._run_motion(motion_plan)
 
-    def _run_motion(self, plan: Dict[str, Any]) -> None:
+    def _run_motion(
+        self,
+        plan: Dict[str, Any],
+        initialization_plan: Optional[Dict[str, Any]] = None,
+    ) -> None:
         try:
             run_mode = str(plan.get('run_mode') or 'once')
             continuous = run_mode == 'continuous'
+            automation_run = bool(plan.get('automation_run'))
+            repeat_mode = str(plan.get('repeat_mode') or 'direct')
+            dwell_sec = max(float(plan.get('dwell_sec') or 0.0), 0.0)
             self._require_playback_command_allowed()
             motors = self._current_motors()
             self._prepare_motion_stream(motors, plan['axes'])
             motion_started_at = time.time()
-            running_message = '연속 모션 실행 중' if continuous else '모션 1회 실행 중'
+            running_message = (
+                '자동 반복 모션 실행 중'
+                if automation_run
+                else ('연속 모션 실행 중' if continuous else '모션 1회 실행 중')
+            )
             status = self._status_from_plan('running', running_message, plan)
             status['phase'] = 'running'
             status['phase_started_at'] = motion_started_at
@@ -649,12 +1172,18 @@ class MotionRunManager(Node):
                 'motion_started_at': motion_started_at,
                 'motion_finished_at': None,
             }
+            if automation_run:
+                with self._run_lock:
+                    self._automation_runtime.update({
+                        'state': 'running',
+                        'message': running_message,
+                    })
             self._set_status(status)
             samples = plan['samples']
-            start_time = time.monotonic()
             cycle_count = 0
-            global_sample_index = 0
+            grade1_seen = False
             while True:
+                cycle_started = time.monotonic()
                 for index, sample in enumerate(samples):
                     if self._stop_event.is_set():
                         status = self._status_from_plan('stopped', '연속 모션 정지' if continuous else '모션 실행 정지', plan)
@@ -666,6 +1195,8 @@ class MotionRunManager(Node):
                         self._set_status(status)
                         return
                     self._require_playback_command_allowed()
+                    if automation_run and self._current_servo_alarm_grade() == 1:
+                        grade1_seen = True
                     positions = sample['positions']
                     self._publish_motion_setpoints(
                         motors,
@@ -683,11 +1214,65 @@ class MotionRunManager(Node):
                         cycle_count=cycle_count,
                         current_cycle=cycle_count + 1,
                     )
-                    global_sample_index += 1
-                    self._sleep_until(start_time + global_sample_index * self.period_sec)
+                    self._sleep_until(cycle_started + ((index + 1) * self.period_sec))
                 cycle_count += 1
                 if not continuous:
                     break
+                if automation_run and grade1_seen:
+                    self._automation_failure(
+                        '1등급 서보 에러 · 나머지 축의 현재 회차 완료 후 자동 반복 중단'
+                    )
+                    self._finish_cycle_stop(
+                        plan,
+                        motion_started_at,
+                        cycle_count,
+                        '1등급 서보 에러로 자동 반복 중단',
+                        state='error',
+                    )
+                    return
+                if automation_run and self._graceful_stop_event.is_set():
+                    self._finish_cycle_stop(
+                        plan,
+                        motion_started_at,
+                        cycle_count,
+                        '현재 모션 회차 완료 후 자동 반복 정지',
+                    )
+                    return
+                if repeat_mode == 'dwell' and dwell_sec > 0.0:
+                    if not self._wait_between_cycles(
+                        plan,
+                        motion_started_at,
+                        cycle_count,
+                        dwell_sec,
+                    ):
+                        return
+                elif repeat_mode == 'reinitialize':
+                    if initialization_plan is None:
+                        raise RuntimeError('반복 초기위치 이동 계획이 없습니다')
+                    self._run_initialization(initialization_plan)
+                    if self._stop_event.is_set():
+                        return
+                    if self.status().get('state') != 'initialized':
+                        raise RuntimeError(
+                            self.status().get('message')
+                            or '반복 초기위치 이동 실패'
+                        )
+                    if automation_run and self._graceful_stop_event.is_set():
+                        self._finish_cycle_stop(
+                            plan,
+                            motion_started_at,
+                            cycle_count,
+                            '반복 초기위치 이동 완료 후 자동 반복 정지',
+                        )
+                        return
+                    self._require_playback_command_allowed()
+                    motors = self._current_motors()
+                    self._prepare_motion_stream(motors, plan['axes'])
+                    self._restore_running_status(
+                        plan,
+                        motion_started_at,
+                        cycle_count,
+                    )
 
             final_positions = samples[-1]['positions'] if samples else {}
             if final_positions:
@@ -743,10 +1328,133 @@ class MotionRunManager(Node):
             status['phase_finished_at'] = time.time()
             status['lifecycle'] = self._current_lifecycle()
             self._set_status(status)
+            if bool(plan.get('automation_run')):
+                self._automation_failure(str(exc))
+
+    def _finish_cycle_stop(
+        self,
+        plan: Dict[str, Any],
+        motion_started_at: float,
+        cycle_count: int,
+        message: str,
+        *,
+        state: str = 'stopped',
+    ) -> None:
+        status = self._status_from_plan(state, message, plan)
+        status['phase'] = state
+        status['phase_started_at'] = motion_started_at
+        status['phase_finished_at'] = time.time()
+        status['lifecycle'] = self._current_lifecycle()
+        status['cycle_count'] = cycle_count
+        status['current_cycle'] = cycle_count
+        with self._run_lock:
+            self._automation_runtime.update({
+                'state': 'waiting',
+                'message': status['message'],
+            })
+        self._set_status(status)
+        self._graceful_stop_event.clear()
+        if state != 'error':
+            with self._run_lock:
+                enabled = bool(self._automation_state.get('enabled'))
+                self._automation_runtime.update({
+                    'state': 'ready' if enabled else 'off',
+                    'message': message,
+                    'stop_after_cycle': False,
+                })
+
+    def _wait_between_cycles(
+        self,
+        plan: Dict[str, Any],
+        motion_started_at: float,
+        cycle_count: int,
+        dwell_sec: float,
+    ) -> bool:
+        started_at = time.time()
+        status = self._status_from_plan(
+            'waiting',
+            f'자동 반복 대기 중 · {dwell_sec:g}초',
+            plan,
+        )
+        status['phase'] = 'repeat_waiting'
+        status['phase_started_at'] = started_at
+        status['phase_finished_at'] = None
+        status['cycle_count'] = cycle_count
+        status['current_cycle'] = cycle_count
+        self._set_status(status)
+        deadline = time.monotonic() + dwell_sec
+        while time.monotonic() < deadline:
+            if self._stop_event.is_set():
+                self._finish_cycle_stop(
+                    plan,
+                    motion_started_at,
+                    cycle_count,
+                    '자동 반복 대기 중 즉시 정지',
+                )
+                return False
+            if self._graceful_stop_event.is_set():
+                self._finish_cycle_stop(
+                    plan,
+                    motion_started_at,
+                    cycle_count,
+                    '자동 반복 대기 취소 후 정지',
+                )
+                return False
+            remaining = max(deadline - time.monotonic(), 0.0)
+            self._update_status({
+                'state': 'waiting',
+                'phase': 'repeat_waiting',
+                'message': f'다음 모션까지 {remaining:.1f}초',
+            })
+            time.sleep(min(0.1, remaining))
+        self._restore_running_status(plan, motion_started_at, cycle_count)
+        return True
+
+    def _restore_running_status(
+        self,
+        plan: Dict[str, Any],
+        motion_started_at: float,
+        cycle_count: int,
+    ) -> None:
+        message = (
+            '자동 반복 모션 실행 중'
+            if plan.get('automation_run')
+            else '연속 모션 실행 중'
+        )
+        status = self._status_from_plan('running', message, plan)
+        status['phase'] = 'running'
+        status['phase_started_at'] = motion_started_at
+        status['phase_finished_at'] = None
+        status['lifecycle'] = self._current_lifecycle()
+        status['cycle_count'] = cycle_count
+        status['current_cycle'] = cycle_count + 1
+        if plan.get('automation_run'):
+            with self._run_lock:
+                self._automation_runtime.update({
+                    'state': 'running',
+                    'message': message,
+                })
+        self._set_status(status)
+
+    def _current_servo_alarm_grade(self) -> int:
+        lock = getattr(self, '_safety_status_lock', None)
+        if lock is None:
+            return 0
+        with lock:
+            status = getattr(self, '_latest_safety_status', None)
+            payload = dict(status) if isinstance(status, dict) else {}
+        try:
+            grade = int(payload.get('servo_alarm_grade') or 0)
+        except (TypeError, ValueError):
+            return 0
+        return grade if grade in (1, 2, 3) else 0
 
     @staticmethod
     def _motion_auto_start_guard_error(plan: Dict[str, Any]) -> str:
-        if plan.get('run_mode') == 'continuous':
+        if (
+            plan.get('run_mode') == 'continuous'
+            and plan.get('repeat_mode') != 'reinitialize'
+        ):
             capability = plan.get('capabilities', {}).get('continuous_run', {})
             if not capability.get('available'):
                 return str(capability.get('reason') or '모션 시작값과 끝값이 달라 연속 동작할 수 없습니다')
@@ -941,6 +1649,17 @@ class MotionRunManager(Node):
         run_mode = str(payload.get('run_mode') or 'once').strip().lower()
         if run_mode not in ('once', 'continuous'):
             raise ValueError('run_mode must be once or continuous')
+        automation_run = bool(payload.get('automation_run', False))
+        repeat_mode = str(payload.get('repeat_mode') or 'direct').strip().lower()
+        if repeat_mode not in REPEAT_MODES:
+            raise ValueError(f'지원하지 않는 자동 반복 방식입니다: {repeat_mode}')
+        dwell_sec = self._finite_float(payload.get('dwell_sec'))
+        dwell_sec = 0.0 if dwell_sec is None else dwell_sec
+        if dwell_sec < 0.0:
+            raise ValueError('자동 반복 대기 시간은 0초 이상이어야 합니다')
+        if not automation_run:
+            repeat_mode = 'direct'
+            dwell_sec = 0.0
         motion_file_id = str(payload.get('motion_file_id') or '').strip()
         mapping_file_id = str(payload.get('mapping_file_id') or '').strip()
         request_source = str(payload.get('request_source') or 'motion_run').strip()
@@ -1246,6 +1965,9 @@ class MotionRunManager(Node):
             'motion_file_id': motion_file_id,
             'mapping_file_id': mapping_file_id,
             'run_mode': run_mode,
+            'automation_run': automation_run,
+            'repeat_mode': repeat_mode,
+            'dwell_sec': dwell_sec,
             'motion_file_path': str(motion_file_path) if motion_file_path else '',
             'mapping_path': str(mapping_path),
             'axes': axes,
@@ -1263,6 +1985,9 @@ class MotionRunManager(Node):
                 'initial_move_time_sec': initial_move_time_override,
                 'continuous_available': continuous_capability['available'],
                 'clamped_axis_count': sum(1 for axis in axes if axis.get('motion_clamped')),
+                'automation_run': automation_run,
+                'repeat_mode': repeat_mode,
+                'dwell_sec': dwell_sec,
             },
         }
 
@@ -1907,6 +2632,9 @@ class MotionRunManager(Node):
             'motion_file_id': plan.get('motion_file_id', ''),
             'mapping_file_id': plan.get('mapping_file_id', ''),
             'run_mode': plan.get('run_mode', 'once'),
+            'automation_run': bool(plan.get('automation_run')),
+            'repeat_mode': plan.get('repeat_mode', 'direct'),
+            'dwell_sec': float(plan.get('dwell_sec') or 0.0),
             'request_source': plan.get('request_source', 'motion_run'),
             'cycle_count': 0,
             'current_cycle': 0,
@@ -1951,6 +2679,9 @@ class MotionRunManager(Node):
             'motion_file_id': '',
             'mapping_file_id': '',
             'run_mode': 'once',
+            'automation_run': False,
+            'repeat_mode': 'direct',
+            'dwell_sec': 0.0,
             'request_source': 'motion_run',
             'cycle_count': 0,
             'current_cycle': 0,
@@ -2036,6 +2767,7 @@ class MotionRunManager(Node):
                 **self._execution_context,
                 'ready': self._execution_context_ready,
             }
+            result['automation'] = self._automation_snapshot()
             return result
 
     def _publish_response(self, payload: Dict[str, Any]) -> None:

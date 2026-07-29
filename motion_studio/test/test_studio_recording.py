@@ -440,6 +440,54 @@ def test_playback_status_mirrors_motion_run_progress_for_web_graph():
     assert node._status['elapsed_sec'] == 3.2
 
 
+def test_playback_graph_waits_for_actual_runtime_running_state():
+    node = MotionStudioNode.__new__(MotionStudioNode)
+    node._lock = threading.RLock()
+    node._workspace_project_id = 'project-1'
+    node._execution_context = {'project_generation': 1}
+    node._status = {
+        'state': 'initializing',
+        'phase': 'countdown',
+        'elapsed_sec': 0.0,
+        'playback_duration_sec': 7.84,
+    }
+    node._motion_run_status = {}
+    node._set_status_locked = lambda state, message: node._status.update({
+        'state': state,
+        'phase': state,
+        'message': message,
+    })
+
+    node._run_status_callback(String(data=json.dumps({
+        'project_id': 'project-1',
+        'execution_context': {'project_generation': 1},
+        'request_source': 'motion_studio',
+        'state': 'initialized',
+        'progress': {
+            'elapsed_sec': 5.0,
+            'duration_sec': 5.0,
+            'ratio': 1.0,
+        },
+    })))
+    assert node._status['state'] == 'initializing'
+    assert node._status['elapsed_sec'] == 0.0
+
+    node._run_status_callback(String(data=json.dumps({
+        'project_id': 'project-1',
+        'execution_context': {'project_generation': 1},
+        'request_source': 'motion_studio',
+        'state': 'running',
+        'progress': {
+            'elapsed_sec': 0.02,
+            'duration_sec': 7.84,
+            'ratio': 0.02 / 7.84,
+        },
+    })))
+    assert node._status['state'] == 'playing'
+    assert node._status['elapsed_sec'] == 0.02
+    assert node._status['playback_duration_sec'] == 7.84
+
+
 def test_recording_snapshot_contains_bounded_live_graph_preview():
     node = MotionStudioNode.__new__(MotionStudioNode)
     node._lock = threading.RLock()

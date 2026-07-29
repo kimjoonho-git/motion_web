@@ -881,3 +881,14 @@ def test_unavailable_ffff_sdo_value_is_not_panasonic_alarm():
     alarm_state = supervisor._servo_alarm_guard.snapshot()
     assert alarm_state['active'] == []
     assert alarm_state['grade'] == 0
+
+
+def test_manual_activity_snapshot_distinguishes_jog_and_action_axes():
+    supervisor = MotionSupervisor.__new__(MotionSupervisor)
+    supervisor._active_jogs = {2: {'request_id': 'jog'}}
+    supervisor._active_actions = {0: {'request_id': 'action'}}
+
+    assert supervisor._manual_activity_snapshot() == {
+        'manual_activity_modes': ['jog', 'action'],
+        'manual_activity_axes': [0, 2],
+    }

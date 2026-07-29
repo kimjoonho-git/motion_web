@@ -237,6 +237,16 @@ class MotionStudioNode(Node):
                 progress = payload.get('progress')
                 if (
                     payload.get('request_source') == 'motion_studio'
+                    and studio_state == 'initializing'
+                    and run_state in {'running', 'verifying'}
+                ):
+                    self._set_status_locked(
+                        'playing',
+                        '레이어 합성 미리보기 재생 중',
+                    )
+                    studio_state = 'playing'
+                if (
+                    payload.get('request_source') == 'motion_studio'
                     and studio_state in {'initializing', 'playing', 'stopping'}
                     and isinstance(progress, dict)
                 ):
@@ -252,7 +262,7 @@ class MotionStudioNode(Node):
                             or 0.0
                         )
                 if (
-                    studio_state == 'playing'
+                    studio_state in {'initializing', 'playing'}
                     and payload.get('request_source') == 'motion_studio'
                     and payload.get('state') in {'completed', 'error', 'stopped'}
                 ):
@@ -853,7 +863,11 @@ class MotionStudioNode(Node):
                 raise ValueError(result.get('message') or '합성 미리보기 시작 실패')
             with self._lock:
                 if operation_generation == self._operation_generation:
-                    self._set_status_locked('playing', '레이어 합성 미리보기 재생 중')
+                    if str(self._status.get('state') or '') != 'playing':
+                        self._set_status_locked(
+                            'initializing',
+                            '초기 위치 확인 완료 · 실제 모션 시작 대기',
+                        )
         except Exception as exc:
             with self._lock:
                 if operation_generation == self._operation_generation:
