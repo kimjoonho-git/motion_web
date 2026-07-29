@@ -67,6 +67,16 @@ export function motionStudioExportResultMessage(result, error = null) {
   );
 }
 
+export function motionStudioExportSelection(layers = []) {
+  const selectedLayers = (layers || []).filter(
+    (layer) => layer && layer.enabled !== false,
+  );
+  return {
+    count: selectedLayers.length,
+    layer: selectedLayers.length === 1 ? selectedLayers[0] : null,
+  };
+}
+
 export function renderMotionStudioWorkspace(el, state) {
   if (el.studioWorkspaceName) {
     el.studioWorkspaceName.textContent = (

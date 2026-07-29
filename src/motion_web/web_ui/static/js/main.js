@@ -10,15 +10,15 @@ import {
   stopMotionRun,
   stopMotionStudio,
   setProjectGeneration,
-} from './api.js?v=20260728-desktop-shortcut-1';
-import { getElements } from './dom.js?v=20260728-desktop-shortcut-1';
+} from './api.js?v=20260729-motion-file-studio-export-1';
+import { getElements } from './dom.js?v=20260729-editor-workflow-export-1';
 import { createMotorEventLogController } from './event_log.js?v=20260727-popup-common-3';
 import { createMidiMonitorController } from './midi_monitor.js?v=20260727-popup-common-3';
-import { createMotionDataController } from './motion_data.js?v=20260729-motion-file-full-view-1';
-import { createMotionStudioController } from './motion_studio.js?v=20260729-motion-export-popup-1';
+import { createMotionDataController } from './motion_data.js?v=20260729-motion-run-auto-initialize-1';
+import { createMotionStudioController } from './motion_studio.js?v=20260729-editor-workflow-export-1';
 import { createMotionTestController } from './motion_test.js?v=20260728-servo-alarm-2';
 import { createMotorConfigController } from './motor_config.js?v=20260727-popup-common-3';
-import { createProjectExplorerController } from './project_explorer.js?v=20260728-project-selection-scope-1';
+import { createProjectExplorerController } from './project_explorer.js?v=20260729-project-file-isolation-1';
 import { renderAccess, renderMonitoring } from './monitoring.js?v=20260724-runtime-fix-1';
 import { createOperationProgressManager } from './operation_progress.js?v=20260728-restart-guard-1';
 import { installDialogManager } from './ui_dialogs.js?v=20260727-popup-common-3';
@@ -72,6 +72,7 @@ const appState = {
   projectGeneration: null,
 };
 const workspaceRouteState = createWorkspaceRouteState('monitoring');
+let projectExplorer = null;
 const RESTART_READY_STABLE_MS = 3500;
 const RESTART_TIMEOUT_MS = 45000;
 const IDENTITY_BLOCKED_WORKSPACES = new Set(['manual', 'motion-run']);
@@ -157,6 +158,7 @@ function renderWorkspacePanel() {
     if (el.motionWorkspaceSubtitle) el.motionWorkspaceSubtitle.textContent = details[1];
     el.motionWorkflowGuide?.classList.toggle('hidden', motionTab === 'run');
   }
+  projectExplorer?.syncWorkspacePermissions();
 }
 
 function setActiveWorkspace(workspace, motionTab = '') {
@@ -1026,6 +1028,7 @@ const motionData = createMotionDataController({
   getConfiguredMotors: () => motorConfig.getConfiguredMotors(),
   onWorkContextChange: updateWorkContext,
   onProjectFilesChange: () => projectExplorer.refresh(true),
+  onExportMotionFileToStudio: (fileName) => motionStudio.addMotionFile(fileName),
 });
 
 const midiMonitor = createMidiMonitorController({
@@ -1036,10 +1039,15 @@ const motionStudio = createMotionStudioController({
   el,
   getMotorActionBlockReason: studioMotorActionBlockReason,
   getConfiguredMotors: () => motorConfig.getConfiguredMotors(),
+  onMotionFilesChange: async () => {
+    await motionData.refreshMotionFiles();
+    await projectExplorer.refresh(true);
+  },
 });
-const projectExplorer = createProjectExplorerController({
+projectExplorer = createProjectExplorerController({
   el,
   canChangeProject: () => canChangeProjectInWorkspace(workspaceRouteState.current()),
+  canManageProjectFiles: () => canChangeProjectInWorkspace(workspaceRouteState.current()),
   onOpenEditor: async (result, requestedWorkspace = '') => {
     const targetRoute = requestedWorkspace || workspaceForProjectCategory(
       result.category,
@@ -1057,11 +1065,6 @@ const projectExplorer = createProjectExplorerController({
   onManageFile: () => {
     setActiveWorkspace('system');
     document.getElementById('projectFileManager')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  },
-  onAddMotionLayer: async (fileName) => {
-    setActiveWorkspace('studio');
-    await motionStudio.refresh(false);
-    await motionStudio.addMotionFile(fileName);
   },
   onProjectChange: async (project, projectGeneration) => {
     clearBrowserProjectMemory(projectGeneration);

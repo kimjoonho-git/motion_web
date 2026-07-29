@@ -11,15 +11,18 @@ import {
   workspaceForProjectCategory,
   workspaceGroupFor,
   workspacePanelFor,
+  WORKSPACE_GROUPS,
 } from '../static/js/workspace_navigation.js';
 
 test('project selection is allowed only in project equipment system information', () => {
-  assert.equal(canChangeProjectInWorkspace('system'), true);
-  assert.equal(canChangeProjectInWorkspace('config'), false);
-  assert.equal(canChangeProjectInWorkspace('servo-errors'), false);
-  assert.equal(canChangeProjectInWorkspace('monitoring'), false);
-  assert.equal(canChangeProjectInWorkspace('motion-files'), false);
-  assert.equal(canChangeProjectInWorkspace('manual'), false);
+  const routes = Object.values(WORKSPACE_GROUPS).flat();
+  for (const route of routes) {
+    assert.equal(
+      canChangeProjectInWorkspace(route),
+      route === 'system',
+      `${route} 프로젝트 변경 허용 여부`,
+    );
+  }
 });
 
 test('workspace routes resolve their group and shared motion panel', () => {

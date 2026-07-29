@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   bindMotionStudioProjectTransportEvents,
   createMotionStudioState,
+  motionStudioExportSelection,
   motionStudioExportResultMessage,
   resetMotionStudioProjectState,
   setMotionStudioMessage,
@@ -18,6 +19,24 @@ test('motion export popup messages distinguish saved and failed results', () => 
     motionStudioExportResultMessage(null, new Error('레이어를 1개 선택하세요')),
     '모션 실행 파일이 저장되지 않았습니다.\n원인 · 레이어를 1개 선택하세요',
   );
+});
+
+test('motion export selection uses only playback-enabled layers', () => {
+  const blueDetailLayerId = 'layer-blue';
+  const layers = [
+    { layer_id: blueDetailLayerId, name: '연한 파란색 상세 행', enabled: false },
+    { layer_id: 'layer-playback', name: '재생 선택 레이어', enabled: true },
+  ];
+
+  const selection = motionStudioExportSelection(layers);
+
+  assert.equal(selection.count, 1);
+  assert.equal(selection.layer.layer_id, 'layer-playback');
+  assert.notEqual(selection.layer.layer_id, blueDetailLayerId);
+  assert.deepEqual(motionStudioExportSelection([
+    ...layers,
+    { layer_id: 'layer-playback-2', enabled: true },
+  ]), { count: 2, layer: null });
 });
 
 test('studio UI state is isolated per controller and reset clears project runtime fields', () => {

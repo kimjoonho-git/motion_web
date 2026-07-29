@@ -30,6 +30,7 @@ import {
   motionStudioMotionTargetAtTime,
   motionStudioNearestMotionTarget,
   motionStudioPointCurveAtTime,
+  motionStudioPointCurveIsApplied,
   motionStudioPointCurveOrder,
   motionStudioPointCurvePreview,
   motionStudioPointCurveViewEnd,
@@ -45,7 +46,7 @@ import {
   motionStudioSnapFrameTime,
   resolveMotionStudioSelectedLayerId,
   synchronizeMotionStudioEditorTimeline,
-} from './motion_studio_calculations.js?v=20260728-point-range-actions-1';
+} from './motion_studio_calculations.js?v=20260729-editor-workflow-export-1';
 import {
   drawMotionStudioEditorGraph,
   drawMotionStudioLayerGraph,
@@ -57,10 +58,11 @@ import {
   bindMotionStudioProjectTransportEvents,
   createMotionStudioState,
   renderMotionStudioWorkspace,
+  motionStudioExportSelection,
   motionStudioExportResultMessage,
   resetMotionStudioProjectState,
   setMotionStudioMessage,
-} from './motion_studio_ui.js?v=20260729-motion-export-popup-1';
+} from './motion_studio_ui.js?v=20260729-editor-workflow-export-1';
 import {
   motionStudioEditorAxisLabel,
   motionStudioEditorInspectorState,
@@ -83,6 +85,7 @@ export {
   motionStudioMotionTargetAtTime,
   motionStudioNearestMotionTarget,
   motionStudioPointCurveAtTime,
+  motionStudioPointCurveIsApplied,
   motionStudioPointCurveOrder,
   motionStudioPointCurvePreview,
   motionStudioPointCurveViewEnd,
@@ -130,6 +133,7 @@ export function createMotionStudioController({
   el,
   getMotorActionBlockReason = () => '',
   getConfiguredMotors = () => [],
+  onMotionFilesChange = async () => {},
 }) {
   const state = createMotionStudioState();
   let preferredEditorEditOperation = 'time_scale';
@@ -581,11 +585,8 @@ export function createMotionStudioController({
     return points.length >= 2 ? { curve, points } : null;
   }
 
-  function pointCurveIsSaved(editor, curveId) {
-    const targetId = String(curveId || '');
-    return Boolean(targetId) && editorPointCurves(editor?.original).some(
-      (curve) => String(curve.curve_id || '') === targetId,
-    );
+  function pointCurveIsApplied(editor, curveId) {
+    return motionStudioPointCurveIsApplied(editor?.working, curveId);
   }
 
   function pointCurveCanBeCreated(editor = state.editor) {
@@ -806,8 +807,8 @@ export function createMotionStudioController({
     const editor = state.editor;
     const point = selectedDraftPoint(editor);
     const pointMode = el.studioEditorOperation?.value === 'point_curve';
-    const savedPointCurve = pointCurveIsSaved(editor, editor?.pointDraft?.curve_id);
-    const editablePointCurve = savedPointCurve || pointCurveCanBeCreated(editor);
+    const appliedPointCurve = pointCurveIsApplied(editor, editor?.pointDraft?.curve_id);
+    const editablePointCurve = appliedPointCurve || pointCurveCanBeCreated(editor);
     const selectedRange = !pointMode ? selectedEditorPointRange(editor) : null;
     const rangeReady = Boolean(selectedRange);
     const draftPoints = editor?.pointDraft?.points || [];
@@ -1076,7 +1077,7 @@ export function createMotionStudioController({
     const selectedIds = editorSelectedMotionIds();
     const selectedAxisPointBacked = selectedIds.length === 1
       && !layerPointCoverageIssues(editor?.working).includes(selectedIds[0]);
-    const savedPointCurve = pointCurveIsSaved(editor, editor?.pointDraft?.curve_id);
+    const appliedPointCurve = pointCurveIsApplied(editor, editor?.pointDraft?.curve_id);
     const creatablePointCurve = pointMode && pointCurveCanBeCreated(editor);
     const workingPointCurve = Boolean(storedCurveForDraft(editor));
     const pointRangeReady = Boolean(selectedEditorPointRange(editor));
@@ -1110,7 +1111,7 @@ export function createMotionStudioController({
     if (el.studioEditorApplyButton) {
       el.studioEditorApplyButton.disabled = (
         Boolean(editor?.preview)
-        || (!savedPointCurve && !creatablePointCurve)
+        || (!appliedPointCurve && !creatablePointCurve)
         || (!pointMode && !pointRangeReady)
       );
     }
@@ -1210,11 +1211,11 @@ export function createMotionStudioController({
         value_scale: '포인트 한 개는 0°, 두 개 이상은 첫 포인트를 기준으로 모션값을 조절합니다.',
         time_shift: '선택한 포인트 한 개 또는 포인트 범위를 시간축으로 이동합니다.',
         value_offset: '선택한 포인트 한 개 또는 포인트 범위의 모션값을 이동합니다.',
-        point_curve: savedPointCurve
-          ? '저장된 포인트 모션입니다. 포인트 추가·이동과 탄젠트 편집이 가능합니다.'
+        point_curve: appliedPointCurve
+          ? '작업본에 반영된 포인트 모션입니다. 포인트 추가·이동과 탄젠트 편집이 가능합니다.'
           : creatablePointCurve
             ? '새로 추가한 축입니다. 그래프를 클릭해 포인트를 두 개 이상 만드세요.'
-            : '선택 축 전체에 포인트를 생성하고 저장한 뒤 편집할 수 있습니다.',
+            : '선택 축 전체에 포인트를 생성하고 작업본에 반영한 뒤 편집할 수 있습니다.',
       };
       el.studioEditorOperationHelp.textContent = help[operation] || '';
     }
@@ -1900,8 +1901,8 @@ export function createMotionStudioController({
     const hasTransitionWarnings = Boolean(state.composition?.transition_warnings?.length);
     const hasCurveMismatches = Boolean(state.composition?.point_curve_mismatches?.length);
     const hasCompositionErrors = hasConflicts || hasTransitionWarnings || hasCurveMismatches;
-    const enabledLayerCount = (state.project?.layers || [])
-      .filter((layer) => layer.enabled !== false).length;
+    const exportSelection = motionStudioExportSelection(state.project?.layers);
+    const enabledLayerCount = exportSelection.count;
     const hasSingleExportLayer = enabledLayerCount === 1;
     const motorBlockReason = motorActionBlockReason();
     if (el.studioState) el.studioState.textContent = state.status?.message || '대기';
@@ -1952,6 +1953,17 @@ export function createMotionStudioController({
         : hasCurveMismatches
         ? '포인트 곡선과 20ms 프레임 불일치를 먼저 정리하세요'
         : (hasCompositionErrors ? '레이어 충돌 또는 모션값 급변을 해결한 뒤 내보낼 수 있습니다' : '');
+    }
+    if (el.studioExportTarget) {
+      const exportLayer = exportSelection.layer;
+      el.studioExportTarget.dataset.state = exportLayer
+        ? 'ready'
+        : enabledLayerCount > 1 ? 'blocked' : 'empty';
+      el.studioExportTarget.textContent = exportLayer
+        ? `내보내기 대상 · ${exportLayer.name} · ${layerSummary(exportLayer)}`
+        : enabledLayerCount > 1
+          ? `내보내기 불가 · 재생 선택 ${enabledLayerCount}개 · 1개만 체크하세요`
+          : '내보내기 대상 없음 · 재생 선택 레이어를 1개만 체크하세요';
     }
     if (el.studioCreateLayerButton) {
       el.studioCreateLayerButton.disabled = state.busy || running || !hasProject;
@@ -2021,6 +2033,31 @@ export function createMotionStudioController({
   }
 
   async function exportFinalMotionFile(name) {
+    const exportSelection = motionStudioExportSelection(state.project?.layers);
+    if (!exportSelection.layer) {
+      await showAlert(
+        `모션 실행 파일을 저장할 수 없습니다.\n재생 선택 · ${exportSelection.count}개\n필요 조건 · 재생 선택 레이어 1개`,
+        {
+          title: '내보내기 대상 확인',
+          confirmLabel: '확인',
+          tone: 'warning',
+        },
+      );
+      return null;
+    }
+    const exportLayer = exportSelection.layer;
+    const confirmed = await showConfirm(
+      `내보내기 대상 · ${exportLayer.name}\n`
+      + `레이어 정보 · ${layerSummary(exportLayer)}\n`
+      + '선택 기준 · 재생 선택 체크\n'
+      + '연한 파란색 행 · 상세보기 대상이며 내보내기와 무관',
+      {
+        title: '모션 실행 파일 저장',
+        confirmLabel: '이 레이어 저장',
+        tone: 'primary',
+      },
+    );
+    if (!confirmed) return null;
     const result = await run(
       () => exportMotionStudio(name),
       {
@@ -2034,6 +2071,7 @@ export function createMotionStudioController({
       },
     );
     if (!result) return null;
+    await onMotionFilesChange(result);
     await showAlert(motionStudioExportResultMessage(result), {
       title: '모션 실행 파일 저장 완료',
       confirmLabel: '확인',
@@ -2490,13 +2528,13 @@ export function createMotionStudioController({
         return;
       }
       if (
-        !pointCurveIsSaved(editor, editor.pointDraft?.curve_id)
+        !pointCurveIsApplied(editor, editor.pointDraft?.curve_id)
         && !pointCurveCanBeCreated(editor)
       ) {
         setEditorMessage(
           editor.pointDraft
-            ? '생성된 포인트를 먼저 작업본에 반영하고 저장하세요.'
-            : '선택 축 전체에 포인트를 생성하고 저장한 뒤 편집하세요.',
+            ? '생성된 포인트를 먼저 작업본에 반영하세요.'
+            : '선택 축 전체에 포인트를 생성하고 작업본에 반영한 뒤 편집하세요.',
           true,
         );
         return;
@@ -3150,14 +3188,14 @@ export function createMotionStudioController({
       });
       if (graphAction === 'edit_point') {
         if (
-          !pointCurveIsSaved(editor, pointTarget.curve.curve_id)
+          !pointCurveIsApplied(editor, pointTarget.curve.curve_id)
           && !pointCurveCanBeCreated(editor)
         ) {
           if (!selectPointCurveFromGraph(
             pointTarget.curve,
             pointTarget.point.point_id,
           )) return;
-          setEditorMessage('생성된 포인트를 먼저 작업본에 반영하고 저장하세요.', true);
+          setEditorMessage('생성된 포인트를 먼저 작업본에 반영하세요.', true);
           return;
         }
         if (editor.preview) {
@@ -3184,14 +3222,14 @@ export function createMotionStudioController({
           activatePointMode,
         )) return;
         setEditorMessage(
-          pointCurveIsSaved(editor, pointRegion.curve_id)
+          pointCurveIsApplied(editor, pointRegion.curve_id)
             ? (
               activatePointMode
                 ? '포인트 데이터입니다. 동그란 포인트를 선택해 편집하세요.'
                 : '현재 편집 항목을 유지합니다. 동그란 포인트 두 개를 선택하세요.'
             )
-            : '생성된 포인트를 먼저 작업본에 반영하고 저장하세요.',
-          !pointCurveIsSaved(editor, pointRegion.curve_id),
+            : '생성된 포인트를 먼저 작업본에 반영하세요.',
+          !pointCurveIsApplied(editor, pointRegion.curve_id),
         );
         return;
       }
@@ -3338,14 +3376,14 @@ export function createMotionStudioController({
       );
       if (pointTarget) {
         if (
-          !pointCurveIsSaved(editor, pointTarget.curve.curve_id)
+          !pointCurveIsApplied(editor, pointTarget.curve.curve_id)
           && !pointCurveCanBeCreated(editor)
         ) {
           if (!selectPointCurveFromGraph(
             pointTarget.curve,
             pointTarget.point.point_id,
           )) return;
-          setEditorMessage('생성된 포인트를 먼저 작업본에 반영하고 저장하세요.', true);
+          setEditorMessage('생성된 포인트를 먼저 작업본에 반영하세요.', true);
           return;
         }
         if (editor.preview) {
