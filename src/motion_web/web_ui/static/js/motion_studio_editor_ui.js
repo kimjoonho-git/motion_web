@@ -52,7 +52,7 @@ export function motionStudioEditorAxisLabel(
 export function motionStudioEditorInspectorState({
   preview = false,
   pointDraftUnsaved = false,
-  savedPointCurve = false,
+  appliedPointCurve = false,
   pointSelected = false,
   rangeSelected = false,
 } = {}) {
@@ -61,31 +61,76 @@ export function motionStudioEditorInspectorState({
     label: '미리보기 중',
     guide: '결과 확인 후 반영 또는 실행 취소',
   };
-  if (pointDraftUnsaved && !savedPointCurve) return {
+  if (pointDraftUnsaved && !appliedPointCurve) return {
     key: 'unsaved-point',
-    label: '저장 전 포인트',
-    guide: '작업본 반영·저장 후 편집 가능',
-  };
-  if (pointSelected) return {
-    key: 'point',
-    label: '포인트 선택',
-    guide: '시간·모션값·탄젠트·곡선 조정',
-  };
-  if (savedPointCurve) return {
-    key: 'saved-point',
-    label: '저장된 포인트',
-    guide: '같은 포인트 곡선의 포인트 2개 선택',
+    label: '반영 전 포인트',
+    guide: '작업본에 반영한 뒤 편집 가능',
   };
   if (rangeSelected) return {
     key: 'point-range',
     label: '포인트 범위',
     guide: '선택 포인트 함께 편집',
   };
+  if (pointSelected) return {
+    key: 'point',
+    label: '포인트 선택',
+    guide: '시간·모션값·탄젠트·곡선 조정',
+  };
+  if (appliedPointCurve) return {
+    key: 'applied-point',
+    label: '반영된 포인트',
+    guide: '같은 포인트 곡선의 포인트 2개 선택',
+  };
   return {
     key: 'none',
     label: '선택 없음',
     guide: '축 전체 포인트 생성 후 편집 가능',
   };
+}
+
+export function motionStudioRangeWarningGroups(warnings = []) {
+  const byMotionId = new Map();
+  (Array.isArray(warnings) ? warnings : []).forEach((warning) => {
+    const motionId = text(warning?.motion_id);
+    const timeSec = Number(warning?.time_sec);
+    const valueDeg = Number(warning?.value_deg);
+    const lowerDeg = Number(warning?.lower_deg);
+    const upperDeg = Number(warning?.upper_deg);
+    if (
+      !motionId
+      || !Number.isFinite(timeSec)
+      || !Number.isFinite(valueDeg)
+      || !Number.isFinite(lowerDeg)
+      || !Number.isFinite(upperDeg)
+    ) return;
+    if (!byMotionId.has(motionId)) byMotionId.set(motionId, []);
+    byMotionId.get(motionId).push({
+      timeSec, valueDeg, lowerDeg, upperDeg,
+    });
+  });
+  return [...byMotionId.entries()].map(([motionId, items]) => {
+    items.sort((left, right) => left.timeSec - right.timeSec);
+    const segments = [];
+    items.forEach((item) => {
+      const previous = segments.at(-1);
+      if (previous && item.timeSec - previous.endSec <= 0.021) {
+        previous.endSec = item.timeSec;
+        return;
+      }
+      segments.push({ startSec: item.timeSec, endSec: item.timeSec });
+    });
+    return {
+      motionId,
+      count: items.length,
+      lowerDeg: items[0].lowerDeg,
+      upperDeg: items[0].upperDeg,
+      minimumDeg: Math.min(...items.map((item) => item.valueDeg)),
+      maximumDeg: Math.max(...items.map((item) => item.valueDeg)),
+      belowLower: items.some((item) => item.valueDeg < item.lowerDeg),
+      aboveUpper: items.some((item) => item.valueDeg > item.upperDeg),
+      segments,
+    };
+  }).sort((left, right) => left.motionId.localeCompare(right.motionId));
 }
 
 export function renderMotionStudioEditorPresentation(el, {

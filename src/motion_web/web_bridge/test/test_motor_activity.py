@@ -28,6 +28,28 @@ def test_repeat_dwell_is_not_reported_as_motor_activity():
     assert result['kind'] == 'repeat_waiting'
 
 
+def test_runtime_countdown_is_not_reported_as_initial_position_motion():
+    result = motor_activity_snapshot(
+        {'state': 'countdown', 'phase': 'countdown'},
+        {'state': 'initializing'},
+        {'command_owner': 'playback'},
+    )
+
+    assert result['active'] is False
+    assert result['kind'] == 'countdown'
+
+
+def test_completed_initial_position_is_not_reported_as_moving():
+    result = motor_activity_snapshot(
+        {'state': 'initialized', 'phase': 'initialized'},
+        {'state': 'initializing'},
+        {'command_owner': 'playback'},
+    )
+
+    assert result['active'] is False
+    assert result['kind'] == 'initialized'
+
+
 def test_manual_activity_distinguishes_action_from_jog():
     action = motor_activity_snapshot(
         {}, {}, {

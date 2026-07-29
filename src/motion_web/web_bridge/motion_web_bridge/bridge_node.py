@@ -77,6 +77,22 @@ def motor_activity_snapshot(
         if bool(run.get('automation_run')):
             return active('automation', '자동 반복 모션 동작 중', 'motion_run')
         return active('motion_run', '모션 동작 중', 'motion_run')
+    if run_state == 'countdown':
+        return {
+            'active': False,
+            'kind': 'countdown',
+            'label': '',
+            'source': 'motion_run',
+            'warning': False,
+        }
+    if run_state == 'initialized' and studio_state == 'initializing':
+        return {
+            'active': False,
+            'kind': 'initialized',
+            'label': '',
+            'source': 'motion_run',
+            'warning': False,
+        }
     if studio_state == 'initializing':
         return active('initializing', '초기 위치 이동 중', 'motion_studio')
     if studio_state == 'playing':

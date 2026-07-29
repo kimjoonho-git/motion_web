@@ -1187,7 +1187,13 @@ body {
   display: flex;
   align-items: center;
   gap: 10px;
-  flex-wrap: wrap;
+  min-width: 0;
+  flex-wrap: nowrap;
+}
+
+.app-title h1,
+.app-title .version-badge {
+  flex: 0 0 auto;
 }
 
 .topbar-operations {
@@ -1325,20 +1331,39 @@ body {
 }
 
 .motor-activity-banner {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
-  gap: 9px;
-  margin: -4px 0 10px;
-  padding: 8px 12px;
+  gap: 7px;
+  width: 190px;
+  min-width: 0;
+  height: 30px;
+  padding: 5px 10px;
+  overflow: hidden;
   border: 1px solid #6ca4e8;
-  border-radius: 8px;
+  border-radius: 999px;
   background: #eaf4ff;
   color: #174f91;
-  font-size: 13px;
+  font-size: 12px;
+  line-height: 1;
+  opacity: 1;
+  visibility: visible;
+  white-space: nowrap;
+}
+
+.motor-activity-banner[aria-hidden="true"] {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.motor-activity-banner strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .motor-activity-banner #motorActivityIndicator {
+  flex: 0 0 auto;
   width: 9px;
   height: 9px;
   border-radius: 50%;
@@ -2972,6 +2997,27 @@ button[aria-disabled="true"] {
 .studio-editor-feedback-text .registry-message {
   margin: 0;
   font-size: 12px;
+}
+
+.studio-editor-validation-details {
+  flex: 1 0 100%;
+  display: grid;
+  gap: 4px;
+  padding: 7px 9px;
+  border: 1px solid #f0b2ac;
+  border-radius: 6px;
+  background: #fff6f5;
+  color: #8f261e;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.studio-editor-validation-details.hidden {
+  display: none;
+}
+
+.studio-editor-validation-details strong {
+  color: #6f1711;
 }
 
 .studio-editor-inspector-content {
@@ -6703,6 +6749,10 @@ body.app-dialog-open {
   .topbar {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .motor-activity-banner {
+    width: 120px;
   }
 
   .topbar-operations {

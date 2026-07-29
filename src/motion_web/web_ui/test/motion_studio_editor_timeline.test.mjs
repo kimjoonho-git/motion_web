@@ -700,7 +700,33 @@ test('axis range violations remain visible warnings without blocking edit apply'
   assert.match(source, /계속 진행 가능/);
   assert.match(
     graphSource,
-    /\(displayedValidation\?\.range_warnings \|\| \[\]\)\.map/,
+    /motionStudioEditorIssueTimes\(displayedValidation, \[\.\.\.selected\]\)/,
+  );
+  assert.match(source, /motionStudioRangeWarningGroups/);
+  assert.match(source, /그래프에서 숨김/);
+});
+
+test('layer axis deletion uses preview, apply, and save workflow', () => {
+  const source = readFileSync(
+    new URL('../static/js/motion_studio.js', import.meta.url),
+    'utf8',
+  );
+  const html = readFileSync(
+    new URL('../static/index.html', import.meta.url),
+    'utf8',
+  );
+  const deletionFlow = source.match(
+    /async function previewEditorAxisDeletion\(\)[\s\S]*?async function applyEditorOperation/,
+  )?.[0] || '';
+
+  assert.match(html, /id="studioEditorDeleteAxisButton"[\s\S]*?>선택 축 삭제</);
+  assert.match(deletionFlow, /operation: 'delete_axis'/);
+  assert.match(deletionFlow, /confirmLabel: '삭제 미리보기'/);
+  assert.match(deletionFlow, /editor\.preview = clone\(result\.layer\)/);
+  assert.doesNotMatch(deletionFlow, /saveMotionStudioLayerData/);
+  assert.match(
+    source,
+    /studioEditorDeleteAxisButton\?\.addEventListener\('click', previewEditorAxisDeletion\)/,
   );
 });
 
@@ -715,6 +741,7 @@ test('saving keeps the layer editor open and refreshes its saved baseline', () =
   assert.match(saveFlow, /editor\.original = clone\(savedLayer\)/);
   assert.match(saveFlow, /editor\.undo = \[\]/);
   assert.match(saveFlow, /editor\.redo = \[\]/);
+  assert.match(saveFlow, /if \(validation\) editor\.validation = clone\(validation\)/);
   assert.match(saveFlow, /저장 완료 · 창을 닫지 않고 편집을 계속할 수 있습니다/);
   assert.doesNotMatch(saveFlow, /if \(result\) \{\s*closeLayerEditor\(\)/);
 });

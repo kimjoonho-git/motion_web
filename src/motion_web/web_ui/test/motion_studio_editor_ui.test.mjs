@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   motionStudioEditorAxisLabel,
   motionStudioEditorInspectorState,
+  motionStudioRangeWarningGroups,
   renderMotionStudioEditorPresentation,
 } from '../static/js/motion_studio_editor_ui.js';
 
@@ -39,18 +40,57 @@ test('inspector state follows preview, point, range, and empty selections', () =
     'unsaved-point',
   );
   assert.equal(
-    motionStudioEditorInspectorState({ savedPointCurve: true, pointSelected: true }).key,
+    motionStudioEditorInspectorState({ appliedPointCurve: true, pointSelected: true }).key,
     'point',
   );
   assert.equal(
-    motionStudioEditorInspectorState({ savedPointCurve: true }).key,
-    'saved-point',
+    motionStudioEditorInspectorState({
+      appliedPointCurve: true,
+      pointSelected: true,
+      rangeSelected: true,
+    }).key,
+    'point-range',
+  );
+  assert.equal(
+    motionStudioEditorInspectorState({ appliedPointCurve: true }).key,
+    'applied-point',
   );
   assert.equal(
     motionStudioEditorInspectorState({ rangeSelected: true }).key,
     'point-range',
   );
   assert.equal(motionStudioEditorInspectorState().key, 'none');
+});
+
+test('range warnings are grouped by axis and adjacent 20ms periods', () => {
+  const groups = motionStudioRangeWarningGroups([
+    {
+      motion_id: '1-3', time_sec: 4.56, value_deg: 10.1,
+      lower_deg: -15, upper_deg: 10,
+    },
+    {
+      motion_id: '1-3', time_sec: 4.58, value_deg: 10.6,
+      lower_deg: -15, upper_deg: 10,
+    },
+    {
+      motion_id: '1-3', time_sec: 6.12, value_deg: 10.3,
+      lower_deg: -15, upper_deg: 10,
+    },
+    {
+      motion_id: '1-2', time_sec: 3.1, value_deg: -10.2,
+      lower_deg: -10, upper_deg: 15,
+    },
+  ]);
+
+  assert.deepEqual(groups.map((group) => group.motionId), ['1-2', '1-3']);
+  assert.equal(groups[0].belowLower, true);
+  assert.equal(groups[0].minimumDeg, -10.2);
+  assert.equal(groups[1].aboveUpper, true);
+  assert.equal(groups[1].maximumDeg, 10.6);
+  assert.deepEqual(groups[1].segments, [
+    { startSec: 4.56, endSec: 4.58 },
+    { startSec: 6.12, endSec: 6.12 },
+  ]);
 });
 
 test('save and inspector presentation render explicit state without moving graph', () => {

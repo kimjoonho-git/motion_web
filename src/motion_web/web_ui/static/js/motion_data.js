@@ -67,6 +67,61 @@ export function registeredMotionFileId(mapping = {}) {
   return String(mapping?.motion_file_id || '').trim();
 }
 
+export function effectiveMotionRunProgress(
+  status = {},
+  {
+    nowSec = Date.now() / 1000,
+    initialMoveTimeSec = null,
+  } = {},
+) {
+  const state = String(status?.state || 'idle');
+  const progress = status?.progress || {};
+  const summaryDuration = Number(status?.summary?.duration_sec);
+  let elapsed = Number(progress.elapsed_sec);
+  let duration = Number(progress.duration_sec);
+
+  if (!Number.isFinite(elapsed)) elapsed = 0.0;
+  if (!Number.isFinite(duration) || duration < 0) duration = 0.0;
+
+  if (state === 'initializing') {
+    if (Number.isFinite(initialMoveTimeSec) && initialMoveTimeSec >= 0) {
+      duration = initialMoveTimeSec;
+    }
+  } else if (
+    state === 'running'
+    || state === 'waiting'
+    || state === 'verifying'
+    || state === 'completed'
+  ) {
+    duration = duration > 0
+      ? duration
+      : (Number.isFinite(summaryDuration) ? summaryDuration : 0.0);
+  }
+
+  if (state === 'running' || state === 'initializing') {
+    const updatedAt = Number(status?.updated_at);
+    if (Number.isFinite(updatedAt) && updatedAt > 0 && nowSec >= updatedAt) {
+      elapsed += nowSec - updatedAt;
+    }
+  } else if (
+    state === 'waiting'
+    || state === 'verifying'
+    || state === 'completed'
+  ) {
+    elapsed = duration;
+  }
+
+  elapsed = Math.max(0.0, elapsed);
+  if (duration > 0) elapsed = Math.min(elapsed, duration);
+  return {
+    elapsed_sec: elapsed,
+    duration_sec: duration,
+    ratio: duration > 0 ? Math.min(Math.max(elapsed / duration, 0.0), 1.0) : 0.0,
+    sample_index: progress.sample_index,
+    active_axis_count: progress.active_axis_count,
+  };
+}
+
 export function motionMotorRef(motor) {
   if (!motor) return '';
   const motorType = normalizeMotorTypeKey(motor.motor_type, motor.motor_type_label);
@@ -709,6 +764,7 @@ export function createMotionDataController({
       initializing: '초기 위치 이동 중',
       initialized: '초기 위치 완료',
       running: '모션 중',
+      waiting: '반복 대기 중',
       verifying: '위치 확인 중',
       stopping: '정지 중',
       stopped: '정지',
@@ -721,14 +777,25 @@ export function createMotionDataController({
   function motionRunStateClass(state) {
     const key = String(state || 'idle');
     if (key === 'error') return 'bad';
-    if (key === 'running' || key === 'initializing' || key === 'verifying' || key === 'stopping') return 'warn';
+    if (
+      key === 'running'
+      || key === 'waiting'
+      || key === 'initializing'
+      || key === 'verifying'
+      || key === 'stopping'
+    ) return 'warn';
     if (key === 'ready' || key === 'initialized' || key === 'completed') return 'ok';
     return 'warn';
   }
 
   function motionRunStageKey(status) {
     const state = String(status?.state || 'idle');
-    if (state === 'stopping' || state === 'stopped' || state === 'error') return state;
+    if (
+      state === 'waiting'
+      || state === 'stopping'
+      || state === 'stopped'
+      || state === 'error'
+    ) return state;
     if (MOTION_RUN_STAGES.some((stage) => stage.key === state)) return state;
     return 'idle';
   }
@@ -738,50 +805,9 @@ export function createMotionDataController({
   }
 
   function motionRunEffectiveProgress(status = motionRunStatus || {}) {
-    const state = String(status?.state || 'idle');
-    const progress = status?.progress || {};
-    const lifecycle = status?.lifecycle || {};
-    const nowSec = Date.now() / 1000;
-    let elapsed = Number(progress.elapsed_sec);
-    let duration = Number(progress.duration_sec);
-
-    if (!Number.isFinite(elapsed)) elapsed = 0.0;
-    if (!Number.isFinite(duration) || duration < 0) duration = 0.0;
-
-    if (state === 'initializing') {
-      const startedAt = Number(lifecycle.initial_started_at || status.phase_started_at || status.updated_at);
-      const overrideDuration = motionRunInitialMoveTimeSec();
-      if (overrideDuration !== null) duration = overrideDuration;
-      if (Number.isFinite(startedAt) && startedAt > 0) elapsed = nowSec - startedAt;
-    } else if (state === 'running') {
-      const startedAt = Number(lifecycle.motion_started_at || status.phase_started_at || status.updated_at);
-      const summaryDuration = Number(status?.summary?.duration_sec);
-      duration = duration > 0 ? duration : (Number.isFinite(summaryDuration) ? summaryDuration : 0.0);
-      if (Number.isFinite(startedAt) && startedAt > 0) {
-        const runningElapsed = nowSec - startedAt;
-        elapsed = status?.run_mode === 'continuous' && duration > 0
-          ? runningElapsed % duration
-          : runningElapsed;
-      }
-    } else if (state === 'verifying') {
-      const summaryDuration = Number(status?.summary?.duration_sec);
-      duration = duration > 0 ? duration : (Number.isFinite(summaryDuration) ? summaryDuration : 0.0);
-      elapsed = duration;
-    } else if (state === 'completed') {
-      const summaryDuration = Number(status?.summary?.duration_sec);
-      duration = duration > 0 ? duration : (Number.isFinite(summaryDuration) ? summaryDuration : 0.0);
-      elapsed = duration;
-    }
-
-    elapsed = Math.max(0.0, elapsed);
-    if (duration > 0) elapsed = Math.min(elapsed, duration);
-    return {
-      elapsed_sec: elapsed,
-      duration_sec: duration,
-      ratio: duration > 0 ? Math.min(Math.max(elapsed / duration, 0.0), 1.0) : 0.0,
-      sample_index: progress.sample_index,
-      active_axis_count: progress.active_axis_count,
-    };
+    return effectiveMotionRunProgress(status, {
+      initialMoveTimeSec: motionRunInitialMoveTimeSec(),
+    });
   }
 
   function renderMotionRunStages() {
@@ -796,7 +822,12 @@ export function createMotionDataController({
       const label = stage.key === currentKey ? `현재: ${stage.label}` : stage.label;
       return `<span class="${className}">${displayText(label)}</span>`;
     }).join('');
-    const extraState = currentKey === 'stopping' || currentKey === 'stopped' || currentKey === 'error'
+    const extraState = (
+      currentKey === 'waiting'
+      || currentKey === 'stopping'
+      || currentKey === 'stopped'
+      || currentKey === 'error'
+    )
       ? `<span class="motion-run-stage ${motionRunStateClass(currentKey)} active">${displayText(`현재: ${motionRunStateText(currentKey)}`)}</span>`
       : '';
     el.motionRunStageStrip.innerHTML = `${stageHtml}${extraState}`;
@@ -818,6 +849,7 @@ export function createMotionDataController({
     if (state === 'running' || state === 'stopping') {
       return `모션 진행 ${formatNumber(progress.elapsed_sec, 2)} / ${formatNumber(progress.duration_sec, 2)} s`;
     }
+    if (state === 'waiting') return String(status?.message || '반복 대기 중');
     if (state === 'verifying') return '최종 위치 확인 중';
     if (state === 'initialized') return '초기 위치 이동 완료';
     if (state === 'completed') return `모션 완료 ${formatNumber(progress.duration_sec, 2)} s`;
@@ -929,7 +961,12 @@ export function createMotionDataController({
     const state = String(status?.state || 'idle');
     const effective = motionRunEffectiveProgress(status);
     let cursorTime = minTime;
-    if (state === 'running' || state === 'verifying' || state === 'completed') {
+    if (
+      state === 'running'
+      || state === 'waiting'
+      || state === 'verifying'
+      || state === 'completed'
+    ) {
       cursorTime = Math.min(Math.max(effective.elapsed_sec, minTime), maxTime);
     } else if (state === 'initialized') {
       cursorTime = minTime;
@@ -944,7 +981,12 @@ export function createMotionDataController({
 
     context.fillStyle = state === 'running' ? '#111827' : '#64748b';
     context.font = '12px Arial';
-    const cursorLabel = state === 'running' || state === 'verifying' || state === 'completed'
+    const cursorLabel = (
+      state === 'running'
+      || state === 'waiting'
+      || state === 'verifying'
+      || state === 'completed'
+    )
       ? `${formatNumber(cursorTime, 2)}s`
       : motionRunStateText(state);
     context.fillText(cursorLabel, Math.min(cursorX + 6, width - 80), padTop + graphHeight - 8);
@@ -955,6 +997,8 @@ export function createMotionDataController({
         messageEl.textContent = `초기 위치 이동 중 ${formatNumber(effective.elapsed_sec, 2)} / ${formatNumber(effective.duration_sec, 2)} s · ${visibleText}`;
       } else if (state === 'running') {
         messageEl.textContent = `모션 중 ${formatNumber(effective.elapsed_sec, 2)} / ${formatNumber(effective.duration_sec, 2)} s · ${visibleText}`;
+      } else if (state === 'waiting') {
+        messageEl.textContent = `${String(status?.message || '반복 대기 중')} · ${visibleText}`;
       } else if (state === 'verifying') {
         messageEl.textContent = `최종 위치 확인 중 · ${visibleText}`;
       } else if (state === 'completed') {

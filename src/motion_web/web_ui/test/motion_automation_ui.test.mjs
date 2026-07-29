@@ -47,4 +47,6 @@ test('global motor activity banner is driven by server status', () => {
   assert.match(html, /id="motorActivityBanner"/);
   assert.match(main, /motor_activity: payload\.motor_activity \|\| \{\}/);
   assert.match(main, /renderMotorActivity\(appState\.latestState\.motor_activity\)/);
+  assert.match(main, /setAttribute\('aria-hidden', active \? 'false' : 'true'\)/);
+  assert.doesNotMatch(main, /motorActivityBanner\.classList\.toggle\('hidden'/);
 });

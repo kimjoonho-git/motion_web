@@ -59,6 +59,22 @@ test('header status and controls share one compact row with separators', () => {
   assert.doesNotMatch(desktopTopbarOperations, /flex-direction: column;/);
 });
 
+test('motor activity uses a reserved title-row slot without vertical layout shift', () => {
+  const title = html.match(/<div class="app-title">[\s\S]*?<\/div>/)?.[0] || '';
+  const activityStyles = styles.match(
+    /\.motor-activity-banner\s*\{([^}]*)\}/,
+  )?.[1] || '';
+  const hiddenActivityStyles = styles.match(
+    /\.motor-activity-banner\[aria-hidden="true"\]\s*\{([^}]*)\}/,
+  )?.[1] || '';
+
+  assert.match(title, /id="motorActivityBanner"/);
+  assert.match(activityStyles, /width: 190px;/);
+  assert.match(activityStyles, /height: 30px;/);
+  assert.match(hiddenActivityStyles, /visibility: hidden;/);
+  assert.doesNotMatch(hiddenActivityStyles, /display: none;/);
+});
+
 test('settings workflows preserve action IDs and expose their defined steps', () => {
   for (const id of [
     'scanButton',
