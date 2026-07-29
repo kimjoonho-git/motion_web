@@ -2316,13 +2316,19 @@ export function createMotionDataController({
     }
   }
 
+  async function showMotionFileDeleteFailure(message) {
+    await showAlert(
+      String(message || '모션 파일을 삭제할 수 없습니다'),
+      { title: '모션 파일 삭제 불가', confirmLabel: '확인', tone: 'warning' },
+    );
+  }
+
   async function deleteSelectedFile() {
     if (!selectedFileId) return;
     if (selectedFileId === registeredMotionFileIdValue) {
-      await showAlert(
+      await showMotionFileDeleteFailure(
         '재생 등록된 모션 파일은 삭제할 수 없습니다.\n'
         + '먼저 재생 등록을 해제한 뒤 다시 삭제하세요.',
-        { title: '모션 파일 삭제 불가', confirmLabel: '확인', tone: 'warning' },
       );
       return;
     }
@@ -2340,17 +2346,26 @@ export function createMotionDataController({
       if (payload.success === false) {
         const message = payload.message || '모션 파일을 삭제할 수 없습니다';
         setMessage(`삭제 실패: ${message}`);
-        await showAlert(
-          message,
-          { title: '모션 파일 삭제 불가', confirmLabel: '확인', tone: 'warning' },
-        );
+        await showMotionFileDeleteFailure(message);
         return;
       }
       selectedFileId = null;
       selectedFile = null;
       setMessage(payload.message || '파일 삭제 완료');
+      try {
+        await onProjectFilesChange?.();
+      } catch (refreshError) {
+        const refreshMessage = refreshError?.message || String(refreshError);
+        setMessage(`파일 삭제 완료 · 프로젝트 목록 갱신 실패: ${refreshMessage}`);
+        await showAlert(
+          `모션 파일은 삭제됐지만 프로젝트 목록을 갱신하지 못했습니다.\n${refreshMessage}`,
+          { title: '프로젝트 목록 갱신 필요', confirmLabel: '확인', tone: 'warning' },
+        );
+      }
     } catch (error) {
-      setMessage(`삭제 실패: ${error?.message || error}`);
+      const message = error?.message || String(error);
+      setMessage(`삭제 실패: ${message}`);
+      await showMotionFileDeleteFailure(message);
     } finally {
       loading = false;
       render();

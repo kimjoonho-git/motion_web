@@ -38,7 +38,6 @@ const CATEGORY_VIEW = {
   layers: { icon: '▤' },
   logs: { icon: '≡' },
   runtime: { icon: '◇' },
-  trash: { icon: '⌫' },
 };
 
 const PROJECT_COPY_FILE_CATEGORIES = new Set([
@@ -185,8 +184,12 @@ export function createProjectExplorerController({
       return;
     }
     const fileManagementAllowed = Boolean(canManageProjectFiles());
-    const totalFiles = state.tree.reduce((sum, folder) => sum + treeFileCount(folder.children), 0);
-    const folders = state.tree.map((folder) => {
+    const visibleTree = state.tree.filter((folder) => folder.category !== 'trash');
+    const totalFiles = visibleTree.reduce(
+      (sum, folder) => sum + treeFileCount(folder.children),
+      0,
+    );
+    const folders = visibleTree.map((folder) => {
       const view = CATEGORY_VIEW[folder.category] || { icon: '□' };
       const readOnly = Boolean(folder.read_only);
       const children = readOnly ? renderReadOnlyNodes(folder.children) : folder.children.map((file, fileIndex) => {
@@ -229,7 +232,7 @@ export function createProjectExplorerController({
           + `</div>${bankTree}</div>`;
       }).join('') || '<div class="project-tree-empty">파일 없음</div>';
       const childCount = readOnly ? treeFileCount(folder.children) : folder.children.length;
-      const defaultOpen = folder.category === 'runtime' || folder.category === 'trash' ? '' : 'open';
+      const defaultOpen = folder.category === 'runtime' ? '' : 'open';
       return `<details class="project-tree-folder project-tree-folder-${escapeHtml(folder.category)}" ${defaultOpen}>`
         + `<summary><span class="project-folder-icon">${view.icon}</span>`
         + `<strong>${escapeHtml(folder.name)}</strong>`

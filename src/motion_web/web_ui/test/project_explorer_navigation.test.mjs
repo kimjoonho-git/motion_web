@@ -121,3 +121,13 @@ test('motion file transfer is not exposed from the project tree', () => {
     /isLogFile \|\| managedInFeature \|\| !fileManagementAllowed \? ''/,
   );
 });
+
+test('project explorer hides recoverable trash without deleting backend data', () => {
+  assert.match(
+    projectExplorer,
+    /const visibleTree = state\.tree\.filter\(\(folder\) => folder\.category !== 'trash'\)/,
+  );
+  assert.match(projectExplorer, /const totalFiles = visibleTree\.reduce/);
+  assert.match(projectExplorer, /const folders = visibleTree\.map/);
+  assert.doesNotMatch(projectExplorer, /trash: \{ icon:/);
+});

@@ -14,11 +14,11 @@ import {
 import { getElements } from './dom.js?v=20260729-editor-workflow-export-1';
 import { createMotorEventLogController } from './event_log.js?v=20260727-popup-common-3';
 import { createMidiMonitorController } from './midi_monitor.js?v=20260727-popup-common-3';
-import { createMotionDataController } from './motion_data.js?v=20260729-motion-run-auto-initialize-1';
+import { createMotionDataController } from './motion_data.js?v=20260729-motion-file-delete-feedback-1';
 import { createMotionStudioController } from './motion_studio.js?v=20260729-editor-workflow-export-1';
 import { createMotionTestController } from './motion_test.js?v=20260728-servo-alarm-2';
 import { createMotorConfigController } from './motor_config.js?v=20260727-popup-common-3';
-import { createProjectExplorerController } from './project_explorer.js?v=20260729-project-file-isolation-1';
+import { createProjectExplorerController } from './project_explorer.js?v=20260729-project-trash-hidden-1';
 import { renderAccess, renderMonitoring } from './monitoring.js?v=20260724-runtime-fix-1';
 import { createOperationProgressManager } from './operation_progress.js?v=20260728-restart-guard-1';
 import { installDialogManager } from './ui_dialogs.js?v=20260727-popup-common-3';
