@@ -57,16 +57,17 @@ import {
   bindMotionStudioProjectTransportEvents,
   createMotionStudioState,
   renderMotionStudioWorkspace,
+  motionStudioExportResultMessage,
   resetMotionStudioProjectState,
   setMotionStudioMessage,
-} from './motion_studio_ui.js?v=20260724-studio-cleanup-3';
+} from './motion_studio_ui.js?v=20260729-motion-export-popup-1';
 import {
   motionStudioEditorAxisLabel,
   motionStudioEditorInspectorState,
   renderMotionStudioEditorPresentation,
   requestMotionStudioEditorSave,
 } from './motion_studio_editor_ui.js?v=20260727-editor-point-confirm-1';
-import { showConfirm } from './ui_dialogs.js?v=20260727-popup-common-3';
+import { showAlert, showConfirm } from './ui_dialogs.js?v=20260727-popup-common-3';
 
 export {
   motionStudioCanCreatePointCurve,
@@ -1899,6 +1900,9 @@ export function createMotionStudioController({
     const hasTransitionWarnings = Boolean(state.composition?.transition_warnings?.length);
     const hasCurveMismatches = Boolean(state.composition?.point_curve_mismatches?.length);
     const hasCompositionErrors = hasConflicts || hasTransitionWarnings || hasCurveMismatches;
+    const enabledLayerCount = (state.project?.layers || [])
+      .filter((layer) => layer.enabled !== false).length;
+    const hasSingleExportLayer = enabledLayerCount === 1;
     const motorBlockReason = motorActionBlockReason();
     if (el.studioState) el.studioState.textContent = state.status?.message || '대기';
     if (el.studioElapsed) el.studioElapsed.textContent = timeText(state.status?.elapsed_sec);
@@ -1942,8 +1946,10 @@ export function createMotionStudioController({
       el.studioStopButton.disabled = !running || runtimeState === 'stopping';
     }
     if (el.studioExportButton) {
-      el.studioExportButton.disabled = state.busy || running || !hasEnabledLayer || hasCompositionErrors;
-      el.studioExportButton.title = hasCurveMismatches
+      el.studioExportButton.disabled = state.busy || running || !hasSingleExportLayer || hasCompositionErrors;
+      el.studioExportButton.title = !hasSingleExportLayer
+        ? '최종 모션 파일은 재생 선택 레이어가 정확히 1개일 때만 저장할 수 있습니다'
+        : hasCurveMismatches
         ? '포인트 곡선과 20ms 프레임 불일치를 먼저 정리하세요'
         : (hasCompositionErrors ? '레이어 충돌 또는 모션값 급변을 해결한 뒤 내보낼 수 있습니다' : '');
     }
@@ -2014,6 +2020,28 @@ export function createMotionStudioController({
     }
   }
 
+  async function exportFinalMotionFile(name) {
+    const result = await run(
+      () => exportMotionStudio(name),
+      {
+        onError: (error) => {
+          void showAlert(motionStudioExportResultMessage(null, error), {
+            title: '모션 실행 파일 저장 실패',
+            confirmLabel: '확인',
+            tone: 'danger',
+          });
+        },
+      },
+    );
+    if (!result) return null;
+    await showAlert(motionStudioExportResultMessage(result), {
+      title: '모션 실행 파일 저장 완료',
+      confirmLabel: '확인',
+      tone: 'info',
+    });
+    return result;
+  }
+
   function resetProjectState() {
     if (state.playbackAnimationFrame) {
       window.cancelAnimationFrame(state.playbackAnimationFrame);
@@ -2079,7 +2107,7 @@ export function createMotionStudioController({
         render();
       },
       defaultExportName: () => state.project?.name || 'motion',
-      onExport: (name) => run(() => exportMotionStudio(name)),
+      onExport: (name) => exportFinalMotionFile(name),
     });
     el.studioLayerRows?.addEventListener('change', (event) => {
       const row = event.target.closest('tr[data-studio-layer-id]');

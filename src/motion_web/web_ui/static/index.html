@@ -52,13 +52,13 @@
           <button class="workspace-tab-button" type="button" role="tab" data-workspace-tab="servo-errors">서보 에러 관리</button>
         </div>
         <div class="workspace-tabs hidden" data-workspace-group-panel="creation" role="tablist" aria-label="모션 제작 메뉴">
-          <button class="workspace-tab-button" type="button" role="tab" data-workspace-tab="motion-files">모션 파일</button>
           <button class="workspace-tab-button" type="button" role="tab" data-workspace-tab="motion-mapping">모션축 설정</button>
           <button class="workspace-tab-button" type="button" role="tab" data-workspace-tab="motion-midi">MIDI 입력 설정</button>
           <button class="workspace-tab-button" type="button" role="tab" data-workspace-tab="studio">모션 스튜디오</button>
         </div>
         <div class="workspace-tabs hidden" data-workspace-group-panel="execution" role="tablist" aria-label="실행 및 시험 메뉴">
           <button class="workspace-tab-button" type="button" role="tab" data-workspace-tab="manual">동작 테스트</button>
+          <button class="workspace-tab-button" type="button" role="tab" data-workspace-tab="motion-files">모션 파일</button>
           <button class="workspace-tab-button" type="button" role="tab" data-workspace-tab="motion-run">모션 실행</button>
         </div>
       </nav>
@@ -741,7 +741,11 @@
             <section class="motion-file-detail" aria-label="모션 파일 상세">
               <div class="section-head compact">
                 <strong>선택 파일 요약</strong>
-                <span>읽기 전용</span>
+                <div class="registry-actions">
+                  <span>읽기 전용</span>
+                  <button id="registerMotionFileButton" type="button" disabled>재생 등록</button>
+                  <button id="unregisterMotionFileButton" type="button" class="danger" disabled>재생 등록 해제</button>
+                </div>
               </div>
               <div id="motionFileSummary" class="motion-file-summary">
                 <div class="empty">파일을 선택하세요</div>
@@ -795,10 +799,10 @@
                 </div>
               </section>
 
-              <section class="motion-file-subsection" aria-label="모션 미리보기">
+              <section class="motion-file-subsection" aria-label="모션 원본 보기">
                 <div class="section-head compact">
-                  <strong>원본 미리보기</strong>
-                  <span>텍스트 일부</span>
+                  <strong>원본 보기</strong>
+                  <span>전체 파일</span>
                 </div>
                 <pre id="motionFilePreviewRows" class="motion-file-preview-text">파일을 선택하세요</pre>
               </section>
@@ -1179,10 +1183,10 @@
                 </div>
               </div>
               <div class="studio-export-panel">
-                <div class="section-head compact"><strong>모션 파일 내보내기</strong><span>현재 재생 선택 레이어의 합성 결과</span></div>
+                <div class="section-head compact"><strong>모션 실행으로 보내기</strong><span>재생 선택 레이어 1개와 선택적인 포인트 편집 정보</span></div>
                 <input id="studioExportName" type="text" placeholder="내보낼 모션 파일명">
-                <button id="studioExportButton" type="button" disabled>모션 파일 내보내기</button>
-                <small>내보낸 파일은 현재 프로젝트의 모션 파일 폴더에 저장됩니다.</small>
+                <button id="studioExportButton" type="button" disabled>모션 실행 파일 저장</button>
+                <small>스튜디오 편집본과 독립된 파일로 저장되며, 모션 실행에서 별도로 재생 등록합니다.</small>
               </div>
             </div>
           </details>
@@ -1627,6 +1631,6 @@
       </div>
     </div>
 
-    <script type="module" src="/static/app.js?v=20260728-desktop-shortcut-1"></script>
+    <script type="module" src="/static/app.js?v=20260729-motion-file-full-view-1"></script>
   </body>
 </html>

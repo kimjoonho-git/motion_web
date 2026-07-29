@@ -27,6 +27,17 @@ test('two-level workspace navigation exposes every defined group and route', () 
   assert.doesNotMatch(main, /tab\?\.click\(\)/);
 });
 
+test('motion files are shown under execution and test, not motion creation', () => {
+  const creationPanel = html.match(
+    /data-workspace-group-panel="creation"[\s\S]*?<\/div>/,
+  )?.[0] || '';
+  const executionPanel = html.match(
+    /data-workspace-group-panel="execution"[\s\S]*?<\/div>/,
+  )?.[0] || '';
+  assert.doesNotMatch(creationPanel, /data-workspace-tab="motion-files"/);
+  assert.match(executionPanel, /data-workspace-tab="motion-files"/);
+});
+
 test('motion screens use workspace routes without obsolete internal tab controls', () => {
   assert.doesNotMatch(html, /id=["']motionTabs["']/);
   assert.doesNotMatch(html, /data-motion-tab=/);

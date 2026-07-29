@@ -5056,6 +5056,7 @@ class MotionWebBridge(Node):
             content = ''
         entry['analysis'] = analysis
         if include_detail:
+            entry['content'] = content
             entry['content_preview'] = content[:12000]
         return entry
 

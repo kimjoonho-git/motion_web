@@ -2,18 +2,17 @@ export const WORKSPACE_GROUPS = Object.freeze({
   operations: Object.freeze(['monitoring', 'log']),
   setup: Object.freeze(['system', 'config', 'servo-errors']),
   creation: Object.freeze([
-    'motion-files',
     'motion-mapping',
     'motion-midi',
     'studio',
   ]),
-  execution: Object.freeze(['manual', 'motion-run']),
+  execution: Object.freeze(['manual', 'motion-files', 'motion-run']),
 });
 
 export const WORKSPACE_DEFAULTS = Object.freeze({
   operations: 'monitoring',
   setup: 'system',
-  creation: 'motion-files',
+  creation: 'studio',
   execution: 'manual',
 });
 

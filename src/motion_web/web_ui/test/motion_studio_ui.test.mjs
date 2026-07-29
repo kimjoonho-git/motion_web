@@ -4,9 +4,21 @@ import test from 'node:test';
 import {
   bindMotionStudioProjectTransportEvents,
   createMotionStudioState,
+  motionStudioExportResultMessage,
   resetMotionStudioProjectState,
   setMotionStudioMessage,
 } from '../static/js/motion_studio_ui.js';
+
+test('motion export popup messages distinguish saved and failed results', () => {
+  assert.equal(
+    motionStudioExportResultMessage({ file_id: 'wave.json', frame_count: 120 }),
+    '모션 실행 파일 저장 완료\n파일 · wave.json\n프레임 · 120개',
+  );
+  assert.equal(
+    motionStudioExportResultMessage(null, new Error('레이어를 1개 선택하세요')),
+    '모션 실행 파일이 저장되지 않았습니다.\n원인 · 레이어를 1개 선택하세요',
+  );
+});
 
 test('studio UI state is isolated per controller and reset clears project runtime fields', () => {
   const first = createMotionStudioState();

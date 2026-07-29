@@ -196,6 +196,8 @@ export function getElements() {
     motionFileInput: document.getElementById('motionFileInput'),
     uploadMotionFileButton: document.getElementById('uploadMotionFileButton'),
     refreshMotionFilesButton: document.getElementById('refreshMotionFilesButton'),
+    registerMotionFileButton: document.getElementById('registerMotionFileButton'),
+    unregisterMotionFileButton: document.getElementById('unregisterMotionFileButton'),
     deleteMotionFileButton: document.getElementById('deleteMotionFileButton'),
     motionFileMessage: document.getElementById('motionFileMessage'),
     motionFileRows: document.getElementById('motionFileRows'),
