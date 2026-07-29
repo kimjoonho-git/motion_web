@@ -16,6 +16,7 @@ import {
   motionStudioMotionTargetAtTime,
   motionStudioNearestMotionTarget,
   motionStudioPointCurveAtTime,
+  motionStudioPointCurveIsApplied,
   motionStudioPointCurveOrder,
   motionStudioPointCurvePreview,
   motionStudioPointCurveViewEnd,
@@ -101,6 +102,16 @@ test('a newly added flat axis can start a point curve without converting motion'
     ...flatLayer,
     point_curves: [{ curve_id: 'curve-a', motion_id: '3-1', points: [] }],
   }, '3-1'), false);
+});
+
+test('point curve editability follows the applied working layer, not the saved baseline', () => {
+  const savedLayer = { point_curves: [] };
+  const workingLayer = {
+    point_curves: [{ curve_id: 'curve-copied', motion_id: '2-1', points: [] }],
+  };
+
+  assert.equal(motionStudioPointCurveIsApplied(savedLayer, 'curve-copied'), false);
+  assert.equal(motionStudioPointCurveIsApplied(workingLayer, 'curve-copied'), true);
 });
 
 test('point edit ranges require two points from the same point curve', () => {
@@ -521,8 +532,8 @@ test('editor exposes whole-axis point creation without motion-section conversion
   assert.doesNotMatch(source, /selection_kind:/);
   assert.doesNotMatch(source, /replace_overlapping_point_curves:/);
   assert.match(source, /approximation_interpolation_order: Number\(/);
-  assert.match(source, /pointCurveIsSaved/);
-  assert.match(source, /전체에 포인트를 생성하고 저장한 뒤 편집/);
+  assert.match(source, /pointCurveIsApplied/);
+  assert.match(source, /전체에 포인트를 생성하고 작업본에 반영한 뒤 편집/);
   assert.match(
     source,
     /const activeCurveId = appliedOperation === 'create_axis_point_curve'/,
@@ -532,6 +543,38 @@ test('editor exposes whole-axis point creation without motion-section conversion
     source,
     /studio-editor-conversion-controls'\)\?\.classList\.toggle\(\s*'hidden',\s*pointMode \|\| selectedAxisPointBacked/,
   );
+});
+
+test('applied point curves can be edited again before the layer is saved', () => {
+  const source = readFileSync(
+    new URL('../static/js/motion_studio.js', import.meta.url),
+    'utf8',
+  );
+  const appliedGuard = source.match(
+    /function pointCurveIsApplied[\s\S]*?^\s*}/m,
+  )?.[0] || '';
+  assert.match(appliedGuard, /editor\?\.working/);
+  assert.doesNotMatch(appliedGuard, /editor\?\.original/);
+  assert.match(
+    source,
+    /Boolean\(editor\?\.preview\)[\s\S]*?\(!appliedPointCurve && !creatablePointCurve\)[\s\S]*?\(!pointMode && !pointRangeReady\)/,
+  );
+});
+
+test('motion export identifies the playback-selected layer and ignores the blue detail row', () => {
+  const html = readFileSync(
+    new URL('../static/index.html', import.meta.url),
+    'utf8',
+  );
+  const source = readFileSync(
+    new URL('../static/js/motion_studio.js', import.meta.url),
+    'utf8',
+  );
+  assert.match(html, /id="studioExportTarget"/);
+  assert.match(html, /재생 선택 체크 기준 · 연한 파란색 행과 무관/);
+  assert.match(source, /motionStudioExportSelection\(state\.project\?\.layers\)/);
+  assert.match(source, /선택 기준 · 재생 선택 체크/);
+  assert.match(source, /연한 파란색 행 · 상세보기 대상이며 내보내기와 무관/);
 });
 
 test('range editing stays disabled until two distinct points from one curve are selected', () => {

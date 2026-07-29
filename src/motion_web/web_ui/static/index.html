@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>모션 녹화 시스템 0.5.0</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260728-point-range-actions-1">
+    <link rel="stylesheet" href="/static/styles.css?v=20260729-editor-workflow-export-1">
   </head>
   <body>
     <main class="shell">
@@ -52,13 +52,13 @@
           <button class="workspace-tab-button" type="button" role="tab" data-workspace-tab="servo-errors">서보 에러 관리</button>
         </div>
         <div class="workspace-tabs hidden" data-workspace-group-panel="creation" role="tablist" aria-label="모션 제작 메뉴">
-          <button class="workspace-tab-button" type="button" role="tab" data-workspace-tab="motion-files">모션 파일</button>
           <button class="workspace-tab-button" type="button" role="tab" data-workspace-tab="motion-mapping">모션축 설정</button>
           <button class="workspace-tab-button" type="button" role="tab" data-workspace-tab="motion-midi">MIDI 입력 설정</button>
           <button class="workspace-tab-button" type="button" role="tab" data-workspace-tab="studio">모션 스튜디오</button>
         </div>
         <div class="workspace-tabs hidden" data-workspace-group-panel="execution" role="tablist" aria-label="실행 및 시험 메뉴">
           <button class="workspace-tab-button" type="button" role="tab" data-workspace-tab="manual">동작 테스트</button>
+          <button class="workspace-tab-button" type="button" role="tab" data-workspace-tab="motion-files">모션 파일</button>
           <button class="workspace-tab-button" type="button" role="tab" data-workspace-tab="motion-run">모션 실행</button>
         </div>
       </nav>
@@ -138,7 +138,7 @@
               <div id="projectUsbHelp" class="project-usb-help">프로젝트 저장 위치 확인 중</div>
               <div class="project-import-row">
                 <select id="projectImportCategory" class="compact-select" aria-label="가져올 파일 종류">
-                  <option value="motor_axes">모터축 설정</option><option value="motion_axis_matching">모션축 설정</option><option value="motions">모션 파일</option><option value="layers">레이어</option>
+                  <option value="motor_axes">모터축 설정</option><option value="motion_axis_matching">모션축 설정</option><option value="layers">레이어</option>
                 </select>
                 <button id="projectImportFileButton" type="button" disabled>파일 가져오기</button>
                 <input id="projectImportFileInput" type="file" class="hidden" accept=".yaml,.yml,.json">
@@ -713,10 +713,7 @@
                 <span id="motionFileMessage">현재 파일 확인 중</span>
               </div>
               <div class="motion-file-upload">
-                <div class="registry-actions">
-                  <button id="refreshMotionFilesButton" type="button">목록 새로고침</button>
-                </div>
-                <div class="registry-message">파일 가져오기·내보내기·이름 변경·삭제는 왼쪽 프로젝트 파일에서 관리합니다.</div>
+                <div class="registry-message">목록은 저장·삭제·프로젝트 전환 시 자동 갱신됩니다. 파일을 선택한 뒤 상세 화면에서 스튜디오 내보내기·재생 등록·삭제를 관리합니다.</div>
               </div>
               <div class="table-wrap motion-file-table-wrap">
                 <table class="motion-file-table">
@@ -741,7 +738,13 @@
             <section class="motion-file-detail" aria-label="모션 파일 상세">
               <div class="section-head compact">
                 <strong>선택 파일 요약</strong>
-                <span>읽기 전용</span>
+                <div class="registry-actions">
+                  <span>읽기 전용</span>
+                  <button id="exportMotionFileToStudioButton" type="button" disabled>스튜디오로 내보내기</button>
+                  <button id="registerMotionFileButton" type="button" disabled>재생 등록</button>
+                  <button id="unregisterMotionFileButton" type="button" class="danger" disabled>재생 등록 해제</button>
+                  <button id="deleteMotionFileButton" type="button" class="danger" disabled>삭제</button>
+                </div>
               </div>
               <div id="motionFileSummary" class="motion-file-summary">
                 <div class="empty">파일을 선택하세요</div>
@@ -795,10 +798,10 @@
                 </div>
               </section>
 
-              <section class="motion-file-subsection" aria-label="모션 미리보기">
+              <section class="motion-file-subsection" aria-label="모션 원본 보기">
                 <div class="section-head compact">
-                  <strong>원본 미리보기</strong>
-                  <span>텍스트 일부</span>
+                  <strong>원본 보기</strong>
+                  <span>전체 파일</span>
                 </div>
                 <pre id="motionFilePreviewRows" class="motion-file-preview-text">파일을 선택하세요</pre>
               </section>
@@ -1168,8 +1171,8 @@
             <div class="studio-secondary-grid">
               <div class="studio-axis-status">
                 <div class="section-head compact">
-                  <strong>녹화 가능 모션 ID</strong>
-                  <span>초기화 완료 후 MIDI 선택 축을 자동 기록</span>
+                  <strong>녹화 대상 Motion ID</strong>
+                  <span>모션축 설정에 포함된 축 · MIDI 선택된 축만 실제 녹화</span>
                 </div>
                 <div id="studioMappingInfo" class="registry-message">현재 프로젝트의 모션축 설정 파일을 확인하세요</div>
                 <div class="table-wrap">
@@ -1179,10 +1182,13 @@
                 </div>
               </div>
               <div class="studio-export-panel">
-                <div class="section-head compact"><strong>모션 파일 내보내기</strong><span>현재 재생 선택 레이어의 합성 결과</span></div>
+                <div class="section-head compact"><strong>모션 실행으로 보내기</strong><span>재생 선택 체크 기준 · 연한 파란색 행과 무관</span></div>
+                <div id="studioExportTarget" class="studio-export-target" data-state="empty">
+                  내보내기 대상 없음 · 재생 선택 레이어를 1개만 체크하세요
+                </div>
                 <input id="studioExportName" type="text" placeholder="내보낼 모션 파일명">
-                <button id="studioExportButton" type="button" disabled>모션 파일 내보내기</button>
-                <small>내보낸 파일은 현재 프로젝트의 모션 파일 폴더에 저장됩니다.</small>
+                <button id="studioExportButton" type="button" disabled>모션 실행 파일 저장</button>
+                <small>스튜디오 편집본과 독립된 파일로 저장되며, 모션 실행에서 별도로 재생 등록합니다.</small>
               </div>
             </div>
           </details>
@@ -1627,6 +1633,6 @@
       </div>
     </div>
 
-    <script type="module" src="/static/app.js?v=20260728-desktop-shortcut-1"></script>
+    <script type="module" src="/static/app.js?v=20260729-motion-run-auto-initialize-1"></script>
   </body>
 </html>

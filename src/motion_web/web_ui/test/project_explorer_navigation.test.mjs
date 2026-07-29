@@ -81,3 +81,43 @@ test('managed file actions open from the project tree popup', () => {
   assert.match(projectExplorer, /document\.addEventListener\('pointerdown'/);
   assert.doesNotMatch(projectExplorer, /projectFileSaveButton/);
 });
+
+test('project file management is visible and executable only from system information', () => {
+  assert.match(main, /canManageProjectFiles: \(\) => canChangeProjectInWorkspace\(workspaceRouteState\.current\(\)\)/);
+  assert.match(main, /projectExplorer\?\.syncWorkspacePermissions\(\)/);
+  assert.match(
+    projectExplorer,
+    /isLogFile \|\| managedInFeature \|\| !fileManagementAllowed \? ''/,
+  );
+  assert.match(
+    projectExplorer,
+    /function requireFileManagementPermission\(\)[\s\S]*?프로젝트 파일 관리는 프로젝트·장비 > 시스템 정보에서만 가능합니다/,
+  );
+  assert.match(
+    projectExplorer,
+    /const disabled = !canManageProjectFiles\(\)[\s\S]*?!file \|\| state\.busy/,
+  );
+  assert.match(
+    projectExplorer,
+    /projectFileRenameButton\?\.addEventListener[\s\S]*?!requireFileManagementPermission\(\)/,
+  );
+  assert.match(
+    projectExplorer,
+    /projectFileActivateButton\?\.addEventListener[\s\S]*?!requireFileManagementPermission\(\)/,
+  );
+  assert.match(
+    projectExplorer,
+    /projectFileDeleteButton\?\.addEventListener[\s\S]*?!requireFileManagementPermission\(\)/,
+  );
+});
+
+test('motion file transfer is not exposed from the project tree', () => {
+  assert.doesNotMatch(projectExplorer, /data-project-add-layer/);
+  assert.doesNotMatch(projectExplorer, /onAddMotionLayer/);
+  assert.doesNotMatch(projectExplorer, /스튜디오 레이어로 추가/);
+  assert.match(projectExplorer, /const managedInFeature = file\.category === 'motions'/);
+  assert.match(
+    projectExplorer,
+    /isLogFile \|\| managedInFeature \|\| !fileManagementAllowed \? ''/,
+  );
+});

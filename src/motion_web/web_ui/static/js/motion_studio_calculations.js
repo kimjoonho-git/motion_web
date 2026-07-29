@@ -112,6 +112,13 @@ export function motionStudioCanCreatePointCurve(layer, motionId) {
   return Math.max(...values) - Math.min(...values) < 1e-9;
 }
 
+export function motionStudioPointCurveIsApplied(layer, curveId) {
+  const targetId = String(curveId || '');
+  return Boolean(targetId) && (layer?.point_curves || []).some(
+    (curve) => String(curve?.curve_id || '') === targetId,
+  );
+}
+
 export function resolveMotionStudioSelectedLayerId(layers, selectedLayerId = '') {
   const available = Array.isArray(layers) ? layers : [];
   if (available.some((layer) => layer.layer_id === selectedLayerId)) return selectedLayerId;

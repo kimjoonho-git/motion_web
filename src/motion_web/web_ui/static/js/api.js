@@ -377,15 +377,6 @@ export async function fetchMotionFile(fileId) {
   return readJson(response);
 }
 
-export async function uploadMotionFile(payload) {
-  const response = await projectFetch('/api/motion-files/upload', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  return readJson(response);
-}
-
 export async function deleteMotionFile(fileId) {
   const response = await projectFetch(`/api/motion-files/${encodeURIComponent(fileId)}`, {
     method: 'DELETE',

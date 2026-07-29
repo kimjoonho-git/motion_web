@@ -42,7 +42,6 @@ from .servo_alarm_policy import (
 
 DYNAMIXEL_BAUDRATE = 1000000
 MOTION_DATA_PERIOD_SEC = 0.02
-MOTION_FILE_SIZE_LIMIT_BYTES = 10 * 1024 * 1024
 
 
 def _monitoring_finite_float(value: Any) -> Optional[float]:
@@ -3449,6 +3448,11 @@ class MotionWebBridge(Node):
         self, project_id: Any, payload: Dict[str, Any]
     ) -> Dict[str, Any]:
         self._ensure_project_mutation_allowed(project_id)
+        if str(payload.get('category') or '').strip() == 'motions':
+            raise ValueError(
+                '모션 파일은 프로젝트 복사로 전달할 수 없습니다. '
+                '모션 파일 화면의 스튜디오 내보내기를 사용하세요'
+            )
         return self.project_repository.copy_file_from_project(
             project_id,
             payload.get('source_project_id'),
@@ -3616,6 +3620,11 @@ class MotionWebBridge(Node):
         self, project_id: Any, payload: Dict[str, Any]
     ) -> Dict[str, Any]:
         self._ensure_project_mutation_allowed(project_id)
+        if str(payload.get('category') or '').strip() == 'motions':
+            raise ValueError(
+                '외부 모션 JSON 파일 가져오기는 지원하지 않습니다. '
+                '모션 스튜디오에서 실행 파일을 저장하세요'
+            )
         return self.project_repository.import_text(
             project_id,
             payload.get('category'),
@@ -4932,69 +4941,6 @@ class MotionWebBridge(Node):
             'files': files,
         }
 
-    def upload_motion_file(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        blocker = self._project_change_blocker()
-        if blocker:
-            return {**self.list_motion_files(), 'success': False, 'message': blocker}
-        filename = str(payload.get('filename') or '').strip()
-        content = payload.get('content')
-        if not filename:
-            return {
-                **self.list_motion_files(),
-                'success': False,
-                'message': 'filename is required',
-            }
-        if not isinstance(content, str) or not content.strip():
-            return {
-                **self.list_motion_files(),
-                'success': False,
-                'message': 'content is required',
-            }
-        if len(content.encode('utf-8')) > MOTION_FILE_SIZE_LIMIT_BYTES:
-            return {
-                **self.list_motion_files(),
-                'success': False,
-                'message': 'motion JSON file is too large',
-            }
-
-        analysis = self._analyze_motion_json(content, include_records=True)
-        if not analysis.get('format_valid'):
-            return {
-                **self.list_motion_files(),
-                'success': False,
-                'message': analysis.get('message') or 'invalid motion data file',
-                'analysis': analysis,
-            }
-
-        project_id = self.project_repository.selected_project_id()
-        if not project_id:
-            return {**self.list_motion_files(), 'success': False, 'message': '통합 프로젝트를 먼저 선택하세요'}
-        files_dir = self.motion_projects_dir / project_id / 'motions'
-        files_dir.mkdir(parents=True, exist_ok=True)
-        target = self._new_motion_file_path(filename, files_dir)
-        try:
-            target.write_text(content, encoding='utf-8')
-        except OSError as exc:
-            return {
-                **self.list_motion_files(),
-                'success': False,
-                'message': f'failed to save motion JSON: {exc}',
-            }
-
-        analysis_valid = bool(analysis.get('valid'))
-        result = {
-            **self.list_motion_files(),
-            'success': True,
-            'message': (
-                'motion JSON uploaded and saved'
-                if analysis_valid
-                else 'motion JSON uploaded and saved; validation errors found'
-            ),
-            'validation_success': analysis_valid,
-            'file': self._motion_file_entry(target, include_detail=True),
-        }
-        return self._sync_project_file(result, 'motions', target)
-
     def load_motion_file(self, file_id: Any) -> Dict[str, Any]:
         try:
             path = self._motion_file_path(file_id, self._selected_motion_files_dir())
@@ -5011,14 +4957,63 @@ class MotionWebBridge(Node):
             'file': self._motion_file_entry(path, include_detail=True),
         }
 
+    def _motion_file_registration_refs(
+        self, project_id: str, motion_file_id: str
+    ) -> List[str]:
+        """Return project-local mapping files that register one motion file."""
+        detail = self.project_repository.get_project(project_id)
+        references: List[str] = []
+        for folder in detail.get('tree') or []:
+            if folder.get('category') != 'motion_axis_matching':
+                continue
+            for file_info in folder.get('children') or []:
+                mapping_name = str(file_info.get('name') or '').strip()
+                if not mapping_name:
+                    continue
+                try:
+                    loaded = self.project_repository.read_file(
+                        project_id, 'motion_axis_matching', mapping_name
+                    )
+                    mapping = yaml.safe_load(loaded.get('content') or '') or {}
+                except (OSError, ValueError, yaml.YAMLError) as exc:
+                    raise ValueError(
+                        f'모션축 설정 {mapping_name}의 재생 등록 상태를 확인할 수 없습니다: {exc}'
+                    ) from exc
+                if not isinstance(mapping, dict):
+                    raise ValueError(
+                        f'모션축 설정 {mapping_name}의 재생 등록 상태를 확인할 수 없습니다'
+                    )
+                registered_id = str(mapping.get('motion_file_id') or '').strip()
+                if registered_id == motion_file_id:
+                    references.append(mapping_name)
+        return references
+
     def delete_motion_file(self, file_id: Any) -> Dict[str, Any]:
         try:
             project_id = self.project_repository.selected_project_id()
             if not project_id:
                 raise ValueError('통합 프로젝트를 먼저 선택하세요')
             self._ensure_project_mutation_allowed(project_id)
+            target = self._motion_file_path(
+                file_id, self.motion_projects_dir / project_id / 'motions'
+            )
+            registration_refs = self._motion_file_registration_refs(
+                project_id, target.name
+            )
+            if registration_refs:
+                return {
+                    **self.list_motion_files(),
+                    'success': False,
+                    'deletion_blocked': 'registered_motion_file',
+                    'registered_mapping_files': registration_refs,
+                    'message': (
+                        '재생 등록된 모션 파일은 삭제할 수 없습니다. '
+                        '재생 등록을 해제한 뒤 다시 삭제하세요. '
+                        f"모션축 설정: {', '.join(registration_refs)}"
+                    ),
+                }
             result = self.project_repository.delete_file(
-                project_id, 'motions', file_id
+                project_id, 'motions', target.name
             )
         except (OSError, ValueError) as exc:
             return {
@@ -5056,6 +5051,7 @@ class MotionWebBridge(Node):
             content = ''
         entry['analysis'] = analysis
         if include_detail:
+            entry['content'] = content
             entry['content_preview'] = content[:12000]
         return entry
 
@@ -5075,35 +5071,6 @@ class MotionWebBridge(Node):
         if not path.is_file():
             raise ValueError(f'motion file not found: {name}')
         return path
-
-    def _new_motion_file_path(self, filename: str, directory: Path) -> Path:
-        safe = self._safe_motion_filename(filename)
-        date_text = time.strftime('%Y%m%d')
-        source = Path(safe)
-        stem = source.stem or 'motion'
-        suffix = source.suffix or '.json'
-        files_dir = directory
-        target = files_dir / f'{stem}_{date_text}{suffix}'
-        counter = 1
-        while target.exists():
-            counter += 1
-            target = files_dir / f'{stem}_{date_text}_{counter}{suffix}'
-        return target
-
-    @staticmethod
-    def _safe_motion_filename(filename: str) -> str:
-        name = Path(filename).name.strip()
-        if not name:
-            name = 'motion.json'
-        cleaned = ''.join(
-            char if char.isalnum() or char in ('-', '_', '.') else '_'
-            for char in name
-        ).strip('._')
-        if not cleaned:
-            cleaned = 'motion'
-        if not cleaned.lower().endswith('.json'):
-            cleaned = f'{cleaned}.json'
-        return cleaned
 
     def _analyze_motion_json(self, content: str, *, include_records: bool) -> Dict[str, Any]:
         result: Dict[str, Any] = {
@@ -7094,13 +7061,6 @@ def create_app(bridge: MotionWebBridge) -> FastAPI:
     @app.get('/api/motion-files')
     async def motion_files():
         return bridge.list_motion_files()
-
-    @app.post('/api/motion-files/upload')
-    async def upload_motion_file(request: Request):
-        body = await request.json()
-        if not isinstance(body, dict):
-            raise HTTPException(status_code=400, detail='request body must be an object')
-        return bridge.upload_motion_file(body)
 
     @app.get('/api/motion-files/{file_id}')
     async def motion_file(file_id: str):

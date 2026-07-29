@@ -2429,6 +2429,28 @@ button[aria-disabled="true"] {
   line-height: 1.45;
 }
 
+.studio-export-target {
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.studio-export-target[data-state="ready"] {
+  border-color: #93c5fd;
+  background: #eff6ff;
+  color: #1e3a8a;
+}
+
+.studio-export-target[data-state="blocked"] {
+  border-color: #fbbf24;
+  background: #fffbeb;
+  color: #92400e;
+}
+
 @media (max-width: 900px) {
   .studio-secondary-grid {
     grid-template-columns: 1fr;

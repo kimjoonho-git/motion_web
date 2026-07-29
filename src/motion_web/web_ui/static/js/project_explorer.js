@@ -14,7 +14,7 @@ import {
   renameProjectFile,
   saveProjectMemo,
   selectProject,
-} from './api.js?v=20260722-motor-config-delete';
+} from './api.js?v=20260729-motion-file-studio-export-1';
 import { showConfirm, showPrompt } from './ui_dialogs.js?v=20260727-popup-common-3';
 
 function escapeHtml(value) {
@@ -41,18 +41,18 @@ const CATEGORY_VIEW = {
   trash: { icon: '⌫' },
 };
 
-const MANAGED_FILE_CATEGORIES = new Set([
-  'motor_axes', 'motion_axis_matching', 'motions', 'layers',
+const PROJECT_COPY_FILE_CATEGORIES = new Set([
+  'motor_axes', 'motion_axis_matching', 'layers',
 ]);
 
 export function createProjectExplorerController({
   el,
   onOpenEditor = () => {},
   onManageFile = () => {},
-  onAddMotionLayer = async () => {},
   onNavigate = () => {},
   onProjectChange = async () => {},
   canChangeProject = () => true,
+  canManageProjectFiles = () => true,
 }) {
   const state = {
     projects: [], project: null, tree: [], selectedFile: null, projectInfoFile: null,
@@ -130,7 +130,7 @@ export function createProjectExplorerController({
     if (el.projectCopySourceFile) {
       const previous = el.projectCopySourceFile.value;
       const options = state.copySourceTree.filter((folder) => (
-        MANAGED_FILE_CATEGORIES.has(folder.category)
+        PROJECT_COPY_FILE_CATEGORIES.has(folder.category)
       )).flatMap((folder) => (
         (folder.children || []).map((file) => ({
           value: JSON.stringify([folder.category, file.name]),
@@ -184,17 +184,16 @@ export function createProjectExplorerController({
       el.projectExplorerTree.innerHTML = '<div class="empty">프로젝트를 만들거나 선택하세요</div>';
       return;
     }
+    const fileManagementAllowed = Boolean(canManageProjectFiles());
     const totalFiles = state.tree.reduce((sum, folder) => sum + treeFileCount(folder.children), 0);
     const folders = state.tree.map((folder) => {
       const view = CATEGORY_VIEW[folder.category] || { icon: '□' };
       const readOnly = Boolean(folder.read_only);
       const children = readOnly ? renderReadOnlyNodes(folder.children) : folder.children.map((file, fileIndex) => {
         const isLogFile = file.category === 'logs';
+        const managedInFeature = file.category === 'motions';
         const selected = state.selectedFile?.category === file.category
           && state.selectedFile?.file_name === file.name;
-        const addButton = file.category === 'motions'
-          ? `<button type="button" class="project-tree-action project-tree-add" data-project-add-layer title="스튜디오 레이어로 추가" aria-label="${escapeHtml(file.name)} 레이어로 추가">＋</button>`
-          : '';
         const bankInfo = file.category === 'motion_axis_matching' ? file.midi_banks : null;
         const midiRouteAttributes = bankInfo
           ? `data-project-open-midi data-project-category="${escapeHtml(file.category)}" data-project-file="${escapeHtml(file.name)}"`
@@ -226,8 +225,7 @@ export function createProjectExplorerController({
           + `<span class="project-tree-branch">${fileIndex === folder.children.length - 1 ? '└' : '├'}</span>`
           + `<span class="project-tree-name">${escapeHtml(file.name)}</span>`
           + `${fileBadge}</button>`
-          + addButton
-          + `${isLogFile ? '' : `<button type="button" class="project-tree-action" data-project-manage title="파일 관리" aria-label="${escapeHtml(file.name)} 관리">⋮</button>`}`
+          + `${isLogFile || managedInFeature || !fileManagementAllowed ? '' : `<button type="button" class="project-tree-action" data-project-manage title="파일 관리" aria-label="${escapeHtml(file.name)} 관리">⋮</button>`}`
           + `</div>${bankTree}</div>`;
       }).join('') || '<div class="project-tree-empty">파일 없음</div>';
       const childCount = readOnly ? treeFileCount(folder.children) : folder.children.length;
@@ -272,9 +270,18 @@ export function createProjectExplorerController({
     el.projectFileActionMenu?.classList.add('hidden');
   }
 
+  function requireFileManagementPermission() {
+    if (canManageProjectFiles()) return true;
+    closeFileActionMenu();
+    setMessage('프로젝트 파일 관리는 프로젝트·장비 > 시스템 정보에서만 가능합니다');
+    renderFileActionMenu();
+    return false;
+  }
+
   function renderFileActionMenu() {
     const file = state.selectedFile;
-    const disabled = !file || state.busy || Boolean(file.read_only);
+    const disabled = !canManageProjectFiles()
+      || !file || state.busy || Boolean(file.read_only);
     if (el.projectFileActionTitle) {
       el.projectFileActionTitle.textContent = file?.file_name || '프로젝트 파일';
     }
@@ -304,7 +311,11 @@ export function createProjectExplorerController({
   }
 
   function openFileActionMenu(anchorRect) {
-    if (!el.projectFileActionMenu || !state.selectedFile) return;
+    if (
+      !el.projectFileActionMenu
+      || !state.selectedFile
+      || !requireFileManagementPermission()
+    ) return;
     state.fileActionMenuOpen = true;
     renderFileActionMenu();
     const menu = el.projectFileActionMenu;
@@ -406,6 +417,13 @@ export function createProjectExplorerController({
     renderSetupProgress();
     renderControls();
     renderProjectMemo();
+    renderFileActionMenu();
+  }
+
+  function syncWorkspacePermissions() {
+    if (!canManageProjectFiles()) closeFileActionMenu();
+    renderTree();
+    renderControls();
     renderFileActionMenu();
   }
 
@@ -747,22 +765,11 @@ export function createProjectExplorerController({
         await openInFeature(category, fileName, 'motion-midi');
         return;
       }
-      if (event.target.closest('[data-project-add-layer]')) {
-        if (!state.project || state.busy) return;
-        state.busy = true;
-        renderControls();
-        try {
-          await onAddMotionLayer(fileName);
-          setMessage(`${fileName} 파일을 스튜디오 레이어로 추가했습니다`);
-        } catch (error) {
-          setMessage(error.message || String(error), true);
-        } finally {
-          state.busy = false;
-          render();
-        }
-        return;
-      }
       if (event.target.closest('[data-project-manage]')) {
+        if (!requireFileManagementPermission()) {
+          renderTree();
+          return;
+        }
         const anchorRect = event.target.closest('[data-project-manage]').getBoundingClientRect();
         const opened = await openFile(category, fileName);
         if (opened && state.selectedFile) openFileActionMenu(anchorRect);
@@ -778,7 +785,7 @@ export function createProjectExplorerController({
     });
     el.projectFileOpenEditorButton?.addEventListener('click', async () => {
       const file = state.selectedFile;
-      if (!file || !state.project || state.busy) return;
+      if (!file || !state.project || state.busy || !requireFileManagementPermission()) return;
       closeFileActionMenu();
       state.busy = true;
       renderControls();
@@ -797,7 +804,7 @@ export function createProjectExplorerController({
     });
     el.projectFileRenameButton?.addEventListener('click', async () => {
       const file = state.selectedFile;
-      if (!file || !state.project) return;
+      if (!file || !state.project || !requireFileManagementPermission()) return;
       closeFileActionMenu();
       const newName = await showPrompt('새 파일명을 입력하세요', {
         title: '파일명 변경',
@@ -805,6 +812,7 @@ export function createProjectExplorerController({
         confirmLabel: '변경',
       });
       if (!newName?.trim() || newName.trim() === file.file_name) return;
+      if (!requireFileManagementPermission()) return;
       await run(
         () => renameProjectFile(state.project.project_id, file.category, file.file_name, newName.trim()),
         '파일 이름 변경 완료',
@@ -814,7 +822,7 @@ export function createProjectExplorerController({
     });
     el.projectFileActivateButton?.addEventListener('click', async () => {
       const file = state.selectedFile;
-      if (!file || !state.project) return;
+      if (!file || !state.project || !requireFileManagementPermission()) return;
       closeFileActionMenu();
       await run(
         () => activateProjectFile(state.project.project_id, file.category, file.file_name),
@@ -823,7 +831,7 @@ export function createProjectExplorerController({
     });
     el.projectFileExportButton?.addEventListener('click', () => {
       const file = state.selectedFile;
-      if (!file || !state.project) return;
+      if (!file || !state.project || !requireFileManagementPermission()) return;
       closeFileActionMenu();
       const anchor = document.createElement('a');
       anchor.href = projectFileDownloadUrl(state.project.project_id, file.category, file.file_name);
@@ -832,12 +840,13 @@ export function createProjectExplorerController({
     });
     el.projectFileDeleteButton?.addEventListener('click', async () => {
       const file = state.selectedFile;
-      if (!file || !state.project) return;
+      if (!file || !state.project || !requireFileManagementPermission()) return;
       closeFileActionMenu();
       if (!await showConfirm(
         `${file.file_name} 파일을 프로젝트 휴지통으로 이동할까요?`,
         { title: '파일 삭제', confirmLabel: '삭제', tone: 'danger' },
       )) return;
+      if (!requireFileManagementPermission()) return;
       await run(
         () => deleteProjectFile(state.project.project_id, file.category, file.file_name),
         '파일을 프로젝트 휴지통으로 이동했습니다',
@@ -861,5 +870,5 @@ export function createProjectExplorerController({
     window.addEventListener('scroll', closeFileActionMenu, true);
   }
 
-  return { bindEvents, refresh };
+  return { bindEvents, refresh, syncWorkspacePermissions };
 }

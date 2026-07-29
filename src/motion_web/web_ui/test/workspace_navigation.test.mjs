@@ -11,15 +11,18 @@ import {
   workspaceForProjectCategory,
   workspaceGroupFor,
   workspacePanelFor,
+  WORKSPACE_GROUPS,
 } from '../static/js/workspace_navigation.js';
 
 test('project selection is allowed only in project equipment system information', () => {
-  assert.equal(canChangeProjectInWorkspace('system'), true);
-  assert.equal(canChangeProjectInWorkspace('config'), false);
-  assert.equal(canChangeProjectInWorkspace('servo-errors'), false);
-  assert.equal(canChangeProjectInWorkspace('monitoring'), false);
-  assert.equal(canChangeProjectInWorkspace('motion-files'), false);
-  assert.equal(canChangeProjectInWorkspace('manual'), false);
+  const routes = Object.values(WORKSPACE_GROUPS).flat();
+  for (const route of routes) {
+    assert.equal(
+      canChangeProjectInWorkspace(route),
+      route === 'system',
+      `${route} 프로젝트 변경 허용 여부`,
+    );
+  }
 });
 
 test('workspace routes resolve their group and shared motion panel', () => {
@@ -27,6 +30,7 @@ test('workspace routes resolve their group and shared motion panel', () => {
   assert.equal(workspaceGroupFor('config'), 'setup');
   assert.equal(workspaceGroupFor('servo-errors'), 'setup');
   assert.equal(workspaceGroupFor('motion-midi'), 'creation');
+  assert.equal(workspaceGroupFor('motion-files'), 'execution');
   assert.equal(workspaceGroupFor('motion-run'), 'execution');
   assert.equal(workspacePanelFor('motion-files'), 'motion');
   assert.equal(workspacePanelFor('studio'), 'studio');
@@ -34,7 +38,7 @@ test('workspace routes resolve their group and shared motion panel', () => {
 });
 
 test('workspace defaults and legacy motion navigation are deterministic', () => {
-  assert.equal(defaultWorkspaceForGroup('creation'), 'motion-files');
+  assert.equal(defaultWorkspaceForGroup('creation'), 'studio');
   assert.equal(defaultWorkspaceForGroup('unknown'), 'monitoring');
   assert.equal(normalizeWorkspaceRoute('unknown'), 'monitoring');
   assert.equal(workspaceForLegacyNavigation('motion', 'midi'), 'motion-midi');

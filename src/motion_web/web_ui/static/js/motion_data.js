@@ -11,18 +11,20 @@ import {
   saveMotionMapping,
   startMotionRun,
   stopMotionRun,
-  uploadMotionFile,
   validateMotionMapping,
-} from './api.js?v=20260722-motor-config-delete';
+} from './api.js?v=20260729-motion-file-studio-export-1';
 import {
   displayText,
   formatInt,
   formatNumber,
   normalizeMotorTypeKey,
 } from './format.js?v=20260718-korean-ui';
-import { showConfirm, showPrompt } from './ui_dialogs.js?v=20260727-popup-common-3';
+import {
+  showAlert,
+  showConfirm,
+  showPrompt,
+} from './ui_dialogs.js?v=20260727-popup-common-3';
 
-const MOTION_FILE_SIZE_LIMIT_BYTES = 10 * 1024 * 1024;
 const MOTOR_AXIS_ANGLE_ALERT_DEG = 360.0;
 const MOTION_ID_PATTERN = /^[1-9]\d*-[1-9]\d*$/;
 const MOTION_RUN_STAGES = [
@@ -56,6 +58,10 @@ function targetText(value) {
 function degValue(value) {
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
+}
+
+export function registeredMotionFileId(mapping = {}) {
+  return String(mapping?.motion_file_id || '').trim();
 }
 
 export function motionMotorRef(motor) {
@@ -269,13 +275,12 @@ function motionIdRowsHtml(analysis) {
   )).join('');
 }
 
-function previewText(file, analysis) {
-  const content = String(file?.content_preview || '');
+export function motionFileOriginalText(file, analysis) {
+  const content = String(file?.content || file?.content_preview || '');
   if (content.trim()) return content;
   const records = Array.isArray(analysis?.preview_records) ? analysis.preview_records : [];
-  if (!records.length) return '미리보기 데이터가 없습니다';
+  if (!records.length) return '원본 데이터가 없습니다';
   return records
-    .slice(0, 40)
     .map((record) => `[${formatInt(record.frame)}, ${formatNumber(record.time_sec, 3)}, "${record.motion_id}", ${formatNumber(record.value, 3)}]`)
     .join('\n');
 }
@@ -370,6 +375,7 @@ export function createMotionDataController({
   getConfiguredMotors = null,
   onWorkContextChange,
   onProjectFilesChange,
+  onExportMotionFileToStudio = async () => null,
 }) {
   let files = [];
   let selectedFileId = null;
@@ -377,12 +383,14 @@ export function createMotionDataController({
   let mappingFiles = [];
   let selectedMappingId = null;
   let mappingDraft = emptyMappingDraft();
+  let registeredMotionFileIdValue = '';
   let mappingRawText = '';
   let mappingValidation = null;
   let mappingMotionFileDetail = null;
   let loading = false;
   let mappingLoading = false;
   let mappingDirty = false;
+  let fileLoadToken = 0;
   let mappingLoadToken = 0;
   let mappingRevision = '';
   let activeMotionPanel = 'files';
@@ -663,7 +671,7 @@ export function createMotionDataController({
   function motionRunPayload() {
     const initialMoveTimeSec = motionRunInitialMoveTimeSec();
     return {
-      motion_file_id: mappingDraft.motion_file_id || selectedFileId || '',
+      motion_file_id: registeredMotionFileId({ motion_file_id: registeredMotionFileIdValue }),
       mapping_file_id: selectedMappingId || '',
       initial_move_time_sec: initialMoveTimeSec,
       run_mode: 'once',
@@ -1129,10 +1137,12 @@ export function createMotionDataController({
     const context = getLatestState()?.execution_context || {};
     const contextReady = context.ready === true;
     const contextMessage = context.message || '현재 프로젝트 실행 설정 적용 대기 중입니다';
-    const startReady = state === 'initialized'
-      && status.motion_file_id === payload.motion_file_id
+    const statusMatchesFiles = status.motion_file_id === payload.motion_file_id
       && status.mapping_file_id === payload.mapping_file_id;
-    const continuousAvailable = status.capabilities?.continuous_run?.available === true;
+    const continuousCapability = statusMatchesFiles
+      ? status.capabilities?.continuous_run
+      : null;
+    const continuousUnavailable = continuousCapability?.available === false;
     if (el.motionRunCheckButton) {
       el.motionRunCheckButton.disabled = motionRunLoading || !contextReady || !hasRequiredFiles || running;
       el.motionRunCheckButton.title = contextReady ? '' : contextMessage;
@@ -1142,15 +1152,19 @@ export function createMotionDataController({
       el.motionRunInitializeButton.title = contextReady ? '' : contextMessage;
     }
     if (el.motionRunStartButton) {
-      el.motionRunStartButton.disabled = motionRunLoading || !contextReady || !hasRequiredFiles || running || !startReady;
-      el.motionRunStartButton.title = contextReady ? '' : contextMessage;
+      el.motionRunStartButton.disabled = motionRunLoading || !contextReady || !hasRequiredFiles || running;
+      el.motionRunStartButton.title = contextReady
+        ? '전체 모션축 초기 위치 이동 완료 후 모션을 1회 실행합니다'
+        : contextMessage;
     }
     if (el.motionRunContinuousStartButton) {
       el.motionRunContinuousStartButton.disabled = motionRunLoading
-        || !contextReady || !hasRequiredFiles || running || !startReady || !continuousAvailable;
-      el.motionRunContinuousStartButton.title = continuousAvailable
-        ? (contextReady ? '정지 버튼을 누를 때까지 모션을 반복합니다' : contextMessage)
-        : (status.capabilities?.continuous_run?.reason || '실행 준비 검사가 필요합니다');
+        || !contextReady || !hasRequiredFiles || running || continuousUnavailable;
+      el.motionRunContinuousStartButton.title = continuousUnavailable
+        ? (continuousCapability?.reason || '연속 모션 안전조건을 통과하지 못했습니다')
+        : (contextReady
+          ? '전체 모션축 초기 위치 이동 완료 후 정지할 때까지 모션을 반복합니다'
+          : contextMessage);
     }
     if (el.motionRunStopButton) {
       el.motionRunStopButton.disabled = motionRunLoading || !running;
@@ -1267,6 +1281,38 @@ export function createMotionDataController({
     const analysis = analysisOf(file);
     if (el.deleteMotionFileButton) {
       el.deleteMotionFileButton.disabled = !file || loading;
+      el.deleteMotionFileButton.title = (
+        file && file.id === registeredMotionFileIdValue
+          ? '재생 등록을 해제한 뒤 삭제할 수 있습니다'
+          : ''
+      );
+    }
+    if (el.exportMotionFileToStudioButton) {
+      el.exportMotionFileToStudioButton.disabled = !file || loading;
+      el.exportMotionFileToStudioButton.title = file
+        ? '선택한 실행 파일을 독립된 스튜디오 레이어로 내보냅니다'
+        : '모션 파일을 먼저 선택하세요';
+    }
+    if (el.registerMotionFileButton) {
+      const registered = Boolean(file && file.id === registeredMotionFileIdValue);
+      el.registerMotionFileButton.disabled = (
+        !file || !selectedMappingId || loading || mappingLoading || mappingDirty || registered
+      );
+      el.registerMotionFileButton.textContent = registered
+        ? '재생 등록됨'
+        : (mappingDirty ? '설정 저장 필요' : '재생 등록');
+      el.registerMotionFileButton.title = !selectedMappingId
+        ? '저장된 모션축 설정을 먼저 선택하세요'
+        : (mappingDirty ? '모션축 설정의 편집 내용을 먼저 저장하거나 되돌리세요' : '');
+    }
+    if (el.unregisterMotionFileButton) {
+      const registered = Boolean(file && file.id === registeredMotionFileIdValue);
+      el.unregisterMotionFileButton.disabled = (
+        !registered || !selectedMappingId || loading || mappingLoading || mappingDirty
+      );
+      el.unregisterMotionFileButton.title = registered
+        ? '현재 모션축 설정에서 이 파일의 재생 등록을 해제합니다'
+        : '현재 재생 등록된 파일을 선택하세요';
     }
     if (!file) {
       if (el.motionFileSummary) el.motionFileSummary.innerHTML = '<div class="empty">파일을 선택하세요</div>';
@@ -1290,7 +1336,7 @@ export function createMotionDataController({
     }
     if (el.motionFileValidation) el.motionFileValidation.innerHTML = validationHtml(analysis);
     if (el.motionFileMotionIdRows) el.motionFileMotionIdRows.innerHTML = motionIdRowsHtml(analysis);
-    if (el.motionFilePreviewRows) el.motionFilePreviewRows.textContent = previewText(file, analysis);
+    if (el.motionFilePreviewRows) el.motionFilePreviewRows.textContent = motionFileOriginalText(file, analysis);
     renderMotionFileGraph(file);
   }
 
@@ -1730,6 +1776,7 @@ export function createMotionDataController({
         selectedMappingId = null;
         mappingRevision = '';
         mappingDraft = emptyMappingDraft();
+        registeredMotionFileIdValue = '';
         mappingRawText = '';
         mappingValidation = null;
         mappingDirty = false;
@@ -1752,6 +1799,7 @@ export function createMotionDataController({
     if (!requestedMappingId) {
       selectedMappingId = null;
       mappingDraft = emptyMappingDraft();
+      registeredMotionFileIdValue = '';
       mappingRawText = '';
       mappingValidation = null;
       mappingMotionFileDetail = null;
@@ -1768,7 +1816,7 @@ export function createMotionDataController({
       if (loadToken !== mappingLoadToken) return;
       const loadedDraft = payload.mapping || emptyMappingDraft();
       let loadedMotionFileDetail = null;
-      let loadedFiles = Array.isArray(payload.files) ? payload.files : mappingFiles;
+      let loadedMotionFiles = files;
       if (loadedDraft.motion_file_id) {
         if (selectedFile?.id === loadedDraft.motion_file_id) {
           loadedMotionFileDetail = selectedFile;
@@ -1776,12 +1824,15 @@ export function createMotionDataController({
           const motionPayload = await fetchMotionFile(loadedDraft.motion_file_id);
           if (loadToken !== mappingLoadToken) return;
           loadedMotionFileDetail = motionPayload.file || null;
-          loadedFiles = Array.isArray(motionPayload.files) ? motionPayload.files : loadedFiles;
+          loadedMotionFiles = Array.isArray(motionPayload.files)
+            ? motionPayload.files
+            : loadedMotionFiles;
         }
       }
-      files = loadedFiles;
+      files = loadedMotionFiles;
       mappingFiles = Array.isArray(payload.files) ? payload.files : mappingFiles;
       mappingDraft = loadedDraft;
+      registeredMotionFileIdValue = registeredMotionFileId(loadedDraft);
       upgradeLegacyMappingRefs();
       selectedMappingId = payload.file?.id || mappingDraft.file_id || requestedMappingId;
       mappingRevision = String(payload.file?.revision || '');
@@ -1828,8 +1879,9 @@ export function createMotionDataController({
       el.motionMappingName?.select();
       return;
     }
-    const baseFile = selectedFile || files[0] || null;
+    const baseFile = selectedFile || null;
     selectedMappingId = null;
+    registeredMotionFileIdValue = '';
     mappingRevision = '';
     mappingRawText = '';
     mappingValidation = null;
@@ -1877,6 +1929,67 @@ export function createMotionDataController({
     }
   }
 
+  async function registerSelectedMotionFile() {
+    if (!selectedFile || !selectedMappingId) {
+      setMessage('재생 등록할 모션 파일과 저장된 모션축 설정을 먼저 선택하세요');
+      return;
+    }
+    if (mappingDirty) {
+      setMessage('모션축 설정의 편집 내용을 먼저 저장하거나 되돌린 뒤 재생 등록하세요');
+      return;
+    }
+    const analysis = analysisOf(selectedFile);
+    if (analysis.valid === false) {
+      setMessage('검증에 실패한 모션 파일은 재생 등록할 수 없습니다');
+      return;
+    }
+    const confirmed = await showConfirm(
+      `${selectedFile.filename} 파일을 현재 모션축 설정의 재생 파일로 등록합니다.\n`
+      + `${selectedMappingId}`,
+      { title: '모션 파일 재생 등록', confirmLabel: '재생 등록', tone: 'primary' },
+    );
+    if (!confirmed) return;
+    mappingDraft.motion_file_id = selectedFile.id;
+    mappingMotionFileDetail = selectedFile;
+    mappingRawText = '';
+    mappingValidation = null;
+    markMappingDirty();
+    setMappingMessage(`재생 등록 저장 중: ${selectedFile.filename}`);
+    await saveCurrentMapping();
+    render();
+  }
+
+  async function unregisterSelectedMotionFile() {
+    if (!selectedFile || !selectedMappingId || selectedFile.id !== registeredMotionFileIdValue) {
+      setMessage('현재 재생 등록된 모션 파일을 선택하세요');
+      return;
+    }
+    if (mappingDirty) {
+      setMessage('모션축 설정의 편집 내용을 먼저 저장하거나 되돌린 뒤 재생 등록을 해제하세요');
+      return;
+    }
+    const registeredFilename = selectedFile.filename;
+    const confirmed = await showConfirm(
+      `${registeredFilename} 파일의 재생 등록을 해제합니다.\n`
+      + '파일은 삭제되지 않으며, 다시 등록하기 전까지 모션 실행은 차단됩니다.',
+      { title: '모션 파일 재생 등록 해제', confirmLabel: '등록 해제', tone: 'danger' },
+    );
+    if (!confirmed) return;
+    mappingDraft.motion_file_id = '';
+    mappingMotionFileDetail = null;
+    mappingRawText = '';
+    mappingValidation = null;
+    markMappingDirty();
+    setMappingMessage(`재생 등록 해제 저장 중: ${registeredFilename}`);
+    await saveCurrentMapping();
+    if (!registeredMotionFileIdValue) {
+      motionRunStatus = null;
+      motionRunLastResult = null;
+      setMotionRunMessage('재생 등록된 모션 파일이 없습니다');
+    }
+    render();
+  }
+
   async function saveCurrentMapping() {
     const draftError = validateMappingDraft();
     if (draftError) {
@@ -1904,6 +2017,7 @@ export function createMotionDataController({
       }
       mappingFiles = Array.isArray(payload.files) ? payload.files : mappingFiles;
       mappingDraft = payload.mapping || mappingDraft;
+      registeredMotionFileIdValue = registeredMotionFileId(mappingDraft);
       selectedMappingId = payload.file?.id || mappingDraft.file_id || selectedMappingId;
       mappingRevision = String(payload.file?.revision || '');
       mappingRawText = payload.content || '';
@@ -1958,6 +2072,7 @@ export function createMotionDataController({
       selectedMappingId = null;
       mappingRevision = '';
       mappingDraft = emptyMappingDraft();
+      registeredMotionFileIdValue = '';
       mappingRawText = '';
       mappingValidation = null;
       mappingDirty = false;
@@ -2083,10 +2198,12 @@ export function createMotionDataController({
     selectedMappingId = null;
     mappingRevision = '';
     mappingDraft = emptyMappingDraft();
+    registeredMotionFileIdValue = '';
     mappingRawText = '';
     mappingValidation = null;
     mappingMotionFileDetail = null;
     mappingDirty = false;
+    fileLoadToken += 1;
     mappingLoadToken += 1;
     forceMappingNameInput('');
     motionRunStatus = null;
@@ -2104,18 +2221,16 @@ export function createMotionDataController({
   }
 
   async function loadFiles(selectFileId = selectedFileId) {
+    const loadToken = ++fileLoadToken;
     loading = true;
     setMessage('파일 목록 불러오는 중');
     render();
     try {
       const payload = await fetchMotionFiles();
+      if (loadToken !== fileLoadToken) return;
       files = Array.isArray(payload.files) ? payload.files : [];
       if (selectFileId && files.some((file) => file.id === selectFileId)) {
-        await selectFile(selectFileId);
-        return;
-      }
-      if (!selectedFileId && files.length) {
-        await selectFile(files[0].id);
+        await selectFile(selectFileId, loadToken);
         return;
       }
       if (selectedFileId && !files.some((file) => file.id === selectedFileId)) {
@@ -2124,66 +2239,77 @@ export function createMotionDataController({
       }
       setMessage(payload.message || '파일 목록 갱신 완료');
     } catch (error) {
+      if (loadToken !== fileLoadToken || error?.staleProjectResponse) return;
       setMessage(`파일 목록 실패: ${error?.message || error}`);
     } finally {
+      if (loadToken !== fileLoadToken) return;
       loading = false;
       render();
     }
   }
 
-  async function selectFile(fileId) {
+  async function selectFile(fileId, requestToken = null) {
+    const loadToken = requestToken ?? ++fileLoadToken;
+    if (loadToken !== fileLoadToken) return;
     selectedFileId = fileId;
     loading = true;
     setMessage('파일 상세 불러오는 중');
     render();
     try {
       const payload = await fetchMotionFile(fileId);
+      if (loadToken !== fileLoadToken) return;
       selectedFile = payload.file || null;
       files = Array.isArray(payload.files) ? payload.files : files;
       setMessage(payload.message || '파일 상세 갱신 완료');
     } catch (error) {
+      if (loadToken !== fileLoadToken || error?.staleProjectResponse) return;
       selectedFile = null;
       setMessage(`파일 상세 실패: ${error?.message || error}`);
     } finally {
+      if (loadToken !== fileLoadToken) return;
       loading = false;
       render();
     }
   }
 
-  async function uploadSelectedFile() {
-    const file = el.motionFileInput?.files?.[0];
+  async function exportSelectedFileToStudio() {
+    const file = selectedFile;
     if (!file) {
-      setMessage('업로드할 JSON 파일을 선택하세요');
-      return;
-    }
-    if (file.size > MOTION_FILE_SIZE_LIMIT_BYTES) {
-      setMessage(`업로드 실패: 파일 크기가 ${bytesText(MOTION_FILE_SIZE_LIMIT_BYTES)}를 초과합니다`);
+      await showAlert(
+        '스튜디오로 내보낼 모션 파일을 먼저 선택하세요.',
+        { title: '스튜디오 내보내기', confirmLabel: '확인', tone: 'warning' },
+      );
       return;
     }
     loading = true;
-    setMessage(`${file.name} 업로드 중`);
+    setMessage(`${file.filename} 스튜디오 내보내기 중`);
     render();
     try {
-      const content = await file.text();
-      const payload = await uploadMotionFile({
-        filename: file.name,
-        content,
-      });
-      if (payload.success === false) {
-        files = Array.isArray(payload.files) ? payload.files : files;
-        setMessage(`업로드 실패: ${payload.message || '서버가 파일을 저장하지 못했습니다'}`);
-        return;
+      const result = await onExportMotionFileToStudio(file.id);
+      if (!result || result.success === false) {
+        throw new Error(result?.message || '스튜디오가 모션 파일을 받지 못했습니다');
       }
-      files = Array.isArray(payload.files) ? payload.files : [];
-      selectedFile = payload.file || null;
-      selectedFileId = selectedFile?.id || selectedFileId;
-      if (payload.file) {
-        setMessage(payload.message || '업로드 완료');
-      } else {
-        setMessage('업로드 응답에 저장 파일 정보가 없습니다. 목록 새로고침을 눌러 확인하세요');
-      }
+      const layers = Array.isArray(result.project?.layers) ? result.project.layers : [];
+      const exportedLayer = [...layers].reverse().find(
+        (layer) => layer?.source_motion_file_id === file.id,
+      );
+      const layerName = String(
+        exportedLayer?.name || file.filename.replace(/\.json$/i, ''),
+      );
+      setMessage(`스튜디오 내보내기 완료: ${file.filename} → ${layerName}`);
+      await onProjectFilesChange?.();
+      await showAlert(
+        `모션 파일을 스튜디오의 독립 레이어로 내보냈습니다.\n`
+        + `파일 · ${file.filename}\n레이어 · ${layerName}`,
+        { title: '스튜디오 내보내기 완료', confirmLabel: '확인', tone: 'info' },
+      );
     } catch (error) {
-      setMessage(`업로드 실패: ${error?.message || error}`);
+      const message = error?.message || String(error);
+      setMessage(`스튜디오 내보내기 실패: ${message}`);
+      await showAlert(
+        `모션 파일을 스튜디오로 내보내지 못했습니다.\n원인 · ${message}`,
+        { title: '스튜디오 내보내기 실패', confirmLabel: '확인', tone: 'danger' },
+      );
     } finally {
       loading = false;
       render();
@@ -2192,6 +2318,14 @@ export function createMotionDataController({
 
   async function deleteSelectedFile() {
     if (!selectedFileId) return;
+    if (selectedFileId === registeredMotionFileIdValue) {
+      await showAlert(
+        '재생 등록된 모션 파일은 삭제할 수 없습니다.\n'
+        + '먼저 재생 등록을 해제한 뒤 다시 삭제하세요.',
+        { title: '모션 파일 삭제 불가', confirmLabel: '확인', tone: 'warning' },
+      );
+      return;
+    }
     const confirmed = await showConfirm(
       `선택한 모션 파일을 삭제합니다.\n${selectedFileId}`,
       { title: '모션 파일 삭제', confirmLabel: '삭제', tone: 'danger' },
@@ -2203,9 +2337,17 @@ export function createMotionDataController({
     try {
       const payload = await deleteMotionFile(selectedFileId);
       files = Array.isArray(payload.files) ? payload.files : [];
-      selectedFileId = files[0]?.id || null;
+      if (payload.success === false) {
+        const message = payload.message || '모션 파일을 삭제할 수 없습니다';
+        setMessage(`삭제 실패: ${message}`);
+        await showAlert(
+          message,
+          { title: '모션 파일 삭제 불가', confirmLabel: '확인', tone: 'warning' },
+        );
+        return;
+      }
+      selectedFileId = null;
       selectedFile = null;
-      if (selectedFileId) await selectFile(selectedFileId);
       setMessage(payload.message || '파일 삭제 완료');
     } catch (error) {
       setMessage(`삭제 실패: ${error?.message || error}`);
@@ -2279,8 +2421,8 @@ export function createMotionDataController({
     const continuous = runMode === 'continuous';
     const confirmed = await showConfirm(
       continuous
-        ? '초기 위치 이동이 완료된 상태에서 연속 모션을 시작합니다. 정지 버튼을 누를 때까지 반복합니다.'
-        : '현재 선택된 모션 파일과 매핑 파일로 모션을 1회 시작합니다.',
+        ? '모션축 설정의 전체 활성 축을 초기 위치로 이동한 뒤 연속 모션을 시작합니다.\n정지 버튼을 누를 때까지 모션 파일을 반복합니다.'
+        : '모션축 설정의 전체 활성 축을 초기 위치로 이동한 뒤 현재 모션 파일을 1회 실행합니다.',
       {
         title: continuous ? '연속 모션 시작' : '모션 1회 시작',
         confirmLabel: '모션 시작',
@@ -2330,6 +2472,8 @@ export function createMotionDataController({
         selectFile(target.dataset.motionFileId);
       });
     }
+    el.registerMotionFileButton?.addEventListener('click', registerSelectedMotionFile);
+    el.unregisterMotionFileButton?.addEventListener('click', unregisterSelectedMotionFile);
     if (el.motionFileGraphAxisToggles) {
       el.motionFileGraphAxisToggles.addEventListener('click', (event) => {
         const button = event.target.closest('button');
@@ -2352,12 +2496,7 @@ export function createMotionDataController({
         renderMotionFileGraph(selectedFile);
       });
     }
-    if (el.uploadMotionFileButton) {
-      el.uploadMotionFileButton.addEventListener('click', uploadSelectedFile);
-    }
-    if (el.refreshMotionFilesButton) {
-      el.refreshMotionFilesButton.addEventListener('click', () => loadFiles());
-    }
+    el.exportMotionFileToStudioButton?.addEventListener('click', exportSelectedFileToStudio);
     if (el.deleteMotionFileButton) {
       el.deleteMotionFileButton.addEventListener('click', deleteSelectedFile);
     }
@@ -2407,13 +2546,6 @@ export function createMotionDataController({
       el.motionRunInitialMoveTime.addEventListener('change', () => {
         renderMotionRunPanel();
         renderMappingPanel();
-      });
-    }
-    if (el.motionFileInput) {
-      el.motionFileInput.addEventListener('change', () => {
-        const file = el.motionFileInput?.files?.[0];
-        if (!file) return;
-        setMessage(`${file.name} 선택됨 (${bytesText(file.size)})`);
       });
     }
     if (el.motionMappingSelect) {
@@ -2505,6 +2637,7 @@ export function createMotionDataController({
       await loadFiles();
       await loadMappings();
     },
+    refreshMotionFiles: () => loadFiles(),
     openProjectFile: async (category, fileName) => {
       if (category === 'motions') await loadFiles(fileName);
       if (category === 'motion_axis_matching') await loadMappings(fileName);
