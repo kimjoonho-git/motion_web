@@ -440,6 +440,92 @@ def test_playback_status_mirrors_motion_run_progress_for_web_graph():
     assert node._status['elapsed_sec'] == 3.2
 
 
+def test_playback_graph_waits_for_actual_runtime_running_state():
+    node = MotionStudioNode.__new__(MotionStudioNode)
+    node._lock = threading.RLock()
+    node._workspace_project_id = 'project-1'
+    node._execution_context = {'project_generation': 1}
+    node._status = {
+        'state': 'initializing',
+        'phase': 'countdown',
+        'elapsed_sec': 0.0,
+        'playback_duration_sec': 7.84,
+    }
+    node._motion_run_status = {}
+    node._set_status_locked = lambda state, message: node._status.update({
+        'state': state,
+        'phase': state,
+        'message': message,
+    })
+
+    node._run_status_callback(String(data=json.dumps({
+        'project_id': 'project-1',
+        'execution_context': {'project_generation': 1},
+        'request_source': 'motion_studio',
+        'state': 'initialized',
+        'progress': {
+            'elapsed_sec': 5.0,
+            'duration_sec': 5.0,
+            'ratio': 1.0,
+        },
+    })))
+    assert node._status['state'] == 'initializing'
+    assert node._status['elapsed_sec'] == 0.0
+
+    node._run_status_callback(String(data=json.dumps({
+        'project_id': 'project-1',
+        'execution_context': {'project_generation': 1},
+        'request_source': 'motion_studio',
+        'state': 'countdown',
+        'message': '모션 시작 3초 전',
+        'progress': {
+            'elapsed_sec': 0.1,
+            'duration_sec': 3.0,
+            'ratio': 0.1 / 3.0,
+        },
+    })))
+    assert node._status['state'] == 'initializing'
+    assert node._status['phase'] == 'countdown'
+    assert node._status['message'] == '모션 시작 3초 전'
+    assert node._status['elapsed_sec'] == 0.0
+
+    node._run_status_callback(String(data=json.dumps({
+        'project_id': 'project-1',
+        'execution_context': {'project_generation': 1},
+        'request_source': 'motion_studio',
+        'state': 'running',
+        'progress': {
+            'elapsed_sec': 0.02,
+            'duration_sec': 7.84,
+            'ratio': 0.02 / 7.84,
+        },
+    })))
+    assert node._status['state'] == 'playing'
+    assert node._status['elapsed_sec'] == 0.02
+    assert node._status['playback_duration_sec'] == 7.84
+
+
+def test_studio_ignores_status_from_cancelled_operation_generation():
+    node = MotionStudioNode.__new__(MotionStudioNode)
+    node._lock = threading.RLock()
+    node._workspace_project_id = 'project-1'
+    node._execution_context = {'project_generation': 1}
+    node._operation_generation = 4
+    node._status = {'state': 'initializing'}
+    node._motion_run_status = {'state': 'idle'}
+
+    node._run_status_callback(String(data=json.dumps({
+        'project_id': 'project-1',
+        'execution_context': {'project_generation': 1},
+        'request_source': 'motion_studio',
+        'operation_generation': 3,
+        'state': 'running',
+    })))
+
+    assert node._motion_run_status == {'state': 'idle'}
+    assert node._status == {'state': 'initializing'}
+
+
 def test_recording_snapshot_contains_bounded_live_graph_preview():
     node = MotionStudioNode.__new__(MotionStudioNode)
     node._lock = threading.RLock()
@@ -550,6 +636,40 @@ def test_standalone_initial_position_finishes_without_starting_playback():
 
     assert commands == ['initialize']
     assert node._status == {'state': 'idle', 'message': '초기 위치 이동 완료'}
+
+
+def test_playback_sends_one_runtime_owned_sequence_request():
+    node = MotionStudioNode.__new__(MotionStudioNode)
+    node._lock = threading.RLock()
+    node._status = {'state': 'initializing'}
+    node._operation_generation = 8
+    node._run_payload = lambda *_args: {
+        'request_source': 'motion_studio',
+        'motion_file_id': 'preview.json',
+    }
+    commands = []
+
+    def request(command, payload, *_args):
+        commands.append((command, dict(payload)))
+        return {'success': True}
+
+    node._request_run_for_operation = request
+    node._set_status_locked = lambda state, message: node._status.update({
+        'state': state,
+        'message': message,
+    })
+
+    node._prepare_playback(
+        {'mapping_file_id': 'mapping.yaml'},
+        'preview.json',
+        ['1-1'],
+        5.0,
+        8,
+    )
+
+    assert [command for command, _payload in commands] == ['start']
+    assert commands[0][1]['countdown_sec'] == 3.0
+    assert node._status['state'] == 'initializing'
 
 
 def test_standalone_initial_position_uses_zero_when_project_has_no_layers(monkeypatch):

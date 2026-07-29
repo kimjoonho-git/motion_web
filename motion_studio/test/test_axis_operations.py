@@ -30,3 +30,27 @@ def test_axis_command_dispatch_ignores_non_axis_operations():
 
     assert apply_axis_operation('value_offset', working, tracks, {}) is False
     assert tracks == {}
+
+
+def test_axis_command_deletes_only_selected_tracks_and_their_edit_metadata():
+    working = {
+        'frames': [],
+        'point_curves': [
+            {'curve_id': 'curve-1', 'motion_id': '1-1'},
+            {'curve_id': 'curve-2', 'motion_id': '1-2'},
+        ],
+    }
+    tracks = {
+        '1-1': [(0.02, 1.0), (0.04, 2.0)],
+        '1-2': [(0.02, 3.0), (0.04, 4.0)],
+    }
+
+    handled = apply_axis_operation('delete_axis', working, tracks, {
+        'motion_ids': ['1-2'],
+    })
+
+    assert handled is True
+    assert tracks == {'1-1': [(0.02, 1.0), (0.04, 2.0)]}
+    assert working['point_curves'] == [
+        {'curve_id': 'curve-1', 'motion_id': '1-1'},
+    ]

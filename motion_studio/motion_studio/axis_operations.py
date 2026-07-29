@@ -76,9 +76,30 @@ def copy_axis(
     working.setdefault('point_curves', []).extend(copied_curves)
 
 
+def delete_axis(
+    working: Dict[str, Any],
+    tracks: TrackMap,
+    request: Dict[str, Any],
+) -> None:
+    selected = unique_motion_ids(request.get('motion_ids') or [])
+    if not selected:
+        raise ValueError('삭제할 Motion ID를 선택하세요')
+    missing = [motion_id for motion_id in selected if motion_id not in tracks]
+    if missing:
+        raise ValueError('레이어에 없는 Motion ID: ' + ', '.join(missing))
+    for motion_id in selected:
+        tracks.pop(motion_id)
+    selected_set = set(selected)
+    working['point_curves'] = [
+        curve for curve in working.get('point_curves') or []
+        if str(curve.get('motion_id') or '') not in selected_set
+    ]
+
+
 AXIS_OPERATION_HANDLERS = {
     'add_axis': add_axis,
     'copy_axis': copy_axis,
+    'delete_axis': delete_axis,
 }
 
 

@@ -231,10 +231,41 @@ class MotionStudioNode(Node):
                         return
                 except (TypeError, ValueError):
                     return
+                if payload.get('request_source') == 'motion_studio':
+                    try:
+                        operation_generation = int(
+                            payload.get('operation_generation') or 0
+                        )
+                    except (TypeError, ValueError):
+                        return
+                    if (
+                        operation_generation
+                        and operation_generation != self._operation_generation
+                    ):
+                        return
                 self._motion_run_status = payload
                 studio_state = str(self._status.get('state') or '')
                 run_state = str(payload.get('state') or '')
                 progress = payload.get('progress')
+                if (
+                    payload.get('request_source') == 'motion_studio'
+                    and studio_state == 'initializing'
+                    and run_state in {'running', 'verifying'}
+                ):
+                    self._set_status_locked(
+                        'playing',
+                        '레이어 합성 미리보기 재생 중',
+                    )
+                    studio_state = 'playing'
+                elif (
+                    payload.get('request_source') == 'motion_studio'
+                    and studio_state == 'initializing'
+                    and run_state == 'countdown'
+                ):
+                    self._status['phase'] = 'countdown'
+                    self._status['message'] = str(
+                        payload.get('message') or '모션 시작 대기'
+                    )
                 if (
                     payload.get('request_source') == 'motion_studio'
                     and studio_state in {'initializing', 'playing', 'stopping'}
@@ -244,6 +275,8 @@ class MotionStudioNode(Node):
                     self._status['updated_at'] = time.time()
                     if studio_state == 'initializing' and run_state in {'initializing', 'initialized'}:
                         self._status['initialization_progress'] = dict(progress)
+                    elif studio_state == 'initializing' and run_state == 'countdown':
+                        self._status['countdown_progress'] = dict(progress)
                     elif studio_state == 'playing' and run_state in {'running', 'verifying'}:
                         self._status['elapsed_sec'] = float(progress.get('elapsed_sec') or 0.0)
                         self._status['playback_duration_sec'] = float(
@@ -252,7 +285,7 @@ class MotionStudioNode(Node):
                             or 0.0
                         )
                 if (
-                    studio_state == 'playing'
+                    studio_state in {'initializing', 'playing'}
                     and payload.get('request_source') == 'motion_studio'
                     and payload.get('state') in {'completed', 'error', 'stopped'}
                 ):
@@ -823,37 +856,20 @@ class MotionStudioNode(Node):
     ) -> None:
         try:
             self._require_active_operation(operation_generation, 'initializing')
-            payload = self._run_payload(project, file_id, motion_ids, move_time)
-            result = self._request_run_for_operation(
-                'initialize', payload, 30.0, operation_generation, 'initializing'
-            )
-            if not result.get('success'):
-                raise ValueError(result.get('message') or '초기 위치 이동 실패')
-            deadline = time.monotonic() + max(15.0, move_time + 10.0)
-            while time.monotonic() < deadline:
-                with self._lock:
-                    if operation_generation != self._operation_generation:
-                        return
-                    state = self._motion_run_status.get('state')
-                    run_message = self._motion_run_status.get('message')
-                if state == 'initialized':
-                    break
-                if state == 'error':
-                    raise ValueError(run_message or '초기 위치 이동 실패')
-                time.sleep(0.05)
-            else:
-                raise ValueError('초기 위치 도착 확인 시간 초과')
-            if not self._countdown('재생', operation_generation):
-                return
-            self._require_active_operation(operation_generation, 'initializing')
+            payload = {
+                **self._run_payload(
+                    project,
+                    file_id,
+                    motion_ids,
+                    move_time,
+                ),
+                'countdown_sec': 3.0,
+            }
             result = self._request_run_for_operation(
                 'start', payload, 5.0, operation_generation, 'initializing'
             )
             if not result.get('success'):
                 raise ValueError(result.get('message') or '합성 미리보기 시작 실패')
-            with self._lock:
-                if operation_generation == self._operation_generation:
-                    self._set_status_locked('playing', '레이어 합성 미리보기 재생 중')
         except Exception as exc:
             with self._lock:
                 if operation_generation == self._operation_generation:
@@ -1334,6 +1350,7 @@ class MotionStudioNode(Node):
         if state in {'idle', 'error'}:
             self._status['runtime_progress'] = {}
             self._status['initialization_progress'] = {}
+            self._status['countdown_progress'] = {}
             self._status['playback_duration_sec'] = 0.0
             self._status['playback_layer_count'] = 0
         project = self._current_project

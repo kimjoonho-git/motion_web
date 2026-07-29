@@ -63,6 +63,30 @@ def test_gateway_preserves_run_request_payload_contract(monkeypatch):
     )]
 
 
+def test_operation_request_carries_operation_generation(monkeypatch):
+    host = GatewayHost()
+    host._status = {'state': 'initializing'}
+    host._operation_machine = lambda: type(
+        'ActiveOperation',
+        (),
+        {'is_active': staticmethod(lambda *_args: True)},
+    )()
+    gateway = StudioRosGateway(host)
+    monkeypatch.setattr('motion_studio.ros_gateway.time.time_ns', lambda: 321)
+    host._run_results['studio-run-g7-321'] = {'success': True}
+
+    result = gateway.request_run_for_operation(
+        'start',
+        {'request_source': 'motion_studio'},
+        0.01,
+        operation_generation=9,
+        expected_state='initializing',
+    )
+
+    assert result == {'success': True}
+    assert host.published[0][1]['payload']['operation_generation'] == 9
+
+
 def test_gateway_adds_project_identity_to_midi_requests(monkeypatch):
     host = GatewayHost()
     gateway = StudioRosGateway(host)

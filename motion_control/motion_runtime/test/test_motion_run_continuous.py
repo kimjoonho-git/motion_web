@@ -366,6 +366,7 @@ def test_auto_start_runs_motion_only_after_initialization_completes():
         current['state'] = 'initialized'
 
     manager._run_initialization = initialize
+    manager._run_countdown = lambda _plan: True
     manager._run_motion = lambda plan: calls.append(('motion', plan['name']))
 
     manager._run_initialization_then_motion(
@@ -391,11 +392,88 @@ def test_auto_start_does_not_run_motion_when_initialization_fails():
         current['state'] = 'error'
 
     manager._run_initialization = initialize
+    manager._run_countdown = lambda _plan: True
     manager._run_motion = lambda _plan: calls.append('motion')
 
     manager._run_initialization_then_motion({}, {})
 
     assert calls == ['initialize']
+
+
+def test_start_routes_one_owned_initialization_and_motion_sequence(monkeypatch):
+    manager = MotionRunManager.__new__(MotionRunManager)
+    manager._run_lock = threading.RLock()
+    manager._run_thread = None
+    manager._stop_event = threading.Event()
+    manager._graceful_stop_event = threading.Event()
+    manager._playback_ownership_error = lambda: ''
+    manager.status = lambda: {'state': 'initialized'}
+    manager._build_plan = lambda _payload, initialization_only=False: {
+        'name': 'initialization' if initialization_only else 'motion',
+        'run_mode': 'once',
+        'summary': {},
+    }
+    manager._motion_auto_start_guard_error = lambda _plan: ''
+    calls = []
+    manager._run_initialization_then_motion = lambda initialization, motion: calls.append(
+        ('initialize_then_motion', initialization['name'], motion['name'])
+    )
+
+    class ImmediateThread:
+        def __init__(self, *, target, args, daemon):
+            self._target = target
+            self._args = args
+            self.daemon = daemon
+
+        def is_alive(self):
+            return False
+
+        def start(self):
+            self._target(*self._args)
+
+    monkeypatch.setattr(threading, 'Thread', ImmediateThread)
+
+    result = manager._start_thread('run', {})
+
+    assert result['success'] is True
+    assert calls == [('initialize_then_motion', 'initialization', 'motion')]
+
+
+def test_owned_sequence_runs_countdown_between_initialization_and_motion():
+    manager = MotionRunManager.__new__(MotionRunManager)
+    manager._stop_event = threading.Event()
+    current = {'state': 'idle'}
+    calls = []
+    manager.status = lambda: dict(current)
+
+    def initialize(_plan):
+        calls.append('initialize')
+        current['state'] = 'initialized'
+
+    manager._run_initialization = initialize
+    manager._run_countdown = lambda _plan: calls.append('countdown') or True
+    manager._run_motion = lambda _plan: calls.append('motion')
+
+    manager._run_initialization_then_motion({}, {})
+
+    assert calls == ['initialize', 'countdown', 'motion']
+
+
+def test_countdown_stop_prevents_motion_start():
+    manager = MotionRunManager.__new__(MotionRunManager)
+    manager._run_lock = threading.RLock()
+    manager._status = manager._empty_status()
+    manager._publish_status = lambda: None
+    manager._stop_event = threading.Event()
+    manager._stop_event.set()
+
+    result = manager._run_countdown({
+        'countdown_sec': 3.0,
+        'axes': [],
+    })
+
+    assert result is False
+    assert manager._status['state'] == 'stopped'
 
 
 def test_auto_start_rejects_unsafe_continuous_motion_before_initialization():

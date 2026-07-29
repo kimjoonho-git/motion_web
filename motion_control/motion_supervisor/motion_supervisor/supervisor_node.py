@@ -2271,10 +2271,26 @@ class MotionSupervisor(Node):
             'servo_alarm_policy_version': alarm_state['policy_version'],
             'servo_alarm_policy_revision': alarm_state['policy_revision'],
             'command_owner': self._command_arbiter_instance().snapshot().owner.value,
+            **self._manual_activity_snapshot(),
             'message': message,
             'stamp': time.time(),
         }
         publisher.publish(String(data=json.dumps(payload, ensure_ascii=False)))
+
+    def _manual_activity_snapshot(self) -> Dict[str, Any]:
+        modes = []
+        if self._active_jogs:
+            modes.append('jog')
+        if self._active_actions:
+            modes.append('action')
+        axes = sorted({
+            *self._active_jogs.keys(),
+            *self._active_actions.keys(),
+        })
+        return {
+            'manual_activity_modes': modes,
+            'manual_activity_axes': axes,
+        }
 
     def _current_motors(self) -> list[Dict[str, Any]]:
         if self._latest_state is None or self._latest_state_at is None:
