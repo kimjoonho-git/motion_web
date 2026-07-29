@@ -366,6 +366,7 @@ def test_auto_start_runs_motion_only_after_initialization_completes():
         current['state'] = 'initialized'
 
     manager._run_initialization = initialize
+    manager._run_countdown = lambda _plan: True
     manager._run_motion = lambda plan: calls.append(('motion', plan['name']))
 
     manager._run_initialization_then_motion(
@@ -391,6 +392,7 @@ def test_auto_start_does_not_run_motion_when_initialization_fails():
         current['state'] = 'error'
 
     manager._run_initialization = initialize
+    manager._run_countdown = lambda _plan: True
     manager._run_motion = lambda _plan: calls.append('motion')
 
     manager._run_initialization_then_motion({}, {})
@@ -398,89 +400,7 @@ def test_auto_start_does_not_run_motion_when_initialization_fails():
     assert calls == ['initialize']
 
 
-def _initialization_reuse_fixture(current_position=12.0):
-    manager = MotionRunManager.__new__(MotionRunManager)
-    plan = {
-        'project_id': 'project-1',
-        'motion_file_id': 'preview.json',
-        'mapping_file_id': 'mapping.yaml',
-        'request_source': 'motion_studio',
-        'axes': [{
-            'motion_id': '1-1',
-            'motor_axis': 0,
-            'motor_type': 'ac_servo',
-            'initial_motor_target_deg': 12.0,
-        }],
-    }
-    manager.status = lambda: {
-        'state': 'initialized',
-        'project_id': 'project-1',
-        'motion_file_id': 'preview.json',
-        'mapping_file_id': 'mapping.yaml',
-        'request_source': 'motion_studio',
-        'axes': [{
-            'motion_id': '1-1',
-            'motor_axis': 0,
-            'initial_motor_target_deg': 12.0,
-        }],
-    }
-    motors = [{
-        'controller_index': 0,
-        'position_deg': current_position,
-        'state': 'detected',
-        'servo_on': True,
-        'motor_type': 'minas',
-    }]
-    manager._current_motors = lambda: motors
-    manager._motor_for_axis = lambda axis, values: next(
-        (motor for motor in values if motor['controller_index'] == axis),
-        None,
-    )
-    manager._motor_ready_error = lambda _motor: ''
-    manager._target_tolerance_deg = lambda _axis: 0.5
-    return manager, plan
-
-
-def test_start_reuses_matching_verified_initialization():
-    manager, plan = _initialization_reuse_fixture(current_position=12.2)
-
-    reusable, reason = manager._verified_initialization_reuse(plan)
-
-    assert reusable is True
-    assert '일치' in reason
-
-
-def test_start_reinitializes_when_live_position_left_initial_target():
-    manager, plan = _initialization_reuse_fixture(current_position=13.0)
-
-    reusable, reason = manager._verified_initialization_reuse(plan)
-
-    assert reusable is False
-    assert '초기 위치에서 벗어났습니다' in reason
-
-
-def test_start_reinitializes_when_initialization_identity_changed():
-    manager, plan = _initialization_reuse_fixture(current_position=12.0)
-    plan['mapping_file_id'] = 'changed.yaml'
-
-    reusable, reason = manager._verified_initialization_reuse(plan)
-
-    assert reusable is False
-    assert 'mapping_file_id' in reason
-
-
-@pytest.mark.parametrize(
-    ('reuse_verified', 'expected_call'),
-    [
-        (True, 'motion'),
-        (False, 'initialize_then_motion'),
-    ],
-)
-def test_start_routes_motion_by_verified_initialization(
-    monkeypatch,
-    reuse_verified,
-    expected_call,
-):
+def test_start_routes_one_owned_initialization_and_motion_sequence(monkeypatch):
     manager = MotionRunManager.__new__(MotionRunManager)
     manager._run_lock = threading.RLock()
     manager._run_thread = None
@@ -494,12 +414,7 @@ def test_start_routes_motion_by_verified_initialization(
         'summary': {},
     }
     manager._motion_auto_start_guard_error = lambda _plan: ''
-    manager._verified_initialization_reuse = lambda _plan: (
-        reuse_verified,
-        '검증 결과',
-    )
     calls = []
-    manager._run_motion = lambda plan: calls.append(('motion', plan['name']))
     manager._run_initialization_then_motion = lambda initialization, motion: calls.append(
         ('initialize_then_motion', initialization['name'], motion['name'])
     )
@@ -521,8 +436,44 @@ def test_start_routes_motion_by_verified_initialization(
     result = manager._start_thread('run', {})
 
     assert result['success'] is True
-    assert result['initialization_reused'] is reuse_verified
-    assert calls[0][0] == expected_call
+    assert calls == [('initialize_then_motion', 'initialization', 'motion')]
+
+
+def test_owned_sequence_runs_countdown_between_initialization_and_motion():
+    manager = MotionRunManager.__new__(MotionRunManager)
+    manager._stop_event = threading.Event()
+    current = {'state': 'idle'}
+    calls = []
+    manager.status = lambda: dict(current)
+
+    def initialize(_plan):
+        calls.append('initialize')
+        current['state'] = 'initialized'
+
+    manager._run_initialization = initialize
+    manager._run_countdown = lambda _plan: calls.append('countdown') or True
+    manager._run_motion = lambda _plan: calls.append('motion')
+
+    manager._run_initialization_then_motion({}, {})
+
+    assert calls == ['initialize', 'countdown', 'motion']
+
+
+def test_countdown_stop_prevents_motion_start():
+    manager = MotionRunManager.__new__(MotionRunManager)
+    manager._run_lock = threading.RLock()
+    manager._status = manager._empty_status()
+    manager._publish_status = lambda: None
+    manager._stop_event = threading.Event()
+    manager._stop_event.set()
+
+    result = manager._run_countdown({
+        'countdown_sec': 3.0,
+        'axes': [],
+    })
+
+    assert result is False
+    assert manager._status['state'] == 'stopped'
 
 
 def test_auto_start_rejects_unsafe_continuous_motion_before_initialization():

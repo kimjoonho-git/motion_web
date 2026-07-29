@@ -80,6 +80,23 @@ def test_editor_allows_unregistered_target_for_axis_copy():
     assert [frame['values']['9-9'] for frame in result['layer']['frames']] == [10.0, 20.0]
 
 
+def test_editor_previews_axis_deletion_without_changing_the_source_layer():
+    editor = MotionStudioEditorNode.__new__(MotionStudioEditorNode)
+    source = base_layer()
+
+    result = editor._handle('edit', {
+        'layer': source,
+        'project': {},
+        'operation': 'delete_axis',
+        'motion_ids': ['1-1'],
+        'mapping_rows': [],
+    })
+
+    assert result['success'] is True
+    assert result['layer']['frames'] == []
+    assert [frame['values']['1-1'] for frame in source['frames']] == [10.0, 20.0]
+
+
 def test_editor_returns_axis_point_creation_approximation_report():
     editor = MotionStudioEditorNode.__new__(MotionStudioEditorNode)
     layer = base_layer()

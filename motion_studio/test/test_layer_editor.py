@@ -163,6 +163,45 @@ def test_copy_axis_rejects_missing_source_or_existing_target():
         })
 
 
+def test_delete_axis_removes_selected_values_and_preserves_other_axes():
+    source = edit_layer(layer(), {
+        'operation': 'point_curve',
+        'motion_ids': ['1-1'],
+        'curve_id': 'curve-delete',
+        'points': [
+            {'point_id': 'p1', 'time_sec': 0.02, 'value_deg': 10.0},
+            {'point_id': 'p2', 'time_sec': 0.08, 'value_deg': 40.0},
+        ],
+    })
+
+    result = edit_layer(source, {
+        'operation': 'delete_axis',
+        'motion_ids': ['1-1'],
+    })
+
+    assert values(result, '1-2') == [0.0, 2.0, 4.0, 6.0]
+    assert all('1-1' not in frame['values'] for frame in result['frames'])
+    assert result['point_curves'] == []
+
+
+def test_delete_all_axes_leaves_an_empty_layer():
+    result = edit_layer(layer(), {
+        'operation': 'delete_axis',
+        'motion_ids': ['1-1', '1-2'],
+    })
+
+    assert result['frames'] == []
+    assert result['point_curves'] == []
+
+
+def test_delete_axis_rejects_unknown_motion_id():
+    with pytest.raises(ValueError, match='레이어에 없는 Motion ID'):
+        edit_layer(layer(), {
+            'operation': 'delete_axis',
+            'motion_ids': ['9-9'],
+        })
+
+
 def test_edit_range_without_selected_axis_data_is_rejected():
     with pytest.raises(ValueError, match='편집 구간에 모션 데이터가 없습니다'):
         edit_layer(layer(), request('value_offset', start_sec=1.0, end_sec=2.0, offset_deg=1.0))

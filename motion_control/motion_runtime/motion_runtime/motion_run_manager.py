@@ -825,8 +825,6 @@ class MotionRunManager(Node):
                     'message': ownership_error,
                     'status': self.status(),
                 }
-            initialization_reused = False
-            initialization_reuse_reason = ''
             if mode == 'initialize':
                 plan = self._build_plan(payload, initialization_only=True)
                 target = self._run_initialization
@@ -853,16 +851,8 @@ class MotionRunManager(Node):
                         'status': self.status(),
                         'summary': plan['summary'],
                     }
-                (
-                    initialization_reused,
-                    initialization_reuse_reason,
-                ) = self._verified_initialization_reuse(initialization_plan)
-                if initialization_reused:
-                    target = self._run_motion
-                    target_args = (plan,)
-                else:
-                    target = self._run_initialization_then_motion
-                    target_args = (initialization_plan, plan)
+                target = self._run_initialization_then_motion
+                target_args = (initialization_plan, plan)
             self._stop_event.clear()
             self._graceful_stop_event.clear()
             self._run_thread = threading.Thread(
@@ -878,103 +868,14 @@ class MotionRunManager(Node):
                 'initial position move started'
                 if mode == 'initialize'
                 else (
-                    (
-                        'verified initial position reused and continuous motion run started'
-                        if plan.get('run_mode') == 'continuous'
-                        else 'verified initial position reused and single motion run started'
-                    )
-                    if initialization_reused
-                    else (
-                        'initial position move and continuous motion run started'
-                        if plan.get('run_mode') == 'continuous'
-                        else 'initial position move and single motion run started'
-                    )
+                    'initial position move and continuous motion run started'
+                    if plan.get('run_mode') == 'continuous'
+                    else 'initial position move and single motion run started'
                 )
             ),
-            'initialization_reused': initialization_reused,
-            'initialization_reuse_reason': initialization_reuse_reason,
             'status': self.status(),
             'summary': plan['summary'],
         }
-
-    def _verified_initialization_reuse(
-        self,
-        initialization_plan: Dict[str, Any],
-    ) -> tuple[bool, str]:
-        """Reuse only a matching initialization that live feedback still proves.
-
-        This keeps ``start`` safe for direct Motion Run callers while allowing
-        Motion Studio's explicit initialize/countdown/start workflow to avoid
-        moving to the same initial position twice.
-        """
-        current = self.status()
-        if str(current.get('state') or '') != 'initialized':
-            return False, '직전 실행 상태가 초기 위치 이동 완료가 아닙니다'
-
-        for key in (
-            'project_id',
-            'motion_file_id',
-            'mapping_file_id',
-            'request_source',
-        ):
-            if str(current.get(key) or '') != str(initialization_plan.get(key) or ''):
-                return False, f'직전 초기화의 {key}가 현재 실행과 다릅니다'
-
-        expected_axes = {
-            int(axis['motor_axis']): axis
-            for axis in initialization_plan.get('axes', [])
-        }
-        initialized_axes = {
-            int(axis['motor_axis']): axis
-            for axis in current.get('axes', [])
-            if isinstance(axis, dict) and axis.get('motor_axis') is not None
-        }
-        if not expected_axes or set(expected_axes) != set(initialized_axes):
-            return False, '직전 초기화 대상 축이 현재 실행 대상과 다릅니다'
-
-        for motor_axis, expected in expected_axes.items():
-            initialized = initialized_axes[motor_axis]
-            if str(initialized.get('motion_id') or '') != str(
-                expected.get('motion_id') or ''
-            ):
-                return False, f'Axis {motor_axis}의 모션축이 직전 초기화와 다릅니다'
-            expected_target = float(expected['initial_motor_target_deg'])
-            initialized_target = self._finite_float(
-                initialized.get('initial_motor_target_deg')
-            )
-            if (
-                initialized_target is None
-                or not math.isclose(
-                    initialized_target,
-                    expected_target,
-                    rel_tol=0.0,
-                    abs_tol=1e-6,
-                )
-            ):
-                return False, f'Axis {motor_axis}의 초기 목표가 직전 초기화와 다릅니다'
-
-        motors = self._current_motors()
-        if not motors:
-            return False, '현재 모터 피드백을 확인할 수 없습니다'
-        for motor_axis, axis_plan in expected_axes.items():
-            motor = self._motor_for_axis(motor_axis, motors)
-            motor_error = self._motor_ready_error(
-                motor or {'controller_index': motor_axis}
-            )
-            if motor_error:
-                return False, motor_error
-            current_position = self._motor_position_deg(motor)
-            if current_position is None:
-                return False, f'Axis {motor_axis} 현재 위치를 확인할 수 없습니다'
-            target = float(axis_plan['initial_motor_target_deg'])
-            tolerance = self._target_tolerance_deg(axis_plan)
-            if abs(current_position - target) > tolerance:
-                return (
-                    False,
-                    f'Axis {motor_axis}가 초기 위치에서 벗어났습니다: '
-                    f'현재 {current_position:.3f}°, 목표 {target:.3f}°',
-                )
-        return True, '직전 초기화와 현재 모터 위치가 일치합니다'
 
     def _handle_stop(self) -> Dict[str, Any]:
         current = self.status()
@@ -992,7 +893,12 @@ class MotionRunManager(Node):
                 pass
         self._stop_event.set()
         self._graceful_stop_event.clear()
-        if current.get('state') in ('initializing', 'running', 'verifying'):
+        if current.get('state') in (
+            'initializing',
+            'countdown',
+            'running',
+            'verifying',
+        ):
             self._update_status({
                 'state': 'stopping',
                 'phase': 'stopping',
@@ -1127,6 +1033,8 @@ class MotionRunManager(Node):
             return
         if self.status().get('state') != 'initialized':
             return
+        if not self._run_countdown(motion_plan):
+            return
         if (
             motion_plan.get('automation_run')
             and self._graceful_stop_event.is_set()
@@ -1142,6 +1050,49 @@ class MotionRunManager(Node):
             self._run_motion(motion_plan, initialization_plan)
         else:
             self._run_motion(motion_plan)
+
+    def _run_countdown(self, plan: Dict[str, Any]) -> bool:
+        duration = max(float(plan.get('countdown_sec') or 0.0), 0.0)
+        if duration <= 0.0:
+            return True
+        started_at = time.time()
+        deadline = time.monotonic() + duration
+        status = self._status_from_plan('countdown', '모션 시작 대기', plan)
+        status['phase'] = 'countdown'
+        status['phase_started_at'] = started_at
+        status['phase_finished_at'] = None
+        status['lifecycle'] = self._current_lifecycle()
+        self._set_status(status)
+        while True:
+            if self._stop_event.is_set():
+                status = self._status_from_plan(
+                    'stopped',
+                    '모션 시작 대기 중 정지',
+                    plan,
+                )
+                status['phase'] = 'stopped'
+                status['phase_started_at'] = started_at
+                status['phase_finished_at'] = time.time()
+                status['lifecycle'] = self._current_lifecycle()
+                self._set_status(status)
+                return False
+            remaining = max(deadline - time.monotonic(), 0.0)
+            elapsed = min(duration - remaining, duration)
+            self._update_status({
+                'state': 'countdown',
+                'phase': 'countdown',
+                'message': f'모션 시작 {max(math.ceil(remaining), 1)}초 전',
+                'progress': {
+                    'elapsed_sec': elapsed,
+                    'duration_sec': duration,
+                    'ratio': min(elapsed / duration, 1.0),
+                    'sample_index': 0,
+                    'active_axis_count': len(plan.get('axes') or []),
+                },
+            })
+            if remaining <= 0.0:
+                return True
+            time.sleep(min(0.05, remaining))
 
     def _run_motion(
         self,
@@ -1379,8 +1330,21 @@ class MotionRunManager(Node):
         status['phase'] = 'repeat_waiting'
         status['phase_started_at'] = started_at
         status['phase_finished_at'] = None
+        status['lifecycle'] = self._current_lifecycle()
         status['cycle_count'] = cycle_count
         status['current_cycle'] = cycle_count
+        duration_sec = float(plan['summary']['duration_sec'])
+        status['progress'] = {
+            'elapsed_sec': duration_sec,
+            'duration_sec': duration_sec,
+            'ratio': 1.0,
+            'sample_index': len(plan.get('samples') or []),
+            'active_axis_count': len(plan.get('axes') or []),
+        }
+        status['repeat_wait'] = {
+            'duration_sec': dwell_sec,
+            'remaining_sec': dwell_sec,
+        }
         self._set_status(status)
         deadline = time.monotonic() + dwell_sec
         while time.monotonic() < deadline:
@@ -1405,6 +1369,10 @@ class MotionRunManager(Node):
                 'state': 'waiting',
                 'phase': 'repeat_waiting',
                 'message': f'다음 모션까지 {remaining:.1f}초',
+                'repeat_wait': {
+                    'duration_sec': dwell_sec,
+                    'remaining_sec': remaining,
+                },
             })
             time.sleep(min(0.1, remaining))
         self._restore_running_status(plan, motion_started_at, cycle_count)
@@ -1422,8 +1390,9 @@ class MotionRunManager(Node):
             else '연속 모션 실행 중'
         )
         status = self._status_from_plan('running', message, plan)
+        cycle_started_at = time.time()
         status['phase'] = 'running'
-        status['phase_started_at'] = motion_started_at
+        status['phase_started_at'] = cycle_started_at
         status['phase_finished_at'] = None
         status['lifecycle'] = self._current_lifecycle()
         status['cycle_count'] = cycle_count
@@ -1657,6 +1626,16 @@ class MotionRunManager(Node):
         dwell_sec = 0.0 if dwell_sec is None else dwell_sec
         if dwell_sec < 0.0:
             raise ValueError('자동 반복 대기 시간은 0초 이상이어야 합니다')
+        countdown_sec = self._finite_float(payload.get('countdown_sec'))
+        countdown_sec = 0.0 if countdown_sec is None else countdown_sec
+        if countdown_sec < 0.0 or countdown_sec > 10.0:
+            raise ValueError('모션 시작 대기 시간은 0초 이상 10초 이하여야 합니다')
+        try:
+            operation_generation = int(payload.get('operation_generation') or 0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError('작업 세대 값이 올바르지 않습니다') from exc
+        if operation_generation < 0:
+            raise ValueError('작업 세대 값은 0 이상이어야 합니다')
         if not automation_run:
             repeat_mode = 'direct'
             dwell_sec = 0.0
@@ -1968,6 +1947,8 @@ class MotionRunManager(Node):
             'automation_run': automation_run,
             'repeat_mode': repeat_mode,
             'dwell_sec': dwell_sec,
+            'countdown_sec': countdown_sec,
+            'operation_generation': operation_generation,
             'motion_file_path': str(motion_file_path) if motion_file_path else '',
             'mapping_path': str(mapping_path),
             'axes': axes,
@@ -1988,6 +1969,8 @@ class MotionRunManager(Node):
                 'automation_run': automation_run,
                 'repeat_mode': repeat_mode,
                 'dwell_sec': dwell_sec,
+                'countdown_sec': countdown_sec,
+                'operation_generation': operation_generation,
             },
         }
 
@@ -2635,6 +2618,8 @@ class MotionRunManager(Node):
             'automation_run': bool(plan.get('automation_run')),
             'repeat_mode': plan.get('repeat_mode', 'direct'),
             'dwell_sec': float(plan.get('dwell_sec') or 0.0),
+            'countdown_sec': float(plan.get('countdown_sec') or 0.0),
+            'operation_generation': int(plan.get('operation_generation') or 0),
             'request_source': plan.get('request_source', 'motion_run'),
             'cycle_count': 0,
             'current_cycle': 0,
@@ -2682,6 +2667,8 @@ class MotionRunManager(Node):
             'automation_run': False,
             'repeat_mode': 'direct',
             'dwell_sec': 0.0,
+            'countdown_sec': 0.0,
+            'operation_generation': 0,
             'request_source': 'motion_run',
             'cycle_count': 0,
             'current_cycle': 0,

@@ -1,4 +1,5 @@
 import threading
+import time
 
 from motion_runtime.motion_automation_store import default_automation_state
 from motion_runtime.motion_run_manager import MotionRunManager
@@ -96,6 +97,46 @@ def test_dwell_repeat_uses_one_transition_handler_between_cycles():
     manager._run_motion(_plan('dwell'))
 
     assert transitions == [(1, 0.1)]
+
+def test_dwell_status_holds_motion_progress_at_file_end():
+    manager = _manager()
+    plan = _plan('dwell')
+    plan['summary']['duration_sec'] = 8.98
+    plan['samples'] = [
+        {
+            'time_sec': 8.98,
+            'positions': {3: 10.0},
+            'motion_values': {'1-2': 1.0},
+        },
+    ]
+    waiting_status = {}
+    manager._finish_cycle_stop = lambda *_args, **_kwargs: waiting_status.update(
+        manager.status()
+    )
+    manager._graceful_stop_event.set()
+
+    completed = manager._wait_between_cycles(
+        plan,
+        time.time(),
+        1,
+        4.0,
+    )
+
+    assert completed is False
+    assert waiting_status['progress']['elapsed_sec'] == 8.98
+    assert waiting_status['progress']['ratio'] == 1.0
+
+
+def test_next_cycle_status_uses_new_phase_start_time(monkeypatch):
+    manager = _manager()
+    monkeypatch.setattr(time, 'time', lambda: 200.0)
+
+    manager._restore_running_status(_plan('dwell'), 100.0, 1)
+
+    status = manager.status()
+    assert status['phase_started_at'] == 200.0
+    assert status['current_cycle'] == 2
+    assert status['progress']['elapsed_sec'] == 0.0
 
 
 def test_reinitialize_repeat_moves_to_initial_position_between_cycles():

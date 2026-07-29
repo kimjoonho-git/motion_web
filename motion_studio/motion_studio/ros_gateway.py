@@ -71,7 +71,11 @@ class StudioRosGateway:
                 'request_id': request_id,
                 'project_generation': generation,
                 'command': command,
-                'payload': {**payload, 'project_generation': generation},
+                'payload': {
+                    **payload,
+                    'project_generation': generation,
+                    'operation_generation': operation_generation,
+                },
             })
         return self.wait_for_run_result(request_id, timeout)
 
