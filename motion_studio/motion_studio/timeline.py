@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import bisect
+import copy
 import json
 import math
 from typing import Any, Dict, Iterable, List, Mapping, Sequence
@@ -46,6 +47,16 @@ def _enabled_layers(project: Dict[str, Any]) -> List[Dict[str, Any]]:
         for layer in project.get('layers') or []
         if isinstance(layer, dict) and layer.get('enabled') is not False
     ]
+
+
+def final_export_layer(project: Dict[str, Any]) -> Dict[str, Any]:
+    """Return the single layer explicitly selected for a final motion file."""
+    layers = _enabled_layers(project)
+    if len(layers) != 1:
+        raise ValueError(
+            '최종 모션 파일은 재생 선택 레이어가 정확히 1개일 때만 내보낼 수 있습니다'
+        )
+    return layers[0]
 
 
 def _composition_duration(project: Dict[str, Any]) -> float:
@@ -381,7 +392,13 @@ def project_motion_ids(project: Dict[str, Any]) -> List[str]:
     return unique_motion_ids(values)
 
 
-def motion_file_text(project: Dict[str, Any], frames: List[Dict[str, Any]]) -> str:
+def motion_file_text(
+    project: Dict[str, Any],
+    frames: List[Dict[str, Any]],
+    *,
+    editor_layer: Dict[str, Any] | None = None,
+    file_title: str | None = None,
+) -> str:
     if not frames:
         raise ValueError('motion project has no Motion IDs to export')
     title = str(project.get('name') or project.get('project_id') or 'motion')
@@ -392,6 +409,27 @@ def motion_file_text(project: Dict[str, Any], frames: List[Dict[str, Any]]) -> s
         'rotation_unit': 'deg',
         'fields': ['frame', 'time_sec', 'id', 'value'],
     }
+    if str(file_title or '').strip():
+        header['file_title'] = str(file_title).strip()
+    if editor_layer is not None:
+        header['editor'] = {
+            'schema_version': 1,
+            'source_project_id': str(project.get('project_id') or ''),
+            'source_project_name': str(project.get('name') or ''),
+            'period_sec': DEFAULT_PERIOD_SEC,
+            'layer': {
+                key: copy.deepcopy(editor_layer.get(key))
+                for key in (
+                    'layer_id',
+                    'name',
+                    'source_layer_ids',
+                    'copied_from_layer_id',
+                    'edit_revision',
+                    'point_curves',
+                )
+                if key in editor_layer
+            },
+        }
     lines = [json.dumps(header, ensure_ascii=False)]
     for frame in frames:
         row: List[Any] = [int(frame['frame']), round(float(frame['time_sec']), 9)]

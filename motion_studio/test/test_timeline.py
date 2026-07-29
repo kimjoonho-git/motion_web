@@ -3,6 +3,7 @@ import json
 import pytest
 
 from motion_studio.timeline import (
+    final_export_layer,
     layer_conflicts,
     layer_transition_warnings,
     motion_file_text,
@@ -255,6 +256,47 @@ def test_export_matches_header_plus_pair_row_format():
 
     assert json.loads(lines[0])['fields'] == ['frame', 'time_sec', 'id', 'value']
     assert json.loads(lines[1]) == [1, 0.02, '1-1', 0.0, '1-2', 0.0, '1-3', 10.0]
+
+
+def test_final_export_requires_exactly_one_enabled_layer():
+    payload = project()
+
+    with pytest.raises(ValueError, match='정확히 1개'):
+        final_export_layer(payload)
+
+    payload['layers'][1]['enabled'] = False
+
+    assert final_export_layer(payload)['layer_id'] == 'base'
+
+
+def test_final_export_embeds_optional_editor_metadata_without_changing_rows():
+    payload = project()
+    payload['layers'][1]['enabled'] = False
+    layer = final_export_layer(payload)
+    layer['point_curves'] = [{
+        'curve_id': 'curve_1',
+        'motion_id': '1-1',
+        'interpolation_order': 3,
+        'points': [
+            {'point_id': 'p1', 'time_sec': 0.02, 'value_deg': 0.0},
+            {'point_id': 'p2', 'time_sec': 0.04, 'value_deg': 2.0},
+        ],
+    }]
+    frames = render_project(payload)
+
+    text = motion_file_text(
+        payload,
+        frames,
+        editor_layer=layer,
+        file_title='모션 테스트 1',
+    )
+    lines = text.splitlines()
+    header = json.loads(lines[0])
+
+    assert header['editor']['source_project_id'] == 'demo'
+    assert header['file_title'] == '모션 테스트 1'
+    assert header['editor']['layer']['point_curves'][0]['curve_id'] == 'curve_1'
+    assert json.loads(lines[1]) == [1, 0.02, '1-1', 0.0, '1-2', 0.0]
 
 
 def test_empty_project_has_no_artificial_recording_tracks():

@@ -454,12 +454,17 @@ class MotionRunManager(Node):
                     'message': ownership_error,
                     'status': self.status(),
                 }
-            plan = self._build_plan(
-                payload,
-                initialization_only=(mode == 'initialize'),
-            )
-            if mode == 'run':
-                guard_error = self._motion_start_guard_error(plan)
+            if mode == 'initialize':
+                plan = self._build_plan(payload, initialization_only=True)
+                target = self._run_initialization
+                target_args = (plan,)
+            else:
+                plan = self._build_plan(payload)
+                initialization_plan = self._build_plan(
+                    payload,
+                    initialization_only=True,
+                )
+                guard_error = self._motion_auto_start_guard_error(plan)
                 if guard_error:
                     current = self.status()
                     current_state = str(current.get('state') or 'ready')
@@ -475,11 +480,12 @@ class MotionRunManager(Node):
                         'status': self.status(),
                         'summary': plan['summary'],
                     }
+                target = self._run_initialization_then_motion
+                target_args = (initialization_plan, plan)
             self._stop_event.clear()
-            target = self._run_initialization if mode == 'initialize' else self._run_motion
             self._run_thread = threading.Thread(
                 target=target,
-                args=(plan,),
+                args=target_args,
                 daemon=True,
             )
             self._run_thread.start()
@@ -489,7 +495,11 @@ class MotionRunManager(Node):
             'message': (
                 'initial position move started'
                 if mode == 'initialize'
-                else ('continuous motion run started' if plan.get('run_mode') == 'continuous' else 'single motion run started')
+                else (
+                    'initial position move and continuous motion run started'
+                    if plan.get('run_mode') == 'continuous'
+                    else 'initial position move and single motion run started'
+                )
             ),
             'status': self.status(),
             'summary': plan['summary'],
@@ -609,6 +619,18 @@ class MotionRunManager(Node):
             status['lifecycle'] = self._current_lifecycle()
             self._set_status(status)
 
+    def _run_initialization_then_motion(
+        self,
+        initialization_plan: Dict[str, Any],
+        motion_plan: Dict[str, Any],
+    ) -> None:
+        self._run_initialization(initialization_plan)
+        if self._stop_event.is_set():
+            return
+        if self.status().get('state') != 'initialized':
+            return
+        self._run_motion(motion_plan)
+
     def _run_motion(self, plan: Dict[str, Any]) -> None:
         try:
             run_mode = str(plan.get('run_mode') or 'once')
@@ -722,28 +744,12 @@ class MotionRunManager(Node):
             status['lifecycle'] = self._current_lifecycle()
             self._set_status(status)
 
-    def _motion_start_guard_error(self, plan: Dict[str, Any]) -> str:
+    @staticmethod
+    def _motion_auto_start_guard_error(plan: Dict[str, Any]) -> str:
         if plan.get('run_mode') == 'continuous':
             capability = plan.get('capabilities', {}).get('continuous_run', {})
             if not capability.get('available'):
                 return str(capability.get('reason') or '모션 시작값과 끝값이 달라 연속 동작할 수 없습니다')
-        current = self.status()
-        if current.get('state') != 'initialized':
-            return '초기 위치 이동 완료 후 모션을 시작할 수 있습니다'
-        if current.get('motion_file_id') != plan.get('motion_file_id'):
-            return '초기 위치 완료 후 모션 파일이 변경되었습니다'
-        if current.get('mapping_file_id') != plan.get('mapping_file_id'):
-            return '초기 위치 완료 후 매핑 파일이 변경되었습니다'
-        if current.get('project_id') != plan.get('project_id'):
-            return '초기 위치 완료 후 통합 프로젝트가 변경되었습니다'
-
-        initial_targets = {
-            int(axis['motor_axis']): float(axis['initial_motor_target_deg'])
-            for axis in plan.get('axes', [])
-        }
-        reached, message = self._wait_for_targets(plan.get('axes', []), initial_targets, 0.0)
-        if not reached:
-            return f'현재 위치가 초기 위치와 다릅니다: {message}'
         return ''
 
     def _run_initial_position_stream(
@@ -988,6 +994,12 @@ class MotionRunManager(Node):
             )
 
         groups = self._motion_groups(motion_records)
+        if request_source != 'motion_studio':
+            requested_motion_ids = (
+                set()
+                if initialization_only
+                else {str(motion_id) for motion_id in groups}
+            )
         initialization_fallback_used = False
         motors = self._current_motors()
         if not motors:

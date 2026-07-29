@@ -11,6 +11,22 @@ from motion_runtime.motion_run_manager import (
 )
 
 
+def test_runtime_ignores_optional_studio_editor_metadata_in_motion_header():
+    manager = MotionRunManager.__new__(MotionRunManager)
+    content = (
+        '{"title":"편집 가능 모션","type":"motion_header","rotation_unit":"deg",'
+        '"fields":["frame","time_sec","id","value"],'
+        '"editor":{"schema_version":1,"layer":{"point_curves":['
+        '{"curve_id":"curve_1","motion_id":"1-1","points":[]}]}}}\n'
+        '[1,0.02,"1-1",3.5]\n'
+    )
+
+    rows, headers = manager._extract_motion_rows(content)
+
+    assert headers == ['frame', 'time_sec', 'id', 'value']
+    assert rows == [[1, 0.02, '1-1', 3.5]]
+
+
 def test_motion_run_confirmation_returns_standard_context_acknowledgement():
     manager = MotionRunManager.__new__(MotionRunManager)
     manager._run_lock = threading.RLock()
@@ -224,6 +240,180 @@ def test_motion_playback_without_motion_file_remains_blocked():
             'motion_file_id': '',
             'mapping_file_id': 'mapping.yaml',
         })
+
+
+def test_motion_run_initialization_uses_every_enabled_mapping_axis():
+    manager = MotionRunManager.__new__(MotionRunManager)
+    manager.period_sec = 0.02
+    manager._motion_file_path = lambda _file_id: None
+    manager._mapping_file_path = lambda _file_id: None
+    manager._load_motion_records = lambda _path: [
+        {'time_sec': 0.02, 'motion_id': '1-2', 'value': 3.0},
+    ]
+    manager._load_mapping = lambda _path: {
+        'motion_file_id': 'motion.json',
+        'mappings': [
+            {
+                'motion_id': '1-1',
+                'motor_axis': 0,
+                'initial_mode': 'manual',
+                'initial_motion_position_deg': -2.0,
+            },
+            {
+                'motion_id': '1-2',
+                'motor_axis': 1,
+                'initial_mode': 'manual',
+                'initial_motion_position_deg': 4.0,
+            },
+        ],
+    }
+    motors = [{'axis': 0}, {'axis': 1}]
+    manager._current_motors = lambda: motors
+    manager._motor_for_axis = lambda axis, _motors: motors[axis]
+    manager._motor_ready_error = lambda _motor: ''
+    manager._target_range_limit_error = lambda _motor, _low, _high: ''
+    manager._motor_type = lambda _motor: 'ac_servo'
+
+    plan = manager._build_plan({
+        'request_source': 'motion_run',
+        'motion_file_id': 'motion.json',
+        'mapping_file_id': 'mapping.yaml',
+        # A client-supplied subset must not weaken whole-mapping initialization.
+        'active_motion_ids': ['1-2'],
+    }, initialization_only=True)
+
+    assert [axis['motion_id'] for axis in plan['axes']] == ['1-1', '1-2']
+    assert [axis['initial_motion_position_deg'] for axis in plan['axes']] == [-2.0, 4.0]
+    assert 'Motion ID 1-1: 모션 데이터가 없어 수동 초기위치 -2.000°를 사용' in plan['warnings']
+
+
+def test_motion_run_initialization_fails_when_any_mapping_axis_is_not_ready():
+    manager = MotionRunManager.__new__(MotionRunManager)
+    manager.period_sec = 0.02
+    manager._motion_file_path = lambda _file_id: None
+    manager._mapping_file_path = lambda _file_id: None
+    manager._load_motion_records = lambda _path: [
+        {'time_sec': 0.02, 'motion_id': '1-1', 'value': 0.0},
+        {'time_sec': 0.02, 'motion_id': '1-2', 'value': 0.0},
+    ]
+    manager._load_mapping = lambda _path: {
+        'motion_file_id': 'motion.json',
+        'mappings': [
+            {'motion_id': '1-1', 'motor_axis': 0},
+            {'motion_id': '1-2', 'motor_axis': 1},
+        ],
+    }
+    motors = [{'axis': 0}, {'axis': 1}]
+    manager._current_motors = lambda: motors
+    manager._motor_for_axis = lambda axis, _motors: motors[axis]
+    manager._motor_ready_error = lambda motor: (
+        'Axis 1 servo is off' if motor['axis'] == 1 else ''
+    )
+    manager._target_range_limit_error = lambda _motor, _low, _high: ''
+    manager._motor_type = lambda _motor: 'ac_servo'
+
+    with pytest.raises(ValueError, match='Motion ID 1-2: Axis 1 servo is off'):
+        manager._build_plan({
+            'request_source': 'motion_run',
+            'motion_file_id': 'motion.json',
+            'mapping_file_id': 'mapping.yaml',
+        }, initialization_only=True)
+
+
+def test_motion_run_playback_uses_only_motion_ids_present_in_file():
+    manager = MotionRunManager.__new__(MotionRunManager)
+    manager.period_sec = 0.02
+    manager._motion_file_path = lambda _file_id: None
+    manager._mapping_file_path = lambda _file_id: None
+    manager._load_motion_records = lambda _path: [
+        {'time_sec': 0.02, 'motion_id': '1-2', 'value': 0.0},
+        {'time_sec': 0.04, 'motion_id': '1-2', 'value': 2.0},
+    ]
+    manager._load_mapping = lambda _path: {
+        'motion_file_id': 'motion.json',
+        'mappings': [
+            {'motion_id': '1-1', 'motor_axis': 0, 'reference_position_deg': 0.0},
+            {'motion_id': '1-2', 'motor_axis': 1, 'reference_position_deg': 10.0},
+        ],
+    }
+    motors = [{'axis': 0}, {'axis': 1}]
+    manager._current_motors = lambda: motors
+    manager._motor_for_axis = lambda axis, _motors: motors[axis]
+    manager._motor_ready_error = lambda _motor: ''
+    manager._target_range_limit_error = lambda _motor, _low, _high: ''
+    manager._motor_type = lambda _motor: 'ac_servo'
+
+    plan = manager._build_plan({
+        'request_source': 'motion_run',
+        'motion_file_id': 'motion.json',
+        'mapping_file_id': 'mapping.yaml',
+    })
+
+    assert [axis['motion_id'] for axis in plan['axes']] == ['1-2']
+    assert plan['samples'][0]['positions'] == {1: 10.0}
+    assert plan['samples'][-1]['positions'] == {1: 12.0}
+
+
+def test_auto_start_runs_motion_only_after_initialization_completes():
+    manager = MotionRunManager.__new__(MotionRunManager)
+    manager._stop_event = threading.Event()
+    current = {'state': 'idle'}
+    calls = []
+    manager.status = lambda: dict(current)
+
+    def initialize(plan):
+        calls.append(('initialize', plan['name']))
+        current['state'] = 'initialized'
+
+    manager._run_initialization = initialize
+    manager._run_motion = lambda plan: calls.append(('motion', plan['name']))
+
+    manager._run_initialization_then_motion(
+        {'name': 'all-mapping-axes'},
+        {'name': 'file-motion-axes'},
+    )
+
+    assert calls == [
+        ('initialize', 'all-mapping-axes'),
+        ('motion', 'file-motion-axes'),
+    ]
+
+
+def test_auto_start_does_not_run_motion_when_initialization_fails():
+    manager = MotionRunManager.__new__(MotionRunManager)
+    manager._stop_event = threading.Event()
+    current = {'state': 'idle'}
+    calls = []
+    manager.status = lambda: dict(current)
+
+    def initialize(_plan):
+        calls.append('initialize')
+        current['state'] = 'error'
+
+    manager._run_initialization = initialize
+    manager._run_motion = lambda _plan: calls.append('motion')
+
+    manager._run_initialization_then_motion({}, {})
+
+    assert calls == ['initialize']
+
+
+def test_auto_start_rejects_unsafe_continuous_motion_before_initialization():
+    reason = MotionRunManager._motion_auto_start_guard_error({
+        'run_mode': 'continuous',
+        'capabilities': {
+            'continuous_run': {
+                'available': False,
+                'reason': '시작·종료값 차이 초과',
+            },
+        },
+    })
+
+    assert reason == '시작·종료값 차이 초과'
+    assert MotionRunManager._motion_auto_start_guard_error({
+        'run_mode': 'once',
+        'capabilities': {},
+    }) == ''
 
 
 def test_zero_fallback_outside_motion_range_blocks_initialization():

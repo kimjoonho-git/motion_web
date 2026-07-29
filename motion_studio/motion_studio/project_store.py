@@ -202,13 +202,54 @@ class ProjectStore:
                 'values': values,
             })
         frames.sort(key=lambda item: (item['time_sec'], item['frame']))
+        editor_layer = None
+        editor_message = '포인트 편집 정보 없음'
+        editor = header.get('editor')
+        if isinstance(editor, dict) and isinstance(editor.get('layer'), dict):
+            candidate = dict(editor['layer'])
+            candidate['frames'] = frames
+            try:
+                editor_layer = normalize_layer(candidate, 0)
+                editor_message = '포인트 편집 정보 포함'
+            except ValueError:
+                # Runtime frames remain valid even when optional editor metadata
+                # was produced by an unsupported or damaged editor version.
+                editor_message = '포인트 편집 정보 사용 불가 · 실행 데이터는 정상'
         return {
             'file_id': path.name,
             'title': str(header.get('title') or path.stem),
+            'file_title': str(header.get('file_title') or path.stem),
             'motion_ids': motion_ids,
             'duration_sec': max((frame['time_sec'] for frame in frames), default=0.0),
             'frames': frames,
+            'editor_layer': editor_layer,
+            'editor_message': editor_message,
         }
+
+    @staticmethod
+    def _imported_layer(motion: Dict[str, Any]) -> Dict[str, Any]:
+        source = motion.get('editor_layer')
+        layer = dict(source) if isinstance(source, dict) else {}
+        source_layer_id = str(layer.get('layer_id') or '')
+        layer.update({
+            'layer_id': f'import_{uuid.uuid4().hex[:8]}',
+            'name': str(motion.get('file_title') or Path(motion['file_id']).stem),
+            'enabled': True,
+            'locked': False,
+            'created_at': time.time(),
+            'source_motion_file_id': motion['file_id'],
+            'frames': motion['frames'],
+        })
+        if source_layer_id:
+            source_layer_ids = [
+                str(value)
+                for value in layer.get('source_layer_ids') or []
+                if str(value)
+            ]
+            if source_layer_id not in source_layer_ids:
+                source_layer_ids.append(source_layer_id)
+            layer['source_layer_ids'] = source_layer_ids
+        return layer
 
     def import_motion_file(
         self,
@@ -225,15 +266,7 @@ class ProjectStore:
                 '선택한 모션축 설정에 없는 Motion ID: ' + ', '.join(missing)
             )
         project = self.create_project(name or motion['title'], mapping['file_id'])
-        project['layers'] = [{
-            'layer_id': f'import_{uuid.uuid4().hex[:8]}',
-            'name': f'가져오기 · {motion["file_id"]}',
-            'enabled': True,
-            'locked': False,
-            'created_at': time.time(),
-            'source_motion_file_id': motion['file_id'],
-            'frames': motion['frames'],
-        }]
+        project['layers'] = [self._imported_layer(motion)]
         return self.save_project(project)
 
     def append_motion_file(
@@ -247,15 +280,7 @@ class ProjectStore:
             raise ValueError(
                 '선택한 모션축 설정에 없는 Motion ID: ' + ', '.join(missing)
             )
-        project.setdefault('layers', []).append({
-            'layer_id': f'import_{uuid.uuid4().hex[:8]}',
-            'name': f'가져오기 · {motion["file_id"]}',
-            'enabled': True,
-            'locked': False,
-            'created_at': time.time(),
-            'source_motion_file_id': motion['file_id'],
-            'frames': motion['frames'],
-        })
+        project.setdefault('layers', []).append(self._imported_layer(motion))
         return self.save_project(project)
 
     def create_project(self, name: Any, mapping_file_id: Any) -> Dict[str, Any]:
