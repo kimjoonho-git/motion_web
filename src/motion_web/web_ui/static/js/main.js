@@ -10,11 +10,11 @@ import {
   stopMotionRun,
   stopMotionStudio,
   setProjectGeneration,
-} from './api.js?v=20260729-motion-file-studio-export-1';
-import { getElements } from './dom.js?v=20260729-editor-workflow-export-1';
+} from './api.js?v=20260729-motion-automation-1';
+import { getElements } from './dom.js?v=20260729-motion-automation-1';
 import { createMotorEventLogController } from './event_log.js?v=20260727-popup-common-3';
 import { createMidiMonitorController } from './midi_monitor.js?v=20260727-popup-common-3';
-import { createMotionDataController } from './motion_data.js?v=20260729-motion-file-delete-feedback-1';
+import { createMotionDataController } from './motion_data.js?v=20260729-motion-automation-1';
 import { createMotionStudioController } from './motion_studio.js?v=20260729-editor-workflow-export-1';
 import { createMotionTestController } from './motion_test.js?v=20260728-servo-alarm-2';
 import { createMotorConfigController } from './motor_config.js?v=20260727-popup-common-3';
@@ -225,9 +225,19 @@ function renderLatestState(nextState = null) {
   motionTest.renderLatestState();
   motionData.renderRuntimeState();
   servoAlarm?.renderRuntimeState();
+  renderMotorActivity(appState.latestState.motor_activity);
   updateWorkContext();
   updateMotorErrorPopup(appState.latestState);
   enforceEmergencyUi();
+}
+
+function renderMotorActivity(activity = {}) {
+  if (!el.motorActivityBanner || !el.motorActivityLabel) return;
+  const active = activity?.active === true;
+  el.motorActivityBanner.classList.toggle('hidden', !active);
+  el.motorActivityBanner.classList.toggle('warning', activity?.warning === true);
+  el.motorActivityBanner.dataset.kind = String(activity?.kind || 'idle');
+  el.motorActivityLabel.textContent = active ? String(activity?.label || '') : '';
 }
 
 function clearBrowserProjectMemory(projectGeneration) {
@@ -312,6 +322,7 @@ function motionStateFromPayload(payload) {
     ...payload.motion_state,
     motion_test_limits: payload.motion_test_limits || payload.motion_state.motion_test_limits || {},
     motion_run_status: payload.motion_run_status || payload.motion_state.motion_run_status || {},
+    motor_activity: payload.motor_activity || {},
     execution_context: payload.execution_context || {},
     service_management: payload.service_management || {},
     safety_status: payload.safety_status || {},

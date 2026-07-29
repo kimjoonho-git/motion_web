@@ -1,7 +1,9 @@
 import {
   checkMotionRun,
+  configureMotionAutomation,
   deleteMotionMapping,
   deleteMotionFile,
+  disableMotionAutomation,
   fetchMotionFile,
   fetchMotionFiles,
   fetchMotionMapping,
@@ -9,10 +11,11 @@ import {
   fetchMotionRunStatus,
   initializeMotionRun,
   saveMotionMapping,
+  startMotionAutomation,
   startMotionRun,
   stopMotionRun,
   validateMotionMapping,
-} from './api.js?v=20260729-motion-file-studio-export-1';
+} from './api.js?v=20260729-motion-automation-1';
 import {
   displayText,
   formatInt,
@@ -1126,11 +1129,88 @@ export function createMotionDataController({
     )).join('');
   }
 
+  function motionAutomationStateText(state) {
+    const labels = {
+      off: '사용 안 함',
+      ready: '시작 대기',
+      checking: '검사 중',
+      starting: '시작 중',
+      initializing: '초기 위치 이동 중',
+      initialized: '초기 위치 이동 완료',
+      running: '반복 중',
+      waiting: '회차 사이 대기',
+      stop_requested: '현재 단계 후 정지',
+      stopped: '정지',
+      blocked: '실행 차단',
+    };
+    const key = String(state || 'off');
+    return labels[key] || key;
+  }
+
+  function renderMotionAutomation() {
+    const automation = motionRunStatus?.automation || {};
+    const enabled = automation.enabled === true;
+    const armed = automation.armed === true;
+    const repeatMode = String(automation.repeat_mode || 'direct');
+    const dwellSec = Number(automation.dwell_sec);
+    const busy = motionRunLoading || armed;
+    const hasFiles = Boolean(
+      motionRunPayload().motion_file_id && motionRunPayload().mapping_file_id,
+    );
+    const contextReady = getLatestState()?.execution_context?.ready === true;
+
+    if (el.motionAutomationEnabled) {
+      el.motionAutomationEnabled.checked = enabled;
+      el.motionAutomationEnabled.disabled = motionRunLoading;
+    }
+    if (el.motionAutomationRepeatMode) {
+      if (document.activeElement !== el.motionAutomationRepeatMode) {
+        el.motionAutomationRepeatMode.value = repeatMode;
+      }
+      el.motionAutomationRepeatMode.disabled = !enabled || busy;
+    }
+    const showDwell = repeatMode === 'dwell';
+    el.motionAutomationDwellWrap?.classList.toggle('hidden', !showDwell);
+    if (el.motionAutomationDwellSec) {
+      if (document.activeElement !== el.motionAutomationDwellSec) {
+        el.motionAutomationDwellSec.value = String(
+          Number.isFinite(dwellSec) ? dwellSec : 0,
+        );
+      }
+      el.motionAutomationDwellSec.disabled = !enabled || busy;
+    }
+    if (el.motionAutomationStartButton) {
+      el.motionAutomationStartButton.disabled = (
+        motionRunLoading || !enabled || armed || !hasFiles || !contextReady
+      );
+    }
+    if (el.motionAutomationStatus) {
+      el.motionAutomationStatus.textContent = motionAutomationStateText(
+        automation.state,
+      );
+      el.motionAutomationStatus.className = automation.state === 'blocked'
+        ? 'bad-text'
+        : (armed ? 'warning-text' : '');
+    }
+    if (el.motionAutomationDetail) {
+      const fileName = motionRunSelectedMotionFile()?.filename
+        || automation.motion_file_id
+        || '재생 등록 파일 없음';
+      el.motionAutomationDetail.textContent = automation.message
+        || `${fileName} · ${repeatMode === 'direct'
+          ? '바로 반복'
+          : repeatMode === 'dwell'
+            ? `${Number.isFinite(dwellSec) ? dwellSec : 0}초 정지 후 반복`
+            : '초기 위치 이동 후 반복'}`;
+    }
+  }
+
   function renderMotionRunPanel() {
     const payload = motionRunPayload();
     const status = motionRunStatus || {};
     const state = String(status.state || 'idle');
-    const running = state === 'running' || state === 'initializing' || state === 'verifying' || state === 'stopping';
+    const running = state === 'running' || state === 'initializing'
+      || state === 'verifying' || state === 'stopping' || state === 'waiting';
     const hasMappingFile = Boolean(payload.mapping_file_id);
     const hasMotionFile = Boolean(payload.motion_file_id);
     const hasRequiredFiles = hasMappingFile && hasMotionFile;
@@ -1194,6 +1274,7 @@ export function createMotionDataController({
     updateMotionRunGraphAnimation();
     stopMotionRunGraphAnimationIfIdle();
     renderMotionRunAxes();
+    renderMotionAutomation();
   }
 
   function renderMotionTabs(active = null) {
@@ -2479,6 +2560,80 @@ export function createMotionDataController({
     }
   }
 
+  function motionAutomationSettings(enabled = true) {
+    const repeatMode = String(
+      el.motionAutomationRepeatMode?.value
+      || motionRunStatus?.automation?.repeat_mode
+      || 'direct',
+    );
+    const dwellSec = Number(el.motionAutomationDwellSec?.value);
+    return {
+      enabled,
+      repeat_mode: repeatMode,
+      dwell_sec: Number.isFinite(dwellSec) && dwellSec >= 0 ? dwellSec : 0,
+    };
+  }
+
+  async function saveMotionAutomation(enabled = true) {
+    motionRunLoading = true;
+    renderMotionRunPanel();
+    try {
+      const payload = enabled
+        ? await configureMotionAutomation(motionAutomationSettings(true))
+        : await disableMotionAutomation();
+      motionRunStatus = payload.status || motionRunStatus || null;
+      motionRunLastResult = payload;
+      if (payload.success === false) {
+        await showAlert(payload.message || '자동 반복 설정 실패', {
+          title: '자동 반복 설정',
+          tone: 'danger',
+        });
+      }
+    } catch (error) {
+      await showAlert(error?.message || String(error), {
+        title: '자동 반복 설정 실패',
+        tone: 'danger',
+      });
+    } finally {
+      motionRunLoading = false;
+      renderMotionRunPanel();
+    }
+  }
+
+  async function startCurrentMotionAutomation() {
+    const confirmed = await showConfirm(
+      '등록된 모션 파일을 검사하고 전체 활성 축을 초기 위치로 이동한 뒤 자동 반복을 시작합니다.',
+      {
+        title: '자동 반복 시작',
+        confirmLabel: '시작',
+        tone: 'warning',
+      },
+    );
+    if (!confirmed) return;
+    motionRunLoading = true;
+    renderMotionRunPanel();
+    try {
+      await ensureMotionRunMotionFileDetail();
+      const payload = await startMotionAutomation(motionRunPayload());
+      motionRunStatus = payload.status || motionRunStatus || null;
+      motionRunLastResult = payload;
+      if (payload.success === false) {
+        await showAlert(payload.message || '자동 반복 시작 실패', {
+          title: '자동 반복 시작',
+          tone: 'danger',
+        });
+      }
+    } catch (error) {
+      await showAlert(error?.message || String(error), {
+        title: '자동 반복 시작 실패',
+        tone: 'danger',
+      });
+    } finally {
+      motionRunLoading = false;
+      renderMotionRunPanel();
+    }
+  }
+
   function bindEvents() {
     if (el.motionFileRows) {
       el.motionFileRows.addEventListener('click', (event) => {
@@ -2533,6 +2688,20 @@ export function createMotionDataController({
     if (el.motionRunRefreshButton) {
       el.motionRunRefreshButton.addEventListener('click', refreshMotionRunStatus);
     }
+    el.motionAutomationEnabled?.addEventListener('change', () => {
+      void saveMotionAutomation(el.motionAutomationEnabled.checked);
+    });
+    el.motionAutomationRepeatMode?.addEventListener('change', () => {
+      renderMotionAutomation();
+      void saveMotionAutomation(true);
+    });
+    el.motionAutomationDwellSec?.addEventListener('change', () => {
+      void saveMotionAutomation(true);
+    });
+    el.motionAutomationStartButton?.addEventListener(
+      'click',
+      startCurrentMotionAutomation,
+    );
     if (el.motionRunGraphAxisToggles) {
       el.motionRunGraphAxisToggles.addEventListener('click', (event) => {
         const button = event.target.closest('button');

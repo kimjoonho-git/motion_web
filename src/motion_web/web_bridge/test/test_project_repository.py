@@ -1859,7 +1859,7 @@ def test_motor_control_restart_rejects_project_without_applied_motor_config(monk
 
 @pytest.mark.parametrize(
     ('run_state', 'studio_state'),
-    [('running', 'idle'), ('idle', 'recording')],
+    [('running', 'idle'), ('waiting', 'idle'), ('idle', 'recording')],
 )
 def test_project_change_is_blocked_during_motion_operations(run_state, studio_state):
     bridge = MotionWebBridge.__new__(MotionWebBridge)

@@ -1324,8 +1324,76 @@ body {
   text-align: center;
 }
 
+.motor-activity-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  margin: -4px 0 10px;
+  padding: 8px 12px;
+  border: 1px solid #6ca4e8;
+  border-radius: 8px;
+  background: #eaf4ff;
+  color: #174f91;
+  font-size: 13px;
+}
+
+.motor-activity-banner #motorActivityIndicator {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #1976d2;
+  box-shadow: 0 0 0 4px rgb(25 118 210 / 13%);
+}
+
+.motor-activity-banner.warning {
+  border-color: #dda83e;
+  background: #fff7df;
+  color: #8a5a00;
+}
+
+.motor-activity-banner.warning #motorActivityIndicator {
+  background: #d88b00;
+  box-shadow: 0 0 0 4px rgb(216 139 0 / 14%);
+}
+
 body.emergency-latched .shell {
   border-top: 5px solid #b42318;
+}
+
+.motion-automation-card {
+  border-color: #a9c8ec;
+  background: #f7fbff;
+}
+
+.motion-automation-controls {
+  display: flex;
+  align-items: end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.motion-automation-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  font-weight: 700;
+}
+
+.motion-automation-toggle input {
+  width: 17px;
+  height: 17px;
+}
+
+.motion-automation-detail {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .version-badge {

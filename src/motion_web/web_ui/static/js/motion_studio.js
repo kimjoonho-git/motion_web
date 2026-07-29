@@ -27,6 +27,7 @@ import {
   motionStudioLayerDuration,
   motionStudioLayerMotionIds,
   motionStudioMotionAxisRange,
+  motionStudioValueViewAfterRangeUnlock,
   motionStudioMotionTargetAtTime,
   motionStudioNearestMotionTarget,
   motionStudioPointCurveAtTime,
@@ -82,6 +83,7 @@ export {
   motionStudioLayerDuration,
   motionStudioLayerMotionIds,
   motionStudioMotionAxisRange,
+  motionStudioValueViewAfterRangeUnlock,
   motionStudioMotionTargetAtTime,
   motionStudioNearestMotionTarget,
   motionStudioPointCurveAtTime,
@@ -926,12 +928,18 @@ export function createMotionStudioController({
     return motionStudioMotionAxisRange(activeMapping()?.rows || [], selectedIds[0]);
   }
 
-  function resetEditorValueView({ unlock = false } = {}) {
+  function resetEditorValueView({
+    unlock = false,
+    preserveLockedRange = false,
+  } = {}) {
     const editor = state.editor;
     if (!editor) return;
+    const unlockedView = preserveLockedRange
+      ? motionStudioValueViewAfterRangeUnlock(editor.valueRangeLock)
+      : null;
     editor.valueScale = 1;
     editor.valueOffset = 0;
-    editor.valueView = null;
+    editor.valueView = unlockedView;
     if (unlock) editor.valueRangeLock = null;
   }
 
@@ -2974,7 +2982,10 @@ export function createMotionStudioController({
       const editor = state.editor;
       if (!editor) return;
       if (editor.valueRangeLock) {
-        resetEditorValueView({ unlock: true });
+        resetEditorValueView({
+          unlock: true,
+          preserveLockedRange: true,
+        });
         setEditorMessage('세로축 고정 해제 · 그래프 배경을 상하로 이동할 수 있습니다.');
         renderEditor();
         return;

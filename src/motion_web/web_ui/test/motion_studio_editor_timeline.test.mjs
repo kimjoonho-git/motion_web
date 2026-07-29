@@ -13,6 +13,7 @@ import {
   motionStudioEditorValueBounds,
   motionStudioLayerMotionIds,
   motionStudioMotionAxisRange,
+  motionStudioValueViewAfterRangeUnlock,
   motionStudioMotionTargetAtTime,
   motionStudioNearestMotionTarget,
   motionStudioPointCurveAtTime,
@@ -503,6 +504,30 @@ test('editor graph background pans both axes and axis selection resets a fixed v
   );
   assert.match(source, /resetEditorValueView\(\{ unlock: true \}\)/);
   assert.match(source, /motionStudioMotionAxisRange\(activeMapping\(\)\?\.rows \|\| \[\]/);
+});
+
+test('unlocking an axis range preserves the visible fixed bounds', () => {
+  assert.deepEqual(
+    motionStudioValueViewAfterRangeUnlock({
+      motionId: '1-1',
+      minValue: -35,
+      maxValue: 45,
+    }),
+    { minValue: -35, maxValue: 45 },
+  );
+  assert.equal(
+    motionStudioValueViewAfterRangeUnlock({ minValue: 10, maxValue: 10 }),
+    null,
+  );
+
+  const source = readFileSync(
+    new URL('../static/js/motion_studio.js', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    source,
+    /resetEditorValueView\(\{\s*unlock: true,\s*preserveLockedRange: true,/,
+  );
 });
 
 test('editor exposes whole-axis point creation without motion-section conversions', () => {
