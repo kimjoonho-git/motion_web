@@ -127,20 +127,33 @@ test('original motion file view prefers the complete file content without trunca
 });
 
 test('registered motion file deletion is blocked with an alert before delete request', () => {
+  const helperStart = controller.indexOf('async function showMotionFileDeleteFailure(');
   const deleteStart = controller.indexOf('async function deleteSelectedFile()');
   const deleteEnd = controller.indexOf('async function refreshMotionRunStatus()', deleteStart);
+  const helperBody = controller.slice(helperStart, deleteStart);
   const deleteBody = controller.slice(deleteStart, deleteEnd);
   const registrationGuard = deleteBody.indexOf('selectedFileId === registeredMotionFileIdValue');
-  const alertCall = deleteBody.indexOf('showAlert(', registrationGuard);
+  const alertCall = deleteBody.indexOf('showMotionFileDeleteFailure(', registrationGuard);
   const confirmCall = deleteBody.indexOf('showConfirm(', registrationGuard);
   const deleteCall = deleteBody.indexOf('deleteMotionFile(selectedFileId)', registrationGuard);
+  const clearSelection = deleteBody.indexOf('selectedFileId = null', deleteCall);
+  const projectRefresh = deleteBody.indexOf('await onProjectFilesChange?.()', clearSelection);
 
+  assert.ok(helperStart >= 0);
+  assert.match(helperBody, /showAlert\(/);
+  assert.match(helperBody, /title: '모션 파일 삭제 불가'/);
   assert.ok(registrationGuard >= 0);
   assert.ok(alertCall > registrationGuard);
   assert.ok(confirmCall > alertCall);
   assert.ok(deleteCall > confirmCall);
+  assert.ok(clearSelection > deleteCall);
+  assert.ok(projectRefresh > clearSelection);
   assert.match(deleteBody, /재생 등록된 모션 파일은 삭제할 수 없습니다/);
   assert.match(deleteBody, /if \(payload\.success === false\)/);
+  assert.match(
+    deleteBody,
+    /catch \(error\) \{[\s\S]*?await showMotionFileDeleteFailure\(message\)/,
+  );
 });
 
 test('motion file screen exports the selected file to Studio without project-tree transfer', () => {

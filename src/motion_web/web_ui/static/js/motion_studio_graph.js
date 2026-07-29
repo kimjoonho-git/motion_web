@@ -212,6 +212,19 @@ export function drawMotionStudioLayerGraph({
   return true;
 }
 
+export function motionStudioEditorIssueTimes(validation = {}, selectedMotionIds = []) {
+  const selected = new Set(selectedMotionIds.map(String));
+  return [
+    ...(validation?.conflicts || []).map((item) => Number(item.start_sec)),
+    ...(validation?.transition_warnings || []).map((item) => (
+      Number(item.second_time_sec)
+    )),
+    ...(validation?.range_warnings || [])
+      .filter((item) => selected.has(String(item.motion_id || '')))
+      .map((item) => Number(item.time_sec)),
+  ].filter(Number.isFinite);
+}
+
 export function drawMotionStudioEditorGraph({
   editor,
   canvas,
@@ -443,13 +456,7 @@ export function drawMotionStudioEditorGraph({
     });
   });
   const displayedValidation = editor.previewValidation || editor.validation;
-  const issueTimes = [
-    ...(displayedValidation?.conflicts || []).map((item) => Number(item.start_sec)),
-    ...(displayedValidation?.transition_warnings || []).map((item) => (
-      Number(item.second_time_sec)
-    )),
-    ...(displayedValidation?.range_warnings || []).map((item) => Number(item.time_sec)),
-  ].filter(Number.isFinite);
+  const issueTimes = motionStudioEditorIssueTimes(displayedValidation, [...selected]);
   context.strokeStyle = '#d33b3b';
   context.setLineDash([4, 3]);
   issueTimes.forEach((timeSec) => {

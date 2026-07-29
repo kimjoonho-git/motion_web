@@ -56,6 +56,15 @@ export function motionStudioMotionAxisRange(rows, motionId) {
   return { motionId: targetId, minValue, maxValue };
 }
 
+export function motionStudioValueViewAfterRangeUnlock(fixedBounds) {
+  const minValue = Number(fixedBounds?.minValue);
+  const maxValue = Number(fixedBounds?.maxValue);
+  if (!Number.isFinite(minValue) || !Number.isFinite(maxValue) || maxValue <= minValue) {
+    return null;
+  }
+  return { minValue, maxValue };
+}
+
 export function motionStudioEditorNextValueScale(currentScale, factor) {
   const current = Number.isFinite(Number(currentScale)) && Number(currentScale) > 0
     ? Number(currentScale) : 1;

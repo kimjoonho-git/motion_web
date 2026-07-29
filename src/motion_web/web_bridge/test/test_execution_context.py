@@ -145,6 +145,58 @@ def test_coordinator_allows_control_only_after_all_nodes_confirm_context():
     }
 
 
+def test_motion_automation_commands_use_current_execution_context():
+    bridge = make_bridge()
+    bridge._execution_context_status = {
+        'state': 'ready',
+        'ready': True,
+        'context_id': 'context-sha',
+        'nodes': {},
+    }
+    calls = []
+
+    def request(command, payload, **_kwargs):
+        calls.append((command, dict(payload)))
+        return {'success': True}
+
+    bridge._request_motion_run = request
+    bridge._motor_runtime_control_blocker = lambda: ''
+
+    assert bridge.motion_automation_configure({
+        'enabled': True,
+        'repeat_mode': 'dwell',
+        'dwell_sec': 3,
+    })['success']
+    assert bridge.motion_automation_start({
+        'motion_file_id': 'motion.json',
+        'mapping_file_id': 'mapping.yaml',
+    })['success']
+    assert bridge.motion_automation_disable()['success']
+    assert [call[0] for call in calls] == [
+        'automation_configure',
+        'automation_start',
+        'automation_disable',
+    ]
+
+
+def test_motion_automation_start_obeys_motor_runtime_blocker():
+    bridge = make_bridge()
+    calls = []
+    bridge._request_motion_run = lambda *args, **kwargs: calls.append((args, kwargs))
+    bridge._motor_runtime_control_blocker = lambda: '서보 에러 2등급'
+
+    result = bridge.motion_automation_start({
+        'motion_file_id': 'motion.json',
+        'mapping_file_id': 'mapping.yaml',
+    })
+
+    assert result == {
+        'success': False,
+        'message': '자동 반복 시작 불가: 서보 에러 2등급',
+    }
+    assert calls == []
+
+
 def test_coordinator_establishes_persisted_generation_after_program_restart():
     bridge = make_bridge()
     bridge._supervisor_project_generation = 0

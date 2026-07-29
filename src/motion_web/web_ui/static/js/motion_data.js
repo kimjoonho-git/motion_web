@@ -1,7 +1,9 @@
 import {
   checkMotionRun,
+  configureMotionAutomation,
   deleteMotionMapping,
   deleteMotionFile,
+  disableMotionAutomation,
   fetchMotionFile,
   fetchMotionFiles,
   fetchMotionMapping,
@@ -9,10 +11,11 @@ import {
   fetchMotionRunStatus,
   initializeMotionRun,
   saveMotionMapping,
+  startMotionAutomation,
   startMotionRun,
   stopMotionRun,
   validateMotionMapping,
-} from './api.js?v=20260729-motion-file-studio-export-1';
+} from './api.js?v=20260729-motion-automation-1';
 import {
   displayText,
   formatInt,
@@ -62,6 +65,61 @@ function degValue(value) {
 
 export function registeredMotionFileId(mapping = {}) {
   return String(mapping?.motion_file_id || '').trim();
+}
+
+export function effectiveMotionRunProgress(
+  status = {},
+  {
+    nowSec = Date.now() / 1000,
+    initialMoveTimeSec = null,
+  } = {},
+) {
+  const state = String(status?.state || 'idle');
+  const progress = status?.progress || {};
+  const summaryDuration = Number(status?.summary?.duration_sec);
+  let elapsed = Number(progress.elapsed_sec);
+  let duration = Number(progress.duration_sec);
+
+  if (!Number.isFinite(elapsed)) elapsed = 0.0;
+  if (!Number.isFinite(duration) || duration < 0) duration = 0.0;
+
+  if (state === 'initializing') {
+    if (Number.isFinite(initialMoveTimeSec) && initialMoveTimeSec >= 0) {
+      duration = initialMoveTimeSec;
+    }
+  } else if (
+    state === 'running'
+    || state === 'waiting'
+    || state === 'verifying'
+    || state === 'completed'
+  ) {
+    duration = duration > 0
+      ? duration
+      : (Number.isFinite(summaryDuration) ? summaryDuration : 0.0);
+  }
+
+  if (state === 'running' || state === 'initializing') {
+    const updatedAt = Number(status?.updated_at);
+    if (Number.isFinite(updatedAt) && updatedAt > 0 && nowSec >= updatedAt) {
+      elapsed += nowSec - updatedAt;
+    }
+  } else if (
+    state === 'waiting'
+    || state === 'verifying'
+    || state === 'completed'
+  ) {
+    elapsed = duration;
+  }
+
+  elapsed = Math.max(0.0, elapsed);
+  if (duration > 0) elapsed = Math.min(elapsed, duration);
+  return {
+    elapsed_sec: elapsed,
+    duration_sec: duration,
+    ratio: duration > 0 ? Math.min(Math.max(elapsed / duration, 0.0), 1.0) : 0.0,
+    sample_index: progress.sample_index,
+    active_axis_count: progress.active_axis_count,
+  };
 }
 
 export function motionMotorRef(motor) {
@@ -706,6 +764,7 @@ export function createMotionDataController({
       initializing: '초기 위치 이동 중',
       initialized: '초기 위치 완료',
       running: '모션 중',
+      waiting: '반복 대기 중',
       verifying: '위치 확인 중',
       stopping: '정지 중',
       stopped: '정지',
@@ -718,14 +777,25 @@ export function createMotionDataController({
   function motionRunStateClass(state) {
     const key = String(state || 'idle');
     if (key === 'error') return 'bad';
-    if (key === 'running' || key === 'initializing' || key === 'verifying' || key === 'stopping') return 'warn';
+    if (
+      key === 'running'
+      || key === 'waiting'
+      || key === 'initializing'
+      || key === 'verifying'
+      || key === 'stopping'
+    ) return 'warn';
     if (key === 'ready' || key === 'initialized' || key === 'completed') return 'ok';
     return 'warn';
   }
 
   function motionRunStageKey(status) {
     const state = String(status?.state || 'idle');
-    if (state === 'stopping' || state === 'stopped' || state === 'error') return state;
+    if (
+      state === 'waiting'
+      || state === 'stopping'
+      || state === 'stopped'
+      || state === 'error'
+    ) return state;
     if (MOTION_RUN_STAGES.some((stage) => stage.key === state)) return state;
     return 'idle';
   }
@@ -735,50 +805,9 @@ export function createMotionDataController({
   }
 
   function motionRunEffectiveProgress(status = motionRunStatus || {}) {
-    const state = String(status?.state || 'idle');
-    const progress = status?.progress || {};
-    const lifecycle = status?.lifecycle || {};
-    const nowSec = Date.now() / 1000;
-    let elapsed = Number(progress.elapsed_sec);
-    let duration = Number(progress.duration_sec);
-
-    if (!Number.isFinite(elapsed)) elapsed = 0.0;
-    if (!Number.isFinite(duration) || duration < 0) duration = 0.0;
-
-    if (state === 'initializing') {
-      const startedAt = Number(lifecycle.initial_started_at || status.phase_started_at || status.updated_at);
-      const overrideDuration = motionRunInitialMoveTimeSec();
-      if (overrideDuration !== null) duration = overrideDuration;
-      if (Number.isFinite(startedAt) && startedAt > 0) elapsed = nowSec - startedAt;
-    } else if (state === 'running') {
-      const startedAt = Number(lifecycle.motion_started_at || status.phase_started_at || status.updated_at);
-      const summaryDuration = Number(status?.summary?.duration_sec);
-      duration = duration > 0 ? duration : (Number.isFinite(summaryDuration) ? summaryDuration : 0.0);
-      if (Number.isFinite(startedAt) && startedAt > 0) {
-        const runningElapsed = nowSec - startedAt;
-        elapsed = status?.run_mode === 'continuous' && duration > 0
-          ? runningElapsed % duration
-          : runningElapsed;
-      }
-    } else if (state === 'verifying') {
-      const summaryDuration = Number(status?.summary?.duration_sec);
-      duration = duration > 0 ? duration : (Number.isFinite(summaryDuration) ? summaryDuration : 0.0);
-      elapsed = duration;
-    } else if (state === 'completed') {
-      const summaryDuration = Number(status?.summary?.duration_sec);
-      duration = duration > 0 ? duration : (Number.isFinite(summaryDuration) ? summaryDuration : 0.0);
-      elapsed = duration;
-    }
-
-    elapsed = Math.max(0.0, elapsed);
-    if (duration > 0) elapsed = Math.min(elapsed, duration);
-    return {
-      elapsed_sec: elapsed,
-      duration_sec: duration,
-      ratio: duration > 0 ? Math.min(Math.max(elapsed / duration, 0.0), 1.0) : 0.0,
-      sample_index: progress.sample_index,
-      active_axis_count: progress.active_axis_count,
-    };
+    return effectiveMotionRunProgress(status, {
+      initialMoveTimeSec: motionRunInitialMoveTimeSec(),
+    });
   }
 
   function renderMotionRunStages() {
@@ -793,7 +822,12 @@ export function createMotionDataController({
       const label = stage.key === currentKey ? `현재: ${stage.label}` : stage.label;
       return `<span class="${className}">${displayText(label)}</span>`;
     }).join('');
-    const extraState = currentKey === 'stopping' || currentKey === 'stopped' || currentKey === 'error'
+    const extraState = (
+      currentKey === 'waiting'
+      || currentKey === 'stopping'
+      || currentKey === 'stopped'
+      || currentKey === 'error'
+    )
       ? `<span class="motion-run-stage ${motionRunStateClass(currentKey)} active">${displayText(`현재: ${motionRunStateText(currentKey)}`)}</span>`
       : '';
     el.motionRunStageStrip.innerHTML = `${stageHtml}${extraState}`;
@@ -815,6 +849,7 @@ export function createMotionDataController({
     if (state === 'running' || state === 'stopping') {
       return `모션 진행 ${formatNumber(progress.elapsed_sec, 2)} / ${formatNumber(progress.duration_sec, 2)} s`;
     }
+    if (state === 'waiting') return String(status?.message || '반복 대기 중');
     if (state === 'verifying') return '최종 위치 확인 중';
     if (state === 'initialized') return '초기 위치 이동 완료';
     if (state === 'completed') return `모션 완료 ${formatNumber(progress.duration_sec, 2)} s`;
@@ -926,7 +961,12 @@ export function createMotionDataController({
     const state = String(status?.state || 'idle');
     const effective = motionRunEffectiveProgress(status);
     let cursorTime = minTime;
-    if (state === 'running' || state === 'verifying' || state === 'completed') {
+    if (
+      state === 'running'
+      || state === 'waiting'
+      || state === 'verifying'
+      || state === 'completed'
+    ) {
       cursorTime = Math.min(Math.max(effective.elapsed_sec, minTime), maxTime);
     } else if (state === 'initialized') {
       cursorTime = minTime;
@@ -941,7 +981,12 @@ export function createMotionDataController({
 
     context.fillStyle = state === 'running' ? '#111827' : '#64748b';
     context.font = '12px Arial';
-    const cursorLabel = state === 'running' || state === 'verifying' || state === 'completed'
+    const cursorLabel = (
+      state === 'running'
+      || state === 'waiting'
+      || state === 'verifying'
+      || state === 'completed'
+    )
       ? `${formatNumber(cursorTime, 2)}s`
       : motionRunStateText(state);
     context.fillText(cursorLabel, Math.min(cursorX + 6, width - 80), padTop + graphHeight - 8);
@@ -952,6 +997,8 @@ export function createMotionDataController({
         messageEl.textContent = `초기 위치 이동 중 ${formatNumber(effective.elapsed_sec, 2)} / ${formatNumber(effective.duration_sec, 2)} s · ${visibleText}`;
       } else if (state === 'running') {
         messageEl.textContent = `모션 중 ${formatNumber(effective.elapsed_sec, 2)} / ${formatNumber(effective.duration_sec, 2)} s · ${visibleText}`;
+      } else if (state === 'waiting') {
+        messageEl.textContent = `${String(status?.message || '반복 대기 중')} · ${visibleText}`;
       } else if (state === 'verifying') {
         messageEl.textContent = `최종 위치 확인 중 · ${visibleText}`;
       } else if (state === 'completed') {
@@ -1126,11 +1173,88 @@ export function createMotionDataController({
     )).join('');
   }
 
+  function motionAutomationStateText(state) {
+    const labels = {
+      off: '사용 안 함',
+      ready: '시작 대기',
+      checking: '검사 중',
+      starting: '시작 중',
+      initializing: '초기 위치 이동 중',
+      initialized: '초기 위치 이동 완료',
+      running: '반복 중',
+      waiting: '회차 사이 대기',
+      stop_requested: '현재 단계 후 정지',
+      stopped: '정지',
+      blocked: '실행 차단',
+    };
+    const key = String(state || 'off');
+    return labels[key] || key;
+  }
+
+  function renderMotionAutomation() {
+    const automation = motionRunStatus?.automation || {};
+    const enabled = automation.enabled === true;
+    const armed = automation.armed === true;
+    const repeatMode = String(automation.repeat_mode || 'direct');
+    const dwellSec = Number(automation.dwell_sec);
+    const busy = motionRunLoading || armed;
+    const hasFiles = Boolean(
+      motionRunPayload().motion_file_id && motionRunPayload().mapping_file_id,
+    );
+    const contextReady = getLatestState()?.execution_context?.ready === true;
+
+    if (el.motionAutomationEnabled) {
+      el.motionAutomationEnabled.checked = enabled;
+      el.motionAutomationEnabled.disabled = motionRunLoading;
+    }
+    if (el.motionAutomationRepeatMode) {
+      if (document.activeElement !== el.motionAutomationRepeatMode) {
+        el.motionAutomationRepeatMode.value = repeatMode;
+      }
+      el.motionAutomationRepeatMode.disabled = !enabled || busy;
+    }
+    const showDwell = repeatMode === 'dwell';
+    el.motionAutomationDwellWrap?.classList.toggle('hidden', !showDwell);
+    if (el.motionAutomationDwellSec) {
+      if (document.activeElement !== el.motionAutomationDwellSec) {
+        el.motionAutomationDwellSec.value = String(
+          Number.isFinite(dwellSec) ? dwellSec : 0,
+        );
+      }
+      el.motionAutomationDwellSec.disabled = !enabled || busy;
+    }
+    if (el.motionAutomationStartButton) {
+      el.motionAutomationStartButton.disabled = (
+        motionRunLoading || !enabled || armed || !hasFiles || !contextReady
+      );
+    }
+    if (el.motionAutomationStatus) {
+      el.motionAutomationStatus.textContent = motionAutomationStateText(
+        automation.state,
+      );
+      el.motionAutomationStatus.className = automation.state === 'blocked'
+        ? 'bad-text'
+        : (armed ? 'warning-text' : '');
+    }
+    if (el.motionAutomationDetail) {
+      const fileName = motionRunSelectedMotionFile()?.filename
+        || automation.motion_file_id
+        || '재생 등록 파일 없음';
+      el.motionAutomationDetail.textContent = automation.message
+        || `${fileName} · ${repeatMode === 'direct'
+          ? '바로 반복'
+          : repeatMode === 'dwell'
+            ? `${Number.isFinite(dwellSec) ? dwellSec : 0}초 정지 후 반복`
+            : '초기 위치 이동 후 반복'}`;
+    }
+  }
+
   function renderMotionRunPanel() {
     const payload = motionRunPayload();
     const status = motionRunStatus || {};
     const state = String(status.state || 'idle');
-    const running = state === 'running' || state === 'initializing' || state === 'verifying' || state === 'stopping';
+    const running = state === 'running' || state === 'initializing'
+      || state === 'verifying' || state === 'stopping' || state === 'waiting';
     const hasMappingFile = Boolean(payload.mapping_file_id);
     const hasMotionFile = Boolean(payload.motion_file_id);
     const hasRequiredFiles = hasMappingFile && hasMotionFile;
@@ -1194,6 +1318,7 @@ export function createMotionDataController({
     updateMotionRunGraphAnimation();
     stopMotionRunGraphAnimationIfIdle();
     renderMotionRunAxes();
+    renderMotionAutomation();
   }
 
   function renderMotionTabs(active = null) {
@@ -2316,13 +2441,19 @@ export function createMotionDataController({
     }
   }
 
+  async function showMotionFileDeleteFailure(message) {
+    await showAlert(
+      String(message || '모션 파일을 삭제할 수 없습니다'),
+      { title: '모션 파일 삭제 불가', confirmLabel: '확인', tone: 'warning' },
+    );
+  }
+
   async function deleteSelectedFile() {
     if (!selectedFileId) return;
     if (selectedFileId === registeredMotionFileIdValue) {
-      await showAlert(
+      await showMotionFileDeleteFailure(
         '재생 등록된 모션 파일은 삭제할 수 없습니다.\n'
         + '먼저 재생 등록을 해제한 뒤 다시 삭제하세요.',
-        { title: '모션 파일 삭제 불가', confirmLabel: '확인', tone: 'warning' },
       );
       return;
     }
@@ -2340,17 +2471,26 @@ export function createMotionDataController({
       if (payload.success === false) {
         const message = payload.message || '모션 파일을 삭제할 수 없습니다';
         setMessage(`삭제 실패: ${message}`);
-        await showAlert(
-          message,
-          { title: '모션 파일 삭제 불가', confirmLabel: '확인', tone: 'warning' },
-        );
+        await showMotionFileDeleteFailure(message);
         return;
       }
       selectedFileId = null;
       selectedFile = null;
       setMessage(payload.message || '파일 삭제 완료');
+      try {
+        await onProjectFilesChange?.();
+      } catch (refreshError) {
+        const refreshMessage = refreshError?.message || String(refreshError);
+        setMessage(`파일 삭제 완료 · 프로젝트 목록 갱신 실패: ${refreshMessage}`);
+        await showAlert(
+          `모션 파일은 삭제됐지만 프로젝트 목록을 갱신하지 못했습니다.\n${refreshMessage}`,
+          { title: '프로젝트 목록 갱신 필요', confirmLabel: '확인', tone: 'warning' },
+        );
+      }
     } catch (error) {
-      setMessage(`삭제 실패: ${error?.message || error}`);
+      const message = error?.message || String(error);
+      setMessage(`삭제 실패: ${message}`);
+      await showMotionFileDeleteFailure(message);
     } finally {
       loading = false;
       render();
@@ -2464,6 +2604,80 @@ export function createMotionDataController({
     }
   }
 
+  function motionAutomationSettings(enabled = true) {
+    const repeatMode = String(
+      el.motionAutomationRepeatMode?.value
+      || motionRunStatus?.automation?.repeat_mode
+      || 'direct',
+    );
+    const dwellSec = Number(el.motionAutomationDwellSec?.value);
+    return {
+      enabled,
+      repeat_mode: repeatMode,
+      dwell_sec: Number.isFinite(dwellSec) && dwellSec >= 0 ? dwellSec : 0,
+    };
+  }
+
+  async function saveMotionAutomation(enabled = true) {
+    motionRunLoading = true;
+    renderMotionRunPanel();
+    try {
+      const payload = enabled
+        ? await configureMotionAutomation(motionAutomationSettings(true))
+        : await disableMotionAutomation();
+      motionRunStatus = payload.status || motionRunStatus || null;
+      motionRunLastResult = payload;
+      if (payload.success === false) {
+        await showAlert(payload.message || '자동 반복 설정 실패', {
+          title: '자동 반복 설정',
+          tone: 'danger',
+        });
+      }
+    } catch (error) {
+      await showAlert(error?.message || String(error), {
+        title: '자동 반복 설정 실패',
+        tone: 'danger',
+      });
+    } finally {
+      motionRunLoading = false;
+      renderMotionRunPanel();
+    }
+  }
+
+  async function startCurrentMotionAutomation() {
+    const confirmed = await showConfirm(
+      '등록된 모션 파일을 검사하고 전체 활성 축을 초기 위치로 이동한 뒤 자동 반복을 시작합니다.',
+      {
+        title: '자동 반복 시작',
+        confirmLabel: '시작',
+        tone: 'warning',
+      },
+    );
+    if (!confirmed) return;
+    motionRunLoading = true;
+    renderMotionRunPanel();
+    try {
+      await ensureMotionRunMotionFileDetail();
+      const payload = await startMotionAutomation(motionRunPayload());
+      motionRunStatus = payload.status || motionRunStatus || null;
+      motionRunLastResult = payload;
+      if (payload.success === false) {
+        await showAlert(payload.message || '자동 반복 시작 실패', {
+          title: '자동 반복 시작',
+          tone: 'danger',
+        });
+      }
+    } catch (error) {
+      await showAlert(error?.message || String(error), {
+        title: '자동 반복 시작 실패',
+        tone: 'danger',
+      });
+    } finally {
+      motionRunLoading = false;
+      renderMotionRunPanel();
+    }
+  }
+
   function bindEvents() {
     if (el.motionFileRows) {
       el.motionFileRows.addEventListener('click', (event) => {
@@ -2518,6 +2732,20 @@ export function createMotionDataController({
     if (el.motionRunRefreshButton) {
       el.motionRunRefreshButton.addEventListener('click', refreshMotionRunStatus);
     }
+    el.motionAutomationEnabled?.addEventListener('change', () => {
+      void saveMotionAutomation(el.motionAutomationEnabled.checked);
+    });
+    el.motionAutomationRepeatMode?.addEventListener('change', () => {
+      renderMotionAutomation();
+      void saveMotionAutomation(true);
+    });
+    el.motionAutomationDwellSec?.addEventListener('change', () => {
+      void saveMotionAutomation(true);
+    });
+    el.motionAutomationStartButton?.addEventListener(
+      'click',
+      startCurrentMotionAutomation,
+    );
     if (el.motionRunGraphAxisToggles) {
       el.motionRunGraphAxisToggles.addEventListener('click', (event) => {
         const button = event.target.closest('button');

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>모션 녹화 시스템 0.5.0</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260729-editor-workflow-export-1">
+    <link rel="stylesheet" href="/static/styles.css?v=20260729-header-motor-activity-1">
   </head>
   <body>
     <main class="shell">
@@ -12,6 +12,16 @@
         <div class="app-title">
           <h1>모션 녹화 시스템</h1>
           <span class="version-badge">버전 0.5.0</span>
+          <div
+            id="motorActivityBanner"
+            class="motor-activity-banner"
+            role="status"
+            aria-live="polite"
+            aria-hidden="true"
+          >
+            <span id="motorActivityIndicator" aria-hidden="true"></span>
+            <strong id="motorActivityLabel"></strong>
+          </div>
         </div>
         <div class="topbar-operations" aria-label="중요 시스템 조작">
           <div class="topbar-operation-status">
@@ -34,7 +44,6 @@
       <div id="emergencyStopBanner" class="emergency-stop-banner hidden" role="alert">
         긴급정지 잠김 · 모터 동작 명령이 차단되었습니다 · 프로그램 재시작 필요
       </div>
-
       <nav id="workspaceTabs" class="workspace-navigation" aria-label="작업 화면">
         <div class="workspace-group-tabs" role="tablist" aria-label="작업 분류">
           <button class="workspace-group-button active" type="button" role="tab" data-workspace-group="operations">운영</button>
@@ -1071,6 +1080,33 @@
               </div>
             </section>
 
+            <section class="motion-file-subsection motion-automation-card" aria-label="자동 반복">
+              <div class="section-head compact">
+                <strong>자동 반복</strong>
+                <span id="motionAutomationStatus">사용 안 함</span>
+              </div>
+              <div class="motion-automation-controls">
+                <label class="motion-automation-toggle">
+                  <input id="motionAutomationEnabled" type="checkbox">
+                  <span>자동 반복 사용</span>
+                </label>
+                <label class="compact-field">
+                  <span>회차 사이 동작</span>
+                  <select id="motionAutomationRepeatMode" class="compact-select" disabled>
+                    <option value="direct">바로 반복</option>
+                    <option value="dwell">정지 후 반복</option>
+                    <option value="reinitialize">초기 위치 이동 후 반복</option>
+                  </select>
+                </label>
+                <label id="motionAutomationDwellWrap" class="compact-field hidden">
+                  <span>정지 시간(초)</span>
+                  <input id="motionAutomationDwellSec" type="number" min="0" max="86400" step="0.1" value="5.0" disabled>
+                </label>
+                <button id="motionAutomationStartButton" class="primary" type="button" disabled>자동 반복 시작</button>
+              </div>
+              <div id="motionAutomationDetail" class="motion-automation-detail">재생 등록 파일과 현재 모션축 설정을 사용합니다.</div>
+            </section>
+
             <section class="motion-file-subsection" aria-label="모션 실행 상태">
               <div class="section-head compact">
                 <strong>실행 상태</strong>
@@ -1380,7 +1416,11 @@
                       <button id="studioEditorCopyAxisButton" type="button">복사</button>
                     </div>
                   </section>
-                  <small>새 축을 만들거나 기존 축의 모션값을 새 ID로 복사합니다.</small>
+                  <section class="studio-editor-axis-form">
+                    <strong>축 삭제</strong>
+                    <button id="studioEditorDeleteAxisButton" class="off" type="button">선택 축 삭제</button>
+                  </section>
+                  <small>현재 레이어의 선택 축만 추가·복사·삭제합니다.</small>
                 </div>
               </details>
             </aside>
@@ -1422,6 +1462,7 @@
                   <span aria-hidden="true">·</span>
                   <div id="studioEditorMessage" class="registry-message">편집 결과가 여기에 표시됩니다.</div>
                 </div>
+                <div id="studioEditorValidationDetails" class="studio-editor-validation-details hidden" aria-live="polite"></div>
               </div>
               <aside id="studioEditorInspector" class="studio-editor-inspector">
                 <div class="studio-editor-inspector-head">
@@ -1633,6 +1674,6 @@
       </div>
     </div>
 
-    <script type="module" src="/static/app.js?v=20260729-motion-run-auto-initialize-1"></script>
+    <script type="module" src="/static/app.js?v=20260729-motion-run-progress-1"></script>
   </body>
 </html>

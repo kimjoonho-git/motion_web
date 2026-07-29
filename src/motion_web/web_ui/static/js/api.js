@@ -451,6 +451,31 @@ export async function startMotionRun(payload) {
   return readJson(response);
 }
 
+export async function configureMotionAutomation(payload) {
+  const response = await projectFetch('/api/motion-run/automation', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return readJson(response);
+}
+
+export async function startMotionAutomation(payload) {
+  const response = await projectFetch('/api/motion-run/automation/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return readJson(response);
+}
+
+export async function disableMotionAutomation() {
+  const response = await projectFetch('/api/motion-run/automation/disable', {
+    method: 'POST',
+  });
+  return readJson(response);
+}
+
 export async function stopMotionRun() {
   const response = await projectFetch('/api/motion-run/stop', { method: 'POST' });
   return readJson(response);

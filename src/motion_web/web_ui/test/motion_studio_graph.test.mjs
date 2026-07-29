@@ -5,6 +5,7 @@ import {
   drawMotionStudioEditorGraph,
   drawMotionStudioLayerGraph,
   motionStudioCompositionTracks,
+  motionStudioEditorIssueTimes,
   motionStudioLayerTracks,
   motionStudioSampleTrack,
   motionStudioZeroAxisY,
@@ -105,6 +106,25 @@ test('zero-degree time axis follows the visible value range', () => {
   assert.equal(motionStudioZeroAxisY(-10, 0, 20, 200), 20);
   assert.equal(motionStudioZeroAxisY(1, 10, 20, 200), null);
   assert.equal(motionStudioZeroAxisY(-10, -1, 20, 200), null);
+});
+
+test('editor warning lines include range warnings only for displayed axes', () => {
+  const validation = {
+    conflicts: [{ start_sec: 0.5 }],
+    transition_warnings: [{ second_time_sec: 0.7 }],
+    range_warnings: [
+      { motion_id: '1-2', time_sec: 1.2 },
+      { motion_id: '1-3', time_sec: 1.3 },
+    ],
+  };
+  assert.deepEqual(
+    motionStudioEditorIssueTimes(validation, ['1-2']),
+    [0.5, 0.7, 1.2],
+  );
+  assert.deepEqual(
+    motionStudioEditorIssueTimes(validation, ['1-3']),
+    [0.5, 0.7, 1.3],
+  );
 });
 
 test('editor graph renderer preserves graph metrics and point hit targets', () => {

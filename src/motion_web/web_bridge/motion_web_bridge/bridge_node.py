@@ -44,6 +44,94 @@ DYNAMIXEL_BAUDRATE = 1000000
 MOTION_DATA_PERIOD_SEC = 0.02
 
 
+def motor_activity_snapshot(
+    motion_run: Dict[str, Any],
+    motion_studio: Dict[str, Any],
+    safety_status: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Return one conservative, display-only motor activity classification."""
+    run = motion_run if isinstance(motion_run, dict) else {}
+    studio = motion_studio if isinstance(motion_studio, dict) else {}
+    safety = safety_status if isinstance(safety_status, dict) else {}
+    run_state = str(run.get('state') or 'idle')
+    run_phase = str(run.get('phase') or '')
+    studio_state = str(studio.get('state') or 'idle')
+    owner = str(safety.get('command_owner') or 'none')
+    manual_values = safety.get('manual_activity_modes')
+    if not isinstance(manual_values, list):
+        manual_values = []
+    manual_modes = {str(item) for item in manual_values if str(item)}
+
+    def active(kind: str, label: str, source: str) -> Dict[str, Any]:
+        return {
+            'active': True,
+            'kind': kind,
+            'label': label,
+            'source': source,
+            'warning': False,
+        }
+
+    if run_state == 'initializing':
+        return active('initializing', '초기 위치 이동 중', 'motion_run')
+    if run_state in {'running', 'verifying'}:
+        if bool(run.get('automation_run')):
+            return active('automation', '자동 반복 모션 동작 중', 'motion_run')
+        return active('motion_run', '모션 동작 중', 'motion_run')
+    if run_state == 'countdown':
+        return {
+            'active': False,
+            'kind': 'countdown',
+            'label': '',
+            'source': 'motion_run',
+            'warning': False,
+        }
+    if run_state == 'initialized' and studio_state == 'initializing':
+        return {
+            'active': False,
+            'kind': 'initialized',
+            'label': '',
+            'source': 'motion_run',
+            'warning': False,
+        }
+    if studio_state == 'initializing':
+        return active('initializing', '초기 위치 이동 중', 'motion_studio')
+    if studio_state == 'playing':
+        return active('studio_playback', '모션 스튜디오 동작 중', 'motion_studio')
+    if studio_state == 'recording':
+        return active('studio_recording', '모션 스튜디오 녹화 중', 'motion_studio')
+    if 'action' in manual_modes:
+        return active('action', '동작 모드 동작 중', 'motion_supervisor')
+    if 'jog' in manual_modes:
+        return active('jog', '조그 모드 동작 중', 'motion_supervisor')
+    if owner == 'midi':
+        return active('midi', 'MIDI 모터 제어 중', 'motion_supervisor')
+
+    repeat_waiting = run_state == 'waiting' and run_phase == 'repeat_waiting'
+    if repeat_waiting and owner == 'playback':
+        return {
+            'active': False,
+            'kind': 'repeat_waiting',
+            'label': '',
+            'source': 'motion_run',
+            'warning': False,
+        }
+    if owner not in {'', 'none'}:
+        return {
+            'active': True,
+            'kind': 'unknown',
+            'label': '모터 동작 상태 확인 필요',
+            'source': 'motion_supervisor',
+            'warning': True,
+        }
+    return {
+        'active': False,
+        'kind': 'idle',
+        'label': '',
+        'source': '',
+        'warning': False,
+    }
+
+
 def _monitoring_finite_float(value: Any) -> Optional[float]:
     try:
         number = float(value)
@@ -1090,6 +1178,11 @@ class MotionWebBridge(Node):
             },
             'web_access': self._web_access,
             'motion_run_status': motion_run_status,
+            'motor_activity': motor_activity_snapshot(
+                motion_run_status,
+                motion_studio,
+                safety_status,
+            ),
             'midi_monitor': midi_monitor,
             'motion_studio': motion_studio,
             'safety_status': safety_status,
@@ -3385,7 +3478,14 @@ class MotionWebBridge(Node):
                 studio_status = dict(getattr(self, '_motion_studio_status', {}) or {})
         run_state = str((run_status or {}).get('state') or 'idle')
         studio_state = str((studio_status or {}).get('state') or 'idle')
-        if run_state in {'initializing', 'initialized', 'running', 'verifying', 'stopping'}:
+        if run_state in {
+            'initializing',
+            'initialized',
+            'running',
+            'waiting',
+            'verifying',
+            'stopping',
+        }:
             return f'모션 동작 상태가 {run_state}이므로 프로젝트를 변경할 수 없습니다'
         if studio_state in {'initializing', 'countdown', 'recording', 'playing', 'stopping'}:
             return f'모션 스튜디오 상태가 {studio_state}이므로 프로젝트를 변경할 수 없습니다'
@@ -4501,6 +4601,28 @@ class MotionWebBridge(Node):
             return {'success': False, 'message': f'모션 실행 불가: {blocker}'}
         return self._request_motion_run('start', payload, timeout_sec=2.0)
 
+    def motion_automation_configure(
+        self, payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        return self._request_motion_run(
+            'automation_configure', payload, timeout_sec=2.0
+        )
+
+    def motion_automation_start(
+        self, payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        blocker = self._motor_runtime_control_blocker()
+        if blocker:
+            return {'success': False, 'message': f'자동 반복 시작 불가: {blocker}'}
+        return self._request_motion_run(
+            'automation_start', payload, timeout_sec=2.0
+        )
+
+    def motion_automation_disable(self) -> Dict[str, Any]:
+        return self._request_motion_run(
+            'automation_disable', {}, timeout_sec=2.0
+        )
+
     def motion_run_stop(self) -> Dict[str, Any]:
         return self._request_motion_run('stop', {}, timeout_sec=2.0)
 
@@ -4689,7 +4811,14 @@ class MotionWebBridge(Node):
         request_payload = dict(payload) if isinstance(payload, dict) else {}
         request_payload['project_id'] = self.project_repository.selected_project_id()
         request_payload['project_generation'] = project_generation
-        if command in {'check', 'initialize', 'start'}:
+        if command in {
+            'check',
+            'initialize',
+            'start',
+            'automation_configure',
+            'automation_start',
+            'automation_disable',
+        }:
             request_payload['context_id'] = self._execution_context_id()
         msg.data = json.dumps({
             'request_id': request_id,
@@ -7120,6 +7249,24 @@ def create_app(bridge: MotionWebBridge) -> FastAPI:
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail='request body must be an object')
         return await asyncio.to_thread(bridge.motion_run_start, body)
+
+    @app.put('/api/motion-run/automation')
+    async def motion_automation_configure(request: Request):
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail='request body must be an object')
+        return await asyncio.to_thread(bridge.motion_automation_configure, body)
+
+    @app.post('/api/motion-run/automation/start')
+    async def motion_automation_start(request: Request):
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail='request body must be an object')
+        return await asyncio.to_thread(bridge.motion_automation_start, body)
+
+    @app.post('/api/motion-run/automation/disable')
+    async def motion_automation_disable():
+        return await asyncio.to_thread(bridge.motion_automation_disable)
 
     @app.post('/api/motion-run/stop')
     async def motion_run_stop():
