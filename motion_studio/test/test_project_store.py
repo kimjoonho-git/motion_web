@@ -4,6 +4,7 @@ import pytest
 
 from motion_studio.layer_editor import edit_layer
 from motion_studio.project_store import ProjectStore
+from motion_studio.timeline import motion_file_text
 
 
 def write_mapping(root, name='face.yaml'):
@@ -158,6 +159,131 @@ def test_exported_motion_file_imports_as_single_editable_layer(tmp_path):
     assert project['layers'][0]['source_motion_file_id'] == 'recorded.json'
     assert project['layers'][0]['frames'][1]['values']['1-2'] == 3.5
     assert mapping_path.read_bytes() == original_mapping
+
+
+def test_motion_file_round_trip_restores_optional_points_and_tangents(tmp_path):
+    write_mapping(tmp_path)
+    store = ProjectStore(tmp_path)
+    source = store.create_project('포인트 원본', 'face.yaml')
+    source['layers'] = [{
+        'layer_id': 'merged_layer',
+        'name': '합친 레이어',
+        'enabled': True,
+        'edit_revision': 7,
+        'point_curves': [{
+            'curve_id': 'curve_1',
+            'motion_id': '1-1',
+            'interpolation_order': 5,
+            'points': [
+                {
+                    'point_id': 'p1',
+                    'time_sec': 0.02,
+                    'value_deg': 0.0,
+                    'tangent_mode': 'broken',
+                    'out_handle': {'dt_sec': 0.01, 'dv_deg': 0.5},
+                },
+                {
+                    'point_id': 'p2',
+                    'time_sec': 0.04,
+                    'value_deg': 2.0,
+                    'tangent_mode': 'broken',
+                    'in_handle': {'dt_sec': -0.01, 'dv_deg': -0.5},
+                },
+            ],
+        }],
+        'frames': [
+            {'frame': 1, 'time_sec': 0.02, 'values': {'1-1': 0.0}},
+            {'frame': 2, 'time_sec': 0.04, 'values': {'1-1': 2.0}},
+        ],
+    }]
+    source = store.save_project(source)
+    layer = source['layers'][0]
+    store.write_motion_file(
+        'published',
+        motion_file_text(
+            source,
+            layer['frames'],
+            editor_layer=layer,
+            file_title='모션 테스트 1',
+        ),
+    )
+
+    imported = store.import_motion_file('published.json', 'face.yaml', '다시 편집')
+    restored = imported['layers'][0]
+
+    assert restored['name'] == '모션 테스트 1'
+    assert restored['source_motion_file_id'] == 'published.json'
+    assert restored['edit_revision'] == 7
+    assert restored['point_curves'][0]['interpolation_order'] == 5
+    assert restored['point_curves'][0]['points'][0]['out_handle']['dv_deg'] == 0.5
+    assert restored['point_curves'][0]['points'][1]['in_handle']['dv_deg'] == -0.5
+    assert restored['frames'] == layer['frames']
+
+
+def test_legacy_editor_layer_name_does_not_override_motion_file_name(tmp_path):
+    write_mapping(tmp_path)
+    store = ProjectStore(tmp_path)
+    store.write_motion_file(
+        '모션_테스트_1',
+        '{"title":"프로젝트 이름","type":"motion_header","rotation_unit":"deg",'
+        '"editor":{"schema_version":1,"layer":{'
+        '"name":"녹화 1 복사본 복사본","point_curves":[]}}}\n'
+        '[1,0.02,"1-1",3.0]\n',
+    )
+
+    imported = store.import_motion_file('모션_테스트_1.json', 'face.yaml')
+
+    assert imported['layers'][0]['name'] == '모션_테스트_1'
+    assert imported['layers'][0]['source_motion_file_id'] == '모션_테스트_1.json'
+
+
+def test_motion_file_without_editor_metadata_still_imports_normally(tmp_path):
+    write_mapping(tmp_path)
+    store = ProjectStore(tmp_path)
+    store.write_motion_file(
+        'runtime-only',
+        '{"title":"실행 전용","type":"motion_header","rotation_unit":"deg"}\n'
+        '[1,0.02,"1-1",1.0]\n',
+    )
+
+    imported = store.import_motion_file('runtime-only.json', 'face.yaml')
+
+    assert imported['layers'][0]['point_curves'] == []
+    assert imported['layers'][0]['frames'][0]['values']['1-1'] == 1.0
+
+
+def test_invalid_editor_metadata_does_not_invalidate_runtime_frames(tmp_path):
+    write_mapping(tmp_path)
+    store = ProjectStore(tmp_path)
+    store.write_motion_file(
+        'damaged-editor',
+        '{"title":"실행 정상","type":"motion_header","rotation_unit":"deg",'
+        '"editor":{"schema_version":1,"layer":{"point_curves":['
+        '{"curve_id":"bad","motion_id":"1-1","points":[]}]}}}\n'
+        '[1,0.02,"1-1",3.0]\n',
+    )
+
+    motion = store.read_motion_file('damaged-editor.json')
+    imported = store.import_motion_file('damaged-editor.json', 'face.yaml')
+
+    assert motion['editor_layer'] is None
+    assert motion['editor_message'] == '포인트 편집 정보 사용 불가 · 실행 데이터는 정상'
+    assert imported['layers'][0]['point_curves'] == []
+    assert imported['layers'][0]['frames'][0]['values']['1-1'] == 3.0
+
+
+def test_editor_metadata_does_not_hide_invalid_runtime_frames(tmp_path):
+    write_mapping(tmp_path)
+    store = ProjectStore(tmp_path)
+    store.write_motion_file(
+        'invalid-runtime',
+        '{"title":"실행값 오류","type":"motion_header","rotation_unit":"deg",'
+        '"editor":{"schema_version":1,"layer":{"point_curves":[]}}}\n'
+        '[1,0.02,"1-1"]\n',
+    )
+
+    with pytest.raises(ValueError, match='모션 프레임 형식'):
+        store.import_motion_file('invalid-runtime.json', 'face.yaml')
 
 
 def test_motion_file_import_rejects_id_missing_from_read_only_mapping(tmp_path):

@@ -29,6 +29,7 @@ from .project_commands import StudioProjectCommands
 from .project_store import DEFAULT_PERIOD_SEC, ProjectStore, normalize_layer
 from .ros_gateway import StudioRosGateway
 from .timeline import (
+    final_export_layer,
     layer_conflicts,
     layer_transition_warnings,
     motion_file_text,
@@ -910,14 +911,23 @@ class MotionStudioNode(Node):
             project = self._require_project_locked()
             self._validate_mapping_locked(project)
             self._require_point_curve_consistency(project, '모션 파일 내보내기')
+            export_layer = final_export_layer(project)
             mapping = self._store.mapping_check(project)
             frames = render_project(
                 project,
                 motion_ranges_deg=self._motion_ranges(mapping),
                 initial_motion_values_deg=self._manual_initial_values(mapping),
             )
+            requested_file_id = str(payload.get('file_id') or project['name']).strip()
+            file_title = Path(requested_file_id).stem.strip() or project['name']
             file_id = self._store.write_motion_file(
-                payload.get('file_id') or project['name'], motion_file_text(project, frames)
+                requested_file_id,
+                motion_file_text(
+                    project,
+                    frames,
+                    editor_layer=export_layer,
+                    file_title=file_title,
+                ),
             )
         return {
             'success': True,
