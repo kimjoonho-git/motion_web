@@ -128,20 +128,45 @@ export function motionMotorRef(motor) {
   if (motorType === 'ac_servo') {
     const alias = motor.alias ?? motor.ethercat_alias;
     const numericAlias = Number(alias);
-    return alias === null || alias === undefined || alias === ''
-      || !Number.isFinite(numericAlias) || numericAlias <= 0
-      ? ''
-      : `ac_servo:alias:${numericAlias}`;
+    const masterIndex = Number(motor.ethercat_master_index ?? 0);
+    if (!Number.isInteger(masterIndex) || masterIndex < 0) return '';
+    if (
+      alias !== null && alias !== undefined && alias !== ''
+      && Number.isFinite(numericAlias) && numericAlias > 0
+    ) {
+      return `ac_servo:master:${masterIndex}:alias:${numericAlias}`;
+    }
+    const slavePosition = Number(motor.slave_position);
+    return Number.isInteger(slavePosition) && slavePosition >= 0
+      ? `ac_servo:master:${masterIndex}:slave:${slavePosition}`
+      : '';
   }
   if (motorType === 'dynamixel') {
     const busId = motor.bus_id ?? motor.node_id;
     const numericBusId = Number(busId);
+    const serialPort = String(motor.serial_port ?? '').trim();
     return busId === null || busId === undefined || busId === ''
-      || !Number.isInteger(numericBusId) || numericBusId < 0
+      || !Number.isInteger(numericBusId) || numericBusId < 0 || !serialPort
       ? ''
-      : `dynamixel:id:${numericBusId}`;
+      : `dynamixel:port:${encodeURIComponent(serialPort)}:id:${numericBusId}`;
   }
   return '';
+}
+
+export function motionMotorRefs(motor) {
+  const canonical = motionMotorRef(motor);
+  const motorType = normalizeMotorTypeKey(motor?.motor_type, motor?.motor_type_label);
+  if (motorType === 'ac_servo') {
+    const alias = Number(motor?.alias ?? motor?.ethercat_alias);
+    const legacy = Number.isFinite(alias) && alias > 0 ? `ac_servo:alias:${alias}` : '';
+    return [canonical, legacy].filter(Boolean);
+  }
+  if (motorType === 'dynamixel') {
+    const busId = Number(motor?.bus_id ?? motor?.node_id);
+    const legacy = Number.isInteger(busId) && busId >= 0 ? `dynamixel:id:${busId}` : '';
+    return [canonical, legacy].filter(Boolean);
+  }
+  return canonical ? [canonical] : [];
 }
 
 export function motionMotorSelectionValue(motor) {
@@ -149,6 +174,27 @@ export function motionMotorSelectionValue(motor) {
   if (motorRef) return motorRef;
   const axis = Number(motor?.controller_index);
   return Number.isFinite(axis) ? `axis:${axis}` : '';
+}
+
+export function motionMotorIdentityLabel(motor) {
+  const motorType = normalizeMotorTypeKey(motor?.motor_type, motor?.motor_type_label);
+  if (motorType === 'ac_servo') {
+    const alias = Number(motor?.alias ?? motor?.ethercat_alias);
+    const masterIndex = formatInt(motor?.ethercat_master_index ?? 0);
+    return Number.isFinite(alias) && alias > 0
+      ? `AC Master ${masterIndex} · EEPROM Alias ${formatInt(alias)}`
+      : (
+        `AC Master ${masterIndex}`
+        + ` · EEPROM Alias 미설정 · Slave Position ${formatInt(motor?.slave_position)}`
+      );
+  }
+  if (motorType === 'dynamixel') {
+    const serialPort = String(motor?.serial_port ?? '').trim() || '직렬 포트 미설정';
+    const busId = motor?.bus_id ?? motor?.node_id ?? motor?.id ?? motor?.device_id;
+    return `Dynamixel ${serialPort} · ID ${formatInt(busId)}`;
+  }
+  const motorId = motor?.id ?? motor?.device_id;
+  return `ID ${formatInt(motorId)}`;
 }
 
 export function motionMappingTargetKey(row) {
@@ -185,7 +231,15 @@ export function buildGeneratedMotionAxisRows(motors = [], previousRows = []) {
     motor_ref: String(row?.motor_ref || '').trim().toLowerCase() === 'ac_servo:alias:0'
       ? ''
       : String(row?.motor_ref || '').trim(),
-  }));
+  })).map((row) => {
+    const target = String(row.motor_ref || '').trim().toLowerCase();
+    const matches = motors.filter((motor) => target
+      ? motionMotorRefs(motor).some((ref) => ref.toLowerCase() === target)
+      : Number(motor?.controller_index) === Number(row.motor_axis));
+    return matches.length === 1
+      ? { ...row, motor_ref: motionMotorRef(matches[0]) }
+      : row;
+  });
   const targetCounts = normalizedPrevious.reduce((counts, row) => {
     const key = motionMappingTargetKey(row);
     if (key) counts.set(key, (counts.get(key) || 0) + 1);
@@ -242,6 +296,10 @@ export function mergeConfiguredMotionMotors(runtimeMotors = [], configuredMotors
       alias: configured?.config?.alias
         ?? configured?.identity?.ethercat_alias
         ?? current?.alias,
+      ethercat_master_index: configured?.config?.ethercat_master_index
+        ?? configured?.identity?.ethercat_master_index
+        ?? current?.ethercat_master_index
+        ?? 0,
       ethercat_alias: configured?.identity?.ethercat_alias ?? current?.ethercat_alias,
       slave_position: configured?.identity?.slave_position
         ?? configured?.config?.position
@@ -250,6 +308,9 @@ export function mergeConfiguredMotionMotors(runtimeMotors = [], configuredMotors
         ?? configured?.config?.bus_id
         ?? current?.bus_id,
       node_id: configured?.identity?.node_id ?? current?.node_id,
+      serial_port: configured?.identity?.serial_port
+        ?? configured?.config?.serial_port
+        ?? current?.serial_port,
     };
   });
 }
@@ -554,13 +615,7 @@ export function createMotionDataController({
   }
 
   function motorOptionLabel(motor) {
-    const motorType = normalizeMotorTypeKey(motor?.motor_type, motor?.motor_type_label);
-    const alias = Number(motor?.alias ?? motor?.ethercat_alias);
-    const identity = motorType === 'ac_servo'
-      ? (Number.isFinite(alias) && alias > 0
-        ? `AC EEPROM Alias ${formatInt(alias)}`
-        : `AC EEPROM Alias 미설정 · Slave Position ${formatInt(motor?.slave_position)}`)
-      : (motorType === 'dynamixel' ? `다이나믹셀 ID ${motorIdText(motor)}` : `ID ${motorIdText(motor)}`);
+    const identity = motionMotorIdentityLabel(motor);
     return `${identity} / 현재 축 번호 ${formatInt(motor.controller_index)} / ${motor.display_name || '-'}`;
   }
 
@@ -577,7 +632,7 @@ export function createMotionDataController({
     const target = String(motorRef || '').trim().toLowerCase();
     if (!target) return null;
     const matches = sortedRuntimeMotors().filter((motor) => (
-      motorRefForMotor(motor).toLowerCase() === target
+      motionMotorRefs(motor).some((ref) => ref.toLowerCase() === target)
     ));
     return matches.length === 1 ? matches[0] : null;
   }
@@ -610,6 +665,7 @@ export function createMotionDataController({
       const current = motorForRef(row.motor_ref);
       if (current) {
         row.motor_axis = Number(current.controller_index);
+        row.motor_ref = motorRefForMotor(current);
         return;
       }
       if (String(row.motor_ref || '').trim()) return;

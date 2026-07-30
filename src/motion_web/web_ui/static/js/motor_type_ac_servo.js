@@ -12,13 +12,14 @@ export function detectedScanRow(row) {
 }
 
 export function motorIdFromScan(row) {
+  const masterIndex = Number(row?.master_index ?? 0);
   if (isAssignedAlias(row.ethercat_alias)) {
-    return `ac_servo_ethercat_alias_${row.ethercat_alias}`;
+    return `ac_servo_ethercat_master_${masterIndex}_alias_${row.ethercat_alias}`;
   }
   if (isAssignedAlias(row.rotary_alias)) {
-    return `ac_servo_ethercat_rotary_${row.rotary_alias}`;
+    return `ac_servo_ethercat_master_${masterIndex}_rotary_${row.rotary_alias}`;
   }
-  return `ac_servo_ethercat_master_${row.master_index ?? 0}_slave_${row.slave_position}`;
+  return `ac_servo_ethercat_master_${masterIndex}_slave_${row.slave_position}`;
 }
 
 function isAssignedAlias(value) {
@@ -54,7 +55,46 @@ export function scanKey(row) {
   return `master:${row.master_index ?? 0}:slave:${row.slave_position ?? '-'}`;
 }
 
+export function configuredEthercatMasterIndex(motor) {
+  const value = motor?.config?.ethercat_master_index
+    ?? motor?.identity?.ethercat_master_index
+    ?? 0;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+export function duplicateEthercatAddress(motors) {
+  const addresses = new Map();
+  for (const motor of Array.isArray(motors) ? motors : []) {
+    if (!motor || motor.transport !== 'ethercat' || motor.deleted) continue;
+    const masterIndex = configuredEthercatMasterIndex(motor);
+    const alias = Number(
+      motor.identity?.ethercat_alias
+      ?? motor.config?.alias
+      ?? 0,
+    );
+    const addressType = alias === 0 ? 'position' : 'alias';
+    const value = alias === 0
+      ? Number(motor.config?.position ?? motor.identity?.slave_position ?? 0)
+      : alias;
+    const key = `${masterIndex}:${addressType}:${value}`;
+    if (addresses.has(key)) {
+      return { masterIndex, addressType, value };
+    }
+    addresses.set(key, motor);
+  }
+  return null;
+}
+
+function scanAndMotorShareMaster(row, motor) {
+  const scanned = Number(row?.master_index ?? 0);
+  return Number.isInteger(scanned) &&
+    scanned >= 0 &&
+    scanned === configuredEthercatMasterIndex(motor);
+}
+
 export function scanRowMatchesRegistryMotor(row, motor) {
+  if (!scanAndMotorShareMaster(row, motor)) return false;
   const identity = motor.identity || {};
   const configuredAlias = motor.config?.alias ?? identity.ethercat_alias;
   const configuredSerial = motor.config?.serial_number ?? identity.serial_number;
@@ -81,6 +121,7 @@ export function scanRowMatchesRegistryMotor(row, motor) {
 
 export function scanRowSharesConfiguredPosition(row, motor) {
   if (!row || !motor || motor.transport !== 'ethercat') return false;
+  if (!scanAndMotorShareMaster(row, motor)) return false;
   const configuredPosition = motor.identity?.slave_position ?? motor.config?.position;
   return configuredPosition !== null &&
     configuredPosition !== undefined &&
@@ -108,6 +149,8 @@ export function resolveRegistryMotorForScanRow(row, motors) {
 
 export function scanRowMatchesRuntimeMotor(row, motor) {
   if (!row || !motor) return false;
+  const runtimeMaster = Number(motor.ethercat_master_index ?? 0);
+  if (runtimeMaster !== Number(row.master_index ?? 0)) return false;
   if (motor.alias !== null && motor.alias !== undefined &&
       row.ethercat_alias !== null && row.ethercat_alias !== undefined) {
     if (Number(motor.alias) === 0 && Number(row.ethercat_alias) === 0) {
@@ -126,6 +169,10 @@ export function scanRowMatchesRuntimeMotor(row, motor) {
 
 export function runtimeMotorConfirmsRegistryMotor(motor, runtime) {
   if (!motor || !runtime) return false;
+  if (
+    configuredEthercatMasterIndex(motor) !==
+    Number(runtime.ethercat_master_index ?? 0)
+  ) return false;
   const configuredAxis = motor.config?.controller_index ?? motor.axis;
   if (configuredAxis === null || configuredAxis === undefined ||
       runtime.controller_index === null || runtime.controller_index === undefined ||
@@ -189,6 +236,7 @@ export function scanRowToMotor(row, nextAvailableAxis) {
     driver_family: 'minas',
     transport: 'ethercat',
     identity: {
+      ethercat_master_index: Number(row.master_index ?? 0),
       rotary_alias: row.rotary_alias ?? null,
       ethercat_alias: ethercatAlias,
       slave_position: row.slave_position ?? null,
@@ -207,6 +255,7 @@ export function scanRowToMotor(row, nextAvailableAxis) {
     },
     config: {
       controller_index: axis,
+      ethercat_master_index: Number(row.master_index ?? 0),
       driver_id: 0,
       alias: ethercatAlias,
       position,

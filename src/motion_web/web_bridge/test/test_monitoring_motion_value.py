@@ -64,6 +64,55 @@ def test_monitoring_resolves_mapping_motor_ref_for_topic_value():
     assert motor['motion_value_message'] == '모션 실행 제어 모션값 수신'
 
 
+def test_monitoring_resolves_master_scoped_ac_ref():
+    state = {
+        'motors': [{
+            'controller_index': 6,
+            'motor_type': 'ac_servo',
+            'ethercat_master_index': 1,
+            'alias': 104,
+        }],
+    }
+    rows = [{
+        'motion_id': '3-2',
+        'motor_ref': 'ac_servo:master:1:alias:104',
+    }]
+
+    add_monitoring_motion_values(
+        state,
+        rows,
+        {'values': {'3-2': 4.5}, 'sources': {'3-2': 'motion_run'}},
+    )
+
+    assert state['motors'][0]['motion_value_deg'] == 4.5
+
+
+def test_monitoring_does_not_guess_duplicated_legacy_alias():
+    state = {
+        'motors': [
+            {
+                'controller_index': 0,
+                'motor_type': 'ac_servo',
+                'ethercat_master_index': 0,
+                'alias': 104,
+            },
+            {
+                'controller_index': 5,
+                'motor_type': 'ac_servo',
+                'ethercat_master_index': 1,
+                'alias': 104,
+            },
+        ],
+    }
+    rows = [{'motion_id': '3-3', 'motor_ref': 'ac_servo:alias:104'}]
+
+    add_monitoring_motion_values(state, rows, {'values': {'3-3': 1.0}})
+
+    assert all(
+        motor['motion_axis_configured'] is False for motor in state['motors']
+    )
+
+
 def test_monitoring_does_not_calculate_when_topic_value_is_invalid():
     state = {'motors': [{'controller_index': 2, 'position_deg': 20.0}]}
     rows = [{'motion_id': '1-1', 'motor_axis': 2}]

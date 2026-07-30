@@ -18,7 +18,7 @@ test('editor axis labels join project mapping and configured motor names', () =>
     {
       name: '입',
       motor_type: 'dynamixel',
-      config: { controller_index: 12, bus_id: 7 },
+      config: { controller_index: 12, bus_id: 7, serial_port: '/dev/ttyUSB0' },
     },
   ];
 

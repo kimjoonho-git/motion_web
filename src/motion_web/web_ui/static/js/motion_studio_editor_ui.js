@@ -16,14 +16,51 @@ function configuredMotorRef(motor) {
   const type = text(motor?.motor_type || motor?.motor_type_label).toLowerCase();
   if (type.includes('dynamixel')) {
     const busId = Number(motor?.config?.bus_id ?? motor?.identity?.bus_id ?? motor?.bus_id);
-    return Number.isInteger(busId) && busId >= 0 ? `dynamixel:id:${busId}` : '';
+    const serialPort = text(
+      motor?.config?.serial_port ?? motor?.identity?.serial_port ?? motor?.serial_port,
+    );
+    return Number.isInteger(busId) && busId >= 0 && serialPort
+      ? `dynamixel:port:${encodeURIComponent(serialPort)}:id:${busId}`
+      : '';
   }
   const alias = Number(
     motor?.config?.alias
     ?? motor?.identity?.ethercat_alias
     ?? motor?.alias,
   );
-  return Number.isFinite(alias) && alias > 0 ? `ac_servo:alias:${alias}` : '';
+  const masterIndex = Number(
+    motor?.config?.ethercat_master_index
+    ?? motor?.identity?.ethercat_master_index
+    ?? motor?.ethercat_master_index
+    ?? 0,
+  );
+  if (!Number.isInteger(masterIndex) || masterIndex < 0) return '';
+  if (Number.isFinite(alias) && alias > 0) {
+    return `ac_servo:master:${masterIndex}:alias:${alias}`;
+  }
+  const slavePosition = Number(
+    motor?.config?.position
+    ?? motor?.identity?.slave_position
+    ?? motor?.slave_position,
+  );
+  return Number.isInteger(slavePosition) && slavePosition >= 0
+    ? `ac_servo:master:${masterIndex}:slave:${slavePosition}`
+    : '';
+}
+
+function configuredMotorRefs(motor) {
+  const canonical = configuredMotorRef(motor);
+  const type = text(motor?.motor_type || motor?.motor_type_label).toLowerCase();
+  if (type.includes('dynamixel')) {
+    const busId = Number(motor?.config?.bus_id ?? motor?.identity?.bus_id ?? motor?.bus_id);
+    const legacy = Number.isInteger(busId) && busId >= 0 ? `dynamixel:id:${busId}` : '';
+    return [canonical, legacy].filter(Boolean);
+  }
+  const alias = Number(
+    motor?.config?.alias ?? motor?.identity?.ethercat_alias ?? motor?.alias,
+  );
+  const legacy = Number.isFinite(alias) && alias > 0 ? `ac_servo:alias:${alias}` : '';
+  return [canonical, legacy].filter(Boolean);
 }
 
 export function motionStudioEditorAxisLabel(
@@ -40,7 +77,7 @@ export function motionStudioEditorAxisLabel(
   const targetAxis = Number(mapping.motor_axis);
   const motor = (Array.isArray(configuredMotors) ? configuredMotors : []).find(
     (candidate) => (
-      (targetRef && configuredMotorRef(candidate) === targetRef)
+      (targetRef && configuredMotorRefs(candidate).some((ref) => ref === targetRef))
       || (!targetRef && Number.isFinite(targetAxis)
         && configuredMotorAxis(candidate) === targetAxis)
     ),

@@ -122,7 +122,14 @@ test('motor type scans and the full scan are directly available without nested c
   assert.match(controller, /\[el\.scanButton, el\.dynamixelScanButton, el\.scanAllButton\]/);
   assert.match(controller, /operationProgress\?\.begin\(\{/);
   assert.match(controller, /operationProgress\?\.finish\(\{/);
-  assert.match(controller, /scanResult\.textContent = `\$\{resultState\} · \$\{formatInt\(slaves\.length\)\}축`/);
+  assert.match(
+    controller,
+    /Master \$\{formatInt\(master\.master_index \?\? 0\)\}/,
+  );
+  assert.match(
+    controller,
+    /`\$\{resultState\} · \$\{formatInt\(slaves\.length\)\}축\$\{masterSummary\}`/,
+  );
   assert.match(controller, /dynamixelScanResult\.textContent = `\$\{resultState\} · \$\{formatInt\(devices\.length\)\}개`/);
   assert.doesNotMatch(controller, /검색된 축: \$\{slaveText\}/);
   assert.doesNotMatch(controller, /후보 \$\{formatInt\(targetCount\)\}개/);

@@ -116,7 +116,7 @@ def test_dynamixel_defaults_do_not_depend_on_scan_order(tmp_path):
     assert by_id[w270_id]['driver_model'] == 'XM540-W270-R'
 
 
-def _registry_motor(axis, *, transport):
+def _registry_motor(axis, *, transport, master_index=0):
     if transport == 'ethercat':
         return {
             'enabled': True,
@@ -134,6 +134,7 @@ def _registry_motor(axis, *, transport):
             },
             'config': {
                 'controller_index': axis,
+                'ethercat_master_index': master_index,
                 'driver_id': 0,
                 'alias': 100 + axis,
                 'position': 0,
@@ -231,6 +232,7 @@ def test_ac_identity_metadata_round_trips_in_project_config(tmp_path):
     assert config['masters'][0]['slaves'][0]['position'] == 1
     assert config['web_axis_identities'] == [{
         'controller_index': 0,
+        'ethercat_master_index': 0,
         'eeprom_alias': 403,
         'rotary_alias': 3,
         'slave_position': 1,
@@ -249,6 +251,7 @@ def test_ac_identity_metadata_round_trips_in_project_config(tmp_path):
         'model_source': 'user_nameplate',
     }]
     assert restored['identity']['ethercat_alias'] == 403
+    assert restored['identity']['ethercat_master_index'] == 0
     assert restored['identity']['rotary_alias'] == 3
     assert restored['identity']['slave_position'] == 1
     assert restored['identity']['revision_number'] == 65536
@@ -260,6 +263,49 @@ def test_ac_identity_metadata_round_trips_in_project_config(tmp_path):
     assert 'driver_model' not in restored['identity']
     assert restored['profile']['driver_model'] == 'MADLN05BE'
     assert restored['profile']['model_confirmed'] is True
+
+
+def test_two_ethercat_masters_round_trip_without_merging_slave_positions(tmp_path):
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge.workspace_root = tmp_path
+    motors = []
+    for master_index in (0, 1):
+        for offset in range(2):
+            axis = master_index * 2 + offset
+            motor = _registry_motor(
+                axis,
+                transport='ethercat',
+                master_index=master_index,
+            )
+            motor['identity'].update({
+                'ethercat_master_index': master_index,
+                'ethercat_alias': 0,
+                'rotary_alias': 0,
+                'slave_position': offset,
+            })
+            motor['config'].update({
+                'alias': 0,
+                'position': offset,
+            })
+            motors.append(motor)
+
+    config = bridge._motor_config_from_registry(
+        {'motors': motors}, bridge._default_motor_config()
+    )
+    restored = bridge._registry_from_motor_config(config)['motors']
+
+    assert [
+        (master['ethercat_master_index'], master['number_of_slaves'])
+        for master in config['masters']
+    ] == [(0, 2), (1, 2)]
+    assert [
+        [slave['controller_index'] for slave in master['slaves']]
+        for master in config['masters']
+    ] == [[0, 1], [2, 3]]
+    assert [
+        motor['config']['ethercat_master_index'] for motor in restored
+    ] == [0, 0, 1, 1]
+    assert len({motor['id'] for motor in restored}) == 4
 
 
 def test_zero_alias_ac_axes_round_trip_with_unique_slave_ids(tmp_path):

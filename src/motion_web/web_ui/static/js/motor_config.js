@@ -27,6 +27,7 @@ import {
   upsertMotorInRegistry,
 } from './motor_registry.js?v=20260718-korean-ui';
 import {
+  duplicateEthercatAddress,
   detectedScanRow,
   runtimeIsAcServo,
   runtimeMotorConfirmsRegistryMotor,
@@ -38,7 +39,7 @@ import {
   scanRowToMotor as acServoScanRowToMotor,
   siiReportedAcServoModel,
   verifiedAcServoModel,
-} from './motor_type_ac_servo.js?v=20260722-runtime-axis-confirm';
+} from './motor_type_ac_servo.js?v=20260730-dual-ethercat-address-1';
 import {
   dynamixelScanDeviceKey,
   dynamixelScanDeviceToMotor as buildDynamixelScanDeviceToMotor,
@@ -516,6 +517,13 @@ export function createMotorConfigController({
     const identity = item.identity || {};
     const config = item.config || {};
     if (item.transport === 'ethercat') {
+      const configuredMasterIndex = Number(firstDefined(
+        config.ethercat_master_index,
+        identity.ethercat_master_index,
+        0,
+      ));
+      const runtimeMasterIndex = Number(motor.ethercat_master_index ?? 0);
+      if (configuredMasterIndex !== runtimeMasterIndex) return false;
       const configuredAlias = firstDefined(identity.ethercat_alias, config.alias);
       if (
         configuredAlias !== null && configuredAlias !== undefined &&
@@ -539,12 +547,17 @@ export function createMotorConfigController({
     if (item.transport === 'serial') {
       const configuredId = firstDefined(identity.bus_id, identity.node_id, config.bus_id);
       const runtimeId = firstDefined(motor.bus_id, motor.node_id);
+      const configuredPort = firstDefined(identity.serial_port, config.serial_port);
+      const runtimePort = motor.serial_port;
       if (
         configuredId !== null &&
         configuredId !== undefined &&
         runtimeId !== null &&
         runtimeId !== undefined &&
-        Number(configuredId) === Number(runtimeId)
+        Number(configuredId) === Number(runtimeId) &&
+        configuredPort &&
+        runtimePort &&
+        String(configuredPort) === String(runtimePort)
       ) {
         return true;
       }
@@ -583,7 +596,11 @@ export function createMotorConfigController({
     if (!device) return null;
     return motors.find((motor) => {
       const runtimeId = firstDefined(motor.bus_id, motor.node_id);
-      return runtimeId !== null && runtimeId !== undefined && Number(runtimeId) === Number(device.id);
+      return runtimeId !== null && runtimeId !== undefined
+        && Number(runtimeId) === Number(device.id)
+        && motor.serial_port
+        && device.port
+        && String(motor.serial_port) === String(device.port);
     }) || null;
   }
 
@@ -1685,9 +1702,16 @@ export function createMotorConfigController({
         identity.slave_position,
         config.position,
       );
+      const masterIndex = firstDefined(
+        row.scanRow?.master_index,
+        identity.ethercat_master_index,
+        config.ethercat_master_index,
+        0,
+      );
       return {
         title: `Vendor ${displayText(vendor)} · Product ${displayText(product)}`,
         detail: [
+          `Master ${displayText(masterIndex)}`,
           `Revision ${displayText(revision)}`,
           serial === null || serial === undefined || serial === ''
             ? 'Serial 미수신'
@@ -1755,8 +1779,17 @@ export function createMotorConfigController({
 
   function rowConnectionIdentity(row) {
     if (rowMotorType(row) === 'ac_servo') {
+      const masterIndex = firstDefined(
+        row.scanRow?.master_index,
+        row.motor?.identity?.ethercat_master_index,
+        row.motor?.config?.ethercat_master_index,
+        0,
+      );
       return {
-        title: `${axisIdLabel(row)} · Slave ${displayText(acIdentityValue(row, 'slave_position'))}`,
+        title: (
+          `${axisIdLabel(row)} · Master ${displayText(masterIndex)}`
+          + ` · Slave ${displayText(acIdentityValue(row, 'slave_position'))}`
+        ),
         detail: `EEPROM ${displayText(directScanAliasValue(row))} · Station ${displayText(acIdentityValue(row, 'rotary_alias'))}`,
       };
     }
@@ -2890,20 +2923,12 @@ export function createMotorConfigController({
       return `축 번호가 0부터 연속으로 정렬되어 있지 않습니다. 현재 축 번호: ${current}. 축 번호 정렬을 먼저 실행하세요.`;
     }
 
-    const acMotors = motors.filter((motor) => motor.transport === 'ethercat');
-    const nonzeroAliases = new Map();
-    const zeroAliasPositions = new Map();
-    for (const motor of acMotors) {
-      const alias = Number(firstDefined(motor.identity?.ethercat_alias, motor.config?.alias, 0));
-      const position = Number(motor.config?.position ?? 0);
-      const target = alias === 0 ? zeroAliasPositions : nonzeroAliases;
-      const key = alias === 0 ? position : alias;
-      if (target.has(key)) {
-        return alias === 0
-          ? `EEPROM Alias가 0인 AC 서보의 Slave Position ${formatInt(position)} 값이 중복되어 있습니다.`
-          : `AC 서보의 EEPROM Alias ${formatInt(alias)} 값이 중복되어 있습니다.`;
-      }
-      target.set(key, motor);
+    const duplicateAddress = duplicateEthercatAddress(motors);
+    if (duplicateAddress) {
+      const { masterIndex, addressType, value } = duplicateAddress;
+      return addressType === 'position'
+        ? `EtherCAT Master ${formatInt(masterIndex)}에서 EEPROM Alias가 0인 AC 서보의 Slave Position ${formatInt(value)} 값이 중복되어 있습니다.`
+        : `EtherCAT Master ${formatInt(masterIndex)}의 AC 서보 EEPROM Alias ${formatInt(value)} 값이 중복되어 있습니다.`;
     }
 
     return '';
@@ -2947,10 +2972,19 @@ export function createMotorConfigController({
     const scannedAliases = new Map();
     scan.slaves.forEach((slave) => {
       const alias = Number(slave.ethercat_alias ?? 0);
-      if (alias !== 0) scannedAliases.set(alias, (scannedAliases.get(alias) || 0) + 1);
+      if (alias === 0) return;
+      const masterIndex = Number(slave.master_index ?? 0);
+      const key = `${masterIndex}:${alias}`;
+      scannedAliases.set(key, {
+        masterIndex,
+        alias,
+        count: (scannedAliases.get(key)?.count || 0) + 1,
+      });
     });
-    const duplicateAlias = [...scannedAliases.entries()].find(([, count]) => count > 1);
-    if (duplicateAlias) return `검색된 EEPROM Alias ${formatInt(duplicateAlias[0])} 값이 중복되어 적용할 수 없습니다.`;
+    const duplicateAlias = [...scannedAliases.values()].find((item) => item.count > 1);
+    if (duplicateAlias) {
+      return `검색된 EtherCAT Master ${formatInt(duplicateAlias.masterIndex)}의 EEPROM Alias ${formatInt(duplicateAlias.alias)} 값이 중복되어 적용할 수 없습니다.`;
+    }
 
     for (const motor of activeAxisMotors().filter(
       (item) => item.transport === 'ethercat' && item.enabled,
@@ -3475,9 +3509,11 @@ export function createMotorConfigController({
       return false;
     }
     const scanRow = selectedRows[0].scanRow;
+    const masterIndex = Number(scanRow.master_index ?? 0);
     const currentAlias = Number(scanRow.ethercat_alias);
     const input = await showPrompt(
-      `Slave Position ${formatInt(scanRow.slave_position)}의 새 EEPROM Alias를 입력하세요.\n`
+      `Master ${formatInt(masterIndex)} · Slave ${formatInt(scanRow.slave_position)}의 `
+      + '새 EEPROM Alias를 입력하세요.\n'
       + '범위: 0~65535 (0은 Alias 제거)',
       {
         title: 'EEPROM Alias 변경',
@@ -3501,6 +3537,7 @@ export function createMotorConfigController({
     }
     const confirmed = await showConfirm(
       '실제 서보 드라이버의 SII EEPROM 값을 변경합니다.\n\n'
+      + `EtherCAT Master: ${formatInt(masterIndex)}\n`
       + `Slave Position: ${formatInt(scanRow.slave_position)}\n`
       + `Serial Number: ${formatInt(scanRow.serial_number)}\n`
       + `EEPROM Alias: ${formatInt(currentAlias)} → ${formatInt(newAlias)}\n\n`
@@ -3523,6 +3560,7 @@ export function createMotorConfigController({
     try {
       const payload = await writeEthercatAlias({
         confirmed: true,
+        master_index: masterIndex,
         slave_position: Number(scanRow.slave_position),
         new_alias: newAlias,
         expected: {
@@ -3539,6 +3577,7 @@ export function createMotorConfigController({
         return false;
       }
       pendingAliasWrite = {
+        masterIndex,
         slavePosition: Number(scanRow.slave_position),
         newAlias,
       };
@@ -3660,7 +3699,10 @@ export function createMotorConfigController({
     latestScan = scan;
     if (pendingAliasWrite) {
       const observed = scan?.ethercat_scan?.slaves?.find(
-        (item) => Number(item.slave_position) === Number(pendingAliasWrite.slavePosition),
+        (item) => (
+          Number(item.master_index ?? 0) === Number(pendingAliasWrite.masterIndex)
+          && Number(item.slave_position) === Number(pendingAliasWrite.slavePosition)
+        ),
       );
       if (observed && Number(observed.ethercat_alias) === Number(pendingAliasWrite.newAlias)) {
         pendingAliasWrite = null;
@@ -3674,12 +3716,21 @@ export function createMotorConfigController({
     }
     const ethercatScan = scan.ethercat_scan || {};
     const slaves = Array.isArray(ethercatScan.slaves) ? ethercatScan.slaves : [];
+    const masters = Array.isArray(ethercatScan.masters) ? ethercatScan.masters : [];
     const resultState = ethercatScan.available && ethercatScan.complete
       ? '검색 완료'
       : ethercatScan.available
         ? '검색 부분 완료'
         : '검색 실패';
-    el.scanResult.textContent = `${resultState} · ${formatInt(slaves.length)}축`;
+    const masterSummary = masters.length
+      ? ` · ${masters.map((master) => (
+        `Master ${formatInt(master.master_index ?? 0)} `
+        + `${formatInt(master.slaves_count ?? 0)}축`
+      )).join(' / ')}`
+      : '';
+    el.scanResult.textContent = (
+      `${resultState} · ${formatInt(slaves.length)}축${masterSummary}`
+    );
   }
 
   function renderDynamixelScan(scan) {

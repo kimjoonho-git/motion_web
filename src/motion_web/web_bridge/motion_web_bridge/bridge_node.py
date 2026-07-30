@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 
 import rclpy
 import uvicorn
+from urllib.parse import quote
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -146,17 +147,54 @@ def _monitoring_motor_ref(motor: Dict[str, Any]) -> str:
     ))
     if 'dynamixel' in text:
         value = motor.get('bus_id', motor.get('node_id'))
+        serial_port = str(motor.get('serial_port') or '').strip()
         try:
-            return f'dynamixel:id:{int(value)}'
+            return (
+                f'dynamixel:port:{quote(serial_port, safe="")}:id:{int(value)}'
+                if serial_port else ''
+            )
         except (TypeError, ValueError):
             return ''
     if 'minas' in text or 'ac servo' in text or 'ac_servo' in text:
         value = motor.get('alias', motor.get('ethercat_alias'))
+        master_index = motor.get('ethercat_master_index', 0)
         try:
-            return f'ac_servo:alias:{int(value)}'
+            master = int(master_index)
+        except (TypeError, ValueError):
+            return ''
+        try:
+            alias = int(value)
+        except (TypeError, ValueError):
+            alias = 0
+        if alias > 0 and master >= 0:
+            return f'ac_servo:master:{master}:alias:{alias}'
+        try:
+            position = int(motor.get('slave_position'))
+            return (
+                f'ac_servo:master:{master}:slave:{position}'
+                if master >= 0 and position >= 0 else ''
+            )
         except (TypeError, ValueError):
             return ''
     return ''
+
+def _monitoring_motor_refs(motor: Dict[str, Any]) -> List[str]:
+    canonical = _monitoring_motor_ref(motor)
+    text = ' '.join(str(motor.get(key) or '').lower() for key in (
+        'motor_type', 'motor_type_label', 'driver_model', 'transport'
+    ))
+    try:
+        if 'minas' in text or 'ac servo' in text or 'ac_servo' in text:
+            alias = int(motor.get('alias', motor.get('ethercat_alias')))
+            legacy = f'ac_servo:alias:{alias}' if alias > 0 else ''
+        elif 'dynamixel' in text:
+            bus_id = int(motor.get('bus_id', motor.get('node_id')))
+            legacy = f'dynamixel:id:{bus_id}' if bus_id >= 0 else ''
+        else:
+            legacy = ''
+    except (TypeError, ValueError):
+        legacy = ''
+    return [item for item in (canonical, legacy) if item]
 
 
 def add_monitoring_motion_values(
@@ -185,7 +223,9 @@ def add_monitoring_motion_values(
         if motor_ref:
             matches = [
                 motor for motor in valid_motors
-                if _monitoring_motor_ref(motor).lower() == motor_ref.lower()
+                if motor_ref.lower() in {
+                    ref.lower() for ref in _monitoring_motor_refs(motor)
+                }
             ]
             if len(matches) == 1:
                 try:
@@ -2508,12 +2548,21 @@ class MotionWebBridge(Node):
                 'message': '사용자 확인값이 없어 EEPROM Alias 쓰기를 중단했습니다.',
             }
         try:
+            master_index = int(payload.get('master_index', 0))
             slave_position = int(payload.get('slave_position'))
             new_alias = int(payload.get('new_alias'))
         except (TypeError, ValueError):
             return {
                 'success': False,
-                'message': 'Slave Position과 EEPROM Alias는 정수여야 합니다.',
+                'message': (
+                    'EtherCAT Master 번호, Slave Position과 EEPROM Alias는 '
+                    '정수여야 합니다.'
+                ),
+            }
+        if master_index < 0:
+            return {
+                'success': False,
+                'message': 'EtherCAT Master 번호는 0 이상의 정수여야 합니다.',
             }
         expected = payload.get('expected')
         if not isinstance(expected, dict):
@@ -2523,13 +2572,17 @@ class MotionWebBridge(Node):
                 slave_position,
                 new_alias,
                 expected,
+                master_index=master_index,
             )
         except EthercatAliasError as exc:
             return {'success': False, 'message': str(exc)}
         self._append_motor_event(
             category='system',
             event_type='ethercat_alias_written',
-            target=f'Slave Position {result["slave_position"]}',
+            target=(
+                f'Master {result["master_index"]} · '
+                f'Slave {result["slave_position"]}'
+            ),
             content=(
                 f'EEPROM Alias {result["previous_alias"]} → {result["new_alias"]}'
             ),
@@ -3294,6 +3347,18 @@ class MotionWebBridge(Node):
                 parts.append(f'AC Servo {int(ethercat.get("slaves_count") or 0)}축')
             except (TypeError, ValueError):
                 pass
+            master_rows = ethercat.get('masters')
+            if isinstance(master_rows, list) and master_rows:
+                parts.append(
+                    ' / '.join(
+                        (
+                            f'Master {int(row.get("master_index") or 0)} '
+                            f'{int(row.get("slaves_count") or 0)}축'
+                        )
+                        for row in master_rows
+                        if isinstance(row, dict)
+                    )
+                )
         if isinstance(dynamixel, dict) and dynamixel.get('skipped') is not True:
             try:
                 parts.append(f'Dynamixel {int(dynamixel.get("devices_count") or 0)}축')
@@ -6320,8 +6385,14 @@ class MotionWebBridge(Node):
                 continue
             master_id = self._optional_int(master.get('id'), 0)
             transport = str(master.get('type') or 'unknown')
-            serial_port = master.get('serial_port')
-            serial_baudrate = self._optional_int(master.get('serial_baudrate'), None)
+            ethercat_master_index = self._optional_int(
+                master.get('ethercat_master_index'), 0
+            )
+            serial_port = master.get('serial_port') or master.get('port')
+            serial_baudrate = self._optional_int(
+                master.get('serial_baudrate'),
+                self._optional_int(master.get('baudrate'), None),
+            )
             for index, slave in enumerate(master.get('slaves', [])):
                 if not isinstance(slave, dict):
                     continue
@@ -6333,15 +6404,24 @@ class MotionWebBridge(Node):
                 alias = self._optional_int(slave.get('alias'), None)
                 web_identity = identity_by_axis.get(axis, {})
                 web_profile = profile_by_axis.get(axis, {})
-                bus_id = self._optional_int(slave.get('bus_id'), None)
+                bus_id = self._optional_int(
+                    slave.get('bus_id'),
+                    self._optional_int(slave.get('id'), None),
+                )
                 slave_position = self._optional_int(slave.get('position'), index)
                 name = str(slave.get('name') or f'Axis {axis}')
                 motor_id = (
-                    f'{motor_type}_{transport}_alias_{alias}'
+                    f'{motor_type}_{transport}_master_{ethercat_master_index}_alias_{alias}'
                     if transport == 'ethercat' and alias is not None and alias > 0
-                    else f'{motor_type}_{transport}_master_{master_id}_slave_{slave_position}'
+                    else (
+                        f'{motor_type}_{transport}_master_'
+                        f'{ethercat_master_index}_slave_{slave_position}'
+                    )
                     if transport == 'ethercat'
-                    else f'{motor_type}_{transport}_id_{bus_id}'
+                    else (
+                        f'{motor_type}_{transport}_port_'
+                        f'{quote(str(serial_port or ""), safe="")}_id_{bus_id}'
+                    )
                     if bus_id is not None
                     else f'{motor_type}_{transport}_axis_{axis}'
                 )
@@ -6358,6 +6438,11 @@ class MotionWebBridge(Node):
                             'driver_family': driver_family,
                             'transport': transport,
                             'identity': {
+                                'ethercat_master_index': (
+                                    ethercat_master_index
+                                    if transport == 'ethercat'
+                                    else None
+                                ),
                                 'rotary_alias': self._optional_int(
                                     web_identity.get('rotary_alias'), None
                                 ),
@@ -6420,6 +6505,12 @@ class MotionWebBridge(Node):
                             },
                             'config': {
                                 'controller_index': axis,
+                                'ethercat_master_index': (
+                                    ethercat_master_index
+                                    if transport == 'ethercat'
+                                    else None
+                                ),
+                                'master_id': master_id,
                                 'driver_id': driver_id,
                                 'bus_id': bus_id,
                                 'serial_port': serial_port,
@@ -6516,7 +6607,7 @@ class MotionWebBridge(Node):
             masters = self._default_motor_config()['masters']
         masters = [dict(master) if isinstance(master, dict) else {} for master in masters]
 
-        slaves = []
+        ethercat_slaves_by_master: Dict[int, List[Dict[str, Any]]] = {}
         web_axis_identities = []
         web_axis_profiles = []
         for motor in registry.get('motors', []):
@@ -6533,6 +6624,14 @@ class MotionWebBridge(Node):
             name = str(motor.get('name') or f'Axis {axis}').strip() or f'Axis {axis}'
             identity = motor.get('identity') if isinstance(motor.get('identity'), dict) else {}
             profile = motor.get('profile') if isinstance(motor.get('profile'), dict) else {}
+            ethercat_master_index = self._optional_int(
+                motor_config.get('ethercat_master_index'),
+                self._optional_int(identity.get('ethercat_master_index'), 0),
+            )
+            if ethercat_master_index is None or ethercat_master_index < 0:
+                raise ValueError(
+                    f'Axis {axis}의 EtherCAT Master 번호가 올바르지 않습니다'
+                )
             eeprom_alias = self._optional_int(
                 identity.get('ethercat_alias'),
                 self._optional_int(motor_config.get('alias'), 0),
@@ -6542,7 +6641,9 @@ class MotionWebBridge(Node):
                 self._optional_int(motor_config.get('position'), 0),
             )
             driver_id = self._driver_id_for_registry_motor(motor, drivers)
-            slaves.append(
+            ethercat_slaves_by_master.setdefault(
+                ethercat_master_index, []
+            ).append(
                 {
                     'controller_index': axis,
                     'name': name,
@@ -6565,6 +6666,7 @@ class MotionWebBridge(Node):
             )
             web_axis_identities.append({
                 'controller_index': axis,
+                'ethercat_master_index': ethercat_master_index,
                 'eeprom_alias': eeprom_alias,
                 'rotary_alias': self._optional_int(identity.get('rotary_alias'), None),
                 'slave_position': slave_position,
@@ -6595,26 +6697,40 @@ class MotionWebBridge(Node):
                 'model_source': str(profile.get('model_source') or ''),
             })
 
-        slaves.sort(key=lambda item: int(item.get('controller_index') or 0))
-        if slaves:
-            ethercat_master = next(
-                (master for master in masters if master.get('type') == 'ethercat'),
-                None,
+        existing_ethercat_masters = {
+            self._optional_int(master.get('ethercat_master_index'), 0): master
+            for master in masters
+            if isinstance(master, dict) and master.get('type') == 'ethercat'
+        }
+        used_master_ids = {
+            self._optional_int(master.get('id'), None)
+            for master in masters
+            if isinstance(master, dict)
+            and self._optional_int(master.get('id'), None) is not None
+        }
+        next_master_id = max(used_master_ids | {-1}) + 1
+        ethercat_masters = []
+        for master_index in sorted(ethercat_slaves_by_master):
+            ethercat_master = dict(
+                existing_ethercat_masters.get(master_index) or {}
             )
-            if ethercat_master is None:
-                ethercat_master = {
-                    'id': 0,
-                    'type': 'ethercat',
-                    'ethercat_master_index': 0,
-                }
-                masters.append(ethercat_master)
-            ethercat_master['slaves'] = slaves
-            ethercat_master['number_of_slaves'] = len(slaves)
-        else:
-            # A Dynamixel-only project must not require an EtherCAT kernel
-            # master merely because the default configuration contained an
-            # empty EtherCAT entry.
-            masters = [master for master in masters if master.get('type') != 'ethercat']
+            master_id = self._optional_int(ethercat_master.get('id'), None)
+            if master_id is None:
+                while next_master_id in used_master_ids:
+                    next_master_id += 1
+                master_id = next_master_id
+                used_master_ids.add(master_id)
+                next_master_id += 1
+            slaves = ethercat_slaves_by_master[master_index]
+            slaves.sort(key=lambda item: int(item.get('controller_index') or 0))
+            ethercat_master.update({
+                'id': master_id,
+                'type': 'ethercat',
+                'ethercat_master_index': master_index,
+                'slaves': slaves,
+                'number_of_slaves': len(slaves),
+            })
+            ethercat_masters.append(ethercat_master)
 
         if web_axis_identities:
             config['web_axis_identities'] = web_axis_identities
@@ -6625,9 +6741,18 @@ class MotionWebBridge(Node):
         else:
             config.pop('web_axis_profiles', None)
 
-        serial_masters = self._serial_masters_from_registry(registry, masters, drivers)
-        non_serial_masters = [master for master in masters if master.get('type') != 'serial']
-        masters = non_serial_masters + serial_masters
+        non_bus_masters = [
+            master
+            for master in masters
+            if master.get('type') not in {'ethercat', 'serial'}
+        ]
+        master_context = ethercat_masters + non_bus_masters + [
+            master for master in masters if master.get('type') == 'serial'
+        ]
+        serial_masters = self._serial_masters_from_registry(
+            registry, master_context, drivers
+        )
+        masters = ethercat_masters + non_bus_masters + serial_masters
 
         config['masters'] = masters
         config['drivers'] = self._prune_unused_drivers(

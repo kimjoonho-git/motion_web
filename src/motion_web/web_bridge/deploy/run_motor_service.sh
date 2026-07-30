@@ -25,10 +25,22 @@ if [[ ! -f "${MOTOR_CONFIG_FILE}" ]]; then
   exit 1
 fi
 
-ethercat_error_positions() {
-  ethercat slaves 2>/dev/null \
-    | awk '$3 ~ /ERROR/ || $4 == "E" {print $1}' \
+ethercat_master_indices() {
+  ethercat master 2>/dev/null \
+    | awk '/^Master[0-9]+$/ {sub(/^Master/, ""); print}' \
     || true
+}
+
+ethercat_error_slaves() {
+  local master_index
+
+  while IFS= read -r master_index; do
+    [[ -n "${master_index}" ]] || continue
+    ethercat slaves -m "${master_index}" 2>/dev/null \
+      | awk -v master="${master_index}" \
+          '$3 ~ /ERROR/ || $4 == "E" {print master ":" $1}' \
+      || true
+  done < <(ethercat_master_indices)
 }
 
 recover_ethercat_errors_before_launch() {
@@ -39,26 +51,36 @@ recover_ethercat_errors_before_launch() {
   local attempts="${ETHERCAT_RECOVERY_ATTEMPTS:-2}"
   local interval="${ETHERCAT_RECOVERY_INTERVAL_SEC:-0.5}"
   local command_timeout="${ETHERCAT_STATE_TIMEOUT_SEC:-3}"
-  local attempt position positions
+  local attempt error_slave error_slaves master_index position
 
   for ((attempt = 1; attempt <= attempts; attempt++)); do
-    positions="$(ethercat_error_positions)"
-    if [[ -z "${positions}" ]]; then
+    error_slaves="$(ethercat_error_slaves)"
+    if [[ -z "${error_slaves}" ]]; then
       return 0
     fi
-    for position in ${positions}; do
-      echo "EtherCAT Slave ${position} 오류 플래그 해제 시도 (${attempt}/${attempts})"
+
+    while IFS= read -r error_slave; do
+      [[ -n "${error_slave}" ]] || continue
+      IFS=: read -r master_index position <<< "${error_slave}"
+      echo "EtherCAT Master ${master_index} Slave ${position} 오류 플래그 해제 시도 (${attempt}/${attempts})"
       timeout "${command_timeout}" \
-        ethercat reg_write -p "${position}" -t uint16 0x0120 0x0011 || true
+        ethercat reg_write -m "${master_index}" -p "${position}" \
+          -t uint16 0x0120 0x0011 || true
       sleep "${interval}"
-      timeout "${command_timeout}" ethercat states -p "${position}" PREOP || true
+      timeout "${command_timeout}" \
+        ethercat states -m "${master_index}" -p "${position}" PREOP || true
       sleep "${interval}"
-    done
+    done <<< "${error_slaves}"
   done
 
-  positions="$(ethercat_error_positions)"
-  if [[ -n "${positions}" ]]; then
-    echo "EtherCAT 오류 플래그를 해제하지 못했습니다: ${positions}" >&2
+  error_slaves="$(ethercat_error_slaves)"
+  if [[ -n "${error_slaves}" ]]; then
+    echo "EtherCAT 오류 플래그를 해제하지 못했습니다:" >&2
+    while IFS= read -r error_slave; do
+      [[ -n "${error_slave}" ]] || continue
+      IFS=: read -r master_index position <<< "${error_slave}"
+      echo "  Master ${master_index} Slave ${position}" >&2
+    done <<< "${error_slaves}"
     return 1
   fi
 }

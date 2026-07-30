@@ -1,1 +1,1 @@
-import './js/main.js?v=20260729-motion-run-progress-1';
+import './js/main.js?v=20260730-dual-ethercat-address-1';

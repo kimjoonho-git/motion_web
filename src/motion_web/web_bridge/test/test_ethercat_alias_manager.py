@@ -86,7 +86,10 @@ def test_write_alias_rechecks_identity_before_single_slave_write():
         'product_code': 0x60380004,
         'serial_number': 0x18050508,
     })
-    assert calls[-1] == ['ethercat', 'alias', '-p', '0', '202']
+    assert calls[-1] == [
+        'ethercat', 'alias', '-m', '0', '-p', '0', '202'
+    ]
+    assert result['master_index'] == 0
     assert result['previous_alias'] == 101
     assert result['new_alias'] == 202
 
@@ -111,3 +114,49 @@ def test_write_alias_blocks_duplicate_nonzero_alias():
             'product_code': 0x60380004,
             'serial_number': 0x18050508,
         })
+
+
+def test_read_and_write_select_the_requested_ethercat_master():
+    listing = '''=== Master 0, Slave 0 ===
+Identity:
+  Vendor Id: 0x0000066f
+  Product code: 0x60380004
+  Serial number: 0x18050508
+=== Master 1, Slave 0 ===
+Identity:
+  Vendor Id: 0x0000066f
+  Product code: 0x60380004
+  Serial number: 0x18050509
+'''
+    calls = []
+
+    def runner(command, **_kwargs):
+        calls.append(command)
+        if command[1] == 'slaves':
+            return completed(stdout=listing)
+        if command[1] == 'sii_read':
+            master_index = int(command[command.index('-m') + 1])
+            return completed(stdout=sii_identity(101, 0x18050508 + master_index))
+        if command[1] == 'alias':
+            return completed()
+        raise AssertionError(command)
+
+    manager = EthercatAliasManager(runner=runner)
+    result = manager.write_alias(
+        0,
+        202,
+        {
+            'ethercat_alias': 101,
+            'vendor_id': 0x0000066F,
+            'product_code': 0x60380004,
+            'serial_number': 0x18050509,
+        },
+        master_index=1,
+    )
+
+    assert ['ethercat', 'sii_read', '-m', '0', '-p', '0'] in calls
+    assert ['ethercat', 'sii_read', '-m', '1', '-p', '0'] in calls
+    assert calls[-1] == [
+        'ethercat', 'alias', '-m', '1', '-p', '0', '202'
+    ]
+    assert result['master_index'] == 1

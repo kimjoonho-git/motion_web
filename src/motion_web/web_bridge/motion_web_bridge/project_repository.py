@@ -1209,6 +1209,9 @@ class ProjectRepository:
         used_controller_indices = set()
         used_nonzero_aliases = set()
         used_zero_alias_positions = set()
+        used_serial_devices = set()
+        used_master_ids = set()
+        used_ethercat_master_indices = set()
         identity_by_axis = {
             item.get('controller_index'): item
             for item in payload.get('web_axis_identities') or []
@@ -1222,6 +1225,30 @@ class ProjectRepository:
         for master in payload.get('masters') or []:
             if not isinstance(master, dict):
                 continue
+            try:
+                master_id = int(master.get('id'))
+            except (TypeError, ValueError) as exc:
+                raise ValueError('모터 Master ID는 정수여야 합니다') from exc
+            if master_id in used_master_ids:
+                raise ValueError(f'Motor Master ID {master_id} 값이 중복되어 있습니다')
+            used_master_ids.add(master_id)
+            ethercat_master_index = None
+            if str(master.get('type') or '') == 'ethercat':
+                try:
+                    ethercat_master_index = int(
+                        master.get('ethercat_master_index', 0)
+                    )
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        'EtherCAT Master 번호는 0 이상의 정수여야 합니다'
+                    ) from exc
+                if ethercat_master_index < 0:
+                    raise ValueError('EtherCAT Master 번호는 0 이상의 정수여야 합니다')
+                if ethercat_master_index in used_ethercat_master_indices:
+                    raise ValueError(
+                        f'EtherCAT Master {ethercat_master_index} 설정이 중복되어 있습니다'
+                    )
+                used_ethercat_master_indices.add(ethercat_master_index)
             for slave in master.get('slaves') or []:
                 if not isinstance(slave, dict):
                     continue
@@ -1240,12 +1267,24 @@ class ProjectRepository:
                     identity = identity_by_axis.get(axis)
                     if isinstance(identity, dict):
                         try:
+                            identity_master_index = int(
+                                identity.get(
+                                    'ethercat_master_index',
+                                    ethercat_master_index,
+                                )
+                            )
                             identity_alias = int(identity.get('eeprom_alias'))
                             identity_position = int(identity.get('slave_position'))
                         except (TypeError, ValueError) as exc:
                             raise ValueError(
                                 f'Axis {axis}의 물리 식별 정보가 완전하지 않습니다'
                             ) from exc
+                        if identity_master_index != ethercat_master_index:
+                            raise ValueError(
+                                f'Axis {axis}의 EtherCAT Master가 실행 설정'
+                                f'({ethercat_master_index})과 물리 식별 정보'
+                                f'({identity_master_index})에서 다릅니다'
+                            )
                         if alias != identity_alias:
                             raise ValueError(
                                 f'Axis {axis}의 EEPROM Alias가 실행 설정({alias})과 '
@@ -1269,17 +1308,68 @@ class ProjectRepository:
                                 '전체 모터 검색 후 해당 검색 장비의 연결정보를 반영하고 저장하세요'
                             )
                     if alias != 0:
-                        if alias in used_nonzero_aliases:
+                        alias_key = (ethercat_master_index, alias)
+                        if alias_key in used_nonzero_aliases:
                             raise ValueError(
+                                f'EtherCAT Master {ethercat_master_index}의 '
                                 f'EEPROM Alias {alias} 값이 중복되어 있습니다'
                             )
-                        used_nonzero_aliases.add(alias)
+                        used_nonzero_aliases.add(alias_key)
                     else:
-                        if position in used_zero_alias_positions:
+                        position_key = (ethercat_master_index, position)
+                        if position_key in used_zero_alias_positions:
                             raise ValueError(
-                                f'EEPROM Alias 0의 Slave Position {position} 값이 중복되어 있습니다'
+                                f'EtherCAT Master {ethercat_master_index}의 '
+                                f'EEPROM Alias 0 Slave Position {position} 값이 '
+                                '중복되어 있습니다'
                             )
-                        used_zero_alias_positions.add(position)
+                        used_zero_alias_positions.add(position_key)
+                elif str(master.get('type') or '') == 'serial':
+                    serial_port = str(
+                        master.get('serial_port') or master.get('port') or ''
+                    ).strip()
+                    if not serial_port:
+                        raise ValueError(
+                            f'Axis {axis}의 Dynamixel 직렬 포트가 설정되지 않았습니다'
+                        )
+                    try:
+                        bus_id = int(
+                            slave.get('bus_id')
+                            if slave.get('bus_id') is not None
+                            else slave.get('id')
+                        )
+                    except (TypeError, ValueError) as exc:
+                        raise ValueError(
+                            f'Axis {axis}의 Dynamixel ID가 올바르지 않습니다'
+                        ) from exc
+                    if bus_id < 0 or bus_id > 252:
+                        raise ValueError(
+                            f'Axis {axis}의 Dynamixel ID는 0~252여야 합니다'
+                        )
+                    serial_key = (serial_port, bus_id)
+                    if serial_key in used_serial_devices:
+                        raise ValueError(
+                            f'Dynamixel 직렬 포트 {serial_port}의 ID {bus_id}가 '
+                            '중복되어 있습니다'
+                        )
+                    used_serial_devices.add(serial_key)
+                    identity = identity_by_axis.get(axis)
+                    if isinstance(identity, dict):
+                        identity_port = str(identity.get('serial_port') or '').strip()
+                        try:
+                            identity_bus_id = int(
+                                identity.get('bus_id', identity.get('node_id'))
+                            )
+                        except (TypeError, ValueError) as exc:
+                            raise ValueError(
+                                f'Axis {axis}의 Dynamixel 물리 식별 정보가 '
+                                '완전하지 않습니다'
+                            ) from exc
+                        if identity_port != serial_port or identity_bus_id != bus_id:
+                            raise ValueError(
+                                f'Axis {axis}의 Dynamixel 직렬 포트·ID가 실행 설정과 '
+                                '물리 식별 정보에서 다릅니다'
+                            )
                 driver_id = slave.get('driver_id')
                 driver = drivers.get(driver_id)
                 if not isinstance(driver, dict):

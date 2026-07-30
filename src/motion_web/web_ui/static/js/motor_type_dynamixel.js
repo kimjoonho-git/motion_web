@@ -112,7 +112,12 @@ export function dynamixelScanDeviceForValues(values, devices) {
     ? null
     : Number(values.nodeId);
   if (nodeId === null || Number.isNaN(nodeId)) return null;
-  return devices.find((device) => Number(device.id) === nodeId) || null;
+  const port = String(values.serialPort || values.port || '').trim();
+  const matches = devices.filter((device) => (
+    Number(device.id) === nodeId
+    && (!port || String(device.port || '') === port)
+  ));
+  return matches.length === 1 ? matches[0] : null;
 }
 
 export function dynamixelScanDeviceForRow(row, values, devices) {

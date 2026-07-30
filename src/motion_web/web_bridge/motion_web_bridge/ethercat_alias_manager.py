@@ -100,28 +100,38 @@ class EthercatAliasManager:
         if not slaves:
             raise EthercatAliasError('현재 연결된 EtherCAT Slave를 찾지 못했습니다.')
         for slave in slaves:
+            master_index = int(slave.get('master_index') or 0)
             position = int(slave['slave_position'])
             try:
                 sii = self._runner(
-                    ['ethercat', 'sii_read', '-p', str(position)],
+                    [
+                        'ethercat',
+                        'sii_read',
+                        '-m',
+                        str(master_index),
+                        '-p',
+                        str(position),
+                    ],
                     check=False,
                     capture_output=True,
                     timeout=timeout_sec,
                 )
             except (OSError, subprocess.TimeoutExpired) as exc:
                 raise EthercatAliasError(
-                    f'Slave Position {position} SII EEPROM 읽기 실패: {exc}'
+                    f'Master {master_index} Slave {position} '
+                    f'SII EEPROM 읽기 실패: {exc}'
                 ) from exc
             if sii.returncode != 0:
                 detail = self._error_text(sii.stderr) or self._error_text(sii.stdout)
                 raise EthercatAliasError(
-                    f'Slave Position {position} SII EEPROM 읽기 실패: {detail}'
+                    f'Master {master_index} Slave {position} '
+                    f'SII EEPROM 읽기 실패: {detail}'
                 )
             try:
                 identity = self.parse_sii_identity(sii.stdout)
             except EthercatAliasError as exc:
                 raise EthercatAliasError(
-                    f'Slave Position {position} {exc}'
+                    f'Master {master_index} Slave {position} {exc}'
                 ) from exc
             slave.update(identity)
             # These strings are SII descriptors, not a verified nameplate
@@ -141,17 +151,26 @@ class EthercatAliasManager:
         new_alias: int,
         expected: Dict[str, Any],
         timeout_sec: float = 5.0,
+        master_index: int = 0,
     ) -> Dict[str, Any]:
+        if not isinstance(master_index, int) or master_index < 0:
+            raise EthercatAliasError('EtherCAT Master 번호는 0 이상의 정수여야 합니다.')
         if not isinstance(slave_position, int) or slave_position < 0:
             raise EthercatAliasError('Slave Position은 0 이상의 정수여야 합니다.')
         if not isinstance(new_alias, int) or not 0 <= new_alias <= 0xFFFF:
             raise EthercatAliasError('EEPROM Alias는 0~65535 범위여야 합니다.')
 
         slaves = self.read_slaves(timeout_sec=min(timeout_sec, 3.0))
-        matches = [item for item in slaves if item['slave_position'] == slave_position]
+        matches = [
+            item
+            for item in slaves
+            if int(item.get('master_index') or 0) == master_index
+            and item['slave_position'] == slave_position
+        ]
         if len(matches) != 1:
             raise EthercatAliasError(
-                f'Slave Position {slave_position} 장비를 하나로 확인할 수 없습니다.'
+                f'Master {master_index} Slave {slave_position} 장비를 '
+                '하나로 확인할 수 없습니다.'
             )
         actual = matches[0]
         labels = {
@@ -175,7 +194,8 @@ class EthercatAliasManager:
             duplicate = next(
                 (
                     item for item in slaves
-                    if item['slave_position'] != slave_position and
+                    if int(item.get('master_index') or 0) == master_index and
+                    item['slave_position'] != slave_position and
                     item.get('ethercat_alias') == new_alias
                 ),
                 None,
@@ -183,12 +203,21 @@ class EthercatAliasManager:
             if duplicate is not None:
                 raise EthercatAliasError(
                     f'EEPROM Alias {new_alias} 값이 Slave Position '
-                    f'{duplicate["slave_position"]}에서 이미 사용 중입니다.'
+                    f'{duplicate["slave_position"]}에서 이미 사용 중입니다 '
+                    f'(Master {master_index}).'
                 )
 
         try:
             completed = self._runner(
-                ['ethercat', 'alias', '-p', str(slave_position), str(new_alias)],
+                [
+                    'ethercat',
+                    'alias',
+                    '-m',
+                    str(master_index),
+                    '-p',
+                    str(slave_position),
+                    str(new_alias),
+                ],
                 check=False,
                 capture_output=True,
                 text=True,
@@ -200,6 +229,7 @@ class EthercatAliasManager:
             detail = completed.stderr.strip() or completed.stdout.strip()
             raise EthercatAliasError(f'EEPROM Alias 쓰기 실패: {detail}')
         return {
+            'master_index': master_index,
             'slave_position': slave_position,
             'previous_alias': actual['ethercat_alias'],
             'new_alias': new_alias,

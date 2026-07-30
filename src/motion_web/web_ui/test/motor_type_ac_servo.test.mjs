@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  duplicateEthercatAddress,
   resolveRegistryMotorForScanRow,
   runtimeMotorConfirmsRegistryMotor,
   scanRowMatchesRegistryMotor,
@@ -13,16 +14,18 @@ import {
 import { normalizeMotor } from '../static/js/motor_registry.js';
 
 
-function configuredMotor({ alias = 0, position = 0 } = {}) {
+function configuredMotor({ alias = 0, position = 0, masterIndex = 0 } = {}) {
   return {
     axis: position,
     transport: 'ethercat',
     identity: {
+      ethercat_master_index: masterIndex,
       ethercat_alias: alias,
       rotary_alias: alias,
       slave_position: position,
     },
     config: {
+      ethercat_master_index: masterIndex,
       alias,
       position,
       controller_index: position,
@@ -106,6 +109,55 @@ test('stored physical serial matches after EtherCAT chain position changes', () 
   }, motor), false);
 });
 
+test('the same slave position and alias on different masters never auto-match', () => {
+  const motor = configuredMotor({ alias: 103, position: 0, masterIndex: 0 });
+
+  assert.equal(scanRowMatchesRegistryMotor({
+    master_index: 1,
+    slave_position: 0,
+    ethercat_alias: 103,
+  }, motor), false);
+  assert.equal(scanRowSharesConfiguredPosition({
+    master_index: 1,
+    slave_position: 0,
+    ethercat_alias: 0,
+  }, motor), false);
+});
+
+test('the same alias-zero slave position is valid on different EtherCAT masters', () => {
+  const motors = [
+    configuredMotor({ alias: 0, position: 0, masterIndex: 0 }),
+    configuredMotor({ alias: 0, position: 0, masterIndex: 1 }),
+  ];
+
+  assert.equal(duplicateEthercatAddress(motors), null);
+});
+
+test('duplicate EtherCAT addresses are rejected only within the same master', () => {
+  assert.deepEqual(duplicateEthercatAddress([
+    configuredMotor({ alias: 0, position: 2, masterIndex: 1 }),
+    configuredMotor({ alias: 0, position: 2, masterIndex: 1 }),
+  ]), {
+    masterIndex: 1,
+    addressType: 'position',
+    value: 2,
+  });
+
+  assert.equal(duplicateEthercatAddress([
+    configuredMotor({ alias: 103, position: 0, masterIndex: 0 }),
+    configuredMotor({ alias: 103, position: 1, masterIndex: 1 }),
+  ]), null);
+
+  assert.deepEqual(duplicateEthercatAddress([
+    configuredMotor({ alias: 103, position: 0, masterIndex: 0 }),
+    configuredMotor({ alias: 103, position: 1, masterIndex: 0 }),
+  ]), {
+    masterIndex: 0,
+    addressType: 'alias',
+    value: 103,
+  });
+});
+
 
 test('configured non-zero alias remains an identity requirement', () => {
   const motor = configuredMotor({ alias: 103, position: 0 });
@@ -129,6 +181,7 @@ test('fresh online runtime feedback confirms an alias-zero motor by axis and pos
   const motor = configuredMotor({ alias: 0, position: 0 });
   const runtime = {
     controller_index: 0,
+    ethercat_master_index: 0,
     slave_position: 0,
     alias: 0,
     driver_model: '',
@@ -137,6 +190,20 @@ test('fresh online runtime feedback confirms an alias-zero motor by axis and pos
   };
 
   assert.equal(runtimeMotorConfirmsRegistryMotor(motor, runtime), true);
+});
+
+test('runtime feedback from another EtherCAT master cannot confirm the axis', () => {
+  const motor = configuredMotor({ alias: 0, position: 0, masterIndex: 1 });
+  const runtime = {
+    controller_index: 0,
+    ethercat_master_index: 0,
+    slave_position: 0,
+    alias: 0,
+    connection_state: 'online',
+    connection_confirmed: true,
+  };
+
+  assert.equal(runtimeMotorConfirmsRegistryMotor(motor, runtime), false);
 });
 
 
@@ -180,7 +247,9 @@ test('physical SII name is not promoted to verified driver model', () => {
   assert.equal(motor.identity.serial_number, 123456);
   assert.equal(motor.identity.vendor_id, 1647);
   assert.equal(motor.identity.product_code, 1614282756);
+  assert.equal(motor.identity.ethercat_master_index, 0);
   assert.equal(motor.config.controller_index, 7);
+  assert.equal(motor.config.ethercat_master_index, 0);
   assert.equal(verifiedAcServoModel({
     vendor_id: 1647,
     product_code: 1614282756,

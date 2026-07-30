@@ -102,6 +102,165 @@ def test_runtime_accepts_web_confirmed_physical_sii_identity_source(tmp_path):
     assert runtime['success'] is True
 
 
+def test_runtime_keeps_two_ethercat_masters_with_duplicate_slave_positions(tmp_path):
+    repository = ProjectRepository(tmp_path / 'projects')
+    project_id = repository.create_project('dual ethercat')['project']['project_id']
+    payload = {
+        'period': 1000000,
+        'masters': [
+            {
+                'id': master_index,
+                'type': 'ethercat',
+                'ethercat_master_index': master_index,
+                'number_of_slaves': 1,
+                'slaves': [{
+                    'controller_index': master_index,
+                    'driver_id': master_index,
+                    'alias': 0,
+                    'position': 0,
+                    'vendor_id': 1647,
+                    'product_id': 1614282756,
+                    'profile_mode': 0,
+                }],
+            }
+            for master_index in (0, 1)
+        ],
+        'web_axis_identities': [
+            {
+                'controller_index': master_index,
+                'ethercat_master_index': master_index,
+                'eeprom_alias': 0,
+                'slave_position': 0,
+                'vendor_id': 1647,
+                'product_id': 1614282756,
+                'revision_number': 65536,
+                'serial_number': 123456 + master_index,
+                'identity_source': 'physical_sii',
+            }
+            for master_index in (0, 1)
+        ],
+        'web_axis_profiles': [
+            {
+                'controller_index': master_index,
+                'driver_model': 'MADLN05BE',
+                'model_confirmed': True,
+                'model_source': 'physical_sii_user_confirmed',
+            }
+            for master_index in (0, 1)
+        ],
+        'drivers': [
+            {
+                'id': master_index,
+                'type': 'minas',
+                'driver_model': 'MADLN05BE',
+                'profile_velocity': 10,
+                'profile_acceleration': 20,
+                'profile_deceleration': 20,
+            }
+            for master_index in (0, 1)
+        ],
+    }
+    repository.save_file(
+        project_id,
+        'motor_axes',
+        'motor_axes.yaml',
+        yaml.safe_dump(payload, sort_keys=False, allow_unicode=True),
+    )
+
+    runtime = repository.prepare_runtime_motor_config(project_id)
+    applied = yaml.safe_load(Path(runtime['runtime_file']).read_text())
+
+    assert [
+        master['ethercat_master_index'] for master in applied['masters']
+    ] == [0, 1]
+    assert [
+        master['slaves'][0]['position'] for master in applied['masters']
+    ] == [0, 0]
+
+
+def test_runtime_allows_same_dynamixel_id_on_different_serial_ports():
+    payload = {
+        'masters': [
+            {
+                'id': index,
+                'type': 'serial',
+                'serial_port': f'/dev/ttyUSB{index}',
+                'slaves': [{
+                    'controller_index': index,
+                    'driver_id': 0,
+                    'bus_id': 3,
+                }],
+            }
+            for index in (0, 1)
+        ],
+        'web_axis_identities': [
+            {
+                'controller_index': index,
+                'serial_port': f'/dev/ttyUSB{index}',
+                'bus_id': 3,
+            }
+            for index in (0, 1)
+        ],
+        'drivers': [{
+            'id': 0,
+            'type': 'dynamixel',
+            'profile_velocity': 10,
+            'profile_acceleration': 20,
+            'profile_deceleration': 20,
+        }],
+    }
+
+    ProjectRepository._validate_runtime_motor_profiles(payload)
+
+
+def test_runtime_rejects_duplicate_dynamixel_id_on_same_serial_port():
+    payload = {
+        'masters': [{
+            'id': 0,
+            'type': 'serial',
+            'serial_port': '/dev/ttyUSB0',
+            'slaves': [
+                {'controller_index': 0, 'driver_id': 0, 'bus_id': 3},
+                {'controller_index': 1, 'driver_id': 0, 'bus_id': 3},
+            ],
+        }],
+        'web_axis_identities': [
+            {'controller_index': 0, 'serial_port': '/dev/ttyUSB0', 'bus_id': 3},
+            {'controller_index': 1, 'serial_port': '/dev/ttyUSB0', 'bus_id': 3},
+        ],
+        'drivers': [{
+            'id': 0,
+            'type': 'dynamixel',
+            'profile_velocity': 10,
+            'profile_acceleration': 20,
+            'profile_deceleration': 20,
+        }],
+    }
+
+    with pytest.raises(ValueError, match='ID 3.*중복'):
+        ProjectRepository._validate_runtime_motor_profiles(payload)
+
+
+def test_runtime_rejects_duplicate_ethercat_master_index(tmp_path):
+    repository = ProjectRepository(tmp_path / 'projects')
+    payload = {
+        'period': 1000000,
+        'masters': [
+            {
+                'id': master_id,
+                'type': 'ethercat',
+                'ethercat_master_index': 0,
+                'slaves': [],
+            }
+            for master_id in (0, 1)
+        ],
+        'drivers': [],
+    }
+
+    with pytest.raises(ValueError, match='EtherCAT Master 0 설정이 중복'):
+        repository._validate_runtime_motor_profiles(payload)
+
+
 def test_runtime_rejects_unverified_ac_servo_profile(tmp_path):
     repository = ProjectRepository(tmp_path / 'projects')
     project_id = repository.create_project('unverified driver')['project']['project_id']
