@@ -1,6 +1,6 @@
 # Motor Runtime Contract
 
-Contract version: `1`
+Contract version: `2`
 
 ## 책임
 
@@ -18,6 +18,9 @@ Contract version: `1`
   덮어쓰지 않는다.
 - 런타임 상태에는 프로젝트 ID, 세션 ID, 프로젝트 내부 상대 경로,
   SHA-256과 프로젝트 세대를 기록한다.
+- RuntimeSession을 사용하는 모든 노드에는 프로젝트 ID, 프로젝트 세대와
+  세션 ID를 명시적으로 전달한다.
+- 소비 노드는 설정 파일 경로를 분석해 프로젝트 소유권을 추측하지 않는다.
 - Motor Manager 시작 전에 상대 경로가 현재 프로젝트의
   `runtime/sessions/` 내부인지와 SHA-256 일치를 다시 검증한다.
 - 새 적용이 실패하면 이전 RuntimeSession을 그대로 복원한다.
@@ -32,6 +35,8 @@ Contract version: `1`
 - 모션축 설정이 없다는 이유로 모터 설정 적용 자체를 실패 처리하지 않는다.
 - 모션 제어 허용은 모터 설정 적용과 별도로 전체 실행 컨텍스트가 준비된
   이후에만 부여한다.
+- Motor Manager 프로세스 존재나 설정 파일 생성만으로 적용 완료를 판정하지
+  않는다.
 
 ## 프로젝트 격리
 
