@@ -53,6 +53,7 @@ export function getElements() {
     axisActionMessage: document.getElementById('axisActionMessage'),
     addAxisButton: document.getElementById('addAxisButton'),
     updateAxisIdentityButton: document.getElementById('updateAxisIdentityButton'),
+    setAxisModelProfileButton: document.getElementById('setAxisModelProfileButton'),
     writeEthercatAliasButton: document.getElementById('writeEthercatAliasButton'),
     deleteAxisButton: document.getElementById('deleteAxisButton'),
     toggleAxisButton: document.getElementById('toggleAxisButton'),

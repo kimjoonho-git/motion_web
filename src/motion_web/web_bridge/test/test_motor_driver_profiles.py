@@ -126,7 +126,12 @@ def _registry_motor(axis, *, transport):
             'driver_family': 'minas',
             'name': f'AC {axis}',
             'axis': axis,
-            'identity': {'driver_model': 'MADLN05BE'},
+            'identity': {},
+            'profile': {
+                'driver_model': 'MADLN05BE',
+                'model_confirmed': True,
+                'model_source': 'user_nameplate',
+            },
             'config': {
                 'controller_index': axis,
                 'driver_id': 0,
@@ -210,6 +215,11 @@ def test_ac_identity_metadata_round_trips_in_project_config(tmp_path):
         'ethercat_alias': 403,
         'rotary_alias': 3,
         'slave_position': 1,
+        'identity_source': 'physical_sii',
+        'revision_number': 65536,
+        'serial_number': 123456,
+        'sii_order_number': 'SII-ORDER',
+        'sii_device_name': 'SII-DEVICE',
     })
 
     config = bridge._motor_config_from_registry(
@@ -226,10 +236,30 @@ def test_ac_identity_metadata_round_trips_in_project_config(tmp_path):
         'slave_position': 1,
         'vendor_id': 1647,
         'product_id': 1614282756,
+        'revision_number': 65536,
+        'serial_number': 123456,
+        'identity_source': 'physical_sii',
+        'sii_order_number': 'SII-ORDER',
+        'sii_device_name': 'SII-DEVICE',
+    }]
+    assert config['web_axis_profiles'] == [{
+        'controller_index': 0,
+        'driver_model': 'MADLN05BE',
+        'model_confirmed': True,
+        'model_source': 'user_nameplate',
     }]
     assert restored['identity']['ethercat_alias'] == 403
     assert restored['identity']['rotary_alias'] == 3
     assert restored['identity']['slave_position'] == 1
+    assert restored['identity']['revision_number'] == 65536
+    assert restored['identity']['serial_number'] == 123456
+    assert restored['identity']['vendor_id'] == 1647
+    assert restored['identity']['product_code'] == 1614282756
+    assert restored['identity']['sii_order_number'] == 'SII-ORDER'
+    assert restored['identity']['sii_device_name'] == 'SII-DEVICE'
+    assert 'driver_model' not in restored['identity']
+    assert restored['profile']['driver_model'] == 'MADLN05BE'
+    assert restored['profile']['model_confirmed'] is True
 
 
 def test_zero_alias_ac_axes_round_trip_with_unique_slave_ids(tmp_path):

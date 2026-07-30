@@ -27,6 +27,18 @@ function isAssignedAlias(value) {
   return Number.isInteger(alias) && alias > 0;
 }
 
+// Entries may be added only from a verified manufacturer/product catalog.
+// SII Order Number and Device Name are intentionally not catalog keys.
+const VERIFIED_AC_SERVO_MODELS = Object.freeze({});
+
+export function verifiedAcServoModel(row) {
+  const vendor = Number(row?.vendor_id);
+  const product = Number(row?.product_code);
+  const revision = Number(row?.revision_number);
+  if (![vendor, product, revision].every(Number.isInteger)) return '';
+  return VERIFIED_AC_SERVO_MODELS[`${vendor}:${product}:${revision}`] || '';
+}
+
 export function scanKey(row) {
   if (!row) return '';
   return `master:${row.master_index ?? 0}:slave:${row.slave_position ?? '-'}`;
@@ -38,41 +50,33 @@ export function scanRowMatchesRegistryMotor(row, motor) {
   const configuredSerial = motor.config?.serial_number ?? identity.serial_number;
   if (
     configuredSerial !== null && configuredSerial !== undefined &&
-    row.serial_number !== null && row.serial_number !== undefined &&
-    Number(configuredSerial) !== Number(row.serial_number)
-  ) return false;
+    row.serial_number !== null && row.serial_number !== undefined
+  ) {
+    return Number(configuredSerial) === Number(row.serial_number);
+  }
+  if (configuredSerial !== null && configuredSerial !== undefined) return false;
   if (isAssignedAlias(configuredAlias) &&
       row.ethercat_alias !== null && row.ethercat_alias !== undefined) {
     return Number(row.ethercat_alias) === Number(configuredAlias);
   }
-  // Alias 0 is an unconfigured value, not a physical identity requirement.
-  // In that mode the EtherCAT chain position is the stable key used by the
-  // current runtime configuration, even if the drive EEPROM contains a
-  // non-zero alias left by a previous installation.
-  if (!isAssignedAlias(configuredAlias)) {
-    const configuredPosition = identity.slave_position ?? motor.config?.position;
-    if (
-      configuredPosition !== null && configuredPosition !== undefined &&
-      row.slave_position !== null && row.slave_position !== undefined
-    ) {
-      return Number(configuredPosition) === Number(row.slave_position);
-    }
-  }
   if (isAssignedAlias(identity.rotary_alias) && isAssignedAlias(row.rotary_alias)) {
     return Number(row.rotary_alias) === Number(identity.rotary_alias);
   }
-  if (
-    identity.slave_position !== null && identity.slave_position !== undefined &&
-    row.slave_position !== null && row.slave_position !== undefined
-  ) {
-    return Number(row.slave_position) === Number(identity.slave_position);
-  }
-  const controllerIndex = motor.config?.controller_index ?? motor.axis;
-  return controllerIndex !== null &&
-    controllerIndex !== undefined &&
-    row.controller_index !== null &&
-    row.controller_index !== undefined &&
-    Number(controllerIndex) === Number(row.controller_index);
+  // Slave Position and Control Index describe topology/configuration, not a
+  // stable physical device.  When all aliases are zero, cable reconnection can
+  // change chain positions. Require one explicit user association so the
+  // directly read Serial Number is stored for subsequent automatic matching.
+  return false;
+}
+
+export function scanRowSharesConfiguredPosition(row, motor) {
+  if (!row || !motor || motor.transport !== 'ethercat') return false;
+  const configuredPosition = motor.identity?.slave_position ?? motor.config?.position;
+  return configuredPosition !== null &&
+    configuredPosition !== undefined &&
+    row.slave_position !== null &&
+    row.slave_position !== undefined &&
+    Number(configuredPosition) === Number(row.slave_position);
 }
 
 export function scanRowMatchesRuntimeMotor(row, motor) {
@@ -110,7 +114,7 @@ export function runtimeMotorConfirmsRegistryMotor(motor, runtime) {
       runtime.alias !== null && runtime.alias !== undefined &&
       Number(configuredAlias) !== Number(runtime.alias)) return false;
 
-  const configuredModel = String(motor.identity?.driver_model || '').trim();
+  const configuredModel = String(motor.profile?.driver_model || '').trim();
   const runtimeModel = String(runtime.driver_model || '').trim();
   if (configuredModel && runtimeModel && configuredModel !== runtimeModel) return false;
 
@@ -146,6 +150,7 @@ export function scanRowToMotor(row, nextAvailableAxis) {
   const name = ethercatAlias !== null && ethercatAlias !== undefined
     ? `alias ${ethercatAlias}`
     : `slave ${row.slave_position ?? '-'}`;
+  const catalogModel = verifiedAcServoModel(row);
   return normalizeMotor({
     id: motorIdFromScan(row),
     enabled: true,
@@ -160,8 +165,18 @@ export function scanRowToMotor(row, nextAvailableAxis) {
       rotary_alias: row.rotary_alias ?? null,
       ethercat_alias: ethercatAlias,
       slave_position: row.slave_position ?? null,
-      driver_model: row.driver_model || '',
+      identity_source: row.identity_source || 'physical_sii',
+      vendor_id: row.vendor_id ?? null,
+      product_code: row.product_code ?? null,
+      revision_number: row.revision_number ?? null,
       serial_number: row.serial_number ?? null,
+      sii_order_number: row.sii_order_number || row.order_number || '',
+      sii_device_name: row.sii_device_name || row.device_name || '',
+    },
+    profile: {
+      driver_model: catalogModel,
+      model_confirmed: Boolean(catalogModel),
+      model_source: catalogModel ? 'verified_catalog' : '',
     },
     config: {
       controller_index: axis,
@@ -191,9 +206,13 @@ export function scanRowButtonAttrs(row) {
     `data-scan-ethercat-alias="${escapeHtml(String(row.ethercat_alias ?? ''))}"`,
     `data-scan-rotary-alias="${escapeHtml(String(row.rotary_alias ?? ''))}"`,
     `data-scan-slave-position="${escapeHtml(String(row.slave_position ?? ''))}"`,
-    `data-scan-driver-model="${escapeHtml(String(row.driver_model || ''))}"`,
+    `data-scan-sii-order-number="${escapeHtml(String(row.sii_order_number || row.order_number || ''))}"`,
+    `data-scan-sii-device-name="${escapeHtml(String(row.sii_device_name || row.device_name || ''))}"`,
     `data-scan-vendor-id="${escapeHtml(String(row.vendor_id ?? ''))}"`,
     `data-scan-product-code="${escapeHtml(String(row.product_code ?? ''))}"`,
+    `data-scan-revision-number="${escapeHtml(String(row.revision_number ?? ''))}"`,
+    `data-scan-serial-number="${escapeHtml(String(row.serial_number ?? ''))}"`,
+    `data-scan-identity-source="${escapeHtml(String(row.identity_source || ''))}"`,
     `data-scan-match-state="${escapeHtml(String(row.match_state || ''))}"`,
   ].join(' ');
 }
@@ -206,9 +225,13 @@ export function scanRowFromButton(button) {
     ethercat_alias: datasetNumber(button.dataset.scanEthercatAlias),
     rotary_alias: datasetNumber(button.dataset.scanRotaryAlias),
     slave_position: datasetNumber(button.dataset.scanSlavePosition),
-    driver_model: button.dataset.scanDriverModel || '',
+    sii_order_number: button.dataset.scanSiiOrderNumber || '',
+    sii_device_name: button.dataset.scanSiiDeviceName || '',
     vendor_id: datasetNumber(button.dataset.scanVendorId),
     product_code: datasetNumber(button.dataset.scanProductCode),
+    revision_number: datasetNumber(button.dataset.scanRevisionNumber),
+    serial_number: datasetNumber(button.dataset.scanSerialNumber),
+    identity_source: button.dataset.scanIdentitySource || '',
     match_state: button.dataset.scanMatchState || '',
   };
 }

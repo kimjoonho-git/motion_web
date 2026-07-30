@@ -4,7 +4,11 @@ import assert from 'node:assert/strict';
 import {
   runtimeMotorConfirmsRegistryMotor,
   scanRowMatchesRegistryMotor,
+  scanRowSharesConfiguredPosition,
+  scanRowToMotor,
+  verifiedAcServoModel,
 } from '../static/js/motor_type_ac_servo.js';
+import { normalizeMotor } from '../static/js/motor_registry.js';
 
 
 function configuredMotor({ alias = 0, position = 0 } = {}) {
@@ -25,7 +29,7 @@ function configuredMotor({ alias = 0, position = 0 } = {}) {
 }
 
 
-test('unconfigured alias zero matches a scanned drive by slave position', () => {
+test('unconfigured alias zero never auto-matches only by slave position', () => {
   const motor = configuredMotor({ alias: 0, position: 0 });
   const scanRow = {
     slave_position: 0,
@@ -33,7 +37,8 @@ test('unconfigured alias zero matches a scanned drive by slave position', () => 
     rotary_alias: 403,
   };
 
-  assert.equal(scanRowMatchesRegistryMotor(scanRow, motor), true);
+  assert.equal(scanRowMatchesRegistryMotor(scanRow, motor), false);
+  assert.equal(scanRowSharesConfiguredPosition(scanRow, motor), true);
 });
 
 
@@ -46,6 +51,24 @@ test('unconfigured alias zero never matches a different slave position', () => {
   };
 
   assert.equal(scanRowMatchesRegistryMotor(scanRow, motor), false);
+  assert.equal(scanRowSharesConfiguredPosition(scanRow, motor), false);
+});
+
+
+test('stored physical serial matches after EtherCAT chain position changes', () => {
+  const motor = configuredMotor({ alias: 0, position: 2 });
+  motor.identity.serial_number = 571478791;
+
+  assert.equal(scanRowMatchesRegistryMotor({
+    slave_position: 4,
+    ethercat_alias: 0,
+    serial_number: 571478791,
+  }, motor), true);
+  assert.equal(scanRowMatchesRegistryMotor({
+    slave_position: 2,
+    ethercat_alias: 0,
+    serial_number: 571484229,
+  }, motor), false);
 });
 
 
@@ -96,4 +119,57 @@ test('runtime feedback cannot confirm a different or stale slave', () => {
   runtime.slave_position = 0;
   runtime.connection_state = 'stale';
   assert.equal(runtimeMotorConfirmsRegistryMotor(motor, runtime), false);
+});
+
+
+test('physical SII name is not promoted to verified driver model', () => {
+  const motor = scanRowToMotor({
+    master_index: 0,
+    slave_position: 2,
+    ethercat_alias: 0,
+    vendor_id: 1647,
+    product_code: 1614282756,
+    revision_number: 65536,
+    serial_number: 123456,
+    identity_source: 'physical_sii',
+    order_number: 'SII-ORDER',
+    device_name: 'SII-DEVICE',
+  }, () => 7);
+
+  assert.equal(motor.identity.driver_model, undefined);
+  assert.equal(motor.identity.nameplate_confirmed, undefined);
+  assert.equal(motor.profile.driver_model, '');
+  assert.equal(motor.profile.model_confirmed, false);
+  assert.equal(motor.identity.sii_order_number, 'SII-ORDER');
+  assert.equal(motor.identity.sii_device_name, 'SII-DEVICE');
+  assert.equal(motor.identity.serial_number, 123456);
+  assert.equal(motor.identity.vendor_id, 1647);
+  assert.equal(motor.identity.product_code, 1614282756);
+  assert.equal(motor.config.controller_index, 7);
+  assert.equal(verifiedAcServoModel({
+    vendor_id: 1647,
+    product_code: 1614282756,
+    revision_number: 65536,
+    sii_device_name: 'MADLN05BE',
+  }), '');
+});
+
+
+test('legacy model metadata migrates out of physical identity', () => {
+  const motor = normalizeMotor({
+    transport: 'ethercat',
+    motor_type: 'ac_servo',
+    identity: {
+      serial_number: 123456,
+      driver_model: 'MADLN05BE',
+      nameplate_confirmed: true,
+    },
+  });
+
+  assert.deepEqual(motor.identity, { serial_number: 123456 });
+  assert.deepEqual(motor.profile, {
+    driver_model: 'MADLN05BE',
+    model_confirmed: true,
+    model_source: 'user_nameplate',
+  });
 });

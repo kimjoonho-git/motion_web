@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import fcntl
 import re
 import shutil
 import threading
@@ -20,6 +21,8 @@ from typing import Any, Dict, Optional
 
 import yaml
 
+from .motor_identity import missing_ethercat_identity
+
 
 PROJECT_VERSION = 1
 MAX_TEXT_BYTES = 10 * 1024 * 1024
@@ -28,6 +31,8 @@ DEFAULT_MOTION_AXIS_FILE = 'motion_axes.yaml'
 SERVO_ALARM_POLICY_FILE = 'servo_alarm_policy.json'
 MOTOR_RUNTIME_TARGET_FIELDS = {
     'target_project_id',
+    'session_id',
+    'config_relpath',
     'config_sha256',
     'project_generation',
     'applied_at',
@@ -60,7 +65,24 @@ def _motor_runtime_locked(method):
     @wraps(method)
     def guarded(self, *args, **kwargs):
         with self._motor_runtime_lock:
-            return method(self, *args, **kwargs)
+            depth = int(getattr(self._motor_runtime_lock_state, 'depth', 0))
+            if depth > 0:
+                self._motor_runtime_lock_state.depth = depth + 1
+                try:
+                    return method(self, *args, **kwargs)
+                finally:
+                    self._motor_runtime_lock_state.depth = depth
+            self._motor_runtime_lock_state.depth = 1
+            lock_file = self.root / '.motor_runtime.lock'
+            try:
+                with lock_file.open('a+', encoding='utf-8') as handle:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                    try:
+                        return method(self, *args, **kwargs)
+                    finally:
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            finally:
+                self._motor_runtime_lock_state.depth = 0
 
     return guarded
 
@@ -74,6 +96,7 @@ class ProjectRepository:
         self.selection_file = self.root / '.selected_project.json'
         self.motor_runtime_file = self.root / '.motor_runtime.json'
         self._motor_runtime_lock = threading.RLock()
+        self._motor_runtime_lock_state = threading.local()
         self._migrate_generated_empty_mappings()
         self._migrate_generated_empty_motor_configs()
         self._migrate_internal_backups()
@@ -495,20 +518,31 @@ class ProjectRepository:
 
     @_motor_runtime_locked
     def mark_runtime_motor_config_applied(self, project_id: Any) -> Path:
-        """Remember only which project runtime file the managed service must run."""
+        """Commit an immutable runtime session for the managed motor service."""
         project_dir = self._project_dir(project_id)
         if self.selected_project_id() != project_dir.name:
             raise ValueError('현재 선택 프로젝트의 모터 설정만 적용할 수 있습니다')
-        runtime = project_dir / 'runtime' / 'applied_motor_config.yaml'
-        if not runtime.is_file():
+        prepared = project_dir / 'runtime' / 'applied_motor_config.yaml'
+        if not prepared.is_file():
             raise ValueError('적용할 런타임 모터축 설정 파일이 없습니다')
-        runtime_content = runtime.read_bytes()
+        runtime_content = prepared.read_bytes()
+        config_sha256 = _sha256(runtime_content)
+        session_id = f'motor-{config_sha256}'
+        session_dir = self._local_directory(project_dir, 'runtime', 'sessions')
+        runtime = session_dir / f'{session_id}.yaml'
+        if runtime.exists():
+            if runtime.is_symlink() or _sha256(runtime.read_bytes()) != config_sha256:
+                raise ValueError('동일 ID의 모터 실행 세션 파일이 손상되었습니다')
+        else:
+            self._atomic_write(runtime, runtime_content.decode('utf-8'))
         existing = self._read_motor_runtime_payload()
         self._write_motor_runtime_state({
             **existing,
             'version': 1,
             'target_project_id': project_dir.name,
-            'config_sha256': _sha256(runtime_content),
+            'session_id': session_id,
+            'config_relpath': runtime.relative_to(project_dir).as_posix(),
+            'config_sha256': config_sha256,
             'project_generation': self.project_generation(),
             'applied_at': time.time(),
         })
@@ -520,6 +554,31 @@ class ProjectRepository:
                 json.dumps(selection, ensure_ascii=False) + '\n',
             )
         return runtime
+
+    @staticmethod
+    def _runtime_config_path(
+        project_dir: Path,
+        payload: Dict[str, Any],
+    ) -> Path:
+        """Resolve a project-owned runtime target without accepting traversal."""
+        relative = str(payload.get('config_relpath') or '').strip()
+        if relative:
+            requested = Path(relative)
+            if requested.is_absolute() or '..' in requested.parts:
+                raise ValueError('invalid motor runtime config path')
+            unresolved_runtime = project_dir / requested
+            unresolved_sessions = project_dir / 'runtime' / 'sessions'
+            if unresolved_runtime.is_symlink() or unresolved_sessions.is_symlink():
+                raise ValueError('motor runtime session must not be a symbolic link')
+            runtime = unresolved_runtime.resolve()
+            sessions = unresolved_sessions.resolve()
+            try:
+                runtime.relative_to(sessions)
+            except ValueError as exc:
+                raise ValueError('motor runtime session is outside project runtime') from exc
+            return runtime
+        # Compatibility for runtime records created before immutable sessions.
+        return project_dir / 'runtime' / 'applied_motor_config.yaml'
 
     @_motor_runtime_locked
     def motor_runtime_state(self) -> Dict[str, Any]:
@@ -541,7 +600,7 @@ class ProjectRepository:
             return {**payload, 'valid': False, 'validation_error': 'invalid project id'}
         try:
             project_dir = self._project_dir(project_id)
-            runtime = project_dir / 'runtime' / 'applied_motor_config.yaml'
+            runtime = self._runtime_config_path(project_dir, payload)
             content = runtime.read_bytes()
         except (OSError, ValueError) as exc:
             return {**payload, 'valid': False, 'validation_error': str(exc)}
@@ -1103,11 +1162,11 @@ class ProjectRepository:
         # Physical scan identities are validated by the web workflow but are
         # deliberately not consumed by the established motor runtime schema.
         runtime_payload.pop('web_axis_identities', None)
+        runtime_payload.pop('web_axis_profiles', None)
         return runtime_payload
 
     def _motor_runtime_matches(self, project_dir: Path, source: Path) -> bool:
         """Compare effective motor settings, excluding web-only metadata."""
-        runtime = project_dir / 'runtime' / 'applied_motor_config.yaml'
         try:
             payload = yaml.safe_load(source.read_text(encoding='utf-8')) or {}
             if not isinstance(payload, dict):
@@ -1117,6 +1176,13 @@ class ProjectRepository:
                 sort_keys=False,
                 allow_unicode=True,
             ).encode('utf-8')
+            runtime_state = self.motor_runtime_state()
+            if (
+                runtime_state.get('valid') is not True
+                or runtime_state.get('target_project_id') != project_dir.name
+            ):
+                return False
+            runtime = Path(str(runtime_state.get('config_file') or ''))
             return runtime.is_file() and _sha256(runtime.read_bytes()) == _sha256(expected)
         except (OSError, yaml.YAMLError, AttributeError):
             return False
@@ -1146,6 +1212,11 @@ class ProjectRepository:
         identity_by_axis = {
             item.get('controller_index'): item
             for item in payload.get('web_axis_identities') or []
+            if isinstance(item, dict) and item.get('controller_index') is not None
+        }
+        profile_by_axis = {
+            item.get('controller_index'): item
+            for item in payload.get('web_axis_profiles') or []
             if isinstance(item, dict) and item.get('controller_index') is not None
         }
         for master in payload.get('masters') or []:
@@ -1187,6 +1258,16 @@ class ProjectRepository:
                                 f'물리 식별 정보({identity_position})에서 다릅니다. '
                                 '모터축 설정에서 확인 후 변경 내용 저장을 누르세요'
                             )
+                        missing_identity = missing_ethercat_identity({
+                            **identity,
+                            'product_code': identity.get('product_id'),
+                        })
+                        if missing_identity:
+                            raise ValueError(
+                                f'Axis {axis}의 실제 EtherCAT 식별정보가 완전하지 않습니다: '
+                                f'{", ".join(missing_identity)}. '
+                                '전체 모터 검색 후 해당 검색 장비의 연결정보를 반영하고 저장하세요'
+                            )
                     if alias != 0:
                         if alias in used_nonzero_aliases:
                             raise ValueError(
@@ -1204,6 +1285,29 @@ class ProjectRepository:
                 if not isinstance(driver, dict):
                     raise ValueError(
                         f'Axis {axis}의 driver_id {driver_id} 설정이 없습니다'
+                    )
+                if (
+                    str(driver.get('type') or '') == 'minas'
+                    and str(driver.get('driver_model') or '').strip().upper()
+                    == 'UNVERIFIED_MINAS'
+                ):
+                    raise ValueError(
+                        f'Axis {axis}의 실제 서보 드라이버 모델이 확인되지 않았습니다. '
+                        '드라이버 명판을 확인해 실제 드라이버 모델을 입력하세요'
+                    )
+                if (
+                    str(driver.get('type') or '') == 'minas'
+                    and str(driver.get('driver_model') or '').strip()
+                    and (
+                        profile_by_axis.get(axis, {}).get(
+                            'model_confirmed',
+                            identity_by_axis.get(axis, {}).get('nameplate_confirmed'),
+                        ) is not True
+                    )
+                ):
+                    raise ValueError(
+                        f'Axis {axis}의 서보 드라이버 모델이 명판 확인되지 않았습니다. '
+                        '모델·운전 프로필 설정에서 모델을 확인하고 저장하세요'
                     )
                 for field in required_positive:
                     try:

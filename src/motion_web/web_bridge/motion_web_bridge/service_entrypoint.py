@@ -24,11 +24,25 @@ def resolve_applied_motor_config(workspace: Path) -> Optional[Path]:
         project_id = str(runtime_state.get('target_project_id') or '').strip()
         expected_sha = str(runtime_state.get('config_sha256') or '').strip()
         if project_id and project_id == Path(project_id).name and expected_sha:
-            candidate = (
-                projects_root / project_id / 'runtime' / 'applied_motor_config.yaml'
-            ).resolve()
+            project_dir = (projects_root / project_id).resolve()
+            relative = str(runtime_state.get('config_relpath') or '').strip()
+            if relative:
+                requested = Path(relative)
+                if requested.is_absolute() or '..' in requested.parts:
+                    return None
+                unresolved_candidate = project_dir / requested
+                unresolved_root = project_dir / 'runtime' / 'sessions'
+                if unresolved_candidate.is_symlink() or unresolved_root.is_symlink():
+                    return None
+                candidate = unresolved_candidate.resolve()
+                allowed_root = unresolved_root.resolve()
+            else:
+                candidate = (
+                    project_dir / 'runtime' / 'applied_motor_config.yaml'
+                ).resolve()
+                allowed_root = project_dir
             try:
-                candidate.relative_to(projects_root)
+                candidate.relative_to(allowed_root)
                 actual_sha = hashlib.sha256(candidate.read_bytes()).hexdigest()
             except (OSError, ValueError):
                 return None

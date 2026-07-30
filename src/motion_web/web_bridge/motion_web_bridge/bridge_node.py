@@ -1218,6 +1218,12 @@ class MotionWebBridge(Node):
         ):
             return self._schedule_interrupted_scan_recovery(operation)
         if status == 'timeout':
+            # ``motor_operation_status`` synthesizes phase=timeout only while
+            # the stored operation is still running.  A terminal timeout with
+            # another phase has already been handled and must never schedule
+            # rollback/restart again after the next snapshot or bridge start.
+            if str(operation.get('phase') or '') != 'timeout':
+                return operation
             if operation_type == 'motor_apply':
                 return self._rollback_failed_motor_apply(
                     operation,
@@ -1231,7 +1237,7 @@ class MotionWebBridge(Node):
                 return repository.finish_motor_operation(
                     operation_id,
                     'timeout',
-                    phase='timeout',
+                    phase='timed_out',
                     error=str(operation.get('error') or '모터 작업 제한시간을 초과했습니다'),
                 )
             except ValueError:
@@ -1293,7 +1299,6 @@ class MotionWebBridge(Node):
                 and runtime_ready
                 and fresh_feedback
                 and readiness.get('ready') is True
-                and execution_context.get('ready') is True
             ):
                 return repository.finish_motor_operation(
                     operation_id,
@@ -4069,8 +4074,11 @@ class MotionWebBridge(Node):
                 },
             )
             prepared = self.project_repository.prepare_runtime_motor_config(project_id)
+            runtime_file = self.project_repository.mark_runtime_motor_config_applied(
+                project_id
+            )
             expected_axes = self._configured_axes_from_runtime_file(
-                prepared['runtime_file']
+                runtime_file
             )
             if not expected_axes:
                 raise ValueError('적용할 모터 실행 설정에서 대상 축을 확인할 수 없습니다')
@@ -4078,11 +4086,10 @@ class MotionWebBridge(Node):
                 str(operation['operation_id']),
                 'prepared',
                 details={
-                    'runtime_file': str(prepared['runtime_file']),
+                    'runtime_file': str(runtime_file),
                     'expected_axes': expected_axes,
                 },
             )
-            self.project_repository.mark_runtime_motor_config_applied(project_id)
             managed_service = str(
                 os.environ.get('MOTION_CONTROL_SERVICE_UNIT') or ''
             ).strip()
@@ -4104,7 +4111,7 @@ class MotionWebBridge(Node):
                 restart_mode = 'split_managed_services'
             else:
                 environment = dict(os.environ)
-                environment['MOTOR_CONFIG_FILE'] = str(prepared['runtime_file'])
+                environment['MOTOR_CONFIG_FILE'] = str(runtime_file)
                 environment['MOTION_WORKSPACE'] = str(self.workspace_root)
                 subprocess.Popen(
                     ['/bin/bash', str(self.restart_script)],
@@ -4119,7 +4126,7 @@ class MotionWebBridge(Node):
                 str(operation['operation_id']),
                 'restart_requested',
                 message='새 모터 설정으로 서비스 재시작 요청 완료',
-                details={'runtime_file': str(prepared['runtime_file'])},
+                details={'runtime_file': str(runtime_file)},
             )
         except (OSError, ValueError, yaml.YAMLError) as exc:
             operation_id = str(operation.get('operation_id') or '')
@@ -4148,7 +4155,13 @@ class MotionWebBridge(Node):
             'message': '프로젝트 설정 적용을 시작했습니다. 웹이 잠시 후 다시 연결됩니다',
             'restart_script': str(self.restart_script),
             'restart_mode': restart_mode,
-            'runtime_config': prepared,
+            'runtime_config': {
+                **prepared,
+                'session_file': str(runtime_file),
+                'session_id': self.project_repository.motor_runtime_state().get(
+                    'session_id', ''
+                ),
+            },
             'motor_operation': self.project_repository.motor_operation_status(),
             **self.snapshot(),
         }
@@ -6196,7 +6209,7 @@ class MotionWebBridge(Node):
             'drivers': [
                 {
                     'id': 0,
-                    'driver_model': 'MADLN05BE',
+                    'driver_model': 'UNVERIFIED_MINAS',
                     'pulse_per_revolution': 8388608,
                     'rated_effort': 0.16,
                     'unit_effort': 0.1,
@@ -6232,6 +6245,12 @@ class MotionWebBridge(Node):
             if isinstance(item, dict)
             and self._optional_int(item.get('controller_index'), None) is not None
         }
+        profile_by_axis = {
+            self._optional_int(item.get('controller_index'), None): item
+            for item in config.get('web_axis_profiles', [])
+            if isinstance(item, dict)
+            and self._optional_int(item.get('controller_index'), None) is not None
+        }
         drivers_by_id = {
             int(driver.get('id')): driver
             for driver in config.get('drivers', [])
@@ -6256,6 +6275,7 @@ class MotionWebBridge(Node):
                 axis = self._optional_int(slave.get('controller_index'), index)
                 alias = self._optional_int(slave.get('alias'), None)
                 web_identity = identity_by_axis.get(axis, {})
+                web_profile = profile_by_axis.get(axis, {})
                 bus_id = self._optional_int(slave.get('bus_id'), None)
                 slave_position = self._optional_int(slave.get('position'), index)
                 name = str(slave.get('name') or f'Axis {axis}')
@@ -6296,7 +6316,50 @@ class MotionWebBridge(Node):
                                     slave_position
                                     if alias in (None, 0) else None,
                                 ),
-                                'driver_model': driver.get('driver_model', ''),
+                                'identity_source': str(
+                                    web_identity.get('identity_source') or ''
+                                ),
+                                'vendor_id': self._optional_int(
+                                    web_identity.get('vendor_id'),
+                                    self._optional_int(slave.get('vendor_id'), None),
+                                ),
+                                'product_code': self._optional_int(
+                                    web_identity.get('product_id'),
+                                    self._optional_int(slave.get('product_id'), None),
+                                ),
+                                'revision_number': self._optional_int(
+                                    web_identity.get('revision_number'), None
+                                ),
+                                'serial_number': self._optional_int(
+                                    web_identity.get('serial_number'), None
+                                ),
+                                'sii_order_number': str(
+                                    web_identity.get('sii_order_number') or ''
+                                ),
+                                'sii_device_name': str(
+                                    web_identity.get('sii_device_name') or ''
+                                ),
+                            },
+                            'profile': {
+                                'driver_model': str(
+                                    web_profile.get('driver_model')
+                                    or driver.get('driver_model')
+                                    or ''
+                                ),
+                                'model_confirmed': (
+                                    web_profile.get(
+                                        'model_confirmed',
+                                        web_identity.get('nameplate_confirmed'),
+                                    ) is True
+                                ),
+                                'model_source': str(
+                                    web_profile.get('model_source')
+                                    or (
+                                        'user_nameplate'
+                                        if web_identity.get('nameplate_confirmed') is True
+                                        else ''
+                                    )
+                                ),
                             },
                             'config': {
                                 'controller_index': axis,
@@ -6398,6 +6461,7 @@ class MotionWebBridge(Node):
 
         slaves = []
         web_axis_identities = []
+        web_axis_profiles = []
         for motor in registry.get('motors', []):
             if not isinstance(motor, dict):
                 continue
@@ -6411,6 +6475,7 @@ class MotionWebBridge(Node):
                 continue
             name = str(motor.get('name') or f'Axis {axis}').strip() or f'Axis {axis}'
             identity = motor.get('identity') if isinstance(motor.get('identity'), dict) else {}
+            profile = motor.get('profile') if isinstance(motor.get('profile'), dict) else {}
             eeprom_alias = self._optional_int(
                 identity.get('ethercat_alias'),
                 self._optional_int(motor_config.get('alias'), 0),
@@ -6419,18 +6484,25 @@ class MotionWebBridge(Node):
                 identity.get('slave_position'),
                 self._optional_int(motor_config.get('position'), 0),
             )
+            driver_id = self._driver_id_for_registry_motor(motor, drivers)
             slaves.append(
                 {
                     'controller_index': axis,
                     'name': name,
-                    'driver_id': self._optional_int(motor_config.get('driver_id'), 0),
+                    'driver_id': driver_id,
                     'alias': eeprom_alias,
                     # The motion-system position field is the physical
                     # EtherCAT Slave Position. Keep it identical to the
                     # user-visible identity instead of retaining stale data.
                     'position': slave_position,
-                    'vendor_id': self._optional_int(motor_config.get('vendor_id'), 0x0000066F),
-                    'product_id': self._optional_int(motor_config.get('product_id'), 0x60380004),
+                    'vendor_id': self._optional_int(
+                        identity.get('vendor_id'),
+                        self._optional_int(motor_config.get('vendor_id'), None),
+                    ),
+                    'product_id': self._optional_int(
+                        identity.get('product_code'),
+                        self._optional_int(motor_config.get('product_id'), None),
+                    ),
                     'profile_mode': self._optional_int(motor_config.get('profile_mode'), 0),
                 }
             )
@@ -6439,8 +6511,31 @@ class MotionWebBridge(Node):
                 'eeprom_alias': eeprom_alias,
                 'rotary_alias': self._optional_int(identity.get('rotary_alias'), None),
                 'slave_position': slave_position,
-                'vendor_id': self._optional_int(motor_config.get('vendor_id'), None),
-                'product_id': self._optional_int(motor_config.get('product_id'), None),
+                'vendor_id': self._optional_int(
+                    identity.get('vendor_id'),
+                    self._optional_int(motor_config.get('vendor_id'), None),
+                ),
+                'product_id': self._optional_int(
+                    identity.get('product_code'),
+                    self._optional_int(motor_config.get('product_id'), None),
+                ),
+                'revision_number': self._optional_int(
+                    identity.get('revision_number'),
+                    self._optional_int(motor_config.get('revision_number'), None),
+                ),
+                'serial_number': self._optional_int(
+                    identity.get('serial_number'),
+                    self._optional_int(motor_config.get('serial_number'), None),
+                ),
+                'identity_source': str(identity.get('identity_source') or ''),
+                'sii_order_number': str(identity.get('sii_order_number') or ''),
+                'sii_device_name': str(identity.get('sii_device_name') or ''),
+            })
+            web_axis_profiles.append({
+                'controller_index': axis,
+                'driver_model': str(profile.get('driver_model') or ''),
+                'model_confirmed': profile.get('model_confirmed') is True,
+                'model_source': str(profile.get('model_source') or ''),
             })
 
         slaves.sort(key=lambda item: int(item.get('controller_index') or 0))
@@ -6468,6 +6563,10 @@ class MotionWebBridge(Node):
             config['web_axis_identities'] = web_axis_identities
         else:
             config.pop('web_axis_identities', None)
+        if web_axis_profiles:
+            config['web_axis_profiles'] = web_axis_profiles
+        else:
+            config.pop('web_axis_profiles', None)
 
         serial_masters = self._serial_masters_from_registry(registry, masters, drivers)
         non_serial_masters = [master for master in masters if master.get('type') != 'serial']
@@ -6628,9 +6727,20 @@ class MotionWebBridge(Node):
         drivers: List[Dict[str, Any]],
     ) -> int:
         motor_config = motor.get('config') if isinstance(motor.get('config'), dict) else {}
-        identity = motor.get('identity') if isinstance(motor.get('identity'), dict) else {}
+        identity = dict(motor.get('identity')) if isinstance(motor.get('identity'), dict) else {}
+        profile = dict(motor.get('profile')) if isinstance(motor.get('profile'), dict) else {}
+        # Accept older registries, but normalize the model/profile facts out of
+        # the physical discovery identity before any further processing.
+        if not profile.get('driver_model') and identity.get('driver_model'):
+            profile['driver_model'] = identity.get('driver_model')
+        if 'model_confirmed' not in profile and 'nameplate_confirmed' in identity:
+            profile['model_confirmed'] = identity.get('nameplate_confirmed') is True
+        if not profile.get('model_source') and profile.get('model_confirmed') is True:
+            profile['model_source'] = 'user_nameplate'
+        identity.pop('driver_model', None)
+        identity.pop('nameplate_confirmed', None)
         driver_type = str(motor.get('driver_family') or motor.get('motor_type') or 'unknown')
-        driver_model = str(identity.get('driver_model') or '').strip()
+        driver_model = str(profile.get('driver_model') or '').strip()
         requested_id = self._optional_int(motor_config.get('driver_id'), None)
 
         drivers_by_id = {
@@ -6786,7 +6896,17 @@ class MotionWebBridge(Node):
         motor_type = str(motor.get('motor_type') or 'unknown')
         transport = str(motor.get('transport') or 'unknown')
         driver_family = str(motor.get('driver_family') or motor_type)
-        identity = motor.get('identity') if isinstance(motor.get('identity'), dict) else {}
+        identity = dict(motor.get('identity')) if isinstance(motor.get('identity'), dict) else {}
+        profile = dict(motor.get('profile')) if isinstance(motor.get('profile'), dict) else {}
+        if not profile.get('driver_model') and identity.get('driver_model'):
+            profile['driver_model'] = identity.pop('driver_model')
+        else:
+            identity.pop('driver_model', None)
+        if 'model_confirmed' not in profile and 'nameplate_confirmed' in identity:
+            profile['model_confirmed'] = identity.get('nameplate_confirmed') is True
+        identity.pop('nameplate_confirmed', None)
+        if not profile.get('model_source') and profile.get('model_confirmed') is True:
+            profile['model_source'] = 'user_nameplate'
         config = dict(motor.get('config')) if isinstance(motor.get('config'), dict) else {}
 
         def optional_int(value: Any, default: Optional[int]) -> Optional[int]:
@@ -6819,6 +6939,7 @@ class MotionWebBridge(Node):
             'driver_family': driver_family,
             'transport': transport,
             'identity': identity,
+            'profile': profile,
             'config': config,
         }
 

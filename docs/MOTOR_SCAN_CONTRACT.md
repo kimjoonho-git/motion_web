@@ -41,6 +41,31 @@ Contract version: `1`
 - 단계별 진행 이벤트
 - 총 검색 시간
 
+## 장치명과 제어 프로필 분리
+
+- `Vendor ID`, `Product Code`, `Revision Number`, `Serial Number`는 실제
+  Slave의 SII EEPROM에서 읽은 물리 식별정보로 저장한다.
+- `Order number`와 `Device name`은 각각 `SII Order Number`,
+  `SII Device Name`으로 표시하고 실제 명판 모델로 자동 확정하지 않는다.
+- 물리 식별정보는 `web_axis_identities`에 저장하며 화면에서 수정할 수 없다.
+- 모델과 운전 프로필 연결정보는 `web_axis_profiles`에 별도로 저장한다.
+- 검증된 `Vendor ID + Product Code + Revision Number` 카탈로그 항목이 있으면
+  모델을 자동 확인할 수 있다. 카탈로그 항목이 없으면 `모델 미확인`으로
+  표시하고 사용자가 필요한 축을 선택해 `모델·운전 프로필 설정`에서
+  명판 모델을 한 번 확인한다.
+- 과거 프로젝트에 저장된 모델값도 명판 재확인 전에는 실행 적용 근거로
+  사용하지 않는다.
+- SII 문자열이나 검색 순서를 근거로 정격전류·정격토크·속도 프로필을
+  자동 선택하지 않는다.
+- 검색 결과와 프로젝트에는 현재 응답한 장치 수만 저장하며 AC Servo 5축,
+  Dynamixel 특정 개수 같은 고정 조건을 두지 않는다.
+- EEPROM Alias가 0인 장치를 Slave Position이나 Control Index만으로 기존
+  프로젝트 축에 자동 연결하지 않는다. 케이블 순서 변경으로 Slave Position이
+  바뀔 수 있으므로 최초 연결은 사용자가 확인하고 이후에는 직접 읽은
+  Serial Number 또는 고유 Alias로 매칭한다.
+- 프로젝트의 물리 식별정보가 불완전하면 실행 설정 적용을 중단하고 누락
+  필드를 정확히 표시한다.
+
 ## 검증 상태
 
 - EtherCAT AC Servo: 현재 실제 연결된 5축을 재열거하고 각 장치의 SII/Alias 응답을 확인하여 실물 검증됨.

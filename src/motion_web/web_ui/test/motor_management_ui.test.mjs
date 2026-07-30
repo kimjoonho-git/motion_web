@@ -38,6 +38,7 @@ test('motor readiness summary keeps each title and value on one compact row', ()
 test('axis readiness table keeps runtime facts distinct', () => {
   for (const heading of [
     '실제 장치 식별',
+    '모델·운전 프로필',
     '설정·실행 적용',
     '모션 매칭',
     '서보·토크',
@@ -51,6 +52,17 @@ test('axis readiness table keeps runtime facts distinct', () => {
   assert.match(controller, /runtime\.servo_on === true/);
   assert.match(controller, /축별 실행 이력은 미지원/);
   assert.match(controller, /실물 검증 미확인/);
+  assert.doesNotMatch(controller, /aria-label="실제 서보 드라이버 모델"/);
+  assert.match(controller, /model_confirmed/);
+  assert.match(controller, /모델 미확인/);
+  assert.match(controller, /Vendor \$\{displayText\(vendor\)\}/);
+  assert.match(controller, /EEPROM Alias \$\{displayText\(eepromAlias\)\}/);
+  assert.match(controller, /Slave Position \$\{displayText\(position\)\}/);
+  assert.match(controller, /id="setAxisModelProfileButton"|setAxisModelProfileButton/);
+  assert.match(controller, /기존 축 연결 후보/);
+  assert.match(controller, /!row\.associationCandidate/);
+  assert.match(controller, /SII 참고값/);
+  assert.match(controller, /UNVERIFIED_MINAS/);
 });
 
 test('unsupported Dynamixel torque controls are not presented as working actions', () => {
@@ -96,6 +108,20 @@ test('motor management actions follow control, edit, save and apply groups', () 
   );
   assert.doesNotMatch(html, /id="saveConfigTableButton"/);
   assert.match(styles, /\.settings-final-actions\s*\{[\s\S]*?grid-template-columns: repeat\(2,/);
+});
+
+test('unconfirmed model profiles can be stored but cannot be applied to runtime', () => {
+  const saveFlow = controller.match(
+    /async function saveAxisConfig\(\)[\s\S]*?async function applyConfigRestart\(\)/,
+  )?.[0] || '';
+  const applyFlow = controller.match(
+    /async function applyConfigRestart\(\)[\s\S]*?const recoveryWarning/,
+  )?.[0] || '';
+
+  assert.doesNotMatch(saveFlow, /unverifiedAcModels/);
+  assert.match(saveFlow, /await saveMotorConfig/);
+  assert.match(applyFlow, /modelProfileApplyBlockMessage\(\)/);
+  assert.match(applyFlow, /window\.alert\(applyBlockMessage\)/);
 });
 
 test('project selection lives in the left project sidebar only', () => {

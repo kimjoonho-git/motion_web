@@ -13,6 +13,22 @@ export function normalizeMotor(motor, index = 0) {
   const identity = motor && typeof motor.identity === 'object' && motor.identity !== null
     ? clone(motor.identity)
     : {};
+  const profile = motor && typeof motor.profile === 'object' && motor.profile !== null
+    ? clone(motor.profile)
+    : {};
+  // Older project registries mixed the user-confirmed model into physical
+  // discovery identity. Migrate it while loading and keep identity read-only.
+  if (!profile.driver_model && identity.driver_model) {
+    profile.driver_model = identity.driver_model;
+  }
+  if (profile.model_confirmed === undefined && identity.nameplate_confirmed !== undefined) {
+    profile.model_confirmed = identity.nameplate_confirmed === true;
+  }
+  if (!profile.model_source && profile.model_confirmed === true) {
+    profile.model_source = 'user_nameplate';
+  }
+  delete identity.driver_model;
+  delete identity.nameplate_confirmed;
   const config = motor && typeof motor.config === 'object' && motor.config !== null
     ? clone(motor.config)
     : {};
@@ -44,6 +60,7 @@ export function normalizeMotor(motor, index = 0) {
     driver_family: driverFamily,
     transport,
     identity,
+    profile,
     config: syncedConfig,
   };
 }
