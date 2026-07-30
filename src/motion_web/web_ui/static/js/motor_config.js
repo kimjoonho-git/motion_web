@@ -3772,8 +3772,22 @@ export function createMotorConfigController({
           : `AC 서보 검색 완료 · 신규 ${formatInt(selection.newCount)}축 자동 선택`,
       Boolean(identityError) || selection.candidateCount > 0);
       if (payload.motion_state) renderLatestState(payload.motion_state);
-      el.scanButton.textContent = payload.success ? '직접 검색 완료' : '직접 검색 실패';
-      await finishScanProgressPopup(payload.success, payload.success ? 'AC 서보 검색 완료' : 'AC 서보 검색 실패');
+      const scanPartial = payload.partial === true
+        || payload.motor_operation?.status === 'partial';
+      el.scanButton.textContent = payload.success
+        ? '직접 검색 완료'
+        : scanPartial
+          ? '직접 검색 부분 완료'
+          : '직접 검색 실패';
+      await finishScanProgressPopup(
+        payload.success,
+        payload.success
+          ? 'AC 서보 검색 완료'
+          : scanPartial
+            ? conciseMotorScanMessage(payload.message || 'AC 서보 검색 부분 완료')
+            : 'AC 서보 검색 실패',
+        scanPartial ? 'partial' : '',
+      );
     } catch (error) {
       if (el.scanResult) el.scanResult.textContent = 'AC 서보 검색 실패';
       el.scanButton.textContent = '검색 실패';
@@ -3829,7 +3843,8 @@ export function createMotorConfigController({
       const summary = getDiscoverySummary();
       const identityError = acHardwareIdentityErrorMessage();
       const scanComplete = payload.scan?.scan_complete === true;
-      const scanPartial = payload.scan?.scan_outcome === 'partial';
+      const scanPartial = payload.partial === true
+        || payload.scan?.scan_outcome === 'partial';
       const dynamixelError = payload.scan?.dynamixel_scan?.error || '';
       if (el.scanAllResult) {
         el.scanAllResult.textContent = scanComplete

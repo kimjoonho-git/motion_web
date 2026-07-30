@@ -752,6 +752,133 @@ def test_scan_result_message_preserves_partial_outcome():
     assert 'Dynamixel 0축' in message
 
 
+def test_scan_result_marks_unused_disconnected_master_as_project_compatible_partial():
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge.load_motor_config = lambda: {
+        'success': True,
+        'registry': {
+            'motors': [
+                {
+                    'axis': axis,
+                    'enabled': True,
+                    'transport': 'ethercat',
+                    'identity': {
+                        'ethercat_master_index': 0,
+                        'vendor_id': 0x66F,
+                        'product_code': 0x60380004,
+                        'serial_number': 100 + axis,
+                    },
+                    'config': {
+                        'controller_index': axis,
+                        'ethercat_master_index': 0,
+                        'position': axis,
+                        'alias': 0,
+                    },
+                }
+                for axis in range(5)
+            ],
+        },
+    }
+    scan = {
+        'scan_id': 'single-project-dual-host',
+        'ethercat_scan': {
+            'complete': False,
+            'slaves_count': 5,
+            'masters': [
+                {'master_index': 0, 'complete': True, 'slaves_count': 5},
+                {
+                    'master_index': 1,
+                    'complete': False,
+                    'slaves_count': 0,
+                    'error': '재스캔 후 응답한 Slave가 없습니다',
+                },
+            ],
+            'slaves': [
+                {
+                    'master_index': 0,
+                    'slave_position': axis,
+                    'vendor_id': 0x66F,
+                    'product_code': 0x60380004,
+                    'serial_number': 100 + axis,
+                    'ethercat_alias': 0,
+                    'direct_read_complete': True,
+                }
+                for axis in range(5)
+            ],
+            'error': 'Master 1: 재스캔 후 응답한 Slave가 없습니다',
+        },
+        'dynamixel_scan': {'skipped': True},
+        'scan_errors': [{
+            'transport': 'ethercat',
+            'message': 'Master 1: 재스캔 후 응답한 Slave가 없습니다',
+        }],
+    }
+
+    bridge._annotate_ethercat_project_compatibility(scan)
+
+    comparison = scan['project_comparison']['ethercat_project']
+    assert comparison['compatible'] is True
+    assert comparison['required_master_indices'] == [0]
+    assert comparison['unused_registered_master_indices'] == [1]
+    assert MotionWebBridge._scan_operation_outcome(
+        scan,
+        operation_type='ac_servo_scan',
+        fallback_success=False,
+    ) == 'partial'
+    message = MotionWebBridge._scan_result_message(False, scan, 'raw failure')
+    assert message.startswith('모터 검색 부분 완료')
+    assert '프로젝트 EtherCAT 구성 확인 완료' in message
+    assert '미사용 Master 1 미연결 허용' in message
+
+
+def test_scan_result_keeps_failure_when_required_project_master_is_missing():
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge.load_motor_config = lambda: {
+        'success': True,
+        'registry': {
+            'motors': [{
+                'axis': 5,
+                'enabled': True,
+                'transport': 'ethercat',
+                'identity': {'ethercat_master_index': 1},
+                'config': {
+                    'controller_index': 5,
+                    'ethercat_master_index': 1,
+                    'position': 0,
+                    'alias': 0,
+                },
+            }],
+        },
+    }
+    scan = {
+        'ethercat_scan': {
+            'complete': False,
+            'masters': [
+                {'master_index': 0, 'complete': True, 'slaves_count': 5},
+                {'master_index': 1, 'complete': False, 'slaves_count': 0},
+            ],
+            'slaves': [
+                {
+                    'master_index': 0,
+                    'slave_position': axis,
+                    'direct_read_complete': True,
+                }
+                for axis in range(5)
+            ],
+        },
+        'dynamixel_scan': {'skipped': True},
+    }
+
+    bridge._annotate_ethercat_project_compatibility(scan)
+
+    assert scan['project_comparison']['ethercat_project']['compatible'] is False
+    assert MotionWebBridge._scan_operation_outcome(
+        scan,
+        operation_type='ac_servo_scan',
+        fallback_success=False,
+    ) == 'failure'
+
+
 def test_scan_entrypoints_use_distinct_operation_types():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge._scan_client = object()

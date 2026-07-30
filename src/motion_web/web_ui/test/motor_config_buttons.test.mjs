@@ -135,6 +135,22 @@ test('motor type scans and the full scan are directly available without nested c
   assert.doesNotMatch(controller, /후보 \$\{formatInt\(targetCount\)\}개/);
 });
 
+test('project-compatible physical scan gaps are displayed as partial, not failure', () => {
+  assert.match(
+    controller,
+    /const scanPartial = payload\.partial === true\s*\|\| payload\.motor_operation\?\.status === 'partial'/,
+  );
+  assert.match(controller, /scanPartial\s*\?\s*'직접 검색 부분 완료'/);
+  assert.match(
+    controller,
+    /scanPartial \? 'partial' : ''/,
+  );
+  assert.match(
+    controller,
+    /const scanPartial = payload\.partial === true\s*\|\| payload\.scan\?\.scan_outcome === 'partial'/,
+  );
+});
+
 test('motor configuration file deletion uses the matching DELETE endpoint', () => {
   assert.match(api, /function deleteMotorConfig\(\)/);
   assert.match(api, /projectFetch\('\/api\/motor-config', \{ method: 'DELETE' \}\)/);

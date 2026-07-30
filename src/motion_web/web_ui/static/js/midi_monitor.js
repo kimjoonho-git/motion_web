@@ -25,6 +25,12 @@ function pathBasename(value) {
   return String(value || '').split(/[\\/]/).filter(Boolean).pop() || '모션축 설정 YAML';
 }
 
+function timestampText(value, fallback) {
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds <= 0) return fallback;
+  return new Date(seconds * 1000).toLocaleString('ko-KR', { hour12: false });
+}
+
 function linkedMotionIdDraft(values) {
   const result = Array.isArray(values) ? values.slice(0, 2).map((value) => String(value || '')) : [];
   while (result.length < 2) result.push('');
@@ -300,9 +306,25 @@ export function createMidiMonitorController({ el, onMappingFileSaved }) {
       el.midiConnectionState.classList.toggle('status-bad', !deviceConnected);
     }
     if (el.midiInputState) {
-      el.midiInputState.textContent = inputActive ? '수신 중' : '입력 대기';
+      el.midiInputState.textContent = inputActive ? '최근 입력 정상' : '현재 입력 없음';
       el.midiInputState.classList.toggle('status-ok', inputActive);
-      el.midiInputState.classList.toggle('status-bad', !inputActive);
+      el.midiInputState.classList.toggle('status-bad', !deviceConnected);
+    }
+    if (el.midiLastInputState) {
+      el.midiLastInputState.textContent = timestampText(
+        status?.last_received_at,
+        '입력 기록 없음',
+      );
+    }
+    if (el.midiPowerReconnectState) {
+      el.midiPowerReconnectState.textContent = timestampText(
+        status?.device_last_power_reconnected_at,
+        '감지 기록 없음',
+      );
+      el.midiPowerReconnectState.title = (
+        `연결 ${Number(status?.device_connection_count || 0)}회 · `
+        + `전원 재연결 ${Number(status?.device_power_reconnect_count || 0)}회`
+      );
     }
     if (el.midiMotorOutputState) {
       el.midiMotorOutputState.textContent = status?.motor_output_enabled ? '활성' : '사용 안 함';

@@ -230,6 +230,8 @@ export function getElements() {
     midiMonitorSummary: document.getElementById('midiMonitorSummary'),
     midiConnectionState: document.getElementById('midiConnectionState'),
     midiInputState: document.getElementById('midiInputState'),
+    midiLastInputState: document.getElementById('midiLastInputState'),
+    midiPowerReconnectState: document.getElementById('midiPowerReconnectState'),
     connectMidiDeviceButton: document.getElementById('connectMidiDeviceButton'),
     disconnectMidiDeviceButton: document.getElementById('disconnectMidiDeviceButton'),
     midiMotorOutputState: document.getElementById('midiMotorOutputState'),
