@@ -1,4 +1,5 @@
 import pytest
+import yaml
 
 from motion_runtime.motion_mapping_manager import MotionMappingManager
 
@@ -126,5 +127,66 @@ def test_mapping_save_rejects_an_outdated_loaded_file_revision(tmp_path):
         manager._save_mapping({
             'file_id': first['file']['id'],
             'base_revision': revision,
+            'mapping': first['mapping'],
+        })
+
+
+def test_mapping_save_allows_a_midi_only_file_revision_change(tmp_path):
+    manager = _manager()
+    manager.mappings_dir = tmp_path / 'selected-project' / 'motion_axis_matching'
+    manager.motion_files_dir = tmp_path / 'selected-project' / 'motions'
+    manager.mappings_dir.mkdir(parents=True)
+    manager.motion_files_dir.mkdir(parents=True)
+    first = manager._save_mapping({
+        'mapping': {'name': 'axes', 'mappings': [_row(axis=0)]},
+    })
+    path = manager.mappings_dir / first['file']['id']
+    payload = yaml.safe_load(path.read_text(encoding='utf-8'))
+    payload['midi_banks'] = {
+        'version': 1,
+        'active_bank_id': 'bank_1',
+        'banks': [],
+    }
+    path.write_text(
+        yaml.safe_dump(payload, sort_keys=False, allow_unicode=True),
+        encoding='utf-8',
+    )
+    edited = dict(first['mapping'])
+    edited['mappings'] = [dict(first['mapping']['mappings'][0], invert=True)]
+
+    saved = manager._save_mapping({
+        'file_id': first['file']['id'],
+        'base_mapping_revision': first['file']['mapping_revision'],
+        'mapping': edited,
+    })
+
+    assert saved['success'] is True
+    assert saved['mapping']['mappings'][0]['invert'] is True
+    assert yaml.safe_load(path.read_text(encoding='utf-8'))['midi_banks'] == (
+        payload['midi_banks']
+    )
+
+
+def test_mapping_save_rejects_a_stale_mapping_section_revision(tmp_path):
+    manager = _manager()
+    manager.mappings_dir = tmp_path / 'selected-project' / 'motion_axis_matching'
+    manager.motion_files_dir = tmp_path / 'selected-project' / 'motions'
+    manager.mappings_dir.mkdir(parents=True)
+    manager.motion_files_dir.mkdir(parents=True)
+    first = manager._save_mapping({
+        'mapping': {'name': 'axes', 'mappings': [_row(axis=0)]},
+    })
+    path = manager.mappings_dir / first['file']['id']
+    payload = yaml.safe_load(path.read_text(encoding='utf-8'))
+    payload['mappings'][0]['invert'] = True
+    path.write_text(
+        yaml.safe_dump(payload, sort_keys=False, allow_unicode=True),
+        encoding='utf-8',
+    )
+
+    with pytest.raises(ValueError, match='모션축 설정이 화면을 불러온 뒤 변경'):
+        manager._save_mapping({
+            'file_id': first['file']['id'],
+            'base_mapping_revision': first['file']['mapping_revision'],
             'mapping': first['mapping'],
         })

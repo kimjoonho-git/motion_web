@@ -47,7 +47,7 @@ DYNAMIXEL_SCAN_BAUDRATES = (1000000,)
 DYNAMIXEL_SCAN_MAX_ID = 252
 DYNAMIXEL_SCAN_PROTOCOL = '2.0'
 COMMUNICATION_UNAVAILABLE_ERROR = 0xFFFF
-MOTOR_SCAN_CONTRACT_VERSION = 1
+MOTOR_SCAN_CONTRACT_VERSION = 3
 
 
 class MotionStateMonitor(Node):
@@ -200,8 +200,8 @@ class MotionStateMonitor(Node):
             transport = str(master.get('type', 'unknown'))
             master_id = master.get('id')
             ethercat_master_index = master.get('ethercat_master_index', 0)
-            serial_port = master.get('serial_port')
-            serial_baudrate = master.get('serial_baudrate')
+            serial_port = master.get('serial_port') or master.get('port')
+            serial_baudrate = master.get('serial_baudrate', master.get('baudrate'))
             for slave in master.get('slaves', []):
                 if not isinstance(slave, dict) or slave.get('controller_index') is None:
                     continue
@@ -245,8 +245,10 @@ class MotionStateMonitor(Node):
                     'upper': self._optional_float(driver.get('upper')),
                     'alias': slave.get('alias'),
                     'slave_position': slave.get('position'),
-                    'node_id': slave.get('node_id', slave.get('bus_id')),
-                    'bus_id': slave.get('bus_id'),
+                    'node_id': slave.get(
+                        'node_id', slave.get('bus_id', slave.get('id'))
+                    ),
+                    'bus_id': slave.get('bus_id', slave.get('id')),
                     'serial_port': serial_port,
                     'serial_baudrate': serial_baudrate,
                 }
@@ -923,11 +925,7 @@ class MotionStateMonitor(Node):
         if not configured_indices:
             return motors
 
-        ethercat = self._current_ethercat_status(now)
         ethercat_available = bool(self._ethercat_status)
-        ethercat_down = ethercat_available and (
-            not ethercat.get('master_active', False) or not ethercat.get('link_up', False)
-        )
         for controller_index in sorted(configured_indices):
             if controller_index not in self._motors:
                 if not self.monitoring_enabled:
@@ -967,6 +965,16 @@ class MotionStateMonitor(Node):
                 self._ethercat_axis_state(motor)
                 if transport == 'ethercat' and ethercat_available
                 else ''
+            )
+            ethercat_master_status = (
+                self._ethercat_master_status(motor)
+                if transport == 'ethercat' and ethercat_available
+                else {}
+            )
+            ethercat_down = transport == 'ethercat' and ethercat_available and (
+                not ethercat_master_status.get('available', False)
+                or not ethercat_master_status.get('master_active', False)
+                or not ethercat_master_status.get('link_up', False)
             )
             if not self.monitoring_enabled:
                 state = 'monitoring_off'
@@ -1043,13 +1051,18 @@ class MotionStateMonitor(Node):
             physical_alias = self._parse_int(
                 slave.get('ethercat_alias', slave.get('rotary_alias'))
             )
-            if expected_alias not in (None, 0) and physical_alias == expected_alias:
+            physical_master = self._parse_int(slave.get('master_index')) or 0
+            if (
+                expected_alias not in (None, 0)
+                and physical_alias == expected_alias
+                and physical_master == expected_master
+            ):
                 matched = slave
                 break
             if (
                 expected_alias in (None, 0)
                 and self._parse_int(slave.get('slave_position')) == expected_position
-                and (self._parse_int(slave.get('master_index')) or 0) == expected_master
+                and physical_master == expected_master
             ):
                 matched = slave
                 break
@@ -1128,90 +1141,141 @@ class MotionStateMonitor(Node):
 
     def _poll_ethercat_bus_status(self) -> None:
         now = time.time()
-        try:
-            master = subprocess.run(
-                ['ethercat', 'master'],
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=2.0,
-            )
-            slaves = subprocess.run(
-                ['ethercat', 'slaves'],
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=2.0,
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            self._ethercat_status = {
-                'available': False,
-                'last_seen_at': now,
-                'error': str(exc),
-            }
-            self._last_ethercat_status_at = now
-            return
+        master_indices = sorted({
+            self._parse_int(metadata.get('ethercat_master_index')) or 0
+            for metadata in getattr(self, '_motor_metadata', {}).values()
+            if str(metadata.get('transport') or '').lower() == 'ethercat'
+        }) or [0]
+        masters: Dict[str, Dict[str, Any]] = {}
+        errors: List[str] = []
 
-        if master.returncode != 0 or slaves.returncode != 0:
-            self._ethercat_status = {
-                'available': False,
-                'last_seen_at': now,
-                'error': (
+        for master_index in master_indices:
+            try:
+                master = subprocess.run(
+                    ['ethercat', 'master', '-m', str(master_index)],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=2.0,
+                )
+                slaves = subprocess.run(
+                    ['ethercat', 'slaves', '-m', str(master_index)],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=2.0,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                error = str(exc)
+                masters[str(master_index)] = {
+                    'available': False,
+                    'master_index': master_index,
+                    'error': error,
+                }
+                errors.append(f'Master {master_index}: {error}')
+                continue
+
+            if master.returncode != 0 or slaves.returncode != 0:
+                error = (
                     master.stderr.strip()
                     or slaves.stderr.strip()
                     or master.stdout.strip()
                     or slaves.stdout.strip()
-                ),
-            }
-            self._last_ethercat_status_at = now
-            return
-
-        phase_match = re.search(
-            r'^\s*Phase:\s*(.+?)\s*$',
-            master.stdout,
-            re.MULTILINE | re.IGNORECASE,
-        )
-        states_by_position: Dict[str, str] = {}
-        states_by_alias: Dict[str, str] = {}
-        for match in re.finditer(
-            r'^\s*(\d+)\s+(\d+):\d+\s+([A-Z]+)\b',
-            slaves.stdout,
-            re.MULTILINE | re.IGNORECASE,
-        ):
-            position, alias, state = match.groups()
-            states_by_position[position] = state.upper()
-            if int(alias) > 0:
-                states_by_alias[alias] = state.upper()
-
-        self._ethercat_status = {
-            'available': True,
-            'last_seen_at': now,
-            'master_active': bool(re.search(
-                r'^\s*Active:\s*yes\s*$',
-                master.stdout,
-                re.MULTILINE | re.IGNORECASE,
-            )),
-            'link_up': bool(re.search(
-                r'^\s*Link:\s*UP\s*$',
-                master.stdout,
-                re.MULTILINE | re.IGNORECASE,
-            )),
-            'slaves_responding': len(states_by_position),
-            'phase': phase_match.group(1).strip() if phase_match else '',
-            'state_text': ', '.join(
-                f'{position}:{state}'
-                for position, state in sorted(
-                    states_by_position.items(),
-                    key=lambda item: int(item[0]),
                 )
+                masters[str(master_index)] = {
+                    'available': False,
+                    'master_index': master_index,
+                    'error': error,
+                }
+                errors.append(f'Master {master_index}: {error}')
+                continue
+
+            phase_match = re.search(
+                r'^\s*Phase:\s*(.+?)\s*$',
+                master.stdout,
+                re.MULTILINE | re.IGNORECASE,
+            )
+            states_by_position: Dict[str, str] = {}
+            states_by_alias: Dict[str, str] = {}
+            for match in re.finditer(
+                r'^\s*(\d+)\s+(\d+):\d+\s+([A-Z]+)\b',
+                slaves.stdout,
+                re.MULTILINE | re.IGNORECASE,
+            ):
+                position, alias, state = match.groups()
+                states_by_position[position] = state.upper()
+                if int(alias) > 0:
+                    states_by_alias[alias] = state.upper()
+
+            masters[str(master_index)] = {
+                'available': True,
+                'master_index': master_index,
+                'master_active': bool(re.search(
+                    r'^\s*Active:\s*yes\s*$',
+                    master.stdout,
+                    re.MULTILINE | re.IGNORECASE,
+                )),
+                'link_up': bool(re.search(
+                    r'^\s*Link:\s*UP\s*$',
+                    master.stdout,
+                    re.MULTILINE | re.IGNORECASE,
+                )),
+                'slaves_responding': len(states_by_position),
+                'phase': phase_match.group(1).strip() if phase_match else '',
+                'state_text': ', '.join(
+                    f'{position}:{state}'
+                    for position, state in sorted(
+                        states_by_position.items(),
+                        key=lambda item: int(item[0]),
+                    )
+                ),
+                'states_by_position': states_by_position,
+                'states_by_alias': states_by_alias,
+                'error': '',
+            }
+
+        available_masters = [
+            status for status in masters.values() if status.get('available')
+        ]
+        first_master = masters.get(str(master_indices[0]), {})
+        self._ethercat_status = {
+            'available': bool(available_masters),
+            'complete': len(available_masters) == len(master_indices),
+            'last_seen_at': now,
+            'master_active': bool(available_masters) and all(
+                status.get('master_active', False) for status in available_masters
             ),
-            'states_by_position': states_by_position,
-            'states_by_alias': states_by_alias,
+            'link_up': bool(available_masters) and all(
+                status.get('link_up', False) for status in available_masters
+            ),
+            'slaves_responding': sum(
+                int(status.get('slaves_responding') or 0)
+                for status in available_masters
+            ),
+            'phase': str(first_master.get('phase') or ''),
+            'state_text': ' · '.join(
+                f'Master {master_index} [{masters[str(master_index)].get("state_text", "")}]'
+                for master_index in master_indices
+                if masters[str(master_index)].get('available')
+            ),
+            'masters': masters,
+            'error': ' / '.join(errors),
         }
         self._last_ethercat_status_at = now
 
-    def _ethercat_axis_state(self, motor: Dict[str, Any]) -> str:
+    def _ethercat_master_status(self, motor: Dict[str, Any]) -> Dict[str, Any]:
         status = self._ethercat_status if isinstance(self._ethercat_status, dict) else {}
+        master_index = self._parse_int(motor.get('ethercat_master_index')) or 0
+        masters = status.get('masters') if isinstance(status.get('masters'), dict) else {}
+        master_status = masters.get(str(master_index))
+        if isinstance(master_status, dict):
+            return master_status
+        if master_index == 0:
+            return status
+        return {}
+
+    def _ethercat_axis_state(self, motor: Dict[str, Any]) -> str:
+        status = self._ethercat_master_status(motor)
         alias = self._parse_int(motor.get('alias'))
         if alias is not None and alias > 0:
             return str((status.get('states_by_alias') or {}).get(str(alias)) or '')
@@ -1688,21 +1752,28 @@ class MotionStateMonitor(Node):
                 details={'slaves_count': len(slaves)},
             )
         for slave in slaves:
+            master_index = int(slave.get('master_index') or 0)
             position = slave['slave_position']
             self._publish_scan_progress(
                 'ethercat_slave_read',
-                f'Slave {position}: SII EEPROM과 Alias 레지스터를 읽습니다',
+                (
+                    f'Master {master_index} · Slave {position}: '
+                    'SII EEPROM과 Alias 레지스터를 읽습니다'
+                ),
                 transport='ethercat',
-                details={'slave_position': position},
+                details={
+                    'master_index': master_index,
+                    'slave_position': position,
+                },
             )
             master_identity = {
                 key: slave.get(key)
                 for key in ('vendor_id', 'product_code', 'revision_number', 'serial_number')
             }
-            sii_identity = self._read_sii_identity(slave['slave_position'])
+            sii_identity = self._read_sii_identity(master_index, position)
             slave['master_identity'] = master_identity
             slave.update(sii_identity)
-            rotary = self._read_station_alias_register(slave['slave_position'])
+            rotary = self._read_station_alias_register(master_index, position)
             slave.update(rotary)
             slave_errors = []
             if slave.get('sii_error'):
@@ -1732,24 +1803,66 @@ class MotionStateMonitor(Node):
             slave['scan_error'] = ' / '.join(slave_errors)
             if slave_errors:
                 errors.append(
-                    f"Slave {slave['slave_position']}: {slave['scan_error']}"
+                    f'Master {master_index} · Slave '
+                    f'{slave["slave_position"]}: {slave["scan_error"]}'
                 )
             self._publish_scan_progress(
                 'ethercat_slave_done' if not slave_errors else 'ethercat_slave_failed',
                 (
-                    f'Slave {position}: Alias {slave.get("ethercat_alias")}, '
+                    f'Master {master_index} · Slave {position}: '
+                    f'Alias {slave.get("ethercat_alias")}, '
                     f'Serial {slave.get("serial_number")} 읽기 완료'
                     if not slave_errors
-                    else f'Slave {position}: {slave["scan_error"]}'
+                    else (
+                        f'Master {master_index} · Slave {position}: '
+                        f'{slave["scan_error"]}'
+                    )
                 ),
                 transport='ethercat',
                 details={
+                    'master_index': master_index,
                     'slave_position': position,
                     'ethercat_alias': slave.get('ethercat_alias'),
                     'serial_number': slave.get('serial_number'),
                     'success': not slave_errors,
                 },
             )
+
+        configured_master_indices = sorted({
+            int(value)
+            for value in re.findall(
+                r'^\s*Master\s*(\d+)\s*$',
+                master_output,
+                re.MULTILINE | re.IGNORECASE,
+            )
+        })
+        if not configured_master_indices:
+            configured_master_indices = sorted({
+                int(slave.get('master_index') or 0) for slave in slaves
+            })
+        master_results = []
+        for master_index in configured_master_indices:
+            master_slaves = [
+                slave
+                for slave in slaves
+                if int(slave.get('master_index') or 0) == master_index
+            ]
+            master_errors = [
+                str(slave.get('scan_error') or '')
+                for slave in master_slaves
+                if str(slave.get('scan_error') or '')
+            ]
+            if not master_slaves:
+                master_errors.append('재스캔 후 응답한 Slave가 없습니다')
+                errors.append(
+                    f'Master {master_index}: 재스캔 후 응답한 Slave가 없습니다'
+                )
+            master_results.append({
+                'master_index': master_index,
+                'complete': bool(master_slaves) and not master_errors,
+                'slaves_count': len(master_slaves),
+                'error': ' / '.join(master_errors),
+            })
 
         return {
             'available': True,
@@ -1761,6 +1874,8 @@ class MotionStateMonitor(Node):
             'scan_duration_ms': round((time.time() - started_at) * 1000.0, 3),
             'scanned_at': started_at,
             'error': ' / '.join(errors),
+            'masters_count': len(master_results),
+            'masters': master_results,
             'slaves_count': len(slaves),
             'slaves': slaves,
         }
@@ -1828,10 +1943,19 @@ class MotionStateMonitor(Node):
             'serial_number': int.from_bytes(data[28:32], 'little'),
         }
 
-    def _read_sii_identity(self, slave_position: int) -> Dict[str, Any]:
+    def _read_sii_identity(
+        self, master_index: int, slave_position: int
+    ) -> Dict[str, Any]:
         try:
             completed = subprocess.run(
-                ['ethercat', 'sii_read', '-p', str(slave_position)],
+                [
+                    'ethercat',
+                    'sii_read',
+                    '-m',
+                    str(master_index),
+                    '-p',
+                    str(slave_position),
+                ],
                 check=False,
                 capture_output=True,
                 timeout=2.0,
@@ -1863,7 +1987,9 @@ class MotionStateMonitor(Node):
             'identity_source': 'physical_sii',
         }
 
-    def _read_station_alias_register(self, slave_position: int) -> Dict[str, Any]:
+    def _read_station_alias_register(
+        self, master_index: int, slave_position: int
+    ) -> Dict[str, Any]:
         completed = None
         last_error = ''
         for attempt in range(3):
@@ -1872,6 +1998,8 @@ class MotionStateMonitor(Node):
                     [
                         'ethercat',
                         'reg_read',
+                        '-m',
+                        str(master_index),
                         '-p',
                         str(slave_position),
                         '-t',
@@ -1894,11 +2022,13 @@ class MotionStateMonitor(Node):
                 self._publish_scan_progress(
                     'ethercat_register_retry',
                     (
-                        f'Slave {slave_position}: Alias 레지스터 응답 지연, '
+                        f'Master {master_index} · Slave {slave_position}: '
+                        'Alias 레지스터 응답 지연, '
                         f'{attempt + 2}번째 읽기를 재시도합니다'
                     ),
                     transport='ethercat',
                     details={
+                        'master_index': master_index,
                         'slave_position': slave_position,
                         'next_attempt': attempt + 2,
                         'error': last_error,
@@ -2387,27 +2517,27 @@ class MotionStateMonitor(Node):
     def _configured_ethercat_identity(
         self, axis: Dict[str, Any]
     ) -> Optional[tuple]:
+        master_index = self._parse_int(axis.get('ethercat_master_index')) or 0
         alias = self._parse_int(axis.get('ethercat_alias'))
         if alias is not None and alias > 0:
-            return ('alias', alias)
+            return ('alias', master_index, alias)
         position = self._parse_int(axis.get('slave_position'))
         if position is None:
             return None
-        master_index = self._parse_int(axis.get('ethercat_master_index')) or 0
         return ('position', master_index, position)
 
     def _scanned_ethercat_identity(
         self, slave: Dict[str, Any]
     ) -> Optional[tuple]:
+        master_index = self._parse_int(slave.get('master_index')) or 0
         alias = self._parse_int(slave.get('ethercat_alias'))
         if alias is None or alias <= 0:
             alias = self._parse_int(slave.get('rotary_alias'))
         if alias is not None and alias > 0:
-            return ('alias', alias)
+            return ('alias', master_index, alias)
         position = self._parse_int(slave.get('slave_position'))
         if position is None:
             return None
-        master_index = self._parse_int(slave.get('master_index')) or 0
         return ('position', master_index, position)
 
     def _matching_row(

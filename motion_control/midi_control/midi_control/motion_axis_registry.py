@@ -2,6 +2,7 @@
 
 from pathlib import Path
 from typing import Any, Dict, Optional
+from urllib.parse import quote
 
 import yaml
 
@@ -75,7 +76,9 @@ class MotionAxisRegistry:
         matches = [
             motor for motor in motors
             if isinstance(motor, dict)
-            and cls._motor_ref(motor).lower() == motor_ref.lower()
+            and motor_ref.lower() in {
+                ref.lower() for ref in cls._motor_refs(motor)
+            }
         ]
         if len(matches) != 1:
             return None
@@ -91,17 +94,55 @@ class MotionAxisRegistry:
         ))
         if 'dynamixel' in text:
             value = motor.get('bus_id', motor.get('node_id'))
+            serial_port = str(motor.get('serial_port') or '').strip()
             try:
-                return f'dynamixel:id:{int(value)}'
+                return (
+                    f'dynamixel:port:{quote(serial_port, safe="")}:id:{int(value)}'
+                    if serial_port else ''
+                )
             except (TypeError, ValueError):
                 return ''
         if 'minas' in text or 'ac servo' in text or 'ac_servo' in text:
             value = motor.get('alias', motor.get('ethercat_alias'))
+            master_index = motor.get('ethercat_master_index', 0)
             try:
-                return f'ac_servo:alias:{int(value)}'
+                master = int(master_index)
+            except (TypeError, ValueError):
+                return ''
+            try:
+                alias = int(value)
+            except (TypeError, ValueError):
+                alias = 0
+            if alias > 0 and master >= 0:
+                return f'ac_servo:master:{master}:alias:{alias}'
+            try:
+                position = int(motor.get('slave_position'))
+                return (
+                    f'ac_servo:master:{master}:slave:{position}'
+                    if master >= 0 and position >= 0 else ''
+                )
             except (TypeError, ValueError):
                 return ''
         return ''
+
+    @classmethod
+    def _motor_refs(cls, motor: Dict[str, Any]) -> list[str]:
+        canonical = cls._motor_ref(motor)
+        text = ' '.join(str(motor.get(key) or '').lower() for key in (
+            'motor_type', 'motor_type_label', 'driver_model', 'transport'
+        ))
+        try:
+            if 'minas' in text or 'ac servo' in text or 'ac_servo' in text:
+                alias = int(motor.get('alias', motor.get('ethercat_alias')))
+                legacy = f'ac_servo:alias:{alias}' if alias > 0 else ''
+            elif 'dynamixel' in text:
+                bus_id = int(motor.get('bus_id', motor.get('node_id')))
+                legacy = f'dynamixel:id:{bus_id}' if bus_id >= 0 else ''
+            else:
+                legacy = ''
+        except (TypeError, ValueError):
+            legacy = ''
+        return [item for item in (canonical, legacy) if item]
 
     def motor_axis(self, motion_id: Any) -> Optional[int]:
         return self.axes.get(str(motion_id or '').strip())

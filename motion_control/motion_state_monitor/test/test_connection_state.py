@@ -250,7 +250,7 @@ class ConnectionStateTest(unittest.TestCase):
         )
 
         contract = result['scan_contract']
-        self.assertEqual(contract['version'], 1)
+        self.assertEqual(contract['version'], 3)
         self.assertTrue(contract['physical_only'])
         self.assertTrue(contract['ethercat_requires_rescan'])
         self.assertEqual(contract['dynamixel_id_min'], 0)
@@ -320,7 +320,88 @@ Identity:
         self.assertTrue(result['complete'])
         self.assertTrue(result['rescan_performed'])
         self.assertEqual(result['source'], 'ethercat_rescan_sii_and_register')
-        self.assertLess(calls.index(['ethercat', 'rescan']), calls.index(['ethercat', 'sii_read', '-p', '0']))
+        self.assertLess(
+            calls.index(['ethercat', 'rescan']),
+            calls.index(['ethercat', 'sii_read', '-m', '0', '-p', '0']),
+        )
+
+    def test_ethercat_scan_reads_duplicate_slave_positions_from_each_master(self):
+        self.monitor._last_motor_status_at = None
+        self.monitor._motor_metadata = {}
+        listing = '''=== Master 0, Slave 0 ===
+State: PREOP
+Identity:
+  Vendor Id: 0x0000066f
+  Product code: 0x60380004
+  Revision number: 0x00010000
+  Serial number: 0x24121207
+=== Master 1, Slave 0 ===
+State: PREOP
+Identity:
+  Vendor Id: 0x0000066f
+  Product code: 0x60380004
+  Revision number: 0x00010000
+  Serial number: 0x24121208
+'''
+        sii_by_master = {}
+        for master_index, serial in ((0, 0x24121207), (1, 0x24121208)):
+            sii = bytearray(32)
+            sii[16:20] = (0x0000066F).to_bytes(4, 'little')
+            sii[20:24] = (0x60380004).to_bytes(4, 'little')
+            sii[24:28] = (0x00010000).to_bytes(4, 'little')
+            sii[28:32] = serial.to_bytes(4, 'little')
+            sii_by_master[master_index] = bytes(sii)
+        calls = []
+
+        def run(command, **_kwargs):
+            calls.append(command)
+            if command[1] == 'master':
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout=(
+                        'Master0\n  Phase: Idle\n  Active: no\n'
+                        'Master1\n  Phase: Idle\n  Active: no\n'
+                    ),
+                    stderr='',
+                )
+            if command[1] == 'slaves':
+                return SimpleNamespace(returncode=0, stdout=listing, stderr='')
+            if command[1] == 'rescan':
+                return SimpleNamespace(returncode=0, stdout='', stderr='')
+            if command[1] == 'sii_read':
+                master_index = int(command[command.index('-m') + 1])
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout=sii_by_master[master_index],
+                    stderr=b'',
+                )
+            if command[1] == 'reg_read':
+                return SimpleNamespace(returncode=0, stdout='0x0000 0', stderr='')
+            raise AssertionError(command)
+
+        with patch('motion_state_monitor.monitor_node.subprocess.run', side_effect=run):
+            result = self.monitor._scan_ethercat_slaves()
+
+        self.assertTrue(result['complete'])
+        self.assertEqual(
+            [(item['master_index'], item['slave_position']) for item in result['slaves']],
+            [(0, 0), (1, 0)],
+        )
+        self.assertEqual(
+            [
+                (item['master_index'], item['complete'], item['slaves_count'])
+                for item in result['masters']
+            ],
+            [(0, True, 1), (1, True, 1)],
+        )
+        self.assertIn(
+            ['ethercat', 'sii_read', '-m', '0', '-p', '0'],
+            calls,
+        )
+        self.assertIn(
+            ['ethercat', 'sii_read', '-m', '1', '-p', '0'],
+            calls,
+        )
 
     def test_ethercat_scan_blocks_rescan_while_slave_is_operational(self):
         self.monitor._last_motor_status_at = None
@@ -454,6 +535,9 @@ Identity:
         self.assertEqual(rows[0]['match_state'], 'matched')
 
     def test_ethercat_bus_poll_reports_powered_off_slaves_as_missing(self):
+        self.monitor._motor_metadata = {
+            0: {'transport': 'ethercat', 'ethercat_master_index': 0},
+        }
         responses = iter([
             SimpleNamespace(
                 returncode=0,
@@ -478,6 +562,9 @@ Identity:
         )
 
     def test_ethercat_bus_poll_tracks_each_slave_operational_state(self):
+        self.monitor._motor_metadata = {
+            0: {'transport': 'ethercat', 'ethercat_master_index': 0},
+        }
         responses = iter([
             SimpleNamespace(
                 returncode=0,
@@ -508,6 +595,87 @@ Identity:
             self.monitor._ethercat_axis_state({'alias': 101, 'slave_position': 0}),
             'PREOP',
         )
+
+    def test_ethercat_bus_poll_keeps_same_slave_position_separate_per_master(self):
+        self.monitor._motor_metadata = {
+            0: {'transport': 'ethercat', 'ethercat_master_index': 0},
+            5: {'transport': 'ethercat', 'ethercat_master_index': 1},
+        }
+        responses = iter([
+            SimpleNamespace(
+                returncode=0,
+                stdout='Phase: Operation\nActive: yes\n  Link: UP\n',
+                stderr='',
+            ),
+            SimpleNamespace(
+                returncode=0,
+                stdout='0  0:0  OP  +  Drive A\n',
+                stderr='',
+            ),
+            SimpleNamespace(
+                returncode=0,
+                stdout='Phase: Operation\nActive: yes\n  Link: UP\n',
+                stderr='',
+            ),
+            SimpleNamespace(
+                returncode=0,
+                stdout='0  0:0  PREOP  +  Drive B\n',
+                stderr='',
+            ),
+        ])
+
+        with patch(
+            'motion_state_monitor.monitor_node.subprocess.run',
+            side_effect=lambda *_args, **_kwargs: next(responses),
+        ) as run:
+            self.monitor._poll_ethercat_bus_status()
+
+        self.assertEqual(
+            [call.args[0] for call in run.call_args_list],
+            [
+                ['ethercat', 'master', '-m', '0'],
+                ['ethercat', 'slaves', '-m', '0'],
+                ['ethercat', 'master', '-m', '1'],
+                ['ethercat', 'slaves', '-m', '1'],
+            ],
+        )
+        self.assertEqual(
+            self.monitor._ethercat_axis_state({
+                'ethercat_master_index': 0,
+                'alias': 0,
+                'slave_position': 0,
+            }),
+            'OP',
+        )
+        self.assertEqual(
+            self.monitor._ethercat_axis_state({
+                'ethercat_master_index': 1,
+                'alias': 0,
+                'slave_position': 0,
+            }),
+            'PREOP',
+        )
+
+    def test_physical_alias_matching_is_scoped_to_master(self):
+        self.monitor._last_ethercat_physical_scan = {
+            'complete': True,
+            'scanned_at': 12.0,
+            'slaves': [
+                {'master_index': 0, 'slave_position': 0, 'ethercat_alias': 101},
+                {'master_index': 1, 'slave_position': 0, 'ethercat_alias': 101},
+            ],
+        }
+        motor = {
+            'transport': 'ethercat',
+            'ethercat_master_index': 1,
+            'slave_position': 0,
+            'alias': 101,
+        }
+
+        self.monitor._set_physical_connection_fields(motor)
+
+        self.assertEqual(motor['physical_connection_state'], 'detected')
+        self.assertEqual(motor['physical_slave_position'], 0)
 
     def test_runtime_motor_state_is_tagged_with_owning_project(self):
         with tempfile.TemporaryDirectory() as directory:

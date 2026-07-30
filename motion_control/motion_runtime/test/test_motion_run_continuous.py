@@ -592,6 +592,52 @@ def test_plan_resolves_current_axis_from_stable_alias_instead_of_saved_axis():
     assert 0 not in plan['samples'][0]['positions']
 
 
+def test_motor_ref_matching_is_scoped_by_ethercat_master_and_serial_port():
+    manager = MotionRunManager.__new__(MotionRunManager)
+    manager._motor_type = lambda motor: motor['motor_type']
+    motors = [
+        {
+            'controller_index': 0,
+            'motor_type': 'ac_servo',
+            'ethercat_master_index': 0,
+            'alias': 101,
+        },
+        {
+            'controller_index': 5,
+            'motor_type': 'ac_servo',
+            'ethercat_master_index': 1,
+            'alias': 101,
+        },
+        {
+            'controller_index': 8,
+            'motor_type': 'dynamixel',
+            'serial_port': '/dev/ttyUSB0',
+            'bus_id': 3,
+        },
+        {
+            'controller_index': 9,
+            'motor_type': 'dynamixel',
+            'serial_port': '/dev/ttyUSB1',
+            'bus_id': 3,
+        },
+    ]
+
+    assert [
+        motor['controller_index']
+        for motor in manager._motors_for_ref(
+            'ac_servo:master:1:alias:101', motors
+        )
+    ] == [5]
+    assert [
+        motor['controller_index']
+        for motor in manager._motors_for_ref(
+            'dynamixel:port:%2Fdev%2FttyUSB1:id:3', motors
+        )
+    ] == [9]
+    assert len(manager._motors_for_ref('ac_servo:alias:101', motors)) == 2
+    assert len(manager._motors_for_ref('dynamixel:id:3', motors)) == 2
+
+
 def test_plan_runs_with_out_of_range_data_and_clamps_every_command():
     manager = MotionRunManager.__new__(MotionRunManager)
     manager.period_sec = 0.5

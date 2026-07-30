@@ -286,7 +286,28 @@ class MotionMappingManager(Node):
                 source_path = self._mapping_file_path(file_id)
             except ValueError:
                 source_path = None
-        if source_path is not None and 'base_revision' in payload:
+        if source_path is not None and 'base_mapping_revision' in payload:
+            expected_mapping_revision = str(
+                payload.get('base_mapping_revision') or ''
+            ).strip()
+            if not expected_mapping_revision:
+                raise ValueError(
+                    '모션축 설정 버전 정보가 없습니다. 파일을 다시 불러온 뒤 저장하세요'
+                )
+            current_payload = yaml.safe_load(
+                source_path.read_text(encoding='utf-8')
+            ) or {}
+            current_mapping = self._normalize_mapping(
+                current_payload,
+                fallback_name=source_path.stem,
+            )
+            actual_mapping_revision = self._mapping_revision(current_mapping)
+            if expected_mapping_revision != actual_mapping_revision:
+                raise ValueError(
+                    '모션축 설정이 화면을 불러온 뒤 변경됐습니다. '
+                    '현재 설정 보호를 위해 저장을 거부했습니다. 파일을 다시 불러오세요'
+                )
+        elif source_path is not None and 'base_revision' in payload:
             actual_revision = hashlib.sha256(source_path.read_bytes()).hexdigest()
             if not expected_revision:
                 raise ValueError(
@@ -449,12 +470,24 @@ class MotionMappingManager(Node):
             'valid': valid,
             'message': message,
             'revision': hashlib.sha256(path.read_bytes()).hexdigest(),
+            'mapping_revision': self._mapping_revision(mapping),
             'name': mapping.get('name') if isinstance(mapping, dict) else path.stem,
             'motion_file_id': mapping.get('motion_file_id') if isinstance(mapping, dict) else '',
             'mapping_count': len(mappings),
             'enabled_count': enabled_count,
             'mapped_count': mapped_count,
         }
+
+    @staticmethod
+    def _mapping_revision(mapping: Dict[str, Any]) -> str:
+        """Hash only motion-axis settings, excluding the MIDI-owned section."""
+        encoded = json.dumps(
+            mapping,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(',', ':'),
+        ).encode('utf-8')
+        return hashlib.sha256(encoded).hexdigest()
 
     def _normalize_mapping(self, mapping: Dict[str, Any], *, fallback_name: str = '') -> Dict[str, Any]:
         if not isinstance(mapping, dict):
@@ -691,16 +724,33 @@ class MotionMappingManager(Node):
     def _valid_motor_ref(value: Any) -> bool:
         text = str(value or '').strip().lower()
         parts = text.split(':')
-        if len(parts) != 3:
-            return False
-        family, key, raw_value = parts
-        if (family, key) not in {
-            ('ac_servo', 'alias'),
-            ('dynamixel', 'id'),
-        }:
-            return False
         try:
-            return int(raw_value, 0) >= 0
+            if len(parts) == 3:
+                family, key, raw_value = parts
+                return (
+                    (family, key) in {
+                        ('ac_servo', 'alias'),
+                        ('dynamixel', 'id'),
+                    }
+                    and int(raw_value, 0) >= 0
+                )
+            if len(parts) == 5 and parts[0] == 'ac_servo':
+                return (
+                    parts[1] == 'master'
+                    and int(parts[2], 0) >= 0
+                    and (
+                        (parts[3] == 'alias' and int(parts[4], 0) > 0)
+                        or (parts[3] == 'slave' and int(parts[4], 0) >= 0)
+                    )
+                )
+            if len(parts) == 5 and parts[0] == 'dynamixel':
+                return (
+                    parts[1] == 'port'
+                    and bool(parts[2])
+                    and parts[3] == 'id'
+                    and int(parts[4], 0) >= 0
+                )
+            return False
         except (TypeError, ValueError):
             return False
 

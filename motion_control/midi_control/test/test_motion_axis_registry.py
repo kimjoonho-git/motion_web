@@ -69,6 +69,7 @@ def test_registry_resolves_stable_motor_ref_after_controller_index_changes(tmp_p
                 'controller_index': 1,
                 'motor_type': 'dynamixel',
                 'bus_id': 3,
+                'serial_port': '/dev/ttyUSB0',
             },
         ],
     }
@@ -78,6 +79,44 @@ def test_registry_resolves_stable_motor_ref_after_controller_index_changes(tmp_p
 
     assert registry.motor_axis('1-1') == 4
     assert registry.motor_axis('1-2') == 1
+
+
+def test_registry_resolves_bus_scoped_refs_and_rejects_ambiguous_legacy_ref(tmp_path):
+    write_mapping(
+        tmp_path / 'scoped.yaml',
+        '- motion_id: 2-1\n'
+        '  enabled: true\n'
+        '  motor_ref: ac_servo:master:1:alias:101\n'
+        '- motion_id: 2-2\n'
+        '  enabled: true\n'
+        '  motor_ref: dynamixel:port:%2Fdev%2FttyUSB1:id:3\n'
+        '- motion_id: 2-3\n'
+        '  enabled: true\n'
+        '  motor_ref: ac_servo:alias:101\n',
+    )
+    state = {
+        'motors': [
+            {
+                'controller_index': 0, 'motor_type': 'ac_servo',
+                'ethercat_master_index': 0, 'alias': 101,
+            },
+            {
+                'controller_index': 5, 'motor_type': 'ac_servo',
+                'ethercat_master_index': 1, 'alias': 101,
+            },
+            {
+                'controller_index': 8, 'motor_type': 'dynamixel',
+                'serial_port': '/dev/ttyUSB1', 'bus_id': 3,
+            },
+        ],
+    }
+
+    registry = MotionAxisRegistry(tmp_path)
+    registry.refresh('scoped.yaml', state)
+
+    assert registry.motor_axis('2-1') == 5
+    assert registry.motor_axis('2-2') == 8
+    assert registry.motor_axis('2-3') is None
 
 
 def test_registry_refresh_reloads_changed_gear_ratio(tmp_path):

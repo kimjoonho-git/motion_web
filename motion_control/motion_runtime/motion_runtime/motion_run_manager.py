@@ -7,6 +7,7 @@ import math
 import os
 import threading
 import time
+from urllib.parse import quote
 import traceback
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -2278,13 +2279,45 @@ class MotionRunManager(Node):
             alias = self._optional_int(
                 motor.get('alias', motor.get('ethercat_alias'))
             )
-            return f'ac_servo:alias:{alias}' if alias is not None else ''
+            master_index = self._optional_int(
+                motor.get('ethercat_master_index')
+            )
+            if master_index is None:
+                master_index = 0
+            if alias is not None and alias > 0 and master_index >= 0:
+                return f'ac_servo:master:{master_index}:alias:{alias}'
+            slave_position = self._optional_int(motor.get('slave_position'))
+            return (
+                f'ac_servo:master:{master_index}:slave:{slave_position}'
+                if slave_position is not None
+                and slave_position >= 0
+                and master_index >= 0
+                else ''
+            )
         if motor_type == 'dynamixel':
             bus_id = self._optional_int(
                 motor.get('bus_id', motor.get('node_id'))
             )
-            return f'dynamixel:id:{bus_id}' if bus_id is not None else ''
+            serial_port = str(motor.get('serial_port') or '').strip()
+            return (
+                f'dynamixel:port:{quote(serial_port, safe="")}:id:{bus_id}'
+                if bus_id is not None and bus_id >= 0 and serial_port else ''
+            )
         return ''
+
+    def _motor_refs_for_motor(self, motor: Dict[str, Any]) -> List[str]:
+        canonical = self._motor_ref_for_motor(motor)
+        if self._motor_type(motor) == 'ac_servo':
+            alias = self._optional_int(
+                motor.get('alias', motor.get('ethercat_alias'))
+            )
+            legacy = f'ac_servo:alias:{alias}' if alias is not None and alias > 0 else ''
+        elif self._motor_type(motor) == 'dynamixel':
+            bus_id = self._optional_int(motor.get('bus_id', motor.get('node_id')))
+            legacy = f'dynamixel:id:{bus_id}' if bus_id is not None and bus_id >= 0 else ''
+        else:
+            legacy = ''
+        return [item for item in (canonical, legacy) if item]
 
     def _motors_for_ref(
         self,
@@ -2296,7 +2329,9 @@ class MotionRunManager(Node):
             return []
         return [
             motor for motor in motors
-            if self._motor_ref_for_motor(motor).lower() == target
+            if target in {
+                ref.lower() for ref in self._motor_refs_for_motor(motor)
+            }
         ]
 
     def _motor_ready_error(self, motor: Dict[str, Any]) -> str:

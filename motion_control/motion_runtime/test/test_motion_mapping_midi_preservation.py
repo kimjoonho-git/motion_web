@@ -80,3 +80,37 @@ def test_motor_ref_is_the_primary_mapping_target():
 
     assert mapping['mappings'][0]['motor_ref'] == 'ac_servo:alias:101'
     assert validation['valid'], validation
+
+
+def test_bus_scoped_motor_refs_are_valid_mapping_targets():
+    manager = MotionMappingManager.__new__(MotionMappingManager)
+    mapping = manager._normalize_mapping({
+        'name': 'bus scoped ids',
+        'mappings': [
+            {
+                'motion_id': '1-1',
+                'enabled': True,
+                'motor_ref': 'ac_servo:master:1:alias:101',
+                'motor_axis': 7,
+                'initial_mode': 'manual',
+            },
+            {
+                'motion_id': '1-2',
+                'enabled': True,
+                'motor_ref': 'dynamixel:port:%2Fdev%2FttyUSB1:id:3',
+                'motor_axis': 8,
+                'initial_mode': 'manual',
+            },
+            {
+                'motion_id': '1-3',
+                'enabled': True,
+                'motor_ref': 'ac_servo:master:0:slave:4',
+                'motor_axis': 4,
+                'initial_mode': 'manual',
+            },
+        ],
+    })
+
+    validation = manager._validate_mapping(mapping, include_motion_file=False)
+
+    assert validation['valid'], validation
