@@ -7,6 +7,7 @@ import {
   conciseMotorScanMessage,
   motorControlConfigurationError,
   motorConfigApplyIdentityBlock,
+  motorModelProfileApplyBlock,
 } from '../static/js/motor_config.js';
 
 
@@ -18,6 +19,15 @@ test('physical slave position is read-only in advanced config table', () => {
 test('logical controller index and display name remain editable', () => {
   assert.equal(isEditableMotorConfigPath('masters[0].slaves[0].controller_index'), true);
   assert.equal(isEditableMotorConfigPath('masters[0].slaves[0].name'), true);
+});
+
+
+test('model profile remains editable only outside physical SII identity', () => {
+  assert.equal(isEditableMotorConfigPath('drivers[0].driver_model'), false);
+  assert.equal(
+    isEditableMotorConfigPath('web_axis_identities[0].sii_device_name'),
+    false,
+  );
 });
 
 
@@ -65,4 +75,37 @@ test('missing scan history does not deadlock saved motor config application', ()
     motorConfigApplyIdentityBlock('실제 연결값이 프로젝트와 다릅니다.', true, false),
     '실제 연결값이 프로젝트와 다릅니다.',
   );
+});
+
+
+test('unconfirmed model profile blocks runtime application without blocking project storage', () => {
+  const message = motorModelProfileApplyBlock([
+    {
+      enabled: true,
+      deleted: false,
+      transport: 'ethercat',
+      axis: 0,
+      profile: {
+        driver_model: '',
+        model_confirmed: false,
+      },
+      config: { controller_index: 0 },
+    },
+    {
+      enabled: true,
+      deleted: false,
+      transport: 'ethercat',
+      axis: 1,
+      profile: {
+        driver_model: 'MCDLN35BE',
+        model_confirmed: true,
+      },
+      config: { controller_index: 1 },
+    },
+  ]);
+
+  assert.match(message, /실행 적용 불가/);
+  assert.match(message, /미확인 축: 0/);
+  assert.match(message, /프로젝트 저장은 가능/);
+  assert.doesNotMatch(message, /미확인 축: 0, 1/);
 });

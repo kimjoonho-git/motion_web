@@ -45,7 +45,7 @@ export function dynamixelMotorIdFromDevice(device) {
 
 export function dynamixelScanDeviceToMotor(device, baseMotor = null, options = {}) {
   const axis = baseMotor?.config?.controller_index ?? baseMotor?.axis ?? options.nextAvailableAxis();
-  const model = modelTextFromDevice(device) || baseMotor?.identity?.driver_model || 'Dynamixel';
+  const model = modelTextFromDevice(device) || baseMotor?.profile?.driver_model || 'Dynamixel';
   const busId = device?.id === null || device?.id === undefined ? null : Number(device.id);
   const baudrate = DYNAMIXEL_BAUDRATE;
   const port = String(device?.port || baseMotor?.identity?.serial_port || baseMotor?.config?.serial_port || '');
@@ -68,7 +68,11 @@ export function dynamixelScanDeviceToMotor(device, baseMotor = null, options = {
       bus_id: busId,
       serial_port: port,
       serial_baudrate: baudrate,
+    },
+    profile: {
       driver_model: model,
+      model_confirmed: Boolean(modelTextFromDevice(device)),
+      model_source: modelTextFromDevice(device) ? 'physical_protocol' : '',
     },
     config: {
       ...existingConfig,
@@ -129,7 +133,7 @@ export function dynamixelScanMismatch(row, values, devices) {
   ) {
     return true;
   }
-  const yamlModel = normalizedModelName(row.motor.identity?.driver_model);
+  const yamlModel = normalizedModelName(row.motor.profile?.driver_model);
   const scanModel = normalizedModelName(modelTextFromDevice(device));
   if (yamlModel && scanModel && !yamlModel.includes(scanModel) && !scanModel.includes(yamlModel)) {
     return true;

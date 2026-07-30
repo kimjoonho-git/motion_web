@@ -1256,6 +1256,107 @@ def test_ac_servo_scan_is_blocked_when_running_motor_state_is_not_fresh(
     assert '최신 모터 상태' in result['message']
 
 
+def test_ac_servo_scan_retires_previous_project_runtime_without_feedback(
+    monkeypatch,
+):
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._lock = threading.Lock()
+    bridge._motion_state = None
+    bridge._motion_state_received_at = None
+    bridge._motion_run_lock = threading.Lock()
+    bridge._motion_run_status = {}
+    bridge._motion_studio_lock = threading.Lock()
+    bridge._motion_studio_status = {}
+    repository = operation_repository(lambda: 'project-b')
+    repository.motor_runtime_state = lambda: {
+        'valid': True,
+        'target_project_id': 'project-a',
+    }
+    bridge.project_repository = repository
+    bridge.snapshot = lambda: {}
+    bridge._current_project_generation = lambda: 4
+    bridge._managed_user_service_active = lambda _service: True
+    calls = []
+    bridge._run_managed_user_service = (
+        lambda action, service: calls.append((action, service))
+    )
+    bridge._wait_for_ethercat_release = lambda timeout_sec: calls.append(
+        ('released', timeout_sec)
+    )
+    bridge._call_scan_service_locked = lambda *_args: {
+        'success': True,
+        'message': 'scan complete',
+        'scan': {'scan_id': 'scan-project-b'},
+    }
+    bridge._wait_for_motor_runtime_recovery = lambda *_args, **_kwargs: (
+        pytest.fail('the previous project runtime must not be restarted')
+    )
+    monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
+
+    result = bridge._call_ethercat_scan_service_locked(
+        object(), '/scan_ac_servo_motors', 10.0
+    )
+
+    assert result['success'] is True
+    assert result['runtime_handoff'] == {
+        'required': True,
+        'selected_project_id': 'project-b',
+        'runtime_project_id': 'project-a',
+    }
+    assert result['motor_service_was_active'] is True
+    assert result['motor_service_restore_required'] is False
+    assert result['motor_service_restored'] is False
+    assert calls == [
+        ('stop', 'motion-motor.service'),
+        ('released', 5.0),
+    ]
+    assert '현재 프로젝트 설정을 저장' in result['message']
+
+
+def test_ac_servo_scan_still_blocks_observed_motion_during_project_handoff(
+    monkeypatch,
+):
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._lock = threading.Lock()
+    bridge._motion_state = {
+        'motors': [{
+            'controller_index': 1,
+            'transport': 'ethercat',
+            'connection_state': 'online',
+            'connection_connected': True,
+            'fault': False,
+            'velocity_deg_s': 6.0,
+            'target_reached': False,
+        }],
+    }
+    bridge._motion_state_received_at = time.time()
+    bridge._motion_run_lock = threading.Lock()
+    bridge._motion_run_status = {}
+    bridge._motion_studio_lock = threading.Lock()
+    bridge._motion_studio_status = {}
+    repository = operation_repository(lambda: 'project-b')
+    repository.motor_runtime_state = lambda: {
+        'valid': True,
+        'target_project_id': 'project-a',
+    }
+    bridge.project_repository = repository
+    bridge.snapshot = lambda: {}
+    bridge._current_project_generation = lambda: 4
+    bridge._managed_user_service_active = lambda _service: (
+        pytest.fail('moving motor must be rejected before checking systemd')
+    )
+    monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
+
+    result = bridge._call_ethercat_scan_service_locked(
+        object(), '/scan_ac_servo_motors', 10.0
+    )
+
+    assert result['success'] is False
+    assert result['scan_blocked'] is True
+    assert '축 1' in result['message']
+    assert '움직이는 중' in result['message']
+
+
 def test_ac_servo_scan_ignores_stopped_servo_velocity_quantization_noise():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge._lock = threading.Lock()

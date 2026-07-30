@@ -37,6 +37,48 @@ test('every motor configuration action button exists and has a controller handle
   assert.match(controller, /reloadMotorConfigButton\.addEventListener\('click', \(\) => fetchRegistry\(\)\)/);
 });
 
+test('position-only legacy axes are merged for explicit batch SII confirmation', () => {
+  assert.match(
+    controller,
+    /resolveRegistryMotorForScanRow\(scanRow, axisMotors\(\)\)/,
+  );
+  assert.match(
+    controller,
+    /row\.identityConfirmationRequired = Boolean\(\s*resolved\.confirmationRequired/,
+  );
+  assert.match(
+    controller,
+    /combinedIdentityRows\.length === selectedRows\.length/,
+  );
+  assert.match(
+    controller,
+    /model_source: catalogModel\s*\?\s*'verified_catalog'\s*:\s*'physical_sii_user_confirmed'/,
+  );
+  assert.match(
+    html,
+    /id="updateAxisIdentityButton"[^>]*>선택 축 검색값 반영</,
+  );
+});
+
+test('apply and restart completes pending scan confirmation and save first', () => {
+  const applyFunction = controller.match(
+    /async function applyConfigRestart\(\) \{([\s\S]*?)\n  \}\n\n  function addSelectedAxis/,
+  );
+  assert.ok(applyFunction, 'applyConfigRestart function missing');
+  assert.match(applyFunction[1], /const pendingScanRows = axisRowsData\(\)\.filter/);
+  assert.match(applyFunction[1], /await updateSelectedAxisIdentity\(\)/);
+  assert.match(applyFunction[1], /await saveAxisConfig\(\)/);
+  assert.match(applyFunction[1], /await applyMotorConfig\(\)/);
+  assert.ok(
+    applyFunction[1].indexOf('await updateSelectedAxisIdentity()')
+      < applyFunction[1].indexOf('await saveAxisConfig()'),
+  );
+  assert.ok(
+    applyFunction[1].indexOf('await saveAxisConfig()')
+      < applyFunction[1].indexOf('await applyMotorConfig()'),
+  );
+});
+
 test('program and motor status refresh actions are clearly separated', () => {
   assert.match(
     html,

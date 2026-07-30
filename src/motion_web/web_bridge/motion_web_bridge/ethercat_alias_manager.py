@@ -124,6 +124,14 @@ class EthercatAliasManager:
                     f'Slave Position {position} {exc}'
                 ) from exc
             slave.update(identity)
+            # These strings are SII descriptors, not a verified nameplate
+            # model and not a safe motion-profile selector.
+            slave['sii_order_number'] = str(
+                slave.get('order_number') or ''
+            ).strip()
+            slave['sii_device_name'] = str(
+                slave.get('device_name') or ''
+            ).strip()
             slave['identity_source'] = 'physical_sii'
         return slaves
 

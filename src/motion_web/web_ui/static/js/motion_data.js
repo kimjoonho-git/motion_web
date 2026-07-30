@@ -476,10 +476,14 @@ export function createMotionDataController({
     onWorkContextChange?.();
   }
 
+  function mappingFileRevision(file) {
+    return String(file?.mapping_revision || file?.revision || '').trim();
+  }
+
   function syncMappingFileRevision(file) {
     if (!file || typeof file !== 'object') return false;
     const fileId = String(file.id || file.filename || '').trim();
-    const revision = String(file.revision || '').trim();
+    const revision = mappingFileRevision(file);
     if (!fileId || fileId !== selectedMappingId || !revision) return false;
     mappingRevision = revision;
     mappingFiles = mappingFiles.map((item) => (
@@ -1720,7 +1724,6 @@ export function createMotionDataController({
     }
     if (el.deleteMotionMappingButton) el.deleteMotionMappingButton.disabled = !selectedMappingId || mappingLoading;
     if (el.saveMotionMappingButton) el.saveMotionMappingButton.disabled = mappingLoading;
-    if (el.validateMotionMappingButton) el.validateMotionMappingButton.disabled = mappingLoading || !mappingDraft.mappings?.length;
     if (el.importMotionIdsButton) el.importMotionIdsButton.disabled = !mappingDraft.motion_file_id || mappingLoading;
     if (el.motionMappingSelect) el.motionMappingSelect.disabled = mappingLoading;
     if (el.refreshMotionMappingsButton) el.refreshMotionMappingsButton.disabled = mappingLoading;
@@ -1960,7 +1963,7 @@ export function createMotionDataController({
       registeredMotionFileIdValue = registeredMotionFileId(loadedDraft);
       upgradeLegacyMappingRefs();
       selectedMappingId = payload.file?.id || mappingDraft.file_id || requestedMappingId;
-      mappingRevision = String(payload.file?.revision || '');
+      mappingRevision = mappingFileRevision(payload.file);
       mappingRawText = payload.content || '';
       mappingValidation = payload.validation || null;
       mappingMotionFileDetail = loadedMotionFileDetail;
@@ -2129,9 +2132,21 @@ export function createMotionDataController({
     upgradeLegacyMappingRefs();
     renderMappingPanel();
     try {
+      const validated = await validateMotionMapping({
+        file_id: selectedMappingId || '',
+        mapping: mappingDraft,
+      });
+      mappingDraft = validated.mapping || mappingDraft;
+      mappingValidation = validated.validation || null;
+      if (validated.success === false || mappingValidation?.valid === false) {
+        setMappingMessage(
+          `검증 실패 · 저장하지 않음: ${validated.message || '설정 오류를 확인하세요'}`,
+        );
+        return;
+      }
       const payload = await saveMotionMapping({
         file_id: selectedMappingId || '',
-        base_revision: mappingRevision,
+        base_mapping_revision: mappingRevision,
         mapping: mappingDraft,
       });
       mappingValidation = payload.validation || null;
@@ -2144,12 +2159,14 @@ export function createMotionDataController({
       mappingDraft = payload.mapping || mappingDraft;
       registeredMotionFileIdValue = registeredMotionFileId(mappingDraft);
       selectedMappingId = payload.file?.id || mappingDraft.file_id || selectedMappingId;
-      mappingRevision = String(payload.file?.revision || '');
+      mappingRevision = mappingFileRevision(payload.file);
       mappingRawText = payload.content || '';
       mappingDirty = false;
-      setMappingMessage(payload.midi_banks?.success
-        ? `모션축 설정 저장 완료: ${selectedMappingId} · MIDI 뱅크는 같은 파일의 midi_banks에 유지됨`
-        : (payload.message || '매핑 저장 완료'));
+      setMappingMessage(payload.message || (
+        payload.runtime_applied
+          ? `모션축 설정 저장 완료: ${selectedMappingId} · MIDI 적용 완료`
+          : `모션축 설정 저장 완료: ${selectedMappingId}`
+      ));
       await onProjectFilesChange?.();
     } catch (error) {
       setMappingMessage(`매핑 저장 실패: ${error?.message || error}`);
@@ -2205,37 +2222,6 @@ export function createMotionDataController({
       await onProjectFilesChange?.();
     } catch (error) {
       setMappingMessage(`매핑 삭제 실패: ${error?.message || error}`);
-    } finally {
-      mappingLoading = false;
-      renderMappingPanel();
-    }
-  }
-
-  async function validateCurrentMapping() {
-    const draftError = validateMappingDraft();
-    if (draftError) {
-      mappingValidation = null;
-      setMappingMessage(`매핑 검증 중단: ${draftError}`);
-      renderMappingPanel();
-      return;
-    }
-    mappingLoading = true;
-    setMappingMessage('매핑 설정 검증 중');
-    normalizeDynamixelGearRatios();
-    upgradeLegacyMappingRefs();
-    renderMappingPanel();
-    try {
-      const beforeValidation = JSON.stringify(mappingDraft);
-      const payload = await validateMotionMapping({
-        file_id: selectedMappingId || '',
-        mapping: mappingDraft,
-      });
-      mappingDraft = payload.mapping || mappingDraft;
-      mappingValidation = payload.validation || null;
-      if (JSON.stringify(mappingDraft) !== beforeValidation) markMappingDirty();
-      setMappingMessage(payload.message || (payload.success ? '매핑 검증 완료' : '매핑 검증 실패'));
-    } catch (error) {
-      setMappingMessage(`매핑 검증 실패: ${error?.message || error}`);
     } finally {
       mappingLoading = false;
       renderMappingPanel();
@@ -2795,9 +2781,6 @@ export function createMotionDataController({
     }
     el.addMotionIdButton?.addEventListener('click', addMotionId);
     el.generateMotionIdsButton?.addEventListener('click', generateMotionIdsFromMotors);
-    if (el.validateMotionMappingButton) {
-      el.validateMotionMappingButton.addEventListener('click', validateCurrentMapping);
-    }
     if (el.saveMotionMappingButton) {
       el.saveMotionMappingButton.addEventListener('click', saveCurrentMapping);
     }

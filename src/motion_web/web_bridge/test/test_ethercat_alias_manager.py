@@ -72,6 +72,8 @@ def test_read_slaves_replaces_master_identity_with_direct_sii_values():
     assert [slave['ethercat_alias'] for slave in slaves] == [101, 403]
     assert [slave['serial_number'] for slave in slaves] == [0x18050508, 0x18050509]
     assert all(slave['identity_source'] == 'physical_sii' for slave in slaves)
+    assert slaves[0]['sii_order_number'] == 'MADLN05BE'
+    assert slaves[0]['sii_device_name'] == 'MADLN05BE'
 
 
 def test_write_alias_rechecks_identity_before_single_slave_write():

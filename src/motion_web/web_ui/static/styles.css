@@ -4122,7 +4122,7 @@ th {
 }
 
 .matching-table-wrap .matching-table {
-  min-width: 1560px;
+  min-width: 1740px;
 }
 
 .axis-combined-cell {
@@ -6402,6 +6402,19 @@ body.app-dialog-open {
 
 .settings-step-actions {
   margin-bottom: 10px;
+}
+
+.motion-mapping-final-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 8px;
+  overflow-x: auto;
+}
+
+.motion-mapping-final-actions button {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .settings-commit-card {

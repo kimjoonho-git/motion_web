@@ -61,16 +61,161 @@ def test_new_project_is_ready_for_first_run_without_legacy_files(tmp_path):
         'period: 1000000\nmasters:\n- id: 0\n  type: ethercat\n  slaves:\n'
         '  - controller_index: 0\n    driver_id: 0\n    alias: 403\n    position: 1\n'
         'web_axis_identities:\n- controller_index: 0\n  eeprom_alias: 403\n'
-        '  rotary_alias: 3\n  slave_position: 1\ndrivers:\n- id: 0\n  type: minas\n'
+        '  rotary_alias: 3\n  slave_position: 1\n  vendor_id: 1647\n'
+        '  product_id: 1614282756\n  revision_number: 65536\n'
+        '  serial_number: 123456\n  identity_source: physical_sii\n'
+        'drivers:\n- id: 0\n  type: minas\n'
         '  profile_velocity: 10\n  profile_acceleration: 20\n  profile_deceleration: 20\n',
     )
     runtime = repository.prepare_runtime_motor_config(project_id)
     runtime_path = project_dir / 'runtime' / 'applied_motor_config.yaml'
     assert runtime_path.is_file()
     assert 'web_axis_identities' not in yaml.safe_load(runtime_path.read_text())
+    assert 'web_axis_profiles' not in yaml.safe_load(runtime_path.read_text())
     assert not repository.get_project(project_id)['project']['setup_status']['motor_applied']
     repository.mark_runtime_motor_config_applied(project_id)
     assert repository.get_project(project_id)['project']['setup_status']['motor_applied']
+
+
+def test_runtime_accepts_web_confirmed_physical_sii_identity_source(tmp_path):
+    repository = ProjectRepository(tmp_path / 'projects')
+    project_id = repository.create_project('confirmed physical scan')['project']['project_id']
+    repository.save_file(
+        project_id,
+        'motor_axes',
+        'motor_axes.yaml',
+        'period: 1000000\nmasters:\n- id: 0\n  type: ethercat\n  slaves:\n'
+        '  - controller_index: 0\n    driver_id: 0\n    alias: 0\n    position: 0\n'
+        'web_axis_identities:\n- controller_index: 0\n  eeprom_alias: 0\n'
+        '  slave_position: 0\n  vendor_id: 1647\n  product_id: 1614282756\n'
+        '  revision_number: 65536\n  serial_number: 123456\n'
+        '  identity_source: physical_sii_user_confirmed\n'
+        'web_axis_profiles:\n- controller_index: 0\n  driver_model: MADLN05BE\n'
+        '  model_confirmed: true\n  model_source: physical_sii_user_confirmed\n'
+        'drivers:\n- id: 0\n  type: minas\n  driver_model: MADLN05BE\n'
+        '  profile_velocity: 10\n  profile_acceleration: 20\n'
+        '  profile_deceleration: 20\n',
+    )
+
+    runtime = repository.prepare_runtime_motor_config(project_id)
+
+    assert runtime['success'] is True
+
+
+def test_runtime_rejects_unverified_ac_servo_profile(tmp_path):
+    repository = ProjectRepository(tmp_path / 'projects')
+    project_id = repository.create_project('unverified driver')['project']['project_id']
+    repository.save_file(
+        project_id,
+        'motor_axes',
+        'motor_axes.yaml',
+        'period: 1000000\nmasters:\n- id: 0\n  type: ethercat\n  slaves:\n'
+        '  - controller_index: 0\n    driver_id: 0\n    alias: 0\n    position: 0\n'
+        'drivers:\n- id: 0\n  type: minas\n  driver_model: UNVERIFIED_MINAS\n'
+        '  profile_velocity: 10\n  profile_acceleration: 20\n'
+        '  profile_deceleration: 20\n',
+    )
+
+    with pytest.raises(ValueError, match='실제 서보 드라이버 모델'):
+        repository.prepare_runtime_motor_config(project_id)
+
+
+def test_runtime_rejects_unconfirmed_legacy_nameplate_model(tmp_path):
+    repository = ProjectRepository(tmp_path / 'projects')
+    project_id = repository.create_project('unconfirmed nameplate')['project']['project_id']
+    repository.save_file(
+        project_id,
+        'motor_axes',
+        'motor_axes.yaml',
+        'period: 1000000\nmasters:\n- id: 0\n  type: ethercat\n  slaves:\n'
+        '  - controller_index: 0\n    driver_id: 0\n    alias: 0\n    position: 0\n'
+        '    vendor_id: 1647\n    product_id: 1614282756\n'
+        'web_axis_identities:\n- controller_index: 0\n  eeprom_alias: 0\n'
+        '  slave_position: 0\n  vendor_id: 1647\n  product_id: 1614282756\n'
+        '  revision_number: 65536\n  serial_number: 123456\n'
+        '  identity_source: physical_sii\n  nameplate_confirmed: false\n'
+        'drivers:\n- id: 0\n  type: minas\n  driver_model: MADLN05BE\n'
+        '  profile_velocity: 10\n  profile_acceleration: 20\n'
+        '  profile_deceleration: 20\n',
+    )
+
+    with pytest.raises(ValueError, match='명판 확인되지 않았습니다'):
+        repository.prepare_runtime_motor_config(project_id)
+
+
+def test_unconfirmed_ac_servo_can_be_saved_but_not_applied(tmp_path):
+    repository = ProjectRepository(tmp_path / 'projects')
+    project_id = repository.create_project('save before model confirmation')['project']['project_id']
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge.project_repository = repository
+    bridge.workspace_root = tmp_path
+    bridge.motor_config_file = (
+        tmp_path / 'projects' / project_id / 'motor_axes' / 'motor_axes.yaml'
+    )
+    config = yaml.safe_load(
+        'period: 1000000\nmasters:\n- id: 0\n  type: ethercat\n  slaves:\n'
+        '  - controller_index: 0\n    driver_id: 0\n    alias: 0\n    position: 0\n'
+        '    vendor_id: 1647\n    product_id: 1614282756\n'
+        'web_axis_identities:\n- controller_index: 0\n  eeprom_alias: 0\n'
+        '  slave_position: 0\n  vendor_id: 1647\n  product_id: 1614282756\n'
+        '  revision_number: 65536\n  serial_number: 123456\n'
+        '  identity_source: physical_sii\n'
+        'web_axis_profiles:\n- controller_index: 0\n  driver_model: ""\n'
+        '  model_confirmed: false\n  model_source: ""\n'
+        'drivers:\n- id: 0\n  type: minas\n  driver_model: UNVERIFIED_MINAS\n'
+        '  profile_velocity: 18000\n  profile_acceleration: 180000\n'
+        '  profile_deceleration: 180000\n'
+    )
+
+    result = bridge.save_motor_config({
+        'registry': bridge._registry_from_motor_config(config),
+        'file_name': 'motor_axes.yaml',
+        'base_revision': '',
+    })
+
+    assert result['success'] is True
+    assert repository.get_project(project_id)['project']['active_files']['motor_axes'] == (
+        'motor_axes.yaml'
+    )
+    with pytest.raises(ValueError, match='실제 서보 드라이버 모델'):
+        repository.prepare_runtime_motor_config(project_id)
+
+
+def test_runtime_uses_separate_axis_model_profile_confirmation(tmp_path):
+    repository = ProjectRepository(tmp_path / 'projects')
+    project_id = repository.create_project('separate model profile')['project']['project_id']
+    content = (
+        'period: 1000000\nmasters:\n- id: 0\n  type: ethercat\n  slaves:\n'
+        '  - controller_index: 0\n    driver_id: 0\n    alias: 0\n    position: 0\n'
+        '    vendor_id: 1647\n    product_id: 1614282756\n'
+        'web_axis_identities:\n- controller_index: 0\n  eeprom_alias: 0\n'
+        '  slave_position: 0\n  vendor_id: 1647\n  product_id: 1614282756\n'
+        '  revision_number: 65536\n  serial_number: 123456\n'
+        '  identity_source: physical_sii\n'
+        'web_axis_profiles:\n- controller_index: 0\n  driver_model: MADLN05BE\n'
+        '  model_confirmed: false\n  model_source: ""\n'
+        'drivers:\n- id: 0\n  type: minas\n  driver_model: MADLN05BE\n'
+        '  profile_velocity: 10\n  profile_acceleration: 20\n'
+        '  profile_deceleration: 20\n'
+    )
+    repository.save_file(project_id, 'motor_axes', 'motor_axes.yaml', content)
+
+    with pytest.raises(ValueError, match='명판 확인되지 않았습니다'):
+        repository.prepare_runtime_motor_config(project_id)
+
+    repository.save_file(
+        project_id,
+        'motor_axes',
+        'motor_axes.yaml',
+        content.replace('model_confirmed: false', 'model_confirmed: true').replace(
+            'model_source: ""',
+            'model_source: user_nameplate',
+        ),
+    )
+    runtime = repository.prepare_runtime_motor_config(project_id)
+    runtime_payload = yaml.safe_load(Path(runtime['runtime_file']).read_text())
+    assert 'web_axis_identities' not in runtime_payload
+    assert 'web_axis_profiles' not in runtime_payload
 
 
 def test_legacy_untouched_motor_placeholder_is_removed(tmp_path):
@@ -136,7 +281,10 @@ def test_web_only_motor_identity_change_does_not_require_motor_runtime_restart(t
         'period: 1000000\nmasters:\n- id: 0\n  type: ethercat\n  slaves:\n'
         '  - controller_index: 0\n    driver_id: 0\n    alias: 403\n    position: 1\n'
         'web_axis_identities:\n- controller_index: 0\n  eeprom_alias: 403\n'
-        '  rotary_alias: 3\n  slave_position: 1\ndrivers:\n- id: 0\n  type: minas\n'
+        '  rotary_alias: 3\n  slave_position: 1\n  vendor_id: 1647\n'
+        '  product_id: 1614282756\n  revision_number: 65536\n'
+        '  serial_number: 123456\n  identity_source: physical_sii\n'
+        'drivers:\n- id: 0\n  type: minas\n'
         '  profile_velocity: 10\n  profile_acceleration: 20\n  profile_deceleration: 20\n'
     )
     repository.save_file(project_id, 'motor_axes', 'motor_axes.yaml', source)
@@ -173,7 +321,10 @@ def test_runtime_motor_config_rejects_identity_position_mismatch(tmp_path):
         'period: 1000000\nmasters:\n- id: 0\n  type: ethercat\n  slaves:\n'
         '  - controller_index: 0\n    driver_id: 0\n    alias: 403\n    position: 0\n'
         'web_axis_identities:\n- controller_index: 0\n  eeprom_alias: 403\n'
-        '  rotary_alias: 3\n  slave_position: 1\ndrivers:\n- id: 0\n  type: minas\n'
+        '  rotary_alias: 3\n  slave_position: 1\n  vendor_id: 1647\n'
+        '  product_id: 1614282756\n  revision_number: 65536\n'
+        '  serial_number: 123456\n  identity_source: physical_sii\n'
+        'drivers:\n- id: 0\n  type: minas\n'
         '  profile_velocity: 10\n  profile_acceleration: 20\n  profile_deceleration: 20\n',
     )
 
@@ -641,7 +792,7 @@ def test_project_switch_preserves_the_independent_applied_runtime(tmp_path):
     assert 'applied_project_id' not in selection
     runtime = repository.applied_runtime_motor_config()
     assert runtime is not None
-    assert runtime.parent.parent.name == runtime_id
+    assert runtime.parents[2].name == runtime_id
     assert repository.selected_runtime_motor_config() is None
     assert resolve_applied_motor_config(workspace) == runtime
     runtime_state = json.loads(
@@ -736,7 +887,7 @@ def test_applied_runtime_rejects_modified_runtime_content(tmp_path):
     )
     prepared = repository.prepare_runtime_motor_config(project_id)
     repository.mark_runtime_motor_config_applied(project_id)
-    runtime = Path(prepared['runtime_file'])
+    runtime = Path(repository.motor_runtime_state()['config_file'])
     runtime.write_text(runtime.read_text(encoding='utf-8') + '# changed\n', encoding='utf-8')
 
     state = repository.motor_runtime_state()
@@ -901,6 +1052,47 @@ def test_runtime_target_rollback_preserves_the_failed_operation(tmp_path):
     assert repository.motor_operation_status()['status'] == 'failure'
 
 
+def test_same_project_reapply_keeps_previous_runtime_session_for_rollback(tmp_path):
+    repository = ProjectRepository(tmp_path / 'projects')
+    project_id = repository.create_project('same project rollback')['project']['project_id']
+    repository.save_file(
+        project_id,
+        'motor_axes',
+        'motor_axes.yaml',
+        'period: 1000000\nmasters:\n- id: 0\n  type: ethercat\n  slaves:\n'
+        '  - controller_index: 0\n    driver_id: 0\ndrivers:\n- id: 0\n'
+        '  type: minas\n  profile_velocity: 10\n'
+        '  profile_acceleration: 20\n  profile_deceleration: 20\n',
+    )
+    config_file = repository.export_path(
+        project_id, 'motor_axes', 'motor_axes.yaml'
+    )
+    repository.prepare_runtime_motor_config(project_id)
+    repository.mark_runtime_motor_config_applied(project_id)
+    previous = repository.motor_runtime_target_snapshot()
+    previous_file = Path(repository.motor_runtime_state()['config_file'])
+    previous_content = previous_file.read_bytes()
+
+    config_file.write_text(
+        config_file.read_text(encoding='utf-8').replace(
+            'profile_velocity: 10', 'profile_velocity: 30'
+        ),
+        encoding='utf-8',
+    )
+    repository.prepare_runtime_motor_config(project_id)
+    repository.mark_runtime_motor_config_applied(project_id)
+    next_file = Path(repository.motor_runtime_state()['config_file'])
+
+    assert next_file != previous_file
+    assert previous_file.read_bytes() == previous_content
+
+    repository.restore_motor_runtime_target(previous)
+    restored = repository.motor_runtime_state()
+    assert restored['valid'] is True
+    assert Path(restored['config_file']) == previous_file
+    assert Path(restored['config_file']).read_bytes() == previous_content
+
+
 def test_timed_out_motor_apply_restores_previous_target_and_requests_restart(
     tmp_path, monkeypatch
 ):
@@ -948,9 +1140,11 @@ def test_timed_out_motor_apply_restores_previous_target_and_requests_restart(
     monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
 
     result = bridge._reconcile_motor_operation_status({}, {}, {})
+    repeated = bridge._reconcile_motor_operation_status({}, {}, {})
 
     assert result['status'] == 'timeout'
     assert result['phase'] == 'rollback_requested'
+    assert repeated['phase'] == 'rollback_requested'
     assert repository.motor_runtime_state()['target_project_id'] == previous_id
     assert scheduled == [
         ('motion-motor.service', 'motion-control.service'),
@@ -1012,6 +1206,50 @@ def test_service_entrypoint_rejects_motor_runtime_sha_mismatch(tmp_path):
             'version': 1,
             'target_project_id': 'runtime-project',
             'config_sha256': '0' * 64,
+        }),
+        encoding='utf-8',
+    )
+
+    assert resolve_applied_motor_config(workspace) is None
+
+
+def test_service_entrypoint_loads_immutable_runtime_session(tmp_path):
+    workspace = tmp_path / 'workspace'
+    projects = workspace / 'motion_projects'
+    session = (
+        projects / 'runtime-project' / 'runtime' / 'sessions'
+        / 'motor-abc123.yaml'
+    )
+    session.parent.mkdir(parents=True)
+    content = b'masters: []\n'
+    session.write_bytes(content)
+    (projects / '.motor_runtime.json').write_text(
+        json.dumps({
+            'version': 1,
+            'target_project_id': 'runtime-project',
+            'config_relpath': 'runtime/sessions/motor-abc123.yaml',
+            'config_sha256': hashlib.sha256(content).hexdigest(),
+        }),
+        encoding='utf-8',
+    )
+
+    assert resolve_applied_motor_config(workspace) == session
+
+
+def test_service_entrypoint_rejects_runtime_session_outside_project(tmp_path):
+    workspace = tmp_path / 'workspace'
+    projects = workspace / 'motion_projects'
+    project = projects / 'runtime-project'
+    project.mkdir(parents=True)
+    outside = projects / 'outside.yaml'
+    content = b'masters: []\n'
+    outside.write_bytes(content)
+    (projects / '.motor_runtime.json').write_text(
+        json.dumps({
+            'version': 1,
+            'target_project_id': 'runtime-project',
+            'config_relpath': '../outside.yaml',
+            'config_sha256': hashlib.sha256(content).hexdigest(),
         }),
         encoding='utf-8',
     )
@@ -1295,6 +1533,49 @@ def test_restarted_bridge_completes_persisted_motor_apply_operation(tmp_path):
     assert result['status'] == 'success'
     assert result['phase'] == 'completed'
     assert ProjectRepository(tmp_path / 'projects').motor_operation_status()['status'] == 'success'
+
+
+def test_motor_apply_completes_without_motion_axis_execution_context(tmp_path):
+    repository = ProjectRepository(tmp_path / 'projects')
+    runtime = tmp_path / 'runtime.yaml'
+    runtime.write_text('masters: []\n', encoding='utf-8')
+    operation = repository.begin_motor_operation(
+        'motor_apply',
+        'restart_requested',
+        timeout_sec=45.0,
+        details={
+            'runtime_file': str(runtime),
+            'expected_axes': [0],
+        },
+    )
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge.project_repository = repository
+    bridge._bridge_started_at = operation['started_at'] + 1.0
+
+    result = bridge._reconcile_motor_operation_status(
+        {
+            'phase': 'ready',
+            'runtime_config_file': str(runtime),
+            'runtime_target_matches_process': True,
+        },
+        {
+            'last_motor_status_at': operation['started_at'] + 2.0,
+            'motors': [{
+                'controller_index': 0,
+                'connection_state': 'online',
+                'connection_connected': True,
+                'fault': False,
+            }],
+        },
+        {
+            'ready': False,
+            'state': 'configuration_required',
+            'missing': ['motion_axis_matching'],
+        },
+    )
+
+    assert result['status'] == 'success'
+    assert result['phase'] == 'completed'
 
 
 def test_motor_restart_success_uses_terminal_completed_phase(tmp_path):

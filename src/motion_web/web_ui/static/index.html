@@ -332,7 +332,8 @@
             <div class="axis-edit-toolbar">
               <div class="registry-actions axis-edit-main-actions">
                 <button id="addAxisButton" class="primary" type="button" disabled>선택 축 추가</button>
-                <button id="updateAxisIdentityButton" type="button" disabled>선택 축 연결정보 변경</button>
+                <button id="updateAxisIdentityButton" type="button" disabled>선택 축 검색값 반영</button>
+                <button id="setAxisModelProfileButton" type="button" disabled>모델·운전 프로필 설정</button>
                 <button id="toggleAxisButton" type="button" disabled>선택 축 사용상태 변경</button>
               </div>
               <div class="registry-actions axis-edit-list-actions">
@@ -349,6 +350,7 @@
                     <th>선택</th>
                     <th>축·이름</th>
                     <th>실제 장치 식별</th>
+                    <th>모델·운전 프로필</th>
                     <th>연결 정보</th>
                     <th>설정·실행 적용</th>
                     <th>모션 매칭</th>
@@ -360,7 +362,7 @@
                 </thead>
                 <tbody id="axisRows">
                   <tr>
-                    <td colspan="10" class="empty">설정 파일을 불러오거나 모터 스캔을 실행하세요</td>
+                    <td colspan="11" class="empty">설정 파일을 불러오거나 모터 스캔을 실행하세요</td>
                   </tr>
                 </tbody>
               </table>
@@ -909,31 +911,18 @@
               </div>
             </section>
 
-            <section class="motion-file-subsection settings-step-card" aria-label="모션축 설정 검증">
+            <section class="motion-file-subsection settings-step-card settings-commit-card" aria-label="모션축 설정 검증 및 저장">
               <div class="section-head compact">
-                <strong>3. 검증 및 계산 미리보기</strong>
-                <span>motion_mapping_manager 계산 결과</span>
+                <strong>3. 검증·미리보기·저장</strong>
+                <span>검증을 통과한 계산 결과만 현재 프로젝트에 저장합니다</span>
               </div>
-              <div class="registry-actions settings-step-actions">
-                <button id="validateMotionMappingButton" class="primary" type="button">설정 검증</button>
+              <div class="registry-actions settings-step-actions motion-mapping-final-actions">
+                <button id="saveMotionMappingButton" class="primary" type="button">검증·미리보기·저장</button>
+                <button id="resetMotionMappingButton" type="button">저장된 내용으로 되돌리기</button>
+                <button id="deleteMotionMappingButton" class="danger" type="button" disabled>현재 설정 파일 삭제</button>
               </div>
               <div id="motionMappingValidation" class="motion-value-table">
-                <div class="empty">설정 검증을 누르면 결과가 표시됩니다</div>
-              </div>
-            </section>
-
-            <section class="motion-file-subsection settings-step-card settings-commit-card" aria-label="모션축 설정 저장">
-              <div class="section-head compact">
-                <strong>4. 저장</strong>
-                <span>검증 결과를 확인하고 현재 프로젝트의 모션축 설정 파일을 저장합니다</span>
-              </div>
-              <div class="settings-commit-actions">
-                <div class="registry-message">저장 후에도 현재 화면에서 계속 편집할 수 있습니다.</div>
-                <div class="registry-actions settings-file-actions">
-                  <button id="saveMotionMappingButton" class="primary" type="button">모션축 설정 저장</button>
-                  <button id="resetMotionMappingButton" type="button">저장된 내용으로 되돌리기</button>
-                  <button id="deleteMotionMappingButton" class="danger" type="button" disabled>현재 설정 파일 삭제</button>
-                </div>
+                <div class="empty">검증·미리보기·저장을 누르면 결과가 표시됩니다</div>
               </div>
             </section>
 
