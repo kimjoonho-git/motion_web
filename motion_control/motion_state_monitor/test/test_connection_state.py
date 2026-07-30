@@ -530,6 +530,40 @@ Identity:
                 '',
             )
 
+    def test_immutable_runtime_session_is_tagged_with_owning_project(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project_dir = root / 'project-a'
+            sessions_dir = project_dir / 'runtime' / 'sessions'
+            sessions_dir.mkdir(parents=True)
+            (project_dir / 'project.json').write_text(
+                json.dumps({'project_id': 'project-a'}), encoding='utf-8'
+            )
+            config = sessions_dir / 'motor-session.yaml'
+            config.write_text('masters: []\n', encoding='utf-8')
+
+            self.assertEqual(
+                self.monitor._project_id_from_motor_config(config),
+                'project-a',
+            )
+
+    def test_non_runtime_subdirectory_is_not_treated_as_project_runtime(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project_dir = root / 'project-a'
+            other_dir = project_dir / 'runtime' / 'other'
+            other_dir.mkdir(parents=True)
+            (project_dir / 'project.json').write_text(
+                json.dumps({'project_id': 'project-a'}), encoding='utf-8'
+            )
+            config = other_dir / 'motor.yaml'
+            config.write_text('masters: []\n', encoding='utf-8')
+
+            self.assertEqual(
+                self.monitor._project_id_from_motor_config(config),
+                '',
+            )
+
 
 if __name__ == '__main__':
     unittest.main()

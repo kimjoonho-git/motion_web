@@ -885,10 +885,26 @@ class MotionStateMonitor(Node):
         raw = str(config_file or '').strip()
         if not raw:
             return ''
-        path = Path(raw).expanduser().resolve()
-        if path.parent.name != 'runtime':
+        requested_path = Path(raw).expanduser()
+        if (
+            not requested_path.is_file()
+            or requested_path.is_symlink()
+        ):
             return ''
-        project_dir = path.parent.parent
+
+        path = requested_path.resolve()
+        if path.parent.name == 'runtime':
+            runtime_dir = path.parent
+        elif path.parent.name == 'sessions' and path.parent.parent.name == 'runtime':
+            runtime_dir = path.parent.parent
+            if path.parent.is_symlink():
+                return ''
+        else:
+            return ''
+
+        if runtime_dir.is_symlink():
+            return ''
+        project_dir = runtime_dir.parent
         manifest_path = project_dir / 'project.json'
         if project_dir.is_symlink() or manifest_path.is_symlink() or not manifest_path.is_file():
             return ''
