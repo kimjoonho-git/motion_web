@@ -27,10 +27,16 @@ RuntimeSession 생성, 서비스 재시작 및 모터 제어 허용은
 ## 3. EtherCAT AC Servo
 
 1. 모터 동작과 다른 검색·적용 작업이 없는지 확인한다.
-2. 활성 Motor Manager가 EtherCAT Master를 사용 중이면 검색을 시작하지 않는다.
-3. `ethercat rescan`으로 기존 열거정보를 폐기한다.
-4. Slave 목록이 안정화될 때까지 기다린다.
-5. 각 Slave의 SII EEPROM에서 다음 값을 직접 읽는다.
+2. 활성 Motor Manager가 EtherCAT Master를 사용 중이면 먼저 Motor Manager를
+   정지하고 Master가 비활성 상태인지 확인한다.
+3. 선택 프로젝트와 실행 프로젝트가 같으면 최신 모터 피드백으로 정지 상태를
+   확인한 경우에만 Motor Manager를 정지한다.
+4. 선택 프로젝트와 실행 프로젝트가 다르면 이전 프로젝트 Motor Manager를
+   정지하고 검색 후 다시 시작하지 않는다. 현재 프로젝트 설정을 저장·적용한
+   경우에만 새 RuntimeSession으로 시작한다.
+5. `ethercat rescan`으로 기존 열거정보를 폐기한다.
+6. Slave 목록이 안정화될 때까지 기다린다.
+7. 각 Slave의 SII EEPROM에서 다음 값을 직접 읽는다.
    - Vendor ID
    - Product Code
    - Revision Number
@@ -38,8 +44,8 @@ RuntimeSession 생성, 서비스 재시작 및 모터 제어 허용은
    - EEPROM Alias
    - SII Order Number
    - SII Device Name
-6. 각 Slave의 Alias 레지스터 `0x0012`와 Slave Position을 읽는다.
-7. Master 열거정보와 SII 식별정보가 불일치하면 해당 Slave를 완료로 처리하지 않는다.
+8. 각 Slave의 Alias 레지스터 `0x0012`와 Slave Position을 읽는다.
+9. Master 열거정보와 SII 식별정보가 불일치하면 해당 Slave를 완료로 처리하지 않는다.
 
 ### EtherCAT 장치 식별
 
@@ -99,6 +105,8 @@ RuntimeSession 생성, 서비스 재시작 및 모터 제어 허용은
 
 - EtherCAT `rescan`이 SII 읽기보다 먼저 실행되는지
 - 활성 Motor Manager 또는 모터 동작 중 위험한 재열거를 차단하는지
+- 프로젝트 전환 후 이전 RuntimeSession 피드백이 없어도 이전 Motor Manager를
+  정지하고 검색하며, 검색 후 이전 RuntimeSession을 복구하지 않는지
 - EtherCAT Alias 레지스터와 SII Alias를 각각 읽는지
 - 이전 프로젝트와 런타임 장치를 검색 결과에 주입하지 않는지
 - Dynamixel ID `0~252` 전체를 대상으로 하는지

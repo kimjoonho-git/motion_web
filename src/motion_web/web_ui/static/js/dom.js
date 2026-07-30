@@ -215,7 +215,6 @@ export function getElements() {
     newMotionMappingButton: document.getElementById('newMotionMappingButton'),
     addMotionIdButton: document.getElementById('addMotionIdButton'),
     generateMotionIdsButton: document.getElementById('generateMotionIdsButton'),
-    validateMotionMappingButton: document.getElementById('validateMotionMappingButton'),
     saveMotionMappingButton: document.getElementById('saveMotionMappingButton'),
     resetMotionMappingButton: document.getElementById('resetMotionMappingButton'),
     deleteMotionMappingButton: document.getElementById('deleteMotionMappingButton'),

@@ -59,7 +59,8 @@ test('axis readiness table keeps runtime facts distinct', () => {
   assert.match(controller, /EEPROM Alias \$\{displayText\(eepromAlias\)\}/);
   assert.match(controller, /Slave Position \$\{displayText\(position\)\}/);
   assert.match(controller, /id="setAxisModelProfileButton"|setAxisModelProfileButton/);
-  assert.match(controller, /기존 축 연결 후보/);
+  assert.match(controller, /기존 축 연결 확인/);
+  assert.match(controller, /identityConfirmationRequired/);
   assert.match(controller, /!row\.associationCandidate/);
   assert.match(controller, /SII 참고값/);
   assert.match(controller, /UNVERIFIED_MINAS/);

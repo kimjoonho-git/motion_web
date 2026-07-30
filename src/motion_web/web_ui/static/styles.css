@@ -6404,6 +6404,19 @@ body.app-dialog-open {
   margin-bottom: 10px;
 }
 
+.motion-mapping-final-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 8px;
+  overflow-x: auto;
+}
+
+.motion-mapping-final-actions button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 .settings-commit-card {
   border-color: #b9cee7 !important;
   background: #f8fbff !important;

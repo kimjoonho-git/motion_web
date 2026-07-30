@@ -2692,7 +2692,9 @@ class MotionWebBridge(Node):
             }
 
         was_active = self._managed_user_service_active(motor_service)
-        if was_active:
+        runtime_handoff = self._ethercat_scan_runtime_handoff()
+        restore_runtime = bool(was_active and not runtime_handoff['required'])
+        if restore_runtime:
             blocker = self._ethercat_scan_safety_blocker(
                 require_fresh_motor_state=True,
             )
@@ -2707,8 +2709,12 @@ class MotionWebBridge(Node):
                     **self.snapshot(),
                 }
 
-        expected_ethercat_axes = self._expected_runtime_ethercat_axes()
-        expected_recovery_axes = self._expected_runtime_axes()
+        expected_ethercat_axes = (
+            self._expected_runtime_ethercat_axes() if restore_runtime else []
+        )
+        expected_recovery_axes = (
+            self._expected_runtime_axes() if restore_runtime else []
+        )
         if operation_id:
             self.project_repository.update_motor_operation(
                 operation_id,
@@ -2717,9 +2723,10 @@ class MotionWebBridge(Node):
                     'motor_service_was_active': was_active,
                     'expected_axes': expected_recovery_axes,
                     'expected_ethercat_axes': expected_ethercat_axes,
+                    'runtime_handoff': runtime_handoff,
                 },
             )
-        if was_active and not expected_ethercat_axes:
+        if restore_runtime and not expected_ethercat_axes:
             return {
                 'success': False,
                 'message': (
@@ -2732,7 +2739,7 @@ class MotionWebBridge(Node):
                 'project_generation': self._current_project_generation(),
                 **self.snapshot(),
             }
-        if was_active and not expected_recovery_axes:
+        if restore_runtime and not expected_recovery_axes:
             return {
                 'success': False,
                 'message': (
@@ -2748,18 +2755,23 @@ class MotionWebBridge(Node):
         result: Dict[str, Any]
         restore_error = ''
         recovery: Dict[str, Any] = {
-            'required': bool(was_active),
-            'expected_axes': expected_recovery_axes,
+            'required': restore_runtime,
+            'expected_axes': expected_recovery_axes if restore_runtime else [],
             'online_axes': [],
-            'recovered': not was_active,
+            'recovered': not restore_runtime,
         }
         try:
             if was_active:
                 if operation_id:
+                    stop_message = (
+                        '이전 프로젝트 Motor Manager 정지 및 EtherCAT 소유권 해제 중'
+                        if runtime_handoff['required']
+                        else 'Motor Manager 정지 및 EtherCAT 소유권 해제 중'
+                    )
                     self.project_repository.update_motor_operation(
                         operation_id,
                         'stopping_runtime',
-                        message='Motor Manager 정지 및 EtherCAT 소유권 해제 중',
+                        message=stop_message,
                     )
                 self._run_managed_user_service('stop', motor_service)
                 self._wait_for_ethercat_release(timeout_sec=5.0)
@@ -2781,7 +2793,7 @@ class MotionWebBridge(Node):
                 **self.snapshot(),
             }
         finally:
-            if was_active:
+            if restore_runtime:
                 try:
                     if operation_id:
                         try:
@@ -2811,8 +2823,18 @@ class MotionWebBridge(Node):
                     restore_error = str(exc)
 
         result['motor_service_was_active'] = was_active
-        result['motor_service_restored'] = bool(was_active and not restore_error)
+        result['motor_service_restore_required'] = restore_runtime
+        result['motor_service_restored'] = bool(
+            restore_runtime and not restore_error
+        )
         result['motor_runtime_recovery'] = recovery
+        result['runtime_handoff'] = runtime_handoff
+        if runtime_handoff['required'] and result.get('success') is True:
+            result['message'] = (
+                f'{result.get("message") or "AC Servo 검색 완료"} / '
+                '이전 프로젝트 모터 실행은 정지되었습니다. '
+                '현재 프로젝트 설정을 저장한 뒤 설정 적용 및 재시작하세요'
+            )
         if restore_error:
             result['success'] = False
             result['restore_error'] = restore_error
@@ -2821,6 +2843,41 @@ class MotionWebBridge(Node):
                 f'Motor Manager 복구 실패: {restore_error}'
             )
         return result
+
+    def _ethercat_scan_runtime_handoff(self) -> Dict[str, Any]:
+        """Describe whether an active Motor Manager belongs to another project.
+
+        A project switch intentionally does not change the active runtime.
+        Therefore a physical scan for the newly selected project must be able
+        to retire the previous project's runtime without depending on feedback
+        from that runtime.  The scan safety blocker still rejects every active
+        upper-level motion operation and any observed moving EtherCAT axis.
+        """
+        selected_project_id = str(
+            self.project_repository.selected_project_id() or ''
+        ).strip()
+        runtime_project_id = ''
+        try:
+            runtime_state = self.project_repository.motor_runtime_state()
+        except (AttributeError, OSError, ValueError, json.JSONDecodeError):
+            runtime_state = {}
+        if isinstance(runtime_state, dict):
+            runtime_project_id = str(
+                runtime_state.get('target_project_id') or ''
+            ).strip()
+        if not runtime_project_id:
+            runtime_project_id = str(
+                self._runtime_project_id_from_path(selected_project_id) or ''
+            ).strip()
+        return {
+            'required': bool(
+                selected_project_id
+                and runtime_project_id
+                and runtime_project_id != selected_project_id
+            ),
+            'selected_project_id': selected_project_id,
+            'runtime_project_id': runtime_project_id,
+        }
 
     def _ethercat_scan_safety_blocker(
         self,
@@ -4470,37 +4527,37 @@ class MotionWebBridge(Node):
             return result
 
         saved_file_id = self._motion_mapping_file_id(result)
-        if saved_file_id:
-            # The mapping manager preserved the file-owned MIDI block. Reload
-            # that verified file state instead of asking MIDI to write YAML.
-            midi_result = self._load_and_apply_midi_banks(saved_file_id)
-            result['midi_banks'] = midi_result
-            if midi_result.get('success') is False:
-                if midi_result.get('missing'):
-                    # A new mapping legitimately has no file-owned bank block
-                    # until the user performs the first MIDI bank save.
-                    result['midi_banks_warning'] = str(
-                        midi_result.get('message') or ''
-                    )
-                    result['message'] = (
-                        '모션축 설정을 저장했습니다. '
-                        'MIDI 뱅크는 MIDI 탭에서 처음 저장하세요'
-                    )
-                else:
-                    result['success'] = False
-                    result['message'] = (
-                        '모션축 설정은 저장됐지만 MIDI 뱅크 적용에 실패했습니다: '
-                        f"{midi_result.get('message') or 'unknown error'}"
-                    )
         if saved_file_id and getattr(self, 'project_repository', None) is not None:
             project_id = self.project_repository.selected_project_id()
-            return self._sync_project_file(
+            result = self._sync_project_file(
                 result,
                 'motion_axis_matching',
                 self.project_repository.export_path(
                     project_id, 'motion_axis_matching', saved_file_id
                 ),
             )
+            # The active mapping file is one immutable part of the project
+            # execution context. Applying only its MIDI-bank subsection leaves
+            # the MIDI axis registry and every other consumer on the previous
+            # file hash. Reconcile the complete context after the repository
+            # has confirmed the saved file and active-file selection.
+            execution_context = self._reconcile_execution_context()
+            result['execution_context'] = execution_context
+            result['runtime_applied'] = bool(execution_context.get('ready'))
+            if result['runtime_applied']:
+                result['message'] = (
+                    '모션축 설정 저장 완료 · 변경된 모션 범위를 MIDI에 적용했습니다'
+                )
+            else:
+                runtime_message = str(
+                    execution_context.get('message')
+                    or '실행 컨텍스트 적용 대기'
+                )
+                result['runtime_apply_warning'] = runtime_message
+                result['message'] = (
+                    '모션축 설정은 저장됐지만 MIDI 적용 대기 중입니다: '
+                    f'{runtime_message}'
+                )
         return result
 
     def _load_and_apply_midi_banks(self, file_id: str) -> Dict[str, Any]:

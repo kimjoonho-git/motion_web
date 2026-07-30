@@ -104,37 +104,72 @@ def test_loading_motion_mapping_reads_banks_from_mapping_owner_and_applies_node(
     ]
 
 
-def test_saving_motion_mapping_preserves_file_banks_then_applies_verified_state(monkeypatch):
+def test_saving_motion_mapping_syncs_active_file_then_reconciles_execution_context(
+    monkeypatch,
+):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     mapping_calls = []
-    midi_calls = []
+    calls = []
 
     def mapping_request(command, payload, timeout_sec=2.0):
         mapping_calls.append((command, payload, timeout_sec))
-        if command == 'save':
-            return {'success': True, 'file': {'id': 'show.yaml'}, 'mapping': {}}
-        return {
-            'success': True,
-            'file': {'id': 'show.yaml'},
-            'midi_banks': MIDI_STATE,
-        }
+        return {'success': True, 'file': {'id': 'show.yaml'}, 'mapping': {}}
 
     monkeypatch.setattr(bridge, '_request_motion_mapping', mapping_request)
     monkeypatch.setattr(
         bridge,
-        '_request_midi_monitor',
-        lambda command, payload, timeout_sec: (
-            midi_calls.append((command, payload, timeout_sec))
-            or {'success': True}
+        'project_repository',
+        SelectedProjectRepository(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        bridge,
+        '_sync_project_file',
+        lambda result, category, path: (
+            calls.append(('sync', category, path))
+            or {**result, 'project_sync': {'success': True}}
         ),
+    )
+    monkeypatch.setattr(
+        bridge,
+        '_reconcile_execution_context',
+        lambda: (
+            calls.append(('reconcile',))
+            or {'ready': True, 'message': 'ready'}
+        ),
+    )
+    monkeypatch.setattr(
+        bridge.project_repository,
+        'export_path',
+        lambda project_id, category, file_id: (
+            calls.append(('export', project_id, category, file_id))
+            or '/projects/project-1/motion_axis_matching/show.yaml'
+        ),
+        raising=False,
     )
 
     result = bridge.save_motion_mapping({'file_id': 'show.yaml', 'mapping': {}})
 
-    assert result['midi_banks']['success'] is True
-    assert mapping_calls[0][0] == 'save'
-    assert mapping_calls[1] == ('load_midi_banks', {'file_id': 'show.yaml'}, 3.0)
-    assert midi_calls[0][0] == 'apply_banks'
+    assert result['runtime_applied'] is True
+    assert result['execution_context']['ready'] is True
+    assert 'MIDI에 적용' in result['message']
+    assert mapping_calls == [
+        ('save', {'file_id': 'show.yaml', 'mapping': {}}, 2.0),
+    ]
+    assert calls == [
+        (
+            'export',
+            'project-1',
+            'motion_axis_matching',
+            'show.yaml',
+        ),
+        (
+            'sync',
+            'motion_axis_matching',
+            '/projects/project-1/motion_axis_matching/show.yaml',
+        ),
+        ('reconcile',),
+    ]
 
 
 def test_first_mapping_save_succeeds_before_first_midi_bank_save(monkeypatch):
@@ -155,8 +190,7 @@ def test_first_mapping_save_succeeds_before_first_midi_bank_save(monkeypatch):
     result = bridge.save_motion_mapping({'mapping': {'name': 'new'}})
 
     assert result['success'] is True
-    assert result['midi_banks']['missing'] is True
-    assert '처음 저장' in result['message']
+    assert result['file']['id'] == 'new.yaml'
 
 
 def test_updating_bank_saves_through_mapping_owner_then_applies_verified_state(monkeypatch):

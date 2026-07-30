@@ -30,11 +30,13 @@ import {
   detectedScanRow,
   runtimeIsAcServo,
   runtimeMotorConfirmsRegistryMotor,
+  resolveRegistryMotorForScanRow,
   scanKey,
   scanRowMatchesRegistryMotor,
   scanRowMatchesRuntimeMotor,
   scanRowSharesConfiguredPosition,
   scanRowToMotor as acServoScanRowToMotor,
+  siiReportedAcServoModel,
   verifiedAcServoModel,
 } from './motor_type_ac_servo.js?v=20260722-runtime-axis-confirm';
 import {
@@ -1568,7 +1570,7 @@ export function createMotorConfigController({
       if (deviceState.includes('ERROR')) {
         return [`EtherCAT ${deviceState}`, 'delete'];
       }
-      if (row.associationCandidate) {
+      if (row.associationCandidate || row.identityConfirmationRequired) {
         return ['기존 축 연결 필요', 'review'];
       }
       const motor = row.motor || row.proposedMotor;
@@ -1633,7 +1635,9 @@ export function createMotorConfigController({
   }
 
   function settingStatus(row) {
-    if (row.associationCandidate) return ['연결 후보', 'review'];
+    if (row.associationCandidate || row.identityConfirmationRequired) {
+      return ['연결 확인 필요', 'review'];
+    }
     const motor = row.motor;
     if (!motor) return ['미설정', 'unregistered'];
     if (motor.deleted) return ['삭제 예정', 'delete'];
@@ -1727,6 +1731,8 @@ export function createMotorConfigController({
       ? '카탈로그 확인'
       : source === 'physical_protocol'
         ? '장치 프로토콜 확인'
+        : source === 'physical_sii_user_confirmed'
+          ? 'SII 검색값 사용자 확인'
         : source === 'user_nameplate'
           ? '사용자 명판 확인'
           : '확인 근거 없음';
@@ -1769,10 +1775,10 @@ export function createMotorConfigController({
 
   function rowMappingView(row) {
     const runtime = row.runtimeMotor;
-    if (row.associationCandidate) {
+    if (row.associationCandidate || row.identityConfirmationRequired) {
       return {
-        text: '연결 대상 선택',
-        detail: '기존 축과 1:1 선택',
+        text: '연결 확인 필요',
+        detail: row.motor ? '검색값 반영 후 저장' : '기존 축과 1:1 선택',
         className: 'review',
         ready: false,
       };
@@ -2203,11 +2209,15 @@ export function createMotorConfigController({
     });
 
     acServoScanRows().forEach((scanRow) => {
-      const matched = axisMotors().find((motor) => scanRowMatchesRegistryMotor(scanRow, motor)) || null;
+      const resolved = resolveRegistryMotorForScanRow(scanRow, axisMotors());
+      const matched = resolved?.motor || null;
       if (matched) {
         const row = byId.get(matched.id);
         if (row) {
           row.scanRow = scanRow;
+          row.identityConfirmationRequired = Boolean(
+            resolved.confirmationRequired,
+          );
           row.runtimeMotor = row.runtimeMotor || runtimeMotorForRegistryMotor(matched, acRuntime);
         }
         usedAcScan.add(scanKey(scanRow));
@@ -2271,10 +2281,16 @@ export function createMotorConfigController({
     const newRows = rows.filter(
       (row) => !row.motor && row.proposedMotor && !row.associationCandidate,
     );
-    const candidateCount = rows.filter(
+    const confirmationRows = rows.filter(
+      (row) => row.motor && row.scanRow && row.identityConfirmationRequired,
+    );
+    const separateCandidateRows = rows.filter(
       (row) => !row.motor && row.associationCandidate,
-    ).length;
-    selectedAxisIds = new Set(newRows.map((row) => row.id));
+    );
+    const candidateCount = confirmationRows.length + separateCandidateRows.length;
+    selectedAxisIds = new Set(
+      [...newRows, ...confirmationRows].map((row) => row.id),
+    );
     lastAxisRenderSignature = '';
     renderAxisSettings();
     return { newCount: newRows.length, candidateCount };
@@ -2306,10 +2322,12 @@ export function createMotorConfigController({
     );
     const canAdd = addRows.length > 0 && selectedAcProjectRows.length === 0 &&
       suspectedExistingRows.length === 0;
+    const combinedIdentityRows = selectedRows.filter(
+      (row) => row.motor?.transport === 'ethercat' && row.scanRow && !row.motor.deleted,
+    );
     const canUpdateIdentity = (
-      selectedRows.length === 1 &&
-      selectedAcProjectRows.length === 1 &&
-      selectedAcScanRows.length === 1
+      selectedRows.length > 0 &&
+      combinedIdentityRows.length === selectedRows.length
     ) || (
       selectedRows.length === 2 &&
       selectedAcProjectRows.length === 1 &&
@@ -2390,8 +2408,8 @@ export function createMotorConfigController({
     }
     if (el.updateAxisIdentityButton) {
       el.updateAxisIdentityButton.title = canUpdateIdentity
-        ? '검색된 실제 연결정보를 선택한 프로젝트 축의 편집 초안에 반영합니다.'
-        : '연결정보를 반영할 프로젝트 AC 서보 축과 검색 축을 선택하세요.';
+        ? '검색된 SII 모델·Serial·연결정보를 선택한 프로젝트 축의 편집 초안에 반영합니다.'
+        : '검색값을 반영할 프로젝트 AC 서보 축을 선택하세요.';
     }
     if (el.saveAxisConfigButton) {
       el.saveAxisConfigButton.title = changed
@@ -2432,7 +2450,8 @@ export function createMotorConfigController({
       )
       : [];
     const connectionCandidateCount = rows.filter(
-      (row) => !row.motor && row.associationCandidate,
+      (row) => row.identityConfirmationRequired
+        || (!row.motor && row.associationCandidate),
     ).length;
     const scanOnlyCount = rows.filter(
       (row) => !row.motor && !row.associationCandidate && (row.scanRow || row.scanDevice),
@@ -2474,7 +2493,7 @@ export function createMotorConfigController({
     } else if (connectionCandidateCount > 0) {
       state = '기존 축 연결 확인 필요';
       detail = `Serial이 없는 기존 축과 같은 위치에서 ${formatInt(connectionCandidateCount)}축이 검색됐습니다.`;
-      next = '다음 작업: 기존 축과 같은 Slave의 검색 장비를 하나씩 선택하고 선택 축 연결정보 변경';
+      next = '다음 작업: 자동 선택된 축을 확인하고 선택 축 검색값 반영';
       stateCode = 'warning';
     } else if (identityError) {
       const needsScan = identityError.includes('검색이 필요');
@@ -2509,7 +2528,8 @@ export function createMotorConfigController({
     const configured = axisMotors().filter((motor) => !motor.deleted);
     const disabled = configured.filter((motor) => !motor.enabled);
     const connectionCandidates = rows.filter(
-      (row) => !row.motor && row.associationCandidate,
+      (row) => row.identityConfirmationRequired
+        || (!row.motor && row.associationCandidate),
     );
     const scanOnly = rows.filter(
       (row) => !row.motor && !row.associationCandidate && (row.scanRow || row.scanDevice),
@@ -2518,7 +2538,7 @@ export function createMotorConfigController({
     const selectedCount = selectedAxisIds.size;
 
     if (el.axisSummary) {
-      el.axisSummary.textContent = `설정 ${formatInt(configured.length)}축, 미사용 ${formatInt(disabled.length)}축, 연결 후보 ${formatInt(connectionCandidates.length)}축, 신규 ${formatInt(scanOnly.length)}축, 선택 ${formatInt(selectedCount)}축, ${changed ? '저장 필요' : '저장됨'}`;
+      el.axisSummary.textContent = `설정 ${formatInt(configured.length)}축, 미사용 ${formatInt(disabled.length)}축, 연결 확인 ${formatInt(connectionCandidates.length)}축, 신규 ${formatInt(scanOnly.length)}축, 선택 ${formatInt(selectedCount)}축, ${changed ? '저장 필요' : '저장됨'}`;
     }
 
     if (el.axisRows) {
@@ -3080,6 +3100,22 @@ export function createMotorConfigController({
   }
 
   async function applyConfigRestart() {
+    const pendingScanRows = axisRowsData().filter((row) => (
+      row.motor?.transport === 'ethercat'
+      && !row.motor.deleted
+      && row.scanRow
+      && (
+        row.identityConfirmationRequired
+        || row.motor.profile?.model_confirmed !== true
+      )
+    ));
+    if (pendingScanRows.length > 0) {
+      selectedAxisIds = new Set(pendingScanRows.map((row) => row.id));
+      const scanValuesApplied = await updateSelectedAxisIdentity();
+      if (!scanValuesApplied) return false;
+      const saved = await saveAxisConfig();
+      if (!saved) return false;
+    }
     if (hasAnyConfigChanges()) {
       setAxisMessage('저장하지 않은 축 설정이 있습니다. 먼저 변경 내용 저장을 누르세요.');
       renderAxisSettings();
@@ -3327,87 +3363,109 @@ export function createMotorConfigController({
 
   async function updateSelectedAxisIdentity() {
     const selectedRows = selectedAxisRows();
-    const projectRows = selectedRows.filter(
-      (row) => row.motor?.transport === 'ethercat' && !row.motor.deleted,
-    );
-    const scanRows = selectedRows.filter((row) => Boolean(row.scanRow));
-    if (projectRows.length !== 1 || scanRows.length !== 1 ||
-        ![1, 2].includes(selectedRows.length)) {
+    let pairs = selectedRows
+      .filter((row) => (
+        row.motor?.transport === 'ethercat'
+        && !row.motor.deleted
+        && row.scanRow
+      ))
+      .map((row) => ({ motor: row.motor, scanRow: row.scanRow }));
+    if (pairs.length !== selectedRows.length && selectedRows.length === 2) {
+      const projectRow = selectedRows.find(
+        (row) => row.motor?.transport === 'ethercat' && !row.motor.deleted,
+      );
+      const scanRow = selectedRows.find((row) => Boolean(row.scanRow));
+      pairs = projectRow && scanRow
+        ? [{ motor: projectRow.motor, scanRow: scanRow.scanRow }]
+        : [];
+    }
+    if (pairs.length === 0 || (
+      pairs.length !== selectedRows.length
+      && !(selectedRows.length === 2 && pairs.length === 1)
+    )) {
       setAxisMessage(
-        '연결값을 바꿀 프로젝트 AC 서보 축과 검색된 AC 서보 축을 하나씩 선택하세요.',
+        '검색값을 반영할 프로젝트 AC 서보 축을 선택하세요.',
         true,
       );
-      return;
+      return false;
     }
 
-    const motor = projectRows[0].motor;
-    const scanRow = scanRows[0].scanRow;
-    const oldIdentity = motor.identity || {};
-    const oldAlias = firstDefined(oldIdentity.ethercat_alias, motor.config?.alias);
-    const changes = [
-      ['EEPROM Alias', oldAlias, scanRow.ethercat_alias],
-      ['Station Alias', oldIdentity.rotary_alias, scanRow.rotary_alias],
-      ['Slave Position', oldIdentity.slave_position, scanRow.slave_position],
-      ['Vendor ID', motor.config?.vendor_id, scanRow.vendor_id],
-      ['Product ID', motor.config?.product_id, scanRow.product_code],
-      ['Revision', oldIdentity.revision_number, scanRow.revision_number],
-      ['Serial Number', oldIdentity.serial_number, scanRow.serial_number],
-      ['SII 장치명', oldIdentity.sii_device_name, scanRow.sii_device_name],
-    ];
-    const changeText = changes.map(([label, before, after]) => (
-      `${label}: ${before ?? '미등록'} → ${after ?? '확인 불가'}`
-    )).join('\n');
+    const changeText = pairs.map(({ motor, scanRow }) => {
+      const model = verifiedAcServoModel(scanRow)
+        || siiReportedAcServoModel(scanRow)
+        || '모델 미확인';
+      return `축 ${formatInt(motorAxisValue(motor))} · Slave `
+        + `${formatInt(scanRow.slave_position)} · ${model} · Serial `
+        + `${formatInt(scanRow.serial_number)}`;
+    }).join('\n');
     const confirmed = await showConfirm(
-      `Control Index ${formatInt(motorAxisValue(motor))}의 연결값을 변경합니다.\n\n`
+      `선택 ${formatInt(pairs.length)}축에 실제 검색값을 반영합니다.\n\n`
       + `${changeText}\n\n`
-      + '이 검색 장비가 프로젝트의 해당 축이 맞는지 확인했습니까?\n'
-      + '확인 후에도 변경 내용 저장을 눌러야 프로젝트 파일에 반영됩니다.',
-      { title: 'AC Servo 연결정보 반영', confirmLabel: '연결정보 반영', tone: 'warning' },
+      + '각 Slave가 프로젝트의 해당 축과 맞는지 확인했습니까?\n'
+      + '반영 후 변경 내용 검증 및 저장을 눌러야 프로젝트 파일에 저장됩니다.',
+      { title: 'AC Servo 검색값 반영', confirmLabel: '검색값 반영', tone: 'warning' },
     );
     if (!confirmed) {
-      setAxisMessage('연결정보 반영 취소');
-      return;
+      setAxisMessage('검색값 반영 취소');
+      return false;
     }
 
-    const eepromAlias = scanRow.ethercat_alias ?? 0;
-    const catalogModel = verifiedAcServoModel(scanRow);
-    const updated = normalizeMotor({
-      ...motor,
-      identity: {
-        ...oldIdentity,
-        ethercat_alias: eepromAlias,
-        rotary_alias: scanRow.rotary_alias ?? null,
-        slave_position: scanRow.slave_position ?? null,
-        identity_source: scanRow.identity_source || 'physical_sii',
-        vendor_id: scanRow.vendor_id ?? null,
-        product_code: scanRow.product_code ?? null,
-        revision_number: scanRow.revision_number ?? null,
-        serial_number: scanRow.serial_number ?? null,
-        sii_order_number: scanRow.sii_order_number || scanRow.order_number || '',
-        sii_device_name: scanRow.sii_device_name || scanRow.device_name || '',
-      },
-      profile: catalogModel ? {
-        ...(motor.profile || {}),
-        driver_model: catalogModel,
-        model_confirmed: true,
-        model_source: 'verified_catalog',
-      } : motor.profile,
-      config: {
-        ...(motor.config || {}),
-        alias: eepromAlias,
-        position: Number(eepromAlias) === 0 ? Number(scanRow.slave_position ?? 0) : 0,
-        vendor_id: scanRow.vendor_id ?? motor.config?.vendor_id,
-        product_id: scanRow.product_code ?? motor.config?.product_id,
-      },
+    const updatedIds = new Set();
+    pairs.forEach(({ motor, scanRow }) => {
+      const oldIdentity = motor.identity || {};
+      const eepromAlias = scanRow.ethercat_alias ?? 0;
+      const catalogModel = verifiedAcServoModel(scanRow);
+      const siiModel = siiReportedAcServoModel(scanRow);
+      const confirmedModel = catalogModel || siiModel;
+      const updated = normalizeMotor({
+        ...motor,
+        identity: {
+          ...oldIdentity,
+          ethercat_alias: eepromAlias,
+          rotary_alias: scanRow.rotary_alias ?? null,
+          slave_position: scanRow.slave_position ?? null,
+          // The device identity source remains the physical SII scan.
+          // User confirmation belongs to the independent model/profile fields.
+          identity_source: 'physical_sii',
+          vendor_id: scanRow.vendor_id ?? null,
+          product_code: scanRow.product_code ?? null,
+          revision_number: scanRow.revision_number ?? null,
+          serial_number: scanRow.serial_number ?? null,
+          sii_order_number: scanRow.sii_order_number || scanRow.order_number || '',
+          sii_device_name: scanRow.sii_device_name || scanRow.device_name || '',
+        },
+        profile: confirmedModel ? {
+          ...(motor.profile || {}),
+          driver_model: confirmedModel,
+          model_confirmed: true,
+          model_source: catalogModel
+            ? 'verified_catalog'
+            : 'physical_sii_user_confirmed',
+        } : motor.profile,
+        config: {
+          ...(motor.config || {}),
+          alias: eepromAlias,
+          position: Number(eepromAlias) === 0
+            ? Number(scanRow.slave_position ?? 0)
+            : 0,
+          vendor_id: scanRow.vendor_id ?? motor.config?.vendor_id,
+          product_id: scanRow.product_code ?? motor.config?.product_id,
+          revision_number: scanRow.revision_number ?? null,
+          serial_number: scanRow.serial_number ?? null,
+        },
+      });
+      upsertMotorInRegistry(axisConfig, updated);
+      updatedIds.add(updated.id);
     });
-    upsertMotorInRegistry(axisConfig, updated);
     identityUpdatePending = true;
-    selectedAxisIds = new Set([updated.id]);
+    selectedAxisIds = updatedIds;
     lastAxisRenderSignature = '';
     setAxisMessage(
-      '연결정보를 편집 초안에 반영했습니다. 변경 내용 저장 전까지 프로젝트 파일은 바뀌지 않습니다.',
+      `선택 ${formatInt(updatedIds.size)}축 검색값을 편집 초안에 반영했습니다. `
+      + '변경 내용 검증 후 저장을 누르세요.',
     );
     renderAxisSettings();
+    return true;
   }
 
   async function writeSelectedEthercatAlias() {
@@ -3656,8 +3714,8 @@ export function createMotorConfigController({
       const selection = autoSelectNewScanAxes();
       const identityError = acHardwareIdentityErrorMessage();
       setAxisMessage(selection.candidateCount > 0
-        ? `AC 서보 검색 완료 · 기존 축 연결 후보 ${formatInt(selection.candidateCount)}축. `
-          + '기존 프로젝트 축과 같은 Slave의 검색 장비를 하나씩 선택한 뒤 선택 축 연결정보 변경을 누르세요.'
+        ? `AC 서보 검색 완료 · 기존 축 연결 확인 ${formatInt(selection.candidateCount)}축 자동 선택. `
+          + '축과 Slave를 확인한 뒤 선택 축 검색값 반영을 누르세요.'
         : identityError
           ? `${identityError} 기존 프로젝트 축과 검색 축을 선택해 연결정보 반영을 확인하세요.`
           : `AC 서보 검색 완료 · 신규 ${formatInt(selection.newCount)}축 자동 선택`,
@@ -3729,16 +3787,16 @@ export function createMotorConfigController({
             ? conciseMotorScanMessage(`부분 완료 · AC 서보 ${formatInt(summary.ethercatCount)}축 · 다이나믹셀 실패: ${dynamixelError || '직접 응답 없음'}`)
             : conciseMotorScanMessage(uiMessage(payload.message, '전체 모터 검색 실패'));
       }
-      setAxisMessage(scanComplete
-        ? selection.candidateCount > 0
-          ? `기존 축 연결 후보 ${formatInt(selection.candidateCount)}축입니다. `
-            + '기존 프로젝트 축과 같은 Slave의 검색 장비를 하나씩 선택한 뒤 선택 축 연결정보 변경을 누르세요.'
-          : identityError
+      setAxisMessage(selection.candidateCount > 0
+        ? `기존 축 연결 확인 ${formatInt(selection.candidateCount)}축을 자동 선택했습니다. `
+          + '축과 Slave를 확인한 뒤 선택 축 검색값 반영을 누르세요.'
+        : scanComplete
+          ? identityError
             ? `${identityError} 기존 프로젝트 축과 검색 축을 선택해 연결정보 반영을 확인하세요.`
             : `신규 ${formatInt(selection.newCount)}축을 자동 선택했습니다. 이름과 축 번호를 확인한 뒤 선택 축 추가를 누르세요.`
-        : scanPartial
-          ? conciseMotorScanMessage(`일부 검색만 완료됐습니다. ${dynamixelError || '연결되지 않은 모터 종류를 확인하세요.'}`)
-          : conciseMotorScanMessage(uiMessage(payload.message, '전체 모터 검색 실패')),
+          : scanPartial
+            ? conciseMotorScanMessage(`일부 검색만 완료됐습니다. ${dynamixelError || '연결되지 않은 모터 종류를 확인하세요.'}`)
+            : conciseMotorScanMessage(uiMessage(payload.message, '전체 모터 검색 실패')),
       Boolean(identityError) || selection.candidateCount > 0 || !scanComplete);
       if (payload.motion_state) renderLatestState(payload.motion_state);
       el.scanAllButton.textContent = scanComplete ? '검색 완료' : (scanPartial ? '부분 완료' : '검색 실패');

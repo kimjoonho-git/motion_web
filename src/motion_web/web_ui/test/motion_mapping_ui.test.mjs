@@ -12,7 +12,6 @@ const actionIds = [
   'newMotionMappingButton',
   'addMotionIdButton',
   'generateMotionIdsButton',
-  'validateMotionMappingButton',
   'saveMotionMappingButton',
   'resetMotionMappingButton',
   'deleteMotionMappingButton',
@@ -27,12 +26,16 @@ test('every motion-axis setting action exists in HTML, DOM bindings, and control
   }
 });
 
-test('save performs browser validation before sending the mapping request', () => {
+test('one action validates, previews, and then saves the mapping', () => {
   const saveStart = controller.indexOf('async function saveCurrentMapping()');
   const saveEnd = controller.indexOf('async function resetCurrentMapping()', saveStart);
   const saveBody = controller.slice(saveStart, saveEnd);
   assert.ok(saveStart >= 0 && saveEnd > saveStart);
-  assert.ok(saveBody.indexOf('validateMappingDraft()') < saveBody.indexOf('saveMotionMapping({'));
+  assert.ok(saveBody.indexOf('validateMappingDraft()') < saveBody.indexOf('validateMotionMapping({'));
+  assert.ok(saveBody.indexOf('validateMotionMapping({') < saveBody.indexOf('saveMotionMapping({'));
+  assert.match(saveBody, /base_mapping_revision: mappingRevision/);
+  assert.match(html, />검증·미리보기·저장<\/button>/);
+  assert.doesNotMatch(html, /id="validateMotionMappingButton"/);
 });
 
 test('revert does not save and deletion uses the recoverable project DELETE path', () => {
@@ -51,7 +54,8 @@ test('reference use is editable and project file explorer refresh is wired after
   assert.match(html, /기준 사용·캡처/);
 });
 
-test('MIDI-only file saves can advance the editor revision without discarding its draft', () => {
+test('MIDI-only saves use the mapping-section revision without discarding the draft', () => {
+  assert.match(controller, /file\?\.mapping_revision \|\| file\?\.revision/);
   assert.match(controller, /function syncMappingFileRevision\(file\)/);
   assert.match(controller, /fileId !== selectedMappingId/);
   assert.match(controller, /mappingRevision = revision/);

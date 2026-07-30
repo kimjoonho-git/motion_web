@@ -14,6 +14,14 @@ PHYSICAL_IDENTITY_FIELDS = (
     'serial_number',
 )
 
+PHYSICAL_SII_IDENTITY_SOURCES = frozenset({
+    'physical_sii',
+    # Compatibility with project files saved by the web confirmation flow.
+    # The suffix records the user's axis association confirmation; the
+    # identity values themselves still came from the physical SII scan.
+    'physical_sii_user_confirmed',
+})
+
 
 def optional_int(value: Any) -> Optional[int]:
     if value in (None, ''):
@@ -31,6 +39,6 @@ def missing_ethercat_identity(identity: Dict[str, Any]) -> list[str]:
         for field in PHYSICAL_IDENTITY_FIELDS
         if optional_int(identity.get(field)) is None
     ]
-    if str(identity.get('identity_source') or '') != 'physical_sii':
+    if str(identity.get('identity_source') or '') not in PHYSICAL_SII_IDENTITY_SOURCES:
         missing.append('identity_source')
     return missing

@@ -2,10 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  resolveRegistryMotorForScanRow,
   runtimeMotorConfirmsRegistryMotor,
   scanRowMatchesRegistryMotor,
   scanRowSharesConfiguredPosition,
   scanRowToMotor,
+  siiReportedAcServoModel,
   verifiedAcServoModel,
 } from '../static/js/motor_type_ac_servo.js';
 import { normalizeMotor } from '../static/js/motor_registry.js';
@@ -39,6 +41,39 @@ test('unconfigured alias zero never auto-matches only by slave position', () => 
 
   assert.equal(scanRowMatchesRegistryMotor(scanRow, motor), false);
   assert.equal(scanRowSharesConfiguredPosition(scanRow, motor), true);
+});
+
+test('SII order number is exposed as the physical scan model reference', () => {
+  assert.equal(siiReportedAcServoModel({
+    sii_order_number: 'MCDLN35BE',
+    sii_device_name: 'Panasonic Servo',
+  }), 'MCDLN35BE');
+  assert.equal(siiReportedAcServoModel({
+    sii_device_name: 'MADLN05BE',
+  }), 'MADLN05BE');
+});
+
+test('one position match is merged as an explicit confirmation candidate', () => {
+  const motor = configuredMotor({ alias: 0, position: 3 });
+  const resolved = resolveRegistryMotorForScanRow({
+    slave_position: 3,
+    ethercat_alias: 0,
+    serial_number: 605164099,
+  }, [motor]);
+
+  assert.equal(resolved.motor, motor);
+  assert.equal(resolved.confirmationRequired, true);
+});
+
+test('ambiguous position matches are never merged', () => {
+  const first = configuredMotor({ alias: 0, position: 3 });
+  const second = configuredMotor({ alias: 0, position: 3 });
+
+  assert.equal(resolveRegistryMotorForScanRow({
+    slave_position: 3,
+    ethercat_alias: 0,
+    serial_number: 605164099,
+  }, [first, second]), null);
 });
 
 

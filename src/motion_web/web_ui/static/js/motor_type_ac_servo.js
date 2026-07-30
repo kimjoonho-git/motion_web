@@ -39,6 +39,16 @@ export function verifiedAcServoModel(row) {
   return VERIFIED_AC_SERVO_MODELS[`${vendor}:${product}:${revision}`] || '';
 }
 
+export function siiReportedAcServoModel(row) {
+  return String(
+    row?.sii_order_number
+    || row?.order_number
+    || row?.sii_device_name
+    || row?.device_name
+    || '',
+  ).trim();
+}
+
 export function scanKey(row) {
   if (!row) return '';
   return `master:${row.master_index ?? 0}:slave:${row.slave_position ?? '-'}`;
@@ -77,6 +87,23 @@ export function scanRowSharesConfiguredPosition(row, motor) {
     row.slave_position !== null &&
     row.slave_position !== undefined &&
     Number(configuredPosition) === Number(row.slave_position);
+}
+
+export function resolveRegistryMotorForScanRow(row, motors) {
+  const configured = Array.isArray(motors)
+    ? motors.filter((motor) => motor && motor.transport === 'ethercat')
+    : [];
+  const identityMatch = configured.find(
+    (motor) => scanRowMatchesRegistryMotor(row, motor),
+  ) || null;
+  if (identityMatch) {
+    return { motor: identityMatch, confirmationRequired: false };
+  }
+  const positionMatches = configured.filter(
+    (motor) => scanRowSharesConfiguredPosition(row, motor),
+  );
+  if (positionMatches.length !== 1) return null;
+  return { motor: positionMatches[0], confirmationRequired: true };
 }
 
 export function scanRowMatchesRuntimeMotor(row, motor) {

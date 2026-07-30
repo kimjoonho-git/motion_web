@@ -77,6 +77,31 @@ def test_new_project_is_ready_for_first_run_without_legacy_files(tmp_path):
     assert repository.get_project(project_id)['project']['setup_status']['motor_applied']
 
 
+def test_runtime_accepts_web_confirmed_physical_sii_identity_source(tmp_path):
+    repository = ProjectRepository(tmp_path / 'projects')
+    project_id = repository.create_project('confirmed physical scan')['project']['project_id']
+    repository.save_file(
+        project_id,
+        'motor_axes',
+        'motor_axes.yaml',
+        'period: 1000000\nmasters:\n- id: 0\n  type: ethercat\n  slaves:\n'
+        '  - controller_index: 0\n    driver_id: 0\n    alias: 0\n    position: 0\n'
+        'web_axis_identities:\n- controller_index: 0\n  eeprom_alias: 0\n'
+        '  slave_position: 0\n  vendor_id: 1647\n  product_id: 1614282756\n'
+        '  revision_number: 65536\n  serial_number: 123456\n'
+        '  identity_source: physical_sii_user_confirmed\n'
+        'web_axis_profiles:\n- controller_index: 0\n  driver_model: MADLN05BE\n'
+        '  model_confirmed: true\n  model_source: physical_sii_user_confirmed\n'
+        'drivers:\n- id: 0\n  type: minas\n  driver_model: MADLN05BE\n'
+        '  profile_velocity: 10\n  profile_acceleration: 20\n'
+        '  profile_deceleration: 20\n',
+    )
+
+    runtime = repository.prepare_runtime_motor_config(project_id)
+
+    assert runtime['success'] is True
+
+
 def test_runtime_rejects_unverified_ac_servo_profile(tmp_path):
     repository = ProjectRepository(tmp_path / 'projects')
     project_id = repository.create_project('unverified driver')['project']['project_id']
