@@ -1475,6 +1475,35 @@ def test_studio_recording_prepare_skips_linked_channel_with_mismatched_ranges():
     assert node._pending_fader_positions == [0] * MIDI_CHANNEL_COUNT
 
 
+def test_connection_state_keeps_midi_power_reconnect_timestamps():
+    node = MidiControlNode.__new__(MidiControlNode)
+    node._lock = threading.Lock()
+    node._device_connected = True
+    node._device_connection_message = ''
+    node._device_last_connected_at = None
+    node._device_last_disconnected_at = None
+    node._device_last_power_reconnected_at = None
+    node._device_connection_count = 0
+    node._device_power_reconnect_count = 0
+    message = SimpleNamespace(data=json.dumps({
+        'connected': True,
+        'message': 'X-Touch connected',
+        'last_connected_at': 1234.5,
+        'last_disconnected_at': 1200.25,
+        'last_power_reconnected_at': 1234.5,
+        'connection_count': 3,
+        'power_reconnect_count': 2,
+    }))
+
+    node._connection_state_callback(message)
+
+    assert node._device_last_connected_at == 1234.5
+    assert node._device_last_disconnected_at == 1200.25
+    assert node._device_last_power_reconnected_at == 1234.5
+    assert node._device_connection_count == 3
+    assert node._device_power_reconnect_count == 2
+
+
 def test_studio_recording_zero_status_waits_for_physical_parking_completion():
     node = MidiControlNode.__new__(MidiControlNode)
     node._device_connected = True

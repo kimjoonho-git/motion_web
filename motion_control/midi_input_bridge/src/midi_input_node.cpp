@@ -52,6 +52,12 @@ bool is_xtouch_port(const std::string & name)
          text.find("BEHRINGER") != std::string::npos;
 }
 
+double wall_time_sec()
+{
+  return std::chrono::duration<double>(
+    std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
 template<typename T>
 std::vector<T> vector_of(const std::array<T, kChannelCount> & values)
 {
@@ -108,6 +114,9 @@ public:
     timer_ = create_wall_timer(
       std::chrono::milliseconds(publish_period_ms),
       std::bind(&MidiInputNode::publish_state, this));
+    connection_health_timer_ = create_wall_timer(
+      std::chrono::milliseconds(250),
+      std::bind(&MidiInputNode::check_device_connection, this));
     RCLCPP_INFO(
       get_logger(),
       "MIDI input ready: topic=%s, feedback_topic=%s, fader_feedback=%s, "
@@ -135,6 +144,21 @@ private:
       input.openPort(index);
       RCLCPP_INFO(get_logger(), "Connected MIDI input: '%s'", name.c_str());
       return true;
+    }
+    return false;
+  }
+
+  static bool xtouch_input_port_present()
+  {
+    try {
+      RtMidiIn probe;
+      const unsigned int count = probe.getPortCount();
+      for (unsigned int index = 0; index < count; ++index) {
+        if (is_xtouch_port(probe.getPortName(index))) {
+          return true;
+        }
+      }
+    } catch (const std::exception &) {
     }
     return false;
   }
@@ -181,6 +205,13 @@ private:
       midi_output_ = std::move(output);
       device_connected_ = true;
       connection_message_ = "X-Touch connected";
+      last_connected_at_ = wall_time_sec();
+      ++connection_count_;
+      if (device_was_missing_) {
+        last_power_reconnected_at_ = last_connected_at_;
+        ++power_reconnect_count_;
+      }
+      device_was_missing_ = false;
       {
         std::lock_guard<std::mutex> lock(mutex_);
         // A newly opened MIDI port is a new hardware session. Never keep a
@@ -216,6 +247,7 @@ private:
 
   void disconnect_device(bool publish = true)
   {
+    const bool was_connected = device_connected_;
     device_connected_ = false;
     if (midi_input_) {
       try {
@@ -240,16 +272,39 @@ private:
       }
     }
     connection_message_ = "X-Touch disconnected";
+    if (was_connected) {
+      last_disconnected_at_ = wall_time_sec();
+    }
     if (publish) {
       publish_connection_state();
+    }
+  }
+
+  void check_device_connection()
+  {
+    const bool present = xtouch_input_port_present();
+    if (!present) {
+      device_was_missing_ = true;
+      if (device_connected_) {
+        disconnect_device(false);
+        connection_message_ =
+          "X-Touch MIDI port disappeared; waiting for power reconnect";
+        publish_connection_state();
+      }
+      return;
+    }
+    if (!device_connected_ && auto_reconnect_enabled_) {
+      connect_device();
     }
   }
 
   void connection_command_callback(const std_msgs::msg::String::SharedPtr msg)
   {
     if (msg->data == "connect") {
+      auto_reconnect_enabled_ = true;
       connect_device();
     } else if (msg->data == "disconnect") {
+      auto_reconnect_enabled_ = false;
       disconnect_device();
     }
   }
@@ -262,7 +317,14 @@ private:
     std_msgs::msg::String msg;
     msg.data = std::string("{\"connected\":") +
       (device_connected_ ? "true" : "false") +
-      ",\"message\":\"" + connection_message_ + "\"}";
+      ",\"message\":\"" + connection_message_ + "\"" +
+      ",\"last_connected_at\":" + std::to_string(last_connected_at_) +
+      ",\"last_disconnected_at\":" + std::to_string(last_disconnected_at_) +
+      ",\"last_power_reconnected_at\":" +
+      std::to_string(last_power_reconnected_at_) +
+      ",\"connection_count\":" + std::to_string(connection_count_) +
+      ",\"power_reconnect_count\":" + std::to_string(power_reconnect_count_) +
+      "}";
     connection_state_publisher_->publish(msg);
   }
 
@@ -688,6 +750,7 @@ private:
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr feedback_subscription_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr connection_command_subscription_;
   rclcpp::TimerBase::SharedPtr timer_;
+  rclcpp::TimerBase::SharedPtr connection_health_timer_;
   std::mutex mutex_;
   std::mutex output_mutex_;
   std::array<int32_t, kChannelCount> fader_{};
@@ -724,8 +787,15 @@ private:
   uint8_t display_device_id_{0x15};
   bool hold_fader_on_release_{true};
   bool device_connected_{false};
+  bool auto_reconnect_enabled_{true};
+  bool device_was_missing_{false};
   bool input_event_seen_{false};
   std::string connection_message_{"X-Touch disconnected"};
+  double last_connected_at_{0.0};
+  double last_disconnected_at_{0.0};
+  double last_power_reconnected_at_{0.0};
+  std::uint64_t connection_count_{0};
+  std::uint64_t power_reconnect_count_{0};
 };
 
 int main(int argc, char ** argv)

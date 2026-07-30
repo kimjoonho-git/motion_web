@@ -421,6 +421,11 @@ class MidiControlNode(Node):
         self._last_physical_input_wall: float | None = None
         self._device_connected = False
         self._device_connection_message = 'MIDI 장치 연결 상태 확인 중'
+        self._device_last_connected_at: float | None = None
+        self._device_last_disconnected_at: float | None = None
+        self._device_last_power_reconnected_at: float | None = None
+        self._device_connection_count = 0
+        self._device_power_reconnect_count = 0
         self._raw_channels = [0] * MIDI_CHANNEL_COUNT
         # Latest device-reported fader values for the LCD only. Command
         # targets remain in _raw_channels and keep their touch/movement gate.
@@ -1560,10 +1565,35 @@ class MidiControlNode(Node):
             return
         connected = bool(payload.get('connected'))
         message = str(payload.get('message') or '')
+        def positive_float(key: str) -> float | None:
+            try:
+                value = float(payload.get(key))
+            except (TypeError, ValueError):
+                return None
+            return value if value > 0.0 else None
+
         with self._lock:
             changed = connected != self._device_connected
             self._device_connected = connected
             self._device_connection_message = message
+            self._device_last_connected_at = positive_float(
+                'last_connected_at'
+            )
+            self._device_last_disconnected_at = positive_float(
+                'last_disconnected_at'
+            )
+            self._device_last_power_reconnected_at = positive_float(
+                'last_power_reconnected_at'
+            )
+            try:
+                self._device_connection_count = max(
+                    0, int(payload.get('connection_count') or 0)
+                )
+                self._device_power_reconnect_count = max(
+                    0, int(payload.get('power_reconnect_count') or 0)
+                )
+            except (TypeError, ValueError):
+                pass
             if changed:
                 # A USB reconnect creates a new hardware session. Never retain
                 # SELECT/motor ownership across it. Replay bank/LCD/LED only;
@@ -2137,6 +2167,13 @@ class MidiControlNode(Node):
             physical_input_wall = self._last_physical_input_wall
             device_connected = self._device_connected
             device_connection_message = self._device_connection_message
+            device_last_connected_at = self._device_last_connected_at
+            device_last_disconnected_at = self._device_last_disconnected_at
+            device_last_power_reconnected_at = (
+                self._device_last_power_reconnected_at
+            )
+            device_connection_count = self._device_connection_count
+            device_power_reconnect_count = self._device_power_reconnect_count
             raw_values = list(self._raw_channels)
             observed_raw_values = list(getattr(
                 self, '_observed_raw_channels', self._raw_channels
@@ -2448,6 +2485,13 @@ class MidiControlNode(Node):
             'connected': connected,
             'device_connected': device_connected,
             'device_connection_message': device_connection_message,
+            'device_last_connected_at': device_last_connected_at,
+            'device_last_disconnected_at': device_last_disconnected_at,
+            'device_last_power_reconnected_at': (
+                device_last_power_reconnected_at
+            ),
+            'device_connection_count': device_connection_count,
+            'device_power_reconnect_count': device_power_reconnect_count,
             'message': (
                 'MIDI 데이터 수신 정상'
                 if connected else (
