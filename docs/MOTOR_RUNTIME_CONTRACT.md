@@ -33,9 +33,10 @@ Motor Manager가 프로젝트 파일을 직접 실행하도록 하면 프로젝�
 
 ### 실행 대상 기록
 
-- 전역 `.motor_runtime.json` 하나
-- 활성 프로젝트 ID, 프로젝트 세대, 세션 ID, 프로젝트 내부 상대 경로와
-  SHA-256만 기록
+- 전역 `.motor_lifecycle_state.json` 하나
+- 활성 프로젝트 ID, 프로젝트 세대, 활성·직전 세션 ID, 프로젝트 내부 상대
+  경로와 SHA-256을 기록
+- 현재 operation ID, 작업 단계와 최종 결과를 같은 상태에 기록
 - 모터 설정 내용을 중복 저장하지 않음
 
 `runtime/applied_motor_config.yaml`과 같은 중간 설정 사본은 사용하지 않는다.
@@ -57,9 +58,13 @@ fallback도 사용하지 않는다.
 
 ## 4. 명시적 실행 소유권
 
+- `.motor_lifecycle_state.json`과 RuntimeSession의 생성·선택·복원 권한은
+  MotorLifecycleCoordinator만 가진다.
 - RuntimeSession을 사용하는 모든 노드에 `project_id`,
   `project_generation`, `runtime_session_id`를 명시적으로 전달한다.
 - 소비 노드는 파일 경로에서 프로젝트 소유권을 추측하지 않는다.
+- Web Bridge, RuntimeStateMonitor와 서비스 시작 스크립트는 실행 대상 기록을
+  직접 수정하지 않는다.
 - 선택 프로젝트 변경만으로 실행 프로젝트를 자동 변경하지 않는다.
 - 선택 프로젝트와 실행 프로젝트가 다르면 모터 제어를 허용하지 않고
   `설정 적용 및 재시작 필요`를 표시한다.

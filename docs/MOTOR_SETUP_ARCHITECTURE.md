@@ -49,13 +49,13 @@
 
 ### 검색 실행 수명주기
 
-사용자는 웹에서 `모터 검색`만 실행하지만 내부에서는 다음 순서를 보장한다.
+사용자는 웹에서 `모터 스캔`만 실행하지만 내부에서는 다음 순서를 보장한다.
 
 1. 모션, 조그 및 MIDI 모터 명령이 실행 중이면 검색을 시작하지 않는다.
 2. 새 모터 명령을 차단하고 정지 상태를 확인한다.
 3. motion_system의 정상 제어 통로로 필요한 안전 정지와 Servo OFF를 수행한다.
 4. Motor Manager를 정지하고 EtherCAT Master 사용권 해제를 확인한다.
-5. MotorSetupService가 물리 검색을 수행한다.
+5. MotorLifecycleCoordinator가 ScanEngine으로 물리 검색을 수행한다.
 6. 검색 전에 유효한 RuntimeSession이 있었다면 같은 세션으로 Motor Manager를
    다시 시작하고 새 피드백을 확인한다.
 7. 이전 RuntimeSession이 없었다면 실행 대상 없음 상태로 종료한다.
@@ -78,37 +78,47 @@ ProjectMotorConfig만 사용자 설정 원본이며 RuntimeSession은 내부 실
 화면에는 두 파일을 따로 표시하지 않고 `적용 필요` 또는 `모터 설정 완료`만
 표시한다.
 
-## 4. 내부 구조
+## 4. 단일 권한 구조
 
-모터 설정 기능은 세 책임으로만 나눈다.
+`MotorLifecycleCoordinator` 한 노드만 모터 설정 수명주기의 상태와 변경 권한을
+소유한다.
 
-### MotorSetupService
+### MotorLifecycleCoordinator의 권한
 
-- `MOTOR_SCAN_CONTRACT.md`에 따라 실제 장치를 검색한다.
-- 검색 결과와 현재 프로젝트 파일을 자동 비교한다.
-- 사용자 승인 후 현재 프로젝트 파일만 저장한다.
-- 검색과 저장은 RuntimeSession을 자동 변경하지 않는다.
+- 현재 프로젝트의 모터 설정 상태
+- 진행 중인 모터 스캔과 검색 결과
+- 프로젝트 설정 비교·저장
+- RuntimeSession 생성·선택·복원
+- Motor Manager 시작·정지·재시작
+- RuntimeFeedback과 실행 세션 일치 판정
+- `스캔 필요`, `적용 필요`, `모터 설정 완료`, `실패` 최종 상태
 
-### MotorRuntimeService
+Web Bridge, UI, RuntimeStateMonitor 및 다른 노드는 위 상태 파일을 직접
+변경하지 않는다. 모든 요청은 MotorLifecycleCoordinator에 전달하고 결과
+상태만 구독한다.
 
-- 저장된 프로젝트 설정을 검증하고 불변 RuntimeSession을 생성한다.
-- 프로젝트 ID, 프로젝트 세대, 세션 ID와 설정 SHA-256을 함께 관리한다.
-- 중간 `applied_motor_config.yaml` 사본을 만들지 않는다.
-- 활성 세션과 검증된 직전 세션만 보관한다.
-- Motor Manager 시작·정지·재시작과 제한시간을 관리한다.
-- 실패 시 검증된 이전 RuntimeSession이 있을 때만 복원한다.
+### 상태를 소유하지 않는 내부 모듈
 
-### RuntimeStateMonitor
+- ScanEngine · 물리 검색 실행 후 결과 반환
+- ProjectConfigStore · 지정된 프로젝트 파일 읽기·원자적 저장
+- RuntimeSessionStore · 불변 세션 생성·해시 검증·정리
+- MotorServiceController · Motor Manager 서비스 시작·정지
+- FeedbackValidator · 실제 피드백과 요청 세션·축 비교
 
-- Motor Manager의 상태를 RuntimeFeedback으로 변환한다.
-- 프로젝트 ID, 프로젝트 세대와 세션 ID를 실행 인자로 받는다.
-- 파일 경로를 분석해 프로젝트를 추측하지 않는다.
+내부 모듈은 독립 실행 상태와 별도 권한 파일을 만들지 않는다. 한 작업 큐와
+한 상태 기계 안에서 MotorLifecycleCoordinator가 순서대로 호출한다.
 
-모터 설정 완료 후의 모션축 설정과 MIDI 제어 허용은 기존 실행 컨텍스트가
-검사한다. 모터 설정 화면은 그 내부 조건을 사용자 작업으로 노출하지 않는다.
+### motion_system과의 경계
 
-`motion_system`은 모터 통신과 제어의 단일 통로로 유지한다. 위 구성요소는
-motion_system을 우회해 모터 명령을 송신하지 않는다.
+- `motion_system`은 실제 모터 통신과 제어의 단일 통로다.
+- motion_system의 Motor Manager는 전달받은 RuntimeSession을 실행하고
+  실제 피드백을 반환한다.
+- motion_system은 프로젝트 선택, 설정 저장, 스캔 결과 반영 및 적용 성공을
+  결정하지 않는다.
+- MotorLifecycleCoordinator는 motion_system을 우회해 모터 명령을 송신하지 않는다.
+
+모터 설정 완료 후 모션축 설정과 MIDI 제어 허용은 실행 컨텍스트가
+MotorLifecycleCoordinator의 `모터 설정 완료` 상태를 사용해 검사한다.
 
 ## 5. 프로젝트와 실제 장치 비교
 
@@ -271,9 +281,9 @@ Vendor/Product/Revision, 원본 SII 및 작업 로그는 `상세 보기`에서 �
 
 1. 문서 계약 확정
 2. 세 가지 사용자 작업과 상태 확정
-3. MotorSetupService의 검색·비교·저장 구현
-4. MotorRuntimeService의 적용·재시작 구현
-5. RuntimeStateMonitor의 경로 추측 제거
+3. MotorLifecycleCoordinator의 단일 상태 기계 구현
+4. 기존 검색·저장·적용 코드를 무상태 내부 모듈로 분리
+5. Web Bridge와 RuntimeStateMonitor의 상태 변경 권한 제거
 6. 실제 적용 통합 테스트
 7. 모션축 설정과 MIDI 제어 연결 검증
 
@@ -307,6 +317,7 @@ Vendor/Product/Revision, 원본 SII 및 작업 로그는 `상세 보기`에서 �
 - 파일 경로에서 프로젝트 ID를 추측하는 코드
 - 이전 프로젝트·검색·런타임 값을 현재 값의 대체값으로 사용하는 fallback
 - Web Bridge 한 클래스에 모터 수명주기 책임을 계속 추가하는 방식
+- 여러 노드가 각각 모터 적용 완료와 프로젝트 소유권을 판정하는 방식
 - 저장 완료와 실행 준비 완료를 같은 상태로 표시하는 방식
 - 사용자가 물리 식별정보나 임의 모델 문자열을 직접 입력하는 UI
 - 단위 테스트 통과를 실제 재시작·실물 검증 완료로 확대하는 보고
