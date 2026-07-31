@@ -21,7 +21,7 @@ import yaml
 
 PROJECT_VERSION = 1
 DEFAULT_PERIOD_SEC = 0.02
-MOTION_FILE_SIZE_LIMIT_BYTES = 10 * 1024 * 1024
+MOTION_FILE_SIZE_LIMIT_BYTES = 256 * 1024 * 1024
 MOTION_ID_PATTERN = re.compile(r'^[1-9]\d*-[1-9]\d*$')
 
 
@@ -157,50 +157,55 @@ class ProjectStore:
     def read_motion_file(self, file_id: Any) -> Dict[str, Any]:
         path = self._motion_file_path(file_id)
         if path.stat().st_size > MOTION_FILE_SIZE_LIMIT_BYTES:
-            raise ValueError('모션 파일이 10MB 제한을 초과합니다')
-        lines = [
-            line.strip()
-            for line in path.read_text(encoding='utf-8').splitlines()
-            if line.strip()
-        ]
-        if len(lines) < 2:
-            raise ValueError('모션 헤더와 프레임 데이터가 필요합니다')
-        header = json.loads(lines[0])
-        if not isinstance(header, dict) or header.get('type') != 'motion_header':
-            raise ValueError('지원하지 않는 모션 파일 헤더입니다')
-        if str(header.get('rotation_unit') or 'deg').lower() != 'deg':
-            raise ValueError('현재는 deg 단위 모션 파일만 가져올 수 있습니다')
+            raise ValueError('모션 파일이 256MB 제한을 초과합니다')
         frames = []
         motion_ids = []
         seen_motion_ids = set()
-        for line_number, line in enumerate(lines[1:], start=2):
-            row = json.loads(line)
-            if not isinstance(row, list) or len(row) < 4 or (len(row) - 2) % 2:
-                raise ValueError(f'{line_number}행 모션 프레임 형식이 올바르지 않습니다')
-            try:
-                frame_number = int(row[0])
-                time_sec = float(row[1])
-            except (TypeError, ValueError) as exc:
-                raise ValueError(f'{line_number}행 frame/time 값이 올바르지 않습니다') from exc
-            if frame_number < 1 or not math.isfinite(time_sec) or time_sec < 0.0:
-                raise ValueError(f'{line_number}행 frame/time 범위가 올바르지 않습니다')
-            values = {}
-            for index in range(2, len(row), 2):
-                motion_id = str(row[index] or '').strip()
-                if not MOTION_ID_PATTERN.match(motion_id):
-                    raise ValueError(f'{line_number}행 Motion ID가 올바르지 않습니다: {motion_id}')
-                value = _finite_float(row[index + 1], math.nan)
-                if not math.isfinite(value):
-                    raise ValueError(f'{line_number}행 모션값이 올바르지 않습니다: {motion_id}')
-                values[motion_id] = value
-                if motion_id not in seen_motion_ids:
-                    seen_motion_ids.add(motion_id)
-                    motion_ids.append(motion_id)
-            frames.append({
-                'frame': frame_number,
-                'time_sec': round(time_sec, 9),
-                'values': values,
-            })
+        header = None
+        with path.open('r', encoding='utf-8') as handle:
+            for line_number, raw_line in enumerate(handle, start=1):
+                line = raw_line.strip()
+                if not line:
+                    continue
+                if header is None:
+                    header = json.loads(line)
+                    if (
+                        not isinstance(header, dict)
+                        or header.get('type') != 'motion_header'
+                    ):
+                        raise ValueError('지원하지 않는 모션 파일 헤더입니다')
+                    if str(header.get('rotation_unit') or 'deg').lower() != 'deg':
+                        raise ValueError('현재는 deg 단위 모션 파일만 가져올 수 있습니다')
+                    continue
+                row = json.loads(line)
+                if not isinstance(row, list) or len(row) < 4 or (len(row) - 2) % 2:
+                    raise ValueError(f'{line_number}행 모션 프레임 형식이 올바르지 않습니다')
+                try:
+                    frame_number = int(row[0])
+                    time_sec = float(row[1])
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(f'{line_number}행 frame/time 값이 올바르지 않습니다') from exc
+                if frame_number < 1 or not math.isfinite(time_sec) or time_sec < 0.0:
+                    raise ValueError(f'{line_number}행 frame/time 범위가 올바르지 않습니다')
+                values = {}
+                for index in range(2, len(row), 2):
+                    motion_id = str(row[index] or '').strip()
+                    if not MOTION_ID_PATTERN.match(motion_id):
+                        raise ValueError(f'{line_number}행 Motion ID가 올바르지 않습니다: {motion_id}')
+                    value = _finite_float(row[index + 1], math.nan)
+                    if not math.isfinite(value):
+                        raise ValueError(f'{line_number}행 모션값이 올바르지 않습니다: {motion_id}')
+                    values[motion_id] = value
+                    if motion_id not in seen_motion_ids:
+                        seen_motion_ids.add(motion_id)
+                        motion_ids.append(motion_id)
+                frames.append({
+                    'frame': frame_number,
+                    'time_sec': round(time_sec, 9),
+                    'values': values,
+                })
+        if header is None or not frames:
+            raise ValueError('모션 헤더와 프레임 데이터가 필요합니다')
         frames.sort(key=lambda item: (item['time_sec'], item['frame']))
         editor_layer = None
         editor_message = '포인트 편집 정보 없음'
@@ -326,7 +331,12 @@ class ProjectStore:
         if hidden and not name.startswith('__studio_'):
             name = f'__studio_{name}'
         target_dir = self.runtime_dir if hidden else self.files_dir
-        self._atomic_write(target_dir / name, content)
+        self._atomic_write_limited(
+            target_dir / name,
+            content,
+            MOTION_FILE_SIZE_LIMIT_BYTES,
+            '모션 파일이 256MB 제한을 초과합니다',
+        )
         return name
 
     def inspect_mapping(self, file_id: Any) -> Dict[str, Any]:
@@ -468,6 +478,23 @@ class ProjectStore:
         temporary = path.with_suffix(path.suffix + '.tmp')
         temporary.write_text(content, encoding='utf-8')
         temporary.replace(path)
+
+    @staticmethod
+    def _atomic_write_limited(
+        path: Path,
+        content: str,
+        limit_bytes: int,
+        error_message: str,
+    ) -> None:
+        temporary = path.with_suffix(path.suffix + '.tmp')
+        try:
+            temporary.write_text(content, encoding='utf-8')
+            if temporary.stat().st_size > limit_bytes:
+                raise ValueError(error_message)
+            temporary.replace(path)
+        finally:
+            if temporary.exists():
+                temporary.unlink()
 
 
 def unique_motion_ids(values: Iterable[Any]) -> List[str]:

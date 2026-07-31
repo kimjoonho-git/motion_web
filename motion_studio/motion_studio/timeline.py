@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import bisect
 import copy
+import io
 import json
 import math
 from typing import Any, Dict, Iterable, List, Mapping, Sequence
@@ -430,10 +431,13 @@ def motion_file_text(
                 if key in editor_layer
             },
         }
-    lines = [json.dumps(header, ensure_ascii=False)]
+    output = io.StringIO()
+    output.write(json.dumps(header, ensure_ascii=False))
+    output.write('\n')
     for frame in frames:
         row: List[Any] = [int(frame['frame']), round(float(frame['time_sec']), 9)]
         for motion_id, value in frame['values'].items():
             row.extend((motion_id, round(float(value), 6)))
-        lines.append(json.dumps(row, ensure_ascii=False, separators=(',', ':')))
-    return '\n'.join(lines) + '\n'
+        output.write(json.dumps(row, ensure_ascii=False, separators=(',', ':')))
+        output.write('\n')
+    return output.getvalue()

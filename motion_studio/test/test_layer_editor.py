@@ -346,6 +346,22 @@ def test_value_edits_move_point_values_and_handles_together():
     assert points[1]['out_handle']['dv_deg'] == pytest.approx(1.0)
     assert point_curve_frame_mismatches(scaled) == []
 
+    inverted = edit_layer(linked_point_curve_layer(), {
+        'operation': 'value_scale', 'motion_ids': ['1-1'],
+        'start_sec': 1.0, 'end_sec': 2.0, 'factor': -1.0,
+    })
+    points = inverted['point_curves'][0]['points']
+    assert [point['value_deg'] for point in points] == [10.0, -10.0, 0.0]
+    assert points[1]['out_handle']['dv_deg'] == pytest.approx(-2.0)
+    assert [point['time_sec'] for point in points] == [1.0, 1.5, 2.0]
+    assert point_curve_frame_mismatches(inverted) == []
+
+    with pytest.raises(ValueError, match='0을 제외'):
+        edit_layer(linked_point_curve_layer(), {
+            'operation': 'value_scale', 'motion_ids': ['1-1'],
+            'start_sec': 1.0, 'end_sec': 2.0, 'factor': 0.0,
+        })
+
 
 def test_point_to_point_partial_edit_moves_only_existing_point_controls():
     result = edit_layer(linked_point_curve_layer(), {

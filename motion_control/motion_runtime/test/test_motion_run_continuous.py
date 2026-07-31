@@ -1,5 +1,6 @@
 import json
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -191,6 +192,21 @@ def test_motor_target_applies_reference_scale_direction_and_gear_ratio():
     assert manager._motor_target(row, 3.0) == -5.0
 
 
+def test_interpolation_uses_precomputed_time_index_for_irregular_samples():
+    manager = MotionRunManager.__new__(MotionRunManager)
+    records = [
+        {'time_sec': 0.0, 'value': 0.0},
+        {'time_sec': 1.0, 'value': 10.0},
+        {'time_sec': 3.0, 'value': 30.0},
+    ]
+    record_times = [record['time_sec'] for record in records]
+
+    assert manager._interpolated_value(records, record_times, -1.0) == 0.0
+    assert manager._interpolated_value(records, record_times, 0.5) == 5.0
+    assert manager._interpolated_value(records, record_times, 2.0) == 20.0
+    assert manager._interpolated_value(records, record_times, 4.0) == 30.0
+
+
 def _initialization_only_manager(mapping):
     manager = MotionRunManager.__new__(MotionRunManager)
     manager.period_sec = 0.02
@@ -285,6 +301,93 @@ def test_motion_run_initialization_uses_every_enabled_mapping_axis():
     assert [axis['motion_id'] for axis in plan['axes']] == ['1-1', '1-2']
     assert [axis['initial_motion_position_deg'] for axis in plan['axes']] == [-2.0, 4.0]
     assert 'Motion ID 1-1: 모션 데이터가 없어 수동 초기위치 -2.000°를 사용' in plan['warnings']
+    assert plan['samples'] == []
+    assert plan['summary']['sample_count'] == 0
+
+
+def test_plan_uses_motion_state_captured_before_slow_motion_file_processing():
+    manager = MotionRunManager.__new__(MotionRunManager)
+    manager.period_sec = 0.02
+    manager._motion_file_path = lambda _file_id: None
+    manager._mapping_file_path = lambda _file_id: None
+    started_at = time.monotonic()
+
+    def slow_motion_records(_path):
+        time.sleep(1.05)
+        return [
+            {'time_sec': 0.00, 'motion_id': '1-1', 'value': 0.0},
+            {'time_sec': 0.02, 'motion_id': '1-1', 'value': 1.0},
+        ]
+
+    manager._load_motion_records = slow_motion_records
+    manager._load_mapping = lambda _path: {
+        'motion_file_id': 'motion.json',
+        'mappings': [{
+            'motion_id': '1-1',
+            'motor_axis': 0,
+            'initial_mode': 'manual',
+            'initial_motion_position_deg': 0.0,
+        }],
+    }
+    motors = [{'axis': 0}]
+    manager._current_motors = lambda: (
+        motors if time.monotonic() - started_at < 1.0 else []
+    )
+    manager._motor_for_axis = lambda _axis, _motors: motors[0]
+    manager._motor_ready_error = lambda _motor: ''
+    manager._target_range_limit_error = lambda _motor, _low, _high: ''
+    manager._motor_type = lambda _motor: 'ac_servo'
+
+    plan = manager._build_plan({
+        'motion_file_id': 'motion.json',
+        'mapping_file_id': 'mapping.yaml',
+    })
+
+    assert [axis['motion_id'] for axis in plan['axes']] == ['1-1']
+
+
+def test_runtime_streams_line_motion_file_without_reading_whole_text(
+    tmp_path,
+    monkeypatch,
+):
+    path = tmp_path / 'large-compatible-motion.json'
+    path.write_text(
+        '{"type":"motion_header","fields":["frame","time_sec","id","value"]}\n'
+        '[1,0.02,"1-1",1.0,"1-2",-1.0]\n'
+        '[2,0.04,"1-1",2.0,"1-2",-2.0]\n',
+        encoding='utf-8',
+    )
+    original_read_text = Path.read_text
+
+    def reject_whole_file_read(candidate, *args, **kwargs):
+        if candidate == path:
+            raise AssertionError('line motion file must be streamed')
+        return original_read_text(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'read_text', reject_whole_file_read)
+    manager = MotionRunManager.__new__(MotionRunManager)
+
+    records = manager._load_motion_records(path)
+
+    assert len(records) == 4
+    assert {record['motion_id'] for record in records} == {'1-1', '1-2'}
+
+
+def test_initialization_waits_for_fresh_motion_state_after_plan_processing():
+    manager = MotionRunManager.__new__(MotionRunManager)
+    manager.period_sec = 0.001
+    manager._stop_event = threading.Event()
+    motors = [{'controller_index': 0}]
+    calls = {'count': 0}
+
+    def current_motors():
+        calls['count'] += 1
+        return motors if calls['count'] >= 3 else []
+
+    manager._current_motors = current_motors
+
+    assert manager._wait_for_current_motors(timeout_sec=0.1) == motors
+    assert calls['count'] == 3
 
 
 def test_motion_run_initialization_fails_when_any_mapping_axis_is_not_ready():
@@ -407,12 +510,22 @@ def test_start_routes_one_owned_initialization_and_motion_sequence(monkeypatch):
     manager._stop_event = threading.Event()
     manager._graceful_stop_event = threading.Event()
     manager._playback_ownership_error = lambda: ''
-    manager.status = lambda: {'state': 'initialized'}
-    manager._build_plan = lambda _payload, initialization_only=False: {
-        'name': 'initialization' if initialization_only else 'motion',
-        'run_mode': 'once',
-        'summary': {},
-    }
+    current = {'state': 'initialized'}
+    manager.status = lambda: dict(current)
+    manager._set_status = lambda status: (current.clear(), current.update(status))
+    motors = [{'axis': 0}]
+    snapshots = []
+    manager._current_motors = lambda: motors
+
+    def build_plan(_payload, initialization_only=False, motors_snapshot=None):
+        snapshots.append(motors_snapshot)
+        return {
+            'name': 'initialization' if initialization_only else 'motion',
+            'run_mode': 'once',
+            'summary': {},
+        }
+
+    manager._build_plan = build_plan
     manager._motion_auto_start_guard_error = lambda _plan: ''
     calls = []
     manager._run_initialization_then_motion = lambda initialization, motion: calls.append(
@@ -437,6 +550,64 @@ def test_start_routes_one_owned_initialization_and_motion_sequence(monkeypatch):
 
     assert result['success'] is True
     assert calls == [('initialize_then_motion', 'initialization', 'motion')]
+    assert snapshots == [motors, motors]
+
+
+def test_start_acknowledges_before_motion_plan_processing(monkeypatch):
+    manager = MotionRunManager.__new__(MotionRunManager)
+    manager._run_lock = threading.RLock()
+    manager._run_thread = None
+    manager._stop_event = threading.Event()
+    manager._graceful_stop_event = threading.Event()
+    manager._playback_ownership_error = lambda: ''
+    manager._current_motors = lambda: [{'axis': 0}]
+    current = {'state': 'idle'}
+    manager.status = lambda: dict(current)
+    manager._set_status = lambda status: (current.clear(), current.update(status))
+    plan_calls = []
+    manager._build_plan = lambda *_args, **_kwargs: plan_calls.append(True)
+
+    class DeferredThread:
+        def __init__(self, *, target, args, daemon):
+            self.target = target
+            self.args = args
+            self.daemon = daemon
+            self.started = False
+
+        def is_alive(self):
+            return self.started
+
+        def start(self):
+            self.started = True
+
+    monkeypatch.setattr(threading, 'Thread', DeferredThread)
+
+    result = manager._start_thread('run', {
+        'project_id': 'project-a',
+        'request_source': 'motion_studio',
+    })
+
+    assert result['success'] is True
+    assert result['message'] == 'motion run preparation started'
+    assert result['status']['state'] == 'preparing'
+    assert plan_calls == []
+    assert manager._run_thread.started is True
+
+
+def test_stop_during_plan_preparation_never_starts_motion():
+    manager = MotionRunManager.__new__(MotionRunManager)
+    manager._stop_event = threading.Event()
+    manager._stop_event.set()
+    manager._build_plan = lambda *_args, **_kwargs: {
+        'run_mode': 'once',
+        'summary': {},
+    }
+    started = []
+    manager._run_initialization_then_motion = lambda *_args: started.append(True)
+
+    manager._prepare_and_run('run', {}, [{'axis': 0}])
+
+    assert started == []
 
 
 def test_owned_sequence_runs_countdown_between_initialization_and_motion():
@@ -731,6 +902,7 @@ def test_normal_motion_run_still_rejects_mapping_file_mismatch():
         'motion_file_id': 'original.json',
         'mappings': [{'motion_id': '1-1', 'motor_axis': 0}],
     }
+    manager._current_motors = lambda: []
 
     try:
         manager._build_plan({

@@ -1,9 +1,11 @@
 import json
+from pathlib import Path
 
 import pytest
 
 from motion_studio.layer_editor import edit_layer
 from motion_studio.project_store import ProjectStore
+from motion_studio.project_store import MOTION_FILE_SIZE_LIMIT_BYTES
 from motion_studio.timeline import motion_file_text
 
 
@@ -39,6 +41,52 @@ def test_project_references_mapping_without_modifying_it(tmp_path):
     assert store.mapping_check(saved)['matches_project'] is True
     assert 'armed_motion_ids' not in saved
     assert mapping_path.read_bytes() == original
+
+
+def test_motion_file_limit_matches_large_editor_output_and_reader_streams(
+    tmp_path,
+    monkeypatch,
+):
+    write_mapping(tmp_path)
+    store = ProjectStore(tmp_path)
+    project = store.create_project('large motion', 'face.yaml')
+    file_id = store.write_motion_file(
+        'streamed.json',
+        motion_file_text(project, [
+            {'frame': 1, 'time_sec': 0.02, 'values': {'1-1': 1.0}},
+            {'frame': 2, 'time_sec': 0.04, 'values': {'1-1': 2.0}},
+        ]),
+    )
+    path = store.files_dir / file_id
+    original_read_text = Path.read_text
+
+    def reject_whole_file_read(candidate, *args, **kwargs):
+        if candidate == path:
+            raise AssertionError('motion file must be streamed')
+        return original_read_text(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'read_text', reject_whole_file_read)
+
+    loaded = store.read_motion_file(file_id)
+
+    assert MOTION_FILE_SIZE_LIMIT_BYTES == 256 * 1024 * 1024
+    assert len(loaded['frames']) == 2
+
+
+def test_limited_motion_write_preserves_previous_file_on_overflow(tmp_path):
+    target = tmp_path / 'motion.json'
+    target.write_text('previous', encoding='utf-8')
+
+    with pytest.raises(ValueError, match='limit'):
+        ProjectStore._atomic_write_limited(
+            target,
+            'too-large',
+            4,
+            'limit exceeded',
+        )
+
+    assert target.read_text(encoding='utf-8') == 'previous'
+    assert not target.with_suffix('.json.tmp').exists()
 
 
 def test_project_layers_round_trip(tmp_path):

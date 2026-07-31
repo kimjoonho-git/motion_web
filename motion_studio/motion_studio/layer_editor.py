@@ -444,8 +444,8 @@ def edit_layer(layer: Dict[str, Any], request: Dict[str, Any]) -> Dict[str, Any]
         _finite(request.get('offset_deg'), '각도 오프셋')
     elif operation == 'value_scale':
         factor = _finite(request.get('factor'), '동작 배율')
-        if factor <= 0.0:
-            raise ValueError('동작 배율은 0보다 커야 합니다')
+        if factor == 0.0:
+            raise ValueError('동작 배율은 0을 제외한 값이어야 합니다')
     elif operation == 'time_scale':
         factor = _finite(request.get('factor'), '시간 배율')
         if factor <= 0.0 or factor > MAX_TIME_SCALE:

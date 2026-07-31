@@ -1,6 +1,7 @@
 """Validate and execute motion plans independently from the web API process."""
 
 import ast
+from bisect import bisect_left
 import hashlib
 import json
 import math
@@ -826,39 +827,37 @@ class MotionRunManager(Node):
                     'message': ownership_error,
                     'status': self.status(),
                 }
-            if mode == 'initialize':
-                plan = self._build_plan(payload, initialization_only=True)
-                target = self._run_initialization
-                target_args = (plan,)
-            else:
-                plan = self._build_plan(payload)
-                initialization_plan = self._build_plan(
-                    payload,
-                    initialization_only=True,
-                )
-                guard_error = self._motion_auto_start_guard_error(plan)
-                if guard_error:
-                    current = self.status()
-                    current_state = str(current.get('state') or 'ready')
-                    status = self._status_from_plan(current_state, f'모션 시작 불가: {guard_error}', plan)
-                    status['phase'] = current.get('phase', 'initialized')
-                    status['phase_started_at'] = current.get('phase_started_at')
-                    status['phase_finished_at'] = current.get('phase_finished_at')
-                    status['lifecycle'] = self._current_lifecycle()
-                    self._set_status(status)
-                    return {
-                        'success': False,
-                        'message': guard_error,
-                        'status': self.status(),
-                        'summary': plan['summary'],
-                    }
-                target = self._run_initialization_then_motion
-                target_args = (initialization_plan, plan)
+            motors_snapshot = self._current_motors()
+            if not motors_snapshot:
+                raise ValueError('current motion_state is unavailable')
             self._stop_event.clear()
             self._graceful_stop_event.clear()
+            preparing_status = self._empty_status()
+            preparing_status.update({
+                'state': 'preparing',
+                'phase': 'preparing',
+                'message': (
+                    '초기 위치 이동 계획 생성 중'
+                    if mode == 'initialize'
+                    else '모션 실행 계획 생성 중'
+                ),
+                'project_id': str(payload.get('project_id') or ''),
+                'motion_file_id': str(payload.get('motion_file_id') or ''),
+                'mapping_file_id': str(payload.get('mapping_file_id') or ''),
+                'run_mode': str(payload.get('run_mode') or 'once'),
+                'automation_run': bool(payload.get('automation_run')),
+                'operation_generation': int(
+                    payload.get('operation_generation') or 0
+                ),
+                'request_source': str(
+                    payload.get('request_source') or 'motion_run'
+                ),
+                'phase_started_at': time.time(),
+            })
+            self._set_status(preparing_status)
             self._run_thread = threading.Thread(
-                target=target,
-                args=target_args,
+                target=self._prepare_and_run,
+                args=(mode, dict(payload), list(motors_snapshot)),
                 daemon=True,
             )
             self._run_thread.start()
@@ -866,17 +865,79 @@ class MotionRunManager(Node):
         return {
             'success': True,
             'message': (
-                'initial position move started'
+                'initial position move preparation started'
                 if mode == 'initialize'
-                else (
-                    'initial position move and continuous motion run started'
-                    if plan.get('run_mode') == 'continuous'
-                    else 'initial position move and single motion run started'
-                )
+                else 'motion run preparation started'
             ),
             'status': self.status(),
-            'summary': plan['summary'],
+            'summary': {},
         }
+
+    def _prepare_and_run(
+        self,
+        mode: str,
+        payload: Dict[str, Any],
+        motors_snapshot: List[Dict[str, Any]],
+    ) -> None:
+        try:
+            if mode == 'initialize':
+                plan = self._build_plan(
+                    payload,
+                    initialization_only=True,
+                    motors_snapshot=motors_snapshot,
+                )
+                if self._stop_event.is_set():
+                    return
+                self._run_initialization(plan)
+                return
+
+            plan = self._build_plan(
+                payload,
+                motors_snapshot=motors_snapshot,
+            )
+            initialization_plan = self._build_plan(
+                payload,
+                initialization_only=True,
+                motors_snapshot=motors_snapshot,
+            )
+            if self._stop_event.is_set():
+                return
+            ownership_error = self._playback_ownership_error()
+            if ownership_error:
+                raise ValueError(ownership_error)
+            guard_error = self._motion_auto_start_guard_error(plan)
+            if guard_error:
+                raise ValueError(guard_error)
+            self._run_initialization_then_motion(initialization_plan, plan)
+        except InterruptedError:
+            return
+        except Exception as exc:
+            if self._stop_event.is_set():
+                return
+            self.get_logger().error(
+                f'motion run preparation failed: {mode}\n{traceback.format_exc()}'
+            )
+            status = self._empty_status()
+            status.update({
+                'state': 'error',
+                'phase': 'error',
+                'message': f'모션 실행 준비 실패: {exc}',
+                'project_id': str(payload.get('project_id') or ''),
+                'motion_file_id': str(payload.get('motion_file_id') or ''),
+                'mapping_file_id': str(payload.get('mapping_file_id') or ''),
+                'run_mode': str(payload.get('run_mode') or 'once'),
+                'automation_run': bool(payload.get('automation_run')),
+                'operation_generation': int(
+                    payload.get('operation_generation') or 0
+                ),
+                'request_source': str(
+                    payload.get('request_source') or 'motion_run'
+                ),
+                'phase_finished_at': time.time(),
+            })
+            self._set_status(status)
+            if bool(payload.get('automation_run')):
+                self._automation_failure(str(exc))
 
     def _handle_stop(self) -> Dict[str, Any]:
         current = self.status()
@@ -894,7 +955,14 @@ class MotionRunManager(Node):
                 pass
         self._stop_event.set()
         self._graceful_stop_event.clear()
-        if current.get('state') in (
+        if current.get('state') == 'preparing':
+            self._update_status({
+                'state': 'stopped',
+                'phase': 'stopped',
+                'phase_finished_at': time.time(),
+                'message': 'stop requested during plan preparation',
+            })
+        elif current.get('state') in (
             'initializing',
             'countdown',
             'running',
@@ -920,6 +988,8 @@ class MotionRunManager(Node):
 
     def _run_initialization(self, plan: Dict[str, Any]) -> None:
         try:
+            if self._stop_event.is_set():
+                raise InterruptedError()
             init_axes = list(plan['axes'])
             if not init_axes:
                 now = time.time()
@@ -935,7 +1005,7 @@ class MotionRunManager(Node):
                 self._set_status(status)
                 return
 
-            motors = self._current_motors()
+            motors = self._wait_for_current_motors()
             starts: Dict[int, float] = {}
             targets: Dict[int, float] = {}
             durations: Dict[int, float] = {}
@@ -1615,6 +1685,7 @@ class MotionRunManager(Node):
         payload: Dict[str, Any],
         *,
         initialization_only: bool = False,
+        motors_snapshot: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         run_mode = str(payload.get('run_mode') or 'once').strip().lower()
         if run_mode not in ('once', 'continuous'):
@@ -1673,6 +1744,11 @@ class MotionRunManager(Node):
             mapping_path = self._mapping_file_path(mapping_file_id)
         if not motion_file_id and not initialization_only:
             raise ValueError('motion file_id is required')
+        motors = (
+            list(motors_snapshot)
+            if motors_snapshot is not None
+            else self._current_motors()
+        )
         motion_records = (
             self._load_motion_records(motion_file_path)
             if motion_file_id
@@ -1700,7 +1776,6 @@ class MotionRunManager(Node):
                 else {str(motion_id) for motion_id in groups}
             )
         initialization_fallback_used = False
-        motors = self._current_motors()
         if not motors:
             raise ValueError('current motion_state is unavailable')
 
@@ -1884,31 +1959,43 @@ class MotionRunManager(Node):
         start_time = min(record['time_sec'] for record in motion_records)
         end_time = max(record['time_sec'] for record in motion_records)
         duration = max(end_time - start_time, 0.0)
-        sample_count = max(1, int(math.floor(duration / self.period_sec)) + 1)
-        last_time = start_time + ((sample_count - 1) * self.period_sec)
-        if end_time - last_time > 0.001:
-            sample_count += 1
-
         samples = []
-        for index in range(sample_count):
-            sample_time = min(start_time + (index * self.period_sec), end_time)
-            positions = {}
-            motion_values = {}
-            for axis in axes:
-                motion_value = self._interpolated_value(groups[axis['motion_id']], sample_time)
-                motion_value = self._clamp_motion_value(
-                    motion_value,
-                    axis.get('motion_limit_lower_deg'),
-                    axis.get('motion_limit_upper_deg'),
-                )
-                positions[int(axis['motor_axis'])] = self._motor_target(axis['row'], motion_value)
-                motion_values[str(axis['motion_id'])] = float(motion_value)
-            samples.append({
-                'time_sec': sample_time - start_time,
-                'absolute_time_sec': sample_time,
-                'positions': positions,
-                'motion_values': motion_values,
-            })
+        if not initialization_only:
+            sample_count = max(1, int(math.floor(duration / self.period_sec)) + 1)
+            last_time = start_time + ((sample_count - 1) * self.period_sec)
+            if end_time - last_time > 0.001:
+                sample_count += 1
+            group_times = {
+                motion_id: [float(record['time_sec']) for record in records]
+                for motion_id, records in groups.items()
+            }
+            for index in range(sample_count):
+                sample_time = min(start_time + (index * self.period_sec), end_time)
+                positions = {}
+                motion_values = {}
+                for axis in axes:
+                    motion_id = str(axis['motion_id'])
+                    motion_value = self._interpolated_value(
+                        groups[motion_id],
+                        group_times[motion_id],
+                        sample_time,
+                    )
+                    motion_value = self._clamp_motion_value(
+                        motion_value,
+                        axis.get('motion_limit_lower_deg'),
+                        axis.get('motion_limit_upper_deg'),
+                    )
+                    positions[int(axis['motor_axis'])] = self._motor_target(
+                        axis['row'],
+                        motion_value,
+                    )
+                    motion_values[motion_id] = float(motion_value)
+                samples.append({
+                    'time_sec': sample_time - start_time,
+                    'absolute_time_sec': sample_time,
+                    'positions': positions,
+                    'motion_values': motion_values,
+                })
 
         complete_motion_data_available = (
             source_motion_data_available and not initialization_fallback_used
@@ -2263,6 +2350,22 @@ class MotionRunManager(Node):
         motors = state.get('motors', [])
         return [motor for motor in motors if isinstance(motor, dict)] if isinstance(motors, list) else []
 
+    def _wait_for_current_motors(
+        self,
+        timeout_sec: float = STATE_TIMEOUT_SEC,
+    ) -> List[Dict[str, Any]]:
+        deadline = time.monotonic() + max(float(timeout_sec), 0.0)
+        while True:
+            motors = self._current_motors()
+            if motors:
+                return motors
+            if self._stop_event.is_set():
+                raise InterruptedError()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                return []
+            time.sleep(min(max(self.period_sec, 0.01), 0.05, remaining))
+
     def _motor_for_axis(
         self,
         axis: int,
@@ -2433,6 +2536,57 @@ class MotionRunManager(Node):
         raise ValueError(f'initial_move_time_sec must be one of: {allowed}')
 
     def _load_motion_records(self, path: Path) -> List[Dict[str, Any]]:
+        first_line = ''
+        with path.open('r', encoding='utf-8') as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+                if line and not line.startswith('#'):
+                    first_line = line
+                    break
+            try:
+                first_payload = json.loads(first_line)
+            except json.JSONDecodeError:
+                first_payload = None
+            if (
+                isinstance(first_payload, dict)
+                and first_payload.get('type') == 'motion_header'
+            ):
+                headers = first_payload.get(
+                    'fields',
+                    first_payload.get('headers', first_payload.get('columns', [])),
+                )
+                headers = (
+                    [str(item) for item in headers]
+                    if isinstance(headers, list)
+                    else []
+                )
+                records = []
+                row_index = 0
+                for raw_line in handle:
+                    line = raw_line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    parsed = self._parse_text_row(line)
+                    if parsed is None:
+                        continue
+                    for row in self._expand_pair_rows([parsed]):
+                        record = self._parse_motion_row(row, headers)
+                        if record is None:
+                            continue
+                        record['row_index'] = row_index
+                        row_index += 1
+                        records.append(record)
+                if not records:
+                    raise ValueError('motion file has no valid records')
+                return sorted(
+                    records,
+                    key=lambda item: (
+                        item['time_sec'],
+                        str(item['motion_id']),
+                        item['row_index'],
+                    ),
+                )
+
         content = path.read_text(encoding='utf-8')
         rows, headers = self._extract_motion_rows(content)
         records = []
@@ -2585,21 +2739,26 @@ class MotionRunManager(Node):
             groups[key] = sorted(groups[key], key=lambda item: item['time_sec'])
         return groups
 
-    def _interpolated_value(self, records: List[Dict[str, Any]], time_sec: float) -> float:
+    def _interpolated_value(
+        self,
+        records: List[Dict[str, Any]],
+        record_times: List[float],
+        time_sec: float,
+    ) -> float:
         if not records:
             return 0.0
         if time_sec <= records[0]['time_sec']:
             return float(records[0]['value'])
         if time_sec >= records[-1]['time_sec']:
             return float(records[-1]['value'])
-        for index in range(1, len(records)):
-            before = records[index - 1]
-            after = records[index]
-            if time_sec <= after['time_sec']:
-                span = max(float(after['time_sec'] - before['time_sec']), 1e-9)
-                ratio = (time_sec - before['time_sec']) / span
-                return float(before['value']) + ((float(after['value']) - float(before['value'])) * ratio)
-        return float(records[-1]['value'])
+        after_index = bisect_left(record_times, time_sec)
+        before = records[after_index - 1]
+        after = records[after_index]
+        span = max(float(after['time_sec'] - before['time_sec']), 1e-9)
+        ratio = (time_sec - before['time_sec']) / span
+        return float(before['value']) + (
+            (float(after['value']) - float(before['value'])) * ratio
+        )
 
     def _project_asset_dirs(self, payload: Dict[str, Any]) -> tuple[str, Path, Path]:
         project_id = str(payload.get('project_id') or '').strip()
