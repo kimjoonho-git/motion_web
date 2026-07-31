@@ -8,6 +8,7 @@ configuration or issue a motor command.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import fcntl
 import re
@@ -26,6 +27,7 @@ from .motor_identity import missing_ethercat_identity
 
 PROJECT_VERSION = 1
 MAX_TEXT_BYTES = 10 * 1024 * 1024
+MAX_MOTION_TEXT_BYTES = 256 * 1024 * 1024
 DEFAULT_MOTOR_FILE = 'motor_axes.yaml'
 DEFAULT_MOTION_AXIS_FILE = 'motion_axes.yaml'
 SERVO_ALARM_POLICY_FILE = 'servo_alarm_policy.json'
@@ -59,6 +61,20 @@ def _safe_stem(value: Any, fallback: str = 'project') -> str:
 
 def _sha256(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open('rb') as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _text_limit(category: str) -> tuple[int, str]:
+    if category == 'motions':
+        return MAX_MOTION_TEXT_BYTES, '256MB'
+    return MAX_TEXT_BYTES, '10MB'
 
 
 def _motor_runtime_locked(method):
@@ -906,9 +922,10 @@ class ProjectRepository:
                 target = target_dir / safe_category / f'{stem}-copy-{counter}{suffix}'
                 counter += 1
             target_name = target.name
+        limit, label = _text_limit(safe_category)
+        if source.stat().st_size > limit:
+            raise ValueError(f'파일이 {label} 제한을 초과합니다')
         content = source.read_text(encoding='utf-8')
-        if len(content.encode('utf-8')) > MAX_TEXT_BYTES:
-            raise ValueError('파일이 10MB 제한을 초과합니다')
         self._validate_content(safe_category, target_name, content)
         shutil.copy2(source, target)
         manifest = self._read_manifest(target_dir)
@@ -937,8 +954,9 @@ class ProjectRepository:
         name = self._file_name(safe_category, file_name)
         text = str(content if content is not None else '')
         encoded = text.encode('utf-8')
-        if len(encoded) > MAX_TEXT_BYTES:
-            raise ValueError('파일이 10MB 제한을 초과합니다')
+        limit, label = _text_limit(safe_category)
+        if len(encoded) > limit:
+            raise ValueError(f'파일이 {label} 제한을 초과합니다')
         self._validate_content(safe_category, name, text)
         target = project_dir / safe_category / name
         if target.exists():
@@ -1019,8 +1037,9 @@ class ProjectRepository:
                 raise
             path = project_dir / safe_category / name
         text = str(content if content is not None else '')
-        if len(text.encode('utf-8')) > MAX_TEXT_BYTES:
-            raise ValueError('파일이 10MB 제한을 초과합니다')
+        limit, label = _text_limit(safe_category)
+        if len(text.encode('utf-8')) > limit:
+            raise ValueError(f'파일이 {label} 제한을 초과합니다')
         self._validate_content(safe_category, path.name, text)
         self._atomic_write(path, text if text.endswith('\n') else text + '\n')
         manifest = self._read_manifest(project_dir)
@@ -1452,8 +1471,9 @@ class ProjectRepository:
             raise ValueError('현재 프로젝트 외부 파일은 자동 동기화할 수 없습니다')
         if not source_path.is_file() or source_path.is_symlink():
             raise ValueError(f'동기화할 파일을 찾을 수 없습니다: {name}')
-        if source_path.stat().st_size > MAX_TEXT_BYTES:
-            raise ValueError('파일이 10MB 제한을 초과합니다')
+        limit, label = _text_limit(safe_category)
+        if source_path.stat().st_size > limit:
+            raise ValueError(f'파일이 {label} 제한을 초과합니다')
         text = source_path.read_text(encoding='utf-8')
         self._validate_content(safe_category, name, text)
         manifest = self._read_manifest(project_dir)
@@ -1540,12 +1560,12 @@ class ProjectRepository:
                     continue
                 if path.suffix.lower() not in PROJECT_CATEGORIES[category]:
                     continue
-                content = path.read_bytes()
+                size = path.stat().st_size
                 children.append({
                     'name': path.name,
                     'category': category,
-                    'size': len(content),
-                    'sha256': _sha256(content),
+                    'size': size,
+                    'sha256': _sha256_file(path),
                     'active': active.get(category) == path.name,
                     **(
                         {'midi_banks': self._midi_bank_tree_info(path)}
@@ -1857,13 +1877,21 @@ class ProjectRepository:
                 if not isinstance(payload, dict):
                     raise ValueError('YAML 최상위 값은 객체여야 합니다')
             elif category == 'motions':
-                lines = [line.strip() for line in content.splitlines() if line.strip()]
-                if len(lines) < 2:
+                lines = (
+                    line.strip()
+                    for line in io.StringIO(content)
+                    if line.strip()
+                )
+                header_line = next(lines, '')
+                frame_line = next(lines, '')
+                if not header_line or not frame_line:
                     raise ValueError('모션 헤더와 프레임 데이터가 필요합니다')
-                header = json.loads(lines[0])
+                header = json.loads(header_line)
                 if not isinstance(header, dict) or header.get('type') != 'motion_header':
                     raise ValueError('지원하지 않는 모션 파일 헤더입니다')
-                for line in lines[1:]:
+                if not isinstance(json.loads(frame_line), list):
+                    raise ValueError('모션 프레임은 배열이어야 합니다')
+                for line in lines:
                     if not isinstance(json.loads(line), list):
                         raise ValueError('모션 프레임은 배열이어야 합니다')
             else:

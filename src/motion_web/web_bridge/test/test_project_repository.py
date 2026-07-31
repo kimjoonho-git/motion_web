@@ -11,7 +11,12 @@ import yaml
 
 from motion_web_bridge import service_entrypoint
 from motion_web_bridge.motor_restart_coordinator import MotorRestartCoordinator
-from motion_web_bridge.project_repository import ProjectRepository
+from motion_web_bridge.project_repository import (
+    MAX_MOTION_TEXT_BYTES,
+    MAX_TEXT_BYTES,
+    ProjectRepository,
+    _text_limit,
+)
 from motion_web_bridge.bridge_node import MotionWebBridge
 from motion_web_bridge.service_entrypoint import (
     resolve_applied_motor_config,
@@ -23,6 +28,12 @@ MOTION_TEXT = '\n'.join([
     json.dumps({'type': 'motion_header', 'rotation_unit': 'deg'}),
     json.dumps([1, 0.0, '1-1', 0.0]),
 ])
+
+
+def test_motion_files_have_a_separate_large_file_limit():
+    assert _text_limit('motions') == (MAX_MOTION_TEXT_BYTES, '256MB')
+    assert MAX_MOTION_TEXT_BYTES == 256 * 1024 * 1024
+    assert _text_limit('motor_axes') == (MAX_TEXT_BYTES, '10MB')
 
 
 def test_project_generation_is_monotonic_and_survives_repository_restart(tmp_path):

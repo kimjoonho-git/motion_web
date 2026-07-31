@@ -1,6 +1,6 @@
 # Motor Scan Contract
 
-Contract version: `2`
+Contract version: `3`
 
 이 문서는 실제 장치 검색의 영구 불변조건만 정의한다. 프로젝트 저장,
 RuntimeSession 생성, 서비스 재시작 및 모터 제어 허용은
@@ -35,8 +35,10 @@ RuntimeSession 생성, 서비스 재시작 및 모터 제어 허용은
    정지하고 검색 후 다시 시작하지 않는다. 현재 프로젝트 설정을 저장·적용한
    경우에만 새 RuntimeSession으로 시작한다.
 5. `ethercat rescan`으로 기존 열거정보를 폐기한다.
-6. Slave 목록이 안정화될 때까지 기다린다.
-7. 각 Slave의 SII EEPROM에서 다음 값을 직접 읽는다.
+6. 등록된 모든 EtherCAT Master를 다시 열거하고 Master별 결과를 구분한다.
+7. Slave 목록이 안정화될 때까지 기다린다.
+8. 각 Slave의 SII EEPROM에서 다음 값을 직접 읽는다. 이때 모든 직접 읽기
+   명령은 `Master Index`와 `Slave Position`을 함께 지정한다.
    - Vendor ID
    - Product Code
    - Revision Number
@@ -44,12 +46,14 @@ RuntimeSession 생성, 서비스 재시작 및 모터 제어 허용은
    - EEPROM Alias
    - SII Order Number
    - SII Device Name
-8. 각 Slave의 Alias 레지스터 `0x0012`와 Slave Position을 읽는다.
-9. Master 열거정보와 SII 식별정보가 불일치하면 해당 Slave를 완료로 처리하지 않는다.
+9. 각 Slave의 Alias 레지스터 `0x0012`와 Slave Position을 읽는다.
+10. Master 열거정보와 SII 식별정보가 불일치하면 해당 Slave를 완료로 처리하지 않는다.
+11. 한 Master만 완료되면 EtherCAT 전체 결과를 완료로 확대하지 않는다.
 
 ### EtherCAT 장치 식별
 
-- EEPROM Alias가 `0`이 아니고 검색 결과에서 유일하면 우선 장치 후보로 사용한다.
+- EtherCAT 장치 위치는 `Master Index + Slave Position` 조합으로 표현한다.
+- EEPROM Alias가 `0`이 아니고 같은 Master 안에서 유일하면 우선 장치 후보로 사용한다.
 - EEPROM Alias가 `0`이거나 중복이면 Serial Number를 장치 후보로 사용한다.
 - Slave Position은 연결 순서 변경을 확인하는 값이며 단독 고유 식별값이 아니다.
 - Serial Number가 없거나 중복되어 장치를 구분할 수 없으면 `comparison_blocked`로 표시한다.
@@ -104,6 +108,9 @@ RuntimeSession 생성, 서비스 재시작 및 모터 제어 허용은
 ## 7. 필수 자동 테스트
 
 - EtherCAT `rescan`이 SII 읽기보다 먼저 실행되는지
+- Master 0과 Master 1에 같은 Slave Position이 있어도 SII와 Alias 레지스터를
+  각각 해당 Master에서 읽는지
+- Master별 검색 결과와 실패가 서로 섞이지 않는지
 - 활성 Motor Manager 또는 모터 동작 중 위험한 재열거를 차단하는지
 - 프로젝트 전환 후 이전 RuntimeSession 피드백이 없어도 이전 Motor Manager를
   정지하고 검색하며, 검색 후 이전 RuntimeSession을 복구하지 않는지

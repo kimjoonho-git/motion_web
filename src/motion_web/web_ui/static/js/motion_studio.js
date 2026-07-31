@@ -1271,10 +1271,14 @@ export function createMotionStudioController({
         ? '시간 배율'
         : '동작 크기 배율';
     }
+    if (el.studioEditorFactor) {
+      el.studioEditorFactor.min = operation === 'value_scale' ? '-100' : '0.01';
+      el.studioEditorFactor.max = '100';
+    }
     if (el.studioEditorOperationHelp) {
       const help = {
         time_scale: '포인트 한 개는 0초, 두 개 이상은 첫 포인트를 기준으로 시간을 조절합니다.',
-        value_scale: '포인트 한 개는 0°, 두 개 이상은 첫 포인트를 기준으로 모션값을 조절합니다.',
+        value_scale: '포인트 한 개는 0°, 두 개 이상은 첫 포인트를 기준으로 모션값을 조절합니다. 음수는 곡선을 상하 반전합니다.',
         time_shift: '선택한 포인트 한 개 또는 포인트 범위를 시간축으로 이동합니다.',
         value_offset: '선택한 포인트 한 개 또는 포인트 범위의 모션값을 이동합니다.',
         point_curve: appliedPointCurve
