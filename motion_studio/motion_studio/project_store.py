@@ -11,6 +11,7 @@ import hashlib
 import json
 import math
 import re
+import shutil
 import time
 import uuid
 from pathlib import Path
@@ -285,8 +286,11 @@ class ProjectStore:
             raise ValueError(
                 '선택한 모션축 설정에 없는 Motion ID: ' + ', '.join(missing)
             )
-        project.setdefault('layers', []).append(self._imported_layer(motion))
-        return self.save_project(project)
+        layer = self._imported_layer(motion)
+        project.setdefault('layers', []).append(layer)
+        return self.save_project(
+            project, upsert_layer_ids=[layer['layer_id']]
+        )
 
     def create_project(self, name: Any, mapping_file_id: Any) -> Dict[str, Any]:
         mapping = self.inspect_mapping(mapping_file_id)
@@ -310,15 +314,99 @@ class ProjectStore:
     def load_project(self, project_id: Any) -> Dict[str, Any]:
         return self._read_project(self._project_path(project_id))
 
-    def save_project(self, project: Dict[str, Any]) -> Dict[str, Any]:
-        normalized = self.normalize_project(project)
+    def save_project(
+        self,
+        project: Dict[str, Any],
+        *,
+        upsert_layer_ids: Optional[Iterable[Any]] = None,
+        delete_layer_ids: Optional[Iterable[Any]] = None,
+    ) -> Dict[str, Any]:
+        if not isinstance(project, dict):
+            raise ValueError('project must be an object')
+        project_id = _safe_name(project.get('project_id'))
+        path = self._project_path(project_id, require_existing=False)
+        try:
+            existing = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, json.JSONDecodeError):
+            existing = {}
+        split_storage = (
+            isinstance(existing, dict)
+            and existing.get('storage_format') == 'split_layers_v1'
+        )
+        selected_upserts = (
+            None
+            if upsert_layer_ids is None
+            else {str(value) for value in upsert_layer_ids if str(value)}
+        )
+        if split_storage and selected_upserts is not None:
+            metadata_source = dict(project)
+            metadata_source['layers'] = []
+            normalized = self.normalize_project(metadata_source)
+            normalized['layers'] = [
+                normalize_layer(layer, index)
+                if str(layer.get('layer_id') or '') in selected_upserts
+                else layer
+                for index, layer in enumerate(project.get('layers') or [])
+                if isinstance(layer, dict)
+            ]
+        else:
+            normalized = self.normalize_project(project)
         normalized['updated_at'] = time.time()
-        path = self._project_path(normalized['project_id'], require_existing=False)
-        self._atomic_write(path, json.dumps(normalized, ensure_ascii=False, indent=2) + '\n')
+        layer_dir = path.with_suffix('.layers')
+        if layer_dir.is_symlink():
+            raise ValueError('motion studio layer directory cannot be a link')
+        layer_dir.mkdir(parents=True, exist_ok=True)
+        selected_deletes = {
+            str(value) for value in delete_layer_ids or [] if str(value)
+        }
+        if not split_storage:
+            selected_upserts = None
+        layer_files = []
+        retained_names = set()
+        for index, layer in enumerate(normalized['layers']):
+            layer_id = str(layer.get('layer_id') or f'layer_{index + 1}')
+            file_name = f'{_safe_name(layer_id, f"layer_{index + 1}")}.json'
+            retained_names.add(file_name)
+            layer_files.append({'layer_id': layer_id, 'file': file_name})
+            if selected_upserts is None or layer_id in selected_upserts:
+                self._atomic_write(
+                    layer_dir / file_name,
+                    json.dumps(layer, ensure_ascii=False, indent=2) + '\n',
+                )
+        if selected_upserts is None:
+            removable = [
+                item for item in layer_dir.iterdir()
+                if item.is_file() and item.name not in retained_names
+            ]
+        else:
+            removable = [
+                layer_dir / f'{_safe_name(layer_id, "layer")}.json'
+                for layer_id in selected_deletes
+            ]
+        metadata = {
+            key: value for key, value in normalized.items() if key != 'layers'
+        }
+        metadata['storage_format'] = 'split_layers_v1'
+        metadata['layer_files'] = layer_files
+        self._atomic_write(
+            path, json.dumps(metadata, ensure_ascii=False, indent=2) + '\n'
+        )
+        for candidate in removable:
+            if candidate.parent == layer_dir and candidate.is_file() and not candidate.is_symlink():
+                candidate.unlink()
         return normalized
 
     def delete_project(self, project_id: Any) -> None:
-        self._project_path(project_id).unlink()
+        path = self._project_path(project_id)
+        layer_dir = path.with_suffix('.layers')
+        path.unlink()
+        if (
+            layer_dir.parent == self.projects_dir
+            and layer_dir.name.endswith('.layers')
+            and layer_dir.is_dir()
+            and not layer_dir.is_symlink()
+        ):
+            shutil.rmtree(layer_dir)
 
     def write_motion_file(
         self,
@@ -441,6 +529,36 @@ class ProjectStore:
 
     def _read_project(self, path: Path) -> Dict[str, Any]:
         payload = json.loads(path.read_text(encoding='utf-8'))
+        if (
+            isinstance(payload, dict)
+            and payload.get('storage_format') == 'split_layers_v1'
+        ):
+            layer_dir = path.with_suffix('.layers')
+            if layer_dir.is_symlink() or not layer_dir.is_dir():
+                raise ValueError('invalid motion studio layer directory')
+            layers = []
+            for entry in payload.get('layer_files') or []:
+                if not isinstance(entry, dict):
+                    raise ValueError('invalid split layer entry')
+                file_name = str(entry.get('file') or '')
+                candidate = layer_dir / file_name
+                if (
+                    not file_name
+                    or file_name != Path(file_name).name
+                    or candidate.resolve().parent != layer_dir.resolve()
+                    or candidate.is_symlink()
+                    or not candidate.is_file()
+                ):
+                    raise ValueError(f'motion studio layer not found: {file_name}')
+                layer = json.loads(candidate.read_text(encoding='utf-8'))
+                if (
+                    not isinstance(layer, dict)
+                    or str(layer.get('layer_id') or '')
+                    != str(entry.get('layer_id') or '')
+                ):
+                    raise ValueError(f'motion studio layer id mismatch: {file_name}')
+                layers.append(layer)
+            payload['layers'] = layers
         return self.normalize_project(payload)
 
     def _project_path(self, project_id: Any, *, require_existing: bool = True) -> Path:

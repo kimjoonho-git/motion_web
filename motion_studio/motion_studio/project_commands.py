@@ -35,6 +35,21 @@ class StudioProjectCommands:
     def handles(self, command: str) -> bool:
         return command in self.COMMANDS
 
+    def _catalog(self, *, refresh: bool = False) -> Dict[str, Any]:
+        studio = self.studio
+        cached = getattr(studio, '_workspace_catalog_cache', None)
+        if refresh or not isinstance(cached, dict):
+            cached = {
+                'projects': studio._store.list_projects(),
+                'mappings': studio._store.list_mappings(),
+                'motion_files': studio._store.list_motion_files(),
+            }
+            studio._workspace_catalog_cache = cached
+        return {
+            key: list(cached.get(key) or [])
+            for key in ('projects', 'mappings', 'motion_files')
+        }
+
     def handle(self, command: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         studio = self.studio
         if command == 'status':
@@ -42,13 +57,15 @@ class StudioProjectCommands:
         if command == 'list':
             with studio._lock:
                 current_project = studio._current_project
+            catalog = self._catalog()
             return {
                 'success': True,
-                'projects': studio._store.list_projects(),
-                'mappings': studio._store.list_mappings(),
-                'motion_files': studio._store.list_motion_files(),
+                **catalog,
                 'project': current_project,
                 'status': studio.snapshot(),
+                'composition': dict(
+                    getattr(studio, '_composition_cache', {}) or {}
+                ),
             }
         if command == 'open_workspace':
             return self._open_workspace(payload)
@@ -60,11 +77,16 @@ class StudioProjectCommands:
             )
             with studio._lock:
                 studio._current_project = project
+                studio._workspace_catalog_cache = None
                 studio._set_status_locked('idle', '새 모션 프로젝트를 만들었습니다')
             return {
                 'success': True,
                 'project': project,
                 'status': studio.snapshot(),
+                'layer_sync': {
+                    'upsert_layer_ids': [],
+                    'delete_layer_ids': [],
+                },
             }
         if command == 'load':
             project = studio._store.load_project(payload.get('project_id'))
@@ -83,6 +105,7 @@ class StudioProjectCommands:
             )
             with studio._lock:
                 studio._current_project = project
+                studio._workspace_catalog_cache = None
                 studio._set_status_locked(
                     'idle', '모션 파일을 단일 레이어 프로젝트로 가져왔습니다'
                 )
@@ -93,6 +116,11 @@ class StudioProjectCommands:
             with studio._lock:
                 studio._require_idle_locked()
                 project = studio._require_project_locked()
+                previous_layer_ids = {
+                    str(layer.get('layer_id') or '')
+                    for layer in project.get('layers') or []
+                    if isinstance(layer, dict)
+                }
                 project = studio._store.append_motion_file(
                     project, payload.get('motion_file_id')
                 )
@@ -100,7 +128,36 @@ class StudioProjectCommands:
                 studio._set_status_locked(
                     'idle', '모션 파일을 현재 프로젝트 레이어로 가져왔습니다'
                 )
-            return studio._project_result(project, '모션 파일 레이어 가져오기 완료')
+            added_layer_ids = [
+                str(layer.get('layer_id') or '')
+                for layer in project.get('layers') or []
+                if (
+                    isinstance(layer, dict)
+                    and str(layer.get('layer_id') or '') not in previous_layer_ids
+                )
+            ]
+            affected_motion_ids = {
+                str(motion_id)
+                for layer in project.get('layers') or []
+                if (
+                    isinstance(layer, dict)
+                    and str(layer.get('layer_id') or '') in added_layer_ids
+                )
+                for frame in layer.get('frames') or []
+                if isinstance(frame, dict)
+                for motion_id in (frame.get('values') or {})
+            }
+            result = studio._project_result(
+                project,
+                '모션 파일 레이어 가져오기 완료',
+                affected_motion_ids=affected_motion_ids,
+                affected_layer_ids=set(added_layer_ids),
+            )
+            result['layer_sync'] = {
+                'upsert_layer_ids': added_layer_ids,
+                'delete_layer_ids': [],
+            }
+            return result
         if command == 'save':
             return self._save(payload)
 
@@ -120,6 +177,7 @@ class StudioProjectCommands:
                 project = studio._require_project_locked()
                 studio._store.delete_project(project['project_id'])
                 studio._current_project = None
+                studio._workspace_catalog_cache = None
                 studio._set_status_locked('idle', '프로젝트를 삭제했습니다')
             return {'success': True, 'message': '프로젝트 삭제 완료'}
         raise ValueError(f'지원하지 않는 모션 스튜디오 프로젝트 명령: {command}')
@@ -134,10 +192,11 @@ class StudioProjectCommands:
         if not workspace_project_id:
             raise ValueError('통합 프로젝트 ID가 필요합니다')
         mapping = studio._store.inspect_mapping(payload.get('mapping_file_id'))
+        projects = studio._store.list_projects()
         summary = next(
             (
                 item
-                for item in studio._store.list_projects()
+                for item in projects
                 if item.get('workspace_project_id') == workspace_project_id
             ),
             None,
@@ -165,12 +224,25 @@ class StudioProjectCommands:
             studio._set_status_locked(
                 'idle', '통합 프로젝트를 모션 스튜디오에 연결했습니다'
             )
-        result = studio._project_result(project, '통합 프로젝트 연결 완료')
-        result.update({
-            'projects': studio._store.list_projects(),
+        current_summary = studio._store.summary(project)
+        catalog_projects = [
+            current_summary
+            if item.get('project_id') == project.get('project_id')
+            else item
+            for item in projects
+        ]
+        if not any(
+            item.get('project_id') == project.get('project_id')
+            for item in catalog_projects
+        ):
+            catalog_projects.insert(0, current_summary)
+        studio._workspace_catalog_cache = {
+            'projects': catalog_projects,
             'mappings': studio._store.list_mappings(),
             'motion_files': studio._store.list_motion_files(),
-        })
+        }
+        result = studio._project_result(project, '통합 프로젝트 연결 완료')
+        result.update(self._catalog())
         return result
 
     def _save(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -190,6 +262,14 @@ class StudioProjectCommands:
                 if level < 1 or level > 10:
                     raise ValueError('급변 기준 단계는 1~10이어야 합니다')
                 project['transition_safety_level'] = level
-            project = studio._store.save_project(project)
+            project = studio._store.save_project(
+                project, upsert_layer_ids=[]
+            )
             studio._current_project = project
-        return studio._project_result(project, '프로젝트 저장 완료')
+            studio._workspace_catalog_cache = None
+        result = studio._project_result(project, '프로젝트 저장 완료')
+        result['layer_sync'] = {
+            'upsert_layer_ids': [],
+            'delete_layer_ids': [],
+        }
+        return result

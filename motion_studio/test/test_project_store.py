@@ -367,3 +367,89 @@ def test_workspace_identity_and_imported_layer_round_trip(tmp_path):
     assert loaded['workspace_project_id'] == 'robot-face-001'
     assert store.summary(loaded)['workspace_project_id'] == 'robot-face-001'
     assert loaded['layers'][0]['source_motion_file_id'] == 'base.json'
+
+
+def test_split_project_storage_writes_only_selected_layer(tmp_path, monkeypatch):
+    write_mapping(tmp_path)
+    store = ProjectStore(tmp_path)
+    project = store.create_project('증분 저장', 'face.yaml')
+    project['layers'] = [
+        {
+            'layer_id': 'first',
+            'name': '첫째',
+            'frames': [{
+                'frame': 1, 'time_sec': 0.02, 'values': {'1-1': 1.0},
+            }],
+        },
+        {
+            'layer_id': 'second',
+            'name': '둘째',
+            'frames': [{
+                'frame': 1, 'time_sec': 0.02, 'values': {'1-2': 2.0},
+            }],
+        },
+    ]
+    project = store.save_project(project)
+    project_path = store.projects_dir / f'{project["project_id"]}.json'
+    layer_dir = project_path.with_suffix('.layers')
+    metadata = json.loads(project_path.read_text(encoding='utf-8'))
+    assert metadata['storage_format'] == 'split_layers_v1'
+    assert 'layers' not in metadata
+
+    writes = []
+    original_write = store._atomic_write
+
+    def record_write(path, content):
+        writes.append(Path(path))
+        original_write(path, content)
+
+    monkeypatch.setattr(store, '_atomic_write', record_write)
+    project['layers'][0]['name'] = '첫째 변경'
+    store.save_project(project, upsert_layer_ids=['first'])
+
+    assert layer_dir / 'first.json' in writes
+    assert layer_dir / 'second.json' not in writes
+    assert project_path in writes
+    loaded = store.load_project(project['project_id'])
+    assert [layer['name'] for layer in loaded['layers']] == ['첫째 변경', '둘째']
+
+    store.save_project(
+        {**project, 'layers': [project['layers'][1]]},
+        upsert_layer_ids=[],
+        delete_layer_ids=['first'],
+    )
+    assert not (layer_dir / 'first.json').exists()
+    assert store.load_project(project['project_id'])['layers'][0]['layer_id'] == 'second'
+
+
+def test_legacy_monolithic_project_migrates_all_layers_before_partial_save(tmp_path):
+    write_mapping(tmp_path)
+    store = ProjectStore(tmp_path)
+    project = store.create_project('기존 프로젝트', 'face.yaml')
+    project['layers'] = [
+        {
+            'layer_id': 'first',
+            'frames': [{
+                'frame': 1, 'time_sec': 0.02, 'values': {'1-1': 1.0},
+            }],
+        },
+        {
+            'layer_id': 'second',
+            'frames': [{
+                'frame': 1, 'time_sec': 0.02, 'values': {'1-2': 2.0},
+            }],
+        },
+    ]
+    project_path = store.projects_dir / f'{project["project_id"]}.json'
+    project_path.write_text(
+        json.dumps(project, ensure_ascii=False), encoding='utf-8'
+    )
+
+    saved = store.save_project(project, upsert_layer_ids=['first'])
+
+    assert {
+        path.name for path in project_path.with_suffix('.layers').iterdir()
+    } == {'first.json', 'second.json'}
+    assert [
+        layer['layer_id'] for layer in store.load_project(saved['project_id'])['layers']
+    ] == ['first', 'second']

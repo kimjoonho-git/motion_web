@@ -55,6 +55,28 @@ def test_same_motion_id_time_overlap_is_reported_and_rejected():
         render_project(payload)
 
 
+def test_composition_checks_can_be_limited_to_affected_motion_ids():
+    payload = project()
+    payload['layers'][1]['frames'][0]['values']['1-1'] = 8.0
+    payload['layers'][1]['frames'][1]['values']['1-1'] = 9.0
+
+    all_conflicts = layer_conflicts(payload)
+    selected_conflicts = layer_conflicts(payload, motion_ids={'1-1'})
+
+    assert {item['motion_id'] for item in all_conflicts} == {'1-1', '1-2'}
+    assert {item['motion_id'] for item in selected_conflicts} == {'1-1'}
+
+    payload['layers'][1]['frames'] = [
+        {'frame': 3, 'time_sec': 0.06, 'values': {'1-1': 30.0, '1-2': 40.0}},
+    ]
+    selected_warnings = layer_transition_warnings(
+        payload, motion_ids={'1-2'}
+    )
+
+    assert selected_warnings
+    assert {item['motion_id'] for item in selected_warnings} == {'1-2'}
+
+
 def test_same_motion_id_in_non_overlapping_time_ranges_with_safe_transition_is_allowed():
     payload = project()
     payload['layers'][0]['frames'] = [

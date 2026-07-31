@@ -74,12 +74,23 @@ def _composition_duration(project: Dict[str, Any]) -> float:
     return round(maximum, 9)
 
 
-def _layer_series(layer: Dict[str, Any]) -> Dict[str, List[tuple[float, float]]]:
+def _layer_series(
+    layer: Dict[str, Any],
+    motion_ids: Iterable[Any] | None = None,
+) -> Dict[str, List[tuple[float, float]]]:
+    selected = (
+        None
+        if motion_ids is None
+        else {str(value) for value in motion_ids if str(value)}
+    )
     series: Dict[str, List[tuple[float, float]]] = {}
     for frame in layer.get('frames') or []:
         time_sec = float(frame.get('time_sec') or 0.0)
         for motion_id, value in (frame.get('values') or {}).items():
-            series.setdefault(str(motion_id), []).append((time_sec, float(value)))
+            motion_id = str(motion_id)
+            if selected is not None and motion_id not in selected:
+                continue
+            series.setdefault(motion_id, []).append((time_sec, float(value)))
     for motion_id in list(series):
         series[motion_id].sort(key=lambda item: item[0])
     return series
@@ -106,8 +117,12 @@ def _series_segments(
     return result
 
 
-def _layer_segments(layer: Dict[str, Any], period: float) -> Dict[str, List[Segment]]:
-    return _series_segments(_layer_series(layer), period)
+def _layer_segments(
+    layer: Dict[str, Any],
+    period: float,
+    motion_ids: Iterable[Any] | None = None,
+) -> Dict[str, List[Segment]]:
+    return _series_segments(_layer_series(layer, motion_ids), period)
 
 
 def _sample(points: Segment, time_sec: float) -> float | None:
@@ -137,11 +152,20 @@ def _sample_segments(segments: List[Segment], time_sec: float) -> float | None:
     return None
 
 
-def layer_conflicts(project: Dict[str, Any]) -> List[Dict[str, Any]]:
+def layer_conflicts(
+    project: Dict[str, Any],
+    *,
+    motion_ids: Iterable[Any] | None = None,
+) -> List[Dict[str, Any]]:
     """Return same-Motion-ID time overlaps among enabled layers."""
     period = float(project.get('period_sec') or DEFAULT_PERIOD_SEC)
+    selected = (
+        None
+        if motion_ids is None
+        else {str(value) for value in motion_ids if str(value)}
+    )
     enabled = [
-        (index, layer, _layer_segments(layer, period))
+        (index, layer, _layer_segments(layer, period, selected))
         for index, layer in enumerate(project.get('layers') or [])
         if isinstance(layer, dict) and layer.get('enabled') is not False
     ]
@@ -177,19 +201,28 @@ def layer_transition_warnings(
     project: Dict[str, Any],
     motion_ranges_deg: Mapping[str, Sequence[float]] | None = None,
     initial_motion_values_deg: Mapping[str, float] | None = None,
+    *,
+    motion_ids: Iterable[Any] | None = None,
 ) -> List[Dict[str, Any]]:
     """Return every unsafe step that the composed 20 ms motion would output."""
     period = float(project.get('period_sec') or DEFAULT_PERIOD_SEC)
     safety_level = transition_safety_level(project)
     ranges = motion_ranges_deg or {}
     manual_initial_values = initial_motion_values_deg or {}
+    selected = (
+        None
+        if motion_ids is None
+        else {str(value) for value in motion_ids if str(value)}
+    )
     tracks: Dict[str, List[Dict[str, Any]]] = {}
     for index, layer in enumerate(project.get('layers') or []):
         if not isinstance(layer, dict) or layer.get('enabled') is False:
             continue
         layer_id = str(layer.get('layer_id') or '')
         layer_name = str(layer.get('name') or f'레이어 {index + 1}')
-        for motion_id, segments in _layer_segments(layer, period).items():
+        for motion_id, segments in _layer_segments(
+            layer, period, selected
+        ).items():
             for segment in segments:
                 if not segment:
                     continue

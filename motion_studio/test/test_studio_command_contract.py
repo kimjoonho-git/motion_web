@@ -42,8 +42,23 @@ def test_status_and_list_command_response_contract_is_stable():
         'motion_files': [{'file_id': 'motion.json'}],
         'project': {'project_id': 'studio-project'},
         'status': {'state': 'idle'},
+        'composition': {},
     }
     assert node._selected_workspace_payload == {'project_id': 'workspace-a'}
+
+
+def test_repeated_list_command_reuses_workspace_catalog():
+    node = bare_node()
+
+    first = node._handle('list', {'project_id': 'workspace-a'})
+    node._store.list_projects = lambda: pytest.fail('projects catalog reread')
+    node._store.list_mappings = lambda: pytest.fail('mapping catalog reread')
+    node._store.list_motion_files = lambda: pytest.fail('motion catalog reread')
+    second = node._handle('list', {'project_id': 'workspace-a'})
+
+    assert second['projects'] == first['projects']
+    assert second['mappings'] == first['mappings']
+    assert second['motion_files'] == first['motion_files']
 
 
 @pytest.mark.parametrize(

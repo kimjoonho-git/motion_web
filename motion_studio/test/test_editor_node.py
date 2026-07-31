@@ -97,6 +97,40 @@ def test_editor_previews_axis_deletion_without_changing_the_source_layer():
     assert [frame['values']['1-1'] for frame in source['frames']] == [10.0, 20.0]
 
 
+def test_editor_composition_preview_checks_only_edited_layer_motion_ids():
+    editor = MotionStudioEditorNode.__new__(MotionStudioEditorNode)
+    source = base_layer()
+    unrelated_a = {
+        'layer_id': 'unrelated-a',
+        'enabled': True,
+        'frames': [
+            {'frame': 1, 'time_sec': 0.02, 'values': {'2-2': 1.0}},
+        ],
+    }
+    unrelated_b = {
+        'layer_id': 'unrelated-b',
+        'enabled': True,
+        'frames': [
+            {'frame': 1, 'time_sec': 0.02, 'values': {'2-2': 2.0}},
+        ],
+    }
+
+    result = editor._handle('edit', {
+        'layer': source,
+        'project': {
+            'project_id': 'project',
+            'layers': [source, unrelated_a, unrelated_b],
+        },
+        'operation': 'delete_axis',
+        'motion_ids': ['1-1'],
+        'mapping_rows': [],
+    })
+
+    assert result['validation']['scope'] == 'affected_motion_ids'
+    assert result['validation']['motion_ids'] == ['1-1']
+    assert result['validation']['conflicts'] == []
+
+
 def test_editor_returns_axis_point_creation_approximation_report():
     editor = MotionStudioEditorNode.__new__(MotionStudioEditorNode)
     layer = base_layer()

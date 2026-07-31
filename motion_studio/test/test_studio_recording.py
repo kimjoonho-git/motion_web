@@ -36,6 +36,50 @@ def test_recording_layer_name_does_not_repeat_after_delete_or_duplicate():
     assert next_numbered_layer_name([{'name': '녹화 1'}, {'name': '녹화 3'}], '녹화') == '녹화 4'
 
 
+def test_incremental_composition_rechecks_affected_axis_and_keeps_other_axis():
+    node = MotionStudioNode.__new__(MotionStudioNode)
+    node._composition_cache_project_id = ''
+    node._composition_cache = {}
+    mapping = {'rows': [], 'motion_ids': ['1-1', '2-2']}
+    project = {
+        'project_id': 'project',
+        'period_sec': 0.02,
+        'layers': [
+            {
+                'layer_id': 'first',
+                'enabled': True,
+                'frames': [{
+                    'frame': 1,
+                    'time_sec': 0.02,
+                    'values': {'1-1': 1.0, '2-2': 1.0},
+                }],
+            },
+            {
+                'layer_id': 'second',
+                'enabled': True,
+                'frames': [{
+                    'frame': 1,
+                    'time_sec': 0.02,
+                    'values': {'1-1': 2.0, '2-2': 2.0},
+                }],
+            },
+        ],
+    }
+
+    initial = node._project_composition(project, mapping)
+    assert {item['motion_id'] for item in initial['conflicts']} == {'1-1', '2-2'}
+
+    project['layers'][1]['frames'][0]['values'].pop('1-1')
+    updated = node._project_composition(
+        project,
+        mapping,
+        affected_motion_ids={'1-1'},
+        affected_layer_ids={'second'},
+    )
+
+    assert {item['motion_id'] for item in updated['conflicts']} == {'2-2'}
+
+
 def test_terminal_status_clears_playback_and_progress_metadata():
     node = MotionStudioNode.__new__(MotionStudioNode)
     node._status = {
@@ -81,13 +125,15 @@ def test_layer_duplicate_is_independent_unlocked_and_disabled():
 
     class Store:
         @staticmethod
-        def save_project(value):
+        def save_project(value, **_kwargs):
             return value
 
     node._store = Store()
     node._require_idle_locked = lambda: None
     node._require_project_locked = lambda: project
-    node._project_result = lambda value, message: {'project': value, 'message': message}
+    node._project_result = lambda value, message, **_kwargs: {
+        'project': value, 'message': message,
+    }
 
     result = node._duplicate_layer({'layer_id': 'source'})
     copied = result['project']['layers'][1]
@@ -156,13 +202,13 @@ def test_merge_commit_rebuilds_all_source_points_when_editor_preview_omits_them(
             ]}
 
         @staticmethod
-        def save_project(value):
+        def save_project(value, **_kwargs):
             return value
 
     node._store = Store()
     node._require_idle_locked = lambda: None
     node._require_project_locked = lambda: project
-    node._project_result = lambda value, message: {
+    node._project_result = lambda value, message, **_kwargs: {
         'success': True, 'project': value, 'message': message,
     }
 
@@ -212,14 +258,14 @@ def test_layer_save_warns_but_keeps_values_outside_axis_range():
             return {'motion_ids': ['1-1']}
 
         @staticmethod
-        def save_project(value):
+        def save_project(value, **_kwargs):
             return value
 
     node._store = Store()
     node._require_idle_locked = lambda: None
     node._require_project_locked = lambda: project
     node._motion_ranges = lambda _mapping: {'1-1': (-5.0, 5.0)}
-    node._project_result = lambda value, message: {
+    node._project_result = lambda value, message, **_kwargs: {
         'success': True, 'project': value, 'message': message,
     }
 
@@ -248,13 +294,15 @@ def test_create_layer_adds_empty_disabled_editable_layer():
 
     class Store:
         @staticmethod
-        def save_project(value):
+        def save_project(value, **_kwargs):
             return value
 
     node._store = Store()
     node._require_idle_locked = lambda: None
     node._require_project_locked = lambda: project
-    node._project_result = lambda value, message: {'project': value, 'message': message}
+    node._project_result = lambda value, message, **_kwargs: {
+        'project': value, 'message': message,
+    }
 
     result = node._create_layer({})
     created = result['project']['layers'][-1]
@@ -576,6 +624,39 @@ def test_stop_returns_immediately_and_defers_acknowledgement_waits(monkeypatch):
     assert node._operation_generation == 8
     assert len(started) == 1
     assert started[0][1] == (8, '모션 스튜디오 정지 완료')
+
+
+def test_recording_stop_reports_only_the_new_layer_for_sync(monkeypatch):
+    node = MotionStudioNode.__new__(MotionStudioNode)
+    node._lock = threading.RLock()
+    node._status = {'state': 'recording', 'message': '녹화 중'}
+    node._operation_generation = 2
+    node._current_project = {'project_id': 'studio', 'layers': []}
+    node._finish_record_locked = lambda: (
+        node._status.update({'message': '녹화 완료'})
+        or 'layer-new'
+    )
+    node._set_status_locked = lambda state, message: node._status.update({
+        'state': state,
+        'message': message,
+    })
+    node.snapshot = lambda: dict(node._status)
+
+    class DeferredThread:
+        def __init__(self, *, target, args, daemon):
+            pass
+
+        def start(self):
+            return None
+
+    monkeypatch.setattr(studio_module.threading, 'Thread', DeferredThread)
+
+    result = node._stop()
+
+    assert result['layer_sync'] == {
+        'upsert_layer_ids': ['layer-new'],
+        'delete_layer_ids': [],
+    }
 
 
 def test_stop_sends_motion_stop_before_midi_cleanup():

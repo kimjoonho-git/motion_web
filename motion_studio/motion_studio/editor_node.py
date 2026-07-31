@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 import json
 import traceback
 from typing import Any, Dict
@@ -77,6 +76,22 @@ class MotionStudioEditorNode(Node):
             and str(row.get('initial_mode') or 'first_frame') == 'manual'
         }
 
+    @staticmethod
+    def _layer_motion_ids(layer: Dict[str, Any]) -> set[str]:
+        result = {
+            str(motion_id)
+            for frame in layer.get('frames') or []
+            if isinstance(frame, dict)
+            for motion_id in (frame.get('values') or {})
+            if str(motion_id)
+        }
+        result.update(
+            str(curve.get('motion_id') or '')
+            for curve in layer.get('point_curves') or []
+            if isinstance(curve, dict) and str(curve.get('motion_id') or '')
+        )
+        return result
+
     def _handle(self, command: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         ranges = self._ranges(payload)
         if command == 'edit':
@@ -101,16 +116,28 @@ class MotionStudioEditorNode(Node):
                         payload.get('approximation_maximum_points', 50),
                         payload.get('approximation_interpolation_order', 1),
                     )
-            layer = edit_layer(payload.get('layer') or {}, payload)
+            original_layer = payload.get('layer') or {}
+            layer = edit_layer(original_layer, payload)
             range_issues = validate_ranges(layer, ranges)
-            project = copy.deepcopy(payload.get('project') or {})
-            for index, existing in enumerate(project.get('layers') or []):
+            source_project = payload.get('project') or {}
+            project = dict(source_project)
+            project['layers'] = list(source_project.get('layers') or [])
+            for index, existing in enumerate(project['layers']):
                 if str(existing.get('layer_id') or '') == str(layer.get('layer_id') or ''):
-                    project['layers'][index] = copy.deepcopy(layer)
+                    project['layers'][index] = layer
                     break
-            conflicts = layer_conflicts(project) if project else []
+            affected_motion_ids = (
+                self._layer_motion_ids(original_layer)
+                | self._layer_motion_ids(layer)
+            )
+            conflicts = layer_conflicts(
+                project, motion_ids=affected_motion_ids
+            ) if project else []
             warnings = layer_transition_warnings(
-                project, ranges, self._manual_values(payload)
+                project,
+                ranges,
+                self._manual_values(payload),
+                motion_ids=affected_motion_ids,
             ) if project else []
             curve_mismatches = point_curve_frame_mismatches(layer)
             return {
@@ -124,6 +151,8 @@ class MotionStudioEditorNode(Node):
                     'range_warnings': range_issues,
                     'point_curve_mismatches': curve_mismatches,
                     'playable': not conflicts and not warnings and not curve_mismatches,
+                    'scope': 'affected_motion_ids',
+                    'motion_ids': sorted(affected_motion_ids),
                 },
             }
         if command == 'merge':
