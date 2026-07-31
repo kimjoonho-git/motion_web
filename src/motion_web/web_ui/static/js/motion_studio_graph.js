@@ -1,7 +1,7 @@
 import {
   motionStudioEditorValueBounds,
   motionStudioPointCurvePreview,
-} from './motion_studio_calculations.js?v=20260727-editor-point-confirm-1';
+} from './motion_studio_calculations.js?v=20260731-studio-performance-2';
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"]/g, (character) => ({
@@ -134,6 +134,68 @@ export function motionStudioCompositionTracks(layers, mappingRows = []) {
   return { tracks, duration, sampleCount, enabledLayers };
 }
 
+export function motionStudioDisplaySegments(points, maximumPoints = 1200) {
+  const source = Array.isArray(points) ? points : [];
+  if (!source.length) return [];
+  const segments = [];
+  let current = [];
+  for (const point of source) {
+    const previous = current[current.length - 1];
+    if (previous && Number(point.timeSec) - Number(previous.timeSec) > 0.031) {
+      segments.push(current);
+      current = [];
+    }
+    current.push(point);
+  }
+  if (current.length) segments.push(current);
+  const total = source.length;
+  return segments.map((segment) => {
+    const budget = Math.max(
+      4,
+      Math.floor((Math.max(4, Number(maximumPoints) || 1200) * segment.length) / total),
+    );
+    if (segment.length <= budget) return segment;
+    const bucketSize = Math.max(1, Math.ceil(segment.length / Math.max(1, budget / 4)));
+    const selected = [];
+    for (let start = 0; start < segment.length; start += bucketSize) {
+      const end = Math.min(segment.length, start + bucketSize);
+      let minimum = start;
+      let maximum = start;
+      for (let index = start + 1; index < end; index += 1) {
+        if (segment[index].value < segment[minimum].value) minimum = index;
+        if (segment[index].value > segment[maximum].value) maximum = index;
+      }
+      const indices = [...new Set([start, minimum, maximum, end - 1])]
+        .sort((left, right) => left - right);
+      selected.push(...indices.map((index) => segment[index]));
+    }
+    return selected;
+  });
+}
+
+export function motionStudioVisiblePoints(points, startTime, endTime) {
+  const source = Array.isArray(points) ? points : [];
+  if (!source.length) return [];
+  const start = Number(startTime);
+  const end = Number(endTime);
+  let low = 0;
+  let high = source.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (Number(source[middle].timeSec) < start) low = middle + 1;
+    else high = middle;
+  }
+  const first = Math.max(0, low - 1);
+  low = first;
+  high = source.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (Number(source[middle].timeSec) <= end) low = middle + 1;
+    else high = middle;
+  }
+  return source.slice(first, Math.min(source.length, low + 1));
+}
+
 export function drawMotionStudioLayerGraph({
   canvas,
   playhead,
@@ -152,8 +214,19 @@ export function drawMotionStudioLayerGraph({
   const context = canvas.getContext('2d');
   context.setTransform(ratio, 0, 0, ratio, 0, 0);
   context.clearRect(0, 0, width, height);
-  const allPoints = [...tracks.values()].flat();
-  if (!allPoints.length) {
+  let pointCount = 0;
+  let maxTime = 0.02;
+  let minValue = 0;
+  let maxValue = 0;
+  for (const points of tracks.values()) {
+    pointCount += points.length;
+    for (const point of points) {
+      maxTime = Math.max(maxTime, Number(point.timeSec) || 0);
+      minValue = Math.min(minValue, Number(point.value) || 0);
+      maxValue = Math.max(maxValue, Number(point.value) || 0);
+    }
+  }
+  if (!pointCount) {
     playhead?.classList.add('hidden');
     context.fillStyle = '#5d6b78';
     context.font = '13px sans-serif';
@@ -163,9 +236,6 @@ export function drawMotionStudioLayerGraph({
   const padding = { left: 52, right: 18, top: 18, bottom: 34 };
   const plotWidth = width - padding.left - padding.right;
   const plotHeight = height - padding.top - padding.bottom;
-  const maxTime = Math.max(...allPoints.map((point) => point.timeSec), 0.02);
-  let minValue = Math.min(0, ...allPoints.map((point) => point.value));
-  let maxValue = Math.max(0, ...allPoints.map((point) => point.value));
   if (Math.abs(maxValue - minValue) < 1e-9) {
     minValue -= 1;
     maxValue += 1;
@@ -182,17 +252,18 @@ export function drawMotionStudioLayerGraph({
   context.fillText(`${maxTime.toFixed(3)}초`, width - padding.right - 58, height - 10);
   const colors = ['#1f6feb', '#d97706', '#16803c', '#a23ab7', '#d33b3b', '#0f8b8d'];
   [...tracks.entries()].forEach(([, points], index) => {
-    context.beginPath();
     context.strokeStyle = colors[index % colors.length];
     context.lineWidth = 2;
-    points.forEach((point, pointIndex) => {
-      const x = padding.left + ((point.timeSec / maxTime) * plotWidth);
-      const y = padding.top + (((maxValue - point.value) / (maxValue - minValue)) * plotHeight);
-      const previous = pointIndex > 0 ? points[pointIndex - 1] : null;
-      if (!previous || point.timeSec - previous.timeSec > 0.031) context.moveTo(x, y);
-      else context.lineTo(x, y);
+    motionStudioDisplaySegments(points, Math.max(400, plotWidth * 2)).forEach((segment) => {
+      context.beginPath();
+      segment.forEach((point, pointIndex) => {
+        const x = padding.left + ((point.timeSec / maxTime) * plotWidth);
+        const y = padding.top + (((maxValue - point.value) / (maxValue - minValue)) * plotHeight);
+        if (pointIndex === 0) context.moveTo(x, y);
+        else context.lineTo(x, y);
+      });
+      context.stroke();
     });
-    context.stroke();
   });
   context.save();
   context.strokeStyle = '#d33b3b';
@@ -359,21 +430,21 @@ export function drawMotionStudioEditorGraph({
   const drawTracks = (tracks, dashed, alpha) => {
     ids.forEach((motionId, colorIndex) => {
       const points = tracks.get(motionId) || [];
-      context.beginPath();
       context.strokeStyle = colors[colorIndex % colors.length];
       context.globalAlpha = alpha;
       context.lineWidth = dashed ? 1.3 : 2.2;
       context.setLineDash(dashed ? [5, 4] : []);
-      let previous = null;
-      points.forEach((point) => {
-        if (point.timeSec < viewStart - 1e-9 || point.timeSec > viewEnd + 1e-9) return;
-        const x = xFor(point.timeSec);
-        const y = yFor(point.value);
-        if (!previous || point.timeSec - previous.timeSec > 0.031) context.moveTo(x, y);
-        else context.lineTo(x, y);
-        previous = point;
+      const visible = motionStudioVisiblePoints(points, viewStart, viewEnd);
+      motionStudioDisplaySegments(visible, Math.max(400, plotWidth * 2)).forEach((segment) => {
+        context.beginPath();
+        segment.forEach((point, pointIndex) => {
+          const x = xFor(point.timeSec);
+          const y = yFor(point.value);
+          if (pointIndex === 0) context.moveTo(x, y);
+          else context.lineTo(x, y);
+        });
+        context.stroke();
       });
-      context.stroke();
     });
   };
   drawTracks(originalTracks, true, 0.4);

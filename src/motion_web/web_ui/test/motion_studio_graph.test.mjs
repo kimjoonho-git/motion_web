@@ -5,11 +5,34 @@ import {
   drawMotionStudioEditorGraph,
   drawMotionStudioLayerGraph,
   motionStudioCompositionTracks,
+  motionStudioDisplaySegments,
   motionStudioEditorIssueTimes,
   motionStudioLayerTracks,
   motionStudioSampleTrack,
+  motionStudioVisiblePoints,
   motionStudioZeroAxisY,
 } from '../static/js/motion_studio_graph.js';
+
+test('graph display data is bounded while preserving extrema and time gaps', () => {
+  const first = Array.from({ length: 5000 }, (_, index) => ({
+    timeSec: index * 0.02,
+    value: index === 2500 ? 100 : Math.sin(index / 20),
+  }));
+  const second = Array.from({ length: 100 }, (_, index) => ({
+    timeSec: 200 + (index * 0.02),
+    value: -index,
+  }));
+  const segments = motionStudioDisplaySegments([...first, ...second], 600);
+
+  assert.equal(segments.length, 2);
+  assert.ok(segments.flat().length < 700);
+  assert.ok(segments[0].some((point) => point.value === 100));
+
+  const visible = motionStudioVisiblePoints(first, 40, 42);
+  assert.ok(visible.length < 110);
+  assert.ok(visible[0].timeSec <= 40);
+  assert.ok(visible.at(-1).timeSec >= 42);
+});
 
 test('graph helpers preserve tracks, interpolation, and manual initial values', () => {
   const layer = {

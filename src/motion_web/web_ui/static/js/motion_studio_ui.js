@@ -16,6 +16,8 @@ export function createMotionStudioState() {
     lastPlaybackDisplayState: 'idle',
     playbackClock: null, playbackAnimationFrame: 0,
     recordingPreviewKey: '',
+    snapshotAxesKey: '',
+    snapshotControlsKey: '',
     layerManagerTab: 'create', mergeLayerIds: new Set(),
     mergeResultMessage: '', mergeResultError: false,
   };
@@ -43,6 +45,8 @@ export function resetMotionStudioProjectState(state) {
   state.playbackClock = null;
   state.playbackAnimationFrame = 0;
   state.recordingPreviewKey = '';
+  state.snapshotAxesKey = '';
+  state.snapshotControlsKey = '';
   state.layerManagerTab = 'create';
   state.mergeLayerIds = new Set();
   state.mergeResultMessage = '';

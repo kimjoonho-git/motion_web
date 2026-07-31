@@ -2456,7 +2456,9 @@ export function createMotionDataController({
       if (!result || result.success === false) {
         throw new Error(result?.message || '스튜디오가 모션 파일을 받지 못했습니다');
       }
-      const layers = Array.isArray(result.project?.layers) ? result.project.layers : [];
+      const layers = Array.isArray(result.project?.layers)
+        ? result.project.layers
+        : (result.project_patch?.upsert_layers || []);
       const exportedLayer = [...layers].reverse().find(
         (layer) => layer?.source_motion_file_id === file.id,
       );

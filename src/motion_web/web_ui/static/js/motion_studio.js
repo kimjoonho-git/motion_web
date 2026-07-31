@@ -17,15 +17,19 @@ import {
   updateMotionStudioLayer,
 } from './api.js?v=20260722-motor-config-delete';
 import {
+  applyMotionStudioProjectPatch,
   motionStudioCanCreatePointCurve,
   motionStudioCanSwitchPointDraftCurve,
   motionStudioCanvasEventPoint,
   motionStudioEditorNextValueScale,
   motionStudioEditorGraphClickAction,
+  motionStudioEditorValidationProject,
   motionStudioEditorValueBounds,
   motionStudioLayerDataEqual,
   motionStudioLayerDuration,
   motionStudioLayerMotionIds,
+  motionStudioMergePreviewProject,
+  motionStudioSetLayerEnabled,
   motionStudioMotionAxisRange,
   motionStudioValueViewAfterRangeUnlock,
   motionStudioMotionTargetAtTime,
@@ -47,13 +51,13 @@ import {
   motionStudioSnapFrameTime,
   resolveMotionStudioSelectedLayerId,
   synchronizeMotionStudioEditorTimeline,
-} from './motion_studio_calculations.js?v=20260729-editor-workflow-export-1';
+} from './motion_studio_calculations.js?v=20260731-studio-performance-2';
 import {
   drawMotionStudioEditorGraph,
   drawMotionStudioLayerGraph,
   motionStudioCompositionTracks as compositionTracks,
   motionStudioLayerTracks as layerTracks,
-} from './motion_studio_graph.js?v=20260729-range-warning-detail-1';
+} from './motion_studio_graph.js?v=20260731-studio-performance-2';
 import {
   bindMotionStudioEvent,
   bindMotionStudioProjectTransportEvents,
@@ -74,15 +78,19 @@ import {
 import { showAlert, showConfirm } from './ui_dialogs.js?v=20260727-popup-common-3';
 
 export {
+  applyMotionStudioProjectPatch,
   motionStudioCanCreatePointCurve,
   motionStudioCanSwitchPointDraftCurve,
   motionStudioCanvasEventPoint,
   motionStudioEditorNextValueScale,
   motionStudioEditorGraphClickAction,
+  motionStudioEditorValidationProject,
   motionStudioEditorValueBounds,
   motionStudioLayerDataEqual,
   motionStudioLayerDuration,
   motionStudioLayerMotionIds,
+  motionStudioMergePreviewProject,
+  motionStudioSetLayerEnabled,
   motionStudioMotionAxisRange,
   motionStudioValueViewAfterRangeUnlock,
   motionStudioMotionTargetAtTime,
@@ -142,6 +150,68 @@ export function createMotionStudioController({
   let preferredEditorEditOperation = 'time_scale';
 
   const clone = (value) => JSON.parse(JSON.stringify(value));
+  const layerMetricsCache = new WeakMap();
+  const layerTracksCache = new WeakMap();
+  let compositionViewCache = null;
+  let motorCommandRevision = 0;
+  let pendingMotorStartAt = 0;
+
+  function layerMetrics(layer) {
+    if (!layer || typeof layer !== 'object') {
+      return { frameCount: 0, duration: 0, motionIds: [] };
+    }
+    const frames = Array.isArray(layer.frames) ? layer.frames : [];
+    const cached = layerMetricsCache.get(layer);
+    if (cached?.frames === frames) return cached.value;
+    const motionIds = new Set();
+    let duration = 0;
+    for (const frame of frames) {
+      duration = Math.max(duration, Number(frame?.time_sec) || 0);
+      for (const motionId of Object.keys(frame?.values || {})) {
+        motionIds.add(motionId);
+      }
+    }
+    const value = {
+      frameCount: frames.length,
+      duration,
+      motionIds: [...motionIds],
+    };
+    layerMetricsCache.set(layer, { frames, value });
+    return value;
+  }
+
+  function cachedLayerTracks(layer) {
+    if (!layer || typeof layer !== 'object') return new Map();
+    if (!(state.project?.layers || []).includes(layer)) return layerTracks(layer);
+    const frames = Array.isArray(layer.frames) ? layer.frames : [];
+    const cached = layerTracksCache.get(layer);
+    if (cached?.frames === frames) return cached.value;
+    const value = layerTracks(layer);
+    layerTracksCache.set(layer, { frames, value });
+    return value;
+  }
+
+  function cachedCompositionTracks(layers, mappingRows) {
+    const frames = layers.map((layer) => layer?.frames);
+    const enabled = layers.map((layer) => layer?.enabled !== false);
+    if (
+      compositionViewCache
+      && compositionViewCache.mappingRows === mappingRows
+      && compositionViewCache.frames.length === frames.length
+      && frames.every((value, index) => (
+        value === compositionViewCache.frames[index]
+        && enabled[index] === compositionViewCache.enabled[index]
+      ))
+    ) return compositionViewCache.value;
+    const value = compositionTracks(layers, mappingRows);
+    compositionViewCache = {
+      mappingRows,
+      frames,
+      enabled,
+      value,
+    };
+    return value;
+  }
 
   function setProject(project) {
     state.project = project || null;
@@ -288,15 +358,13 @@ export function createMotionStudioController({
       [item.first_layer_id, item.second_layer_id]
     )));
     el.studioLayerRows.innerHTML = layers.map((layer) => {
-      const frames = layer.frames || [];
-      const duration = frames.length ? Number(frames[frames.length - 1].time_sec || 0) : 0;
-      const motionIds = new Set(frames.flatMap((frame) => Object.keys(frame.values || {})));
+      const metrics = layerMetrics(layer);
       const selected = layer.layer_id === state.selectedLayerId;
       return `<tr class="${selected ? 'selected-row' : ''}" data-studio-layer-id="${escapeHtml(layer.layer_id)}">
         <td><label class="studio-playback-choice"><input type="checkbox" data-layer-enabled ${layer.enabled !== false ? 'checked' : ''} ${layer.locked ? 'disabled' : ''}><span>${layer.enabled !== false ? '선택' : '제외'}</span></label></td>
         <td><input class="studio-layer-main-name" type="text" data-layer-main-name maxlength="40" value="${escapeHtml(layer.name)}" ${layer.locked ? 'disabled' : ''} aria-label="레이어 이름"></td>
         <td><div class="studio-layer-info-cell">
-          <span>${frames.length}프레임</span><span>${duration.toFixed(3)}초</span><span>${motionIds.size}축</span>
+          <span>${metrics.frameCount}프레임</span><span>${metrics.duration.toFixed(3)}초</span><span>${metrics.motionIds.length}축</span>
           ${layer.locked ? '<span class="status-chip off">잠금</span>' : ''}
           ${conflictLayers.has(layer.layer_id) ? '<span class="status-chip warn">충돌</span>' : ''}
           ${transitionLayers.has(layer.layer_id) ? '<span class="status-chip warn">급변</span>' : ''}
@@ -305,14 +373,12 @@ export function createMotionStudioController({
   }
 
   function layerSummary(layer) {
-    const frames = layer?.frames || [];
-    const duration = frames.length ? Number(frames[frames.length - 1].time_sec || 0) : 0;
-    const motionIds = new Set(frames.flatMap((frame) => Object.keys(frame.values || {})));
-    return `${frames.length}프레임 · ${duration.toFixed(3)}초 · ${motionIds.size}축`;
+    const metrics = layerMetrics(layer);
+    return `${metrics.frameCount}프레임 · ${metrics.duration.toFixed(3)}초 · ${metrics.motionIds.length}축`;
   }
 
   function layerPointCoverageIssues(layer) {
-    const tracks = layerTracks(layer);
+    const tracks = cachedLayerTracks(layer);
     if (!tracks.size) return ['모션 데이터 없음'];
     const curves = editorPointCurves(layer);
     return [...tracks.entries()].filter(([motionId, samples]) => {
@@ -329,16 +395,28 @@ export function createMotionStudioController({
     }).map(([motionId]) => motionId);
   }
 
+  function editorValidationProject(layer, extraMotionIds = []) {
+    return motionStudioEditorValidationProject(
+      state.project, layer, extraMotionIds,
+    );
+  }
+
+  function mergePreviewProject(layerIds) {
+    return motionStudioMergePreviewProject(state.project, layerIds);
+  }
+
   function renderLayerManager() {
     const layers = state.project?.layers || [];
     const layerIds = new Set(layers.map((layer) => String(layer.layer_id || '')));
-    const mergeableLayerIds = new Set(layers
-      .filter((layer) => !layer.locked && layerPointCoverageIssues(layer).length === 0)
-      .map((layer) => String(layer.layer_id || '')));
     if (state.selectedLayerId && !layerIds.has(state.selectedLayerId)) state.selectedLayerId = '';
-    state.mergeLayerIds = new Set(
-      [...state.mergeLayerIds].filter((layerId) => mergeableLayerIds.has(layerId)),
-    );
+    if (state.layerManagerTab === 'merge') {
+      const mergeableLayerIds = new Set(layers
+        .filter((layer) => !layer.locked && layerPointCoverageIssues(layer).length === 0)
+        .map((layer) => String(layer.layer_id || '')));
+      state.mergeLayerIds = new Set(
+        [...state.mergeLayerIds].filter((layerId) => mergeableLayerIds.has(layerId)),
+      );
+    }
 
     el.studioLayerManagerTabs?.querySelectorAll('[data-layer-manager-tab]').forEach((button) => {
       const active = button.dataset.layerManagerTab === state.layerManagerTab;
@@ -349,7 +427,7 @@ export function createMotionStudioController({
       panel.classList.toggle('hidden', panel.dataset.layerManagerPanel !== state.layerManagerTab);
     });
 
-    if (el.studioManagerLayerRows) {
+    if (el.studioManagerLayerRows && state.layerManagerTab === 'copy') {
       el.studioManagerLayerRows.innerHTML = layers.length ? layers.map((layer) => {
         const selected = layer.layer_id === state.selectedLayerId;
         return `<tr class="${selected ? 'selected-row' : ''}" data-manager-layer-id="${escapeHtml(layer.layer_id)}">
@@ -360,7 +438,7 @@ export function createMotionStudioController({
       }).join('') : '<tr><td colspan="3" class="empty">레이어가 없습니다</td></tr>';
     }
 
-    if (el.studioManagerMergeRows) {
+    if (el.studioManagerMergeRows && state.layerManagerTab === 'merge') {
       el.studioManagerMergeRows.innerHTML = layers.length ? layers.map((layer) => {
         const checked = state.mergeLayerIds.has(layer.layer_id);
         const pointIssues = layerPointCoverageIssues(layer);
@@ -1472,7 +1550,7 @@ export function createMotionStudioController({
     try {
       const result = await editMotionStudioLayer({
         layer: editor.working,
-        project: state.project,
+        project: editorValidationProject(editor.working, [motionId]),
         operation: 'add_axis',
         motion_ids: [motionId],
         initial_value_deg: initialValue,
@@ -1520,7 +1598,9 @@ export function createMotionStudioController({
     try {
       const result = await editMotionStudioLayer({
         layer: editor.working,
-        project: state.project,
+        project: editorValidationProject(
+          editor.working, [sourceMotionId, targetMotionId],
+        ),
         operation: 'copy_axis',
         source_motion_id: sourceMotionId,
         motion_ids: [targetMotionId],
@@ -1576,7 +1656,7 @@ export function createMotionStudioController({
     try {
       const result = await editMotionStudioLayer({
         layer: editor.working,
-        project: state.project,
+        project: editorValidationProject(editor.working, motionIds),
         operation: 'delete_axis',
         motion_ids: motionIds,
         mapping_rows: activeMapping()?.rows || [],
@@ -1627,7 +1707,7 @@ export function createMotionStudioController({
     }
     const payload = {
       layer: editor.working,
-      project: state.project,
+      project: editorValidationProject(editor.working, motionIds),
       operation,
       motion_ids: motionIds,
       start_sec: Number(editor.selectionStartSec || 0),
@@ -1739,7 +1819,10 @@ export function createMotionStudioController({
   function renderSelectedLayerActions() {
     const layer = selectedLayer();
     const runtimeState = String(state.status?.state || 'idle');
-    const running = ['initializing', 'recording', 'playing', 'stopping'].includes(runtimeState);
+    const running = (
+      ['initializing', 'recording', 'playing', 'stopping'].includes(runtimeState)
+      || pendingMotorStartAt > 0
+    );
     const blocked = state.busy || running;
     const unavailableReason = !layer
       ? '선택할 레이어가 없습니다'
@@ -1785,10 +1868,11 @@ export function createMotionStudioController({
       state.layerDetailMode = 'composition';
       state.selectedLayerId = '';
     }
-    const composition = compositionTracks(layers, activeMapping()?.rows || []);
+    const mappingRows = activeMapping()?.rows || [];
+    const composition = cachedCompositionTracks(layers, mappingRows);
     const compositionMode = state.layerDetailMode !== 'layer';
     const frames = layer?.frames || [];
-    const tracks = compositionMode ? composition.tracks : layerTracks(layer);
+    const tracks = compositionMode ? composition.tracks : cachedLayerTracks(layer);
     const duration = compositionMode
       ? composition.duration
       : (frames.length ? Number(frames[frames.length - 1].time_sec || 0) : 0);
@@ -2005,7 +2089,7 @@ export function createMotionStudioController({
     return run(async () => {
       const calculated = await editMotionStudioLayer({
         layer,
-        project: state.project,
+        project: editorValidationProject(layer),
         operation: 'resolve_point_curve_consistency',
         strategy: 'points',
         curve_ids: [...new Set(issues.map((item) => item.curve_id))],
@@ -2079,7 +2163,9 @@ export function createMotionStudioController({
     }
     // 정지는 다른 스튜디오 요청 처리 중에도 항상 우선 입력할 수 있어야 한다.
     if (el.studioStopButton) {
-      el.studioStopButton.disabled = !running || runtimeState === 'stopping';
+      el.studioStopButton.disabled = pendingMotorStartAt > 0
+        ? false
+        : (!running || runtimeState === 'stopping');
     }
     if (el.studioExportButton) {
       el.studioExportButton.disabled = state.busy || running || !hasSingleExportLayer || hasCompositionErrors;
@@ -2113,30 +2199,79 @@ export function createMotionStudioController({
   }
 
   function render() {
-    renderLists(); renderMapping(); renderAxes(); renderLayers(); renderLayerManager(); renderLayerDetail();
+    renderLists(); renderMapping(); renderAxes(); renderLayers();
+    if (!el.studioLayerManagerModal?.classList.contains('hidden')) {
+      renderLayerManager();
+    }
+    renderLayerDetail();
     renderConflicts(); renderControls();
   }
 
-  async function run(action, { onError = null } = {}) {
+  async function run(
+    action,
+    {
+      onError = null,
+      refreshAfter = false,
+      isCurrent = () => true,
+    } = {},
+  ) {
     setBusy(true);
     setMessage('요청 처리 중입니다…');
     try {
       const result = await action();
+      if (!isCurrent()) return null;
       if (result.success === false) throw new Error(result.message || '요청 실패');
-      if (result.project) setProject(result.project);
+      if (result.project_patch) {
+        setProject(applyMotionStudioProjectPatch(state.project, result.project_patch));
+      } else if (result.project) {
+        setProject(result.project);
+      }
       if (result.status) state.status = result.status;
       if (result.composition) state.composition = result.composition;
       setMessage(result.message || '완료');
-      await refresh(false);
+      if (refreshAfter) await refresh(false);
       render();
       return result;
     } catch (error) {
+      if (!isCurrent()) return null;
       setMessage(error.message || String(error), true);
       onError?.(error);
       return null;
     } finally {
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
+  }
+
+  async function runMotorStart(action, pendingMessage) {
+    const revision = ++motorCommandRevision;
+    const previousStatus = state.status;
+    pendingMotorStartAt = Date.now() / 1000;
+    state.status = {
+      ...(state.status || {}),
+      state: 'initializing',
+      phase: 'initializing',
+      message: pendingMessage,
+      updated_at: pendingMotorStartAt,
+    };
+    renderControls();
+    const result = await run(action, {
+      isCurrent: () => revision === motorCommandRevision,
+      onError: () => {
+        pendingMotorStartAt = 0;
+        state.status = previousStatus;
+        renderControls();
+      },
+    });
+    if (revision !== motorCommandRevision) return null;
+    if (!result) {
+      pendingMotorStartAt = 0;
+      state.status = previousStatus;
+      render();
+      return null;
+    }
+    if (result.status) pendingMotorStartAt = 0;
+    renderControls();
+    return result;
   }
 
   async function refresh(showMessage = true) {
@@ -2252,27 +2387,48 @@ export function createMotionStudioController({
       onRecord: ({ mode, initialMoveTimeSec }) => {
         if (!requireMotorActionReady('녹화')) return;
         showLayerGraph({ composition: true });
-        run(() => startMotionStudioRecord({
-          mode,
-          initial_move_time_sec: initialMoveTimeSec,
-        }));
+        runMotorStart(
+          () => startMotionStudioRecord({
+            mode,
+            initial_move_time_sec: initialMoveTimeSec,
+          }),
+          '모션 녹화 초기 위치 이동 요청 중',
+        );
       },
       onInitialize: ({ initialMoveTimeSec }) => {
         if (!requireMotorActionReady('초기 위치 이동')) return;
         showLayerGraph({ composition: true });
-        run(() => startMotionStudioInitialization({
-          initial_move_time_sec: initialMoveTimeSec,
-        }));
+        runMotorStart(
+          () => startMotionStudioInitialization({
+            initial_move_time_sec: initialMoveTimeSec,
+          }),
+          '초기 위치 이동 요청 중',
+        );
       },
       onPlay: ({ initialMoveTimeSec }) => {
         if (!requireMotorActionReady('합성 미리보기 재생')) return;
         showLayerGraph({ composition: true });
-        run(() => startMotionStudioPlayback({
-          initial_move_time_sec: initialMoveTimeSec,
-        }));
+        runMotorStart(
+          () => startMotionStudioPlayback({
+            initial_move_time_sec: initialMoveTimeSec,
+          }),
+          '합성 미리보기 초기 위치 이동 요청 중',
+        );
       },
       // The helper disables duplicate stop clicks before this callback runs.
-      onStop: () => run(stopMotionStudio),
+      onStop: () => {
+        motorCommandRevision += 1;
+        pendingMotorStartAt = 0;
+        state.status = {
+          ...(state.status || {}),
+          state: 'stopping',
+          phase: 'stopping',
+          message: '정지 명령 전달 중',
+          updated_at: Date.now() / 1000,
+        };
+        renderControls();
+        run(stopMotionStudio, { refreshAfter: true });
+      },
       onCreateLayer: async () => {
         const result = await run(() => createMotionStudioLayer());
         if (!result?.layer_id) return;
@@ -2282,15 +2438,31 @@ export function createMotionStudioController({
       defaultExportName: () => state.project?.name || 'motion',
       onExport: (name) => exportFinalMotionFile(name),
     });
-    el.studioLayerRows?.addEventListener('change', (event) => {
+    el.studioLayerRows?.addEventListener('change', async (event) => {
       const row = event.target.closest('tr[data-studio-layer-id]');
       if (!row) return;
       state.selectedLayerId = row.dataset.studioLayerId;
       if (event.target.matches('[data-layer-enabled]')) {
-        run(() => updateMotionStudioLayer({
-          layer_id: row.dataset.studioLayerId,
-          enabled: event.target.checked,
+        const layerId = row.dataset.studioLayerId;
+        const layer = state.project?.layers?.find((item) => item.layer_id === layerId);
+        const previousEnabled = layer?.enabled !== false;
+        if (state.busy) {
+          event.target.checked = previousEnabled;
+          return;
+        }
+        const nextEnabled = event.target.checked;
+        setProject(motionStudioSetLayerEnabled(state.project, layerId, nextEnabled));
+        render();
+        const result = await run(() => updateMotionStudioLayer({
+          layer_id: layerId,
+          enabled: nextEnabled,
         }));
+        if (!result) {
+          setProject(motionStudioSetLayerEnabled(
+            state.project, layerId, previousEnabled,
+          ));
+          render();
+        }
         return;
       }
       if (event.target.matches('[data-layer-main-name]')) {
@@ -2408,7 +2580,7 @@ export function createMotionStudioController({
         return;
       }
       state.selectedLayerId = resolveMotionStudioSelectedLayerId(
-        result.project?.layers || [], state.selectedLayerId,
+        state.project?.layers || [], state.selectedLayerId,
       );
       state.layerDetailMode = 'composition';
       setMessage(`레이어 '${layer.name}'을 삭제했습니다.`);
@@ -2442,7 +2614,7 @@ export function createMotionStudioController({
       const result = await run(async () => {
         try {
           const preview = await previewMotionStudioMerge({
-            project: state.project,
+            project: mergePreviewProject(layerIds),
             layer_ids: layerIds,
             name,
             mapping_rows: activeMapping()?.rows || [],
@@ -3645,13 +3817,62 @@ export function createMotionStudioController({
   function renderSnapshot(studioStatus, midiStatus) {
     const previousStatus = state.status;
     if (studioStatus && Object.keys(studioStatus).length) {
+      const statusUpdatedAt = Number(studioStatus.updated_at);
+      if (
+        pendingMotorStartAt > 0
+        && Number.isFinite(statusUpdatedAt)
+        && statusUpdatedAt >= pendingMotorStartAt
+        && ['initializing', 'recording', 'playing'].includes(
+          String(studioStatus.state || ''),
+        )
+      ) {
+        pendingMotorStartAt = 0;
+      }
       state.status = studioStatus;
       const feedback = motionStudioRuntimeStatusMessage(previousStatus, studioStatus);
       if (feedback) setMessage(feedback.message, feedback.error);
     }
     if (midiStatus) state.midi = midiStatus;
     syncPlaybackClock();
-    renderAxes(); renderControls();
+    const axesKey = JSON.stringify([
+      Boolean(state.midi?.select_locked),
+      (state.midi?.channels || []).map((channel) => [
+        channel?.motion_id,
+        channel?.select_enabled ?? channel?.control_enabled,
+        Number(channel?.motion_value_deg),
+      ]),
+    ]);
+    if (state.snapshotAxesKey !== axesKey) {
+      state.snapshotAxesKey = axesKey;
+      renderAxes();
+    }
+    if (el.studioState) el.studioState.textContent = state.status?.message || '대기';
+    if (el.studioElapsed) {
+      el.studioElapsed.textContent = timeText(state.status?.elapsed_sec);
+    }
+    if (el.studioFrameCount) {
+      el.studioFrameCount.textContent = `${state.status?.recorded_frames || 0}프레임 · 20ms`;
+    }
+    const controlsKey = JSON.stringify([
+      state.status?.state,
+      state.status?.phase,
+      state.busy,
+      pendingMotorStartAt > 0,
+      state.project?.project_id,
+      activeMapping()?.file_id,
+      activeMapping()?.rows?.length || 0,
+      (state.project?.layers || []).map((layer) => [
+        layer.layer_id, layer.enabled !== false, Boolean(layer.locked),
+      ]),
+      state.composition?.conflicts?.length || 0,
+      state.composition?.transition_warnings?.length || 0,
+      state.composition?.point_curve_mismatches?.length || 0,
+      motorActionBlockReason(),
+    ]);
+    if (state.snapshotControlsKey !== controlsKey) {
+      state.snapshotControlsKey = controlsKey;
+      renderControls();
+    }
     if (renderRecordingPreview()) {
       animatePlaybackGraph();
       return;

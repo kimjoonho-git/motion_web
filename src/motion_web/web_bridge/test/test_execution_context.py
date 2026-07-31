@@ -1720,7 +1720,7 @@ def test_record_prepares_unified_project_before_requesting_operation():
         'success': True,
     }
     bridge.request_motion_studio = (
-        lambda command, payload: calls.append((command, payload)) or {
+        lambda command, payload, **_kwargs: calls.append((command, payload)) or {
             'success': True,
         }
     )

@@ -3,15 +3,19 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
+  applyMotionStudioProjectPatch,
   motionStudioCanCreatePointCurve,
   motionStudioCanSwitchPointDraftCurve,
   motionStudioCanvasEventPoint,
   motionStudioEditorGraphClickAction,
+  motionStudioEditorValidationProject,
   motionStudioLayerDataEqual,
   motionStudioLayerDuration,
   motionStudioEditorNextValueScale,
   motionStudioEditorValueBounds,
   motionStudioLayerMotionIds,
+  motionStudioMergePreviewProject,
+  motionStudioSetLayerEnabled,
   motionStudioMotionAxisRange,
   motionStudioValueViewAfterRangeUnlock,
   motionStudioMotionTargetAtTime,
@@ -34,6 +38,73 @@ import {
   resolveMotionStudioSelectedLayerId,
   synchronizeMotionStudioEditorTimeline,
 } from '../static/js/motion_studio.js';
+
+test('project patches preserve unchanged layer objects and apply order changes', () => {
+  const unchanged = { layer_id: 'unchanged', frames: [{ time_sec: 0.02, values: {} }] };
+  const replaced = { layer_id: 'replaced', frames: [] };
+  const updated = { layer_id: 'replaced', name: 'updated', frames: [] };
+
+  const project = applyMotionStudioProjectPatch(
+    {
+      project_id: 'project',
+      name: 'before',
+      layers: [unchanged, replaced, { layer_id: 'deleted', frames: [] }],
+    },
+    {
+      metadata: { project_id: 'project', name: 'after' },
+      layer_order: ['replaced', 'unchanged'],
+      upsert_layers: [updated],
+      delete_layer_ids: ['deleted'],
+    },
+  );
+
+  assert.equal(project.name, 'after');
+  assert.deepEqual(project.layers.map((layer) => layer.layer_id), [
+    'replaced', 'unchanged',
+  ]);
+  assert.equal(project.layers[0], updated);
+  assert.equal(project.layers[1], unchanged);
+});
+
+test('playback selection updates one layer without replacing unchanged layers', () => {
+  const first = { layer_id: 'first', enabled: true, frames: [] };
+  const second = { layer_id: 'second', enabled: true, frames: [] };
+  const project = { project_id: 'project-a', layers: [first, second] };
+
+  const updated = motionStudioSetLayerEnabled(project, 'second', false);
+
+  assert.notEqual(updated, project);
+  assert.equal(updated.layers[0], first);
+  assert.notEqual(updated.layers[1], second);
+  assert.equal(updated.layers[1].enabled, false);
+  assert.equal(motionStudioSetLayerEnabled(updated, 'missing', true), updated);
+});
+
+test('editor validation payload keeps only affected axes across other layers', () => {
+  const edited = {
+    layer_id: 'edited',
+    frames: [{ time_sec: 0.02, values: { '1-1': 1 } }],
+  };
+  const other = {
+    layer_id: 'other',
+    frames: [
+      { time_sec: 0.02, values: { '1-1': 2, '9-9': 9 } },
+      { time_sec: 0.04, values: { '9-9': 10 } },
+    ],
+  };
+  const project = { project_id: 'project', layers: [edited, other] };
+
+  const validation = motionStudioEditorValidationProject(project, edited);
+
+  assert.deepEqual(validation.layers[0].frames, []);
+  assert.deepEqual(validation.layers[1].frames, [
+    { time_sec: 0.02, values: { '1-1': 2 } },
+  ]);
+  assert.deepEqual(
+    motionStudioMergePreviewProject(project, ['other']).layers,
+    [other],
+  );
+});
 
 test('canvas pointer coordinates follow the internal graph size on scaled displays', () => {
   assert.deepEqual(
@@ -1035,5 +1106,31 @@ test('editor history restores point-curve selection with each applied edit', () 
   assert.match(
     source,
     /const followingCurve = editorPointCurves\(editor\.working\)\.find\([\s\S]*?loadPointDraft\(followingCurve, following\.selectedPointId\)/,
+  );
+});
+
+test('studio mutations render their response without an automatic full refresh', () => {
+  const source = readFileSync(
+    new URL('../static/js/motion_studio.js', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(source, /async function run\([\s\S]*?isCurrent = \(\) => true/);
+  assert.match(source, /if \(refreshAfter\) await refresh\(false\);/);
+  assert.match(
+    source,
+    /async function runMotorStart\(action, pendingMessage\)/,
+  );
+  assert.match(
+    source,
+    /pendingMotorStartAt > 0[\s\S]*?\['initializing', 'recording', 'playing'\]/,
+  );
+  assert.match(
+    source,
+    /studioStopButton\.disabled = pendingMotorStartAt > 0[\s\S]*?\? false/,
+  );
+  assert.match(
+    source,
+    /onStop: \(\) => \{[\s\S]*?state: 'stopping'[\s\S]*?run\(stopMotionStudio, \{ refreshAfter: true \}\)/,
   );
 });
