@@ -416,6 +416,9 @@ export function createMotionStudioController({
       state.mergeLayerIds = new Set(
         [...state.mergeLayerIds].filter((layerId) => mergeableLayerIds.has(layerId)),
       );
+      if (!state.mergeLayerIds.has(state.mergeAppendLayerId)) {
+        state.mergeAppendLayerId = '';
+      }
     }
 
     el.studioLayerManagerTabs?.querySelectorAll('[data-layer-manager-tab]').forEach((button) => {
@@ -449,6 +452,22 @@ export function createMotionStudioController({
           <td><span>${layerSummary(layer)}</span>${layer.locked ? ' <span class="status-chip off">잠금</span>' : ''}${pointIssues.length ? ` <span class="status-chip warn">포인트 필요 · ${escapeHtml(pointIssues.join(', '))}</span>` : ''}</td>
         </tr>`;
       }).join('') : '<tr><td colspan="3" class="empty">레이어가 없습니다</td></tr>';
+    }
+    if (el.studioMergeMode && state.layerManagerTab === 'merge') {
+      el.studioMergeMode.value = state.mergeMode;
+    }
+    if (el.studioMergeAppendLayer && state.layerManagerTab === 'merge') {
+      const selectedLayers = layers.filter(
+        (layer) => state.mergeLayerIds.has(String(layer.layer_id || '')),
+      );
+      el.studioMergeAppendLayer.innerHTML = (
+        '<option value="">선택한 레이어 중 지정</option>'
+        + selectedLayers.map((layer) => (
+          `<option value="${escapeHtml(layer.layer_id)}">${escapeHtml(layer.name)}</option>`
+        )).join('')
+      );
+      el.studioMergeAppendLayer.value = state.mergeAppendLayerId;
+      el.studioMergeAppendLayer.disabled = state.mergeMode !== 'append';
     }
   }
 
@@ -949,8 +968,19 @@ export function createMotionStudioController({
         ? '선택한 포인트만 삭제하고 남은 포인트로 곡선을 다시 계산합니다'
         : '곡선을 유지하려면 포인트가 최소 2개 필요합니다';
     }
-    if (el.studioEditorRangeActions) {
-      el.studioEditorRangeActions.classList.toggle('hidden', !rangeReady);
+    if (el.studioEditorRangeStatus) {
+      el.studioEditorRangeStatus.textContent = rangeReady
+        ? `${selectedRange.curve.motion_id} · `
+          + `${Number(editor.selectionStartSec).toFixed(2)}초 ~ `
+          + `${Number(editor.selectionEndSec).toFixed(2)}초 · `
+          + `${selectedRange.points.length}개 포인트`
+        : pointMode
+          ? '시간 이동·시간 배율·모션값 이동·모션값 배율 중 하나를 선택한 뒤 시작·종료 포인트를 선택하세요.'
+          : '그래프에서 같은 포인트 곡선의 시작·종료 포인트를 선택하세요.';
+      el.studioEditorRangeStatus.classList.toggle('ready', rangeReady);
+    }
+    if (el.studioEditorRangeCopyTarget) {
+      el.studioEditorRangeCopyTarget.disabled = !rangeReady || Boolean(editor?.preview);
     }
     if (el.studioEditorRangeCopyButton) {
       el.studioEditorRangeCopyButton.disabled = !rangeReady || Boolean(editor?.preview);
@@ -962,9 +992,11 @@ export function createMotionStudioController({
       el.studioEditorRangeDeleteButton.disabled = (
         !rangeReady || Boolean(editor?.preview) || remainingCount < 2
       );
-      el.studioEditorRangeDeleteButton.title = remainingCount < 2
-        ? '곡선을 유지하려면 삭제 후 포인트가 최소 2개 남아야 합니다'
-        : '선택 범위의 포인트를 삭제합니다';
+      el.studioEditorRangeDeleteButton.title = !rangeReady
+        ? '같은 포인트 곡선의 시작·종료 포인트를 먼저 선택하세요'
+        : remainingCount < 2
+          ? '곡선을 유지하려면 삭제 후 포인트가 최소 2개 남아야 합니다'
+          : '선택 범위의 포인트를 삭제합니다';
     }
     if (el.studioEditorPointCurveOrder) {
       el.studioEditorPointCurveOrder.disabled = !pointMode || !editablePointCurve;
@@ -1262,18 +1294,11 @@ export function createMotionStudioController({
       );
     }
     if (el.studioEditorOperationTitle) el.studioEditorOperationTitle.textContent = '포인트 편집';
-    document.querySelector('.studio-editor-conversion-controls')?.classList.toggle(
-      'hidden',
-      pointMode || selectedAxisPointBacked,
-    );
-    document.querySelector('.studio-editor-operations')?.classList.toggle(
-      'hidden',
-      !workingPointCurve,
-    );
-    el.studioEditorOperationHelp?.classList.toggle(
-      'hidden',
-      !workingPointCurve,
-    );
+    document.querySelectorAll(
+      '.studio-editor-conversion-controls select, .studio-editor-conversion-controls input',
+    ).forEach((control) => {
+      control.disabled = Boolean(editor?.preview) || pointMode || selectedAxisPointBacked;
+    });
     if (el.studioEditorFitSelectionButton) {
       el.studioEditorFitSelectionButton.disabled = pointMode;
     }
@@ -1322,7 +1347,7 @@ export function createMotionStudioController({
     el.studioEditorOperationButtons?.forEach((button) => {
       const active = button.dataset.studioEditorOperation === operation;
       button.setAttribute('aria-pressed', active ? 'true' : 'false');
-      button.disabled = Boolean(editor?.preview);
+      button.disabled = Boolean(editor?.preview) || !workingPointCurve;
     });
     if (el.studioEditorCreatePointsButton) {
       const selectedId = selectedIds.length === 1 ? selectedIds[0] : '';
@@ -1798,12 +1823,25 @@ export function createMotionStudioController({
 
   function renderMergeControl() {
     const count = state.mergeLayerIds.size;
-    if (el.studioMergeButton) el.studioMergeButton.disabled = state.busy || count < 2;
+    const appendMode = state.mergeMode === 'append';
+    const appendLayerReady = state.mergeLayerIds.has(state.mergeAppendLayerId);
+    if (el.studioMergeButton) {
+      el.studioMergeButton.disabled = (
+        state.busy || count < 2 || (appendMode && !appendLayerReady)
+      );
+      el.studioMergeButton.textContent = appendMode
+        ? '뒤에 이어 붙이기'
+        : '레이어 합치기';
+    }
     if (el.studioMergeStatus) {
       el.studioMergeStatus.textContent = state.mergeResultMessage || (
         count < 2
           ? '합칠 레이어를 2개 이상 선택하세요'
-          : `합칠 레이어 ${count}개 · 합치기를 누르면 충돌 검사를 진행합니다`
+          : appendMode && !appendLayerReady
+            ? '뒤로 이동할 레이어를 선택하세요'
+            : appendMode
+              ? `합칠 레이어 ${count}개 · 지정한 레이어 전체를 나머지 레이어 뒤로 이동합니다`
+              : `합칠 레이어 ${count}개 · 현재 시간 위치로 충돌 검사를 진행합니다`
       );
       el.studioMergeStatus.classList.toggle('error', Boolean(state.mergeResultError));
       el.studioMergeStatus.classList.toggle(
@@ -2525,6 +2563,25 @@ export function createMotionStudioController({
       const layerId = row.dataset.managerMergeLayerId;
       if (event.target.checked) state.mergeLayerIds.add(layerId);
       else state.mergeLayerIds.delete(layerId);
+      if (!state.mergeLayerIds.has(state.mergeAppendLayerId)) {
+        state.mergeAppendLayerId = '';
+      }
+      state.mergeResultMessage = '';
+      state.mergeResultError = false;
+      renderLayerManager();
+      renderMergeControl();
+    });
+    el.studioMergeMode?.addEventListener('change', () => {
+      state.mergeMode = el.studioMergeMode.value === 'append' ? 'append' : 'preserve';
+      if (state.mergeMode !== 'append') state.mergeAppendLayerId = '';
+      state.mergeResultMessage = '';
+      state.mergeResultError = false;
+      renderLayerManager();
+      renderMergeControl();
+    });
+    el.studioMergeAppendLayer?.addEventListener('change', () => {
+      const layerId = String(el.studioMergeAppendLayer.value || '');
+      state.mergeAppendLayerId = state.mergeLayerIds.has(layerId) ? layerId : '';
       state.mergeResultMessage = '';
       state.mergeResultError = false;
       renderMergeControl();
@@ -2602,12 +2659,30 @@ export function createMotionStudioController({
     el.studioMergeButton?.addEventListener('click', async () => {
       const layerIds = [...state.mergeLayerIds];
       if (layerIds.length < 2) return;
+      const appendLayerId = state.mergeMode === 'append'
+        ? state.mergeAppendLayerId
+        : '';
+      if (state.mergeMode === 'append' && !state.mergeLayerIds.has(appendLayerId)) return;
+      const appendLayer = state.project?.layers?.find(
+        (layer) => layer.layer_id === appendLayerId,
+      );
       const name = nextMergedLayerName();
       if (!await showConfirm(
-        `선택한 ${layerIds.length}개 레이어를 '${name}'로 합칠까요?\n원본과 결과는 재생 선택 상태를 변경하지 않습니다.`,
-        { title: '레이어 합치기', confirmLabel: '합치기', tone: 'warning' },
+        appendLayerId
+          ? `선택한 ${layerIds.length}개 레이어를 '${name}'로 합칠까요?\n`
+            + `'${appendLayer?.name || appendLayerId}' 레이어 전체를 나머지 레이어의 마지막 시간 뒤로 이동합니다.\n`
+            + '원본과 결과는 재생 선택 상태를 변경하지 않습니다.'
+          : `선택한 ${layerIds.length}개 레이어를 '${name}'로 합칠까요?\n`
+            + '현재 시간 위치를 유지하며, 원본과 결과는 재생 선택 상태를 변경하지 않습니다.',
+        {
+          title: appendLayerId ? '레이어 뒤에 이어 붙이기' : '레이어 합치기',
+          confirmLabel: appendLayerId ? '이어 붙이기' : '합치기',
+          tone: 'warning',
+        },
       )) return;
-      state.mergeResultMessage = `${layerIds.length}개 레이어 충돌 검사 중…`;
+      state.mergeResultMessage = appendLayerId
+        ? `'${appendLayer?.name || appendLayerId}' 레이어 시간 이동 및 충돌 검사 중…`
+        : `${layerIds.length}개 레이어 충돌 검사 중…`;
       state.mergeResultError = false;
       renderMergeControl();
       let failureMessage = '';
@@ -2616,6 +2691,7 @@ export function createMotionStudioController({
           const preview = await previewMotionStudioMerge({
             project: mergePreviewProject(layerIds),
             layer_ids: layerIds,
+            append_layer_id: appendLayerId,
             name,
             mapping_rows: activeMapping()?.rows || [],
           });
@@ -2624,6 +2700,7 @@ export function createMotionStudioController({
           }
           const committed = await commitMotionStudioMerge({
             source_layer_ids: layerIds,
+            append_layer_id: appendLayerId,
             name: preview.layer?.name || name,
             layer: preview.layer,
             source_revisions: Object.fromEntries(layerIds.map((layerId) => {
@@ -2643,8 +2720,11 @@ export function createMotionStudioController({
       if (result) {
         state.selectedLayerId = result.layer_id || '';
         state.mergeLayerIds.clear();
+        state.mergeAppendLayerId = '';
         state.layerManagerTab = 'merge';
-        state.mergeResultMessage = `합치기 성공 · '${name}' 레이어를 생성했습니다`;
+        state.mergeResultMessage = appendLayerId
+          ? `뒤에 이어 붙이기 성공 · '${name}' 레이어를 생성했습니다`
+          : `합치기 성공 · '${name}' 레이어를 생성했습니다`;
         state.mergeResultError = false;
         render();
       } else {

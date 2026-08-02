@@ -19,6 +19,7 @@ export function createMotionStudioState() {
     snapshotAxesKey: '',
     snapshotControlsKey: '',
     layerManagerTab: 'create', mergeLayerIds: new Set(),
+    mergeMode: 'preserve', mergeAppendLayerId: '',
     mergeResultMessage: '', mergeResultError: false,
   };
 }
@@ -49,6 +50,8 @@ export function resetMotionStudioProjectState(state) {
   state.snapshotControlsKey = '';
   state.layerManagerTab = 'create';
   state.mergeLayerIds = new Set();
+  state.mergeMode = 'preserve';
+  state.mergeAppendLayerId = '';
   state.mergeResultMessage = '';
   state.mergeResultError = false;
   return state;

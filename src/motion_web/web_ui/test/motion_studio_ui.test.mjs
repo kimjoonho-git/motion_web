@@ -43,6 +43,8 @@ test('studio UI state is isolated per controller and reset clears project runtim
   const first = createMotionStudioState();
   const second = createMotionStudioState();
   first.mergeLayerIds.add('layer-a');
+  first.mergeMode = 'append';
+  first.mergeAppendLayerId = 'layer-a';
   first.project = { project_id: 'project-a' };
   first.workspaceProject = { project_id: 'workspace-a' };
   first.editor = { dirty: true };
@@ -65,6 +67,8 @@ test('studio UI state is isolated per controller and reset clears project runtim
   assert.equal(first.recordingPreviewKey, '');
   assert.equal(first.layerManagerTab, 'create');
   assert.equal(first.mergeLayerIds.size, 0);
+  assert.equal(first.mergeMode, 'preserve');
+  assert.equal(first.mergeAppendLayerId, '');
   assert.equal(second.project, null);
   assert.equal(second.editor, null);
   assert.equal(second.mergeLayerIds.size, 0);
@@ -75,17 +79,25 @@ test('resetting one project state does not mutate another project state', () => 
   const projectB = createMotionStudioState();
   projectA.project = { project_id: 'project-a' };
   projectA.mergeLayerIds.add('layer-a');
+  projectA.mergeMode = 'append';
+  projectA.mergeAppendLayerId = 'layer-a';
   projectB.project = { project_id: 'project-b' };
   projectB.editor = { layerId: 'layer-b' };
   projectB.mergeLayerIds.add('layer-b');
+  projectB.mergeMode = 'append';
+  projectB.mergeAppendLayerId = 'layer-b';
 
   resetMotionStudioProjectState(projectA);
 
   assert.equal(projectA.project, null);
   assert.equal(projectA.mergeLayerIds.size, 0);
+  assert.equal(projectA.mergeMode, 'preserve');
+  assert.equal(projectA.mergeAppendLayerId, '');
   assert.deepEqual(projectB.project, { project_id: 'project-b' });
   assert.deepEqual(projectB.editor, { layerId: 'layer-b' });
   assert.deepEqual([...projectB.mergeLayerIds], ['layer-b']);
+  assert.equal(projectB.mergeMode, 'append');
+  assert.equal(projectB.mergeAppendLayerId, 'layer-b');
 });
 
 test('studio message rendering preserves text and error state', () => {

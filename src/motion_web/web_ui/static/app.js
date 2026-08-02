@@ -1,1 +1,1 @@
-import './js/main.js?v=20260731-project-compatible-scan-2';
+import './js/main.js?v=20260803-range-actions-visible-1';

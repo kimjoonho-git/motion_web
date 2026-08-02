@@ -540,7 +540,7 @@ test('editor uses a wide graph column with the inspector below it', () => {
   assert.equal((html.match(/id="studioEditorCloseButton"/g) || []).length, 1);
   assert.match(
     styles,
-    /grid-template-columns:\s*210px minmax\(0,\s*1fr\)/,
+    /grid-template-columns:\s*268px minmax\(0,\s*1fr\)/,
   );
   assert.match(
     styles,
@@ -637,7 +637,7 @@ test('editor exposes whole-axis point creation without motion-section conversion
   assert.match(source, /const workingPointCurve = Boolean\(storedCurveForDraft\(editor\)\)/);
   assert.match(
     source,
-    /studio-editor-conversion-controls'\)\?\.classList\.toggle\(\s*'hidden',\s*pointMode \|\| selectedAxisPointBacked/,
+    /studio-editor-conversion-controls select, \.studio-editor-conversion-controls input'[\s\S]*?control\.disabled = Boolean\(editor\?\.preview\) \|\| pointMode \|\| selectedAxisPointBacked/,
   );
 });
 
@@ -713,14 +713,26 @@ test('point range actions reset stale selection and use the point-curve apply pa
     /studioEditorRangeCopyButton\?\.addEventListener\('click'[\s\S]*?studioEditorRangeDeleteButton[\s\S]*?\n    \}\);/,
   )?.[0] || '';
 
-  assert.match(html, /id="studioEditorRangeCopyTarget"[^>]*step="0\.02"/);
-  assert.match(html, /id="studioEditorRangeCopyButton"[^>]*>구간 복사</);
-  assert.match(html, /id="studioEditorRangeDeleteButton"[^>]*>구간 삭제</);
+  assert.match(html, /id="studioEditorRangeActions" class="studio-editor-range-actions"/);
+  assert.doesNotMatch(html, /studio-editor-range-actions hidden/);
+  assert.match(html, /id="studioEditorRangeStatus"[^>]*>그래프에서 같은 포인트 곡선/);
+  assert.match(html, /id="studioEditorRangeCopyTarget"[^>]*step="0\.02"[^>]*disabled/);
+  assert.match(html, /id="studioEditorRangeCopyButton"[^>]*disabled>구간 복사</);
+  assert.match(html, /id="studioEditorRangeDeleteButton"[^>]*disabled>구간 삭제</);
   assert.match(addFlow, /clearEditorPointRange\(editor\)/);
   assert.match(deleteFlow, /clearEditorPointRange\(editor\)/);
   assert.match(rangeFlow, /motionStudioCopyPointRange/);
   assert.match(rangeFlow, /motionStudioDeletePointRange/);
   assert.match(rangeFlow, /activatePointDraftMutation/);
+  assert.doesNotMatch(source, /studioEditorRangeActions\.classList\.toggle\('hidden'/);
+  assert.match(
+    source,
+    /studioEditorRangeStatus\.textContent = rangeReady[\s\S]*?selectedRange\.points\.length/,
+  );
+  assert.match(
+    source,
+    /studioEditorRangeCopyTarget\.disabled = !rangeReady \|\| Boolean\(editor\?\.preview\)/,
+  );
 });
 
 test('temporary point editing restores the last selected range edit operation', () => {
@@ -1132,5 +1144,78 @@ test('studio mutations render their response without an automatic full refresh',
   assert.match(
     source,
     /onStop: \(\) => \{[\s\S]*?state: 'stopping'[\s\S]*?run\(stopMotionStudio, \{ refreshAfter: true \}\)/,
+  );
+});
+
+test('editor operations and axis management keep a fixed compact layout', () => {
+  const html = readFileSync(
+    new URL('../static/index.html', import.meta.url),
+    'utf8',
+  );
+  const styles = readFileSync(
+    new URL('../static/styles.css', import.meta.url),
+    'utf8',
+  );
+  const source = readFileSync(
+    new URL('../static/js/motion_studio.js', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(
+    html,
+    /<section class="studio-editor-axis-management" aria-label="축 관리">/,
+  );
+  assert.doesNotMatch(html, /<details class="studio-editor-axis-management"/);
+  assert.match(html, /<div class="studio-editor-operations">/);
+  assert.doesNotMatch(html, /class="studio-editor-operations hidden"/);
+  assert.match(
+    html,
+    /id="studioEditorOperationHelp" class="studio-editor-operation-help"/,
+  );
+  assert.match(
+    styles,
+    /\.studio-editor-operation-choices \{[\s\S]*?grid-template-columns: repeat\(5, minmax\(92px, 1fr\)\);/,
+  );
+  assert.match(
+    styles,
+    /\.studio-editor-operation-choices button \{[\s\S]*?white-space: nowrap;/,
+  );
+  assert.doesNotMatch(
+    source,
+    /querySelector\('\.studio-editor-operations'\)\?\.classList\.toggle/,
+  );
+  assert.match(
+    source,
+    /button\.disabled = Boolean\(editor\?\.preview\) \|\| !workingPointCurve;/,
+  );
+});
+
+test('layer merge lets the user choose one whole layer to append', () => {
+  const html = readFileSync(
+    new URL('../static/index.html', import.meta.url),
+    'utf8',
+  );
+  const source = readFileSync(
+    new URL('../static/js/motion_studio.js', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(
+    html,
+    /id="studioMergeMode">[\s\S]*?value="preserve">시간 위치 유지<[\s\S]*?value="append">뒤에 이어 붙이기</,
+  );
+  assert.match(html, /id="studioMergeAppendLayer" disabled/);
+  assert.match(html, /지정한 레이어의 전체 축을 나머지 레이어 뒤로 함께 이동/);
+  assert.match(
+    source,
+    /previewMotionStudioMerge\(\{[\s\S]*?append_layer_id: appendLayerId/,
+  );
+  assert.match(
+    source,
+    /commitMotionStudioMerge\(\{[\s\S]*?append_layer_id: appendLayerId/,
+  );
+  assert.match(
+    source,
+    /state\.mergeMode === 'append'[\s\S]*?state\.mergeAppendLayerId/,
   );
 });

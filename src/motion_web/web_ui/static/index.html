@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>모션 녹화 시스템 0.5.0</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260729-header-motor-activity-1">
+    <link rel="stylesheet" href="/static/styles.css?v=20260803-range-actions-visible-1">
   </head>
   <body>
     <main class="shell">
@@ -1346,7 +1346,16 @@
           <section class="studio-layer-manager-panel hidden" data-layer-manager-panel="merge">
             <div class="studio-layer-manager-guide">
               <strong>레이어 합치기</strong>
-              <span>모든 모션축에 포인트가 생성된 레이어만 선택할 수 있습니다. 같은 Motion ID의 시간이 겹치면 합치지 않습니다.</span>
+              <span>모든 모션축에 포인트가 생성된 레이어만 선택할 수 있습니다. 뒤에 이어 붙이기는 지정한 레이어의 전체 축을 나머지 레이어 뒤로 함께 이동합니다.</span>
+            </div>
+            <div class="studio-merge-options" aria-label="레이어 합치기 방식">
+              <label><span>합치기 방식</span><select id="studioMergeMode">
+                <option value="preserve">시간 위치 유지</option>
+                <option value="append">뒤에 이어 붙이기</option>
+              </select></label>
+              <label><span>뒤로 이동할 레이어</span><select id="studioMergeAppendLayer" disabled>
+                <option value="">선택한 레이어 중 지정</option>
+              </select></label>
             </div>
             <div class="table-wrap studio-layer-manager-table-wrap">
               <table class="studio-layer-manager-table">
@@ -1388,32 +1397,28 @@
               <strong>모션축 선택</strong>
               <div class="registry-actions"><button id="studioEditorSelectAllButton" type="button">전체 선택</button><button id="studioEditorSelectNoneButton" type="button">전체 해제</button></div>
               <div id="studioEditorAxisList" class="studio-editor-axis-list"></div>
-              <details class="studio-editor-axis-management">
-                <summary>축 관리</summary>
+              <section class="studio-editor-axis-management" aria-label="축 관리">
+                <strong class="studio-editor-axis-management-title">축 관리</strong>
                 <div class="studio-editor-add-axis">
                   <section class="studio-editor-axis-form">
-                    <strong>축 추가</strong>
+                    <strong>추가</strong>
                     <label><span>Motion ID</span><input id="studioEditorAddAxisSelect" type="text" inputmode="text" placeholder="예: 1-2" aria-label="추가할 Motion ID"></label>
-                    <div class="studio-editor-axis-form-action">
-                      <label><span>초기값</span><input id="studioEditorAddAxisValue" type="number" step="0.1" value="0" aria-label="새 축 초기값"></label>
-                      <button id="studioEditorAddAxisButton" type="button">추가</button>
-                    </div>
+                    <label><span>초기값</span><input id="studioEditorAddAxisValue" type="number" step="0.1" value="0" aria-label="새 축 초기값"></label>
+                    <button id="studioEditorAddAxisButton" type="button">추가</button>
                   </section>
                   <section class="studio-editor-axis-form">
-                    <strong>축 복사</strong>
+                    <strong>복사</strong>
                     <label><span>원본 축</span><select id="studioEditorCopyAxisSource" aria-label="복사할 원본 Motion ID"><option value="">원본 축 없음</option></select></label>
-                    <div class="studio-editor-axis-form-action">
-                      <label><span>대상 ID</span><input id="studioEditorCopyAxisTarget" type="text" inputmode="text" placeholder="예: 1-2" aria-label="복사 대상 Motion ID"></label>
-                      <button id="studioEditorCopyAxisButton" type="button">복사</button>
-                    </div>
+                    <label><span>대상 ID</span><input id="studioEditorCopyAxisTarget" type="text" inputmode="text" placeholder="예: 1-2" aria-label="복사 대상 Motion ID"></label>
+                    <button id="studioEditorCopyAxisButton" type="button">복사</button>
                   </section>
-                  <section class="studio-editor-axis-form">
-                    <strong>축 삭제</strong>
+                  <section class="studio-editor-axis-form studio-editor-axis-delete-form">
+                    <strong>삭제</strong>
                     <button id="studioEditorDeleteAxisButton" class="off" type="button">선택 축 삭제</button>
                   </section>
-                  <small>현재 레이어의 선택 축만 추가·복사·삭제합니다.</small>
+                  <small>현재 레이어의 축만 변경합니다.</small>
                 </div>
-              </details>
+              </section>
             </aside>
             <div class="studio-editor-main">
               <div class="studio-editor-toolbar">
@@ -1486,7 +1491,7 @@
                       </label>
                       <button id="studioEditorCreatePointsButton" type="button">전체 포인트 생성</button>
                     </div>
-                    <div class="studio-editor-operations hidden">
+                    <div class="studio-editor-operations">
                       <select id="studioEditorOperation" class="hidden" aria-hidden="true" tabindex="-1">
                         <option value="time_scale">시간 배율</option>
                         <option value="value_scale">모션값 배율</option>
@@ -1517,14 +1522,15 @@
                         </select></label>
                       </div>
                     </div>
-                    <div id="studioEditorOperationHelp" class="studio-editor-operation-help hidden">선택한 포인트의 시간을 조절합니다.</div>
-                    <div id="studioEditorRangeActions" class="studio-editor-range-actions hidden">
+                    <div id="studioEditorOperationHelp" class="studio-editor-operation-help">선택한 포인트의 시간을 조절합니다.</div>
+                    <div id="studioEditorRangeActions" class="studio-editor-range-actions">
                       <strong>선택 구간</strong>
+                      <span id="studioEditorRangeStatus" class="studio-editor-range-status" aria-live="polite">그래프에서 같은 포인트 곡선의 시작·종료 포인트를 선택하세요.</span>
                       <label class="compact-field"><span>복사 시작(초)</span>
-                        <input id="studioEditorRangeCopyTarget" type="number" min="0" step="0.02" value="0.00">
+                        <input id="studioEditorRangeCopyTarget" type="number" min="0" step="0.02" value="0.00" disabled>
                       </label>
-                      <button id="studioEditorRangeCopyButton" type="button">구간 복사</button>
-                      <button id="studioEditorRangeDeleteButton" class="off" type="button">구간 삭제</button>
+                      <button id="studioEditorRangeCopyButton" type="button" disabled>구간 복사</button>
+                      <button id="studioEditorRangeDeleteButton" class="off" type="button" disabled>구간 삭제</button>
                     </div>
                   </section>
                   <section id="studioEditorDangerZone" class="studio-editor-danger-zone hidden">
@@ -1665,6 +1671,6 @@
       </div>
     </div>
 
-    <script type="module" src="/static/app.js?v=20260731-project-compatible-scan-2"></script>
+    <script type="module" src="/static/app.js?v=20260803-range-actions-visible-1"></script>
   </body>
 </html>
