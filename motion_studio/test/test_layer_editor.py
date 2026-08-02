@@ -709,6 +709,7 @@ def test_merged_point_curves_remain_isolated_between_two_projects():
         return merge_layers(
             {'period_sec': 0.02, 'layers': layers},
             [layer['layer_id'] for layer in layers],
+            append_layer_id=layers[1]['layer_id'],
         )
 
     first = merge_project('project-a', 0.0)
@@ -721,6 +722,67 @@ def test_merged_point_curves_remain_isolated_between_two_projects():
         curve['curve_id'] for curve in second['point_curves']
     } == {'project-b-curve-1', 'project-b-curve-2'}
     assert first['frames'] != second['frames']
+
+
+def test_merge_append_moves_the_user_selected_whole_layer_after_the_other_layer():
+    first = create_all_axis_points({
+        'layer_id': 'a', 'name': 'A', 'frames': [
+            {'frame': 1, 'time_sec': 0.02, 'values': {'1-1': 0.0}},
+            {'frame': 2, 'time_sec': 0.04, 'values': {'1-1': 1.0}},
+        ],
+    })
+    second = create_all_axis_points({
+        'layer_id': 'b', 'name': 'B', 'frames': [
+            {'frame': 1, 'time_sec': 0.02, 'values': {'1-1': 20.0, '2-1': 5.0}},
+            {'frame': 2, 'time_sec': 0.04, 'values': {'1-1': 21.0, '2-1': 6.0}},
+        ],
+    })
+    project = {'period_sec': 0.02, 'layers': [first, second]}
+
+    append_second = merge_layers(
+        project, ['a', 'b'], append_layer_id='b', name='A 뒤 B'
+    )
+    append_first = merge_layers(
+        project, ['a', 'b'], append_layer_id='a', name='B 뒤 A'
+    )
+
+    assert values(append_second, '1-1') == [0.0, 1.0, 20.0, 21.0]
+    assert {
+        point['time_sec']
+        for curve in append_second['point_curves']
+        if curve['motion_id'] in {'1-1', '2-1'} and curve['curve_id'].startswith('curve-b-')
+        for point in curve['points']
+    } == {0.06, 0.08}
+    assert append_second['merge_report'] == {
+        'mode': 'append', 'append_layer_id': 'b', 'append_offset_sec': 0.04,
+    }
+    assert values(append_first, '1-1') == [20.0, 21.0, 0.0, 1.0]
+    assert append_first['merge_report']['append_layer_id'] == 'a'
+    assert point_curve_frame_mismatches(append_second) == []
+    assert point_curve_frame_mismatches(append_first) == []
+    assert [frame['time_sec'] for frame in first['frames']] == [0.02, 0.04]
+    assert [frame['time_sec'] for frame in second['frames']] == [0.02, 0.04]
+
+
+def test_merge_append_requires_the_moved_layer_to_be_selected():
+    first = create_all_axis_points({
+        'layer_id': 'a', 'name': 'A', 'frames': [
+            {'frame': 1, 'time_sec': 0.02, 'values': {'1-1': 0.0}},
+            {'frame': 2, 'time_sec': 0.04, 'values': {'1-1': 1.0}},
+        ],
+    })
+    second = create_all_axis_points({
+        'layer_id': 'b', 'name': 'B', 'frames': [
+            {'frame': 1, 'time_sec': 0.02, 'values': {'1-1': 2.0}},
+            {'frame': 2, 'time_sec': 0.04, 'values': {'1-1': 3.0}},
+        ],
+    })
+
+    with pytest.raises(ValueError, match='합치기 대상에 포함되지 않았습니다'):
+        merge_layers(
+            {'period_sec': 0.02, 'layers': [first, second]},
+            ['a', 'b'], append_layer_id='missing',
+        )
 
 
 def test_merge_requires_points_and_rejects_exact_time_overlap_but_allows_jump():

@@ -537,11 +537,43 @@ def layer_point_coverage_issues(layer: Mapping[str, Any]) -> List[str]:
     ]
 
 
+def _layer_time_bounds(layer: Mapping[str, Any]) -> tuple[float, float]:
+    times = [
+        _finite(frame.get('time_sec'), '프레임 시간')
+        for frame in layer.get('frames') or []
+        if isinstance(frame, Mapping)
+    ]
+    if not times:
+        raise ValueError(
+            f"레이어 합치기 중단 · '{layer.get('name') or layer.get('layer_id')}'의 "
+            '모션 데이터가 없습니다'
+        )
+    return min(times), max(times)
+
+
+def _shift_layer_time(layer: Mapping[str, Any], offset_sec: float) -> Dict[str, Any]:
+    shifted = copy.deepcopy(dict(layer))
+    offset = round(max(0.0, float(offset_sec)), 9)
+    if offset <= EPSILON:
+        return shifted
+    for frame in shifted.get('frames') or []:
+        frame['time_sec'] = round(
+            _finite(frame.get('time_sec'), '프레임 시간') + offset, 9
+        )
+    for curve in shifted.get('point_curves') or []:
+        for point in curve.get('points') or []:
+            point['time_sec'] = round(
+                _finite(point.get('time_sec'), '포인트 시간') + offset, 9
+            )
+    return shifted
+
+
 def merge_layers(
     project: Dict[str, Any],
     layer_ids: Iterable[Any],
     *,
     name: Any = '합친 레이어',
+    append_layer_id: Any = '',
     motion_ranges_deg: Mapping[str, Sequence[float]] | None = None,
     initial_motion_values_deg: Mapping[str, float] | None = None,
 ) -> Dict[str, Any]:
@@ -564,6 +596,34 @@ def merge_layers(
                 '전체 모션축에 포인트를 먼저 생성하세요: '
                 + ', '.join(uncovered)
             )
+    append_id = str(append_layer_id or '')
+    append_offset_sec = 0.0
+    if append_id:
+        if append_id not in selected_ids:
+            raise ValueError('뒤로 이동할 레이어가 합치기 대상에 포함되지 않았습니다')
+        append_index = next(
+            index for index, layer in enumerate(selected_layers)
+            if str(layer.get('layer_id') or '') == append_id
+        )
+        stationary_layers = [
+            layer for index, layer in enumerate(selected_layers)
+            if index != append_index
+        ]
+        stationary_end = max(
+            _layer_time_bounds(layer)[1] for layer in stationary_layers
+        )
+        append_start, _append_end = _layer_time_bounds(selected_layers[append_index])
+        period_sec = _finite(
+            project.get('period_sec') or DEFAULT_PERIOD_SEC, '모션 주기'
+        )
+        if period_sec <= 0.0:
+            raise ValueError('모션 주기는 0보다 커야 합니다')
+        append_offset_sec = round(max(
+            0.0, stationary_end + period_sec - append_start
+        ), 9)
+        selected_layers[append_index] = _shift_layer_time(
+            selected_layers[append_index], append_offset_sec
+        )
     temporary = {
         'period_sec': DEFAULT_PERIOD_SEC,
         'transition_safety_level': project.get('transition_safety_level', 4),
@@ -585,7 +645,7 @@ def merge_layers(
         require_safe_transitions=False,
     )
     merged_point_curves = collect_merged_point_curves(selected_layers)
-    return normalize_layer({
+    merged = normalize_layer({
         'layer_id': f'merged_{uuid.uuid4().hex[:8]}',
         'name': str(name or '합친 레이어').strip()[:40] or '합친 레이어',
         'enabled': True,
@@ -594,3 +654,9 @@ def merge_layers(
         'frames': frames,
         'point_curves': merged_point_curves,
     })
+    merged['merge_report'] = {
+        'mode': 'append' if append_id else 'preserve',
+        'append_layer_id': append_id,
+        'append_offset_sec': append_offset_sec,
+    }
+    return merged

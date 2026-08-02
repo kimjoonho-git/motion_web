@@ -171,7 +171,9 @@ class MotionStudioEditorNode(Node):
                 )
             layer = merge_layers(
                 payload.get('project') or {}, payload.get('layer_ids') or [],
-                name=payload.get('name'), motion_ranges_deg=ranges,
+                name=payload.get('name'),
+                append_layer_id=payload.get('append_layer_id'),
+                motion_ranges_deg=ranges,
                 initial_motion_values_deg=self._manual_values(payload),
             )
             return {'success': True, 'message': '레이어 합성 결과를 만들었습니다', 'layer': layer}

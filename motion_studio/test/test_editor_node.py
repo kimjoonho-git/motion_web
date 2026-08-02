@@ -261,16 +261,16 @@ def test_editor_merge_response_preserves_source_point_curves():
         'enabled': True,
         'locked': False,
         'frames': [
-            {'frame': 3, 'time_sec': 0.06, 'values': {'2-1': 3.0}},
-            {'frame': 4, 'time_sec': 0.08, 'values': {'2-1': 4.0}},
+            {'frame': 1, 'time_sec': 0.02, 'values': {'2-1': 3.0}},
+            {'frame': 2, 'time_sec': 0.04, 'values': {'2-1': 4.0}},
         ],
         'point_curves': [{
             'curve_id': 'curve-b',
             'motion_id': '2-1',
             'interpolation_order': 1,
             'points': [
-                {'point_id': 'b-start', 'time_sec': 0.06, 'value_deg': 3.0},
-                {'point_id': 'b-end', 'time_sec': 0.08, 'value_deg': 4.0},
+                {'point_id': 'b-start', 'time_sec': 0.02, 'value_deg': 3.0},
+                {'point_id': 'b-end', 'time_sec': 0.04, 'value_deg': 4.0},
             ],
         }],
     }
@@ -278,6 +278,7 @@ def test_editor_merge_response_preserves_source_point_curves():
     result = editor._handle('merge', {
         'project': {'period_sec': 0.02, 'layers': [first, second]},
         'layer_ids': ['a', 'b'],
+        'append_layer_id': 'b',
         'mapping_rows': [],
     })
 
@@ -285,3 +286,9 @@ def test_editor_merge_response_preserves_source_point_curves():
     assert {
         curve['curve_id'] for curve in result['layer']['point_curves']
     } == {'curve-a', 'curve-b'}
+    appended_curve = next(
+        curve for curve in result['layer']['point_curves']
+        if curve['curve_id'] == 'curve-b'
+    )
+    assert [point['time_sec'] for point in appended_curve['points']] == [0.06, 0.08]
+    assert result['layer']['merge_report']['append_offset_sec'] == 0.04

@@ -1358,9 +1358,11 @@ class MotionStudioNode(Node):
                 project,
                 source_ids,
                 name=payload.get('name') or provided.get('name') or '합친 레이어',
+                append_layer_id=payload.get('append_layer_id'),
                 motion_ranges_deg=self._motion_ranges(mapping),
                 initial_motion_values_deg=self._manual_initial_values(mapping),
             )
+            merge_report = dict(merged.get('merge_report') or {})
             if set(merged.get('source_layer_ids') or []) != source_ids:
                 raise ValueError('합성 결과의 원본 레이어 정보가 일치하지 않습니다')
             range_issues = validate_ranges(merged, self._motion_ranges(mapping))
@@ -1383,6 +1385,7 @@ class MotionStudioNode(Node):
         )
         result['layer_id'] = merged['layer_id']
         result['range_warnings'] = range_issues
+        result['merge_report'] = merge_report
         result['layer_sync'] = {
             'upsert_layer_ids': [merged['layer_id']],
             'delete_layer_ids': [],

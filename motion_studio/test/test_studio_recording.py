@@ -178,13 +178,13 @@ def test_merge_commit_rebuilds_all_source_points_when_editor_preview_omits_them(
                 'motion_id': '2-1',
                 'interpolation_order': 1,
                 'points': [
-                    {'point_id': 'point-b-start', 'time_sec': 0.06, 'value_deg': 2.0},
-                    {'point_id': 'point-b-end', 'time_sec': 0.08, 'value_deg': 3.0},
+                    {'point_id': 'point-b-start', 'time_sec': 0.02, 'value_deg': 2.0},
+                    {'point_id': 'point-b-end', 'time_sec': 0.04, 'value_deg': 3.0},
                 ],
             }],
             'frames': [
-                {'frame': 3, 'time_sec': 0.06, 'values': {'2-1': 2.0}},
-                {'frame': 4, 'time_sec': 0.08, 'values': {'2-1': 3.0}},
+                {'frame': 1, 'time_sec': 0.02, 'values': {'2-1': 2.0}},
+                {'frame': 2, 'time_sec': 0.04, 'values': {'2-1': 3.0}},
             ],
         },
     ]}
@@ -214,6 +214,7 @@ def test_merge_commit_rebuilds_all_source_points_when_editor_preview_omits_them(
 
     result = node._commit_merged_layer({
         'source_layer_ids': ['source-a', 'source-b'],
+        'append_layer_id': 'source-b',
         'source_revisions': {'source-a': 3, 'source-b': 1},
         'name': '방어 병합',
         # Simulate a preview produced by the previously running editor build.
@@ -236,6 +237,16 @@ def test_merge_commit_rebuilds_all_source_points_when_editor_preview_omits_them(
     assert {
         curve['curve_id'] for curve in merged['point_curves']
     } == {'curve-source', 'curve-source-b'}
+    appended_curve = next(
+        curve for curve in merged['point_curves']
+        if curve['curve_id'] == 'curve-source-b'
+    )
+    assert [point['time_sec'] for point in appended_curve['points']] == [0.06, 0.08]
+    assert result['merge_report'] == {
+        'mode': 'append',
+        'append_layer_id': 'source-b',
+        'append_offset_sec': 0.04,
+    }
     assert project['layers'][0]['point_curves'] == [point_curve]
 
 
