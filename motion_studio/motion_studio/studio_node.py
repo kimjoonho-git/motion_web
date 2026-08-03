@@ -723,20 +723,16 @@ class MotionStudioNode(Node):
         raise ValueError(f'{last_message} · 제한 시간 초과로 모터 이동을 차단했습니다')
 
     def _record_tick(self) -> None:
-        session = getattr(self, '_recording_session', None) or StudioRecordingSession(self)
-        session.record_tick()
+        self._recording().record_tick()
 
     def _finish_record_locked(self, message: str = '모션 녹화 완료') -> str:
-        session = getattr(self, '_recording_session', None) or StudioRecordingSession(self)
-        return session.finish_locked(message)
+        return self._recording().finish_locked(message)
 
     def _start_playback(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        session = getattr(self, '_playback_session', None) or StudioPlaybackSession(self)
-        return session.start_playback(payload)
+        return self._playback().start_playback(payload)
 
     def _start_initial_position(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        session = getattr(self, '_playback_session', None) or StudioPlaybackSession(self)
-        return session.start_initial_position(payload)
+        return self._playback().start_initial_position(payload)
 
     def _prepare_initial_position(
         self,
@@ -746,8 +742,7 @@ class MotionStudioNode(Node):
         move_time: float,
         operation_generation: int,
     ) -> None:
-        session = getattr(self, '_playback_session', None) or StudioPlaybackSession(self)
-        session.prepare_initial_position(
+        self._playback().prepare_initial_position(
             project, file_id, motion_ids, move_time, operation_generation
         )
 
@@ -759,18 +754,17 @@ class MotionStudioNode(Node):
         move_time: float,
         operation_generation: int,
     ) -> None:
-        session = getattr(self, '_playback_session', None) or StudioPlaybackSession(self)
-        session.prepare_playback(
+        self._playback().prepare_playback(
             project, file_id, motion_ids, move_time, operation_generation
         )
 
     def _stop(self) -> Dict[str, Any]:
-        session = getattr(self, '_playback_session', None) or StudioPlaybackSession(self)
-        return session.stop()
+        return self._playback().stop()
 
     def _finish_stop(self, stop_generation: int, completion_message: str) -> None:
-        session = getattr(self, '_playback_session', None) or StudioPlaybackSession(self)
-        session.finish_stop(stop_generation, completion_message)
+        self._playback().finish_stop(
+            stop_generation, completion_message
+        )
 
     def _export(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:
@@ -805,28 +799,22 @@ class MotionStudioNode(Node):
         }
 
     def _update_layer(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        commands = getattr(self, '_layer_commands', None) or StudioLayerCommands(self)
-        return commands.update(payload)
+        return self._layers().update(payload)
 
     def _create_layer(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        commands = getattr(self, '_layer_commands', None) or StudioLayerCommands(self)
-        return commands.create(payload)
+        return self._layers().create(payload)
 
     def _replace_layer_data(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        commands = getattr(self, '_layer_commands', None) or StudioLayerCommands(self)
-        return commands.replace_data(payload)
+        return self._layers().replace_data(payload)
 
     def _delete_layer(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        commands = getattr(self, '_layer_commands', None) or StudioLayerCommands(self)
-        return commands.delete(payload)
+        return self._layers().delete(payload)
 
     def _duplicate_layer(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        commands = getattr(self, '_layer_commands', None) or StudioLayerCommands(self)
-        return commands.duplicate(payload)
+        return self._layers().duplicate(payload)
 
     def _commit_merged_layer(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        commands = getattr(self, '_layer_commands', None) or StudioLayerCommands(self)
-        return commands.commit_merged(payload)
+        return self._layers().commit_merged(payload)
 
     @staticmethod
     def _motion_ranges(mapping: Dict[str, Any]) -> Dict[str, tuple[float, float]]:
@@ -850,8 +838,23 @@ class MotionStudioNode(Node):
     def _run_payload(
         self, project: Dict[str, Any], file_id: str, motion_ids: List[str], move_time: float
     ) -> Dict[str, Any]:
-        session = getattr(self, '_playback_session', None) or StudioPlaybackSession(self)
-        return session.run_payload(project, file_id, motion_ids, move_time)
+        return self._playback().run_payload(project, file_id, motion_ids, move_time)
+
+    def _recording(self) -> StudioRecordingSession:
+        return self._service('_recording_session', StudioRecordingSession)
+
+    def _playback(self) -> StudioPlaybackSession:
+        return self._service('_playback_session', StudioPlaybackSession)
+
+    def _layers(self) -> StudioLayerCommands:
+        return self._service('_layer_commands', StudioLayerCommands)
+
+    def _service(self, attribute: str, factory: Any) -> Any:
+        service = getattr(self, attribute, None)
+        if service is None:
+            service = factory(self)
+            setattr(self, attribute, service)
+        return service
 
     def _context_generation(self) -> int:
         try:
