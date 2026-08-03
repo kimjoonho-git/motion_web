@@ -1,5 +1,6 @@
-import { motionStudioPointRangePoints } from './motion_studio_calculations.js?v=20260803-studio-structure-9';
+import { motionStudioPointRangePoints } from './motion_studio_point_model.js?v=20260803-studio-structure-12';
 import { MOTION_STUDIO_PERIOD_SEC } from './motion_studio_constants.js?v=20260803-studio-structure-4';
+import { MOTION_STUDIO_TIME_EPSILON } from './motion_studio_constants.js?v=20260803-studio-structure-4';
 
 const clone = structuredClone;
 const layerDirtyCache = new WeakMap();
@@ -125,6 +126,80 @@ export function motionStudioRangeSelectionBounds(editor) {
   const end = Number(editor?.rangeSelection?.end?.timeSec);
   if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
   return { startSec: Math.min(start, end), endSec: Math.max(start, end) };
+}
+
+export function motionStudioSelectRangePoint(editor, pointTarget) {
+  if (!editor || !pointTarget?.curve || !pointTarget?.point) {
+    return { ok: false, reason: 'missing_target' };
+  }
+  const phase = editor.rangeSelection?.phase;
+  if (!['awaiting_start', 'awaiting_end'].includes(phase)) {
+    return { ok: false, reason: 'inactive' };
+  }
+  const target = {
+    pointId: String(pointTarget.point.point_id || ''),
+    motionId: String(pointTarget.curve.motion_id || ''),
+    curveId: String(pointTarget.curve.curve_id || ''),
+    timeSec: Number(Number(pointTarget.point.time_sec || 0).toFixed(2)),
+  };
+  if (phase === 'awaiting_start') {
+    editor.rangeSelection = {
+      phase: 'awaiting_end',
+      start: target,
+      end: null,
+    };
+    return { ok: true, phase: 'awaiting_end', target };
+  }
+  const start = editor.rangeSelection?.start;
+  if (!start) return { ok: false, reason: 'missing_start' };
+  if (
+    String(start.motionId || '') !== target.motionId
+    || String(start.curveId || '') !== target.curveId
+  ) {
+    return { ok: false, reason: 'different_curve', start, target };
+  }
+  const samePoint = start.pointId && target.pointId
+    ? String(start.pointId) === target.pointId
+    : Math.abs(Number(start.timeSec) - target.timeSec) < MOTION_STUDIO_TIME_EPSILON;
+  if (samePoint) return { ok: false, reason: 'same_point', start, target };
+  const [rangeStart, rangeEnd] = Number(start.timeSec) <= target.timeSec
+    ? [start, target] : [target, start];
+  editor.rangeSelection = {
+    phase: 'complete',
+    start: rangeStart,
+    end: rangeEnd,
+  };
+  return {
+    ok: true,
+    phase: 'complete',
+    start: rangeStart,
+    end: rangeEnd,
+  };
+}
+
+export function motionStudioBeginPointDrag(editor, pointTarget, x, y, pointMode) {
+  if (!editor || !pointTarget?.curve || !pointTarget?.point) return false;
+  editor.draggingHandle = null;
+  editor.panningGraph = null;
+  editor.draggingPoint = {
+    pointId: pointTarget.point.point_id,
+    curve: pointTarget.curve,
+    startX: x,
+    startY: y,
+    moved: false,
+    activated: Boolean(pointMode),
+  };
+  motionStudioResetRangeSelection(editor, false);
+  return true;
+}
+
+export function motionStudioBeginTangentDrag(editor, side) {
+  if (!editor || !['in', 'out'].includes(side)) return false;
+  editor.draggingPoint = null;
+  editor.panningGraph = null;
+  editor.draggingHandle = { side };
+  motionStudioResetRangeSelection(editor, false);
+  return true;
 }
 
 function comparablePointCurve(curve) {

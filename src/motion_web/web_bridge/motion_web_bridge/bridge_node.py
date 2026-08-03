@@ -29,6 +29,12 @@ from std_srvs.srv import SetBool, Trigger
 
 from .ethercat_alias_manager import EthercatAliasError, EthercatAliasManager
 from .motor_restart_coordinator import MotorRestartCoordinator
+from .motion_studio_bridge import MotionStudioRosBridge
+from .motion_studio_routes import register_motion_studio_routes
+from .motion_studio_sync import (
+    MotionStudioSync,
+    _project_tree_category_signature,
+)
 from .project_repository import ProjectRepository
 from .servo_alarm_policy import (
     CATALOG_VERSION as SERVO_ALARM_CATALOG_VERSION,
@@ -43,26 +49,6 @@ from .servo_alarm_policy import (
 
 DYNAMIXEL_BAUDRATE = 1000000
 MOTION_DATA_PERIOD_SEC = 0.02
-
-
-def _project_tree_category_signature(tree: Any, category: str) -> str:
-    rows = []
-    for folder in tree or []:
-        if not isinstance(folder, dict) or folder.get('category') != category:
-            continue
-        rows.extend(
-            (
-                str(file_info.get('name') or ''),
-                str(file_info.get('sha256') or ''),
-            )
-            for file_info in folder.get('children') or []
-            if isinstance(file_info, dict)
-        )
-    return hashlib.sha256(
-        json.dumps(
-            sorted(rows), ensure_ascii=False, separators=(',', ':')
-        ).encode('utf-8')
-    ).hexdigest()
 
 
 def motor_activity_snapshot(
@@ -518,6 +504,8 @@ class MotionWebBridge(Node):
         self._motion_studio_start_generation = 0
         self._motion_studio_editor_lock = threading.Lock()
         self._motion_studio_editor_results: Dict[str, Dict[str, Any]] = {}
+        self._motion_studio_ros_bridge = MotionStudioRosBridge(self)
+        self._motion_studio_sync_service = MotionStudioSync(self)
         self._safety_status_lock = threading.Lock()
         self._safety_status: Dict[str, Any] = {}
         self._execution_context_lock = threading.RLock()
@@ -972,14 +960,7 @@ class MotionWebBridge(Node):
                 self._midi_monitor_results.pop(key, None)
 
     def _motion_studio_status_callback(self, msg: String) -> None:
-        try:
-            payload = json.loads(msg.data)
-        except json.JSONDecodeError:
-            self.get_logger().warn(f'Invalid {self.motion_studio_status_topic} JSON received.')
-            return
-        if isinstance(payload, dict) and self._payload_matches_selected_project(payload):
-            with self._motion_studio_lock:
-                self._motion_studio_status = payload
+        self._motion_studio_transport().status_callback(msg)
 
     def _safety_status_callback(self, msg: String) -> None:
         try:
@@ -992,32 +973,10 @@ class MotionWebBridge(Node):
                 self._safety_status = payload
 
     def _motion_studio_response_callback(self, msg: String) -> None:
-        try:
-            payload = json.loads(msg.data)
-        except json.JSONDecodeError:
-            self.get_logger().warn(f'Invalid {self.motion_studio_response_topic} JSON received.')
-            return
-        if not isinstance(payload, dict):
-            return
-        request_id = str(payload.get('request_id') or '')
-        if request_id and self._response_matches_current_generation(payload):
-            with self._motion_studio_lock:
-                self._motion_studio_results[request_id] = payload
+        self._motion_studio_transport().response_callback(msg)
 
     def _motion_studio_editor_response_callback(self, msg: String) -> None:
-        try:
-            payload = json.loads(msg.data)
-        except json.JSONDecodeError:
-            self.get_logger().warn(
-                f'Invalid {self.motion_studio_editor_response_topic} JSON received.'
-            )
-            return
-        if not isinstance(payload, dict):
-            return
-        request_id = str(payload.get('request_id') or '')
-        if request_id and self._response_matches_current_generation(payload):
-            with self._motion_studio_editor_lock:
-                self._motion_studio_editor_results[request_id] = payload
+        self._motion_studio_transport().editor_response_callback(msg)
 
     def _wait_for_jog_result(
         self,
@@ -1103,28 +1062,16 @@ class MotionWebBridge(Node):
         request_id: str,
         timeout_sec: float = 3.0,
     ) -> Optional[Dict[str, Any]]:
-        deadline = time.time() + timeout_sec
-        while time.time() < deadline:
-            with self._motion_studio_lock:
-                result = self._motion_studio_results.pop(request_id, None)
-            if result is not None:
-                return result
-            time.sleep(0.01)
-        with self._motion_studio_lock:
-            return self._motion_studio_results.pop(request_id, None)
+        return self._motion_studio_transport().wait_for_result(
+            request_id, timeout_sec
+        )
 
     def _wait_for_motion_studio_editor_result(
         self, request_id: str, timeout_sec: float = 4.0
     ) -> Optional[Dict[str, Any]]:
-        deadline = time.time() + timeout_sec
-        while time.time() < deadline:
-            with self._motion_studio_editor_lock:
-                result = self._motion_studio_editor_results.pop(request_id, None)
-            if result is not None:
-                return result
-            time.sleep(0.01)
-        with self._motion_studio_editor_lock:
-            return self._motion_studio_editor_results.pop(request_id, None)
+        return self._motion_studio_transport().wait_for_editor_result(
+            request_id, timeout_sec
+        )
 
     def _motor_operation_reconcile_callback(self) -> None:
         lock = getattr(self, '_motor_operation_reconcile_lock', None)
@@ -3803,12 +3750,7 @@ class MotionWebBridge(Node):
         with self._midi_monitor_lock:
             self._midi_monitor_results.clear()
             self._midi_monitor_status = {}
-        with self._motion_studio_lock:
-            self._motion_studio_results.clear()
-            self._motion_studio_status = {}
-            self._motion_studio_workspace_signatures = {}
-        with self._motion_studio_editor_lock:
-            self._motion_studio_editor_results.clear()
+        self._motion_studio_sync().clear_project_memory()
         empty_scan_progress = {
             'scan_id': '',
             'events': [],
@@ -5220,6 +5162,13 @@ class MotionWebBridge(Node):
         result.pop('_received_at', None)
         return result
 
+    def _motion_studio_transport(self) -> MotionStudioRosBridge:
+        service = getattr(self, '_motion_studio_ros_bridge', None)
+        if service is None:
+            service = MotionStudioRosBridge(self)
+            self._motion_studio_ros_bridge = service
+        return service
+
     def request_motion_studio(
         self,
         command: str,
@@ -5227,48 +5176,9 @@ class MotionWebBridge(Node):
         timeout_sec: float = 4.0,
         start_generation: Optional[int] = None,
     ) -> Dict[str, Any]:
-        request_id = self._new_project_request_id('studio')
-        project_generation = self._current_project_generation()
-        msg = String()
-        request_payload = dict(payload) if isinstance(payload, dict) else {}
-        request_payload['project_id'] = self.project_repository.selected_project_id()
-        request_payload['project_generation'] = project_generation
-        if command in {'record', 'play'}:
-            request_payload['context_id'] = self._execution_context_id()
-        msg.data = json.dumps({
-            'request_id': request_id,
-            'project_generation': project_generation,
-            'command': command,
-            'payload': request_payload,
-        }, ensure_ascii=False)
-        if start_generation is None:
-            self._motion_studio_request_publisher.publish(msg)
-        else:
-            with self._motion_studio_start_order_lock():
-                if start_generation != self._motion_studio_start_generation:
-                    return {
-                        'success': False,
-                        'start_cancelled': True,
-                        'message': (
-                            '모션 스튜디오 시작 요청이 정지 또는 '
-                            '더 최근 동작 요청으로 취소되었습니다'
-                        ),
-                    }
-                self._motion_studio_request_publisher.publish(msg)
-        result = self._wait_for_motion_studio_result(request_id, timeout_sec=timeout_sec)
-        if result is None:
-            with self._motion_studio_lock:
-                cached = dict(self._motion_studio_status)
-            return {
-                'success': False,
-                'message': 'motion_studio_node 응답 시간 초과',
-                'status': cached,
-            }
-        status = result.get('status') if isinstance(result, dict) else None
-        if isinstance(status, dict):
-            with self._motion_studio_lock:
-                self._motion_studio_status = dict(status)
-        return result
+        return self._motion_studio_transport().request(
+            command, payload, timeout_sec, start_generation
+        )
 
     def request_motion_studio_editor(
         self,
@@ -5276,316 +5186,43 @@ class MotionWebBridge(Node):
         payload: Optional[Dict[str, Any]] = None,
         timeout_sec: float = 8.0,
     ) -> Dict[str, Any]:
-        request_id = self._new_project_request_id('studio-editor')
-        project_generation = self._current_project_generation()
-        msg = String()
-        msg.data = json.dumps({
-            'request_id': request_id,
-            'project_generation': project_generation,
-            'command': command,
-            'payload': {
-                **(dict(payload) if isinstance(payload, dict) else {}),
-                'project_generation': project_generation,
-            },
-        }, ensure_ascii=False)
-        self._motion_studio_editor_request_publisher.publish(msg)
-        result = self._wait_for_motion_studio_editor_result(request_id, timeout_sec)
-        return result or {
-            'success': False,
-            'message': 'motion_studio_editor_node 응답 시간 초과',
-        }
+        return self._motion_studio_transport().request_editor(
+            command, payload, timeout_sec
+        )
 
-    def sync_motion_studio_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
-        repository = getattr(self, 'project_repository', None)
-        if repository is None:
-            return result
-        if result.get('success') is False:
-            return result
-        selected_project_id = repository.selected_project_id()
-        result_project = (
-            result.get('project') if isinstance(result.get('project'), dict) else {}
-        )
-        result_workspace_id = str(
-            result_project.get('workspace_project_id') or ''
-        )
-        if (
-            result_workspace_id
-            and result_workspace_id != selected_project_id
-        ):
-            message = (
-                '저장 완료 전에 선택 프로젝트가 변경되어 레이어 파일 동기화를 폐기했습니다'
-            )
-            result.update({
-                'success': False,
-                'message': message,
-                'project_sync_warning': message,
-            })
-            result.pop('project', None)
-            return result
-        result_generation = result.get('project_generation')
-        if result_generation is not None:
-            try:
-                generation_matches = (
-                    int(result_generation) == self._current_project_generation()
-                )
-            except (TypeError, ValueError):
-                generation_matches = False
-            if not generation_matches:
-                message = (
-                    '저장 완료 전에 프로젝트 세대가 변경되어 레이어 파일 동기화를 폐기했습니다'
-                )
-                result.update({
-                    'success': False,
-                    'message': message,
-                    'project_sync_warning': message,
-                })
-                result.pop('project', None)
-                return result
-        layer_sync = result.get('layer_sync')
-        try:
-            if isinstance(layer_sync, dict):
-                sync = repository.sync_studio_layers(
-                    result.get('project'),
-                    upsert_layer_ids=layer_sync.get('upsert_layer_ids') or [],
-                    delete_layer_ids=layer_sync.get('delete_layer_ids') or [],
-                    replace_all=False,
-                )
-            else:
-                sync = repository.sync_studio_layers(result.get('project'))
-        except (OSError, UnicodeDecodeError, ValueError) as exc:
-            result['project_sync_warning'] = str(exc)
-            return result
-        signatures = getattr(self, '_motion_studio_workspace_signatures', None)
-        if not isinstance(signatures, dict):
-            signatures = {}
-            self._motion_studio_workspace_signatures = signatures
-        current = dict(signatures.get(selected_project_id) or {})
-        current['layers'] = str(sync.get('layer_signature') or '')
-        signatures[selected_project_id] = current
-        result['project_sync'] = sync
-        if isinstance(layer_sync, dict) and result_project:
-            upsert_ids = {
-                str(value)
-                for value in layer_sync.get('upsert_layer_ids') or []
-                if str(value)
-            }
-            layers = [
-                layer for layer in result_project.get('layers') or []
-                if isinstance(layer, dict)
-            ]
-            metadata = {
-                key: value
-                for key, value in result_project.items()
-                if key != 'layers'
-            }
-            result['project_patch'] = {
-                'metadata': metadata,
-                'layer_order': [
-                    str(layer.get('layer_id') or '') for layer in layers
-                ],
-                'upsert_layers': [
-                    layer for layer in layers
-                    if str(layer.get('layer_id') or '') in upsert_ids
-                ],
-                'delete_layer_ids': [
-                    str(value)
-                    for value in layer_sync.get('delete_layer_ids') or []
-                    if str(value)
-                ],
-            }
-            result.pop('project', None)
-        return result
+    def _motion_studio_sync(self) -> MotionStudioSync:
+        service = getattr(self, '_motion_studio_sync_service', None)
+        if service is None:
+            service = MotionStudioSync(self)
+            self._motion_studio_sync_service = service
+        return service
+
+    def sync_motion_studio_result(
+        self, result: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        return self._motion_studio_sync().sync_result(result)
 
     def export_motion_studio(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        result = self.request_motion_studio('export', payload)
-        file_id = str(result.get('file_id') or '').strip()
-        if result.get('success') is not False and file_id:
-            project_id = self.project_repository.selected_project_id()
-            return self._sync_project_file(
-                result,
-                'motions',
-                self.project_repository.export_path(project_id, 'motions', file_id),
-            )
-        return result
+        return self._motion_studio_sync().export(payload)
 
     def prepare_unified_motion_studio(self) -> Dict[str, Any]:
-        repository = self.project_repository
-        project_id = repository.selected_project_id()
-        if not project_id:
-            return {
-                'success': False,
-                'message': '왼쪽에서 통합 프로젝트를 먼저 선택하세요',
-                'unified_project': True,
-                'workspace_project': None,
-                'projects': [],
-                'project': None,
-                'mappings': [],
-                'motion_files': [],
-                'status': {'state': 'idle', 'message': '통합 프로젝트 미선택'},
-            }
-        detail = repository.get_project(project_id)
-        workspace = detail['project']
-        layer_signature = _project_tree_category_signature(
-            detail.get('tree'), 'layers'
-        )
-        motion_signature = _project_tree_category_signature(
-            detail.get('tree'), 'motions'
-        )
-        workspace_signatures = getattr(
-            self, '_motion_studio_workspace_signatures', {}
-        )
-        if not isinstance(workspace_signatures, dict):
-            workspace_signatures = {}
-        cached_signatures = workspace_signatures.get(project_id) or {}
-        active = workspace.get('active_files') or {}
-        mapping_name = str(active.get('motion_axis_matching') or '')
-        if not mapping_name:
-            return {
-                'success': False,
-                'message': '현재 프로젝트의 모션축 설정 파일을 선택하세요',
-                'unified_project': True,
-                'workspace_project': workspace,
-                'projects': [],
-                'project': None,
-                'mappings': [],
-                'motion_files': [],
-                'status': {'state': 'idle', 'message': '모션축 설정 미선택'},
-            }
-        published_motion_names = []
-        mapping_sha256 = ''
-        for folder in detail.get('tree') or []:
-            category = str(folder.get('category') or '')
-            for file_info in folder.get('children') or []:
-                file_name = str(file_info.get('name') or '')
-                if category == 'motions':
-                    published_motion_names.append(file_name)
-                elif (
-                    category == 'motion_axis_matching'
-                    and file_name == mapping_name
-                ):
-                    mapping_sha256 = str(file_info.get('sha256') or '')
-        with self._motion_studio_lock:
-            studio_state = str(self._motion_studio_status.get('state') or 'idle')
-        studio_busy = studio_state not in {'idle', 'error'}
-        result = self.request_motion_studio('list', {}, timeout_sec=8.0)
-        current_project = (
-            result.get('project') if isinstance(result.get('project'), dict) else {}
-        )
-        workspace_matches = (
-            str(current_project.get('workspace_project_id') or '') == project_id
-            and str(current_project.get('mapping_file_id') or '') == mapping_name
-            and bool(mapping_sha256)
-            and str(current_project.get('mapping_sha256') or '') == mapping_sha256
-            and str(cached_signatures.get('layers') or '') == layer_signature
-            and str(cached_signatures.get('motions') or '') == motion_signature
-            and isinstance(result.get('composition'), dict)
-            and 'conflicts' in result.get('composition')
-        )
-        if not studio_busy and not workspace_matches:
-            layers_by_id: Dict[str, Dict[str, Any]] = {}
-            for folder in detail.get('tree') or []:
-                if folder.get('category') != 'layers':
-                    continue
-                for file_info in folder.get('children') or []:
-                    loaded = repository.read_file(
-                        project_id, 'layers', file_info.get('name')
-                    )
-                    layer = json.loads(loaded['content'])
-                    if not isinstance(layer, dict):
-                        continue
-                    layer_id = str(
-                        layer.get('layer_id') or file_info.get('name')
-                    )
-                    layers_by_id[layer_id] = layer
-            result = self.request_motion_studio(
-                'open_workspace',
-                {
-                'workspace_project_id': project_id,
-                'name': workspace.get('name'),
-                'mapping_file_id': mapping_name,
-                'layers': list(layers_by_id.values()),
-                },
-                timeout_sec=8.0,
-            )
-            if result.get('success') is not False:
-                workspace_signatures[project_id] = {
-                    'layers': layer_signature,
-                    'motions': motion_signature,
-                }
-                self._motion_studio_workspace_signatures = workspace_signatures
-        result['unified_project'] = True
-        result['workspace_project'] = workspace
-        result['mappings'] = [
-            item for item in result.get('mappings') or []
-            if item.get('file_id') == mapping_name
-        ]
-        result['motion_files'] = [
-            item for item in result.get('motion_files') or []
-            if item.get('file_id') in published_motion_names
-        ]
-        return result
+        return self._motion_studio_sync().prepare()
 
     def request_prepared_motion_studio(
         self, command: str, payload: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        """Open the selected unified project before record/play.
-
-        Record and play are core operations and must not depend on whether the
-        browser happened to open the Motion Studio tab first.  Applying the
-        execution context selects the project directory, but intentionally
-        does not populate the editable layer project.  Prepare it here at the
-        API boundary so refresh timing and tab navigation cannot make the same
-        operation intermittently fail with "select a project first".
-        """
-        start_generation = None
-        if command in {'record', 'play', 'initialize'}:
-            with self._motion_studio_start_order_lock():
-                self._motion_studio_start_generation += 1
-                start_generation = self._motion_studio_start_generation
-        prepared = self.prepare_unified_motion_studio()
-        if prepared.get('success') is False:
-            return prepared
-        if command in {'record', 'play', 'initialize'}:
-            blocker = self._motor_runtime_control_blocker()
-            if blocker:
-                return {
-                    'success': False,
-                    'message': f'모션 스튜디오 동작 불가: {blocker}',
-                }
-        return self.request_motion_studio(
-            command,
-            payload or {},
-            start_generation=start_generation,
-        )
+        return self._motion_studio_sync().request_prepared(command, payload)
 
     def cancel_pending_motion_studio_start(self) -> int:
-        """Order every later stop after any already-published studio start."""
-        with self._motion_studio_start_order_lock():
-            self._motion_studio_start_generation += 1
-            return self._motion_studio_start_generation
+        return self._motion_studio_transport().cancel_pending_start()
 
     def _motion_studio_start_order_lock(self) -> threading.Lock:
-        """Return the order lock, including for lightweight test instances."""
-        lock = getattr(self, '_motion_studio_command_order_lock', None)
-        if lock is None:
-            lock = threading.Lock()
-            self._motion_studio_command_order_lock = lock
-        if not hasattr(self, '_motion_studio_start_generation'):
-            self._motion_studio_start_generation = 0
-        return lock
+        return self._motion_studio_transport().start_order_lock()
 
-    def import_motion_studio_layer(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        prepared = self.prepare_unified_motion_studio()
-        if prepared.get('success') is False:
-            return prepared
-        result = self.request_motion_studio(
-            'import_motion_layer',
-            {'motion_file_id': payload.get('motion_file_id')},
-            timeout_sec=8.0,
-        )
-        result['unified_project'] = True
-        result['workspace_project'] = prepared.get('workspace_project')
-        return self.sync_motion_studio_result(result)
+    def import_motion_studio_layer(
+        self, payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        return self._motion_studio_sync().import_layer(payload)
 
     def list_motion_files(self) -> Dict[str, Any]:
         project_id = self.project_repository.selected_project_id()
@@ -8024,143 +7661,7 @@ def create_app(bridge: MotionWebBridge) -> FastAPI:
             'acknowledgement_pending': True,
         }
 
-    @app.get('/api/motion-studio')
-    async def motion_studio():
-        return await asyncio.to_thread(project_call, bridge.prepare_unified_motion_studio)
-
-    @app.post('/api/motion-studio/projects')
-    async def motion_studio_create(request: Request):
-        body = await request.json()
-        if not isinstance(body, dict):
-            raise HTTPException(status_code=400, detail='request body must be an object')
-        return await asyncio.to_thread(
-            lambda: bridge.sync_motion_studio_result(
-                bridge.request_motion_studio('create', body)
-            )
-        )
-
-    @app.post('/api/motion-studio/projects/load')
-    async def motion_studio_load(request: Request):
-        body = await request.json()
-        return await asyncio.to_thread(bridge.request_motion_studio, 'load', body)
-
-    @app.post('/api/motion-studio/import')
-    async def motion_studio_import(request: Request):
-        body = await request.json()
-        if not isinstance(body, dict):
-            raise HTTPException(status_code=400, detail='request body must be an object')
-        return await asyncio.to_thread(project_call, bridge.import_motion_studio_layer, body)
-
-    @app.put('/api/motion-studio/project')
-    async def motion_studio_save(request: Request):
-        body = await request.json()
-        return await asyncio.to_thread(
-            lambda: bridge.sync_motion_studio_result(
-                bridge.request_motion_studio('save', body)
-            )
-        )
-
-    @app.put('/api/motion-studio/layers')
-    async def motion_studio_layer(request: Request):
-        body = await request.json()
-        return await asyncio.to_thread(
-            lambda: bridge.sync_motion_studio_result(
-                bridge.request_motion_studio('update_layer', body)
-            )
-        )
-
-    @app.post('/api/motion-studio/layers')
-    async def motion_studio_layer_create(request: Request):
-        body = await request.json()
-        return await asyncio.to_thread(
-            lambda: bridge.sync_motion_studio_result(
-                bridge.request_motion_studio('create_layer', body)
-            )
-        )
-
-    @app.put('/api/motion-studio/layers/data')
-    async def motion_studio_layer_data(request: Request):
-        body = await request.json()
-        return await asyncio.to_thread(
-            lambda: bridge.sync_motion_studio_result(
-                bridge.request_motion_studio('replace_layer_data', body, timeout_sec=8.0)
-            )
-        )
-
-    @app.delete('/api/motion-studio/layers/{layer_id}')
-    async def motion_studio_layer_delete(layer_id: str):
-        return await asyncio.to_thread(
-            lambda: bridge.sync_motion_studio_result(
-                bridge.request_motion_studio('delete_layer', {'layer_id': layer_id})
-            )
-        )
-
-    @app.post('/api/motion-studio/layers/{layer_id}/duplicate')
-    async def motion_studio_layer_duplicate(layer_id: str):
-        return await asyncio.to_thread(
-            lambda: bridge.sync_motion_studio_result(
-                bridge.request_motion_studio('duplicate_layer', {'layer_id': layer_id})
-            )
-        )
-
-    @app.post('/api/motion-studio/editor/transform')
-    async def motion_studio_editor_transform(request: Request):
-        body = await request.json()
-        return await asyncio.to_thread(
-            bridge.request_motion_studio_editor, 'edit', body, 12.0
-        )
-
-    @app.post('/api/motion-studio/editor/merge-preview')
-    async def motion_studio_editor_merge_preview(request: Request):
-        body = await request.json()
-        return await asyncio.to_thread(
-            bridge.request_motion_studio_editor, 'merge', body, 20.0
-        )
-
-    @app.post('/api/motion-studio/layers/merge')
-    async def motion_studio_layers_merge(request: Request):
-        body = await request.json()
-        return await asyncio.to_thread(
-            lambda: bridge.sync_motion_studio_result(
-                bridge.request_motion_studio('commit_merged_layer', body, timeout_sec=12.0)
-            )
-        )
-
-    @app.post('/api/motion-studio/record')
-    async def motion_studio_record(request: Request):
-        body = await request.json()
-        return await asyncio.to_thread(
-            bridge.request_prepared_motion_studio, 'record', body
-        )
-
-    @app.post('/api/motion-studio/play')
-    async def motion_studio_play(request: Request):
-        body = await request.json()
-        return await asyncio.to_thread(
-            bridge.request_prepared_motion_studio, 'play', body
-        )
-
-    @app.post('/api/motion-studio/initialize')
-    async def motion_studio_initialize(request: Request):
-        body = await request.json()
-        return await asyncio.to_thread(
-            bridge.request_prepared_motion_studio, 'initialize', body
-        )
-
-    @app.post('/api/motion-studio/stop')
-    async def motion_studio_stop():
-        return await asyncio.to_thread(
-            _safety_first_stop,
-            bridge,
-            lambda: bridge.sync_motion_studio_result(
-                bridge.request_motion_studio('stop')
-            ),
-        )
-
-    @app.post('/api/motion-studio/export')
-    async def motion_studio_export(request: Request):
-        body = await request.json()
-        return await asyncio.to_thread(bridge.export_motion_studio, body)
+    register_motion_studio_routes(app, bridge, project_call, _safety_first_stop)
 
     @app.get('/api/midi-monitor')
     async def midi_monitor_status():

@@ -1,1 +1,1 @@
-import './js/main.js?v=20260803-studio-structure-9';
+import './js/main.js?v=20260803-studio-structure-12';

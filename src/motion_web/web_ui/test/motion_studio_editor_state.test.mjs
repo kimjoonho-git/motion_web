@@ -3,12 +3,16 @@ import test from 'node:test';
 
 import {
   createMotionStudioEditorSession,
+  motionStudioBeginPointDrag,
+  motionStudioBeginTangentDrag,
   motionStudioEditorFailureFingerprint,
   motionStudioEditorLayerIsDirty,
   motionStudioEditorPointCurves,
   motionStudioPointDraftHasUnsavedChanges,
   motionStudioSelectedDraftPoint,
   motionStudioSelectedPointRange,
+  motionStudioResetRangeSelection,
+  motionStudioSelectRangePoint,
 } from '../static/js/motion_studio_editor_state.js';
 
 function pointCurve() {
@@ -92,4 +96,62 @@ test('editor layer dirty comparison is reused until a layer copy changes', () =>
   editor.working = { frames: [{ time_sec: 0 }] };
   assert.equal(motionStudioEditorLayerIsDirty(editor, equal), true);
   assert.equal(comparisonCount, 2);
+});
+
+test('range selection accepts two points only from the same curve and orders time', () => {
+  const editor = { rangeSelection: { phase: 'awaiting_start', start: null, end: null } };
+  const target = (pointId, timeSec, curveId = 'curve-a') => ({
+    curve: { curve_id: curveId, motion_id: '1-1' },
+    point: { point_id: pointId, time_sec: timeSec },
+  });
+
+  assert.deepEqual(
+    motionStudioSelectRangePoint(editor, target('p2', 2)),
+    {
+      ok: true,
+      phase: 'awaiting_end',
+      target: {
+        pointId: 'p2', motionId: '1-1', curveId: 'curve-a', timeSec: 2,
+      },
+    },
+  );
+  assert.equal(
+    motionStudioSelectRangePoint(editor, target('p1', 1, 'curve-b')).reason,
+    'different_curve',
+  );
+  assert.equal(editor.rangeSelection.phase, 'awaiting_end');
+  assert.equal(motionStudioSelectRangePoint(editor, target('p2', 2)).reason, 'same_point');
+
+  const complete = motionStudioSelectRangePoint(editor, target('p1', 1));
+  assert.equal(complete.ok, true);
+  assert.equal(editor.rangeSelection.phase, 'complete');
+  assert.deepEqual(
+    [editor.rangeSelection.start.pointId, editor.rangeSelection.end.pointId],
+    ['p1', 'p2'],
+  );
+});
+
+test('single point and tangent drags clear range state and competing gestures', () => {
+  const editor = {
+    rangeSelection: { phase: 'complete', start: {}, end: {} },
+    draggingHandle: { side: 'in' },
+    panningGraph: { moved: false },
+  };
+  const pointTarget = {
+    curve: { curve_id: 'curve-a', motion_id: '1-1' },
+    point: { point_id: 'p1', time_sec: 0 },
+  };
+
+  assert.equal(motionStudioBeginPointDrag(editor, pointTarget, 10, 20, false), true);
+  assert.equal(editor.draggingPoint.pointId, 'p1');
+  assert.equal(editor.draggingPoint.activated, false);
+  assert.equal(editor.draggingHandle, null);
+  assert.equal(editor.panningGraph, null);
+  assert.equal(editor.rangeSelection.phase, 'inactive');
+
+  motionStudioResetRangeSelection(editor, true);
+  assert.equal(motionStudioBeginTangentDrag(editor, 'out'), true);
+  assert.deepEqual(editor.draggingHandle, { side: 'out' });
+  assert.equal(editor.draggingPoint, null);
+  assert.equal(editor.rangeSelection.phase, 'inactive');
 });
