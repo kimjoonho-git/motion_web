@@ -300,6 +300,8 @@ export function drawMotionStudioEditorGraph({
   editor,
   canvas,
   legend,
+  originalTrackMap = null,
+  workingTrackMap = null,
   selectedMotionIds = [],
   operation = '',
   selectionStartText = '',
@@ -308,9 +310,9 @@ export function drawMotionStudioEditorGraph({
 }) {
   if (!editor || !canvas) return false;
   const selected = new Set(selectedMotionIds);
-  const originalTracks = motionStudioLayerTracks(editor.original);
+  const originalTracks = originalTrackMap || motionStudioLayerTracks(editor.original);
   const displayedLayer = editor.preview || editor.working;
-  const workingTracks = motionStudioLayerTracks(displayedLayer);
+  const workingTracks = workingTrackMap || motionStudioLayerTracks(displayedLayer);
   const ids = [...new Set([...originalTracks.keys(), ...workingTracks.keys()])]
     .filter((motionId) => selected.has(motionId));
   const draftPreview = (

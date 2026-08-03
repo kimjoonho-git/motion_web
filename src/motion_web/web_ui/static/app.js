@@ -1,1 +1,1 @@
-import './js/main.js?v=20260803-range-actions-visible-1';
+import './js/main.js?v=20260803-studio-structure-1';

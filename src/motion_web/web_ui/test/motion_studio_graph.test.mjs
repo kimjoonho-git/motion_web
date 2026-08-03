@@ -237,3 +237,34 @@ test('editor graph renderer preserves graph metrics and point hit targets', () =
     (call) => call[0] === 'fillText' && call[1] === '추가 후보',
   ));
 });
+
+test('editor graph renderer accepts cached track maps from the controller', () => {
+  const fixture = graphFixture();
+  const editor = {
+    original: { frames: [] },
+    working: { frames: [] },
+    preview: null,
+    viewStart: 0,
+    viewEnd: 0.04,
+    valueScale: 1,
+    selectionStage: 0,
+    validation: {},
+  };
+  const legend = { innerHTML: '' };
+  const cachedTracks = new Map([['7-1', [
+    { timeSec: 0, value: 1 },
+    { timeSec: 0.04, value: 2 },
+  ]]]);
+
+  drawMotionStudioEditorGraph({
+    editor,
+    canvas: fixture.canvas,
+    legend,
+    selectedMotionIds: ['7-1'],
+    originalTrackMap: cachedTracks,
+    workingTrackMap: cachedTracks,
+  });
+
+  assert.match(legend.innerHTML, /7-1/);
+  assert.equal(editor.graphMetrics.maxValue > 1, true);
+});

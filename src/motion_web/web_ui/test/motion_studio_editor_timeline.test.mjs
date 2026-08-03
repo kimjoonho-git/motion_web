@@ -38,6 +38,10 @@ import {
   resolveMotionStudioSelectedLayerId,
   synchronizeMotionStudioEditorTimeline,
 } from '../static/js/motion_studio.js';
+import {
+  createMotionStudioEditorSession,
+  motionStudioPointDraftHasUnsavedChanges,
+} from '../static/js/motion_studio_editor_state.js';
 
 test('project patches preserve unchanged layer objects and apply order changes', () => {
   const unchanged = { layer_id: 'unchanged', frames: [{ time_sec: 0.02, values: {} }] };
@@ -591,14 +595,6 @@ test('unlocking an axis range preserves the visible fixed bounds', () => {
     null,
   );
 
-  const source = readFileSync(
-    new URL('../static/js/motion_studio.js', import.meta.url),
-    'utf8',
-  );
-  assert.match(
-    source,
-    /resetEditorValueView\(\{\s*unlock: true,\s*preserveLockedRange: true,/,
-  );
 });
 
 test('editor exposes whole-axis point creation without motion-section conversions', () => {
@@ -753,8 +749,14 @@ test('temporary point editing restores the last selected range edit operation', 
     /if \(graphAction === 'select_curve'\)[\s\S]*?discardEditorPreview/,
   )?.[0] || '';
 
-  assert.match(openFlow, /preferredEditOperation: operation/);
-  assert.match(openFlow, /pointModeReturnOperation: ''/);
+  const editor = createMotionStudioEditorSession({
+    layer: { layer_id: 'layer-a', frames: [], point_curves: [] },
+    operation: 'time_scale',
+    duration: 1,
+    pointTimelineEnd: 2,
+  });
+  assert.equal(editor.preferredEditOperation, 'time_scale');
+  assert.equal(editor.pointModeReturnOperation, '');
   assert.match(openFlow, /const operation = preferredEditorEditOperation/);
   assert.match(source, /preferredEditorEditOperation = operation/);
   assert.match(pointModeFlow, /editor\.pointModeReturnOperation = currentOperation/);
@@ -819,7 +821,7 @@ test('saving keeps the layer editor open and refreshes its saved baseline', () =
     'utf8',
   );
   const saveFlow = source.match(
-    /const acceptSavedEditorLayer =[\s\S]*?const setEditorView =/,
+    /const acceptSavedEditorLayer =[\s\S]*?editorViewport\.bind\(\)/,
   )?.[0] || '';
   assert.match(saveFlow, /editor\.original = clone\(savedLayer\)/);
   assert.match(saveFlow, /editor\.undo = \[\]/);
@@ -841,16 +843,22 @@ test('undo also cancels point drafts and previews before edit apply', () => {
 });
 
 test('linear point curves do not become dirty only from legacy tangent naming', () => {
-  const source = readFileSync(
-    new URL('../static/js/motion_studio.js', import.meta.url),
-    'utf8',
-  );
-  const dirtyCheck = source.match(
-    /function pointDraftHasUnsavedChanges[\s\S]*?\n  }\n\n  function loadPointDraft/,
-  )?.[0] || '';
-  assert.match(dirtyCheck, /interpolation_order\) === 1/);
-  assert.match(dirtyCheck, /point\.tangent_mode === 'linear'/);
-  assert.match(dirtyCheck, /point\.tangent_mode = 'auto'/);
+  const stored = {
+    curve_id: 'curve-a',
+    motion_id: '1-1',
+    interpolation_order: 1,
+    points: [
+      { point_id: 'p1', time_sec: 0, value_deg: 0, tangent_mode: 'linear' },
+      { point_id: 'p2', time_sec: 1, value_deg: 1, tangent_mode: 'linear' },
+    ],
+  };
+  const pointDraft = structuredClone(stored);
+  pointDraft.points.forEach((point) => { point.tangent_mode = 'auto'; });
+
+  assert.equal(motionStudioPointDraftHasUnsavedChanges({
+    working: { point_curves: [stored] },
+    pointDraft,
+  }), false);
 });
 
 test('general-motion range controls are absent from the simplified editor', () => {
