@@ -34,8 +34,11 @@ function fixture() {
     valueView: null,
     valueRangeLock: null,
     graphMetrics: { minValue: -10, maxValue: 10 },
-    selectionStartSec: 0.5,
-    selectionEndSec: 1.5,
+    rangeSelection: {
+      phase: 'complete',
+      start: { timeSec: 0.5 },
+      end: { timeSec: 1.5 },
+    },
   };
   let drawCount = 0;
   let scheduledCount = 0;

@@ -1,7 +1,7 @@
-import { motionStudioPointRangePoints } from './motion_studio_calculations.js?v=20260803-studio-structure-2';
-import { MOTION_STUDIO_PERIOD_SEC } from './motion_studio_constants.js?v=20260803-studio-structure-2';
+import { motionStudioPointRangePoints } from './motion_studio_calculations.js?v=20260803-studio-structure-9';
+import { MOTION_STUDIO_PERIOD_SEC } from './motion_studio_constants.js?v=20260803-studio-structure-4';
 
-const clone = (value) => JSON.parse(JSON.stringify(value));
+const clone = structuredClone;
 const layerDirtyCache = new WeakMap();
 
 export function createMotionStudioEditorSession({
@@ -26,13 +26,11 @@ export function createMotionStudioEditorSession({
     valueOffset: 0,
     valueView: null,
     valueRangeLock: null,
-    selectionStage: 0,
-    selectionAnchor: null,
-    selectionStartSec: null,
-    selectionEndSec: null,
-    selectionMotionId: '',
-    selectionCurveId: '',
-    lastGraphClick: null,
+    rangeSelection: {
+      phase: 'inactive',
+      start: null,
+      end: null,
+    },
     pendingPointCandidate: null,
     cursor: null,
     graphMetrics: null,
@@ -82,8 +80,8 @@ export function motionStudioStoredCurveForDraft(editor) {
 }
 
 export function motionStudioSelectedRangeCurve(editor) {
-  const curveId = String(editor?.selectionCurveId || '');
-  const motionId = String(editor?.selectionMotionId || '');
+  const curveId = String(editor?.rangeSelection?.start?.curveId || '');
+  const motionId = String(editor?.rangeSelection?.start?.motionId || '');
   if (!curveId || !motionId) return null;
   if (
     String(editor?.pointDraft?.curve_id || '') === curveId
@@ -97,14 +95,36 @@ export function motionStudioSelectedRangeCurve(editor) {
 
 export function motionStudioSelectedPointRange(editor) {
   const curve = motionStudioSelectedRangeCurve(editor);
+  const start = editor?.rangeSelection?.start;
+  const end = editor?.rangeSelection?.end;
   const points = motionStudioPointRangePoints(
     curve,
-    editor?.selectionStartSec,
-    editor?.selectionEndSec,
-    editor?.selectionMotionId,
-    editor?.selectionCurveId,
+    start?.timeSec,
+    end?.timeSec,
+    start?.motionId,
+    start?.curveId,
   );
   return points.length >= 2 ? { curve, points } : null;
+}
+
+export function motionStudioResetRangeSelection(editor, active = false) {
+  if (!editor) return;
+  editor.rangeSelection = {
+    phase: active ? 'awaiting_start' : 'inactive',
+    start: null,
+    end: null,
+  };
+}
+
+export function motionStudioRangeSelectionActive(editor) {
+  return ['awaiting_start', 'awaiting_end'].includes(editor?.rangeSelection?.phase);
+}
+
+export function motionStudioRangeSelectionBounds(editor) {
+  const start = Number(editor?.rangeSelection?.start?.timeSec);
+  const end = Number(editor?.rangeSelection?.end?.timeSec);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  return { startSec: Math.min(start, end), endSec: Math.max(start, end) };
 }
 
 function comparablePointCurve(curve) {

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>모션 녹화 시스템 0.5.0</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260803-range-actions-visible-1">
+    <link rel="stylesheet" href="/static/styles.css?v=20260803-studio-compact-3">
   </head>
   <body>
     <main class="shell">
@@ -1436,7 +1436,7 @@
                 <button id="studioEditorFitSelectionButton" type="button">선택 포인트 맞춤</button>
                 <button id="studioEditorFitAllButton" type="button">전체 맞춤</button>
               </div>
-              <div class="studio-editor-canvas-wrap"><canvas id="studioEditorGraph" height="430"></canvas></div>
+              <div class="studio-editor-canvas-wrap"><canvas id="studioEditorGraph" height="360"></canvas></div>
               <div id="studioEditorLegend" class="studio-layer-graph-legend"></div>
               <div class="studio-editor-feedback">
                 <div id="studioEditorSelectedPointSummary" class="studio-editor-selected-point hidden" aria-live="polite">
@@ -1523,15 +1523,16 @@
                       </div>
                     </div>
                     <div id="studioEditorOperationHelp" class="studio-editor-operation-help">선택한 포인트의 시간을 조절합니다.</div>
-                    <div id="studioEditorRangeActions" class="studio-editor-range-actions">
-                      <strong>선택 구간</strong>
-                      <span id="studioEditorRangeStatus" class="studio-editor-range-status" aria-live="polite">그래프에서 같은 포인트 곡선의 시작·종료 포인트를 선택하세요.</span>
-                      <label class="compact-field"><span>복사 시작(초)</span>
-                        <input id="studioEditorRangeCopyTarget" type="number" min="0" step="0.02" value="0.00" disabled>
-                      </label>
-                      <button id="studioEditorRangeCopyButton" type="button" disabled>구간 복사</button>
-                      <button id="studioEditorRangeDeleteButton" class="off" type="button" disabled>구간 삭제</button>
-                    </div>
+                  </section>
+                  <section id="studioEditorRangeActions" class="studio-editor-range-actions" aria-label="선택 구간 편집">
+                    <strong>선택 구간</strong>
+                    <button id="studioEditorRangeSelectButton" type="button" aria-pressed="false">구간 선택</button>
+                    <span id="studioEditorRangeStatus" class="studio-editor-range-status" aria-live="polite">그래프에서 같은 포인트 곡선의 시작·종료 포인트를 선택하세요.</span>
+                    <label class="compact-field"><span>복사 시작(초)</span>
+                      <input id="studioEditorRangeCopyTarget" type="number" min="0" step="0.02" value="0.00" disabled>
+                    </label>
+                    <button id="studioEditorRangeCopyButton" type="button" disabled>구간 복사</button>
+                    <button id="studioEditorRangeDeleteButton" class="off" type="button" disabled>구간 삭제</button>
                   </section>
                   <section id="studioEditorDangerZone" class="studio-editor-danger-zone hidden">
                     <button id="studioEditorPointDeleteButton" class="off" type="button" disabled>포인트 삭제</button>
@@ -1671,6 +1672,6 @@
       </div>
     </div>
 
-    <script type="module" src="/static/app.js?v=20260803-studio-structure-2"></script>
+    <script type="module" src="/static/app.js?v=20260803-studio-structure-9"></script>
   </body>
 </html>

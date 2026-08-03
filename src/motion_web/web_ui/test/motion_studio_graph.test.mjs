@@ -174,7 +174,6 @@ test('editor graph renderer preserves graph metrics and point hit targets', () =
     viewStart: 0,
     viewEnd: 0.04,
     valueScale: 1,
-    selectionStage: 0,
     validation: {},
   };
   const legend = { innerHTML: '' };
@@ -247,7 +246,6 @@ test('editor graph renderer accepts cached track maps from the controller', () =
     viewStart: 0,
     viewEnd: 0.04,
     valueScale: 1,
-    selectionStage: 0,
     validation: {},
   };
   const legend = { innerHTML: '' };

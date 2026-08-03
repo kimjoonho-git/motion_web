@@ -41,6 +41,9 @@ test('editor session owns independent saved and working layer copies', () => {
   assert.equal(layer.frames[0].values['1-1'], 1);
   assert.equal(session.original.frames[0].values['1-1'], 1);
   assert.equal(session.viewEnd, 1);
+  assert.deepEqual(session.rangeSelection, {
+    phase: 'inactive', start: null, end: null,
+  });
   assert.deepEqual(session.validation.range_warnings, [{ motion_id: '1-1' }]);
 });
 
@@ -50,10 +53,11 @@ test('editor point selectors preserve curve range and linear compatibility', () 
     working: { point_curves: [stored] },
     pointDraft: structuredClone(stored),
     selectedPointId: 'p2',
-    selectionStartSec: 0,
-    selectionEndSec: 1,
-    selectionMotionId: '1-1',
-    selectionCurveId: 'curve-a',
+    rangeSelection: {
+      phase: 'complete',
+      start: { pointId: 'p1', timeSec: 0, motionId: '1-1', curveId: 'curve-a' },
+      end: { pointId: 'p2', timeSec: 1, motionId: '1-1', curveId: 'curve-a' },
+    },
   };
   editor.pointDraft.points.forEach((point) => { point.tangent_mode = 'auto'; });
 

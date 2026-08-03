@@ -96,8 +96,8 @@ export function createMotionStudioEditorViewportController({
       }
       resetValueView();
       setView(
-        Math.min(editor.selectionStartSec, editor.selectionEndSec),
-        Math.max(editor.selectionStartSec, editor.selectionEndSec),
+        Number(editor.rangeSelection.start.timeSec),
+        Number(editor.rangeSelection.end.timeSec),
       );
     });
   }

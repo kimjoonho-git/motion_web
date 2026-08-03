@@ -46,6 +46,15 @@ import {
   motionStudioPanEditorGraph,
 } from '../static/js/motion_studio_graph_interactions.js';
 
+const motionStudioRuntimeSource = () => [
+  'motion_studio.js',
+  'motion_studio_graph_interactions.js',
+  'motion_studio_point_editor.js',
+].map((name) => readFileSync(
+  new URL(`../static/js/${name}`, import.meta.url),
+  'utf8',
+)).join('\n');
+
 test('project patches preserve unchanged layer objects and apply order changes', () => {
   const unchanged = { layer_id: 'unchanged', frames: [{ time_sec: 0.02, values: {} }] };
   const replaced = { layer_id: 'replaced', frames: [] };
@@ -328,23 +337,21 @@ test('graph cursor time and value resolve to the selected 20 ms motion sample', 
 });
 
 test('graph hover and point creation use the same 20 ms motion sample source', () => {
-  const source = readFileSync(
-    new URL('../static/js/motion_studio.js', import.meta.url),
-    'utf8',
-  );
+  const source = motionStudioRuntimeSource();
   const hoverFlow = source.match(
     /studioEditorGraph\?\.addEventListener\('mousemove'[\s\S]*?studioEditorGraph\?\.addEventListener\('mouseleave'/,
   )?.[0] || '';
-  const addPointFlow = source.match(
-    /if \(graphAction === 'add_point'\)[\s\S]*?drawEditorGraph\(\);\n        return;/,
-  )?.[0] || '';
+  const addPointFlow = readFileSync(
+    new URL('../static/js/motion_studio_graph_interactions.js', import.meta.url),
+    'utf8',
+  );
   const confirmPointFlow = source.match(
     /studioEditorPointAddButton\?\.addEventListener\('click'[\s\S]*?studioEditorPointDeleteButton/,
   )?.[0] || '';
 
   assert.match(hoverFlow, /motionStudioSnapFrameTime\(metrics\.timeFor\(x\)\)/);
   assert.match(hoverFlow, /motionStudioMotionTargetAtTime/);
-  assert.match(hoverFlow, /const value = nearest \? nearest\.value : rawValue/);
+  assert.match(hoverFlow, /value: nearest \? nearest\.value : rawValue/);
   assert.match(addPointFlow, /const timeSec = motionStudioSnapFrameTime/);
   assert.match(addPointFlow, /const graphSample = motionStudioMotionTargetAtTime/);
   assert.match(addPointFlow, /graphSample\?\.value \?\? metrics\.valueFor/);
@@ -370,6 +377,11 @@ test('graph click intent keeps point creation separate from range selection', ()
   assert.equal(motionStudioEditorGraphClickAction({
     operation: 'time_shift',
     pointTarget,
+  }), 'edit_point');
+  assert.equal(motionStudioEditorGraphClickAction({
+    operation: 'point_curve',
+    pointTarget,
+    rangeSelection: true,
   }), 'select_point');
   assert.equal(motionStudioEditorGraphClickAction({
     operation: 'point_curve',
@@ -462,10 +474,7 @@ test('unsaved point drafts block curve and axis switches without blocking same-c
 });
 
 test('each layer editor session starts without a general-motion range mode', () => {
-  const source = readFileSync(
-    new URL('../static/js/motion_studio.js', import.meta.url),
-    'utf8',
-  );
+  const source = motionStudioRuntimeSource();
 
   assert.match(
     source,
@@ -516,7 +525,7 @@ test('primary edit workflow actions stay in the fixed top action area', () => {
   }
 });
 
-test('editor uses a wide graph column with the inspector below it', () => {
+test('editor keeps the graph and compact range toolbar in one viewport layout', () => {
   const html = readFileSync(
     new URL('../static/index.html', import.meta.url),
     'utf8',
@@ -547,19 +556,44 @@ test('editor uses a wide graph column with the inspector below it', () => {
   assert.equal((html.match(/id="studioEditorCloseButton"/g) || []).length, 1);
   assert.match(
     styles,
-    /grid-template-columns:\s*268px minmax\(0,\s*1fr\)/,
+    /grid-template-columns:\s*230px minmax\(0,\s*1fr\)/,
   );
   assert.match(
     styles,
-    /grid-template-rows:\s*auto var\(--studio-editor-graph-height\) auto auto auto/,
+    /grid-template-rows:\s*auto minmax\(var\(--studio-editor-graph-min-height\), 1fr\) auto auto auto/,
+  );
+  assert.match(
+    html,
+    /studio-editor-inspector-content[\s\S]*?studio-editor-operation-panel[\s\S]*?id="studioEditorRangeActions"/,
+  );
+  assert.match(
+    styles,
+    /\.studio-editor-inspector-content \{[\s\S]*?grid-template-columns: minmax\(0, 1\.7fr\) minmax\(360px, 1fr\)/,
+  );
+  assert.match(
+    styles,
+    /\.studio-editor-operation-panel \{[\s\S]*?border: 1px solid var\(--line\)/,
+  );
+  assert.match(
+    styles,
+    /--studio-editor-graph-min-height:\s*240px/,
+  );
+  assert.match(
+    styles,
+    /\.studio-editor-toolbar \{[\s\S]*?justify-content: flex-end;/,
+  );
+  assert.match(
+    styles,
+    /\.studio-editor-canvas-wrap \{[\s\S]*?height: auto;/,
+  );
+  assert.match(
+    styles,
+    /\.studio-editor-main \{[\s\S]*?overflow: hidden;/,
   );
 });
 
 test('selected range start and end point values are rendered in the graph summary', () => {
-  const source = readFileSync(
-    new URL('../static/js/motion_studio.js', import.meta.url),
-    'utf8',
-  );
+  const source = motionStudioRuntimeSource();
   assert.match(
     source,
     /studioEditorSelectedPointSummary\?\.classList\.toggle\('hidden', !startPoint\)/,
@@ -571,10 +605,7 @@ test('selected range start and end point values are rendered in the graph summar
 });
 
 test('editor graph background pans both axes and axis selection resets a fixed value range', () => {
-  const source = readFileSync(
-    new URL('../static/js/motion_studio.js', import.meta.url),
-    'utf8',
-  );
+  const source = motionStudioRuntimeSource();
   const editor = {
     valueRangeLock: null,
     panningGraph: {
@@ -622,10 +653,7 @@ test('editor exposes whole-axis point creation without motion-section conversion
     new URL('../static/index.html', import.meta.url),
     'utf8',
   );
-  const source = readFileSync(
-    new URL('../static/js/motion_studio.js', import.meta.url),
-    'utf8',
-  );
+  const source = motionStudioRuntimeSource();
   assert.match(
     html,
     /id="studioEditorCreatePointsButton"[^>]*>전체 포인트 생성</,
@@ -658,10 +686,7 @@ test('editor exposes whole-axis point creation without motion-section conversion
 });
 
 test('applied point curves can be edited again before the layer is saved', () => {
-  const source = readFileSync(
-    new URL('../static/js/motion_studio.js', import.meta.url),
-    'utf8',
-  );
+  const source = motionStudioRuntimeSource();
   const appliedGuard = source.match(
     /function pointCurveIsApplied[\s\S]*?^\s*}/m,
   )?.[0] || '';
@@ -678,10 +703,7 @@ test('motion export identifies the playback-selected layer and ignores the blue 
     new URL('../static/index.html', import.meta.url),
     'utf8',
   );
-  const source = readFileSync(
-    new URL('../static/js/motion_studio.js', import.meta.url),
-    'utf8',
-  );
+  const source = motionStudioRuntimeSource();
   assert.match(html, /id="studioExportTarget"/);
   assert.match(html, /재생 선택 체크 기준 · 연한 파란색 행과 무관/);
   assert.match(source, /motionStudioExportSelection\(state\.project\?\.layers\)/);
@@ -690,23 +712,20 @@ test('motion export identifies the playback-selected layer and ignores the blue 
 });
 
 test('range editing stays disabled until two distinct points from one curve are selected', () => {
-  const source = readFileSync(
-    new URL('../static/js/motion_studio.js', import.meta.url),
-    'utf8',
-  );
+  const source = motionStudioRuntimeSource();
   const selectionFlow = source.match(
-    /if \(editor\.selectionStage === 0\)[\s\S]*?renderEditorControls\(\);\n      drawEditorGraph\(\);/,
+    /const selectRangePoint = \(pointTarget\) => \{[\s\S]*?renderEditorControls\(\);\n\s*drawEditorGraph\(\);/,
   )?.[0] || '';
   const applyGuard = source.match(
     /async function applyEditorOperation[\s\S]*?if \(operation === 'point_curve'/,
   )?.[0] || '';
 
-  assert.match(selectionFlow, /setEditorPointRange\(editor, snapped, snapped/);
+  assert.match(selectionFlow, /phase: 'awaiting_end'/);
   assert.match(selectionFlow, /같은 포인트 곡선의 다른 포인트를 선택/);
-  assert.match(
-    selectionFlow,
-    /Math\.abs\(first - snapped\)\s*< MOTION_STUDIO_PERIOD_SEC - MOTION_STUDIO_TIME_EPSILON/,
-  );
+  assert.match(selectionFlow, /const samePoint = rangeStart\.pointId && endPointId/);
+  assert.match(selectionFlow, /phase: 'complete', start, end/);
+  assert.doesNotMatch(selectionFlow, /enterEditorPointMode/);
+  assert.doesNotMatch(selectionFlow, /selectionStage|selectionAnchor/);
   assert.doesNotMatch(selectionFlow, /selectionKind/);
   assert.match(applyGuard, /selectedEditorPointRange/);
   assert.match(applyGuard, /서로 다른 포인트 두 개/);
@@ -718,8 +737,9 @@ test('point range actions reset stale selection and use the point-curve apply pa
     new URL('../static/index.html', import.meta.url),
     'utf8',
   );
-  const source = readFileSync(
-    new URL('../static/js/motion_studio.js', import.meta.url),
+  const source = motionStudioRuntimeSource();
+  const styles = readFileSync(
+    new URL('../static/styles.css', import.meta.url),
     'utf8',
   );
   const addFlow = source.match(
@@ -728,11 +748,16 @@ test('point range actions reset stale selection and use the point-curve apply pa
   const deleteFlow = source.match(
     /studioEditorPointDeleteButton\?\.addEventListener\('click'[\s\S]*?studioEditorRangeCopyButton/,
   )?.[0] || '';
-  const rangeFlow = source.match(
-    /studioEditorRangeCopyButton\?\.addEventListener\('click'[\s\S]*?studioEditorRangeDeleteButton[\s\S]*?\n    \}\);/,
+  const rangeSelectControlFlow = source.match(
+    /if \(el\.studioEditorRangeSelectButton\) \{[\s\S]*?classList\.toggle\('on', rangeSelecting\);/,
   )?.[0] || '';
+  const rangeFlow = source;
 
   assert.match(html, /id="studioEditorRangeActions" class="studio-editor-range-actions"/);
+  assert.match(
+    html,
+    /id="studioEditorRangeSelectButton"[^>]*aria-pressed="false">구간 선택</,
+  );
   assert.doesNotMatch(html, /studio-editor-range-actions hidden/);
   assert.match(html, /id="studioEditorRangeStatus"[^>]*>그래프에서 같은 포인트 곡선/);
   assert.match(html, /id="studioEditorRangeCopyTarget"[^>]*step="0\.02"[^>]*disabled/);
@@ -743,6 +768,23 @@ test('point range actions reset stale selection and use the point-curve apply pa
   assert.match(rangeFlow, /motionStudioCopyPointRange/);
   assert.match(rangeFlow, /motionStudioDeletePointRange/);
   assert.match(rangeFlow, /activatePointDraftMutation/);
+  assert.match(source, /rangeSelection: rangeSelecting/);
+  assert.match(source, /void applyDraggedPoint\(\)/);
+  assert.match(
+    rangeSelectControlFlow,
+    /studioEditorRangeSelectButton\.disabled = Boolean\(editor\?\.preview\)/,
+  );
+  assert.doesNotMatch(
+    rangeSelectControlFlow,
+    /selectedIds\.length !== 1/,
+  );
+  assert.match(
+    styles,
+    /studio-editor-range-actions button\[aria-pressed="true"\]/,
+  );
+  assert.match(source, /if \(editor\.suppressGraphClick && !rangeSelecting\)/);
+  assert.match(source, /rangeSelecting \? 22 : 14/);
+  assert.match(source, /구간을 선택하려면 포인트 곡선이 표시된 Motion ID/);
   assert.doesNotMatch(source, /studioEditorRangeActions\.classList\.toggle\('hidden'/);
   assert.match(
     source,
@@ -755,10 +797,7 @@ test('point range actions reset stale selection and use the point-curve apply pa
 });
 
 test('temporary point editing restores the last selected range edit operation', () => {
-  const source = readFileSync(
-    new URL('../static/js/motion_studio.js', import.meta.url),
-    'utf8',
-  );
+  const source = motionStudioRuntimeSource();
   const openFlow = source.match(
     /function openLayerEditor[\s\S]*?function closeLayerEditor/,
   )?.[0] || '';
@@ -795,10 +834,7 @@ test('temporary point editing restores the last selected range edit operation', 
 });
 
 test('axis range violations remain visible warnings without blocking edit apply', () => {
-  const source = readFileSync(
-    new URL('../static/js/motion_studio.js', import.meta.url),
-    'utf8',
-  );
+  const source = motionStudioRuntimeSource();
   const graphSource = readFileSync(
     new URL('../static/js/motion_studio_graph.js', import.meta.url),
     'utf8',
@@ -815,10 +851,7 @@ test('axis range violations remain visible warnings without blocking edit apply'
 });
 
 test('layer axis deletion uses preview, apply, and save workflow', () => {
-  const source = readFileSync(
-    new URL('../static/js/motion_studio.js', import.meta.url),
-    'utf8',
-  );
+  const source = motionStudioRuntimeSource();
   const html = readFileSync(
     new URL('../static/index.html', import.meta.url),
     'utf8',
@@ -839,10 +872,7 @@ test('layer axis deletion uses preview, apply, and save workflow', () => {
 });
 
 test('saving keeps the layer editor open and refreshes its saved baseline', () => {
-  const source = readFileSync(
-    new URL('../static/js/motion_studio.js', import.meta.url),
-    'utf8',
-  );
+  const source = motionStudioRuntimeSource();
   const saveFlow = source.match(
     /const acceptSavedEditorLayer =[\s\S]*?editorViewport\.bind\(\)/,
   )?.[0] || '';
@@ -855,10 +885,7 @@ test('saving keeps the layer editor open and refreshes its saved baseline', () =
 });
 
 test('undo also cancels point drafts and previews before edit apply', () => {
-  const source = readFileSync(
-    new URL('../static/js/motion_studio.js', import.meta.url),
-    'utf8',
-  );
+  const source = motionStudioRuntimeSource();
   assert.match(source, /if \(editor\.preview\) \{[\s\S]*?discardEditorPreview/);
   assert.match(source, /if \(pointDraftHasUnsavedChanges\(editor\)\)/);
   assert.match(source, /편집 반영 전 포인트 변경을 취소했습니다/);
@@ -903,6 +930,9 @@ test('point hit target is forgiving and a click does not become a drag', () => {
   const target = { x: 100, y: 50, point: { point_id: 'point_1' } };
   assert.equal(motionStudioPointHitTarget([target], 113, 50), target);
   assert.equal(motionStudioPointHitTarget([target], 115, 50), null);
+  assert.equal(motionStudioPointHitTarget([target], 120, 50, 22), target);
+  const nearer = { x: 112, y: 50, point: { point_id: 'point_2' } };
+  assert.equal(motionStudioPointHitTarget([target, nearer], 111, 50, 22), nearer);
   assert.equal(
     motionStudioPointDragStarted({ startX: 100, startY: 50, moved: false }, 102, 51),
     false,
@@ -939,10 +969,7 @@ test('point curve order uses one validated value for display, draft, and preview
   assert.equal(motionStudioPointCurveOrder(2, 1), 1);
   assert.equal(motionStudioPointCurveOrder(2, 2), 3);
 
-  const source = readFileSync(
-    new URL('../static/js/motion_studio.js', import.meta.url),
-    'utf8',
-  );
+  const source = motionStudioRuntimeSource();
   const loadDraft = source.match(
     /function loadPointDraft[\s\S]*?\n  }\n\n  function selectOnlyEditorAxis/,
   )?.[0] || '';
@@ -1048,8 +1075,9 @@ test('editor timeline shrinks when an edit removes trailing data', () => {
   const editor = {
     viewStart: 0,
     viewEnd: 25.26,
-    selectionStage: 2,
-    selectionAnchor: 11.12,
+    rangeSelection: {
+      phase: 'complete', start: { timeSec: 5 }, end: { timeSec: 11.12 },
+    },
   };
 
   const changed = synchronizeMotionStudioEditorTimeline(
@@ -1061,14 +1089,17 @@ test('editor timeline shrinks when an edit removes trailing data', () => {
   assert.equal(changed, true);
   assert.equal(editor.viewStart, 0);
   assert.equal(editor.viewEnd, 11.12);
-  assert.equal(editor.selectionStage, 0);
-  assert.equal(editor.selectionAnchor, null);
-  assert.equal(editor.selectionMotionId, '');
-  assert.equal(editor.selectionCurveId, '');
+  assert.deepEqual(editor.rangeSelection, {
+    phase: 'inactive', start: null, end: null,
+  });
 });
 
 test('editor timeline expands when an edit creates later data', () => {
-  const editor = { viewStart: 0, viewEnd: 11.12, selectionStage: 0, selectionAnchor: null };
+  const editor = {
+    viewStart: 0,
+    viewEnd: 11.12,
+    rangeSelection: { phase: 'inactive', start: null, end: null },
+  };
 
   synchronizeMotionStudioEditorTimeline(
     editor,
@@ -1080,7 +1111,11 @@ test('editor timeline expands when an edit creates later data', () => {
 });
 
 test('value-only edits preserve the current zoom', () => {
-  const editor = { viewStart: 4, viewEnd: 8, selectionStage: 2, selectionAnchor: 5 };
+  const editor = {
+    viewStart: 4,
+    viewEnd: 8,
+    rangeSelection: { phase: 'awaiting_end', start: { timeSec: 5 }, end: null },
+  };
 
   const changed = synchronizeMotionStudioEditorTimeline(
     editor,
@@ -1092,8 +1127,7 @@ test('value-only edits preserve the current zoom', () => {
   assert.deepEqual(editor, {
     viewStart: 4,
     viewEnd: 8,
-    selectionStage: 2,
-    selectionAnchor: 5,
+    rangeSelection: { phase: 'awaiting_end', start: { timeSec: 5 }, end: null },
   });
 });
 
@@ -1130,10 +1164,7 @@ test('layer selection stays valid and falls back after deletion', () => {
 });
 
 test('editor history restores point-curve selection with each applied edit', () => {
-  const source = readFileSync(
-    new URL('../static/js/motion_studio.js', import.meta.url),
-    'utf8',
-  );
+  const source = motionStudioRuntimeSource();
   assert.match(
     source,
     /editor\.undo\.push\(\{[\s\S]*?curveId:[\s\S]*?selectedPointId:/,
@@ -1153,10 +1184,7 @@ test('editor history restores point-curve selection with each applied edit', () 
 });
 
 test('studio mutations render their response without an automatic full refresh', () => {
-  const source = readFileSync(
-    new URL('../static/js/motion_studio.js', import.meta.url),
-    'utf8',
-  );
+  const source = motionStudioRuntimeSource();
 
   assert.match(source, /async function run\([\s\S]*?isCurrent = \(\) => true/);
   assert.match(source, /if \(refreshAfter\) await refresh\(false\);/);
@@ -1187,10 +1215,7 @@ test('editor operations and axis management keep a fixed compact layout', () => 
     new URL('../static/styles.css', import.meta.url),
     'utf8',
   );
-  const source = readFileSync(
-    new URL('../static/js/motion_studio.js', import.meta.url),
-    'utf8',
-  );
+  const source = motionStudioRuntimeSource();
 
   assert.match(
     html,
@@ -1226,10 +1251,7 @@ test('layer merge lets the user choose one whole layer to append', () => {
     new URL('../static/index.html', import.meta.url),
     'utf8',
   );
-  const source = readFileSync(
-    new URL('../static/js/motion_studio.js', import.meta.url),
-    'utf8',
-  );
+  const source = motionStudioRuntimeSource();
 
   assert.match(
     html,

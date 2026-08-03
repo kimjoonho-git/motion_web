@@ -1,7 +1,7 @@
 import {
   MOTION_STUDIO_PERIOD_SEC,
   MOTION_STUDIO_TIME_EPSILON,
-} from './motion_studio_constants.js?v=20260803-studio-structure-2';
+} from './motion_studio_constants.js?v=20260803-studio-structure-4';
 
 export function applyMotionStudioProjectPatch(project, patch) {
   if (!patch || typeof patch !== 'object') return project || null;
@@ -193,10 +193,7 @@ export function synchronizeMotionStudioEditorTimeline(editor, layer, previousLay
   }
   editor.viewStart = 0;
   editor.viewEnd = Math.max(MOTION_STUDIO_PERIOD_SEC, duration);
-  editor.selectionStage = 0;
-  editor.selectionAnchor = null;
-  editor.selectionMotionId = '';
-  editor.selectionCurveId = '';
+  editor.rangeSelection = { phase: 'inactive', start: null, end: null };
   return true;
 }
 
@@ -332,7 +329,7 @@ export function motionStudioCopyPointRange(
   const targetStart = motionStudioSnapFrameTime(requestedTargetStart);
   const sourceStart = Number(sourcePoints[0].time_sec);
   const copiedPoints = sourcePoints.map((point) => ({
-    ...JSON.parse(JSON.stringify(point)),
+    ...structuredClone(point),
     time_sec: motionStudioSnapFrameTime(
       targetStart + (Number(point.time_sec) - sourceStart),
     ),
@@ -382,7 +379,7 @@ export function motionStudioDeletePointRange(
   if (remainingPoints.length < 2) return { ok: false, reason: 'minimum_points' };
   return {
     ok: true,
-    points: JSON.parse(JSON.stringify(remainingPoints)),
+    points: structuredClone(remainingPoints),
     deletedCount: selectedPoints.length,
   };
 }
@@ -435,9 +432,10 @@ export function motionStudioEditorGraphClickAction({
   motionTarget = null,
   pointRegion = null,
   activeCurveId = '',
+  rangeSelection = false,
 } = {}) {
   const pointMode = operation === 'point_curve';
-  if (pointTarget) return pointMode ? 'edit_point' : 'select_point';
+  if (pointTarget) return rangeSelection ? 'select_point' : 'edit_point';
   const regionCurveId = String(pointRegion?.curve_id || '');
   const activeId = String(activeCurveId || '');
   if (pointMode) {
@@ -452,9 +450,16 @@ export function motionStudioEditorGraphClickAction({
 }
 
 export function motionStudioPointHitTarget(targets, x, y, radius = 14) {
-  return (Array.isArray(targets) ? targets : []).find(
-    (target) => Math.hypot(Number(target.x) - x, Number(target.y) - y) <= radius,
-  ) || null;
+  let nearest = null;
+  let nearestDistance = Number(radius);
+  for (const target of Array.isArray(targets) ? targets : []) {
+    const distance = Math.hypot(Number(target.x) - x, Number(target.y) - y);
+    if (distance <= nearestDistance) {
+      nearest = target;
+      nearestDistance = distance;
+    }
+  }
+  return nearest;
 }
 
 export function motionStudioNearestMotionTarget(

@@ -1,10 +1,10 @@
 import {
   motionStudioEditorValueBounds,
   motionStudioPointCurvePreview,
-} from './motion_studio_calculations.js?v=20260803-studio-structure-2';
+} from './motion_studio_calculations.js?v=20260803-studio-structure-9';
 import {
   MOTION_STUDIO_PERIOD_SEC,
-} from './motion_studio_constants.js?v=20260803-studio-structure-2';
+} from './motion_studio_constants.js?v=20260803-studio-structure-4';
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"]/g, (character) => ({
@@ -401,8 +401,12 @@ export function drawMotionStudioEditorGraph({
     });
   const selectionStart = Number(selectionStartText);
   const selectionEnd = Number(selectionEndText);
-  if (editor.selectionStage === 1 && Number.isFinite(editor.selectionAnchor)) {
-    const anchor = Math.max(viewStart, Math.min(viewEnd, editor.selectionAnchor));
+  if (Number.isFinite(editor.rangeSelection?.start?.timeSec)
+    && editor.rangeSelection?.phase === 'awaiting_end') {
+    const anchor = Math.max(
+      viewStart,
+      Math.min(viewEnd, editor.rangeSelection.start.timeSec),
+    );
     context.strokeStyle = '#1f6feb';
     context.lineWidth = 2;
     context.beginPath();
@@ -481,7 +485,7 @@ export function drawMotionStudioEditorGraph({
     context.setLineDash([]);
   }
   let displayedCurves = pointCurves(displayedLayer).map(
-    (curve) => JSON.parse(JSON.stringify(curve)),
+    (curve) => structuredClone(curve),
   );
   if (editor.pointDraft && operation === 'point_curve') {
     displayedCurves = displayedCurves.filter(
