@@ -1506,6 +1506,7 @@ class ProjectRepository:
         delete_layer_ids: Optional[Iterable[Any]] = None,
         replace_all: bool = True,
     ) -> Dict[str, Any]:
+        started_at = time.perf_counter()
         project_id = self.selected_project_id()
         if not project_id or not isinstance(studio_project, dict):
             return {'success': True, 'synced': False, 'message': '동기화할 프로젝트 없음'}
@@ -1574,20 +1575,48 @@ class ProjectRepository:
         prepared_hashes = {
             name: digest for name, _content, digest in prepared
         }
-        all_layer_hashes = {
-            path.name: (
-                prepared_hashes[path.name]
-                if path.name in prepared_hashes
-                else _sha256_file(path)
-            )
-            for path in (project_dir / 'layers').iterdir()
-            if path.is_file() and not path.is_symlink()
-        }
+        cached_files = manifest.get('studio_layer_file_cache')
+        if not isinstance(cached_files, dict):
+            cached_files = {}
+        all_layer_hashes = {}
+        current_file_cache = {}
+        hashed_file_count = 0
+        reused_hash_count = 0
+        for path in (project_dir / 'layers').iterdir():
+            if not path.is_file() or path.is_symlink():
+                continue
+            stat = path.stat()
+            cached = cached_files.get(path.name)
+            digest = prepared_hashes.get(path.name)
+            if not digest and isinstance(cached, dict):
+                try:
+                    cache_matches = (
+                        int(cached.get('size')) == stat.st_size
+                        and int(cached.get('mtime_ns')) == stat.st_mtime_ns
+                        and int(cached.get('ctime_ns')) == stat.st_ctime_ns
+                        and bool(str(cached.get('sha256') or ''))
+                    )
+                except (TypeError, ValueError):
+                    cache_matches = False
+                if cache_matches:
+                    digest = str(cached['sha256'])
+                    reused_hash_count += 1
+            if not digest:
+                digest = _sha256_file(path)
+                hashed_file_count += 1
+            all_layer_hashes[path.name] = digest
+            current_file_cache[path.name] = {
+                'size': stat.st_size,
+                'mtime_ns': stat.st_mtime_ns,
+                'ctime_ns': stat.st_ctime_ns,
+                'sha256': digest,
+            }
         manifest['studio_managed_layers'] = managed
         manifest['studio_managed_layer_sha256'] = {
             name: all_layer_hashes[name]
             for name in managed if name in all_layer_hashes
         }
+        manifest['studio_layer_file_cache'] = current_file_cache
         active_layer = manifest['active_files'].get('layers')
         if managed and not active_layer:
             manifest['active_files']['layers'] = managed[0]
@@ -1603,6 +1632,9 @@ class ProjectRepository:
             'deleted_files': removed,
             'managed_files': managed,
             'layer_signature': _studio_layer_signature(all_layer_hashes),
+            'elapsed_ms': round((time.perf_counter() - started_at) * 1000, 3),
+            'hashed_file_count': hashed_file_count,
+            'reused_hash_count': reused_hash_count,
         }
 
     def _tree(self, project_dir: Path, manifest: Dict[str, Any]) -> list[Dict[str, Any]]:

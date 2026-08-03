@@ -1,3 +1,8 @@
+import {
+  MOTION_STUDIO_PERIOD_SEC,
+  MOTION_STUDIO_TIME_EPSILON,
+} from './motion_studio_constants.js?v=20260803-studio-structure-2';
+
 export function applyMotionStudioProjectPatch(project, patch) {
   if (!patch || typeof patch !== 'object') return project || null;
   const metadata = (
@@ -187,7 +192,7 @@ export function synchronizeMotionStudioEditorTimeline(editor, layer, previousLay
     return false;
   }
   editor.viewStart = 0;
-  editor.viewEnd = Math.max(0.02, duration);
+  editor.viewEnd = Math.max(MOTION_STUDIO_PERIOD_SEC, duration);
   editor.selectionStage = 0;
   editor.selectionAnchor = null;
   editor.selectionMotionId = '';
@@ -264,7 +269,7 @@ export function motionStudioPointRangeReady(
   const end = Number(endSec);
   const basicRangeReady = Number.isFinite(start)
     && Number.isFinite(end)
-    && Math.abs(end - start) >= 0.02 - 1e-9
+    && Math.abs(end - start) >= MOTION_STUDIO_PERIOD_SEC - MOTION_STUDIO_TIME_EPSILON
     && Boolean(String(motionId || ''))
     && Boolean(String(curveId || ''));
   if (!basicRangeReady || !curve) return basicRangeReady;
@@ -479,7 +484,10 @@ export function motionStudioNearestMotionTarget(
   return nearest;
 }
 
-export function motionStudioSnapFrameTime(timeSec, periodSec = 0.02) {
+export function motionStudioSnapFrameTime(
+  timeSec,
+  periodSec = MOTION_STUDIO_PERIOD_SEC,
+) {
   const time = Number(timeSec);
   const period = Number(periodSec);
   if (!Number.isFinite(time) || !Number.isFinite(period) || period <= 0) return 0;
@@ -627,7 +635,10 @@ export function motionStudioPointCurvePreview(rawPoints, interpolationOrder = 3)
     const second = points[index + 1];
     const span = second.time_sec - first.time_sec;
     if (span <= 1e-9) return;
-    const steps = Math.max(8, Math.min(80, Math.ceil(span / 0.02)));
+    const steps = Math.max(
+      8,
+      Math.min(80, Math.ceil(span / MOTION_STUDIO_PERIOD_SEC)),
+    );
     for (let step = 0; step <= steps; step += 1) {
       if (index > 0 && step === 0) continue;
       const ratio = step / steps;

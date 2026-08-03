@@ -1,7 +1,10 @@
 import {
   motionStudioEditorValueBounds,
   motionStudioPointCurvePreview,
-} from './motion_studio_calculations.js?v=20260731-studio-performance-2';
+} from './motion_studio_calculations.js?v=20260803-studio-structure-2';
+import {
+  MOTION_STUDIO_PERIOD_SEC,
+} from './motion_studio_constants.js?v=20260803-studio-structure-2';
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"]/g, (character) => ({
@@ -105,7 +108,7 @@ export function motionStudioCompositionTracks(layers, mappingRows = []) {
   const duration = Math.max(0, ...enabledLayers.flatMap((layer) => (
     (layer.frames || []).map((frame) => Number(frame.time_sec || 0))
   )));
-  const sampleCount = Math.max(0, Math.ceil(duration / 0.02));
+  const sampleCount = Math.max(0, Math.ceil(duration / MOTION_STUDIO_PERIOD_SEC));
   const tracks = new Map([...motionIds].map((motionId) => [motionId, []]));
   const lastValues = new Map([...motionIds].map((motionId) => {
     const firstPoint = firstPoints.get(motionId);
@@ -113,7 +116,7 @@ export function motionStudioCompositionTracks(layers, mappingRows = []) {
       ? manualInitialValues.get(motionId) : Number(firstPoint?.value || 0)];
   }));
   for (let index = 1; index <= sampleCount; index += 1) {
-    const timeSec = Number((index * 0.02).toFixed(9));
+    const timeSec = Number((index * MOTION_STUDIO_PERIOD_SEC).toFixed(9));
     for (const motionId of motionIds) {
       let value = null;
       for (const source of sources) {
@@ -215,7 +218,7 @@ export function drawMotionStudioLayerGraph({
   context.setTransform(ratio, 0, 0, ratio, 0, 0);
   context.clearRect(0, 0, width, height);
   let pointCount = 0;
-  let maxTime = 0.02;
+  let maxTime = MOTION_STUDIO_PERIOD_SEC;
   let minValue = 0;
   let maxValue = 0;
   for (const points of tracks.values()) {
@@ -335,7 +338,10 @@ export function drawMotionStudioEditorGraph({
   const plotWidth = width - padding.left - padding.right;
   const plotHeight = height - padding.top - padding.bottom;
   const viewStart = Math.max(0, Number(editor.viewStart || 0));
-  const viewEnd = Math.max(viewStart + 0.02, Number(editor.viewEnd || 0.02));
+  const viewEnd = Math.max(
+    viewStart + MOTION_STUDIO_PERIOD_SEC,
+    Number(editor.viewEnd || MOTION_STUDIO_PERIOD_SEC),
+  );
   const visiblePoints = ids.flatMap((motionId) => [
     ...(workingTracks.get(motionId) || []), ...(originalTracks.get(motionId) || []),
   ].filter((point) => point.timeSec >= viewStart - 1e-9 && point.timeSec <= viewEnd + 1e-9))

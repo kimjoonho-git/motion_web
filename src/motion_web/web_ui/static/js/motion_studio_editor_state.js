@@ -1,4 +1,5 @@
-import { motionStudioPointRangePoints } from './motion_studio_calculations.js?v=20260731-studio-performance-2';
+import { motionStudioPointRangePoints } from './motion_studio_calculations.js?v=20260803-studio-structure-2';
+import { MOTION_STUDIO_PERIOD_SEC } from './motion_studio_constants.js?v=20260803-studio-structure-2';
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const layerDirtyCache = new WeakMap();
@@ -20,7 +21,7 @@ export function createMotionStudioEditorSession({
     redo: [],
     viewStart: 0,
     viewEnd: operation === 'point_curve'
-      ? pointTimelineEnd : Math.max(0.02, duration),
+      ? pointTimelineEnd : Math.max(MOTION_STUDIO_PERIOD_SEC, duration),
     valueScale: 1,
     valueOffset: 0,
     valueView: null,

@@ -42,6 +42,9 @@ import {
   createMotionStudioEditorSession,
   motionStudioPointDraftHasUnsavedChanges,
 } from '../static/js/motion_studio_editor_state.js';
+import {
+  motionStudioPanEditorGraph,
+} from '../static/js/motion_studio_graph_interactions.js';
 
 test('project patches preserve unchanged layer objects and apply order changes', () => {
   const unchanged = { layer_id: 'unchanged', frames: [{ time_sec: 0.02, values: {} }] };
@@ -347,7 +350,7 @@ test('graph hover and point creation use the same 20 ms motion sample source', (
   assert.match(addPointFlow, /graphSample\?\.value \?\? metrics\.valueFor/);
   assert.match(addPointFlow, /editor\.pendingPointCandidate =/);
   assert.doesNotMatch(addPointFlow, /editor\.pointDraft\.points\.push/);
-  assert.match(confirmPointFlow, /editor\.pointDraft\.points\.push\(point\)/);
+  assert.match(confirmPointFlow, /addMotionStudioDraftPoint\(editor, candidate/);
   assert.match(confirmPointFlow, /clearPendingPointCandidate\(editor\)/);
 });
 
@@ -572,11 +575,28 @@ test('editor graph background pans both axes and axis selection resets a fixed v
     new URL('../static/js/motion_studio.js', import.meta.url),
     'utf8',
   );
-  assert.match(source, /const pixelDeltaY = y - editor\.panningGraph\.startY/);
-  assert.match(
-    source,
-    /editor\.valueView = \{\s*minValue: editor\.panningGraph\.startMinValue \+ valueDelta,\s*maxValue: editor\.panningGraph\.startMaxValue \+ valueDelta/,
+  const editor = {
+    valueRangeLock: null,
+    panningGraph: {
+      startX: 40,
+      startY: 30,
+      startViewStart: 2,
+      startViewEnd: 12,
+      startMinValue: -10,
+      startMaxValue: 30,
+      timeSpan: 10,
+      valueSpan: 40,
+      moved: false,
+    },
+  };
+  const panned = motionStudioPanEditorGraph(
+    editor,
+    { plotWidth: 200, plotHeight: 100 },
+    60,
+    50,
   );
+  assert.deepEqual(panned, { viewStart: 1, viewEnd: 11 });
+  assert.deepEqual(editor.valueView, { minValue: -2, maxValue: 38 });
   assert.match(source, /resetEditorValueView\(\{ unlock: true \}\)/);
   assert.match(source, /motionStudioMotionAxisRange\(activeMapping\(\)\?\.rows \|\| \[\]/);
 });
@@ -620,7 +640,7 @@ test('editor exposes whole-axis point creation without motion-section conversion
   assert.match(source, /applyEditorOperation\('create_axis_point_curve'\)/);
   assert.doesNotMatch(source, /convert_motion_to_point_curve/);
   assert.doesNotMatch(source, /convert_point_curve_to_motion/);
-  assert.match(source, /points \|\| \[\]\)\.length <= 2/);
+  assert.match(source, /deleteMotionStudioDraftPoint\(editor, point\.point_id\)/);
   assert.doesNotMatch(source, /selection_kind:/);
   assert.doesNotMatch(source, /replace_overlapping_point_curves:/);
   assert.match(source, /approximation_interpolation_order: Number\(/);
@@ -683,7 +703,10 @@ test('range editing stays disabled until two distinct points from one curve are 
 
   assert.match(selectionFlow, /setEditorPointRange\(editor, snapped, snapped/);
   assert.match(selectionFlow, /같은 포인트 곡선의 다른 포인트를 선택/);
-  assert.match(selectionFlow, /Math\.abs\(first - snapped\) < 0\.02/);
+  assert.match(
+    selectionFlow,
+    /Math\.abs\(first - snapped\)\s*< MOTION_STUDIO_PERIOD_SEC - MOTION_STUDIO_TIME_EPSILON/,
+  );
   assert.doesNotMatch(selectionFlow, /selectionKind/);
   assert.match(applyGuard, /selectedEditorPointRange/);
   assert.match(applyGuard, /서로 다른 포인트 두 개/);

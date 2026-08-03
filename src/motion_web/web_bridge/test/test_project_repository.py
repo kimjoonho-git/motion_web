@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+import motion_web_bridge.project_repository as project_repository_module
 from motion_web_bridge import service_entrypoint
 from motion_web_bridge.motor_restart_coordinator import MotorRestartCoordinator
 from motion_web_bridge.project_repository import (
@@ -2463,13 +2464,20 @@ def test_studio_layer_partial_sync_writes_only_changed_layer(tmp_path, monkeypat
     second_path = project_dir / 'layers' / 'studio-one__second.json'
     second_before = second_path.read_bytes()
     writes = []
+    file_hashes = []
     original_write = repository._atomic_write
+    original_file_hash = project_repository_module._sha256_file
 
     def record_write(path, content):
         writes.append(Path(path))
         return original_write(path, content)
 
     monkeypatch.setattr(repository, '_atomic_write', record_write)
+    monkeypatch.setattr(
+        project_repository_module,
+        '_sha256_file',
+        lambda path: file_hashes.append(Path(path)) or original_file_hash(path),
+    )
     studio_project['layers'][0]['name'] = '변경됨'
     result = repository.sync_studio_layers(
         studio_project,
@@ -2481,6 +2489,10 @@ def test_studio_layer_partial_sync_writes_only_changed_layer(tmp_path, monkeypat
     assert second_path.read_bytes() == second_before
     assert project_dir / 'layers' / 'studio-one__first.json' in writes
     assert second_path not in writes
+    assert file_hashes == []
+    assert result['hashed_file_count'] == 0
+    assert result['reused_hash_count'] == 1
+    assert result['elapsed_ms'] >= 0
     assert set(result['managed_files']) == {
         'studio-one__first.json',
         'studio-one__second.json',
@@ -2488,6 +2500,16 @@ def test_studio_layer_partial_sync_writes_only_changed_layer(tmp_path, monkeypat
     assert result['layer_signature'] == _project_tree_category_signature(
         repository.get_project(project_id)['tree'], 'layers'
     )
+    file_hashes.clear()
+
+    second_path.write_text('{"layer_id":"second","frames":[]}\n', encoding='utf-8')
+    external_result = repository.sync_studio_layers(
+        studio_project,
+        upsert_layer_ids=[],
+        replace_all=False,
+    )
+    assert file_hashes == [second_path]
+    assert external_result['hashed_file_count'] == 1
 
 
 def test_studio_layer_partial_sync_deletes_only_requested_layer(tmp_path):
