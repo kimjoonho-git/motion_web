@@ -19,9 +19,10 @@ from typing import Any, Dict, Iterable, List, Optional
 
 import yaml
 
+from .constants import DEFAULT_PERIOD_SEC
+
 
 PROJECT_VERSION = 1
-DEFAULT_PERIOD_SEC = 0.02
 MOTION_FILE_SIZE_LIMIT_BYTES = 256 * 1024 * 1024
 MOTION_ID_PATTERN = re.compile(r'^[1-9]\d*-[1-9]\d*$')
 

@@ -10,8 +10,8 @@ from __future__ import annotations
 import math
 from typing import Any, Dict, List, Sequence
 
+from .constants import DEFAULT_PERIOD_SEC
 
-DEFAULT_PERIOD_SEC = 0.02
 EPSILON = 1e-9
 MAX_TIME_SCALE = 100.0
 

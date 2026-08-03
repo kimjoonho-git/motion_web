@@ -4,13 +4,10 @@ from __future__ import annotations
 
 import json
 import hashlib
-import copy
 import os
-import re
 import threading
 import time
 import traceback
-import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -18,23 +15,26 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
 
-from .layer_editor import merge_layers
+from .layer_commands import (
+    StudioLayerCommands,
+    layer_motion_ids,
+    next_numbered_layer_name,
+)
 from .layer_validation import (
-    point_curve_frame_mismatches,
     project_point_curve_frame_mismatches,
     validate_ranges,
 )
 from .operation_state import StudioOperationStateMachine
+from .playback_session import StudioPlaybackSession, project_initial_motion_values
 from .project_commands import StudioProjectCommands
-from .project_store import DEFAULT_PERIOD_SEC, ProjectStore, normalize_layer
+from .project_store import DEFAULT_PERIOD_SEC, ProjectStore
+from .recording_session import StudioRecordingSession
 from .ros_gateway import StudioRosGateway
 from .timeline import (
     final_export_layer,
     layer_conflicts,
     layer_transition_warnings,
     motion_file_text,
-    project_motion_ids,
-    recording_values,
     render_project,
 )
 
@@ -43,63 +43,6 @@ DEFAULT_MOTION_PROJECTS_DIR = str(
     Path(os.environ.get('MOTION_WORKSPACE', Path.cwd())).expanduser()
     / 'motion_projects'
 )
-
-
-def next_numbered_layer_name(layers: List[Dict[str, Any]], label: str) -> str:
-    """Return a stable new name even after layers are deleted or reordered."""
-    pattern = re.compile(rf'^{re.escape(label)}\s+(\d+)$')
-    numbers = []
-    for layer in layers:
-        if not isinstance(layer, dict):
-            continue
-        matched = pattern.fullmatch(str(layer.get('name') or '').strip())
-        if matched:
-            numbers.append(int(matched.group(1)))
-    return f'{label} {max(numbers, default=0) + 1}'
-
-
-def project_initial_motion_values(
-    project: Dict[str, Any], motion_ids: List[str]
-) -> Dict[str, float]:
-    """Return each enabled track's earliest recorded value for S-curve initialization."""
-    selected = set(motion_ids)
-    earliest: Dict[str, tuple[float, float]] = {}
-    for layer in project.get('layers') or []:
-        if not isinstance(layer, dict) or layer.get('enabled') is False:
-            continue
-        for frame in layer.get('frames') or []:
-            try:
-                time_sec = float(frame.get('time_sec') or 0.0)
-            except (AttributeError, TypeError, ValueError):
-                continue
-            for motion_id, raw_value in (frame.get('values') or {}).items():
-                motion_id = str(motion_id)
-                if motion_id not in selected:
-                    continue
-                current = earliest.get(motion_id)
-                if current is None or time_sec < current[0]:
-                    earliest[motion_id] = (time_sec, float(raw_value))
-    return {
-        motion_id: earliest[motion_id][1]
-        for motion_id in motion_ids
-        if motion_id in earliest
-    }
-
-
-def layer_motion_ids(layer: Dict[str, Any]) -> set[str]:
-    result = {
-        str(motion_id)
-        for frame in layer.get('frames') or []
-        if isinstance(frame, dict)
-        for motion_id in (frame.get('values') or {})
-        if str(motion_id)
-    }
-    result.update(
-        str(curve.get('motion_id') or '')
-        for curve in layer.get('point_curves') or []
-        if isinstance(curve, dict) and str(curve.get('motion_id') or '')
-    )
-    return result
 
 
 class MotionStudioNode(Node):
@@ -160,6 +103,9 @@ class MotionStudioNode(Node):
         self._operation_state = StudioOperationStateMachine()
         self._status = self._empty_status()
         self._project_commands = StudioProjectCommands(self)
+        self._layer_commands = StudioLayerCommands(self)
+        self._recording_session = StudioRecordingSession(self)
+        self._playback_session = StudioPlaybackSession(self)
         self._ros_gateway = StudioRosGateway(self)
 
         self._request_pub = self.create_publisher(String, self.motion_run_request_topic, 10)
@@ -777,167 +723,20 @@ class MotionStudioNode(Node):
         raise ValueError(f'{last_message} · 제한 시간 초과로 모터 이동을 차단했습니다')
 
     def _record_tick(self) -> None:
-        with self._lock:
-            if self._status.get('state') != 'recording':
-                return
-            selected = self._selected_motion_values_locked()
-            values = recording_values(selected, self._record_eligible_motion_ids)
-            self._recorded_motion_ids.update(values)
-            index = len(self._record_frames) + 1
-            frame = {
-                'frame': index,
-                'time_sec': round(index * DEFAULT_PERIOD_SEC, 9),
-                'values': values,
-            }
-            self._record_frames.append(frame)
-            self._status['elapsed_sec'] = frame['time_sec']
-            self._status['recorded_frames'] = index
-            self._status['updated_at'] = time.time()
+        session = getattr(self, '_recording_session', None) or StudioRecordingSession(self)
+        session.record_tick()
 
     def _finish_record_locked(self, message: str = '모션 녹화 완료') -> str:
-        if not self._record_frames or not self._recorded_motion_ids:
-            self._record_frames = []
-            self._set_status_locked(
-                'idle',
-                '기록된 축이 없어 레이어를 만들지 않았습니다 · 녹화 중 MIDI SELECT 축을 움직이세요',
-            )
-            return ''
-        project = self._require_project_locked()
-        layers = project.setdefault('layers', [])
-        layer_name = next_numbered_layer_name(
-            layers, self._mode_label(self._record_mode)
-        )
-        layer = {
-            'layer_id': f'layer_{uuid.uuid4().hex[:8]}',
-            'name': layer_name,
-            'enabled': True,
-            'locked': False,
-            'created_at': time.time(),
-            'frames': list(self._record_frames),
-        }
-        layers.append(layer)
-        self._current_project = self._store.save_project(
-            project, upsert_layer_ids=[layer['layer_id']]
-        )
-        try:
-            mapping = self._store.mapping_check(self._current_project)
-            self._project_composition(
-                self._current_project,
-                mapping,
-                affected_motion_ids=layer_motion_ids(layer),
-                affected_layer_ids={layer['layer_id']},
-            )
-        except Exception:
-            # Composition feedback must never prevent the safety-first stop
-            # path after the recorded layer itself has been persisted.
-            self._composition_cache_project_id = ''
-            self._composition_cache = {}
-        count = len(self._record_frames)
-        motion_id_count = len(self._recorded_motion_ids)
-        self._record_frames = []
-        self._recorded_motion_ids = set()
-        self._set_status_locked(
-            'idle', f'{message} · {motion_id_count}개 축 · {count} 프레임 저장'
-        )
-        return layer['layer_id']
+        session = getattr(self, '_recording_session', None) or StudioRecordingSession(self)
+        return session.finish_locked(message)
 
     def _start_playback(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        with self._lock:
-            self._require_idle_locked()
-            project = self._require_project_locked()
-            self._validate_mapping_locked(project)
-            self._require_point_curve_consistency(project, '합성 미리보기')
-            motion_ids = project_motion_ids(project)
-            if not motion_ids:
-                raise ValueError('재생할 모션 데이터가 없습니다')
-            mapping = self._store.mapping_check(project)
-            frames = render_project(
-                project,
-                motion_ids=motion_ids,
-                motion_ranges_deg=self._motion_ranges(mapping),
-                initial_motion_values_deg=self._manual_initial_values(mapping),
-            )
-            file_id = self._store.write_motion_file(
-                f'{project["project_id"]}_preview', motion_file_text(project, frames), hidden=True
-            )
-            operation_generation = self._operation_machine().begin(
-                str(self._status.get('state') or '')
-            )
-            self._set_status_locked('initializing', '합성 미리보기 초기 위치 이동 중')
-            self._status['elapsed_sec'] = 0.0
-            self._status['playback_duration_sec'] = max(
-                (float(frame.get('time_sec') or 0.0) for frame in frames),
-                default=0.0,
-            )
-            self._status['playback_layer_count'] = sum(
-                1 for layer in project.get('layers', []) if layer.get('enabled', True)
-            )
-            self._status['runtime_progress'] = {}
-            self._status['initialization_progress'] = {}
-        thread = threading.Thread(
-            target=self._prepare_playback,
-            args=(
-                project,
-                file_id,
-                motion_ids,
-                float(payload.get('initial_move_time_sec') or 5.0),
-                operation_generation,
-            ),
-            daemon=True,
-        )
-        thread.start()
-        return {'success': True, 'message': '초기 위치 이동 후 합성 미리보기를 재생합니다'}
+        session = getattr(self, '_playback_session', None) or StudioPlaybackSession(self)
+        return session.start_playback(payload)
 
     def _start_initial_position(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Move to the composed project's initial position without starting playback."""
-        with self._lock:
-            self._require_idle_locked()
-            project = self._require_project_locked()
-            self._validate_mapping_locked(project)
-            self._require_point_curve_consistency(project, '초기 위치 이동')
-            mapping = self._store.mapping_check(project)
-            motion_ids = project_motion_ids(project)
-            if motion_ids:
-                conflicts = layer_conflicts(project)
-                if conflicts:
-                    first = conflicts[0]
-                    raise ValueError(
-                        '초기 위치 계산 불가: '
-                        f"{first['motion_id']} 레이어 시간이 겹칩니다"
-                    )
-                frames = [{
-                    'frame': 1,
-                    'time_sec': 0.0,
-                    'values': project_initial_motion_values(project, motion_ids),
-                }]
-            else:
-                motion_ids = list(mapping.get('motion_ids') or [])
-                if not motion_ids:
-                    raise ValueError('초기 위치를 계산할 모션축 설정이 없습니다')
-                frames = [{
-                    'frame': 1,
-                    'time_sec': 0.0,
-                    'values': {motion_id: 0.0 for motion_id in motion_ids},
-                }]
-            file_id = self._store.write_motion_file(
-                f'{project["project_id"]}_initial_position',
-                motion_file_text(project, frames),
-                hidden=True,
-            )
-            move_time = float(payload.get('initial_move_time_sec') or 5.0)
-            operation_generation = self._operation_machine().begin(
-                str(self._status.get('state') or '')
-            )
-            self._set_status_locked('initializing', '초기 위치 이동 중')
-            self._status['elapsed_sec'] = 0.0
-            self._status['runtime_progress'] = {}
-            self._status['initialization_progress'] = {}
-        threading.Thread(
-            target=self._prepare_initial_position,
-            args=(project, file_id, motion_ids, move_time, operation_generation),
-            daemon=True,
-        ).start()
-        return {'success': True, 'message': '초기 위치 이동을 시작합니다', 'status': self.snapshot()}
+        session = getattr(self, '_playback_session', None) or StudioPlaybackSession(self)
+        return session.start_initial_position(payload)
 
     def _prepare_initial_position(
         self,
@@ -947,34 +746,10 @@ class MotionStudioNode(Node):
         move_time: float,
         operation_generation: int,
     ) -> None:
-        try:
-            self._require_active_operation(operation_generation, 'initializing')
-            payload = self._run_payload(project, file_id, motion_ids, move_time)
-            result = self._request_run_for_operation(
-                'initialize', payload, 30.0, operation_generation, 'initializing'
-            )
-            if not result.get('success'):
-                raise ValueError(result.get('message') or '초기 위치 이동 실패')
-            deadline = time.monotonic() + max(15.0, move_time + 10.0)
-            while time.monotonic() < deadline:
-                with self._lock:
-                    if operation_generation != self._operation_generation:
-                        return
-                    state = self._motion_run_status.get('state')
-                    run_message = self._motion_run_status.get('message')
-                if state == 'initialized':
-                    with self._lock:
-                        if operation_generation == self._operation_generation:
-                            self._set_status_locked('idle', '초기 위치 이동 완료')
-                    return
-                if state == 'error':
-                    raise ValueError(run_message or '초기 위치 이동 실패')
-                time.sleep(0.05)
-            raise ValueError('초기 위치 도착 확인 시간 초과')
-        except Exception as exc:
-            with self._lock:
-                if operation_generation == self._operation_generation:
-                    self._set_status_locked('error', str(exc))
+        session = getattr(self, '_playback_session', None) or StudioPlaybackSession(self)
+        session.prepare_initial_position(
+            project, file_id, motion_ids, move_time, operation_generation
+        )
 
     def _prepare_playback(
         self,
@@ -984,82 +759,18 @@ class MotionStudioNode(Node):
         move_time: float,
         operation_generation: int,
     ) -> None:
-        try:
-            self._require_active_operation(operation_generation, 'initializing')
-            payload = {
-                **self._run_payload(
-                    project,
-                    file_id,
-                    motion_ids,
-                    move_time,
-                ),
-                'countdown_sec': 3.0,
-            }
-            result = self._request_run_for_operation(
-                'start', payload, 5.0, operation_generation, 'initializing'
-            )
-            if not result.get('success'):
-                raise ValueError(result.get('message') or '합성 미리보기 시작 실패')
-        except Exception as exc:
-            with self._lock:
-                if operation_generation == self._operation_generation:
-                    self._set_status_locked('error', str(exc))
+        session = getattr(self, '_playback_session', None) or StudioPlaybackSession(self)
+        session.prepare_playback(
+            project, file_id, motion_ids, move_time, operation_generation
+        )
 
     def _stop(self) -> Dict[str, Any]:
-        with self._lock:
-            state = self._status.get('state')
-            stop_generation = self._operation_machine().cancel()
-            project = None
-            completion_message = '모션 스튜디오 정지 완료'
-            recorded_layer_id = ''
-            if state == 'recording':
-                recorded_layer_id = self._finish_record_locked()
-                completion_message = self._status['message']
-                project = self._current_project
-            self._set_status_locked('stopping', '정지 명령 전달 중')
-            status = self.snapshot()
-        threading.Thread(
-            target=self._finish_stop,
-            args=(stop_generation, completion_message),
-            daemon=True,
-        ).start()
-        result = {
-            'success': True,
-            'message': '정지 명령을 즉시 전달했습니다',
-            'status': status,
-        }
-        if project is not None:
-            result['project'] = project
-            result['composition'] = dict(
-                getattr(self, '_composition_cache', {}) or {}
-            )
-            result['layer_sync'] = {
-                'upsert_layer_ids': (
-                    [recorded_layer_id] if recorded_layer_id else []
-                ),
-                'delete_layer_ids': [],
-            }
-        return result
+        session = getattr(self, '_playback_session', None) or StudioPlaybackSession(self)
+        return session.stop()
 
     def _finish_stop(self, stop_generation: int, completion_message: str) -> None:
-        """Stop motor output first, then release recording-only MIDI state."""
-        run_result = self._request_run('stop', {}, 3.0)
-        midi_result = self._request_midi('studio_recording_ready', {}, 2.0)
-        with self._lock:
-            if stop_generation != self._operation_generation:
-                return
-            if not run_result.get('success'):
-                self._set_status_locked(
-                    'error',
-                    str(run_result.get('message') or '모션 정지 명령 확인 실패'),
-                )
-                return
-            if not midi_result.get('success'):
-                completion_message = (
-                    f'{completion_message} · MIDI 제어 복구 확인 필요: '
-                    f'{midi_result.get("message") or "응답 없음"}'
-                )
-            self._set_status_locked('idle', completion_message)
+        session = getattr(self, '_playback_session', None) or StudioPlaybackSession(self)
+        session.finish_stop(stop_generation, completion_message)
 
     def _export(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:
@@ -1094,303 +805,28 @@ class MotionStudioNode(Node):
         }
 
     def _update_layer(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        layer_id = str(payload.get('layer_id') or '')
-        with self._lock:
-            self._require_idle_locked()
-            project = self._require_project_locked()
-            layer = next((item for item in project.get('layers') or []
-                          if item.get('layer_id') == layer_id), None)
-            if layer is None:
-                raise ValueError('레이어를 찾을 수 없습니다')
-            if layer.get('locked') and payload.get('locked') is not False and any(
-                key in payload for key in ('enabled', 'name')
-            ):
-                raise ValueError('잠긴 레이어는 재생 선택 상태나 이름을 변경할 수 없습니다')
-            if 'enabled' in payload:
-                layer['enabled'] = bool(payload['enabled'])
-            if 'locked' in payload:
-                layer['locked'] = bool(payload['locked'])
-            if 'name' in payload:
-                layer['name'] = (
-                    str(payload.get('name') or '').strip()[:40] or layer['name']
-                )
-            affected_motion_ids = (
-                layer_motion_ids(layer)
-                if any(key in payload for key in ('enabled', 'name'))
-                else set()
-            )
-            self._current_project = self._store.save_project(
-                project, upsert_layer_ids=[layer_id]
-            )
-            project = self._current_project
-        result = self._project_result(
-            project,
-            '레이어 설정 저장 완료',
-            affected_motion_ids=affected_motion_ids,
-            affected_layer_ids={layer_id},
-        )
-        result['layer_sync'] = {
-            'upsert_layer_ids': [layer_id],
-            'delete_layer_ids': [],
-        }
-        return result
+        commands = getattr(self, '_layer_commands', None) or StudioLayerCommands(self)
+        return commands.update(payload)
 
     def _create_layer(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        with self._lock:
-            self._require_idle_locked()
-            project = self._require_project_locked()
-            layers = project.setdefault('layers', [])
-            requested_name = str(payload.get('name') or '').strip()[:40]
-            layer = normalize_layer({
-                'layer_id': f'layer_{uuid.uuid4().hex[:8]}',
-                'name': requested_name or next_numbered_layer_name(layers, '새 레이어'),
-                'enabled': False,
-                'locked': False,
-                'created_at': time.time(),
-                'edit_revision': 0,
-                'point_curves': [],
-                'frames': [],
-            }, len(layers))
-            layers.append(layer)
-            self._current_project = self._store.save_project(
-                project, upsert_layer_ids=[layer['layer_id']]
-            )
-            project = self._current_project
-        result = self._project_result(
-            project, '빈 레이어를 생성했습니다 · 편집 후 재생 선택하세요',
-            affected_layer_ids={layer['layer_id']},
-        )
-        result['layer_id'] = layer['layer_id']
-        result['layer_sync'] = {
-            'upsert_layer_ids': [layer['layer_id']],
-            'delete_layer_ids': [],
-        }
-        return result
+        commands = getattr(self, '_layer_commands', None) or StudioLayerCommands(self)
+        return commands.create(payload)
 
     def _replace_layer_data(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        layer_id = str(payload.get('layer_id') or '')
-        replacement = payload.get('layer')
-        if not isinstance(replacement, dict):
-            raise ValueError('저장할 레이어 데이터가 필요합니다')
-        with self._lock:
-            self._require_idle_locked()
-            project = self._require_project_locked()
-            index = next((
-                order for order, item in enumerate(project.get('layers') or [])
-                if str(item.get('layer_id') or '') == layer_id
-            ), None)
-            if index is None:
-                raise ValueError('레이어를 찾을 수 없습니다')
-            original = project['layers'][index]
-            if original.get('locked'):
-                raise ValueError('잠긴 레이어는 편집할 수 없습니다')
-            try:
-                original_revision = int(payload.get('original_revision') or 0)
-            except (TypeError, ValueError) as exc:
-                raise ValueError('원본 레이어 편집 버전이 올바르지 않습니다') from exc
-            if original_revision != int(original.get('edit_revision') or 0):
-                raise ValueError(
-                    '편집 중 원본 레이어가 변경되었습니다. 편집 창을 다시 열어 작업하세요'
-                )
-            original_motion_ids = layer_motion_ids(original)
-            updated = dict(replacement)
-            updated['layer_id'] = layer_id
-            updated['enabled'] = original.get('enabled') is not False
-            updated['locked'] = False
-            updated['created_at'] = original.get('created_at')
-            mapping = self._store.mapping_check(project)
-            available_ids = set(mapping.get('motion_ids') or [])
-            edited_ids = {
-                str(motion_id)
-                for frame in updated.get('frames') or []
-                if isinstance(frame, dict)
-                for motion_id in (frame.get('values') or {})
-            }
-            missing = sorted(edited_ids - available_ids)
-            if missing:
-                raise ValueError('모션축 설정에 없는 Motion ID: ' + ', '.join(missing))
-            range_issues = validate_ranges(updated, self._motion_ranges(mapping))
-            curve_mismatches = point_curve_frame_mismatches(updated)
-            if curve_mismatches:
-                first = curve_mismatches[0]
-                raise ValueError(
-                    f"{first['motion_id']} 포인트 곡선과 20ms 프레임이 다릅니다"
-                )
-            project['layers'][index] = updated
-            self._current_project = self._store.save_project(
-                project, upsert_layer_ids=[layer_id]
-            )
-            project = self._current_project
-        result = self._project_result(
-            project,
-            '편집한 레이어를 저장했습니다',
-            affected_motion_ids=original_motion_ids | layer_motion_ids(updated),
-            affected_layer_ids={layer_id},
-        )
-        result['range_warnings'] = range_issues
-        result['layer_sync'] = {
-            'upsert_layer_ids': [layer_id],
-            'delete_layer_ids': [],
-        }
-        return result
+        commands = getattr(self, '_layer_commands', None) or StudioLayerCommands(self)
+        return commands.replace_data(payload)
 
     def _delete_layer(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        layer_id = str(payload.get('layer_id') or '')
-        with self._lock:
-            self._require_idle_locked()
-            project = self._require_project_locked()
-            layer = next((
-                item for item in project.get('layers') or []
-                if str(item.get('layer_id') or '') == layer_id
-            ), None)
-            if layer is None:
-                raise ValueError('레이어를 찾을 수 없습니다')
-            if layer.get('locked'):
-                raise ValueError('잠긴 레이어는 삭제할 수 없습니다')
-            affected_motion_ids = layer_motion_ids(layer)
-            project['layers'] = [
-                item for item in project.get('layers') or []
-                if str(item.get('layer_id') or '') != layer_id
-            ]
-            self._current_project = self._store.save_project(
-                project,
-                upsert_layer_ids=[],
-                delete_layer_ids=[layer_id],
-            )
-            project = self._current_project
-        result = self._project_result(
-            project,
-            '레이어를 삭제했습니다',
-            affected_motion_ids=affected_motion_ids,
-            affected_layer_ids={layer_id},
-        )
-        result['layer_sync'] = {
-            'upsert_layer_ids': [],
-            'delete_layer_ids': [layer_id],
-        }
-        return result
+        commands = getattr(self, '_layer_commands', None) or StudioLayerCommands(self)
+        return commands.delete(payload)
 
     def _duplicate_layer(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        layer_id = str(payload.get('layer_id') or '')
-        with self._lock:
-            self._require_idle_locked()
-            project = self._require_project_locked()
-            source = next((
-                item for item in project.get('layers') or []
-                if str(item.get('layer_id') or '') == layer_id
-            ), None)
-            if source is None:
-                raise ValueError('복사할 레이어를 찾을 수 없습니다')
-            duplicate = copy.deepcopy(source)
-            duplicate['layer_id'] = f'layer_{uuid.uuid4().hex[:8]}'
-            duplicate['name'] = (
-                str(payload.get('name') or f"{source.get('name') or '레이어'} 복사본")
-                .strip()[:40] or '레이어 복사본'
-            )
-            duplicate['enabled'] = False
-            duplicate['locked'] = False
-            duplicate['created_at'] = time.time()
-            duplicate['copied_from_layer_id'] = layer_id
-            duplicate['edit_revision'] = 0
-            for curve in duplicate.get('point_curves') or []:
-                curve['curve_id'] = f'curve_{uuid.uuid4().hex[:8]}'
-                for point in curve.get('points') or []:
-                    point['point_id'] = f'point_{uuid.uuid4().hex[:8]}'
-            project.setdefault('layers', []).append(normalize_layer(duplicate))
-            self._current_project = self._store.save_project(
-                project, upsert_layer_ids=[duplicate['layer_id']]
-            )
-            project = self._current_project
-        result = self._project_result(
-            project,
-            '레이어를 독립 복사했습니다 · 재생 미선택 상태입니다',
-            affected_motion_ids=layer_motion_ids(duplicate),
-            affected_layer_ids={duplicate['layer_id']},
-        )
-        result['layer_id'] = duplicate['layer_id']
-        result['layer_sync'] = {
-            'upsert_layer_ids': [duplicate['layer_id']],
-            'delete_layer_ids': [],
-        }
-        return result
+        commands = getattr(self, '_layer_commands', None) or StudioLayerCommands(self)
+        return commands.duplicate(payload)
 
     def _commit_merged_layer(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        source_ids = {
-            str(value) for value in payload.get('source_layer_ids') or [] if str(value)
-        }
-        if len(source_ids) < 2:
-            raise ValueError('합칠 원본 레이어 정보가 필요합니다')
-        with self._lock:
-            self._require_idle_locked()
-            project = self._require_project_locked()
-            sources = [
-                item for item in project.get('layers') or []
-                if str(item.get('layer_id') or '') in source_ids
-            ]
-            if len(sources) != len(source_ids):
-                raise ValueError('합칠 원본 레이어를 찾을 수 없습니다')
-            if any(item.get('locked') for item in sources):
-                raise ValueError('잠긴 레이어는 합치기에 사용할 수 없습니다')
-            inconsistent = [
-                str(item.get('name') or item.get('layer_id') or '')
-                for item in sources
-                if point_curve_frame_mismatches(item)
-            ]
-            if inconsistent:
-                raise ValueError(
-                    '포인트와 20ms 프레임이 다른 레이어를 먼저 다시 계산하세요: '
-                    + ', '.join(inconsistent)
-                )
-            provided = payload.get('layer')
-            if not isinstance(provided, dict):
-                raise ValueError('계산 노드가 만든 합성 미리보기 데이터가 필요합니다')
-            expected_revisions = payload.get('source_revisions') or {}
-            for item in sources:
-                item_id = str(item.get('layer_id') or '')
-                try:
-                    expected = int(expected_revisions.get(item_id, -1))
-                except (TypeError, ValueError) as exc:
-                    raise ValueError('합칠 원본 레이어 버전이 올바르지 않습니다') from exc
-                if expected != int(item.get('edit_revision') or 0):
-                    raise ValueError('합성 미리보기 이후 원본 레이어가 변경되었습니다')
-            mapping = self._store.mapping_check(project)
-            merged = merge_layers(
-                project,
-                source_ids,
-                name=payload.get('name') or provided.get('name') or '합친 레이어',
-                append_layer_id=payload.get('append_layer_id'),
-                motion_ranges_deg=self._motion_ranges(mapping),
-                initial_motion_values_deg=self._manual_initial_values(mapping),
-            )
-            merge_report = dict(merged.get('merge_report') or {})
-            if set(merged.get('source_layer_ids') or []) != source_ids:
-                raise ValueError('합성 결과의 원본 레이어 정보가 일치하지 않습니다')
-            range_issues = validate_ranges(merged, self._motion_ranges(mapping))
-            merged = dict(merged)
-            merged['layer_id'] = f'merged_{uuid.uuid4().hex[:8]}'
-            merged['name'] = str(payload.get('name') or merged.get('name') or '합친 레이어')[:40]
-            merged['source_layer_ids'] = sorted(source_ids)
-            merged['enabled'] = False
-            merged['locked'] = False
-            project.setdefault('layers', []).append(merged)
-            self._current_project = self._store.save_project(
-                project, upsert_layer_ids=[merged['layer_id']]
-            )
-            project = self._current_project
-        result = self._project_result(
-            project,
-            '선택 레이어를 새 레이어로 합쳤습니다 · 결과는 재생 미선택 상태입니다',
-            affected_motion_ids=layer_motion_ids(merged),
-            affected_layer_ids={merged['layer_id']},
-        )
-        result['layer_id'] = merged['layer_id']
-        result['range_warnings'] = range_issues
-        result['merge_report'] = merge_report
-        result['layer_sync'] = {
-            'upsert_layer_ids': [merged['layer_id']],
-            'delete_layer_ids': [],
-        }
-        return result
+        commands = getattr(self, '_layer_commands', None) or StudioLayerCommands(self)
+        return commands.commit_merged(payload)
 
     @staticmethod
     def _motion_ranges(mapping: Dict[str, Any]) -> Dict[str, tuple[float, float]]:
@@ -1414,16 +850,8 @@ class MotionStudioNode(Node):
     def _run_payload(
         self, project: Dict[str, Any], file_id: str, motion_ids: List[str], move_time: float
     ) -> Dict[str, Any]:
-        return {
-            'project_id': self._workspace_project_id,
-            'context_id': self._execution_context.get('context_id', ''),
-            'project_generation': self._context_generation(),
-            'request_source': 'motion_studio',
-            'motion_file_id': file_id,
-            'mapping_file_id': project['mapping_file_id'],
-            'active_motion_ids': motion_ids,
-            'initial_move_time_sec': move_time,
-        }
+        session = getattr(self, '_playback_session', None) or StudioPlaybackSession(self)
+        return session.run_payload(project, file_id, motion_ids, move_time)
 
     def _context_generation(self) -> int:
         try:
@@ -1612,7 +1040,7 @@ class MotionStudioNode(Node):
 
     @staticmethod
     def _mode_label(mode: str) -> str:
-        return {'overdub': '오버더빙', 'append': '이어 녹화'}.get(mode, '녹화')
+        return StudioRecordingSession.mode_label(mode)
 
 
 def main(args: List[str] | None = None) -> None:
