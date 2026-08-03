@@ -10,7 +10,7 @@ from typing import Any, Dict, List
 
 from .layer_editor import merge_layers
 from .layer_validation import point_curve_frame_mismatches, validate_ranges
-from .project_store import normalize_layer
+from .motion_model import layer_motion_ids, normalize_layer
 
 
 def next_numbered_layer_name(layers: List[Dict[str, Any]], label: str) -> str:
@@ -23,22 +23,6 @@ def next_numbered_layer_name(layers: List[Dict[str, Any]], label: str) -> str:
         if matched:
             numbers.append(int(matched.group(1)))
     return f'{label} {max(numbers, default=0) + 1}'
-
-
-def layer_motion_ids(layer: Dict[str, Any]) -> set[str]:
-    result = {
-        str(motion_id)
-        for frame in layer.get('frames') or []
-        if isinstance(frame, dict)
-        for motion_id in (frame.get('values') or {})
-        if str(motion_id)
-    }
-    result.update(
-        str(curve.get('motion_id') or '')
-        for curve in layer.get('point_curves') or []
-        if isinstance(curve, dict) and str(curve.get('motion_id') or '')
-    )
-    return result
 
 
 class StudioLayerCommands:

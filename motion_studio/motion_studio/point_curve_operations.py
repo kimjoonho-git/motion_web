@@ -11,11 +11,7 @@ from .curve_engine import (
     point_curve_order,
     render_point_curve,
 )
-
-
-def curve_bounds(curve: Dict[str, Any]) -> tuple[float, float]:
-    points = curve.get('points') or []
-    return float(points[0]['time_sec']), float(points[-1]['time_sec'])
+from .motion_model import point_curve_bounds
 
 
 def transform_point_curve(
@@ -74,7 +70,7 @@ def validate_point_curve_overlaps(curves: Sequence[Dict[str, Any]]) -> None:
     by_motion_id: Dict[str, List[tuple[float, float]]] = {}
     for curve in curves:
         by_motion_id.setdefault(str(curve.get('motion_id') or ''), []).append(
-            curve_bounds(curve)
+            point_curve_bounds(curve)
         )
     for motion_id, ranges in by_motion_id.items():
         ordered = sorted(ranges)

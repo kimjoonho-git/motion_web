@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import hashlib
 import os
 import threading
 import time
@@ -15,28 +14,21 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
 
+from .export_service import StudioExportService
 from .layer_commands import (
     StudioLayerCommands,
-    layer_motion_ids,
     next_numbered_layer_name,
 )
-from .layer_validation import (
-    project_point_curve_frame_mismatches,
-    validate_ranges,
-)
 from .operation_state import StudioOperationStateMachine
+from .constants import DEFAULT_PERIOD_SEC
+from .mapping_model import manual_initial_values, motion_ranges
+from .motion_model import layer_motion_ids
 from .playback_session import StudioPlaybackSession, project_initial_motion_values
 from .project_commands import StudioProjectCommands
-from .project_store import DEFAULT_PERIOD_SEC, ProjectStore
+from .project_store import ProjectStore
 from .recording_session import StudioRecordingSession
 from .ros_gateway import StudioRosGateway
-from .timeline import (
-    final_export_layer,
-    layer_conflicts,
-    layer_transition_warnings,
-    motion_file_text,
-    render_project,
-)
+from .workspace_session import StudioWorkspaceSession
 
 
 DEFAULT_MOTION_PROJECTS_DIR = str(
@@ -106,6 +98,8 @@ class MotionStudioNode(Node):
         self._layer_commands = StudioLayerCommands(self)
         self._recording_session = StudioRecordingSession(self)
         self._playback_session = StudioPlaybackSession(self)
+        self._workspace_session = StudioWorkspaceSession(self)
+        self._export_service = StudioExportService(self)
         self._ros_gateway = StudioRosGateway(self)
 
         self._request_pub = self.create_publisher(String, self.motion_run_request_topic, 10)
@@ -314,48 +308,9 @@ class MotionStudioNode(Node):
         if command == 'apply_context':
             return self._apply_execution_context(payload)
         if command == 'confirm_context':
-            context_id = str(payload.get('context_id') or '').strip()
-            with self._lock:
-                if (
-                    not context_id
-                    or context_id != self._execution_context.get('context_id')
-                ):
-                    raise ValueError('확인하려는 실행 컨텍스트가 적용된 설정과 다릅니다')
-                self._execution_context_ready = True
-                confirmed_context = dict(self._execution_context)
-            return {
-                'success': True,
-                'message': '모션 스튜디오 사용 허용',
-                **confirmed_context,
-                'status': self.snapshot(),
-            }
+            return self._workspace().confirm_execution_context(payload)
         if command == 'invalidate_context':
-            with self._lock:
-                self._operation_machine().cancel()
-                self._store = ProjectStore()
-                self._workspace_project_id = ''
-                self._current_project = None
-                self._composition_cache_project_id = ''
-                self._composition_cache = {}
-                self._workspace_catalog_cache = None
-                self._execution_context = {}
-                self._execution_context_ready = False
-                self._midi_state = {}
-                self._motion_run_status = {}
-                self._run_results.clear()
-                self._midi_results.clear()
-                self._record_started = 0.0
-                self._record_frames = []
-                self._record_eligible_motion_ids = set()
-                self._recorded_motion_ids = set()
-                self._status = self._empty_status()
-            return {
-                'success': True,
-                'message': '모션 스튜디오 프로젝트 메모리 폐기',
-                'project_id': '',
-                'context_id': '',
-                'status': self.snapshot(),
-            }
+            return self._workspace().invalidate()
         project_commands = getattr(self, '_project_commands', None)
         if project_commands is None:
             project_commands = StudioProjectCommands(self)
@@ -378,90 +333,13 @@ class MotionStudioNode(Node):
         raise ValueError(f'지원하지 않는 모션 스튜디오 명령: {command}')
 
     def _apply_execution_context(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        self._select_workspace(payload)
-        context_id = str(payload.get('context_id') or '').strip()
-        mapping_file_id = str(payload.get('mapping_file_id') or '').strip()
-        mapping_sha256 = str(payload.get('mapping_sha256') or '').strip()
-        if not context_id or not mapping_file_id or not mapping_sha256:
-            raise ValueError('실행 컨텍스트 ID와 모션축 설정 버전이 필요합니다')
-        path = self.motion_projects_dir / self._workspace_project_id / 'motion_axis_matching' / mapping_file_id
-        if path.parent != (
-            self.motion_projects_dir / self._workspace_project_id / 'motion_axis_matching'
-        ) or not path.is_file():
-            raise ValueError('현재 프로젝트의 모션축 설정 파일을 찾을 수 없습니다')
-        actual_sha = hashlib.sha256(path.read_bytes()).hexdigest()
-        if actual_sha != mapping_sha256:
-            raise ValueError('모션축 설정 파일 버전이 실행 컨텍스트와 다릅니다')
-        with self._lock:
-            next_context = {
-                'context_id': context_id,
-                'project_id': self._workspace_project_id,
-                'project_generation': int(payload.get('project_generation') or 0),
-                'mapping_file_id': mapping_file_id,
-                'mapping_sha256': actual_sha,
-            }
-            same_context = self._execution_context == next_context
-            self._execution_context = next_context
-            if not same_context:
-                self._execution_context_ready = False
-        return {
-            'success': True,
-            'message': '모션 스튜디오 실행 컨텍스트 적용 확인 완료',
-            **self._execution_context,
-            'status': self.snapshot(),
-        }
+        return self._workspace().apply_execution_context(payload)
 
     def _require_execution_context(self) -> None:
-        with self._lock:
-            ready = self._execution_context_ready
-            project_id = self._execution_context.get('project_id')
-        if (
-            not ready
-            or project_id != self._workspace_project_id
-            or self._context_generation() != int(self._project_generation or 0)
-        ):
-            raise ValueError('현재 프로젝트 실행 컨텍스트 적용 대기 중입니다')
-        path = (
-            self.motion_projects_dir / project_id / 'motion_axis_matching'
-            / str(self._execution_context.get('mapping_file_id') or '')
-        )
-        if (
-            not path.is_file()
-            or hashlib.sha256(path.read_bytes()).hexdigest()
-            != self._execution_context.get('mapping_sha256')
-        ):
-            with self._lock:
-                self._execution_context_ready = False
-            raise ValueError('모션축 설정 파일이 변경되어 실행 컨텍스트 재적용이 필요합니다')
+        self._workspace().require_execution_context()
 
     def _select_workspace(self, payload: Dict[str, Any]) -> None:
-        project_id = str(
-            payload.get('project_id') or payload.get('workspace_project_id') or ''
-        ).strip()
-        if (
-            not project_id
-            or project_id != Path(project_id).name
-            or project_id.startswith('.')
-            or '/' in project_id
-            or '\\' in project_id
-        ):
-            raise ValueError('유효한 통합 프로젝트 ID가 필요합니다')
-        project_dir = (self.motion_projects_dir / project_id).resolve()
-        if (
-            project_dir.parent != self.motion_projects_dir
-            or not (project_dir / 'project.json').is_file()
-        ):
-            raise ValueError(f'통합 프로젝트를 찾을 수 없습니다: {project_id}')
-        if project_id == self._workspace_project_id:
-            return
-        with self._lock:
-            self._require_idle_locked()
-            self._store.use_workspace(project_dir)
-            self._workspace_project_id = project_id
-            self._current_project = None
-            self._composition_cache_project_id = ''
-            self._composition_cache = {}
-            self._workspace_catalog_cache = None
+        self._workspace().select(payload)
 
     def _project_composition(
         self,
@@ -471,94 +349,12 @@ class MotionStudioNode(Node):
         affected_motion_ids: set[str] | None = None,
         affected_layer_ids: set[str] | None = None,
     ) -> Dict[str, Any]:
-        project_id = str(project.get('project_id') or '')
-        motion_ranges = self._motion_ranges(mapping)
-        manual_values = self._manual_initial_values(mapping)
-        selected_motion_ids = {
-            str(value) for value in affected_motion_ids or set() if str(value)
-        }
-        selected_layer_ids = {
-            str(value) for value in affected_layer_ids or set() if str(value)
-        }
-        cached = getattr(self, '_composition_cache', {})
-        cache_matches = (
-            getattr(self, '_composition_cache_project_id', '') == project_id
-            and isinstance(cached, dict)
-            and bool(cached)
+        return self._workspace().composition(
+            project,
+            mapping,
+            affected_motion_ids=affected_motion_ids,
+            affected_layer_ids=affected_layer_ids,
         )
-        incremental = cache_matches and (
-            bool(selected_motion_ids) or bool(selected_layer_ids)
-        )
-        if incremental:
-            conflicts = [
-                item for item in cached.get('conflicts') or []
-                if str(item.get('motion_id') or '') not in selected_motion_ids
-            ]
-            conflicts.extend(layer_conflicts(
-                project, motion_ids=selected_motion_ids
-            ))
-            transition_warnings = [
-                item for item in cached.get('transition_warnings') or []
-                if str(item.get('motion_id') or '') not in selected_motion_ids
-            ]
-            transition_warnings.extend(layer_transition_warnings(
-                project,
-                motion_ranges,
-                manual_values,
-                motion_ids=selected_motion_ids,
-            ))
-            range_warnings = [
-                item for item in cached.get('range_warnings') or []
-                if str(item.get('layer_id') or '') not in selected_layer_ids
-            ]
-            curve_mismatches = [
-                item for item in cached.get('point_curve_mismatches') or []
-                if str(item.get('layer_id') or '') not in selected_layer_ids
-            ]
-            target_layers = [
-                layer for layer in project.get('layers') or []
-                if (
-                    isinstance(layer, dict)
-                    and str(layer.get('layer_id') or '') in selected_layer_ids
-                )
-            ]
-        else:
-            conflicts = layer_conflicts(project)
-            transition_warnings = layer_transition_warnings(
-                project, motion_ranges, manual_values
-            )
-            range_warnings = []
-            curve_mismatches = []
-            target_layers = [
-                layer for layer in project.get('layers') or []
-                if isinstance(layer, dict)
-            ]
-        range_warnings.extend(
-            {
-                **issue,
-                'layer_id': str(layer.get('layer_id') or ''),
-                'layer_name': str(layer.get('name') or ''),
-            }
-            for layer in target_layers
-            for issue in validate_ranges(layer, motion_ranges)
-        )
-        curve_mismatches.extend(project_point_curve_frame_mismatches(
-            {'layers': target_layers}
-        ))
-        composition = {
-            'conflicts': conflicts,
-            'transition_warnings': transition_warnings,
-            'range_warnings': range_warnings,
-            'point_curve_mismatches': curve_mismatches,
-            'conflict_free': (
-                not conflicts
-                and not transition_warnings
-                and not curve_mismatches
-            ),
-        }
-        self._composition_cache_project_id = project_id
-        self._composition_cache = composition
-        return composition
 
     def _project_result(
         self,
@@ -568,159 +364,27 @@ class MotionStudioNode(Node):
         affected_motion_ids: set[str] | None = None,
         affected_layer_ids: set[str] | None = None,
     ) -> Dict[str, Any]:
-        mapping = self._store.mapping_check(project)
-        composition = self._project_composition(
+        return self._workspace().project_result(
             project,
-            mapping,
+            message,
             affected_motion_ids=affected_motion_ids,
             affected_layer_ids=affected_layer_ids,
         )
-        return {
-            'success': True,
-            'message': message,
-            'project': project,
-            'mapping': mapping,
-            'status': self.snapshot(),
-            'composition': composition,
-        }
 
     @staticmethod
     def _require_point_curve_consistency(project: Dict[str, Any], action: str) -> None:
-        mismatches = project_point_curve_frame_mismatches(project)
-        if not mismatches:
-            return
-        first = mismatches[0]
-        raise ValueError(
-            f'{action} 차단: {first["layer_name"]}의 {first["motion_id"]} '
-            '포인트 곡선과 20ms 프레임이 다릅니다. '
-            '포인트 기준으로 다시 계산하세요'
+        StudioWorkspaceSession.require_point_curve_consistency(
+            project, action
         )
 
     def _start_record(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        mode = str(payload.get('mode') or 'record').strip().lower()
-        if mode not in {'record', 'overdub', 'append'}:
-            raise ValueError('녹화 모드는 record, overdub, append 중 하나여야 합니다')
-        with self._lock:
-            self._require_idle_locked()
-            project = self._require_project_locked()
-            self._validate_mapping_locked(project)
-            if mode in {'overdub', 'append'} and project.get('layers'):
-                raise ValueError(
-                    '오버더빙/이어 녹화는 축별 충돌 중재가 완성된 뒤 활성화됩니다. '
-                    '현재는 안전을 위해 일반 모션 녹화만 허용합니다'
-                )
-            mapping = self._store.mapping_check(project)
-            motion_ids = list(mapping.get('motion_ids') or [])
-            if not motion_ids:
-                raise ValueError('모션축 설정에 녹화 가능한 Motion ID가 없습니다')
-            self._record_mode = mode
-            self._record_frames = []
-            self._record_eligible_motion_ids = set(motion_ids)
-            self._recorded_motion_ids = set()
-            operation_generation = self._operation_machine().begin(
-                str(self._status.get('state') or '')
-            )
-            self._set_status_locked('initializing', '초기 위치 이동 준비 중')
-        thread = threading.Thread(
-            target=self._prepare_record,
-            args=(float(payload.get('initial_move_time_sec') or 5.0), operation_generation),
-            daemon=True,
-        )
-        thread.start()
-        return {'success': True, 'message': '자동 초기 위치 이동을 시작합니다', 'status': self.snapshot()}
+        return self._recording().start(payload)
 
     def _prepare_record(self, move_time: float, operation_generation: int) -> None:
-        midi_locked = False
-        try:
-            self._require_active_operation(operation_generation, 'initializing')
-            midi_prepare = self._request_midi('studio_recording_prepare', {}, 5.0)
-            midi_locked = True
-            if not midi_prepare.get('success'):
-                raise ValueError(
-                    midi_prepare.get('message') or 'MIDI 녹화 초기화 준비 실패'
-                )
-            self._wait_for_midi_faders_zero(8.0)
-            self._require_active_operation(operation_generation, 'initializing')
-            with self._lock:
-                project = dict(self._require_project_locked())
-                motion_ids = list(self._record_eligible_motion_ids)
-            zero_frames = [{'frame': 1, 'time_sec': DEFAULT_PERIOD_SEC,
-                            'values': {motion_id: 0.0 for motion_id in motion_ids}}]
-            file_id = self._store.write_motion_file(
-                f'{project["project_id"]}_record_init',
-                motion_file_text(project, zero_frames),
-                hidden=True,
-            )
-            run_payload = self._run_payload(project, file_id, motion_ids, move_time)
-            response = self._request_run_for_operation(
-                'initialize', run_payload, 30.0, operation_generation, 'initializing'
-            )
-            if not response.get('success'):
-                raise ValueError(response.get('message') or '초기 위치 이동 실패')
-            deadline = time.monotonic() + max(15.0, move_time + 10.0)
-            while time.monotonic() < deadline:
-                with self._lock:
-                    if operation_generation != self._operation_generation:
-                        return
-                    status = dict(self._motion_run_status)
-                if status.get('state') == 'initialized':
-                    break
-                if status.get('state') == 'error':
-                    raise ValueError(status.get('message') or '초기 위치 이동 실패')
-                time.sleep(0.05)
-            else:
-                raise ValueError('초기 위치 도착 확인 시간 초과')
-            if not self._countdown('녹화', operation_generation):
-                return
-            self._require_active_operation(operation_generation, 'initializing')
-            midi_ready = self._request_midi('studio_recording_ready', {}, 5.0)
-            if not midi_ready.get('success'):
-                raise ValueError(midi_ready.get('message') or 'MIDI SELECT 잠금 해제 실패')
-            midi_locked = False
-            with self._lock:
-                self._record_started = time.monotonic()
-                self._record_frames = []
-                self._recorded_motion_ids = set()
-                self._set_status_locked(
-                    'recording',
-                    '모션 녹화 중 · MIDI SELECT로 움직이는 축을 자동 기록합니다',
-                )
-        except Exception as exc:
-            with self._lock:
-                if operation_generation == self._operation_generation:
-                    self._set_status_locked('error', str(exc))
-        finally:
-            if midi_locked:
-                self._request_midi('studio_recording_ready', {}, 2.0)
+        self._recording().prepare(move_time, operation_generation)
 
     def _wait_for_midi_faders_zero(self, timeout: float) -> None:
-        """Block motor initialization until all physical MIDI faders are at zero."""
-        deadline = time.monotonic() + max(0.1, float(timeout))
-        last_message = 'MIDI 페이더 물리 0 복귀 확인 중'
-        while time.monotonic() < deadline:
-            response = self._request_midi(
-                'studio_recording_zero_status', {}, min(2.0, timeout)
-            )
-            if not response.get('success'):
-                raise ValueError(
-                    response.get('message') or 'MIDI 페이더 0 위치 확인 실패'
-                )
-            if not response.get('device_connected', True):
-                raise ValueError('MIDI 장치 연결이 끊겨 녹화를 시작할 수 없습니다')
-            if response.get('ready'):
-                return
-            last_message = str(
-                response.get('message') or 'MIDI 페이더 물리 0 복귀 확인 중'
-            )
-            with self._lock:
-                if self._status.get('state') != 'initializing':
-                    raise ValueError('녹화 초기화가 취소되었습니다')
-                self._status['phase'] = 'midi_zero_wait'
-                self._status['message'] = last_message
-                self._status['updated_at'] = time.time()
-            self._publish_status()
-            time.sleep(0.05)
-        raise ValueError(f'{last_message} · 제한 시간 초과로 모터 이동을 차단했습니다')
+        self._recording().wait_for_midi_faders_zero(timeout)
 
     def _record_tick(self) -> None:
         self._recording().record_tick()
@@ -767,36 +431,7 @@ class MotionStudioNode(Node):
         )
 
     def _export(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        with self._lock:
-            self._require_idle_locked()
-            project = self._require_project_locked()
-            self._validate_mapping_locked(project)
-            self._require_point_curve_consistency(project, '모션 파일 내보내기')
-            export_layer = final_export_layer(project)
-            mapping = self._store.mapping_check(project)
-            frames = render_project(
-                project,
-                motion_ranges_deg=self._motion_ranges(mapping),
-                initial_motion_values_deg=self._manual_initial_values(mapping),
-            )
-            requested_file_id = str(payload.get('file_id') or project['name']).strip()
-            file_title = Path(requested_file_id).stem.strip() or project['name']
-            file_id = self._store.write_motion_file(
-                requested_file_id,
-                motion_file_text(
-                    project,
-                    frames,
-                    editor_layer=export_layer,
-                    file_title=file_title,
-                ),
-            )
-            self._workspace_catalog_cache = None
-        return {
-            'success': True,
-            'message': '모션 파일 내보내기 완료',
-            'file_id': file_id,
-            'frame_count': len(frames),
-        }
+        return self._exporter().export(payload)
 
     def _update_layer(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self._layers().update(payload)
@@ -816,24 +451,8 @@ class MotionStudioNode(Node):
     def _commit_merged_layer(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self._layers().commit_merged(payload)
 
-    @staticmethod
-    def _motion_ranges(mapping: Dict[str, Any]) -> Dict[str, tuple[float, float]]:
-        return {
-            str(row['motion_id']): (
-                float(row.get('motion_lower_deg', -180.0)),
-                float(row.get('motion_upper_deg', 180.0)),
-            )
-            for row in mapping.get('rows') or []
-            if row.get('motion_id')
-        }
-
-    @staticmethod
-    def _manual_initial_values(mapping: Dict[str, Any]) -> Dict[str, float]:
-        return {
-            str(row['motion_id']): float(row.get('initial_motion_position_deg', 0.0))
-            for row in mapping.get('rows') or []
-            if row.get('motion_id') and str(row.get('initial_mode') or 'first_frame') == 'manual'
-        }
+    _motion_ranges = staticmethod(motion_ranges)
+    _manual_initial_values = staticmethod(manual_initial_values)
 
     def _run_payload(
         self, project: Dict[str, Any], file_id: str, motion_ids: List[str], move_time: float
@@ -849,6 +468,12 @@ class MotionStudioNode(Node):
     def _layers(self) -> StudioLayerCommands:
         return self._service('_layer_commands', StudioLayerCommands)
 
+    def _workspace(self) -> StudioWorkspaceSession:
+        return self._service('_workspace_session', StudioWorkspaceSession)
+
+    def _exporter(self) -> StudioExportService:
+        return self._service('_export_service', StudioExportService)
+
     def _service(self, attribute: str, factory: Any) -> Any:
         service = getattr(self, attribute, None)
         if service is None:
@@ -857,18 +482,10 @@ class MotionStudioNode(Node):
         return service
 
     def _context_generation(self) -> int:
-        try:
-            return int(self._execution_context.get('project_generation') or 0)
-        except (AttributeError, TypeError, ValueError):
-            return 0
+        return self._workspace().context_generation()
 
     def _response_generation_matches(self, payload: Any) -> bool:
-        if not isinstance(payload, dict):
-            return False
-        try:
-            return int(payload.get('project_generation')) == self._context_generation()
-        except (TypeError, ValueError):
-            return False
+        return self._workspace().response_generation_matches(payload)
 
     def _request_run(self, command: str, payload: Dict[str, Any], timeout: float) -> Dict[str, Any]:
         return self._gateway().request_run(command, payload, timeout)
@@ -928,28 +545,7 @@ class MotionStudioNode(Node):
         return True
 
     def _selected_motion_values_locked(self) -> Dict[str, float]:
-        result = {}
-        for channel in self._midi_state.get('channels') or []:
-            if (
-                not isinstance(channel, dict)
-                or not channel.get('control_enabled')
-                or channel.get('motion_group_valid') is False
-                or channel.get('motion_command_valid') is False
-            ):
-                continue
-            linked_values = channel.get('motion_values_deg')
-            if isinstance(linked_values, dict):
-                for motion_id, value in linked_values.items():
-                    motion_id = str(motion_id or '')
-                    if motion_id and isinstance(value, (int, float)):
-                        result[motion_id] = float(value)
-                if linked_values:
-                    continue
-            motion_id = str(channel.get('motion_id') or '')
-            value = channel.get('motion_value_deg')
-            if motion_id and isinstance(value, (int, float)):
-                result[motion_id] = float(value)
-        return result
+        return self._recording().selected_motion_values_locked()
 
     def _validate_mapping_locked(self, project: Dict[str, Any]) -> None:
         check = self._store.mapping_check(project)
@@ -1010,28 +606,11 @@ class MotionStudioNode(Node):
             project = self._current_project
             result['project'] = self._store.summary(project) if project else None
             result['selected_motion_ids'] = list(self._selected_motion_values_locked())
-            result['recording_motion_ids'] = sorted(self._recorded_motion_ids)
-            result['recorded_frames'] = len(self._record_frames)
             result['execution_context'] = {
                 **getattr(self, '_execution_context', {}),
                 'ready': bool(getattr(self, '_execution_context_ready', False)),
             }
-            if result.get('state') == 'recording':
-                result['elapsed_sec'] = round(len(self._record_frames) * DEFAULT_PERIOD_SEC, 3)
-                preview_limit = 240
-                frame_count = len(self._record_frames)
-                stride = max(1, (frame_count + preview_limit - 1) // preview_limit)
-                preview_frames = self._record_frames[::stride]
-                if self._record_frames and preview_frames[-1] is not self._record_frames[-1]:
-                    preview_frames = [*preview_frames, self._record_frames[-1]]
-                result['recording_preview_frames'] = [
-                    {
-                        'time_sec': float(frame.get('time_sec') or 0.0),
-                        'values': dict(frame.get('values') or {}),
-                    }
-                    for frame in preview_frames
-                ]
-                result['recording_preview_stride'] = stride
+            self._recording().update_snapshot(result)
             return result
 
     def _publish_status(self) -> None:

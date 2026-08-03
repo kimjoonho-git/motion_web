@@ -9,7 +9,8 @@ import json
 import math
 from typing import Any, Dict, Iterable, List, Mapping, Sequence
 
-from .project_store import DEFAULT_PERIOD_SEC, unique_motion_ids
+from .constants import DEFAULT_PERIOD_SEC
+from .motion_model import unique_motion_ids
 
 
 DEFAULT_LAYER_TRANSITION_SAFETY_LEVEL = 4

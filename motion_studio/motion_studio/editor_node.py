@@ -16,6 +16,8 @@ from .layer_editor import (
     merge_layers,
 )
 from .layer_validation import point_curve_frame_mismatches, validate_ranges
+from .mapping_model import manual_initial_values, motion_ranges
+from .motion_model import layer_motion_ids
 from .timeline import layer_conflicts, layer_transition_warnings
 
 
@@ -54,43 +56,9 @@ class MotionStudioEditorNode(Node):
             result, ensure_ascii=False, separators=(',', ':')
         )))
 
-    @staticmethod
-    def _ranges(payload: Dict[str, Any]) -> Dict[str, tuple[float, float]]:
-        result = {}
-        for row in payload.get('mapping_rows') or []:
-            if not isinstance(row, dict) or not row.get('motion_id'):
-                continue
-            result[str(row['motion_id'])] = (
-                float(row.get('motion_lower_deg', -180.0)),
-                float(row.get('motion_upper_deg', 180.0)),
-            )
-        return result
-
-    @staticmethod
-    def _manual_values(payload: Dict[str, Any]) -> Dict[str, float]:
-        return {
-            str(row['motion_id']): float(row.get('initial_motion_position_deg', 0.0))
-            for row in payload.get('mapping_rows') or []
-            if isinstance(row, dict)
-            and row.get('motion_id')
-            and str(row.get('initial_mode') or 'first_frame') == 'manual'
-        }
-
-    @staticmethod
-    def _layer_motion_ids(layer: Dict[str, Any]) -> set[str]:
-        result = {
-            str(motion_id)
-            for frame in layer.get('frames') or []
-            if isinstance(frame, dict)
-            for motion_id in (frame.get('values') or {})
-            if str(motion_id)
-        }
-        result.update(
-            str(curve.get('motion_id') or '')
-            for curve in layer.get('point_curves') or []
-            if isinstance(curve, dict) and str(curve.get('motion_id') or '')
-        )
-        return result
+    _ranges = staticmethod(motion_ranges)
+    _manual_values = staticmethod(manual_initial_values)
+    _layer_motion_ids = staticmethod(layer_motion_ids)
 
     def _handle(self, command: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         ranges = self._ranges(payload)

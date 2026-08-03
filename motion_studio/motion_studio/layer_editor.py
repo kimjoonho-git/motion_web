@@ -12,6 +12,7 @@ import uuid
 from typing import Any, Dict, Iterable, List, Mapping, Sequence
 
 from .axis_operations import apply_axis_operation
+from .constants import DEFAULT_PERIOD_SEC
 from .curve_engine import (
     EPSILON,
     MAX_TIME_SCALE,
@@ -24,7 +25,7 @@ from .point_curve_operations import (
     transform_point_curve,
     validate_point_curve_overlaps,
 )
-from .project_store import DEFAULT_PERIOD_SEC, normalize_layer, unique_motion_ids
+from .motion_model import normalize_layer, point_curve_bounds, unique_motion_ids
 from .timeline import layer_conflicts, render_project
 
 
@@ -82,11 +83,6 @@ def _inside(time_sec: float, start_sec: float, end_sec: float) -> bool:
     return start_sec - EPSILON <= time_sec <= end_sec + EPSILON
 
 
-def _curve_bounds(curve: Dict[str, Any]) -> tuple[float, float]:
-    points = curve.get('points') or []
-    return float(points[0]['time_sec']), float(points[-1]['time_sec'])
-
-
 def _overlapping_curves(
     layer: Dict[str, Any], motion_ids: Iterable[str], start_sec: float, end_sec: float,
     *, excluding_curve_id: str = '',
@@ -99,7 +95,7 @@ def _overlapping_curves(
             or curve.get('curve_id') == excluding_curve_id
         ):
             continue
-        curve_start, curve_end = _curve_bounds(curve)
+        curve_start, curve_end = point_curve_bounds(curve)
         if curve_start <= end_sec + EPSILON and curve_end >= start_sec - EPSILON:
             result.append(curve)
     return result
@@ -310,7 +306,7 @@ def edit_layer(layer: Dict[str, Any], request: Dict[str, Any]) -> Dict[str, Any]
         ), None)
         if previous_curve is not None:
             previous_motion_id = str(previous_curve['motion_id'])
-            previous_start, previous_end = _curve_bounds(previous_curve)
+            previous_start, previous_end = point_curve_bounds(previous_curve)
             tracks[previous_motion_id] = [
                 point for point in tracks.get(previous_motion_id, [])
                 if not _inside(point[0], previous_start, previous_end)
@@ -431,7 +427,7 @@ def edit_layer(layer: Dict[str, Any], request: Dict[str, Any]) -> Dict[str, Any]
     # Remove their old samples first so moved/scaled curves cannot silently
     # overwrite unrelated data at the destination.
     for curve in overlapping_curves:
-        curve_start, curve_end = _curve_bounds(curve)
+        curve_start, curve_end = point_curve_bounds(curve)
         motion_id = str(curve['motion_id'])
         tracks[motion_id] = [
             point for point in tracks[motion_id]

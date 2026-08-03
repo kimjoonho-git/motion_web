@@ -7,7 +7,8 @@ import uuid
 from typing import Any, Dict, List
 
 from .curve_engine import EPSILON, finite, frame_time
-from .project_store import DEFAULT_PERIOD_SEC, unique_motion_ids
+from .constants import DEFAULT_PERIOD_SEC
+from .motion_model import unique_motion_ids
 
 
 TrackMap = Dict[str, List[tuple[float, float]]]
