@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>midi_control</name>
+  <version>0.1.0</version>
+  <description>MIDI state, mapping, filtering, and device-feedback control.</description>
+  <maintainer email="joonho_test@example.com">joonho_test</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_python</buildtool_depend>
+  <depend>rclpy</depend>
+  <depend>midi_msgs</depend>
+  <depend>std_msgs</depend>
+  <exec_depend>midi_input_bridge</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

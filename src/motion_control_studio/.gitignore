@@ -1,0 +1,31 @@
+# ROS2 / colcon generated files
+build/
+install/
+log/
+
+# Python generated files
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Local backups and runtime artifacts
+backups/
+*.bak
+*.bak-*
+*.tmp
+*.log
+
+# User-created project data and the read-only legacy archive. These are moved
+# between computers explicitly (USB/import), not with the application source.
+/motion_projects/
+/motion_data/
+
+# Local machine files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Misc local files
+packages.microsoft.gpg
+sdo.txt
