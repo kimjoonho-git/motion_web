@@ -390,6 +390,27 @@ def edit_layer(layer: Dict[str, Any], request: Dict[str, Any]) -> Dict[str, Any]
             '포인트가 없는 모션은 편집할 수 없습니다. '
             '선택 축 전체에 포인트를 먼저 생성하세요'
         )
+    curves_with_selected_points = [
+        curve for curve in overlapping_curves
+        if any(
+            _inside(float(point['time_sec']), start_sec, end_sec)
+            for point in curve.get('points') or []
+        )
+    ]
+    motions_with_selected_points = {
+        str(curve.get('motion_id') or '')
+        for curve in curves_with_selected_points
+    }
+    missing_range_points = [
+        motion_id for motion_id in selected
+        if motion_id not in motions_with_selected_points
+    ]
+    if missing_range_points:
+        raise ValueError(
+            '선택영역에 편집할 포인트가 없는 Motion ID: '
+            + ', '.join(missing_range_points)
+        )
+    overlapping_curves = curves_with_selected_points
     point_times = {
         round(float(point['time_sec']), 9)
         for curve in overlapping_curves
@@ -400,15 +421,9 @@ def edit_layer(layer: Dict[str, Any], request: Dict[str, Any]) -> Dict[str, Any]
         or round(end_sec, 9) not in point_times
     ):
         raise ValueError(
-            '포인트 편집은 포인트 한 개 또는 같은 축의 두 포인트로 선택하세요'
+            '공통 시간영역은 선택된 축의 포인트 두 개로 지정하세요'
         )
-    selected_curve_points = [
-        point
-        for curve in overlapping_curves
-        for point in curve.get('points') or []
-        if _inside(float(point['time_sec']), start_sec, end_sec)
-    ]
-    single_point_selection = len(selected_curve_points) == 1
+    single_point_selection = abs(end_sec - start_sec) <= EPSILON
     time_scale_pivot = 0.0 if single_point_selection else start_sec
     value_scale_pivots: Dict[str, float] = {}
     if operation == 'value_scale':

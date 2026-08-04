@@ -301,6 +301,122 @@ def linked_point_curve_layer():
     })
 
 
+def multi_axis_point_curve_layer():
+    source = {
+        'layer_id': 'multi-linked', 'name': '다축 연동 곡선',
+        'enabled': True, 'locked': False,
+        'frames': [
+            {'frame': 1, 'time_sec': 1.0,
+             'values': {'1-1': 10.0, '2-1': 100.0}},
+            {'frame': 2, 'time_sec': 2.0,
+             'values': {'1-1': 20.0, '2-1': 110.0}},
+        ],
+    }
+    result = edit_layer(source, {
+        'operation': 'point_curve', 'motion_ids': ['1-1'],
+        'curve_id': 'curve-first', 'interpolation_order': 3,
+        'points': [
+            {'point_id': 'a1', 'time_sec': 1.0, 'value_deg': 10.0},
+            {'point_id': 'a2', 'time_sec': 1.5, 'value_deg': 30.0},
+            {'point_id': 'a3', 'time_sec': 2.0, 'value_deg': 20.0},
+        ],
+    })
+    return edit_layer(result, {
+        'operation': 'point_curve', 'motion_ids': ['2-1'],
+        'curve_id': 'curve-second', 'interpolation_order': 3,
+        'points': [
+            {'point_id': 'b1', 'time_sec': 1.0, 'value_deg': 100.0},
+            {'point_id': 'b2', 'time_sec': 1.6, 'value_deg': 120.0},
+            {'point_id': 'b3', 'time_sec': 2.0, 'value_deg': 110.0},
+        ],
+    })
+
+
+def test_common_time_range_edits_points_from_multiple_axes_atomically():
+    source = multi_axis_point_curve_layer()
+    result = edit_layer(source, {
+        'operation': 'value_offset', 'motion_ids': ['1-1', '2-1'],
+        'start_sec': 1.0, 'end_sec': 2.0, 'offset_deg': 5.0,
+    })
+
+    curves = {
+        curve['motion_id']: curve for curve in result['point_curves']
+    }
+    assert [point['value_deg'] for point in curves['1-1']['points']] == [
+        15.0, 35.0, 25.0,
+    ]
+    assert [point['value_deg'] for point in curves['2-1']['points']] == [
+        105.0, 125.0, 115.0,
+    ]
+    assert point_curve_frame_mismatches(result) == []
+    assert source != result
+
+
+def test_common_time_range_uses_one_time_pivot_for_different_axis_point_times():
+    result = edit_layer(multi_axis_point_curve_layer(), {
+        'operation': 'time_scale', 'motion_ids': ['1-1', '2-1'],
+        'start_sec': 1.0, 'end_sec': 2.0, 'factor': 0.5,
+    })
+
+    curves = {
+        curve['motion_id']: curve for curve in result['point_curves']
+    }
+    assert [point['time_sec'] for point in curves['1-1']['points']] == [
+        1.0, 1.24, 1.5,
+    ]
+    assert [point['time_sec'] for point in curves['2-1']['points']] == [
+        1.0, 1.3, 1.5,
+    ]
+    assert point_curve_frame_mismatches(result) == []
+
+
+def test_common_time_range_shifts_point_times_on_every_selected_axis():
+    result = edit_layer(multi_axis_point_curve_layer(), {
+        'operation': 'time_shift', 'motion_ids': ['1-1', '2-1'],
+        'start_sec': 1.0, 'end_sec': 2.0, 'delta_sec': 0.2,
+    })
+
+    curves = {
+        curve['motion_id']: curve for curve in result['point_curves']
+    }
+    assert [point['time_sec'] for point in curves['1-1']['points']] == [
+        1.2, 1.7, 2.2,
+    ]
+    assert [point['time_sec'] for point in curves['2-1']['points']] == [
+        1.2, 1.8, 2.2,
+    ]
+    assert point_curve_frame_mismatches(result) == []
+
+
+def test_common_time_range_scales_values_from_each_axis_start_value():
+    result = edit_layer(multi_axis_point_curve_layer(), {
+        'operation': 'value_scale', 'motion_ids': ['1-1', '2-1'],
+        'start_sec': 1.0, 'end_sec': 2.0, 'factor': 0.5,
+    })
+
+    curves = {
+        curve['motion_id']: curve for curve in result['point_curves']
+    }
+    assert [point['value_deg'] for point in curves['1-1']['points']] == [
+        10.0, 20.0, 15.0,
+    ]
+    assert [point['value_deg'] for point in curves['2-1']['points']] == [
+        100.0, 110.0, 105.0,
+    ]
+    assert point_curve_frame_mismatches(result) == []
+
+
+def test_common_time_range_rejects_an_axis_without_points_in_the_area():
+    with pytest.raises(
+        ValueError,
+        match='선택영역에 편집할 포인트가 없는 Motion ID: 2-1',
+    ):
+        edit_layer(multi_axis_point_curve_layer(), {
+            'operation': 'value_offset', 'motion_ids': ['1-1', '2-1'],
+            'start_sec': 1.4, 'end_sec': 1.5, 'offset_deg': 5.0,
+        })
+
+
 def test_time_shift_moves_point_metadata_and_rendered_curve_together():
     result = edit_layer(linked_point_curve_layer(), {
         'operation': 'time_shift', 'motion_ids': ['1-1'],
