@@ -29,6 +29,7 @@ from std_srvs.srv import SetBool, Trigger
 
 from .ethercat_alias_manager import EthercatAliasError, EthercatAliasManager
 from .motor_restart_coordinator import MotorRestartCoordinator
+from .motor_restart_diagnostics import diagnose_motor_restart_failure
 from .motion_studio_bridge import MotionStudioRosBridge
 from .motion_studio_routes import register_motion_studio_routes
 from .motion_studio_sync import (
@@ -1218,6 +1219,7 @@ class MotionWebBridge(Node):
         status = str(operation.get('status') or '')
         operation_type = str(operation.get('type') or '')
         started_at = float(operation.get('started_at') or 0.0)
+        state_payload = motion_state if isinstance(motion_state, dict) else {}
         bridge_restarted = float(
             getattr(self, '_bridge_started_at', 0.0) or 0.0
         ) > started_at
@@ -1243,6 +1245,26 @@ class MotionWebBridge(Node):
                         or '모터 설정 적용 제한시간을 초과했습니다'
                     ),
                 )
+            if operation_type == 'motor_restart':
+                diagnosis = diagnose_motor_restart_failure(
+                    operation,
+                    state_payload,
+                    runtime_status,
+                )
+                try:
+                    return repository.finish_motor_operation(
+                        operation_id,
+                        'timeout',
+                        phase='timed_out',
+                        error=str(diagnosis['message']),
+                        details={
+                            'failure_code': diagnosis['failure_code'],
+                            'pending_axes': diagnosis['pending_axes'],
+                            'pending_connections': diagnosis['pending_connections'],
+                        },
+                    )
+                except ValueError:
+                    return operation
             try:
                 return repository.finish_motor_operation(
                     operation_id,
@@ -1265,7 +1287,6 @@ class MotionWebBridge(Node):
         }:
             return operation
 
-        state_payload = motion_state if isinstance(motion_state, dict) else {}
         if operation_type == 'motor_restart':
             return self._motor_restart_lifecycle().reconcile(
                 operation,

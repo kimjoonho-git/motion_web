@@ -12,6 +12,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Optional
 
+from .motor_restart_diagnostics import motor_restart_service_failure
+
 
 ReadinessCheck = Callable[
     [Dict[str, Any], Dict[str, Any], Dict[str, Any]],
@@ -191,7 +193,10 @@ class MotorRestartCoordinator:
                 },
             )
         except (OSError, RuntimeError, ValueError) as exc:
-            self._finish_failure_if_running(operation_id, str(exc))
+            self._finish_failure_if_running(
+                operation_id,
+                motor_restart_service_failure(exc),
+            )
 
     @staticmethod
     def _validate_new_generation(

@@ -75,6 +75,7 @@ const workspaceRouteState = createWorkspaceRouteState('monitoring');
 let projectExplorer = null;
 const RESTART_READY_STABLE_MS = 3500;
 const RESTART_TIMEOUT_MS = 45000;
+const MOTOR_RESTART_STATUS_GRACE_MS = 10000;
 const IDENTITY_BLOCKED_WORKSPACES = new Set(['manual', 'motion-run']);
 
 function blockWorkspaceForMotorIdentity(workspace) {
@@ -675,7 +676,10 @@ function restartReadyState(payload) {
   const elapsedMs = appState.configApplyStartedAtMs
     ? Date.now() - appState.configApplyStartedAtMs
     : 0;
-  if (elapsedMs >= RESTART_TIMEOUT_MS) {
+  if (
+    elapsedMs >= RESTART_TIMEOUT_MS
+    && (restartMode !== 'motor_control' || !payload)
+  ) {
     return {
       ready: false,
       failed: true,
@@ -719,9 +723,7 @@ function restartReadyState(payload) {
       return {
         ready: false,
         failed: true,
-        title: tracked.state === 'timeout'
-          ? '모터 작업 확인 시간 초과'
-          : '모터 작업 실패',
+        title: '모터 제어 재시작 실패',
         detail: tracked.detail,
       };
     }
@@ -730,6 +732,14 @@ function restartReadyState(payload) {
         ready: true,
         title: '모터 제어 재시작 완료',
         detail: tracked.detail,
+      };
+    }
+    if (elapsedMs >= RESTART_TIMEOUT_MS + MOTOR_RESTART_STATUS_GRACE_MS) {
+      return {
+        ready: false,
+        failed: true,
+        title: '모터 제어 재시작 실패',
+        detail: '서버의 최종 모터 연결 진단 결과를 받지 못했습니다. Motor Manager 서비스 상태를 확인하세요.',
       };
     }
     return {
@@ -1411,7 +1421,10 @@ if (el.motorControlRestartButton) {
     } catch (error) {
       clearRestartTracking();
       setRestartOverlay(false);
-      window.alert(error?.message || String(error));
+      await appDialogs.alert(error?.message || String(error), {
+        title: '모터 제어 재시작 실패',
+        tone: 'danger',
+      });
     } finally {
       el.motorControlRestartButton.textContent = originalText;
       window.setTimeout(() => fetchStatus(), 3000);

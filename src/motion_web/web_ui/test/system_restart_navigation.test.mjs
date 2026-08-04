@@ -66,6 +66,10 @@ test('restart controls require confirmation and invoke only their matching opera
   assert.doesNotMatch(programHandler, /restartMotorControlSystem\(\)/);
   assert.match(motorHandler, /await appDialogs\.confirm/);
   assert.match(motorHandler, /restartMotorControlSystem\(\)/);
+  assert.match(
+    motorHandler,
+    /await appDialogs\.alert[\s\S]*?title: '모터 제어 재시작 실패'[\s\S]*?tone: 'danger'/,
+  );
   assert.doesNotMatch(motorHandler, /restartManagedProgram\(\)/);
 });
 
@@ -95,7 +99,16 @@ test('motor-control restart waits for its backend operation and has a timeout', 
     /restartMode === 'motor_control'[\s\S]*?trackedMotorRestartState/,
   );
   assert.match(main, /RESTART_TIMEOUT_MS = 45000/);
+  assert.match(main, /MOTOR_RESTART_STATUS_GRACE_MS = 10000/);
   assert.match(main, /startRestartProgressPolling\(\)/);
+  assert.match(
+    main,
+    /restartMode === 'motor_control'[\s\S]*?title: '모터 제어 재시작 실패'/,
+  );
+  assert.match(
+    main,
+    /RESTART_TIMEOUT_MS \+ MOTOR_RESTART_STATUS_GRACE_MS[\s\S]*?서버의 최종 모터 연결 진단 결과를 받지 못했습니다/,
+  );
 });
 
 test('motor-control restart requires the selected project motor config to be applied', () => {
