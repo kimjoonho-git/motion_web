@@ -549,7 +549,7 @@ test('editor keeps the graph and compact range toolbar in one viewport layout', 
     /studio-editor-layout[\s\S]*?studio-editor-sidebar[\s\S]*?studio-editor-main[\s\S]*?studioEditorGraph[\s\S]*?studio-editor-inspector/,
   );
   assert.match(html, /id="studioEditorSaveConfirmModal"/);
-  assert.match(html, /id="studioEditorDangerZone"/);
+  assert.doesNotMatch(html, /id="studioEditorDangerZone"/);
   assert.match(html, /id="studioEditorTimeZoomInButton"/);
   assert.match(html, /id="studioEditorValueZoomInButton"/);
   assert.match(html, /id="studioEditorValueRangeLockButton"[^>]*>축 범위 고정</);
@@ -721,27 +721,24 @@ test('motion export identifies the playback-selected layer and ignores the blue 
   assert.match(source, /연한 파란색 행 · 상세보기 대상이며 내보내기와 무관/);
 });
 
-test('range editing stays disabled until two distinct points from one curve are selected', () => {
+test('range editing accepts two distinct times from different axes', () => {
   const editor = { rangeSelection: { phase: 'awaiting_start', start: null, end: null } };
-  const target = (pointId, timeSec, curveId = 'curve-a') => ({
-    curve: { curve_id: curveId, motion_id: '1-1' },
-    point: { point_id: pointId, time_sec: timeSec },
+  const target = (pointId, timeSec, curveId = 'curve-a', motionId = '1-1') => ({
+    curve: { curve_id: curveId, motion_id: motionId },
+    point: { point_id: pointId, time_sec: timeSec, value_deg: timeSec },
   });
 
   assert.equal(motionStudioSelectRangePoint(editor, target('p1', 1)).phase, 'awaiting_end');
   assert.equal(motionStudioSelectRangePoint(editor, target('p1', 1)).reason, 'same_point');
   assert.equal(
-    motionStudioSelectRangePoint(editor, target('p2', 2, 'curve-b')).reason,
-    'different_curve',
+    motionStudioSelectRangePoint(editor, target('same-time', 1, 'curve-b', '2-1')).reason,
+    'same_time',
   );
   assert.equal(editor.rangeSelection.phase, 'awaiting_end');
-  assert.equal(motionStudioSelectRangePoint(editor, target('p2', 2)).phase, 'complete');
-  assert.equal(motionStudioPointRangeReady(
-    editor.rangeSelection.start.timeSec,
-    editor.rangeSelection.end.timeSec,
-    editor.rangeSelection.start.motionId,
-    editor.rangeSelection.start.curveId,
-  ), true);
+  assert.equal(
+    motionStudioSelectRangePoint(editor, target('p2', 2, 'curve-b', '2-1')).phase,
+    'complete',
+  );
 });
 
 test('point range actions reset stale selection and use the point-curve apply path', () => {
@@ -771,7 +768,11 @@ test('point range actions reset stale selection and use the point-curve apply pa
     /id="studioEditorRangeSelectButton"[^>]*aria-pressed="false">구간 선택</,
   );
   assert.doesNotMatch(html, /studio-editor-range-actions hidden/);
-  assert.match(html, /id="studioEditorRangeStatus"[^>]*>그래프에서 같은 포인트 곡선/);
+  assert.match(
+    html,
+    /id="studioEditorRangeActions"[\s\S]*?class="studio-editor-point-action-row"[\s\S]*?id="studioEditorPointAddButton"[\s\S]*?id="studioEditorPointDeleteButton"[\s\S]*?class="studio-editor-range-action-row"[\s\S]*?id="studioEditorRangeCopyButton"[\s\S]*?id="studioEditorRangeDeleteButton"[\s\S]*?<\/section>/,
+  );
+  assert.match(html, /id="studioEditorRangeStatus"[^>]*>선택된 축에서 시작·종료 포인트/);
   assert.match(html, /id="studioEditorRangeCopyTarget"[^>]*step="0\.02"[^>]*disabled/);
   assert.match(html, /id="studioEditorRangeCopyButton"[^>]*disabled>구간 복사</);
   assert.match(html, /id="studioEditorRangeDeleteButton"[^>]*disabled>구간 삭제</);
@@ -794,17 +795,21 @@ test('point range actions reset stale selection and use the point-curve apply pa
     styles,
     /studio-editor-range-actions button\[aria-pressed="true"\]/,
   );
+  assert.match(
+    styles,
+    /studio-editor-range-actions button \{[\s\S]*?white-space: nowrap/,
+  );
   assert.match(source, /if \(editor\.suppressGraphClick && !rangeSelecting\)/);
   assert.match(source, /rangeSelecting \? 22 : 14/);
   assert.match(source, /구간을 선택하려면 포인트 곡선이 표시된 Motion ID/);
   assert.doesNotMatch(source, /studioEditorRangeActions\.classList\.toggle\('hidden'/);
   assert.match(
     source,
-    /studioEditorRangeStatus\.textContent = rangeReady[\s\S]*?selectedRange\.points\.length/,
+    /studioEditorRangeStatus\.textContent = rangeReady[\s\S]*?rangePointTargets\.length/,
   );
   assert.match(
     source,
-    /studioEditorRangeCopyTarget\.disabled = !rangeReady \|\| Boolean\(editor\?\.preview\)/,
+    /studioEditorRangeCopyTarget\.disabled = !selectedRange \|\| Boolean\(editor\?\.preview\)/,
   );
 });
 

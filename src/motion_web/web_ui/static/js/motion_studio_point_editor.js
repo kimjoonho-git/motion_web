@@ -15,7 +15,7 @@ import {
   motionStudioRangeSelectionActive,
   motionStudioRangeSelectionBounds,
   motionStudioResetRangeSelection,
-} from './motion_studio_editor_state.js?v=20260803-studio-structure-12';
+} from './motion_studio_editor_state.js?v=20260804-multi-axis-range-1';
 
 export function updateMotionStudioDraftPoint(editor, point, {
   timeSec,
@@ -260,7 +260,7 @@ export function bindMotionStudioPointEditorEvents(context) {
     motionStudioResetRangeSelection(editor, selecting);
     setEditorMessage(
       selecting
-        ? '구간 선택 · 같은 포인트 곡선에서 시작 포인트를 선택하세요.'
+        ? '공통 시간영역 선택 · 선택된 축에서 시작 포인트를 선택하세요.'
         : '구간 선택을 취소했습니다 · 포인트 하나를 선택하거나 드래그할 수 있습니다.',
     );
     renderEditor();
@@ -269,7 +269,7 @@ export function bindMotionStudioPointEditorEvents(context) {
     const editor = state.editor;
     const selectedRange = selectedEditorPointRange(editor);
     if (!editor || !selectedRange) {
-      setEditorMessage('같은 포인트 곡선의 서로 다른 포인트 두 개를 선택하세요.', true);
+      setEditorMessage('구간 복사는 같은 축·같은 곡선의 두 포인트를 선택하세요.', true);
       return;
     }
     const bounds = motionStudioRangeSelectionBounds(editor);

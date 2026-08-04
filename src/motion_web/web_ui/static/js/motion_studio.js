@@ -50,7 +50,7 @@ import {
 } from './motion_studio_ui.js?v=20260729-editor-workflow-export-1';
 import {
   motionStudioEditorAxisLabel,
-} from './motion_studio_editor_ui.js?v=20260729-range-warning-detail-1';
+} from './motion_studio_editor_ui.js?v=20260804-point-actions-range-1';
 import {
   createMotionStudioPlaybackController,
 } from './motion_studio_playback.js?v=20260803-studio-structure-4';
@@ -67,8 +67,8 @@ import {
 } from './motion_studio_layer_controller.js?v=20260803-studio-structure-10';
 import {
   createMotionStudioEditorController,
-} from './motion_studio_editor_controller.js?v=20260804-studio-range-2';
-import { motionStudioEditorPointCurves } from './motion_studio_editor_state.js?v=20260803-studio-structure-12';
+} from './motion_studio_editor_controller.js?v=20260804-point-actions-range-1';
+import { motionStudioEditorPointCurves } from './motion_studio_editor_state.js?v=20260804-multi-axis-range-1';
 import {
   createMotionStudioRequestFence,
 } from './motion_studio_controller_events.js?v=20260803-studio-structure-10';

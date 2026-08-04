@@ -94,24 +94,18 @@ test('range warnings are grouped by axis and adjacent 20ms periods', () => {
 });
 
 test('save and inspector presentation render explicit state without moving graph', () => {
-  const toggles = [];
   const el = {
     studioEditorSaveStatus: { textContent: '', className: '' },
     studioEditorInspectorState: { textContent: '', dataset: {} },
     studioEditorSelectionGuide: { textContent: '' },
-    studioEditorDangerZone: {
-      classList: { toggle: (name, enabled) => toggles.push([name, enabled]) },
-    },
   };
 
   renderMotionStudioEditorPresentation(el, {
     saveState: 'failed',
     saveError: '충돌',
     inspector: motionStudioEditorInspectorState({ pointSelected: true }),
-    showDangerZone: true,
   });
 
   assert.equal(el.studioEditorSaveStatus.textContent, '저장 실패 · 충돌');
   assert.equal(el.studioEditorInspectorState.textContent, '포인트 선택');
-  assert.deepEqual(toggles, [['hidden', false]]);
 });

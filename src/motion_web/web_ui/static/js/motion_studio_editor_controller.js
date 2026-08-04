@@ -33,7 +33,7 @@ import {
   motionStudioRangeWarningGroups,
   renderMotionStudioEditorPresentation,
   requestMotionStudioEditorSave,
-} from './motion_studio_editor_ui.js?v=20260729-range-warning-detail-1';
+} from './motion_studio_editor_ui.js?v=20260804-point-actions-range-1';
 import {
   createMotionStudioEditorSession,
   motionStudioEditorFailureFingerprint,
@@ -45,8 +45,9 @@ import {
   motionStudioResetRangeSelection,
   motionStudioSelectedDraftPoint,
   motionStudioSelectedPointRange,
+  motionStudioSelectedTimeRange,
   motionStudioStoredCurveForDraft,
-} from './motion_studio_editor_state.js?v=20260803-studio-structure-12';
+} from './motion_studio_editor_state.js?v=20260804-multi-axis-range-1';
 import {
   createMotionStudioGraphScheduler,
 } from './motion_studio_graph_scheduler.js?v=20260803-studio-structure-1';
@@ -58,10 +59,10 @@ import {
 } from './motion_studio_constants.js?v=20260803-studio-structure-4';
 import {
   bindMotionStudioGraphEvents,
-} from './motion_studio_graph_interactions.js?v=20260803-studio-structure-12';
+} from './motion_studio_graph_interactions.js?v=20260804-multi-axis-range-1';
 import {
   bindMotionStudioPointEditorEvents,
-} from './motion_studio_point_editor.js?v=20260803-studio-structure-12';
+} from './motion_studio_point_editor.js?v=20260804-multi-axis-range-1';
 import {
   createMotionStudioAxisEditorController,
   motionStudioValidMotionId,
@@ -124,6 +125,25 @@ export function createMotionStudioEditorController({
 
   function selectedEditorPointRange(editor = state.editor) {
     return motionStudioSelectedPointRange(editor);
+  }
+
+  function selectedEditorTimeRange(editor = state.editor) {
+    return motionStudioSelectedTimeRange(editor);
+  }
+
+  function selectedEditorTimeRangePoints(editor = state.editor) {
+    const range = selectedEditorTimeRange(editor);
+    if (!range) return [];
+    const selectedIds = new Set(editorSelectedMotionIds());
+    return editorPointCurves(editor?.working).flatMap((curve) => {
+      if (!selectedIds.has(String(curve.motion_id || ''))) return [];
+      return (curve.points || []).filter((point) => {
+        const timeSec = Number(point.time_sec);
+        return Number.isFinite(timeSec)
+          && timeSec >= range.startSec - 1e-9
+          && timeSec <= range.endSec + 1e-9;
+      }).map((point) => ({ curve, point }));
+    });
   }
 
   function pointCurveIsApplied(editor, curveId) {
@@ -246,7 +266,12 @@ export function createMotionStudioEditorController({
     renderEditor();
   }
 
-  function selectPointCurveFromGraph(curve, pointId = '', activatePointMode = true) {
+  function selectPointCurveFromGraph(
+    curve,
+    pointId = '',
+    activatePointMode = true,
+    preserveAxisSelection = false,
+  ) {
     const editor = state.editor;
     if (!editor || !curve) return false;
     const activeCurveId = String(editor.pointDraft?.curve_id || '');
@@ -266,7 +291,7 @@ export function createMotionStudioEditorController({
     if (activatePointMode) {
       setPointCurveMode(curve, pointId);
     } else {
-      selectOnlyEditorAxis(curve.motion_id);
+      if (!preserveAxisSelection) selectOnlyEditorAxis(curve.motion_id);
       loadPointDraft(curve, pointId);
       renderEditorControls();
       drawEditorGraph();
@@ -302,19 +327,17 @@ export function createMotionStudioEditorController({
     const appliedPointCurve = pointCurveIsApplied(editor, editor?.pointDraft?.curve_id);
     const editablePointCurve = appliedPointCurve || pointCurveCanBeCreated(editor);
     const selectedRange = selectedEditorPointRange(editor);
-    const rangeReady = Boolean(selectedRange);
+    const selectedTimeRange = selectedEditorTimeRange(editor);
+    const rangeReady = Boolean(selectedTimeRange);
     const rangeSelecting = motionStudioRangeSelectionActive(editor);
-    const rangeBounds = motionStudioRangeSelectionBounds(editor);
+    const rangeBounds = selectedTimeRange || motionStudioRangeSelectionBounds(editor);
     const selectedIds = editorSelectedMotionIds();
+    const rangePointTargets = selectedEditorTimeRangePoints(editor);
     const selectedAppliedPointCurve = editorPointCurves(editor?.working).some(
       (curve) => selectedIds.includes(String(curve.motion_id || '')),
     );
-    const draftPoints = editor?.pointDraft?.points || [];
-    const pointAtTime = (timeSec) => draftPoints.find(
-      (candidate) => Math.abs(Number(candidate.time_sec) - Number(timeSec)) < 1e-7,
-    ) || null;
-    const startPoint = rangeReady ? pointAtTime(rangeBounds?.startSec) : point;
-    const endPoint = rangeReady ? pointAtTime(rangeBounds?.endSec) : null;
+    const startPoint = rangeReady ? selectedTimeRange.start : point;
+    const endPoint = rangeReady ? selectedTimeRange.end : null;
     el.studioEditorSelectedPointSummary?.classList.toggle('hidden', !startPoint);
     if (el.studioEditorSelectedPointTitle) {
       el.studioEditorSelectedPointTitle.textContent = rangeReady
@@ -323,23 +346,23 @@ export function createMotionStudioEditorController({
     }
     if (el.studioEditorSelectedPointStartTime) {
       el.studioEditorSelectedPointStartTime.textContent = startPoint
-        ? `${Number(startPoint.time_sec).toFixed(2)}초`
+        ? `${Number(startPoint.timeSec ?? startPoint.time_sec).toFixed(2)}초`
         : '-';
     }
     if (el.studioEditorSelectedPointStartValue) {
       el.studioEditorSelectedPointStartValue.textContent = startPoint
-        ? `${Number(startPoint.value_deg).toFixed(3)}°`
+        ? `${Number(startPoint.valueDeg ?? startPoint.value_deg).toFixed(3)}°`
         : '-';
     }
     el.studioEditorSelectedPointEnd?.classList.toggle('pending', !endPoint);
     if (el.studioEditorSelectedPointEndTime) {
       el.studioEditorSelectedPointEndTime.textContent = endPoint
-        ? `${Number(endPoint.time_sec).toFixed(2)}초`
+        ? `${Number(endPoint.timeSec ?? endPoint.time_sec).toFixed(2)}초`
         : '선택 필요';
     }
     if (el.studioEditorSelectedPointEndValue) {
       el.studioEditorSelectedPointEndValue.textContent = endPoint
-        ? `${Number(endPoint.value_deg).toFixed(3)}°`
+        ? `${Number(endPoint.valueDeg ?? endPoint.value_deg).toFixed(3)}°`
         : '-';
     }
     if (el.studioEditorPointAddButton) {
@@ -368,14 +391,15 @@ export function createMotionStudioEditorController({
     }
     if (el.studioEditorRangeStatus) {
       el.studioEditorRangeStatus.textContent = rangeReady
-        ? `${selectedRange.curve.motion_id} · `
+        ? `${selectedIds.length}개 축 · `
           + `${rangeBounds.startSec.toFixed(2)}초 ~ `
           + `${rangeBounds.endSec.toFixed(2)}초 · `
-          + `${selectedRange.points.length}개 포인트`
+          + `${rangePointTargets.length}개 포인트 · `
+          + `${selectedTimeRange.start.motionId} → ${selectedTimeRange.end.motionId}`
         : rangeSelecting
           ? editor?.rangeSelection?.phase === 'awaiting_end'
-            ? '같은 포인트 곡선에서 종료 포인트를 선택하세요.'
-            : '같은 포인트 곡선에서 시작 포인트를 선택하세요.'
+            ? '선택된 축에서 종료 포인트를 선택하세요. 다른 축도 가능합니다.'
+            : '선택된 축에서 시작 포인트를 선택하세요.'
           : '구간 선택을 누른 뒤 시작·종료 포인트를 선택하세요.';
       el.studioEditorRangeStatus.classList.toggle('ready', rangeReady);
     }
@@ -393,19 +417,22 @@ export function createMotionStudioEditorController({
         : '구간의 시작 포인트와 종료 포인트를 차례로 선택합니다';
     }
     if (el.studioEditorRangeCopyTarget) {
-      el.studioEditorRangeCopyTarget.disabled = !rangeReady || Boolean(editor?.preview);
+      el.studioEditorRangeCopyTarget.disabled = !selectedRange || Boolean(editor?.preview);
     }
     if (el.studioEditorRangeCopyButton) {
-      el.studioEditorRangeCopyButton.disabled = !rangeReady || Boolean(editor?.preview);
+      el.studioEditorRangeCopyButton.disabled = !selectedRange || Boolean(editor?.preview);
+      el.studioEditorRangeCopyButton.title = selectedRange
+        ? '같은 곡선에서 선택한 포인트를 복사합니다'
+        : '구간 복사는 같은 축·같은 곡선의 두 포인트를 선택하세요';
     }
     if (el.studioEditorRangeDeleteButton) {
-      const remainingCount = rangeReady
+      const remainingCount = selectedRange
         ? (selectedRange.curve.points || []).length - selectedRange.points.length
         : 0;
       el.studioEditorRangeDeleteButton.disabled = (
-        !rangeReady || Boolean(editor?.preview) || remainingCount < 2
+        !selectedRange || Boolean(editor?.preview) || remainingCount < 2
       );
-      el.studioEditorRangeDeleteButton.title = !rangeReady
+      el.studioEditorRangeDeleteButton.title = !selectedRange
         ? '같은 포인트 곡선의 시작·종료 포인트를 먼저 선택하세요'
         : remainingCount < 2
           ? '곡선을 유지하려면 삭제 후 포인트가 최소 2개 남아야 합니다'
@@ -613,7 +640,7 @@ export function createMotionStudioEditorController({
     );
     const creatablePointCurve = pointMode && pointCurveCanBeCreated(editor);
     const workingPointCurve = Boolean(storedCurveForDraft(editor));
-    const pointRangeReady = Boolean(selectedEditorPointRange(editor));
+    const pointRangeReady = Boolean(selectedEditorTimeRange(editor));
     const pointDraftDirty = pointDraftHasUnsavedChanges(editor);
     const hasTransientChange = Boolean(editor?.preview) || pointDraftDirty;
     const layerDirty = motionStudioEditorLayerIsDirty(editor, motionStudioLayerDataEqual);
@@ -758,7 +785,6 @@ export function createMotionStudioEditorController({
         pointSelected: Boolean(selectedDraftPoint(editor)),
         rangeSelected: pointRangeReady,
       }),
-      showDangerZone: pointMode && Boolean(editor?.pointDraft?.curve_id),
     });
     syncPointControls();
   }
@@ -1098,9 +1124,9 @@ export function createMotionStudioEditorController({
     if (!motionIds.length) { setEditorMessage('편집할 Motion ID를 선택하세요', true); return; }
     if (
       !pointMetadataOperation
-      && !selectedEditorPointRange(editor)
+      && !selectedEditorTimeRange(editor)
     ) {
-      setEditorMessage('같은 포인트 곡선에서 서로 다른 포인트 두 개를 선택하세요.', true);
+      setEditorMessage('선택된 축에서 시간이 다른 포인트 두 개를 선택하세요.', true);
       return;
     }
     if (operation === 'point_curve' && (!editor.pointDraft || editor.pointDraft.points.length < 2)) {

@@ -98,6 +98,11 @@ export function motionStudioSelectedPointRange(editor) {
   const curve = motionStudioSelectedRangeCurve(editor);
   const start = editor?.rangeSelection?.start;
   const end = editor?.rangeSelection?.end;
+  if (
+    !start || !end
+    || String(start.motionId || '') !== String(end.motionId || '')
+    || String(start.curveId || '') !== String(end.curveId || '')
+  ) return null;
   const points = motionStudioPointRangePoints(
     curve,
     start?.timeSec,
@@ -106,6 +111,26 @@ export function motionStudioSelectedPointRange(editor) {
     start?.curveId,
   );
   return points.length >= 2 ? { curve, points } : null;
+}
+
+export function motionStudioSelectedTimeRange(editor) {
+  if (editor?.rangeSelection?.phase !== 'complete') return null;
+  const start = editor.rangeSelection.start;
+  const end = editor.rangeSelection.end;
+  const startSec = Number(start?.timeSec);
+  const endSec = Number(end?.timeSec);
+  if (
+    !Number.isFinite(startSec)
+    || !Number.isFinite(endSec)
+    || Math.abs(endSec - startSec)
+      < MOTION_STUDIO_PERIOD_SEC - MOTION_STUDIO_TIME_EPSILON
+  ) return null;
+  return {
+    startSec: Math.min(startSec, endSec),
+    endSec: Math.max(startSec, endSec),
+    start,
+    end,
+  };
 }
 
 export function motionStudioResetRangeSelection(editor, active = false) {
@@ -141,6 +166,7 @@ export function motionStudioSelectRangePoint(editor, pointTarget) {
     motionId: String(pointTarget.curve.motion_id || ''),
     curveId: String(pointTarget.curve.curve_id || ''),
     timeSec: Number(Number(pointTarget.point.time_sec || 0).toFixed(2)),
+    valueDeg: Number(Number(pointTarget.point.value_deg || 0).toFixed(6)),
   };
   if (phase === 'awaiting_start') {
     editor.rangeSelection = {
@@ -152,16 +178,15 @@ export function motionStudioSelectRangePoint(editor, pointTarget) {
   }
   const start = editor.rangeSelection?.start;
   if (!start) return { ok: false, reason: 'missing_start' };
-  if (
-    String(start.motionId || '') !== target.motionId
-    || String(start.curveId || '') !== target.curveId
-  ) {
-    return { ok: false, reason: 'different_curve', start, target };
-  }
   const samePoint = start.pointId && target.pointId
+    && String(start.motionId || '') === target.motionId
+    && String(start.curveId || '') === target.curveId
     ? String(start.pointId) === target.pointId
-    : Math.abs(Number(start.timeSec) - target.timeSec) < MOTION_STUDIO_TIME_EPSILON;
+    : false;
   if (samePoint) return { ok: false, reason: 'same_point', start, target };
+  if (Math.abs(Number(start.timeSec) - target.timeSec) < MOTION_STUDIO_TIME_EPSILON) {
+    return { ok: false, reason: 'same_time', start, target };
+  }
   const [rangeStart, rangeEnd] = Number(start.timeSec) <= target.timeSec
     ? [start, target] : [target, start];
   editor.rangeSelection = {

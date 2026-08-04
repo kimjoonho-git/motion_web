@@ -11,6 +11,7 @@ import {
   motionStudioPointDraftHasUnsavedChanges,
   motionStudioSelectedDraftPoint,
   motionStudioSelectedPointRange,
+  motionStudioSelectedTimeRange,
   motionStudioResetRangeSelection,
   motionStudioSelectRangePoint,
 } from '../static/js/motion_studio_editor_state.js';
@@ -98,11 +99,11 @@ test('editor layer dirty comparison is reused until a layer copy changes', () =>
   assert.equal(comparisonCount, 2);
 });
 
-test('range selection accepts two points only from the same curve and orders time', () => {
+test('range selection accepts points from different selected axes and orders global time', () => {
   const editor = { rangeSelection: { phase: 'awaiting_start', start: null, end: null } };
-  const target = (pointId, timeSec, curveId = 'curve-a') => ({
-    curve: { curve_id: curveId, motion_id: '1-1' },
-    point: { point_id: pointId, time_sec: timeSec },
+  const target = (pointId, timeSec, curveId = 'curve-a', motionId = '1-1') => ({
+    curve: { curve_id: curveId, motion_id: motionId },
+    point: { point_id: pointId, time_sec: timeSec, value_deg: timeSec * 10 },
   });
 
   assert.deepEqual(
@@ -112,23 +113,33 @@ test('range selection accepts two points only from the same curve and orders tim
       phase: 'awaiting_end',
       target: {
         pointId: 'p2', motionId: '1-1', curveId: 'curve-a', timeSec: 2,
+        valueDeg: 20,
       },
     },
   );
-  assert.equal(
-    motionStudioSelectRangePoint(editor, target('p1', 1, 'curve-b')).reason,
-    'different_curve',
-  );
-  assert.equal(editor.rangeSelection.phase, 'awaiting_end');
   assert.equal(motionStudioSelectRangePoint(editor, target('p2', 2)).reason, 'same_point');
+  assert.equal(
+    motionStudioSelectRangePoint(editor, target('other', 2, 'curve-b', '2-1')).reason,
+    'same_time',
+  );
 
-  const complete = motionStudioSelectRangePoint(editor, target('p1', 1));
+  const complete = motionStudioSelectRangePoint(
+    editor,
+    target('p1', 1, 'curve-b', '2-1'),
+  );
   assert.equal(complete.ok, true);
   assert.equal(editor.rangeSelection.phase, 'complete');
   assert.deepEqual(
-    [editor.rangeSelection.start.pointId, editor.rangeSelection.end.pointId],
-    ['p1', 'p2'],
+    [editor.rangeSelection.start.motionId, editor.rangeSelection.end.motionId],
+    ['2-1', '1-1'],
   );
+  assert.deepEqual(motionStudioSelectedTimeRange(editor), {
+    startSec: 1,
+    endSec: 2,
+    start: editor.rangeSelection.start,
+    end: editor.rangeSelection.end,
+  });
+  assert.equal(motionStudioSelectedPointRange(editor), null);
 });
 
 test('single point and tangent drags clear range state and competing gestures', () => {

@@ -175,7 +175,6 @@ export function renderMotionStudioEditorPresentation(el, {
   savedAt = '',
   saveError = '',
   inspector = motionStudioEditorInspectorState(),
-  showDangerZone = false,
 } = {}) {
   const saveLabels = {
     saved: savedAt ? `저장 완료 · ${savedAt}` : '저장됨',
@@ -197,7 +196,6 @@ export function renderMotionStudioEditorPresentation(el, {
   if (el.studioEditorSelectionGuide) {
     el.studioEditorSelectionGuide.textContent = inspector.guide;
   }
-  el.studioEditorDangerZone?.classList.toggle('hidden', !showDangerZone);
 }
 
 export function requestMotionStudioEditorSave(el, summary = {}) {

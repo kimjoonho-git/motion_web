@@ -19,7 +19,7 @@ import {
   motionStudioBeginTangentDrag,
   motionStudioRangeSelectionActive,
   motionStudioSelectRangePoint,
-} from './motion_studio_editor_state.js?v=20260803-studio-structure-12';
+} from './motion_studio_editor_state.js?v=20260804-multi-axis-range-1';
 
 export function motionStudioGraphPointInside(metrics, x, y) {
   const { padding } = metrics;
@@ -107,40 +107,40 @@ export function bindMotionStudioGraphEvents(context) {
         pointTarget.curve,
         pointTarget.point.point_id,
         false,
+        true,
       )) {
         editor.rangeSelection = { phase: 'awaiting_start', start: null, end: null };
         return false;
       }
       setEditorMessage(
         `포인트 한 개 선택 · ${result.target.timeSec.toFixed(2)}초 · `
-        + '같은 포인트 곡선의 다른 포인트를 선택하세요.',
+        + '선택된 축에서 시간이 다른 종료 포인트를 선택하세요. 다른 축도 가능합니다.',
       );
     } else if (!result.ok) {
-      if (result.reason === 'different_curve') {
-        setEditorMessage(
-          `같은 포인트 곡선의 포인트를 선택하세요. 현재 선택: ${result.start.motionId}`,
-          true,
-        );
-      } else if (result.reason === 'same_point') {
+      if (result.reason === 'same_point') {
         setEditorMessage('범위를 만들려면 서로 다른 포인트를 선택하세요.', true);
+      } else if (result.reason === 'same_time') {
+        setEditorMessage('범위를 만들려면 시간이 다른 포인트를 선택하세요.', true);
       }
       return false;
     } else if (result.phase === 'complete') {
-      loadPointDraft(pointTarget.curve, pointTarget.point.point_id);
       if (el.studioEditorRangeCopyTarget) {
-        const curveEnd = Math.max(
+        const selectedCurveEnd = Math.max(
           0,
-          ...(pointTarget.curve.points || []).map(
-            (point) => Number(point.time_sec) || 0,
-          ),
+          ...editorPointCurves(editor.working)
+            .filter((curve) => editorSelectedMotionIds().includes(String(curve.motion_id || '')))
+            .flatMap((curve) => (curve.points || []).map(
+              (point) => Number(point.time_sec) || 0,
+            )),
         );
         el.studioEditorRangeCopyTarget.value = motionStudioSnapFrameTime(
-          Math.max(result.end.timeSec, curveEnd) + MOTION_STUDIO_PERIOD_SEC,
+          Math.max(result.end.timeSec, selectedCurveEnd) + MOTION_STUDIO_PERIOD_SEC,
         ).toFixed(2);
       }
       setEditorMessage(
-        '포인트 범위 선택 완료 · '
-        + `${result.start.timeSec.toFixed(2)}초 ~ ${result.end.timeSec.toFixed(2)}초`,
+        '공통 시간영역 선택 완료 · '
+        + `${result.start.timeSec.toFixed(2)}초(${result.start.motionId}) ~ `
+        + `${result.end.timeSec.toFixed(2)}초(${result.end.motionId})`,
       );
     } else {
       return false;

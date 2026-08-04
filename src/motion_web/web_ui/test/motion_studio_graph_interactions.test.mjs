@@ -90,21 +90,23 @@ test('graph pan and tangent movement update only editor view state', () => {
   assert.equal(point.in_handle.dt_sec < 0, true);
 });
 
-test('range selection has one click path and keeps one canonical selection state', () => {
-  const curve = {
+test('range selection keeps multiple axes and accepts endpoints from different curves', () => {
+  const firstCurve = {
     curve_id: 'curve_1',
     motion_id: '1-1',
-    points: [
-      { point_id: 'start', time_sec: 18.16, value_deg: -1.624 },
-      { point_id: 'end', time_sec: 31.82, value_deg: -0.954 },
-    ],
+    points: [{ point_id: 'start', time_sec: 18.16, value_deg: -1.624 }],
+  };
+  const secondCurve = {
+    curve_id: 'curve_2',
+    motion_id: '2-1',
+    points: [{ point_id: 'end', time_sec: 31.82, value_deg: -0.954 }],
   };
   const graph = new FakeEventTarget({ left: 0, top: 0, width: 400, height: 300 });
   const fakeWindow = new FakeEventTarget();
   const previousWindow = globalThis.window;
   globalThis.window = fakeWindow;
   const editor = {
-    working: { point_curves: [curve] },
+    working: { point_curves: [firstCurve, secondCurve] },
     preview: null,
     graphMetrics: {
       width: 400,
@@ -118,14 +120,15 @@ test('range selection has one click path and keeps one canonical selection state
       yFor: (value) => value,
     },
     pointHitTargets: [
-      { x: 181.6, y: 50, curve, point: curve.points[0] },
-      { x: 318.2, y: 50, curve, point: curve.points[1] },
+      { x: 181.6, y: 50, curve: firstCurve, point: firstCurve.points[0] },
+      { x: 318.2, y: 50, curve: secondCurve, point: secondCurve.points[0] },
     ],
     handleHitTargets: [],
     rangeSelection: { phase: 'awaiting_start', start: null, end: null },
     suppressGraphClick: true,
     pointDraft: null,
   };
+  const selectionCalls = [];
   try {
     const context = {
       state: { editor },
@@ -135,10 +138,11 @@ test('range selection has one click path and keeps one canonical selection state
         studioEditorRangeCopyTarget: { value: '' },
       },
       cachedLayerTracks: () => new Map(),
-      editorSelectedMotionIds: () => ['1-1'],
+      editorSelectedMotionIds: () => ['1-1', '2-1'],
       selectedDraftPoint: () => null,
       clearEditorPointRange: () => {},
-      selectPointCurveFromGraph: (targetCurve, pointId) => {
+      selectPointCurveFromGraph: (targetCurve, pointId, pointMode, preserveAxes) => {
+        selectionCalls.push({ pointMode, preserveAxes });
         editor.pointDraft = structuredClone(targetCurve);
         editor.selectedPointId = pointId;
         return true;
@@ -146,7 +150,7 @@ test('range selection has one click path and keeps one canonical selection state
       syncPointControls: () => {},
       editorGraphScheduler: { schedule: () => {} },
       editorViewport: { setView: () => {} },
-      editorPointCurves: () => [curve],
+      editorPointCurves: () => [firstCurve, secondCurve],
       pointCurveIsApplied: () => true,
       pointCurveCanBeCreated: () => false,
       setEditorMessage: () => {},
@@ -175,6 +179,7 @@ test('range selection has one click path and keeps one canonical selection state
       phase: 'awaiting_end',
       start: {
         pointId: 'start', motionId: '1-1', curveId: 'curve_1', timeSec: 18.16,
+        valueDeg: -1.624,
       },
       end: null,
     });
@@ -191,11 +196,14 @@ test('range selection has one click path and keeps one canonical selection state
       phase: 'complete',
       start: {
         pointId: 'start', motionId: '1-1', curveId: 'curve_1', timeSec: 18.16,
+        valueDeg: -1.624,
       },
       end: {
-        pointId: 'end', motionId: '1-1', curveId: 'curve_1', timeSec: 31.82,
+        pointId: 'end', motionId: '2-1', curveId: 'curve_2', timeSec: 31.82,
+        valueDeg: -0.954,
       },
     });
+    assert.deepEqual(selectionCalls, [{ pointMode: false, preserveAxes: true }]);
     assert.equal(context.el.studioEditorRangeCopyTarget.value, '31.84');
   } finally {
     globalThis.window = previousWindow;

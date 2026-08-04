@@ -379,7 +379,6 @@ export function getElements() {
     studioEditorOperationTitle: document.getElementById('studioEditorOperationTitle'),
     studioEditorInspectorState: document.getElementById('studioEditorInspectorState'),
     studioEditorSelectionGuide: document.getElementById('studioEditorSelectionGuide'),
-    studioEditorDangerZone: document.getElementById('studioEditorDangerZone'),
     studioEditorOperation: document.getElementById('studioEditorOperation'),
     studioEditorOperationButtons: document.querySelectorAll('[data-studio-editor-operation]'),
     studioEditorOffset: document.getElementById('studioEditorOffset'),
