@@ -6,6 +6,7 @@ ROS 2 기반 상위 모션 제어와 모션 편집 패키지 모음입니다.
 
 - `motion_control/midi_control`
 - `motion_control/midi_input_bridge`
+- `motion_control/motion_coordination` (인증된 PC 상태 공유·연동 모드·중앙 역할)
 - `motion_control/motion_runtime`
 - `motion_control/motion_state_monitor`
 - `motion_control/motion_supervisor`

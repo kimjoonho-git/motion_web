@@ -349,6 +349,8 @@ class MotionRunManager(Node):
                 response = self._start_thread('run', payload)
             elif command == 'stop':
                 response = self._handle_stop()
+            elif command == 'stop_after_cycle':
+                response = self._handle_stop_after_cycle()
             else:
                 response = {'success': False, 'message': f'unknown motion run command: {command}'}
         except Exception as exc:  # Defensive boundary for the web bridge.
@@ -986,6 +988,21 @@ class MotionRunManager(Node):
             'status': self.status(),
         }
 
+    def _handle_stop_after_cycle(self) -> Dict[str, Any]:
+        current = self.status()
+        if not int(current.get('synchronized_repeat_count') or 0):
+            return {
+                'success': False,
+                'message': '동기 반복 실행 중일 때만 현재 회차 후 정지를 사용할 수 있습니다',
+                'status': current,
+            }
+        self._graceful_stop_event.set()
+        return {
+            'success': True,
+            'message': '현재 동기 반복 회차 완료 후 정지 요청',
+            'status': self.status(),
+        }
+
     def _run_initialization(self, plan: Dict[str, Any]) -> None:
         try:
             if self._stop_event.is_set():
@@ -1123,7 +1140,15 @@ class MotionRunManager(Node):
             self._run_motion(motion_plan)
 
     def _run_countdown(self, plan: Dict[str, Any]) -> bool:
+        scheduled_at = float(plan.get('scheduled_start_at') or 0.0)
         duration = max(float(plan.get('countdown_sec') or 0.0), 0.0)
+        if scheduled_at > 0.0:
+            duration = max(scheduled_at - time.time(), 0.0)
+            if duration <= 0.0:
+                status = self._status_from_plan('error', '예약 시작 시각이 이미 지났습니다', plan)
+                status['phase'] = 'error'
+                self._set_status(status)
+                return False
         if duration <= 0.0:
             return True
         started_at = time.time()
@@ -1194,6 +1219,13 @@ class MotionRunManager(Node):
                 'motion_started_at': motion_started_at,
                 'motion_finished_at': None,
             }
+            requested_start_at = float(plan.get('scheduled_start_at') or 0.0)
+            if requested_start_at:
+                status['requested_start_at'] = requested_start_at
+                status['actual_start_at'] = motion_started_at
+                status['start_error_ms'] = round(
+                    (motion_started_at - requested_start_at) * 1000.0, 3
+                )
             if automation_run:
                 with self._run_lock:
                     self._automation_runtime.update({
@@ -1238,6 +1270,21 @@ class MotionRunManager(Node):
                     )
                     self._sleep_until(cycle_started + ((index + 1) * self.period_sec))
                 cycle_count += 1
+                synchronized_count = int(plan.get('synchronized_repeat_count') or 0)
+                if synchronized_count:
+                    if self._graceful_stop_event.is_set():
+                        self._finish_cycle_stop(
+                            plan, motion_started_at, cycle_count,
+                            '현재 동기 반복 회차 완료 후 정지',
+                        )
+                        return
+                    if cycle_count >= synchronized_count:
+                        break
+                    if not self._wait_synchronized_boundary(
+                        plan, motors, samples, cycle_count
+                    ):
+                        return
+                    continue
                 if not continuous:
                     break
                 if automation_run and grade1_seen:
@@ -1352,6 +1399,45 @@ class MotionRunManager(Node):
             self._set_status(status)
             if bool(plan.get('automation_run')):
                 self._automation_failure(str(exc))
+
+    def _wait_synchronized_boundary(
+        self, plan: Dict[str, Any], motors: List[Dict[str, Any]],
+        samples: List[Dict[str, Any]], cycle_count: int,
+    ) -> bool:
+        """Hold the final target until an absolute cycle boundary."""
+        first_start = float(plan.get('scheduled_start_at') or 0.0)
+        cycle_sec = float(plan.get('synchronized_cycle_sec') or 0.0)
+        deadline_wall = first_start + (cycle_count * cycle_sec)
+        remaining = deadline_wall - time.time()
+        if remaining < -self.period_sec:
+            raise RuntimeError('동기 반복 시작 시각을 놓쳤습니다')
+        deadline = time.monotonic() + max(remaining, 0.0)
+        final_sample = samples[-1] if samples else {}
+        self._update_status({
+            'state': 'waiting', 'phase': 'waiting',
+            'message': '다음 동기 반복 시작 대기',
+            'next_start_at': deadline_wall,
+        })
+        while time.monotonic() < deadline:
+            if self._stop_event.is_set():
+                return False
+            if self._graceful_stop_event.is_set():
+                status = self._status_from_plan(
+                    'stopped', '다음 동기 반복 시작 전 정지', plan
+                )
+                status['phase'] = 'stopped'
+                status['cycle_count'] = cycle_count
+                status['phase_finished_at'] = time.time()
+                self._set_status(status)
+                return False
+            if final_sample and plan.get('hold_final_until_cycle'):
+                self._publish_motion_setpoints(
+                    motors, plan['axes'], final_sample['positions'],
+                    final_sample.get('motion_values'),
+                )
+            self._sleep_until(min(time.monotonic() + self.period_sec, deadline))
+        self._restore_running_status(plan, time.time(), cycle_count)
+        return True
 
     def _finish_cycle_stop(
         self,
@@ -1702,6 +1788,19 @@ class MotionRunManager(Node):
         countdown_sec = 0.0 if countdown_sec is None else countdown_sec
         if countdown_sec < 0.0 or countdown_sec > 10.0:
             raise ValueError('모션 시작 대기 시간은 0초 이상 10초 이하여야 합니다')
+        scheduled_start_at = self._finite_float(payload.get('scheduled_start_at'))
+        scheduled_start_at = 0.0 if scheduled_start_at is None else scheduled_start_at
+        synchronized_cycle_sec = self._finite_float(payload.get('synchronized_cycle_sec'))
+        synchronized_cycle_sec = 0.0 if synchronized_cycle_sec is None else synchronized_cycle_sec
+        try:
+            synchronized_repeat_count = int(payload.get('synchronized_repeat_count') or 0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError('동기 반복 횟수가 올바르지 않습니다') from exc
+        if synchronized_repeat_count and (
+            scheduled_start_at <= time.time() or synchronized_cycle_sec <= 0.0
+            or not 1 <= synchronized_repeat_count <= 10000
+        ):
+            raise ValueError('동기 예약 시작 시각·주기·반복 횟수를 확인하세요')
         try:
             operation_generation = int(payload.get('operation_generation') or 0)
         except (TypeError, ValueError) as exc:
@@ -2036,6 +2135,12 @@ class MotionRunManager(Node):
             'repeat_mode': repeat_mode,
             'dwell_sec': dwell_sec,
             'countdown_sec': countdown_sec,
+            'scheduled_start_at': scheduled_start_at,
+            'synchronized_cycle_sec': synchronized_cycle_sec,
+            'synchronized_repeat_count': synchronized_repeat_count,
+            'hold_final_until_cycle': bool(payload.get('hold_final_until_cycle')),
+            'network_operation_id': str(payload.get('network_operation_id') or ''),
+            'network_lease_id': str(payload.get('network_lease_id') or ''),
             'operation_generation': operation_generation,
             'motion_file_path': str(motion_file_path) if motion_file_path else '',
             'mapping_path': str(mapping_path),
@@ -2052,12 +2157,22 @@ class MotionRunManager(Node):
                 'period_sec': self.period_sec,
                 'sample_count': len(samples),
                 'initial_move_time_sec': initial_move_time_override,
+                'initialization_duration_sec': max(
+                    (
+                        float(axis.get('initial_move_time_sec') or self.period_sec)
+                        for axis in axes
+                    ),
+                    default=0.0,
+                ),
                 'continuous_available': continuous_capability['available'],
                 'clamped_axis_count': sum(1 for axis in axes if axis.get('motion_clamped')),
                 'automation_run': automation_run,
                 'repeat_mode': repeat_mode,
                 'dwell_sec': dwell_sec,
                 'countdown_sec': countdown_sec,
+                'scheduled_start_at': scheduled_start_at,
+                'synchronized_cycle_sec': synchronized_cycle_sec,
+                'synchronized_repeat_count': synchronized_repeat_count,
                 'operation_generation': operation_generation,
             },
         }
@@ -2813,6 +2928,10 @@ class MotionRunManager(Node):
             'repeat_mode': plan.get('repeat_mode', 'direct'),
             'dwell_sec': float(plan.get('dwell_sec') or 0.0),
             'countdown_sec': float(plan.get('countdown_sec') or 0.0),
+            'scheduled_start_at': float(plan.get('scheduled_start_at') or 0.0),
+            'synchronized_cycle_sec': float(plan.get('synchronized_cycle_sec') or 0.0),
+            'synchronized_repeat_count': int(plan.get('synchronized_repeat_count') or 0),
+            'network_operation_id': plan.get('network_operation_id', ''),
             'operation_generation': int(plan.get('operation_generation') or 0),
             'request_source': plan.get('request_source', 'motion_run'),
             'cycle_count': 0,

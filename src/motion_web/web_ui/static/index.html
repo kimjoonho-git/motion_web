@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>모션 녹화 시스템 0.5.0</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260804-point-actions-range-1">
+    <link rel="stylesheet" href="/static/styles.css?v=20260804-coordination-2">
   </head>
   <body>
     <main class="shell">
@@ -57,6 +57,7 @@
         </div>
         <div class="workspace-tabs hidden" data-workspace-group-panel="setup" role="tablist" aria-label="프로젝트 및 장비 메뉴">
           <button class="workspace-tab-button" type="button" role="tab" data-workspace-tab="system">시스템 정보</button>
+          <button class="workspace-tab-button" type="button" role="tab" data-workspace-tab="coordination">장비 연동 상태</button>
           <button class="workspace-tab-button" type="button" role="tab" data-workspace-tab="config">모터 관리</button>
           <button class="workspace-tab-button" type="button" role="tab" data-workspace-tab="servo-errors">서보 에러 관리</button>
         </div>
@@ -186,6 +187,86 @@
             <section class="project-file-editor-panel">
               <textarea id="projectFileEditor" class="project-file-editor" spellcheck="false" readonly disabled></textarea>
             </section>
+          </div>
+        </section>
+      </section>
+
+      <section class="coordination-panel workspace-panel hidden" data-workspace-panel="coordination" aria-label="장비 연동 상태">
+        <div class="section-head workspace-page-head">
+          <div><strong>장비 연동 상태</strong><small>프로젝트 데이터 없이 PC 생존·준비 상태만 공유합니다</small></div>
+          <div class="registry-actions">
+            <button id="coordinationRefreshButton" type="button">상태 새로고침</button>
+          </div>
+        </div>
+
+        <div class="coordination-overview-grid">
+          <section class="motion-file-subsection coordination-settings-card" aria-label="이 PC 연동 설정">
+            <div class="section-head compact">
+              <strong>이 PC 연동 설정</strong>
+              <span id="coordinationNodeState">연동 노드 확인 중</span>
+            </div>
+            <div class="coordination-settings-fields">
+              <label class="compact-field"><span>연동 모드</span>
+                <select id="coordinationModeSelect" class="compact-select">
+                  <option value="off">연동 끔</option>
+                  <option value="status">상태 공유</option>
+                  <option value="participant">연동 참여</option>
+                </select>
+              </label>
+              <label class="compact-field"><span>역할</span>
+                <select id="coordinationRoleSelect" class="compact-select">
+                  <option value="peer">참여 PC</option>
+                  <option value="coordinator">중앙 PC</option>
+                </select>
+              </label>
+              <label class="compact-field coordination-coordinator-field"><span>중앙 PC ID</span>
+                <input id="coordinationCoordinatorInput" type="text" maxlength="128" placeholder="예: pc-a">
+              </label>
+              <button id="coordinationSaveButton" class="primary" type="button">설정 저장·연동 재시작</button>
+            </div>
+            <div id="coordinationConfigMessage" class="registry-message">전역 연동 설정을 확인하고 있습니다.</div>
+          </section>
+
+          <section class="motion-file-subsection coordination-summary-card" aria-label="연동 요약">
+            <div class="section-head compact"><strong>연동 요약</strong><span id="coordinationUpdatedAt">-</span></div>
+            <div class="status-strip coordination-status-strip">
+              <div><span>이 PC</span><strong id="coordinationMachineId">-</strong></div>
+              <div><span>모드·역할</span><strong id="coordinationModeRole">-</strong></div>
+              <div><span>중앙 상태</span><strong id="coordinationCoordinatorState">-</strong></div>
+              <div><span>연결 PC</span><strong id="coordinationPeerCount">0대</strong></div>
+            </div>
+            <div class="registry-actions coordination-readiness-actions">
+              <button id="coordinationReadinessButton" type="button" disabled>전체 실행 준비 확인</button>
+              <span id="coordinationReadinessSummary">연동 참여 중앙 PC에서 사용할 수 있습니다.</span>
+            </div>
+            <div class="coordination-control-panel" aria-label="네트워크 모션 실행">
+              <div class="registry-actions">
+                <strong id="coordinationExecutionOwner">모션 실행 제어권 · 로컬</strong>
+                <button id="coordinationAcquireButton" type="button" disabled>제어권 획득</button>
+                <button id="coordinationReleaseButton" type="button" disabled>제어권 반환</button>
+                <button id="coordinationRunOnceButton" type="button" disabled>1회 모션 실행</button>
+                <button id="coordinationMotionStopButton" class="danger" type="button" disabled>모션 정지</button>
+                <button id="coordinationInitializeButton" type="button" disabled>초기위치 이동</button>
+                <button id="coordinationInitializeStopButton" type="button" disabled>초기위치 이동 정지</button>
+              </div>
+              <div class="registry-actions">
+                <label class="compact-field"><span>반복 횟수</span><input id="coordinationRepeatCountInput" type="number" min="1" max="10000" value="1"></label>
+                <label class="compact-field"><span>공통 대기(초)</span><input id="coordinationDwellInput" type="number" min="0" step="0.02" value="0"></label>
+                <label class="compact-field"><span>시작 여유(초)</span><input id="coordinationLeadInput" type="number" min="2" step="1" value="15"></label>
+                <button id="coordinationSynchronizedRunButton" class="primary" type="button" disabled>동기 실행</button>
+              </div>
+              <span id="coordinationControlSummary">제어 명령 대기</span>
+            </div>
+          </section>
+        </div>
+
+        <section class="motion-file-subsection" aria-label="연결 PC 상태">
+          <div class="section-head compact"><strong>연결 PC</strong><span>3초 이상 응답이 없으면 목록에서 분리됩니다</span></div>
+          <div class="table-wrap">
+            <table class="coordination-peer-table">
+              <thead><tr><th>PC</th><th>연동</th><th>프로그램</th><th>모터</th><th>안전</th><th>모션</th><th>준비 결과</th></tr></thead>
+              <tbody id="coordinationPeerRows"><tr><td colspan="7" class="empty">연결 상태 수신 대기</td></tr></tbody>
+            </table>
           </div>
         </section>
       </section>
@@ -1678,6 +1759,6 @@
       </div>
     </div>
 
-    <script type="module" src="/static/app.js?v=20260804-point-actions-range-1"></script>
+    <script type="module" src="/static/app.js?v=20260804-coordination-2"></script>
   </body>
 </html>

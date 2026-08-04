@@ -19,6 +19,11 @@ backups/
 # between computers explicitly (USB/import), not with the application source.
 /motion_projects/
 /motion_data/
+/runtime/
+
+# Per-PC network coordination settings and HMAC credentials
+/config/motion_coordination.yaml
+/config/motion_coordination.credentials.yaml
 
 # Local machine files
 .vscode/

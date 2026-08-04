@@ -104,6 +104,33 @@ def test_continuous_loop_tolerance_is_five_degrees():
     assert CONTINUOUS_LOOP_TOLERANCE_DEG == 5.0
 
 
+def test_synchronized_stop_after_cycle_is_distinct_from_immediate_stop():
+    manager = MotionRunManager.__new__(MotionRunManager)
+    manager._graceful_stop_event = threading.Event()
+    manager.status = lambda: {
+        'state': 'running', 'synchronized_repeat_count': 3,
+    }
+    result = manager._handle_stop_after_cycle()
+    assert result['success'] is True
+    assert manager._graceful_stop_event.is_set()
+
+
+def test_past_synchronized_start_is_rejected_instead_of_running_late():
+    manager = MotionRunManager.__new__(MotionRunManager)
+    manager._stop_event = threading.Event()
+    captured = []
+    manager._status_from_plan = lambda state, message, _plan: {
+        'state': state, 'message': message,
+    }
+    manager._set_status = captured.append
+    result = manager._run_countdown({
+        'scheduled_start_at': time.time() - 0.1,
+        'countdown_sec': 0.0,
+    })
+    assert result is False
+    assert captured[-1]['state'] == 'error'
+
+
 def test_motion_value_clamps_to_mapping_min_and_max():
     assert MotionRunManager._clamp_motion_value(-35.0, -30.0, 30.0) == -30.0
     assert MotionRunManager._clamp_motion_value(12.0, -30.0, 30.0) == 12.0

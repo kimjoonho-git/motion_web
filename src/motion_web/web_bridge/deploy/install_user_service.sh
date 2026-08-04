@@ -5,18 +5,23 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE="${MOTION_WORKSPACE:-$(cd "${SCRIPT_DIR}/../../../.." && pwd)}"
 CONTROL_TEMPLATE="${SCRIPT_DIR}/motion-control.service.in"
 MOTOR_TEMPLATE="${SCRIPT_DIR}/motion-motor.service.in"
+COORDINATION_TEMPLATE="${WORKSPACE}/src/motion_control_studio/motion_control/motion_coordination/deploy/motion-coordination.service.in"
+COORDINATION_SERVICE_EXECUTABLE="${WORKSPACE}/install/motion_coordination/lib/motion_coordination/motion_coordination_node"
 SERVICE_EXECUTABLE="${WORKSPACE}/install/motion_web_bridge/lib/motion_web_bridge/motion_control_service"
 MOTOR_SERVICE_EXECUTABLE="${WORKSPACE}/install/motion_web_bridge/lib/motion_web_bridge/motion_motor_service"
 SERVICE_RUNNER="${SCRIPT_DIR}/run_user_service.sh"
 MOTOR_SERVICE_RUNNER="${SCRIPT_DIR}/run_motor_user_service.sh"
+COORDINATION_SERVICE_RUNNER="${WORKSPACE}/src/motion_control_studio/motion_control/motion_coordination/deploy/run_coordination_user_service.sh"
 USER_UNIT_DIR="${HOME}/.config/systemd/user"
 CONTROL_UNIT_FILE="${USER_UNIT_DIR}/motion-control.service"
 MOTOR_UNIT_FILE="${USER_UNIT_DIR}/motion-motor.service"
+COORDINATION_UNIT_FILE="${USER_UNIT_DIR}/motion-coordination.service"
 INSTALL_TMP=""
 SERVICES_STOPPED=false
 INSTALL_COMPLETE=false
 CONTROL_WAS_ACTIVE=false
 MOTOR_WAS_ACTIVE=false
+COORDINATION_WAS_ACTIVE=false
 
 cleanup_install_tmp() {
   if [[ -n "${INSTALL_TMP}" && -d "${INSTALL_TMP}" ]]; then
@@ -33,12 +38,18 @@ restore_previous_install_on_error() {
     if [[ -f "${INSTALL_TMP}/motion-motor.service.previous" ]]; then
       cp -p "${INSTALL_TMP}/motion-motor.service.previous" "${MOTOR_UNIT_FILE}" || true
     fi
+    if [[ -f "${INSTALL_TMP}/motion-coordination.service.previous" ]]; then
+      cp -p "${INSTALL_TMP}/motion-coordination.service.previous" "${COORDINATION_UNIT_FILE}" || true
+    fi
     systemctl --user daemon-reload 2>/dev/null || true
     if [[ "${MOTOR_WAS_ACTIVE}" == true ]]; then
       systemctl --user start motion-motor.service 2>/dev/null || true
     fi
     if [[ "${CONTROL_WAS_ACTIVE}" == true ]]; then
       systemctl --user start motion-control.service 2>/dev/null || true
+    fi
+    if [[ "${COORDINATION_WAS_ACTIVE}" == true ]]; then
+      systemctl --user start motion-coordination.service 2>/dev/null || true
     fi
   fi
   cleanup_install_tmp
@@ -57,12 +68,21 @@ if [[ ! -x "${MOTOR_SERVICE_EXECUTABLE}" ]]; then
   echo "먼저 colcon build를 완료하세요." >&2
   exit 1
 fi
+if [[ ! -x "${COORDINATION_SERVICE_EXECUTABLE}" ]]; then
+  echo "PC 연동 서비스 실행 파일이 없습니다: ${COORDINATION_SERVICE_EXECUTABLE}" >&2
+  echo "먼저 colcon build를 완료하세요." >&2
+  exit 1
+fi
 if [[ ! -f "${SERVICE_RUNNER}" ]]; then
   echo "서비스 환경 실행 스크립트가 없습니다: ${SERVICE_RUNNER}" >&2
   exit 1
 fi
 if [[ ! -f "${MOTOR_SERVICE_RUNNER}" ]]; then
   echo "Motor Manager 서비스 환경 실행 스크립트가 없습니다: ${MOTOR_SERVICE_RUNNER}" >&2
+  exit 1
+fi
+if [[ ! -f "${COORDINATION_TEMPLATE}" || ! -f "${COORDINATION_SERVICE_RUNNER}" ]]; then
+  echo "PC 연동 서비스 설치 파일을 찾을 수 없습니다." >&2
   exit 1
 fi
 
@@ -84,8 +104,12 @@ fi
 if [[ -f "${MOTOR_UNIT_FILE}" ]]; then
   cp -p "${MOTOR_UNIT_FILE}" "${INSTALL_TMP}/motion-motor.service.previous"
 fi
+if [[ -f "${COORDINATION_UNIT_FILE}" ]]; then
+  cp -p "${COORDINATION_UNIT_FILE}" "${INSTALL_TMP}/motion-coordination.service.previous"
+fi
 CONTROL_WAS_ACTIVE="$(systemctl --user is-active --quiet motion-control.service && echo true || echo false)"
 MOTOR_WAS_ACTIVE="$(systemctl --user is-active --quiet motion-motor.service && echo true || echo false)"
+COORDINATION_WAS_ACTIVE="$(systemctl --user is-active --quiet motion-coordination.service && echo true || echo false)"
 
 sed \
   -e "s|@WORKSPACE@|${WORKSPACE//&/\\&}|g" \
@@ -96,32 +120,40 @@ sed \
   -e "s|@WORKSPACE@|${WORKSPACE//&/\\&}|g" \
   -e "s|@MOTOR_SERVICE_RUNNER@|${MOTOR_SERVICE_RUNNER//&/\\&}|g" \
   "${MOTOR_TEMPLATE}" > "${INSTALL_TMP}/motion-motor.service"
+sed \
+  -e "s|@WORKSPACE@|${WORKSPACE//&/\\&}|g" \
+  -e "s|@COORDINATION_SERVICE_RUNNER@|${COORDINATION_SERVICE_RUNNER//&/\\&}|g" \
+  "${COORDINATION_TEMPLATE}" > "${INSTALL_TMP}/motion-coordination.service"
 chmod 0644 \
   "${INSTALL_TMP}/motion-control.service" \
-  "${INSTALL_TMP}/motion-motor.service"
+  "${INSTALL_TMP}/motion-motor.service" \
+  "${INSTALL_TMP}/motion-coordination.service"
 
 # Stop every existing state, including activating/auto-restart loops, so the
 # newly rendered unit is guaranteed to start with the updated ExecStart.
 SERVICES_STOPPED=true
 systemctl --user stop motion-control.service 2>/dev/null || true
 systemctl --user stop motion-motor.service 2>/dev/null || true
+systemctl --user stop motion-coordination.service 2>/dev/null || true
 
 mv "${INSTALL_TMP}/motion-control.service" "${CONTROL_UNIT_FILE}"
 mv "${INSTALL_TMP}/motion-motor.service" "${MOTOR_UNIT_FILE}"
+mv "${INSTALL_TMP}/motion-coordination.service" "${COORDINATION_UNIT_FILE}"
 
 systemctl --user daemon-reload
-systemctl --user enable motion-motor.service motion-control.service
+systemctl --user enable motion-motor.service motion-control.service motion-coordination.service
 if [[ -n "${MOTOR_CONFIG}" ]]; then
   systemctl --user start motion-motor.service
 else
   echo "검증된 모터 실행 설정 없음 · motion-motor.service 시작 보류"
 fi
 systemctl --user start motion-control.service
+systemctl --user start motion-coordination.service
 INSTALL_COMPLETE=true
 cleanup_install_tmp
 trap - EXIT
 
-echo "motion-motor.service 및 motion-control.service 설치·자동실행 등록 완료"
+echo "motion-motor.service, motion-control.service, motion-coordination.service 설치·자동실행 등록 완료"
 echo "웹 주소: http://localhost:8000"
 echo "상위 프로그램 로그: journalctl --user -u motion-control.service"
 echo "Motor Manager 로그: journalctl --user -u motion-motor.service"

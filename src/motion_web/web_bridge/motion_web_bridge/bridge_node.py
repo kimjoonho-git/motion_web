@@ -28,6 +28,9 @@ from std_msgs.msg import String
 from std_srvs.srv import SetBool, Trigger
 
 from .ethercat_alias_manager import EthercatAliasError, EthercatAliasManager
+from .coordination_bridge import (
+    CoordinationWebBridge, local_motion_control, local_motion_readiness,
+)
 from .motor_restart_coordinator import MotorRestartCoordinator
 from .motor_restart_diagnostics import diagnose_motor_restart_failure
 from .motion_studio_bridge import MotionStudioRosBridge
@@ -662,6 +665,11 @@ class MotionWebBridge(Node):
             self._safety_status_callback,
             10,
         )
+        self._coordination_web_bridge = CoordinationWebBridge(
+            self,
+            self.workspace_root,
+            self._current_project_generation,
+        )
         self._startup_project_context_timer = self.create_timer(
             1.0, self._schedule_execution_context_reconcile
         )
@@ -1200,8 +1208,38 @@ class MotionWebBridge(Node):
             'execution_context': execution_context,
             'motor_operation': motor_operation,
             'project_scope': project_scope,
+            'coordination': (
+                self._coordination_web_bridge.snapshot()
+                if hasattr(self, '_coordination_web_bridge') else {}
+            ),
             'motion_state': motion_state,
         }
+
+    def coordination_status(self) -> Dict[str, Any]:
+        """Return global PC coordination state without project data."""
+        return self._coordination_web_bridge.snapshot()
+
+    def update_coordination_settings(
+        self, payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Update this PC's mode and manual role only."""
+        return self._coordination_web_bridge.update_settings(payload)
+
+    def coordination_local_readiness(self) -> Dict[str, Any]:
+        """Check the currently active local execution files and safety state."""
+        return local_motion_readiness(self)
+
+    def coordination_readiness(self) -> Dict[str, Any]:
+        """Ask the active coordinator node to check all participants."""
+        return self._coordination_web_bridge.request_readiness()
+
+    def coordination_control(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Send one coordinator operation through the isolated ROS adapter."""
+        return self._coordination_web_bridge.request_control(payload)
+
+    def coordination_local_control(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute a validated loopback request through motion_run_manager."""
+        return local_motion_control(self, payload)
 
     def _reconcile_motor_operation_status(
         self,
@@ -4935,13 +4973,25 @@ class MotionWebBridge(Node):
     def motion_run_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self._request_motion_run('check', payload, timeout_sec=3.0)
 
+    def _coordination_execution_blocker(self) -> str:
+        service = getattr(self, '_coordination_web_bridge', None)
+        return service.local_execution_blocker() if service is not None else ''
+
     def motion_run_initialize(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        if str(payload.get('request_source') or '') != 'network_control':
+            conflict = self._coordination_execution_blocker()
+            if conflict:
+                return {'success': False, 'message': f'초기 위치 이동 불가: {conflict}'}
         blocker = self._motor_runtime_control_blocker()
         if blocker:
             return {'success': False, 'message': f'초기 위치 이동 불가: {blocker}'}
         return self._request_motion_run('initialize', payload, timeout_sec=2.0)
 
     def motion_run_start(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        if str(payload.get('request_source') or '') != 'network_control':
+            conflict = self._coordination_execution_blocker()
+            if conflict:
+                return {'success': False, 'message': f'모션 실행 불가: {conflict}'}
         blocker = self._motor_runtime_control_blocker()
         if blocker:
             return {'success': False, 'message': f'모션 실행 불가: {blocker}'}
@@ -4957,6 +5007,9 @@ class MotionWebBridge(Node):
     def motion_automation_start(
         self, payload: Dict[str, Any]
     ) -> Dict[str, Any]:
+        conflict = self._coordination_execution_blocker()
+        if conflict:
+            return {'success': False, 'message': f'자동 반복 시작 불가: {conflict}'}
         blocker = self._motor_runtime_control_blocker()
         if blocker:
             return {'success': False, 'message': f'자동 반복 시작 불가: {blocker}'}
@@ -4971,6 +5024,9 @@ class MotionWebBridge(Node):
 
     def motion_run_stop(self) -> Dict[str, Any]:
         return self._request_motion_run('stop', {}, timeout_sec=2.0)
+
+    def motion_run_stop_after_cycle(self) -> Dict[str, Any]:
+        return self._request_motion_run('stop_after_cycle', {}, timeout_sec=2.0)
 
     def midi_monitor_status(self) -> Dict[str, Any]:
         result = self._request_midi_monitor('status', {}, timeout_sec=1.0)
@@ -7349,6 +7405,44 @@ def create_app(bridge: MotionWebBridge) -> FastAPI:
     @app.get('/api/status')
     async def status():
         return bridge.snapshot()
+
+    @app.get('/api/coordination')
+    async def coordination_status():
+        return bridge.coordination_status()
+
+    @app.put('/api/coordination/settings')
+    async def update_coordination_settings(request: Request):
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail='request body must be an object')
+        return await asyncio.to_thread(
+            project_call, bridge.update_coordination_settings, body
+        )
+
+    @app.post('/api/coordination/local-readiness')
+    async def coordination_local_readiness():
+        return await asyncio.to_thread(bridge.coordination_local_readiness)
+
+    @app.post('/api/coordination/readiness')
+    async def coordination_readiness():
+        return await asyncio.to_thread(bridge.coordination_readiness)
+
+    @app.post('/api/coordination/control')
+    async def coordination_control(request: Request):
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail='request body must be an object')
+        return await asyncio.to_thread(project_call, bridge.coordination_control, body)
+
+    @app.post('/api/coordination/local-control')
+    async def coordination_local_control(request: Request):
+        remote_ip = request.client.host if request.client else ''
+        if remote_ip not in {'127.0.0.1', '::1'}:
+            raise HTTPException(status_code=403, detail='loopback only')
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail='request body must be an object')
+        return await asyncio.to_thread(bridge.coordination_local_control, body)
 
     @app.get('/api/projects')
     async def motion_projects():

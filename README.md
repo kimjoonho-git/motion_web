@@ -83,7 +83,7 @@ sudo apt update
 sudo apt install -y \
   git build-essential cmake \
   python3-rosdep python3-colcon-common-extensions \
-  python3-fastapi python3-uvicorn python3-yaml
+  python3-fastapi python3-uvicorn python3-yaml chrony
 ```
 
 Dynamixel 직렬 통신과 MIDI 장치를 사용하는 계정에는 필요한 그룹 권한을
@@ -189,6 +189,7 @@ sudo loginctl enable-linger "$(id -un)"
 
 - `motion-control.service`: 웹·프로젝트·모션 제어 서비스
 - `motion-motor.service`: 검증된 프로젝트 모터 실행 설정이 있을 때 Motor Manager
+- `motion-coordination.service`: PC 상태 공유·인증된 고수준 모션 실행 연동
 
 새 PC에 검증된 모터 실행 설정이 없으면 웹은 실행되지만 Motor Manager 시작은
 보류됩니다. 브라우저 창은 자동으로 열리지 않습니다.
@@ -197,7 +198,7 @@ sudo loginctl enable-linger "$(id -un)"
 
 ```bash
 systemctl --user start motion-control.service
-systemctl --user status motion-control.service motion-motor.service
+systemctl --user status motion-control.service motion-motor.service motion-coordination.service
 ```
 
 로그 확인:
@@ -205,6 +206,7 @@ systemctl --user status motion-control.service motion-motor.service
 ```bash
 journalctl --user -u motion-control.service -n 100
 journalctl --user -u motion-motor.service -n 100
+journalctl --user -u motion-coordination.service -n 100
 ```
 
 웹 접속:
@@ -216,7 +218,7 @@ journalctl --user -u motion-motor.service -n 100
 
 ```bash
 loginctl show-user "$(id -un)" -p Linger
-systemctl --user is-enabled motion-control.service motion-motor.service
+systemctl --user is-enabled motion-control.service motion-motor.service motion-coordination.service
 ss -ltnp | grep ':8000'
 ```
 
@@ -230,7 +232,10 @@ ss -ltnp | grep ':8000'
 - 웹은 `0.0.0.0:8000`에 바인딩되므로 신뢰할 수 있는 내부망에서만 사용합니다.
 - 방화벽은 운영 PC가 있는 내부 대역만 허용하고 인터넷에 직접 노출하지 않습니다.
 - `ROS_LOCALHOST_ONLY=1`이 적용되어 각 PC의 ROS DDS 통신은 로컬로 격리됩니다.
-- 현재 Git 구조 통합은 여러 PC의 모션 동기 실행 기능을 의미하지 않습니다.
+- PC 연동 전용 포트는 `8010`이며 기본 설정은 `연동 끔`이라 수신하지 않습니다.
+- 동기 실행을 사용할 PC는 chrony 시간 동기화, 고유 `machine_id`, 내부망 고정 IP,
+  peer URL·허용 대역과 PC별 HMAC 키를 별도로 설정해야 합니다.
+- 동기 실행 코드는 포함되지만 실제 여러 PC와 모터의 시작 오차는 실물 검증 전입니다.
 
 ## 8. Git 작업 방법
 

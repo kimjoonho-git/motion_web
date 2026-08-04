@@ -10,6 +10,74 @@
   --red: #c62828;
 }
 
+.coordination-overview-grid {
+  display: grid;
+  grid-template-columns: minmax(420px, 1.2fr) minmax(360px, 1fr);
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.coordination-settings-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(140px, 1fr)) auto;
+  align-items: end;
+  gap: 10px;
+}
+
+.coordination-settings-fields input,
+.coordination-settings-fields select {
+  width: 100%;
+}
+
+.coordination-status-strip {
+  grid-template-columns: repeat(2, minmax(140px, 1fr));
+}
+
+.coordination-readiness-actions {
+  align-items: center;
+  margin-top: 12px;
+}
+
+.coordination-readiness-actions span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.coordination-control-panel {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-color, #d8e1ea);
+}
+
+.coordination-control-panel .compact-field { min-width: 110px; }
+.coordination-control-panel input { width: 96px; }
+
+.coordination-peer-table td,
+.coordination-peer-table th {
+  white-space: nowrap;
+}
+
+.coordination-state-ok {
+  color: var(--green);
+}
+
+.coordination-state-warn {
+  color: var(--yellow);
+}
+
+.coordination-state-bad {
+  color: var(--red);
+}
+
+@media (max-width: 980px) {
+  .coordination-overview-grid,
+  .coordination-settings-fields {
+    grid-template-columns: 1fr;
+  }
+}
+
 .project-explorer-panel {
   margin-top: 18px;
   border: 1px solid var(--line);
