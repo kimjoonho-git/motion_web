@@ -37,14 +37,6 @@ ros2_ws/
 └── src/motion_system              # Git submodule
 ```
 
-주요 기능:
-
-- AC Servo·Dynamixel 물리 검색, 설정과 상태 모니터링
-- Servo ON/OFF, Fault Reset, 조그와 초기 위치 이동
-- 모션축 매핑, 모션·레이어 편집과 20ms 기준 실행
-- 프로젝트별 설정·모션·런타임 격리
-- 웹 기반 상태 확인, 설정 적용과 오류 알림
-
 ## 검증 기준 버전
 
 아래 값은 현재 개발 PC에서 확인한 기준입니다. EtherCAT 커널과 NIC 드라이버는
@@ -228,38 +220,7 @@ systemctl --user is-enabled motion-control.service motion-motor.service
 ss -ltnp | grep ':8000'
 ```
 
-## 7. 새 PC의 프로젝트와 모터 설정
-
-`motion_projects/`는 Git에 포함되지 않습니다. USB 또는 프로그램의 가져오기
-기능으로 별도 이동합니다.
-
-새 PC에서는 다음 순서로 확인합니다.
-
-1. 프로젝트 생성 또는 가져오기.
-2. EtherCAT NIC, Master 번호와 Dynamixel 직렬 포트 확인.
-3. `전체 모터 검색`으로 AC Servo와 Dynamixel을 새로 물리 검색.
-4. 프로젝트 설정과 실제 검색 결과 비교.
-5. 모터 설정 저장 후 `설정 적용 및 재시작` 실행.
-6. Servo OFF 상태에서 피드백과 제한값 확인.
-7. 안전을 확보한 뒤 저속으로 실물 동작 검증.
-
-프로젝트별 모터축 설정·모션축 설정·모션·레이어는 다음 위치에 분리됩니다.
-
-```text
-motion_projects/<project_id>/
-```
-
-적용된 모터 설정은 내용 해시 기반의 다음 실행 세션 파일로 관리됩니다.
-
-```text
-motion_projects/<project_id>/runtime/sessions/motor-<sha256>.yaml
-motion_projects/.motor_runtime.json
-```
-
-다른 PC의 이전 스캔 결과나 런타임 캐시를 새 PC의 실제 장치 검색 결과로
-대체해서는 안 됩니다.
-
-## 8. 네트워크 주의사항
+## 7. 네트워크 주의사항
 
 - PC마다 서로 다른 IP 주소와 hostname을 사용합니다.
 - 고정 IP 또는 공유기의 DHCP 예약을 권장합니다.
@@ -271,7 +232,7 @@ motion_projects/.motor_runtime.json
 - `ROS_LOCALHOST_ONLY=1`이 적용되어 각 PC의 ROS DDS 통신은 로컬로 격리됩니다.
 - 현재 Git 구조 통합은 여러 PC의 모션 동기 실행 기능을 의미하지 않습니다.
 
-## 9. Git 작업 방법
+## 8. Git 작업 방법
 
 Motion Web과 Motion Control Studio는 상위 저장소에서 함께 커밋합니다.
 
@@ -297,11 +258,3 @@ backups/
 motion_projects/
 motion_data/
 ```
-
-## 안전 주의사항
-
-이 프로그램은 실제 모터를 제어합니다. 실제 구동 전에는 기구물 안전 상태,
-Servo 상태, 위치 제한값, 초기 위치와 모션축 매핑을 확인해야 합니다.
-
-특히 서비스 재시작, Servo ON/OFF, Fault Reset, 초기 위치 이동과 모션 실행은
-기구물 하중과 작업자 안전을 확보한 뒤 수행합니다.
