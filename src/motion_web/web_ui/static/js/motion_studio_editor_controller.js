@@ -40,6 +40,8 @@ import {
   motionStudioEditorLayerIsDirty,
   motionStudioEditorPointCurves,
   motionStudioPointDraftHasUnsavedChanges,
+  motionStudioRangeSelectionActive,
+  motionStudioRangeSelectionBounds,
   motionStudioResetRangeSelection,
   motionStudioSelectedDraftPoint,
   motionStudioSelectedPointRange,

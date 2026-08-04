@@ -164,6 +164,32 @@ test('editor workflow stays in the editor controller and the workspace controlle
   assert.match(editorSource, /const onEditorRedo = \(\) =>/);
 });
 
+test('editor controller imports the range selection state used during rendering', () => {
+  const editorSource = readFileSync(
+    new URL('../static/js/motion_studio_editor_controller.js', import.meta.url), 'utf8',
+  );
+  const stateImport = editorSource.match(
+    /import \{([\s\S]*?)\} from '\.\/motion_studio_editor_state\.js[^']*';/,
+  )?.[1] || '';
+
+  for (const functionName of [
+    'motionStudioRangeSelectionActive',
+    'motionStudioRangeSelectionBounds',
+  ]) {
+    assert.match(stateImport, new RegExp(`\\b${functionName}\\b`));
+    assert.match(editorSource, new RegExp(`${functionName}\\(editor\\)`));
+  }
+});
+
+test('workspace point coverage uses the shared point-curve model after controller split', () => {
+  const workspaceSource = readFileSync(
+    new URL('../static/js/motion_studio.js', import.meta.url), 'utf8',
+  );
+
+  assert.match(workspaceSource, /\bmotionStudioEditorPointCurves\(layer\)/);
+  assert.doesNotMatch(workspaceSource, /\beditorPointCurves\(layer\)/);
+});
+
 test('stage 6 separates project, point, math, track, and canvas responsibilities', () => {
   const source = (name) => readFileSync(
     new URL(`../static/js/${name}`, import.meta.url), 'utf8',

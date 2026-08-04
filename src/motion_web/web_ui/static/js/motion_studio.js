@@ -67,7 +67,8 @@ import {
 } from './motion_studio_layer_controller.js?v=20260803-studio-structure-10';
 import {
   createMotionStudioEditorController,
-} from './motion_studio_editor_controller.js?v=20260803-studio-structure-12';
+} from './motion_studio_editor_controller.js?v=20260804-studio-range-2';
+import { motionStudioEditorPointCurves } from './motion_studio_editor_state.js?v=20260803-studio-structure-12';
 import {
   createMotionStudioRequestFence,
 } from './motion_studio_controller_events.js?v=20260803-studio-structure-10';
@@ -89,7 +90,6 @@ export {
   motionStudioShouldProtectPointAxisSelection, motionStudioSnapFrameTime,
   resolveMotionStudioSelectedLayerId, synchronizeMotionStudioEditorTimeline,
 };
-
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"]/g, (character) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;',
@@ -344,7 +344,7 @@ export function createMotionStudioController({
   function layerPointCoverageIssues(layer) {
     if (!layer || typeof layer !== 'object') return ['모션 데이터 없음'];
     const frames = Array.isArray(layer.frames) ? layer.frames : [];
-    const pointCurves = editorPointCurves(layer);
+    const pointCurves = motionStudioEditorPointCurves(layer);
     const cached = layerPointCoverageCache.get(layer);
     if (cached?.frames === frames && cached?.pointCurves === pointCurves) {
       return cached.value;
