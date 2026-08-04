@@ -10,6 +10,7 @@ WorkingDirectory=@WORKSPACE@
 Environment="MOTION_WORKSPACE=@WORKSPACE@"
 Environment="MOTION_CONTROL_SERVICE_UNIT=motion-control.service"
 Environment="MOTION_MOTOR_SERVICE_UNIT=motion-motor.service"
+Environment="MOTION_COORDINATION_SERVICE_UNIT=motion-coordination.service"
 Environment="ROS_LOCALHOST_ONLY=1"
 ExecStart=/bin/bash @SERVICE_RUNNER@
 Restart=always

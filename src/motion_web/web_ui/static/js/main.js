@@ -38,6 +38,7 @@ import {
 } from './workspace_navigation.js?v=20260729-motion-files-execution-1';
 import { installFeedbackPresentation } from './ui_feedback.js?v=20260724-ui-finish-1';
 import { createServoAlarmController } from './servo_alarm.js?v=20260728-servo-alarm-2';
+import { createCoordinationController } from './coordination.js?v=20260804-coordination-2';
 
 const el = getElements();
 const operationProgress = createOperationProgressManager({ el });
@@ -72,6 +73,7 @@ const appState = {
   projectGeneration: null,
 };
 const workspaceRouteState = createWorkspaceRouteState('monitoring');
+const coordination = createCoordinationController({ el });
 let projectExplorer = null;
 const RESTART_READY_STABLE_MS = 3500;
 const RESTART_TIMEOUT_MS = 45000;
@@ -1569,6 +1571,7 @@ if (el.workspaceTabs) {
       if (target === 'studio') motionStudio.refresh(false);
       if (target === 'config') motorConfig.fetchRegistry();
       if (target === 'servo-errors') servoAlarm.refresh();
+      if (target === 'coordination') coordination.refresh();
       projectExplorer.refresh(true);
       return;
     }
@@ -1581,6 +1584,7 @@ if (el.workspaceTabs) {
     if (target === 'studio') motionStudio.refresh(false);
     if (target === 'config') motorConfig.fetchRegistry();
     if (target === 'servo-errors') servoAlarm.refresh();
+    if (target === 'coordination') coordination.refresh();
     projectExplorer.refresh(true);
   });
 }
@@ -1592,6 +1596,7 @@ motionStudio.bindEvents();
 projectExplorer.bindEvents();
 motorEventLog.bindEvents();
 servoAlarm.bindEvents();
+coordination.start();
 motorConfig.renderRegistrationTabs();
 renderWorkspacePanel();
 updateWorkContext();

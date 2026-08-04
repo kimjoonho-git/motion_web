@@ -104,6 +104,38 @@ export async function fetchStatusSnapshot(timeoutMs = 5000) {
   return readJson(response);
 }
 
+export async function fetchCoordinationStatus() {
+  const response = await projectFetch('/api/coordination');
+  return readJson(response);
+}
+
+export async function saveCoordinationSettings(payload) {
+  const response = await projectFetch('/api/coordination/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return readJson(response);
+}
+
+export async function checkCoordinationReadiness() {
+  const response = await projectFetch('/api/coordination/readiness', {
+    method: 'POST',
+    timeoutMs: 15000,
+  });
+  return readJson(response);
+}
+
+export async function sendCoordinationControl(payload) {
+  const response = await projectFetch('/api/coordination/control', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    timeoutMs: 20000,
+  });
+  return readJson(response);
+}
+
 export async function fetchServoAlarmPolicy() {
   const response = await projectFetch('/api/servo-alarm-policy');
   return readJson(response);

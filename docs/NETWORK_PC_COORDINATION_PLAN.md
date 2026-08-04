@@ -2,7 +2,7 @@
 
 - 문서 상태: 방향성 검토 기준
 - 현재 코드 기준: 2026-08-04
-- 현재 구현: 로컬 실행 기반 존재 · 네트워크 연동 미구현
+- 현재 구현: 9·11단계 코드 완료 · 10단계 자동 검증 완료·실물 미검증
 - 긴급도: 즉시 기능 장애 아님 · 네트워크 연결 전 보안 경계 확정 필요
 - 기준 구조: 프로젝트 실행 컨텍스트, `motion_run_manager` 단일 실행 순서,
   프로젝트별 자동 반복 설정, 상위 프로그램과 Motor Manager 분리 서비스
@@ -97,20 +97,45 @@ motion_coordination_node
 - 연동 노드는 기존 `/api/status`나 모션 실행 API를 외부에 그대로 중계하지 않는다.
 - 초기 개발에서 브라우저 세션 인증과 컴퓨터 간 연동 인증을 하나로 합치지 않는다.
 
+4단계 구현은 `motion_coordination.access_policy.AccessPolicy`가 담당한다.
+
+- 사용자 웹 기본값은 `0.0.0.0:8000`으로 유지한다.
+- PC 연동 기본 포트는 `8010`이며 `off` 모드에서는 수신 서비스를 열지 않는다.
+- PC 연동 활성화 시 wildcard·loopback·공인 IP 바인딩을 거부한다.
+- 허용 내부망 CIDR이 없거나 수신 IP가 허용 CIDR 밖이면 설정을 거부한다.
+- `/api/*`를 연동 경로로 사용하지 않고 `/coordination/v1/*`만 허용한다.
+- 검증된 허용 CIDR·수신 IP·`8010/tcp`만 포함하는 선언형 방화벽 규칙을 생성한다.
+- 운영체제 방화벽은 자동 변경하지 않는다. 생성된 규칙은 실제 다중 PC 배포 시
+  사용자가 확인한 뒤 별도 적용한다.
+
 연동 요청과 응답은 다음 값을 모두 검증한다.
 
 - 송신 `machine_id`와 허용 중앙 ID
 - 요청 시각과 최대 허용 시간 차이
 - 요청마다 다른 nonce
-- `network_operation_id`
+- 제어 요청의 `network_operation_id`
 - HTTP 메서드·경로·본문 SHA-256을 포함한 HMAC-SHA256 서명
 - 현재 중앙 역할과 수신 컴퓨터의 `연동 참여` 모드
 
 컴퓨터별 자격증명은 프로젝트 파일과 분리된 전역 파일에 저장하며 상태 응답과
 로그에 기록하지 않는다. 모든 컴퓨터가 하나의 비밀키를 공유하지 않고 중앙과
 각 참여 컴퓨터 사이의 HMAC 키를 구분한다. TLS를 적용할 수 있는 환경에서는
-전송 암호화도 함께 사용한다. nonce와 `network_operation_id`는 요청 허용 시간보다
-길게 보관하여 같은 요청의 재사용을 차단한다.
+전송 암호화도 함께 사용한다. nonce와 제어 요청의 `network_operation_id`는 요청
+허용 시간보다 길게 보관하여 같은 요청의 재사용을 차단한다.
+
+5단계 구현은 `motion_coordination.security`가 담당한다.
+
+- 인증 헤더: `x-motion-machine-id`, `x-motion-nonce`, `x-motion-signature`.
+- 서명 대상: 인증 버전, HTTP 메서드, 정확한 요청 경로, 본문 SHA-256, nonce.
+- 본문: 키 정렬과 고정 구분자를 사용하는 UTF-8 canonical JSON.
+- HMAC 키: PC 관계별 32바이트 이상 키를 Base64로 저장한다.
+- 요청 시각: 기본 ±30초 범위만 허용한다.
+- `NonceReplayGuard`: 같은 PC가 재사용한 nonce를 차단한다.
+- `SequenceGuard`: 같은 실행 세션의 이전·중복 sequence와 종료된 세션을 차단한다.
+- `DuplicateOperationGuard`: 같은 PC의 `network_operation_id` 중복 처리를 차단한다.
+- 실제 HTTP 요청 검증기는 6단계 노드에 연결했다. 현재 상태 메시지의 nonce와
+  sequence는 연동 프로세스 메모리에서 실행 세션별로 관리한다. 향후 제어 요청의
+  `network_operation_id`는 11~12단계에서 재시작 후에도 유지되는 저장소를 추가한다.
 
 ### 4.2 노드와 내부 모듈 경계
 
@@ -161,8 +186,8 @@ motion_coordination_node
 
 ## 6. 컴퓨터별 연동 모드
 
-각 컴퓨터 사용자가 해당 컴퓨터의 웹에서 직접 연동 모드를 선택한다.
-중앙 컴퓨터가 다른 컴퓨터의 연동 모드를 강제로 변경할 수 없다.
+각 컴퓨터의 `장비 연동 상태` 웹 화면에서 그 컴퓨터의 전역 연동 모드와 역할만
+변경한다. 중앙 컴퓨터가 다른 컴퓨터의 연동 모드를 강제로 변경하는 경로는 없다.
 
 | 모드 | 상태 전송 | 전체 상태 확인 | 제한 제어 수신 |
 |---|---:|---:|---:|
@@ -170,32 +195,99 @@ motion_coordination_node
 | 상태 공유 | 허용 | 허용 | 차단 |
 | 연동 참여 | 허용 | 허용 | 로컬 검사 후 허용 |
 
-- 연동 노드 프로세스는 계속 실행하고 연동 모드만 변경한다.
-- `연동 참여`는 프로그램 재시작 후 항상 `상태 공유`로 복귀한다.
-- 동작 중 연동 해제는 로컬 동작 상태를 확인한 뒤 처리한다.
+- `off`에서는 8010 포트를 열지 않고 상태를 송수신하지 않는다.
+- `status`와 `participant`는 인증된 축약 상태만 송수신한다.
+- `participant`에서만 인증된 고수준 실행 명령을 허용하며
+  `remote_control_enabled=true`로 표시한다. `status`와 `off`는 제어를 차단한다.
 
 ## 7. 공유 상태
 
-컴퓨터 간에는 축약된 상태만 공유한다.
+### 7.1 1단계 완료 · 전송 목적과 최소 항목
 
-- 컴퓨터 식별자와 표시 이름.
-- 프로그램 정상, 오류, 연결 끊김.
-- 현재 연동 모드와 중앙 역할 여부.
-- 모터 설정 미완료, 완료, 오류.
-- 모션 실행 설정 미완료, 완료, 오류.
-- 모터 연결 정상, 오프라인, 오류.
-- 안전 정상 또는 차단.
-- 초기위치 이동 가능, 이동 중, 완료, 실패.
-- 모션 실행 가능, 동작 중, 완료, 실패.
-- 모션 정지 중, 정지 완료.
-- 실행 실패·거부 사유.
-- 현재 `network_operation_id`.
-- 연동 노드 실행 세션을 구분하는 `coordination_boot_id`.
-- 상위 로컬 프로그램 실행 세션을 구분하는 `program_session_id`.
-- 상태 순서를 구분하는 `coordination_sequence`.
-- 마지막 상태 변경·수신 시각.
+첫 네트워크 전송 목적은 `등록된 PC의 생존 여부와 축약 상태 공유`로 제한한다.
+프로젝트·모션·모터 설정과 제어 명령은 첫 전송 범위에 포함하지 않는다.
 
-현재 로컬 실행 상태에는 다음 값들이 포함된다. 이 목록을 네트워크 계약으로
+모든 메시지에서 고정하는 최소 항목은 다음 공통 봉투뿐이다.
+
+- `schema_version`: 공통 봉투의 호환 버전.
+- `message_type`: `status`, `heartbeat` 등 메시지 용도.
+- `sender.machine_id`: 전역 설정에 저장된 송신 PC 식별자.
+- `sender.coordination_boot_id`: 연동 프로세스 실행 세션 식별자.
+- `sequence`: 같은 실행 세션 안에서 증가하는 메시지 순서.
+- `sent_at`: 송신 시각을 나타내는 UTC RFC3339 문자열.
+- `payload`: 메시지 종류별 내용. 공통 봉투는 내부 필드를 제한하지 않는다.
+
+`machine_id`와 연동 인증 설정은 프로젝트가 아닌 전역 설정으로 관리한다.
+`payload`의 실제 상태 항목은 3단계 `status_adapter` 계약을 사용한다.
+
+### 7.2 2단계 완료 · 확장 가능한 공통 메시지 형식
+
+공통 메시지 형식은 다음과 같다.
+
+```json
+{
+  "schema_version": 1,
+  "message_type": "status",
+  "sender": {
+    "machine_id": "pc-a",
+    "coordination_boot_id": "boot-123"
+  },
+  "sequence": 7,
+  "sent_at": "2026-08-04T13:20:30.123Z",
+  "payload": {},
+  "extensions": {}
+}
+```
+
+- 공통 계약 구현: `motion_coordination.protocol`.
+- `extensions`는 선택 항목이며 공급자별 부가정보만 저장한다.
+- 수신 측은 같은 버전에서 알 수 없는 선택 필드를 무시하고 보존할 수 있어야 한다.
+- `payload` 선택 필드 추가는 `schema_version`을 올리지 않는다.
+- 필수 필드 삭제·의미 변경·형식 변경은 새 `schema_version`으로 분리한다.
+- 네트워크 전송 코드는 로컬 상태 필드를 직접 선택하지 않고 향후
+  `status_adapter` 결과만 `payload`에 넣는다.
+- 인증 서명은 직렬화된 최종 봉투 전체를 대상으로 하며
+  `motion_coordination.security`가 검증한다.
+
+### 7.3 3단계 완료 · 상태 payload 계약
+
+`motion_coordination.status_adapter`는 기존 `/api/status` 전체 객체에서 승인된
+축약 정보만 새 객체로 생성한다.
+
+```json
+{
+  "status_payload_version": 1,
+  "display_name": "PC A",
+  "program": {"state": "ready"},
+  "configuration": {
+    "motor": "ready",
+    "motion": "ready"
+  },
+  "motors": {
+    "state": "online",
+    "total_count": 2,
+    "online_count": 2,
+    "fault_count": 0
+  },
+  "safety": {"state": "ready"},
+  "motion": {"state": "running"}
+}
+```
+
+- `display_name`은 전역 설정값이 있을 때만 포함한다.
+- 프로그램: `ready`, `error`, `unknown`.
+- 설정: `ready`, `configuration_required`, `error`, `unknown`.
+- 모터: `online`, `offline`, `error`, `unknown`과 축 개수만 포함한다.
+- 안전: `ready`, `blocked`, `unknown`.
+- 모션: `configuration_required`, `ready`, `initializing`, `waiting_start`,
+  `running`, `waiting`, `stopping`, `completed`, `error`, `unknown`.
+- 알 수 없는 내부 상태는 `unknown`으로 변환하고 완료로 추정하지 않는다.
+- 프로젝트 ID·이름, 컨텍스트 ID, 파일명, Motion ID, 축 ID, 실제 모터값과
+  내부 오류 문구는 payload에 포함하지 않는다.
+- 연동 모드·중앙 역할과 프로젝트 값을 노출하지 않는 불투명 프로그램·준비 세션
+  ID를 선택 필드로 포함한다.
+
+현재 로컬 실행 상태에는 다음 값들이 포함된다. 이 목록을 공통 메시지 계약으로
 직접 사용하지 않고 `status_adapter`가 축약 상태로 변환한다.
 
 ```text
@@ -234,8 +326,8 @@ error
 확인에 사용한다. 네트워크 상태 순서와 중복 실행 방지에는 다음 전용 식별자를
 사용한다.
 
-- `coordination_boot_id`: 연동 노드 실행 세션.
-- `coordination_sequence`: 해당 세션의 상태 순서.
+- `sender.coordination_boot_id`: 연동 노드 실행 세션.
+- `sequence`: 해당 세션의 상태 순서.
 - `network_operation_id`: 하나의 네트워크 제어 작업.
 - `program_session_id`: 상위 로컬 프로그램 재시작을 구분하는 불투명 식별자.
 
@@ -384,13 +476,25 @@ error
 
 이후 `1회 모션 실행`을 요청하면 안전을 위해 초기 위치 이동을 다시 수행한다.
 
+### 11.1 현재 구현된 준비 확인 범위
+
+- 중앙 PC만 `전체 실행 준비 확인`을 시작한다.
+- 중앙과 참여 PC는 각자 로컬의 활성 모션 파일·모션축 설정을 사용해 기존
+  `motion_run_manager`의 `check`를 실행한다.
+- PC 사이에는 프로젝트 ID, 파일명, 경로와 실제 모터값을 보내지 않고
+  `준비 완료`, `설정 확인 필요`, `응답 없음`과 축약 사유만 전송한다.
+- `network_operation_id` 재사용은 차단한다.
+- 프로그램 재시작은 `program_session_id`, 프로젝트 전환은
+  `readiness_session_id`를 새로 발급해 이전 준비 결과를 폐기한다.
+- 준비 확인은 모터 동작 명령이 아니며 초기위치 이동이나 모션 재생을 시작하지 않는다.
+
 ## 12. 장애 처리
 
 - 중앙 컴퓨터 종료: 로컬 기능 유지, 새로운 연동 명령 차단.
 - 네트워크 단절: 로컬 기능 유지, 해당 컴퓨터를 연결 끊김으로 표시.
 - 다른 컴퓨터 오류: 정상 컴퓨터의 로컬 기능에 영향 없음.
 - 연동 노드 오류: 웹·Supervisor·Motor Manager 유지.
-- 연동 노드 재시작: 이전 상태를 폐기하고 새 `coordination_boot_id`로 상태 재등록.
+- 연동 노드 재시작: 이전 상태를 폐기하고 새 `sender.coordination_boot_id`로 상태 재등록.
 - 상위 프로그램 재시작: 이전 완료 상태를 폐기하고 새 `program_session_id`로
   상태 재등록.
 - 프로젝트·모션 선택 변경: 이전 초기위치 완료·모션 완료 상태 폐기.
@@ -402,7 +506,7 @@ error
 - lease 만료: 새 명령과 다음 반복 시작을 차단하되 이미 수락된 1회 실행은
   로컬 안전조건에 따라 현재 실행을 완료할 수 있다.
 - 순서가 뒤바뀐 상태:
-  `coordination_boot_id + coordination_sequence`로 폐기.
+  `sender.coordination_boot_id + sequence`로 폐기.
 - 중복 실행 요청: `network_operation_id`로 한 번만 실행.
 - 모순 상태: 임의로 선택하지 않고 상태 충돌로 표시.
 
@@ -419,26 +523,49 @@ error
 config/motion_coordination.yaml
 ```
 
-예상 항목:
+현재 구현된 1~11단계 기준 예시:
 
 ```yaml
-machine_id: machine-a
+version: 1
+machine_id: pc-a
 display_name: PC A
-role: coordinator
-mode: status
-coordinator_url: http://172.16.21.10:8010
-max_computers: 32
+mode: off
+role: peer
+coordinator_machine_id: ''
+heartbeat_sec: 1.0
+peer_timeout_sec: 3.0
+peers: []
+access:
+  web:
+    host: 0.0.0.0
+    port: 8000
+  coordination:
+    enabled: false
+    host: ''
+    port: 8010
+    allowed_peer_networks: []
 credential_file: config/motion_coordination.credentials.yaml
-allowed_coordinator_ids:
-  - machine-a
+```
+
+기준 예시는 `config/motion_coordination.example.yaml`에 저장한다. 활성화할 때는
+각 peer의 `machine_id`와 명시적인 내부망 `http(s)://IP:8010` 주소를 등록한다.
+활성 모드는 wildcard·loopback·공인 IP·DNS peer 주소를 허용하지 않는다.
+
+자격증명 파일 형식:
+
+```yaml
+version: 1
+peers:
+  pc-b:
+    hmac_key_base64: '<32바이트 이상 키의 Base64 값>'
 ```
 
 - `machine_id`는 컴퓨터별로 중복되지 않아야 한다.
 - IP 주소는 고정 IP 또는 DHCP 예약을 권장한다.
 - 연동 설정과 프로젝트 데이터 사이에 대체값·복사·병합 경로를 만들지 않는다.
 - 컴퓨터별 HMAC 자격증명은 프로젝트 파일과 분리하며 상태 응답이나 로그에 기록하지 않는다.
-- 연동 명령은 HMAC-SHA256 서명, 허용 중앙 ID, 요청 시각,
-  nonce, 본문 SHA-256 서명과 `network_operation_id`를 모두 검증한다.
+- 모든 연동 요청은 HMAC-SHA256 서명, 허용 PC ID, 요청 시각, nonce와 본문
+  SHA-256을 검증한다. 제어 요청은 `network_operation_id`도 추가로 검증한다.
 - 기존 웹의 모션 실행 API를 외부 PC가 직접 호출하게 하지 않는다.
 - `motion-coordination.service`는 `motion-control.service`와
   `motion-motor.service`의 필수 의존 서비스로 등록하지 않는다.
@@ -446,25 +573,34 @@ allowed_coordinator_ids:
 
 ## 14. 개발 순서
 
-현재 우선 개발 대상은 0~7단계의 `네트워크 상태 연동`이다. 각 단계의 검증이
-끝나기 전에는 다음 단계와 멀티 PC 동기 실행 코드를 함께 활성화하지 않는다.
+각 단계의 검증이 끝나기 전에는 다음 단계와 멀티 PC 동기 실행 코드를 함께
+활성화하지 않는다.
 
-0. 기존 `8000` API와 연동 전용 `8010` API의 접근·방화벽·인증 경계 확정.
-1. 현재 로컬 상태를 외부용 축약 상태로 변환하는 순수 변환기와 계약 테스트.
-2. 네트워크 식별자, HMAC 서명, nonce, 순서, 중복 요청 방지와 lease 계약 확정.
-3. 상태 공유 전용 `motion_coordination_node`와
-   `motion-coordination.service` 구현.
-4. `연동 끔`, `상태 공유`, `연동 참여` 구현.
-5. 중앙 역할 수동 지정, 중앙 중복 차단 및 권한 폐기 구현.
-6. 기존 웹에 `장비 연동 상태` 화면 추가.
-7. 2대 컴퓨터로 상태 공유, 프로그램 재시작, 프로젝트 변경, 네트워크 단절 검증.
-8. 모션 실행 준비 확인 연동.
-9. `1회 모션 실행`과 모션 정지 연동.
-10. 점검용 초기위치 이동과 초기위치 이동 정지 연동.
-11. 4대, 16대, 32대 상태 부하 검증.
-12. 멀티 PC 동기 실행에 필요한 제어권 획득·반환과 실행 명령 전달 계약 검증.
-13. 동시 시작과 반복 주기 계산은 `MULTI_PC_MOTION_SCHEDULER_PLAN.md`에 따라
-    별도 구현.
+1. **완료** · 네트워크 전송 목적과 최소 항목 정리.
+2. **완료** · 확장 가능한 공통 메시지 형식과 독립 계약 테스트 구현.
+3. **완료** · 현재 로컬 상태를 외부용 축약 상태로 변환하는
+   `status_adapter`와 계약 테스트.
+4. **완료** · 기존 웹 `8000`과 연동 전용 `8010`의 접근정책 경계 구현.
+5. **완료** · PC 식별자, HMAC 서명, nonce, 순서와 중복 요청 차단 구현.
+6. **완료** · 상태 공유 전용 `motion_coordination_node`와
+   독립 `motion-coordination.service` 구현.
+7. **완료** · 전역 설정 기반 `연동 끔`, `상태 공유`, `연동 참여` 구현.
+8. **완료** · 중앙 역할 수동 지정, 중앙 중복 감지와 권한 차단 구현.
+9. **완료** · 기존 웹에 `장비 연동 상태` 화면과 로컬 모드·역할 설정 추가.
+10. **부분 완료** · 2대 런타임 상태 공유, 프로그램 재시작, 프로젝트 변경과
+    네트워크 단절 자동 검증 완료 · 실제 2대 PC 검증은 실물 미검증.
+11. **코드 완료** · 기존 로컬 `motion_run_manager`를 사용하는 인증된 전체 실행
+    준비 확인과 프로젝트 전환 결과 폐기 구현 · 실제 2대 PC는 실물 미검증.
+12. **코드 완료** · 인증된 `1회 모션 실행`과 모션 정지 연동 · 실물 미검증.
+13. **코드 완료** · 점검용 초기위치 이동과 초기위치 이동 정지 연동 · 실물 미검증.
+14. **코드 완료** · 원자적 제어권 lease 획득·반환, 로컬 실행 충돌 차단,
+    프로젝트 중립 실행 계약과 재시작 후 중복 작업 차단 · 실물 미검증.
+15. **코드 완료** · chrony 허용 오차 검사, UTC 절대시각 예약과 실제 시작 오차
+    기록 · 실제 2대 PC 10ms 목표는 실물 미검증.
+16. **코드 완료** · 최장 모션 기준 20ms 올림 공통 주기, 절대 반복 경계,
+    짧은 모션 최종값 유지, lease 만료 시 다음 회차 정지 · 실물 미검증.
+17. **코드 완료** · 최대 32대 설정과 16개 제한 병렬 송수신, 4·16·32대
+    계약·부하 시뮬레이션 · 실제 다중 PC는 실물 미검증.
 
 단계 구분:
 
@@ -506,7 +642,7 @@ allowed_coordinator_ids:
 ## 16. 현재 상태
 
 - 본 문서는 확정된 개발 방향을 저장한 계획 문서다.
-- 네트워크 PC 상태 공유와 제한 제어는 아직 구현하지 않았다.
+- 공통 메시지, 상태 변환, 접근정책, 인증 검증과 `8010` 상태 송수신을 구현했다.
 - 현재 코드에는 다음 기반 기능이 구현되어 있다.
   - 프로젝트별 실행 컨텍스트와 `project_generation` 경계.
   - 취소된 모션 스튜디오 작업을 구분하는 `operation_generation`.
@@ -516,15 +652,18 @@ allowed_coordinator_ids:
   - 프로젝트별 자동 반복 설정과 모션·매핑 파일 해시 검증.
   - `motion-control.service`와 `motion-motor.service` 분리.
   - `ROS_LOCALHOST_ONLY=1`.
-- 다음 기능은 아직 구현되지 않았다.
-  - `motion_coordination_node`와 `motion-coordination.service`.
-  - 연동 전용 상태 계약, 인증 API와 전역 설정.
-  - 연동 끔·상태 공유·연동 참여.
-  - 중앙 역할 수동 지정과 중복 중앙 차단.
-  - 기존 웹의 `장비 연동 상태` 화면.
-  - 네트워크 제어 중복 방지와 다중 PC 검증.
-- 현재 Web Bridge의 `0.0.0.0:8000` 바인딩은 연동 전용 인증 경계가 아니므로
-  다른 컴퓨터가 기존 제어 API를 호출하지 못하게 하는 접근 정책이 먼저 필요하다.
-- 다음 개발 시작점은 기존 웹과 연동 API의 보안 경계 확정 후 상태 변환 계약과
-  인증을 포함한 1차 네트워크 상태 연동이다.
-- 멀티 PC 동기 실행은 네트워크 상태 연동 검증 전에는 구현하거나 활성화하지 않는다.
+  - 프로젝트 정보를 제외하는 `status_adapter`와 상태 payload 계약.
+  - `8000` 사용자 웹과 `8010` PC 연동의 접근정책 검증.
+  - peer별 HMAC, 시각·nonce·sequence·작업 ID 재사용 차단 계약.
+  - `motion_coordination_node`의 서명된 상태 요청·응답과 peer 만료 처리.
+  - 독립 `motion-coordination.service` 설치 및 자동 실행 등록.
+  - `off`, `status`, `participant` 설정과 수동 `peer`/`coordinator` 역할.
+  - 중앙 주장 중복 시 `conflict` 표시와 `authority_allowed=false` 차단.
+  - 기존 웹의 `장비 연동 상태` 화면과 이 PC의 모드·역할 저장·서비스 재시작.
+  - 로컬 ROS 요청·응답과 HMAC 전용 API를 연결한 전체 실행 준비 확인.
+  - 프로그램·프로젝트 변경 시 불투명 세션 ID 교체와 이전 준비 결과 폐기.
+- 남은 항목은 실제 2대 PC의 상태·단절·재시작·예약 시작 오차와 모터 동작
+  실물 검증이다.
+- 현재 Web Bridge의 `0.0.0.0:8000` 바인딩은 사용자 웹 접근용으로 유지하며
+  PC 간 연동 통신은 해당 포트를 사용하지 않는다.
+- 실제 활성화는 2대 PC에서 상태 연동·chrony·초기 위치 이동·정지부터 검증한다.
