@@ -2,8 +2,24 @@
 
 ROS 2 기반 모션 제어 웹 브리지와 웹 UI 패키지입니다.
 
-이 저장소는 별도 `motion_control_studio`와 `motion_system` 저장소 위에서
-동작하며, 웹 API, 웹 UI, 공통 설정과 실행 스크립트를 관리합니다.
+이 저장소는 웹 API와 웹 UI뿐 아니라 `motion_control_studio`를 함께 관리합니다.
+저수준 모터 제어 계층인 `motion_system`은 호환 커밋을 고정하는 Git
+서브모듈로 연결합니다.
+
+## 저장소 받기
+
+내부 `motion_system` 서브모듈까지 한 번에 받습니다.
+
+```bash
+git clone --recurse-submodules \
+  https://github.com/kimjoonho-git/motion_web.git ros2_ws
+```
+
+이미 저장소를 받은 경우에는 다음 명령으로 서브모듈을 맞춥니다.
+
+```bash
+git submodule update --init --recursive
+```
 
 ## 주요 기능
 
@@ -28,6 +44,12 @@ src/motion_web
 ├── web_bridge
 └── web_ui
 
+src/motion_control_studio
+├── motion_control
+└── motion_studio
+
+src/motion_system  # Git submodule
+
 config
 scripts
 docs
@@ -35,11 +57,12 @@ docs
 
 ## 의존 관계
 
-이 저장소는 아래 두 저장소의 제어 계층 위에서 동작합니다.
+모션 편집·실행 계층은 이 저장소에서 함께 관리하고, 저수준 모터 제어 계층은
+별도 서브모듈로 유지합니다.
 
 ```text
-src/motion_control_studio
-src/motion_system
+src/motion_control_studio  # 상위 저장소에 통합
+src/motion_system          # 별도 Git 서브모듈
 ```
 
 계층 구조:

@@ -26,9 +26,8 @@ backups/
 *.swp
 *.swo
 
-# Do not include the separate low-level motor-system repository here.
+# Keep the separate low-level motor-system repository as a Git submodule.
 src/motion_system/
-src/motion_control_studio/
 
 # Local agent configuration
 .agents/

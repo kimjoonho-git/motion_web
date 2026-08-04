@@ -1,0 +1,3 @@
+[submodule "src/motion_system"]
+	path = src/motion_system
+	url = https://github.com/kimjoonho-git/motion_system_ros2.git
