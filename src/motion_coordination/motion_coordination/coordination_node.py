@@ -18,6 +18,7 @@ import yaml
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 from rclpy.node import Node
+from rclpy.executors import ExternalShutdownException
 from std_msgs.msg import String
 
 from .configuration import ConfigurationError, load_config
@@ -336,6 +337,9 @@ class MotionCoordinationNode(Node):
     def _publish_snapshot(self) -> None:
         snapshot = self._runtime.snapshot()
         snapshot['execution_control'] = self._execution_lease.snapshot()
+        snapshot['synchronized_operation_active'] = (
+            self._synchronized_operation_active
+        )
         snapshot['coordinator_lease_id'] = (
             self._coordinator_lease_id
             if self._config.role == 'coordinator' else ''
@@ -484,12 +488,25 @@ class MotionCoordinationNode(Node):
                     payload.get('network_operation_id')
                     or f'control-{uuid.uuid4().hex}'
                 )
-                wire = validate_control_payload({**payload, 'network_operation_id': operation_id})
+                wire_payload = {
+                    **payload,
+                    'network_operation_id': operation_id,
+                }
                 if command == 'acquire_control':
                     lease_id = f'lease-{uuid.uuid4().hex}'
-                    wire['lease_id'] = lease_id
-                elif command == 'release_control':
-                    wire['lease_id'] = str(payload.get('lease_id') or self._coordinator_lease_id)
+                    wire_payload['lease_id'] = lease_id
+                elif command in {'run_once', 'initialize', 'release_control'}:
+                    wire_payload['lease_id'] = str(
+                        payload.get('lease_id') or self._coordinator_lease_id
+                    )
+                if (
+                    command == 'release_control'
+                    and self._synchronized_operation_active
+                ):
+                    raise ValueError(
+                        '동기 실행 중에는 모션 실행 제어권을 반환할 수 없습니다'
+                    )
+                wire = validate_control_payload(wire_payload)
                 result = self._broadcast_control(wire)
                 if command == 'acquire_control' and result['success']:
                     self._coordinator_lease_id = wire['lease_id']
@@ -519,7 +536,24 @@ class MotionCoordinationNode(Node):
                 results.append(future.result())
         success = bool(results) and all(item.get('success') for item in results)
         if not success and payload.get('command') in {'acquire_control', 'start_at'}:
-            # Best-effort rollback keeps a partial acquisition from becoming usable.
+            # Cancel an accepted scheduled run before releasing a partially
+            # acquired lease.  Releasing first could allow a local run to race
+            # with an already accepted START_AT operation.
+            if payload.get('command') == 'start_at':
+                cancel = {
+                    'network_operation_id': f'rollback-cancel-{uuid.uuid4().hex}',
+                    'command': 'cancel_before_start',
+                }
+                self._execute_control(self._config.machine_id, cancel)
+                with ThreadPoolExecutor(
+                    max_workers=min(16, len(self._config.peers) or 1)
+                ) as pool:
+                    list(pool.map(
+                        lambda peer: self._request_peer_control(
+                            peer.machine_id, peer.url, cancel
+                        ),
+                        self._config.peers,
+                    ))
             lease_id = str(payload.get('lease_id') or '')
             if lease_id:
                 rollback = {
@@ -598,7 +632,7 @@ class MotionCoordinationNode(Node):
                     'success': True, 'message': '네트워크 모션 실행 제어권 반환',
                     **self._execution_lease.release(sender, str(safe['lease_id'])),
                 }
-            elif command == 'start_at':
+            elif command in {'run_once', 'initialize', 'start_at'}:
                 self._execution_lease.require(sender, str(safe['lease_id']))
                 result = self._call_local_control(safe)
             elif command in {'stop_after_cycle'}:
@@ -752,7 +786,10 @@ def main(args=None) -> None:
     try:
         node = MotionCoordinationNode()
         rclpy.spin(node)
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
     finally:
         if node is not None:
             node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()

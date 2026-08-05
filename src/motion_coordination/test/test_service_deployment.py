@@ -11,7 +11,7 @@ from motion_coordination.runtime import (
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
-WORKSPACE = PACKAGE_ROOT.parents[3]
+WORKSPACE = PACKAGE_ROOT.parents[1]
 
 
 def test_off_mode_application_exposes_only_status_transport_route(tmp_path):
@@ -42,6 +42,15 @@ def test_user_service_installer_registers_coordination_service():
     ).read_text(encoding='utf-8')
 
     assert 'COORDINATION_SERVICE_EXECUTABLE=' in installer
+    assert (
+        'src/motion_coordination/deploy/motion-coordination.service.in'
+        in installer
+    )
+    assert (
+        'src/motion_coordination/deploy/run_coordination_user_service.sh'
+        in installer
+    )
+    assert 'motion_control/motion_coordination' not in installer
     enabled_services = (
         'enable motion-motor.service motion-control.service '
         'motion-coordination.service'

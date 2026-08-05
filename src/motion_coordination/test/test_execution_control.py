@@ -33,6 +33,22 @@ def test_start_at_contract_requires_lease_and_absolute_schedule():
         })
 
 
+@pytest.mark.parametrize('command', ['run_once', 'initialize'])
+def test_motion_start_commands_require_execution_lease(command):
+    with pytest.raises(ValueError, match='lease_id'):
+        validate_control_payload({
+            'network_operation_id': f'{command}-operation',
+            'command': command,
+        })
+
+    value = validate_control_payload({
+        'network_operation_id': f'{command}-operation',
+        'command': command,
+        'lease_id': 'lease-a',
+    })
+    assert value['lease_id'] == 'lease-a'
+
+
 def test_execution_lease_is_atomic_and_expires():
     now = [100.0]
     lease = ExecutionLease(clock=lambda: now[0])
@@ -57,6 +73,15 @@ def test_operation_journal_blocks_duplicate_after_new_instance(tmp_path):
         second.begin('pc-a', 'op-1', 'run_once')
     stored = json.loads(path.read_text(encoding='utf-8'))
     assert stored['pc-a:op-1']['state'] == 'completed'
+
+
+@pytest.mark.parametrize('content', ['not-json', '[]', 'null'])
+def test_operation_journal_fails_closed_when_history_is_corrupt(tmp_path, content):
+    path = tmp_path / 'operations.json'
+    path.write_text(content, encoding='utf-8')
+
+    with pytest.raises(ValueError, match='실행 이력 파일'):
+        OperationJournal(path).begin('pc-a', 'op-new', 'run_once')
 
 
 def test_schedule_uses_longest_motion_and_absolute_boundaries():

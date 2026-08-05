@@ -43,3 +43,11 @@ def test_coordination_frontend_modules_parse_as_project_assets():
     assert "from './coordination.js?v=" in main
     assert 'createCoordinationController' in controller
     assert '/api/coordination' in (UI / 'js/api.js').read_text(encoding='utf-8')
+
+
+def test_coordination_controls_enforce_network_execution_ownership():
+    controller = (UI / 'js/coordination.js').read_text(encoding='utf-8')
+
+    assert '!networkOwned || synchronizedActive' in controller
+    assert 'networkOwned || synchronizedActive' in controller
+    assert '동기 실행을 정지한 후 제어권을 반환하세요' in controller

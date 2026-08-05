@@ -21,6 +21,7 @@ EtherLab·IgH EtherCAT / Dynamixel
 |---|---|---|
 | Motion Web | 상위 Git 저장소 | 웹 UI, 웹 API, 프로젝트·서비스 관리 |
 | Motion Control Studio | 상위 저장소에 통합 | 모션 편집, 실행, 상태·안전 관리 |
+| Motion Coordination | 상위 저장소의 독립 ROS 2 패키지 | PC 간 상태 공유·실행 조정 |
 | Motion System | Git 서브모듈 | Motor Manager와 저수준 모터 드라이버 |
 | EtherLab/IgH EtherCAT | PC에 별도 설치 | AC Servo EtherCAT 통신 |
 
@@ -34,6 +35,7 @@ ros2_ws/
 ├── src/motion_control_studio
 │   ├── motion_control
 │   └── motion_studio
+├── src/motion_coordination       # PC 간 상태 공유·실행 조정
 └── src/motion_system              # Git submodule
 ```
 
@@ -239,11 +241,12 @@ ss -ltnp | grep ':8000'
 
 ## 8. Git 작업 방법
 
-Motion Web과 Motion Control Studio는 상위 저장소에서 함께 커밋합니다.
+Motion Web, Motion Control Studio와 Motion Coordination은 상위 저장소에서
+함께 커밋합니다.
 
 ```bash
 cd ~/ros2_ws
-git add src/motion_web src/motion_control_studio
+git add src/motion_web src/motion_control_studio src/motion_coordination
 git commit -m "변경 내용"
 ```
 

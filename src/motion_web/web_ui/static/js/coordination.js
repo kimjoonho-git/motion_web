@@ -3,7 +3,7 @@ import {
   fetchCoordinationStatus,
   sendCoordinationControl,
   saveCoordinationSettings,
-} from './api.js?v=20260804-coordination-2';
+} from './api.js?v=20260805-coordination-safety';
 
 function text(value) {
   return String(value ?? '').replace(/[&<>"']/g, (character) => ({
@@ -81,6 +81,7 @@ export function createCoordinationController({ el }) {
     const peers = Array.isArray(runtime.peers) ? runtime.peers : [];
     const coordinator = runtime.coordinator || {};
     const executionControl = runtime.execution_control || { state: 'local' };
+    const synchronizedActive = runtime.synchronized_operation_active === true;
     renderSettings(config);
     if (el.coordinationNodeState) {
       el.coordinationNodeState.textContent = snapshot?.node_connected ? '연동 노드 연결됨' : '연동 노드 응답 없음';
@@ -118,16 +119,23 @@ export function createCoordinationController({ el }) {
         : '모션 실행 제어권 · 로컬';
     }
     if (el.coordinationAcquireButton) el.coordinationAcquireButton.disabled = loading || !canCheck || networkOwned;
-    if (el.coordinationReleaseButton) el.coordinationReleaseButton.disabled = loading || !canCheck || !networkOwned;
+    if (el.coordinationReleaseButton) {
+      el.coordinationReleaseButton.disabled = loading || !canCheck || !networkOwned || synchronizedActive;
+      el.coordinationReleaseButton.title = synchronizedActive ? '동기 실행을 정지한 후 제어권을 반환하세요' : '';
+    }
     if (el.coordinationReadinessButton) {
       el.coordinationReadinessButton.disabled = loading || !canCheck;
       el.coordinationReadinessButton.title = canCheck ? '' : '연동 참여 중앙 PC가 활성 상태여야 합니다';
     }
-    [
-      el.coordinationRunOnceButton, el.coordinationMotionStopButton,
-      el.coordinationInitializeButton, el.coordinationInitializeStopButton,
-      el.coordinationSynchronizedRunButton,
-    ].forEach((button) => { if (button) button.disabled = loading || !canCheck; });
+    [el.coordinationRunOnceButton, el.coordinationInitializeButton].forEach((button) => {
+      if (button) button.disabled = loading || !canCheck || !networkOwned || synchronizedActive;
+    });
+    [el.coordinationMotionStopButton, el.coordinationInitializeStopButton].forEach((button) => {
+      if (button) button.disabled = loading || !canCheck;
+    });
+    if (el.coordinationSynchronizedRunButton) {
+      el.coordinationSynchronizedRunButton.disabled = loading || !canCheck || networkOwned || synchronizedActive;
+    }
     if (el.coordinationPeerRows) {
       const rows = [];
       if (runtime.local && runtime.machine_id) rows.push(peerRow(runtime.machine_id, runtime.local, true));

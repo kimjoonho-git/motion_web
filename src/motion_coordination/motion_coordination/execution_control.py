@@ -66,7 +66,9 @@ def validate_control_payload(value: Mapping[str, Any]) -> Dict[str, Any]:
         for field in ('lease_id', 'start_at', 'cycle_sec', 'repeat_count'):
             if field not in result:
                 raise ValueError(f'start_at 명령에는 {field}가 필요합니다')
-    if command in {'release_control', 'stop_after_cycle'} and not lease_id:
+    if command in {
+        'run_once', 'initialize', 'release_control', 'stop_after_cycle',
+    } and not lease_id:
         raise ValueError(f'{command} 명령에는 lease_id가 필요합니다')
     return result
 
@@ -171,9 +173,15 @@ class OperationJournal:
     def _read(self) -> Dict[str, Dict[str, Any]]:
         try:
             value = json.loads(self.path.read_text(encoding='utf-8'))
-        except (OSError, ValueError):
+        except FileNotFoundError:
             return {}
-        return value if isinstance(value, dict) else {}
+        except OSError as exc:
+            raise ValueError(f'실행 이력 파일을 읽을 수 없습니다: {exc}') from exc
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise ValueError('실행 이력 파일이 손상되었습니다') from exc
+        if not isinstance(value, dict):
+            raise ValueError('실행 이력 파일 형식이 올바르지 않습니다')
+        return value
 
     def _write(self, value: Mapping[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)

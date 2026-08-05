@@ -153,7 +153,11 @@ def test_participant_control_round_trip_contains_no_project_data():
     )
     _exchange_status(pc_a, pc_b, 'pc-a', 'pc-b', '192.168.10.10')
     _exchange_status(pc_b, pc_a, 'pc-b', 'pc-a', '192.168.10.20')
-    payload = {'network_operation_id': 'run-1', 'command': 'run_once'}
+    payload = {
+        'network_operation_id': 'run-1',
+        'command': 'run_once',
+        'lease_id': 'lease-1',
+    }
     sequence, request = pc_a.build_control_request('pc-b', payload)
     assert b'project' not in request.body and b'motion_file' not in request.body
     accepted = pc_b.accept_control_request(

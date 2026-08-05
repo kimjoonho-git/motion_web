@@ -1,1 +1,1 @@
-import './js/main.js?v=20260804-coordination-2';
+import './js/main.js?v=20260805-coordination-safety';
