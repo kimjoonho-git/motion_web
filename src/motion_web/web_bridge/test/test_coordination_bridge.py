@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import motion_web_bridge.coordination_bridge as coordination_bridge_module
 
 from motion_web_bridge.coordination_bridge import (
     CoordinationWebBridge,
@@ -217,3 +218,85 @@ def test_control_response_is_discarded_after_project_transition(tmp_path):
     result = service.request_control({'command': 'run_once'})
     assert result['success'] is False
     assert result['stale_project_generation'] is True
+
+
+def test_pairing_offer_is_global_and_contains_no_project_data(tmp_path, monkeypatch):
+    monkeypatch.setenv('HOME', str(tmp_path / 'home'))
+    node = _Node()
+    service = CoordinationWebBridge(node, tmp_path, lambda: node.generation[0])
+
+    offer = service.start_pairing({
+        'machine_id': 'pc-a',
+        'display_name': 'PC A',
+    })
+    public_info = service.pairing_info()
+
+    assert offer['pairing_code']
+    assert public_info['coordinator_machine_id'] == 'pc-a'
+    assert 'pairing_code' not in public_info
+    assert 'project' not in str(public_info).lower()
+    assert offer['service']['installed'] is False
+
+
+def test_pairing_rejects_machine_id_change_when_existing_peer_is_registered(
+    tmp_path,
+):
+    config = tmp_path / 'config/motion_coordination.yaml'
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        'version: 1\n'
+        'machine_id: pc-a\n'
+        'display_name: PC A\n'
+        'mode: off\n'
+        'role: peer\n'
+        'peers:\n'
+        '  - machine_id: pc-b\n'
+        '    url: http://192.168.10.20:8010\n'
+        'access: {}\n',
+        encoding='utf-8',
+    )
+    node = _Node()
+    service = CoordinationWebBridge(node, tmp_path, lambda: node.generation[0])
+
+    try:
+        service.start_pairing({
+            'machine_id': 'renamed-pc-a', 'display_name': 'Renamed',
+        })
+    except ValueError as exc:
+        assert 'PC ID를 변경할 수 없습니다' in str(exc)
+    else:
+        raise AssertionError('existing pairing must lock the local machine ID')
+
+
+def test_pairing_reports_partial_when_either_pc_service_is_not_ready(
+    tmp_path, monkeypatch,
+):
+    node = _Node()
+    service = CoordinationWebBridge(node, tmp_path, lambda: node.generation[0])
+    monkeypatch.setattr(coordination_bridge_module, 'join_pairing', lambda *args, **kwargs: {
+        'success': True,
+        'paired': True,
+        'message': 'saved',
+        'central_restart': {
+            'service_installed': False,
+            'restart_pending': False,
+            'message': '중앙 서비스 미설치',
+        },
+    })
+    monkeypatch.setattr(service, '_restart_coordination_service', lambda: {
+        'service_installed': True,
+        'restart_pending': True,
+        'message': '참여 서비스 재시작 요청 완료',
+    })
+
+    result = service.join_pairing({
+        'coordinator_host': '192.168.10.10',
+        'pairing_code': 'ABCD-EFGH',
+        'machine_id': 'pc-b',
+        'display_name': 'PC B',
+    })
+
+    assert result['success'] is False
+    assert result['configuration_saved'] is True
+    assert result['operation_state'] == 'partial'
+    assert '중앙 PC' in result['message']

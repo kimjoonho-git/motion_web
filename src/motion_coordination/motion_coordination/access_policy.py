@@ -8,6 +8,15 @@ from typing import Any, Mapping, Tuple
 DEFAULT_WEB_PORT = 8000
 DEFAULT_COORDINATION_PORT = 8010
 COORDINATION_PATH_PREFIX = '/coordination/v1/'
+_INTERNAL_IPV4_NETWORKS = tuple(
+    ipaddress.ip_network(value) for value in (
+        '10.0.0.0/8',
+        '100.64.0.0/10',
+        '169.254.0.0/16',
+        '172.16.0.0/12',
+        '192.168.0.0/16',
+    )
+)
 
 
 class AccessPolicyError(ValueError):
@@ -143,7 +152,7 @@ def _coordination_address(value: str) -> Any:
         raise AccessPolicyError('연동 수신 IP는 명시적인 내부망 IP여야 합니다') from exc
     if address.is_unspecified or address.is_loopback or address.is_multicast:
         raise AccessPolicyError('연동 수신 IP에 wildcard·loopback을 사용할 수 없습니다')
-    if not (address.is_private or address.is_link_local):
+    if address.version != 4 or not is_internal_ipv4(address):
         raise AccessPolicyError('연동 수신 IP는 내부망 주소여야 합니다')
     return address
 
@@ -155,6 +164,24 @@ def _peer_network(value: str) -> Any:
         raise AccessPolicyError(f'허용 PC 네트워크 형식이 잘못됐습니다: {value}') from exc
     if network.prefixlen == 0:
         raise AccessPolicyError('전체 인터넷을 허용 PC 네트워크로 사용할 수 없습니다')
-    if not (network.is_private or network.is_link_local):
+    if network.version != 4 or not any(
+        network.subnet_of(allowed) for allowed in _INTERNAL_IPV4_NETWORKS
+    ):
         raise AccessPolicyError('허용 PC 네트워크는 내부망 범위여야 합니다')
     return network
+
+
+def is_internal_ipv4(value: Any) -> bool:
+    """Return whether an address is usable on an explicitly supported LAN."""
+    try:
+        address = value if isinstance(value, ipaddress.IPv4Address) else ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    return (
+        address.version == 4
+        and not address.is_unspecified
+        and not address.is_loopback
+        and not address.is_multicast
+        and not address.is_reserved
+        and any(address in network for network in _INTERNAL_IPV4_NETWORKS)
+    )

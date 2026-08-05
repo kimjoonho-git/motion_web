@@ -20,6 +20,11 @@ def test_coordination_screen_has_mode_role_peers_and_readiness_controls():
         'id="coordinationMotionStopButton"',
         'id="coordinationInitializeButton"',
         'id="coordinationSynchronizedRunButton"',
+        'id="coordinationPairingStartButton"',
+        'id="coordinationPairingJoinButton"',
+        'id="coordinationPairingCode"',
+        'id="coordinationPairingMachineIdHint"',
+        'id="coordinationPairingLocalAddress"',
     ):
         assert marker in html
 
@@ -32,6 +37,9 @@ def test_user_web_exposes_only_high_level_coordination_control():
     assert "@app.post('/api/coordination/readiness')" in source
     assert "@app.post('/api/coordination/control')" in source
     assert "@app.post('/api/coordination/local-control')" in source
+    assert "@app.post('/api/coordination/pairing/start')" in source
+    assert "@app.post('/api/coordination/pairing/join')" in source
+    assert "@app.post('/api/coordination/pairing/claim')" in source
     assert "/api/coordination/motion-start" not in source
     assert "/api/coordination/motor-command" not in source
 
@@ -43,6 +51,13 @@ def test_coordination_frontend_modules_parse_as_project_assets():
     assert "from './coordination.js?v=" in main
     assert 'createCoordinationController' in controller
     assert '/api/coordination' in (UI / 'js/api.js').read_text(encoding='utf-8')
+
+
+def test_pairing_requests_are_global_not_project_generation_bound():
+    api = (UI / 'js/api.js').read_text(encoding='utf-8')
+
+    assert "return globalJson('/api/coordination/pairing/start'" in api
+    assert "return globalJson('/api/coordination/pairing/join'" in api
 
 
 def test_coordination_controls_enforce_network_execution_ownership():

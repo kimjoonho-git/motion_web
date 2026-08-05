@@ -13,6 +13,8 @@ from typing import Any, Callable, Dict, Mapping
 import yaml
 from std_msgs.msg import String
 
+from motion_coordination.pairing import PairingCoordinator, join_pairing
+
 
 class CoordinationWebBridge:
     """Expose global coordination state without mixing it into project data."""
@@ -35,6 +37,10 @@ class CoordinationWebBridge:
         self._status_received_at = 0.0
         self._result_lock = threading.Lock()
         self._results: Dict[str, Dict[str, Any]] = {}
+        self._pairing = PairingCoordinator(
+            self._workspace,
+            self._config_path,
+        )
         self._publisher = node.create_publisher(
             String, '/motion_coordination/request', 10
         )
@@ -57,9 +63,15 @@ class CoordinationWebBridge:
             runtime = copy.deepcopy(self._status)
             received_at = self._status_received_at
         try:
-            from motion_coordination.configuration import load_config
+            from motion_coordination.configuration import (
+                load_config,
+                pairing_identity_state,
+            )
 
             config = load_config(self._config_path, workspace=self._workspace)
+            identity = pairing_identity_state(
+                self._config_path, workspace=self._workspace
+            )
             config_error = ''
             configured = {
                 'machine_id': config.machine_id,
@@ -74,6 +86,7 @@ class CoordinationWebBridge:
                     {'machine_id': peer.machine_id, 'url': peer.url}
                     for peer in config.peers
                 ],
+                'identity_locked': identity['locked'],
             }
         except (ImportError, OSError, ValueError) as exc:
             configured = {}
@@ -86,6 +99,7 @@ class CoordinationWebBridge:
             'config': configured,
             'config_error': config_error,
             'runtime': runtime,
+            'pairing': self._pairing.status(),
         }
 
     def local_execution_blocker(self) -> str:
@@ -115,15 +129,120 @@ class CoordinationWebBridge:
                 payload.get('coordinator_machine_id') or ''
             ),
         )
-        service = str(
-            os.environ.get('MOTION_COORDINATION_SERVICE_UNIT') or ''
-        ).strip()
-        if service != 'motion-coordination.service':
+        restart = self._restart_coordination_service()
+        if not restart['service_installed']:
             return {
                 'success': False,
                 'saved': True,
-                'message': '설정은 저장했지만 PC 연동 자동실행 서비스가 설치되지 않았습니다',
+                'message': restart['message'],
                 'config': self._config_summary(config),
+            }
+        if not restart['restart_pending']:
+            return {
+                'success': False,
+                'saved': True,
+                'message': restart['message'],
+                'config': self._config_summary(config),
+            }
+        return {
+            'success': True,
+            'saved': True,
+            'restart_pending': True,
+            'message': '연동 설정 저장 · PC 연동 서비스 재시작 요청 완료',
+            'config': self._config_summary(config),
+        }
+
+    def start_pairing(self, payload: Mapping[str, Any]) -> Dict[str, Any]:
+        """Create one short-lived pairing code on the central PC."""
+        if not isinstance(payload, Mapping):
+            raise ValueError('PC 연동 코드 요청은 객체여야 합니다')
+        allowed = {'machine_id', 'display_name'}
+        if set(payload).difference(allowed):
+            raise ValueError('허용되지 않은 PC 연동 코드 항목이 있습니다')
+        machine_id = self._validated_pairing_machine_id(
+            str(payload.get('machine_id') or '')
+        )
+        result = self._pairing.start(
+            machine_id,
+            str(payload.get('display_name') or ''),
+        )
+        return {**result, 'service': self._coordination_service_state()}
+
+    def pairing_info(self) -> Dict[str, Any]:
+        """Return the active offer's public material without its code."""
+        return self._pairing.info()
+
+    def accept_pairing(
+        self, payload: Mapping[str, Any], remote_ip: str,
+    ) -> Dict[str, Any]:
+        """Accept one encrypted participant claim and restart coordination."""
+        result = self._pairing.claim(payload, remote_ip)
+        restart = self._restart_coordination_service()
+        return {
+            **result,
+            'central_restart': restart,
+            'central_configuration_saved': True,
+        }
+
+    def join_pairing(self, payload: Mapping[str, Any]) -> Dict[str, Any]:
+        """Join a central PC with one code and save this participant config."""
+        if not isinstance(payload, Mapping):
+            raise ValueError('PC 연동 참여 요청은 객체여야 합니다')
+        allowed = {'coordinator_host', 'pairing_code', 'machine_id', 'display_name'}
+        if set(payload).difference(allowed):
+            raise ValueError('허용되지 않은 PC 연동 참여 항목이 있습니다')
+        machine_id = self._validated_pairing_machine_id(
+            str(payload.get('machine_id') or '')
+        )
+        result = join_pairing(
+            str(payload.get('coordinator_host') or ''),
+            str(payload.get('pairing_code') or ''),
+            machine_id,
+            str(payload.get('display_name') or ''),
+            workspace=self._workspace,
+            config_path=self._config_path,
+        )
+        restart = self._restart_coordination_service()
+        central_restart = result.get('central_restart')
+        central_restart = (
+            dict(central_restart) if isinstance(central_restart, Mapping) else {}
+        )
+        issues = []
+        if not central_restart.get('restart_pending'):
+            issues.append(
+                f'중앙 PC: {central_restart.get("message") or "서비스 상태 확인 필요"}'
+            )
+        if not restart.get('restart_pending'):
+            issues.append(f'참여 PC: {restart["message"]}')
+        partial = bool(issues)
+        message = '양쪽 PC 연동 설정과 암호화 키 저장 완료'
+        if partial:
+            message = f'{message} · 부분 완료 · {" · ".join(issues)}'
+        else:
+            message = f'{message} · 양쪽 서비스 재시작 요청 완료'
+        return {
+            **result,
+            **restart,
+            'success': not partial,
+            'paired': True,
+            'configuration_saved': True,
+            'operation_state': 'partial' if partial else 'restart_requested',
+            'central_restart': central_restart,
+            'participant_restart': restart,
+            'message': message,
+        }
+
+    @staticmethod
+    def _restart_coordination_service() -> Dict[str, Any]:
+        service = str(
+            os.environ.get('MOTION_COORDINATION_SERVICE_UNIT') or ''
+        ).strip()
+        unit_path = Path.home() / '.config/systemd/user/motion-coordination.service'
+        if service != 'motion-coordination.service' or not unit_path.is_file():
+            return {
+                'service_installed': False,
+                'restart_pending': False,
+                'message': 'PC 연동 자동실행 서비스가 설치되지 않았습니다',
             }
         completed = subprocess.run(
             ['/usr/bin/systemctl', '--user', 'restart', '--no-block', service],
@@ -135,18 +254,44 @@ class CoordinationWebBridge:
         if completed.returncode != 0:
             detail = completed.stderr.strip() or completed.stdout.strip()
             return {
-                'success': False,
-                'saved': True,
+                'service_installed': True,
+                'restart_pending': False,
                 'message': detail or 'PC 연동 서비스 재시작 요청 실패',
-                'config': self._config_summary(config),
             }
         return {
-            'success': True,
-            'saved': True,
+            'service_installed': True,
             'restart_pending': True,
-            'message': '연동 설정 저장 · PC 연동 서비스 재시작 요청 완료',
-            'config': self._config_summary(config),
+            'message': 'PC 연동 서비스 재시작 요청 완료',
         }
+
+    @staticmethod
+    def _coordination_service_state() -> Dict[str, Any]:
+        service = str(
+            os.environ.get('MOTION_COORDINATION_SERVICE_UNIT') or ''
+        ).strip()
+        unit_path = Path.home() / '.config/systemd/user/motion-coordination.service'
+        installed = service == 'motion-coordination.service' and unit_path.is_file()
+        return {
+            'installed': installed,
+            'unit': 'motion-coordination.service',
+            'message': (
+                'PC 연동 자동실행 서비스 설치됨' if installed
+                else 'PC 연동 자동실행 서비스 설치 필요'
+            ),
+        }
+
+    def _validated_pairing_machine_id(self, requested: str) -> str:
+        from motion_coordination.configuration import pairing_identity_state
+
+        clean = str(requested or '').strip()
+        identity = pairing_identity_state(
+            self._config_path, workspace=self._workspace
+        )
+        if identity['locked'] and clean != identity['machine_id']:
+            raise ValueError(
+                '기존 PC 연동이 있어 이 PC ID를 변경할 수 없습니다'
+            )
+        return clean
 
     def request_readiness(self) -> Dict[str, Any]:
         """Request readiness and discard a result crossing a project boundary."""

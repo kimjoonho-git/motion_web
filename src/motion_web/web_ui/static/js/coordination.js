@@ -1,9 +1,11 @@
 import {
   checkCoordinationReadiness,
   fetchCoordinationStatus,
+  joinCoordinationPairing,
   sendCoordinationControl,
   saveCoordinationSettings,
-} from './api.js?v=20260805-coordination-safety';
+  startCoordinationPairing,
+} from './api.js?v=20260805-pairing-safety-v2';
 
 function text(value) {
   return String(value ?? '').replace(/[&<>"']/g, (character) => ({
@@ -37,6 +39,7 @@ export function createCoordinationController({ el }) {
   let readiness = new Map();
   let timer = null;
   let formDirty = false;
+  let pairingIdentityDirty = false;
 
   function renderSettings(config = {}, force = false) {
     if (formDirty && !force) return;
@@ -82,7 +85,33 @@ export function createCoordinationController({ el }) {
     const coordinator = runtime.coordinator || {};
     const executionControl = runtime.execution_control || { state: 'local' };
     const synchronizedActive = runtime.synchronized_operation_active === true;
+    const pairing = snapshot?.pairing || { state: 'idle' };
+    const identityLocked = config.identity_locked === true;
     renderSettings(config);
+    if (!pairingIdentityDirty) {
+      if (el.coordinationPairingMachineId) {
+        el.coordinationPairingMachineId.value = config.machine_id || '';
+      }
+      if (el.coordinationPairingDisplayName) {
+        el.coordinationPairingDisplayName.value = config.display_name || config.machine_id || '';
+      }
+    }
+    if (el.coordinationPairingMachineId) {
+      el.coordinationPairingMachineId.readOnly = identityLocked;
+      el.coordinationPairingMachineId.title = identityLocked
+        ? '기존 연동이 있어 PC ID가 고정되었습니다.' : '';
+    }
+    if (el.coordinationPairingMachineIdHint) {
+      el.coordinationPairingMachineIdHint.textContent = identityLocked
+        ? '기존 연동이 있어 PC ID가 고정되었습니다.'
+        : '최초 연동 후에는 변경할 수 없습니다.';
+    }
+    if (el.coordinationPairingLocalAddress) {
+      const host = window.location.hostname || '';
+      el.coordinationPairingLocalAddress.textContent = ['localhost', '127.0.0.1'].includes(host)
+        ? '다른 PC에는 이 PC의 내부망 IPv4를 입력하세요.'
+        : `참여 PC에 입력할 주소 · ${host}`;
+    }
     if (el.coordinationNodeState) {
       el.coordinationNodeState.textContent = snapshot?.node_connected ? '연동 노드 연결됨' : '연동 노드 응답 없음';
       el.coordinationNodeState.className = snapshot?.node_connected ? 'coordination-state-ok' : 'coordination-state-warn';
@@ -108,6 +137,17 @@ export function createCoordinationController({ el }) {
       el.coordinationCoordinatorState.className = stateClass(coordinator.state);
     }
     if (el.coordinationPeerCount) el.coordinationPeerCount.textContent = `${peers.length}대`;
+    if (el.coordinationPairingMessage && pairing.state !== 'idle') {
+      const pairingMessage = {
+        waiting: '연동 코드 입력 대기 중 · 5분 안에 참여 PC에서 연결하세요.',
+        paired: `연동 설정 완료${pairing.paired_peer ? ` · ${pairing.paired_peer}` : ''}`,
+        expired: '연동 코드가 만료되었습니다. 새 코드를 생성하세요.',
+        blocked: '연동 코드 확인 횟수를 초과했습니다. 새 코드를 생성하세요.',
+      };
+      el.coordinationPairingMessage.textContent = pairingMessage[pairing.state] || 'PC 연동 상태 확인 필요';
+    }
+    if (el.coordinationPairingStartButton) el.coordinationPairingStartButton.disabled = loading;
+    if (el.coordinationPairingJoinButton) el.coordinationPairingJoinButton.disabled = loading;
     const canCheck = snapshot?.node_connected
       && runtime.mode === 'participant'
       && runtime.role === 'coordinator'
@@ -187,6 +227,69 @@ export function createCoordinationController({ el }) {
     }
   }
 
+  function pairingIdentity() {
+    return {
+      machine_id: el.coordinationPairingMachineId?.value?.trim() || '',
+      display_name: el.coordinationPairingDisplayName?.value?.trim() || '',
+    };
+  }
+
+  async function startPairing() {
+    if (loading) return;
+    const identity = pairingIdentity();
+    if (!identity.machine_id) {
+      window.alert('이 PC ID를 입력하세요.');
+      return;
+    }
+    loading = true;
+    render();
+    try {
+      const result = await startCoordinationPairing(identity);
+      if (el.coordinationPairingCode) el.coordinationPairingCode.textContent = result.pairing_code || '----';
+      if (el.coordinationPairingMessage) {
+        const serviceMessage = result.service?.installed ? '' : ' · 서비스 설치가 필요합니다.';
+        el.coordinationPairingMessage.textContent = `참여 PC에서 중앙 PC IP와 이 코드를 입력하세요. 코드는 5분 동안 한 번만 사용할 수 있습니다.${serviceMessage}`;
+      }
+    } catch (error) {
+      window.alert(error?.message || String(error));
+    } finally {
+      loading = false;
+      render();
+    }
+  }
+
+  async function joinPairing() {
+    if (loading) return;
+    const identity = pairingIdentity();
+    const coordinatorHost = el.coordinationPairingHost?.value?.trim() || '';
+    const pairingCode = el.coordinationPairingCodeInput?.value?.trim() || '';
+    if (!identity.machine_id || !coordinatorHost || !pairingCode) {
+      window.alert('이 PC ID, 중앙 PC IP와 연동 코드를 모두 입력하세요.');
+      return;
+    }
+    loading = true;
+    if (el.coordinationPairingMessage) el.coordinationPairingMessage.textContent = '암호화 키 교환과 PC 설정 저장 중';
+    render();
+    try {
+      const result = await joinCoordinationPairing({
+        ...identity,
+        coordinator_host: coordinatorHost,
+        pairing_code: pairingCode,
+      });
+      pairingIdentityDirty = false;
+      if (el.coordinationPairingCodeInput) el.coordinationPairingCodeInput.value = '';
+      if (el.coordinationPairingMessage) el.coordinationPairingMessage.textContent = result.message || 'PC 연동 설정 완료';
+      if (result.operation_state === 'partial') window.alert(result.message);
+      window.setTimeout(refresh, 1500);
+    } catch (error) {
+      if (el.coordinationPairingMessage) el.coordinationPairingMessage.textContent = error?.message || 'PC 연동 실패';
+      window.alert(error?.message || String(error));
+    } finally {
+      loading = false;
+      render();
+    }
+  }
+
   async function checkReadiness() {
     if (loading) return;
     loading = true;
@@ -237,6 +340,8 @@ export function createCoordinationController({ el }) {
   function bindEvents() {
     el.coordinationRefreshButton?.addEventListener('click', refresh);
     el.coordinationSaveButton?.addEventListener('click', save);
+    el.coordinationPairingStartButton?.addEventListener('click', startPairing);
+    el.coordinationPairingJoinButton?.addEventListener('click', joinPairing);
     el.coordinationReadinessButton?.addEventListener('click', checkReadiness);
     el.coordinationAcquireButton?.addEventListener('click', () => control('acquire_control'));
     el.coordinationReleaseButton?.addEventListener('click', () => control('release_control'));
@@ -269,6 +374,8 @@ export function createCoordinationController({ el }) {
       }, true);
     });
     el.coordinationCoordinatorInput?.addEventListener('input', () => { formDirty = true; });
+    el.coordinationPairingMachineId?.addEventListener('input', () => { pairingIdentityDirty = true; });
+    el.coordinationPairingDisplayName?.addEventListener('input', () => { pairingIdentityDirty = true; });
   }
 
   function start() {

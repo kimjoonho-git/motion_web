@@ -1225,6 +1225,24 @@ class MotionWebBridge(Node):
         """Update this PC's mode and manual role only."""
         return self._coordination_web_bridge.update_settings(payload)
 
+    def start_coordination_pairing(
+        self, payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        return self._coordination_web_bridge.start_pairing(payload)
+
+    def coordination_pairing_info(self) -> Dict[str, Any]:
+        return self._coordination_web_bridge.pairing_info()
+
+    def accept_coordination_pairing(
+        self, payload: Dict[str, Any], remote_ip: str,
+    ) -> Dict[str, Any]:
+        return self._coordination_web_bridge.accept_pairing(payload, remote_ip)
+
+    def join_coordination_pairing(
+        self, payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        return self._coordination_web_bridge.join_pairing(payload)
+
     def coordination_local_readiness(self) -> Dict[str, Any]:
         """Check the currently active local execution files and safety state."""
         return local_motion_readiness(self)
@@ -7418,6 +7436,52 @@ def create_app(bridge: MotionWebBridge) -> FastAPI:
         return await asyncio.to_thread(
             project_call, bridge.update_coordination_settings, body
         )
+
+    @app.post('/api/coordination/pairing/start')
+    async def start_coordination_pairing(request: Request):
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail='request body must be an object')
+        try:
+            return await asyncio.to_thread(bridge.start_coordination_pairing, body)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get('/api/coordination/pairing/info')
+    async def coordination_pairing_info():
+        try:
+            return bridge.coordination_pairing_info()
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post('/api/coordination/pairing/claim')
+    async def accept_coordination_pairing(request: Request):
+        raw_body = await request.body()
+        if len(raw_body) > 32 * 1024:
+            raise HTTPException(status_code=413, detail='pairing request too large')
+        try:
+            body = json.loads(raw_body.decode('utf-8'))
+        except (UnicodeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail='invalid pairing request') from exc
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail='request body must be an object')
+        remote_ip = request.client.host if request.client else ''
+        try:
+            return await asyncio.to_thread(
+                bridge.accept_coordination_pairing, body, remote_ip
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post('/api/coordination/pairing/join')
+    async def join_coordination_pairing(request: Request):
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail='request body must be an object')
+        try:
+            return await asyncio.to_thread(bridge.join_coordination_pairing, body)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post('/api/coordination/local-readiness')
     async def coordination_local_readiness():

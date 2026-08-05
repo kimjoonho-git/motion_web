@@ -99,6 +99,38 @@ async function readJson(response) {
   return payload;
 }
 
+async function globalJson(input, options = {}) {
+  const { timeoutMs = 0, ...requestOptions } = options;
+  const timeout = Number(timeoutMs);
+  const controller = Number.isFinite(timeout) && timeout > 0
+    ? new AbortController()
+    : null;
+  const timer = controller ? window.setTimeout(() => controller.abort(), timeout) : null;
+  let response;
+  try {
+    response = await window.fetch(input, {
+      ...requestOptions,
+      signal: controller?.signal || requestOptions.signal,
+    });
+  } catch (error) {
+    if (controller?.signal.aborted) throw new Error('PC 연동 요청 시간 초과');
+    throw error;
+  } finally {
+    if (timer !== null) window.clearTimeout(timer);
+  }
+  let payload;
+  try {
+    payload = await response.json();
+  } catch (error) {
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    throw error;
+  }
+  if (!response.ok) {
+    throw new Error(payload?.message || payload?.detail || `HTTP ${response.status}`);
+  }
+  return payload;
+}
+
 export async function fetchStatusSnapshot(timeoutMs = 5000) {
   const response = await projectFetch('/api/status', { timeoutMs });
   return readJson(response);
@@ -116,6 +148,23 @@ export async function saveCoordinationSettings(payload) {
     body: JSON.stringify(payload),
   });
   return readJson(response);
+}
+
+export async function startCoordinationPairing(payload) {
+  return globalJson('/api/coordination/pairing/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function joinCoordinationPairing(payload) {
+  return globalJson('/api/coordination/pairing/join', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    timeoutMs: 15000,
+  });
 }
 
 export async function checkCoordinationReadiness() {

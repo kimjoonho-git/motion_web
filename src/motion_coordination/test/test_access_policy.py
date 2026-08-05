@@ -77,3 +77,17 @@ def test_coordination_routes_have_a_separate_namespace():
     )
     with pytest.raises(AccessPolicyError, match='/coordination/v1/'):
         AccessPolicy.validate_coordination_path('/api/status')
+
+
+@pytest.mark.parametrize('host', ['0.0.0.0', '127.0.0.1', '240.0.0.1'])
+def test_internal_address_policy_rejects_unusable_ipv4(host):
+    with pytest.raises(AccessPolicyError):
+        AccessPolicy.from_mapping(_enabled(host=host))
+
+
+def test_internal_address_policy_accepts_cgnat_for_managed_private_lans():
+    policy = AccessPolicy.from_mapping(_enabled(
+        host='100.64.0.10', allowed_peer_networks=['100.64.0.0/24']
+    ))
+
+    assert policy.allows_peer('100.64.0.20') is True

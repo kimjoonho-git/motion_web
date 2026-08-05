@@ -24,6 +24,8 @@ backups/
 # Per-PC network coordination settings and HMAC credentials
 /config/motion_coordination.yaml
 /config/motion_coordination.credentials.yaml
+/config/.motion_coordination.yaml.lock
+/config/.motion_coordination.yaml.transaction.json
 
 # Local machine files
 .vscode/
