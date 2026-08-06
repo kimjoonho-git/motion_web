@@ -26,3 +26,15 @@ test('a verified MIDI bank save reports the new mapping file revision', () => {
   assert.match(controller, /createMidiMonitorController\(\{ el, onMappingFileSaved \}\)/);
   assert.match(controller, /onMappingFileSaved\?\.\(payload\.file\)/);
 });
+
+test('MIDI motion angle uses the current displayed value instead of stale command cache', () => {
+  assert.match(controller, /const displayedMotionDeg = live\?\.displayed_motion_value_deg/);
+  assert.match(controller, /displayedMotionDeg === null \|\| displayedMotionDeg === undefined/);
+});
+
+test('SELECT OFF reports zero command without claiming physical arrival', () => {
+  assert.match(controller, /commandMessage\.includes\('물리 도착 피드백 없음'\)/);
+  assert.match(controller, /비활성 · 0 명령 전송/);
+  assert.match(controller, /const zeroReturnFailed/);
+  assert.match(controller, /0 복귀 실패/);
+});

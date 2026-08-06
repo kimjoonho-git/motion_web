@@ -13,7 +13,7 @@ import {
 } from './api.js?v=20260729-motion-automation-1';
 import { getElements } from './dom.js?v=20260804-point-actions-range-1';
 import { createMotorEventLogController } from './event_log.js?v=20260727-popup-common-3';
-import { createMidiMonitorController } from './midi_monitor.js?v=20260731-midi-health-1';
+import { createMidiMonitorController } from './midi_monitor.js?v=20260806-midi-pickup-reconnect-1';
 import { createMotionDataController } from './motion_data.js?v=20260806-mapping-revision-reconnect-1';
 import { createMotionStudioController } from './motion_studio.js?v=20260804-point-actions-range-1';
 import { createMotionTestController } from './motion_test.js?v=20260728-servo-alarm-2';

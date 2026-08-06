@@ -1076,7 +1076,33 @@ def test_failed_normal_fader_parking_times_out_and_allows_select_retry():
     assert node._fader_parking[0] is False
     assert node._pending_fader_positions[0] is None
     assert node._motor_command_state[0] == 'fader_park_failed'
-    assert 'SELECT 재시도 가능' in node._motor_command_message[0]
+
+
+def test_select_off_nonzero_input_resends_zero_once_and_latches_failure():
+    node = playback_follow_node()
+    node._control_enabled[0] = False
+    node._raw_channels[0] = 0
+    node._channels[0] = 0.0
+    node._filter_stage1[0] = 0.0
+    node._filter_stage2[0] = 0.0
+    node._pending_motor_requests = {}
+    started = time.monotonic()
+    node._start_fader_parking_locked(0, started)
+    node._update_fader_parking_locked(0, 0, started + 0.1)
+
+    node._midi_callback(midi_message(touched=True, value=2600))
+
+    assert node._fader_parking[0] is False
+    assert node._pending_fader_positions[0] == 0
+    assert node._motor_command_state[0] == 'fader_park_failed'
+    assert '0 재명령 후 정지' in node._motor_command_message[0]
+
+    node._pending_fader_positions[0] = None
+    node._midi_callback(midi_message(touched=True, value=2600))
+
+    assert node._fader_parking[0] is False
+    assert node._pending_fader_positions[0] is None
+    assert node._motor_command_state[0] == 'fader_park_failed'
 
 
 def test_studio_fader_parking_never_bypasses_physical_zero_requirement():
@@ -1505,6 +1531,85 @@ def test_connection_state_keeps_midi_power_reconnect_timestamps():
     assert node._device_last_power_reconnected_at == 1234.5
     assert node._device_connection_count == 3
     assert node._device_power_reconnect_count == 2
+
+
+def test_device_reconnect_parks_every_select_off_fader_at_zero():
+    node = MidiControlNode.__new__(MidiControlNode)
+    node._lock = threading.Lock()
+    node._device_connected = False
+    node._device_connection_message = ''
+    node._device_last_connected_at = None
+    node._device_last_disconnected_at = None
+    node._device_last_power_reconnected_at = None
+    node._device_connection_count = 0
+    node._device_power_reconnect_count = 0
+    node._fader_input_generation = list(range(MIDI_CHANNEL_COUNT))
+    node._pending_fader_positions = [None] * MIDI_CHANNEL_COUNT
+    node._pending_fader_input_generations = [0] * MIDI_CHANNEL_COUNT
+    reset_calls = []
+    parking_calls = []
+
+    def reset_runtime_controls():
+        reset_calls.append(True)
+        node._pending_fader_positions = [0] * MIDI_CHANNEL_COUNT
+        node._pending_fader_input_generations = list(
+            node._fader_input_generation
+        )
+
+    node._reset_runtime_controls_locked = reset_runtime_controls
+
+    def start_fader_parking(channel, _now):
+        parking_calls.append(channel)
+        node._pending_fader_positions[channel] = 0
+
+    node._start_fader_parking_locked = start_fader_parking
+    node._connection_state_callback(SimpleNamespace(data=json.dumps({
+        'connected': True,
+        'message': 'X-Touch connected',
+        'connection_count': 1,
+        'power_reconnect_count': 0,
+    })))
+
+    assert reset_calls == [True]
+    assert parking_calls == list(range(MIDI_CHANNEL_COUNT))
+    assert node._pending_fader_positions == [0] * MIDI_CHANNEL_COUNT
+    assert node._pending_fader_input_generations == list(range(MIDI_CHANNEL_COUNT))
+
+
+def test_device_disconnect_does_not_leave_undeliverable_zero_commands():
+    node = MidiControlNode.__new__(MidiControlNode)
+    node._lock = threading.Lock()
+    node._device_connected = True
+    node._device_connection_message = ''
+    node._device_last_connected_at = None
+    node._device_last_disconnected_at = None
+    node._device_last_power_reconnected_at = None
+    node._device_connection_count = 1
+    node._device_power_reconnect_count = 0
+    node._fader_input_generation = list(range(MIDI_CHANNEL_COUNT))
+    node._pending_fader_positions = [None] * MIDI_CHANNEL_COUNT
+    node._pending_fader_input_generations = [0] * MIDI_CHANNEL_COUNT
+    node._touch = [True] * MIDI_CHANNEL_COUNT
+    node._physical_touch = [True] * MIDI_CHANNEL_COUNT
+    node._fader_moving = [True] * MIDI_CHANNEL_COUNT
+    node._bridge_fader_syncing = [True] * MIDI_CHANNEL_COUNT
+
+    def reset_runtime_controls():
+        node._pending_fader_positions = [0] * MIDI_CHANNEL_COUNT
+
+    node._reset_runtime_controls_locked = reset_runtime_controls
+    node._connection_state_callback(SimpleNamespace(data=json.dumps({
+        'connected': False,
+        'message': 'X-Touch disconnected',
+        'connection_count': 1,
+        'power_reconnect_count': 0,
+    })))
+
+    assert node._pending_fader_positions == [None] * MIDI_CHANNEL_COUNT
+    assert node._touch == [False] * MIDI_CHANNEL_COUNT
+    assert node._physical_touch == [False] * MIDI_CHANNEL_COUNT
+    assert node._fader_moving == [False] * MIDI_CHANNEL_COUNT
+    assert node._bridge_fader_syncing == [False] * MIDI_CHANNEL_COUNT
 
 
 def test_studio_recording_zero_status_waits_for_physical_parking_completion():

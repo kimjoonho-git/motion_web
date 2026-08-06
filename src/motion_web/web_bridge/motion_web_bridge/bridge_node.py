@@ -5176,14 +5176,16 @@ class MotionWebBridge(Node):
         return self._persist_midi_bank_result(updated)
 
     def create_midi_bank(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return self._request_midi_monitor('create_bank', payload, timeout_sec=2.0)
+        created = self._request_midi_monitor('create_bank', payload, timeout_sec=2.0)
+        return self._persist_midi_bank_result(created)
 
     def select_midi_bank(self, bank_id: str) -> Dict[str, Any]:
-        return self._request_midi_monitor(
+        selected = self._request_midi_monitor(
             'select_bank',
             {'bank_id': bank_id},
             timeout_sec=2.0,
         )
+        return self._persist_midi_bank_result(selected)
 
     def update_midi_bank(self, bank_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         updated = self._request_midi_monitor(
@@ -5194,11 +5196,12 @@ class MotionWebBridge(Node):
         return self._persist_midi_bank_result(updated)
 
     def delete_midi_bank(self, bank_id: str) -> Dict[str, Any]:
-        return self._request_midi_monitor(
+        deleted = self._request_midi_monitor(
             'delete_bank',
             {'bank_id': bank_id},
             timeout_sec=2.0,
         )
+        return self._persist_midi_bank_result(deleted)
 
     def save_midi_banks_to_file(self) -> Dict[str, Any]:
         return self._persist_midi_bank_result(self.midi_monitor_status())

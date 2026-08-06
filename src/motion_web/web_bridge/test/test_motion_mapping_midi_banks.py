@@ -231,3 +231,92 @@ def test_updating_bank_saves_through_mapping_owner_then_applies_verified_state(m
         3.0,
     )]
     assert [call[0] for call in midi_calls] == ['update_bank', 'apply_banks']
+
+
+def test_bank_lifecycle_actions_are_persisted_immediately(monkeypatch):
+    operations = (
+        ('create_midi_bank', ({'name': 'Bank 2'},), 'create_bank'),
+        ('select_midi_bank', ('bank_2',), 'select_bank'),
+        ('delete_midi_bank', ('bank_2',), 'delete_bank'),
+    )
+    for method_name, args, expected_command in operations:
+        bridge = MotionWebBridge.__new__(MotionWebBridge)
+        midi_calls = []
+        mapping_calls = []
+
+        def midi_request(command, payload, timeout_sec):
+            midi_calls.append((command, payload, timeout_sec))
+            return {
+                'success': True,
+                'motion_mapping_file_id': 'show.yaml',
+                'bank_state': MIDI_STATE,
+            }
+
+        def mapping_request(command, payload, timeout_sec=2.0):
+            mapping_calls.append((command, payload, timeout_sec))
+            return {
+                'success': True,
+                'file': {'id': 'show.yaml'},
+                'midi_banks': MIDI_STATE,
+            }
+
+        monkeypatch.setattr(bridge, '_request_midi_monitor', midi_request)
+        monkeypatch.setattr(bridge, '_request_motion_mapping', mapping_request)
+
+        result = getattr(bridge, method_name)(*args)
+
+        assert result['success'] is True
+        assert [call[0] for call in midi_calls] == [
+            expected_command, 'apply_banks'
+        ]
+        assert [call[0] for call in mapping_calls] == ['save_midi_banks']
+
+
+def test_bank_lifecycle_persistence_keeps_mapping_files_isolated(monkeypatch):
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    responses = iter((
+        {
+            'success': True,
+            'motion_mapping_file_id': 'project-a.yaml',
+            'bank_state': {**MIDI_STATE, 'project_marker': 'a'},
+        },
+        {
+            'success': True,
+            'motion_mapping_file_id': 'project-b.yaml',
+            'bank_state': {**MIDI_STATE, 'project_marker': 'b'},
+        },
+    ))
+    mapping_calls = []
+    apply_calls = []
+
+    monkeypatch.setattr(
+        bridge,
+        '_request_midi_monitor',
+        lambda command, payload, timeout_sec: (
+            apply_calls.append((command, payload)) or {'success': True}
+            if command == 'apply_banks'
+            else next(responses)
+        ),
+    )
+
+    def mapping_request(command, payload, timeout_sec=2.0):
+        mapping_calls.append((command, payload))
+        return {
+            'success': True,
+            'midi_banks': payload['midi_banks'],
+        }
+
+    monkeypatch.setattr(bridge, '_request_motion_mapping', mapping_request)
+
+    bridge.create_midi_bank({'name': 'Project A bank'})
+    bridge.create_midi_bank({'name': 'Project B bank'})
+
+    assert [payload['file_id'] for _, payload in mapping_calls] == [
+        'project-a.yaml', 'project-b.yaml'
+    ]
+    assert [payload['midi_banks']['project_marker'] for _, payload in mapping_calls] == [
+        'a', 'b'
+    ]
+    assert [payload['mapping_file_id'] for _, payload in apply_calls] == [
+        'project-a.yaml', 'project-b.yaml'
+    ]

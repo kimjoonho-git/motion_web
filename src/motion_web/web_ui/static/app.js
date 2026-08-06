@@ -1,1 +1,1 @@
-import './js/main.js?v=20260806-mapping-midi-delivery-1';
+import './js/main.js?v=20260806-midi-state-consistency-1';

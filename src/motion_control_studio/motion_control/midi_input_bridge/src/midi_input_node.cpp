@@ -191,11 +191,9 @@ private:
         publish_connection_state();
         return false;
       }
-      input->setCallback(&MidiInputNode::midi_callback, this);
 
       auto output = std::make_unique<RtMidiOut>();
       if (!open_output_port(*output)) {
-        input->cancelCallback();
         input->closePort();
         connection_message_ = "X-Touch MIDI output port not found";
         publish_connection_state();
@@ -234,6 +232,18 @@ private:
       last_dial_led_.fill(-1);
       last_display_top_.fill("\x01");
       last_display_bottom_.fill("\x01");
+
+      // SELECT is reset to OFF for every new hardware session. Send the
+      // corresponding physical fader target before accepting input events;
+      // otherwise the X-Touch's startup position events can mark a fader as
+      // user-controlled and block the zero target until parking times out.
+      for (std::size_t channel = 0; channel < kChannelCount; ++channel) {
+        send_fader_position(channel, 0);
+      }
+      midi_input_->setCallback(&MidiInputNode::midi_callback, this);
+      RCLCPP_INFO(
+        get_logger(),
+        "New X-Touch session: sent zero target to all SELECT-OFF faders");
       publish_connection_state();
       return true;
     } catch (const std::exception & error) {

@@ -203,6 +203,7 @@ export function createMidiMonitorController({ el, onMappingFileSaved }) {
       if (sensitivityMode) mapping.min_percent = 0;
       const groupValid = live?.motion_group_valid !== false;
       const faderParking = Boolean(live?.fader_parking);
+      const zeroReturnFailed = live?.motor_command_state === 'fader_park_failed';
       const selected = Boolean(live?.motion_axis_matched)
         && groupValid
         && Boolean(live?.select_enabled ?? live?.control_enabled);
@@ -232,22 +233,39 @@ export function createMidiMonitorController({ el, onMappingFileSaved }) {
       if (finalCell) finalCell.textContent = Math.round(finalOutput).toLocaleString('ko-KR');
       if (ratioCell) ratioCell.textContent = `${(finalRatio * 100).toFixed(2)}%`;
       if (motionDegCell) {
-        const motionDeg = Number(live?.motion_value_deg);
+        const displayedMotionDeg = live?.displayed_motion_value_deg;
+        const motionDeg = Number(
+          displayedMotionDeg === null || displayedMotionDeg === undefined
+            ? live?.motion_value_deg
+            : displayedMotionDeg,
+        );
         motionDegCell.textContent = Number.isFinite(motionDeg) ? motionDeg.toFixed(2) : '-';
       }
       if (selectCell) {
         const matched = Boolean(live?.motion_axis_matched);
+        const commandMessage = String(live?.motor_command_message || '');
+        const zeroArrivalUnverified = !selected
+          && commandMessage.includes('물리 도착 피드백 없음');
         selectCell.textContent = faderParking
           ? '0 복귀 중 · SELECT 대기'
+          : (zeroReturnFailed
+          ? '0 복귀 실패'
           : (!matched
           ? '매칭 없음'
           : (!groupValid || activationRejected
             ? `활성 불가 · ${activationMessage}`
-            : (selected ? '활성' : '비활성')));
-        selectCell.title = matched && (!groupValid || activationRejected) ? activationMessage : '';
+            : (selected ? '활성' : (
+              zeroArrivalUnverified ? '비활성 · 0 명령 전송' : '비활성'
+            )))));
+        selectCell.title = matched && (!groupValid || activationRejected)
+          ? activationMessage
+          : (zeroReturnFailed || zeroArrivalUnverified ? commandMessage : '');
         selectCell.classList.toggle('midi-select-active', selected);
         selectCell.classList.toggle('midi-select-unmatched', !matched);
-        selectCell.classList.toggle('midi-select-rejected', matched && (!groupValid || activationRejected));
+        selectCell.classList.toggle(
+          'midi-select-rejected',
+          zeroReturnFailed || (matched && (!groupValid || activationRejected)),
+        );
       }
       if (minPercentInput) {
         minPercentInput.disabled = sensitivityMode;
