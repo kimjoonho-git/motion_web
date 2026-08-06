@@ -96,6 +96,35 @@ class GroupExecution:
         self.stop_after_cycle = False
         self.last_start_spread_ms: Optional[float] = None
         self.last_initialize_spread_ms: Optional[float] = None
+        self.pending_command = ''
+        self.pending_command_id = ''
+        self.pending_acks: set[str] = set()
+        self.pending_ack_deadline = 0.0
+        self.pending_scheduled_at = 0.0
+        self.motion_start_report_deadline = 0.0
+
+    def activate_claim(
+        self, execution_id: str, coordinator_id: str,
+        participants: Iterable[str],
+    ) -> None:
+        """Accept one peer-owned execution as this node's active lease."""
+        self.reset()
+        self.execution_id = str(execution_id)
+        self.coordinator_id = str(coordinator_id)
+        self.participants = tuple(participants)
+        self.state = 'preparing'
+
+    def clear_active(self) -> None:
+        """Release the active lease while keeping its final display state."""
+        self.execution_id = ''
+        self.coordinator_id = ''
+        self.participants = ()
+        self.pending_command = ''
+        self.pending_command_id = ''
+        self.pending_acks.clear()
+        self.pending_ack_deadline = 0.0
+        self.pending_scheduled_at = 0.0
+        self.motion_start_report_deadline = 0.0
 
     def begin(self, coordinator_id: str, participants: Iterable[str]) -> str:
         selected = tuple(sorted(set(str(value) for value in participants if str(value))))

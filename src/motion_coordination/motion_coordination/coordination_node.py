@@ -30,7 +30,6 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from .alarm_registry import AlarmRegistry
 from .command_dispatcher import CommandDispatcher
-from .execution_session import ExecutionSession
 from .group_configuration import (
     GroupConfig,
     load_group_config,
@@ -76,7 +75,6 @@ class MotionCoordinationNode(Node):
         self._boot_id = f'boot-{uuid.uuid4().hex}'
         self._joined = False
         self._sequence = 0
-        self._local_sequence = 0
         self._lock = threading.RLock()
         self._trigger_sync_status: Dict[str, Any] = {
             'trigger_sync_state': 'idle',
@@ -97,8 +95,6 @@ class MotionCoordinationNode(Node):
         self._alarm_registry = AlarmRegistry()
         self._seen_commands: Dict[str, float] = {}
         self._cancelled_execution_ids: set[str] = set()
-        self._session = ExecutionSession()
-        self._last_failure: Dict[str, Any] = {}
         self._coordination_error: Dict[str, Any] = {}
         self._duplicate_pc_boot_id = ''
         self._registry = MemberRegistry(
@@ -106,6 +102,7 @@ class MotionCoordinationNode(Node):
             timeout_sec=self._config.peer_timeout_sec,
         )
         self._execution = GroupExecution(start_lead_sec=self._config.start_lead_sec)
+        # One object owns both execution state and its transient command lease.
         self._safety_stop = SafetyStopController()
         local_web_port = int(os.environ.get('MOTION_WEB_BRIDGE_PORT') or 8000)
         self._local_web_base_url = f'http://127.0.0.1:{local_web_port}'
@@ -190,8 +187,8 @@ class MotionCoordinationNode(Node):
         _set_stamp(message.sent_at, time.time())
         message.joined = bool(joined)
         with self._lock:
-            message.execution_active = bool(self._session.execution_id)
-            message.execution_id = self._session.execution_id
+            message.execution_active = bool(self._execution.execution_id)
+            message.execution_id = self._execution.execution_id
             message.cycle_number = int(self._execution.cycle_number)
             message.state = self._local_group_state()
             message.trigger_sync_state = str(
@@ -207,14 +204,13 @@ class MotionCoordinationNode(Node):
 
     def _state_tick(self) -> None:
         with self._lock:
-            execution_active = bool(self._session.execution_id)
+            execution_active = bool(self._execution.execution_id)
         self._local_runtime_monitor.set_active(execution_active)
         self._consume_local_runtime_status()
         self._emit_local_runtime_event()
         self._enforce_execution_membership()
         self._enforce_schedule_ack_deadline()
         self._enforce_motion_start_report_deadline()
-        self._enforce_stop_confirmation_deadline()
         self._drive_trigger_sync()
         self._prune_seen_commands()
 
@@ -247,7 +243,7 @@ class MotionCoordinationNode(Node):
         )
         if pending_alarm is not None:
             self._alarm_callback(pending_alarm)
-        if restarted and message.pc_id in self._session.participants:
+        if restarted and message.pc_id in self._execution.participants:
             threading.Thread(
                 target=self._stop_for_peer_failure,
                 args=(f'{message.pc_id} 프로그램 재시작',),
@@ -264,7 +260,7 @@ class MotionCoordinationNode(Node):
                 and current.get('conflicting_boot_id') == conflicting_boot_id
             ):
                 return
-            execution_id = self._session.execution_id
+            execution_id = self._execution.execution_id
         if execution_id:
             self._stop_for_peer_failure(
                 f'중복 PC ID 감지: {self._config.pc_id}'
@@ -276,18 +272,15 @@ class MotionCoordinationNode(Node):
                 f'{self._config.pc_id}'
             ),
             execution_id=execution_id,
-            details={'conflicting_boot_id': conflicting_boot_id},
         )
-        with self._lock:
-            self._coordination_error['conflicting_boot_id'] = conflicting_boot_id
 
     def _time_sync_callback(self, message: GroupTimeSync) -> None:
         """Handle one execution-local DDS monotonic clock exchange."""
         if (
             message.group_id != self._config.group_id
             or not self._joined
-            or message.execution_id != self._session.execution_id
-            or message.coordinator_id != self._session.coordinator_id
+            or message.execution_id != self._execution.execution_id
+            or message.coordinator_id != self._execution.coordinator_id
         ):
             return
         kind = str(message.kind)
@@ -339,7 +332,7 @@ class MotionCoordinationNode(Node):
                     return
                 result = GroupTimeSync()
                 result.group_id = self._config.group_id
-                result.execution_id = self._session.execution_id
+                result.execution_id = self._execution.execution_id
                 result.coordinator_id = self._config.pc_id
                 result.target_pc_id = pc_id
                 result.responder_pc_id = pc_id
@@ -415,7 +408,7 @@ class MotionCoordinationNode(Node):
         with self._lock:
             if (
                 not self._sync_next_action
-                or self._session.coordinator_id != self._config.pc_id
+                or self._execution.coordinator_id != self._config.pc_id
             ):
                 return
             now = time.monotonic()
@@ -439,7 +432,7 @@ class MotionCoordinationNode(Node):
                     continue
                 probe = GroupTimeSync()
                 probe.group_id = self._config.group_id
-                probe.execution_id = self._session.execution_id
+                probe.execution_id = self._execution.execution_id
                 probe.coordinator_id = self._config.pc_id
                 probe.target_pc_id = pc_id
                 probe.kind = 'probe'
@@ -488,9 +481,9 @@ class MotionCoordinationNode(Node):
             participants = tuple(sorted(set(message.participant_ids)))
             urgent_stop = bool(
                 message.command in {'stop_now', 'cancel_before_start'}
-                and message.execution_id == self._session.execution_id
-                and participants == self._session.participants
-                and message.coordinator_id in self._session.participants
+                and message.execution_id == self._execution.execution_id
+                and participants == self._execution.participants
+                and message.coordinator_id in self._execution.participants
             )
             if urgent_stop:
                 self._cancelled_execution_ids.add(message.execution_id)
@@ -597,8 +590,7 @@ class MotionCoordinationNode(Node):
         if message.group_id != self._config.group_id:
             return
         cancel_reason = ''
-        spread_recovery: Optional[Dict[str, Any]] = None
-        retry_context: Optional[Dict[str, Any]] = None
+        spread_failure: Optional[Dict[str, Any]] = None
         runtime_error = ''
         with self._lock:
             if (
@@ -639,7 +631,7 @@ class MotionCoordinationNode(Node):
                             f'spread_ms={self._execution.last_initialize_spread_ms}'
                         )
                         if self._execution.initialize_within_tolerance() is False:
-                            spread_recovery = {
+                            spread_failure = {
                                 'stage': 'initialize',
                                 'execution_id': self._execution.execution_id,
                                 'participants': tuple(self._execution.participants),
@@ -647,11 +639,6 @@ class MotionCoordinationNode(Node):
                                 'spread_ms': self._execution.last_initialize_spread_ms,
                                 'triggered': dict(
                                     self._execution.initialize_triggered
-                                ),
-                                'retry_attempt': self._session.retry_attempt,
-                                'root_execution_id': (
-                                    self._session.retry_root_execution_id
-                                    or self._execution.execution_id
                                 ),
                             }
                         else:
@@ -668,8 +655,7 @@ class MotionCoordinationNode(Node):
                         int(message.triggered_monotonic_ns) / 1_000_000_000.0,
                     )
                     if self._execution.state == 'running':
-                        self._session.motion_start_report_deadline = 0.0
-                        self._session.motion_start_report_cycle = 0
+                        self._execution.motion_start_report_deadline = 0.0
                         self.get_logger().info(
                             '그룹 모션 시작 트리거 편차 · '
                             f'execution={self._execution.execution_id} · '
@@ -677,24 +663,14 @@ class MotionCoordinationNode(Node):
                             f'spread_ms={self._execution.last_start_spread_ms}'
                         )
                     if self._execution.trigger_within_tolerance() is False:
-                        spread_recovery = {
+                        spread_failure = {
                             'stage': 'motion_start',
                             'execution_id': self._execution.execution_id,
                             'participants': tuple(self._execution.participants),
                             'cycle_number': self._execution.cycle_number,
                             'spread_ms': self._execution.last_start_spread_ms,
                             'triggered': dict(self._execution.triggered),
-                            'retry_attempt': self._session.retry_attempt,
-                            'root_execution_id': (
-                                self._session.retry_root_execution_id
-                                or self._execution.execution_id
-                            ),
                         }
-                    elif self._execution.state == 'running':
-                        if self._session.retry_attempt > 0:
-                            self._last_failure = {}
-                        self._session.retry_attempt = 0
-                        self._session.retry_root_execution_id = self._execution.execution_id
                 elif message.event == 'cycle_ready' and message.success:
                     self._execution.mark_cycle_ready(message.pc_id, int(message.cycle_number))
                     if self._execution.state == 'cycle_ready':
@@ -704,16 +680,7 @@ class MotionCoordinationNode(Node):
                         else:
                             self._publish_next_start()
                 elif message.event == 'stopped':
-                    self._session.stopped_members.add(message.pc_id)
-                    if self._session.stopped_members >= set(self._execution.participants):
-                        self._execution.stop_now()
-                        retry_context = dict(self._session.retry_pending) or None
-                        self._session.retry_pending = {}
-                        self._session.stop_confirmation_deadline = 0.0
-                        self._clear_active_execution()
-                        if retry_context is None:
-                            self._session.retry_attempt = 0
-                            self._session.retry_root_execution_id = ''
+                    self._execution.stop_now()
                 elif message.event == 'error':
                     runtime_error = (
                         f'{message.pc_id} 로컬 그룹 실행 오류: '
@@ -723,25 +690,18 @@ class MotionCoordinationNode(Node):
                 self.get_logger().warn(f'Group event rejected: {exc}')
         if cancel_reason:
             self._cancel_before_start(cancel_reason, code='GROUP_START_REJECTED')
-        if spread_recovery is not None:
-            self._handle_trigger_spread_exceeded(spread_recovery)
-        if retry_context is not None:
-            threading.Thread(
-                target=self._restart_after_trigger_spread,
-                args=(retry_context,),
-                name='group-trigger-retry',
-                daemon=True,
-            ).start()
+        if spread_failure is not None:
+            self._handle_trigger_spread_exceeded(spread_failure)
         if runtime_error:
             self._stop_for_peer_failure(runtime_error)
 
     def _cancel_before_start(self, reason: str, *, code: str) -> None:
         """Cancel a pre-start session locally, notify peers, then release its lease."""
         with self._lock:
-            execution_id = self._session.execution_id
+            execution_id = self._execution.execution_id
             if not execution_id:
                 return
-            participants = self._session.participants or self._execution.participants
+            participants = self._execution.participants
             cancel_message = self._new_command(
                 command='cancel_before_start',
                 execution_id=execution_id,
@@ -765,44 +725,26 @@ class MotionCoordinationNode(Node):
             self._command_pub.publish(cancel_message)
         with self._lock:
             self._execution.stop_now(error=True)
-            self._session.retry_pending = {}
-            self._session.stop_confirmation_deadline = 0.0
-            self._session.retry_attempt = 0
-            self._session.retry_root_execution_id = ''
             self._clear_active_execution()
-            self._last_failure = {
-                'active': True,
-                'code': str(code),
-                'stage': 'before_start',
-                'execution_id': execution_id,
-                'message': str(reason),
-                'occurred_at': time.time(),
-            }
+        message = str(reason)
         if local_cancel_failed:
-            self._publish_coordination_error(
-                code='GROUP_LOCAL_CANCEL_FAILED',
-                message=(
-                    '그룹 시작 취소 실패 후 로컬 즉시 정지를 요청했습니다: '
-                    f'{local_cancel.get("message") or "응답 없음"}'
-                    + (
-                        '' if local_stop.get('success') else
-                        f' · 즉시 정지 확인 실패: '
-                        f'{local_stop.get("message") or "응답 없음"}'
-                    )
-                ),
-                execution_id=execution_id,
-                details={
-                    'cancel_result': dict(local_cancel),
-                    'stop_result': dict(local_stop),
-                    'original_code': str(code),
-                },
+            message += (
+                ' · 로컬 취소 실패 후 즉시 정지 요청: '
+                f'{local_cancel.get("message") or "응답 없음"}'
             )
+            if not local_stop.get('success'):
+                message += (
+                    ' · 로컬 즉시 정지 실패: '
+                    f'{local_stop.get("message") or "응답 없음"}'
+                )
+        self._publish_coordination_error(
+            code=code, message=message, execution_id=execution_id,
+        )
 
     def _handle_trigger_spread_exceeded(self, context: Mapping[str, Any]) -> None:
         execution_id = str(context.get('execution_id') or '')
         participants = tuple(context.get('participants') or ())
         spread_ms = float(context.get('spread_ms') or 0.0)
-        retry_attempt = int(context.get('retry_attempt') or 0)
         stage = str(context.get('stage') or 'motion_start')
         initialize_stage = stage == 'initialize'
         label = '초기화' if initialize_stage else '모션 시작'
@@ -814,115 +756,23 @@ class MotionCoordinationNode(Node):
             execution_id=execution_id, participants=participants,
             cycle_number=int(context.get('cycle_number') or 0),
         )
-        local = stop_outcome.local_result
-        repeated = retry_attempt >= 1
         with self._lock:
-            self._execution.stop_now(error=True)
-            self._session.stopped_members.clear()
-            self._last_failure = {
-                'active': True,
-                'code': error_code,
-                'stage': stage,
-                'execution_id': execution_id,
-                'cycle_number': int(context.get('cycle_number') or 0),
-                'spread_ms': round(spread_ms, 6),
-                'triggered_monotonic': dict(context.get('triggered') or {}),
-                'retry_attempt': retry_attempt,
-                'message': f'{label} 트리거 편차 20ms 초과: {spread_ms:.3f}ms',
-                'occurred_at': time.time(),
-            }
-            if not repeated and local.get('success'):
-                self._session.retry_pending = {
-                    'participants': participants,
-                    'retry_attempt': 1,
-                    'root_execution_id': str(
-                        context.get('root_execution_id') or execution_id
-                    ),
-                    'previous_execution_id': execution_id,
-                    'spread_ms': spread_ms,
-                    'stage': stage,
-                }
-            else:
-                self._session.retry_pending = {}
-            self._session.stop_confirmation_deadline = (
-                time.monotonic() + self._config.prepare_timeout_sec
-            )
-        if repeated:
-            self._publish_coordination_error(
-                code=error_code,
-                message=(
-                    f'자동 재시도에서도 {label} 트리거 편차가 '
-                    f'20ms를 초과했습니다: {spread_ms:.3f}ms'
-                ),
-                execution_id=execution_id,
-                details=dict(self._last_failure),
-            )
-        elif not local.get('success'):
-            self._publish_coordination_error(
-                code='GROUP_STOP_CONFIRMATION_FAILED',
-                message=(
-                    '트리거 편차 초과 후 이 PC의 즉시 정지를 확인하지 못했습니다: '
-                    f'{local.get("message") or "응답 없음"}'
-                ),
-                execution_id=execution_id,
-                details=dict(self._last_failure),
-            )
-
-    def _restart_after_trigger_spread(self, context: Mapping[str, Any]) -> None:
-        participants = tuple(context.get('participants') or ())
-        try:
-            result = self._start_group_execution(
-                participants_override=participants,
-                retry_attempt=int(context.get('retry_attempt') or 1),
-                retry_root_execution_id=str(
-                    context.get('root_execution_id') or ''
-                ),
-            )
-            self.get_logger().warn(
-                f'{context.get("stage") or "모션 시작"} 트리거 편차 초과 · '
-                '자동 재시도 시작 · '
-                f'execution={result.get("execution_id")}'
-            )
-        except Exception as exc:
-            self._publish_coordination_error(
-                code='GROUP_TRIGGER_RETRY_FAILED',
-                message=f'그룹 자동 재시도 준비 실패: {exc}',
-                execution_id=str(context.get('previous_execution_id') or ''),
-                details=dict(context),
-            )
-
-    def _enforce_stop_confirmation_deadline(self) -> None:
-        failure: Optional[Dict[str, Any]] = None
-        with self._lock:
-            if (
-                not self._session.stop_confirmation_deadline
-                or time.monotonic() < self._session.stop_confirmation_deadline
-            ):
-                return
-            expected = set(self._execution.participants)
-            missing = sorted(expected - self._session.stopped_members)
-            if not missing:
-                self._session.stop_confirmation_deadline = 0.0
-                return
-            failure = {
-                'execution_id': self._execution.execution_id,
-                'missing': missing,
-                'participants': list(expected),
-            }
-            self._session.retry_pending = {}
-            self._session.stop_confirmation_deadline = 0.0
             self._execution.stop_now(error=True)
             self._clear_active_execution()
         self._publish_coordination_error(
-            code='GROUP_STOP_CONFIRMATION_TIMEOUT',
-            message='전체 PC 정지 확인 제한시간 초과: ' + ', '.join(missing),
-            execution_id=str(failure.get('execution_id') or ''),
-            details=failure,
+            code=error_code,
+            message=(
+                f'{label} 트리거 편차 20ms 초과: {spread_ms:.3f}ms'
+                + (
+                    '' if stop_outcome.local_success else
+                    ' · 로컬 즉시 정지 요청 실패'
+                )
+            ),
+            execution_id=execution_id,
         )
 
     def _publish_coordination_error(
         self, *, code: str, message: str, execution_id: str,
-        details: Optional[Mapping[str, Any]] = None,
     ) -> None:
         error = {
             'active': True,
@@ -931,7 +781,6 @@ class MotionCoordinationNode(Node):
             'grade': 2,
             'execution_id': str(execution_id),
             'message': str(message),
-            'details': dict(details or {}),
             'occurred_at': time.time(),
         }
         with self._lock:
@@ -947,7 +796,7 @@ class MotionCoordinationNode(Node):
         alarm.motor_axis = -1
         alarm.error_code = str(code)
         alarm.error_source = 'group_coordination'
-        alarm.action = '전체 즉시 정지·그룹 재실행 차단'
+        alarm.action = '그룹 실행 중지·재실행 차단'
         alarm.message = str(message)[:512]
         alarm.active = True
         if self._joined and self._config.group_id:
@@ -961,7 +810,6 @@ class MotionCoordinationNode(Node):
                 raise ValueError('중복 PC ID를 수정하고 연동 서비스를 재시작하세요')
             previous = dict(self._coordination_error)
             self._coordination_error = {}
-            self._last_failure = {}
             self._alarm_registry.alarms = {
                 pc_id: alarm for pc_id, alarm in self._alarm_registry.alarms.items()
                 if alarm.get('error_source') != 'group_coordination'
@@ -1025,48 +873,9 @@ class MotionCoordinationNode(Node):
                     self._alarm_registry.clear_coordination()
                     if not self._duplicate_pc_boot_id:
                         self._coordination_error = {}
-                        self._last_failure = {}
                 return
-            if (
-                not self._session.execution_id
-                or message.execution_id != self._session.execution_id
-            ):
-                return
-        if coordination_alarm:
-            # STOP_NOW is delivered on the ordered command path. The alarm only
-            # blocks another group start and must not clear the active lease
-            # before the participant can acknowledge that stop command.
-            return
-        if int(message.grade) == 1:
-            self._call_local_control({
-                'command': 'stop_after_cycle',
-                'execution_id': message.execution_id,
-                'network_operation_id': f'alarm-cycle-stop-{message.pc_id}-{message.sequence}',
-            })
-            with self._lock:
-                self._execution.stop_after_cycle = True
-                if self._execution.coordinator_id == self._config.pc_id:
-                    self._broadcast_stop('stop_after_cycle')
-        elif int(message.grade) >= 2:
-            outcome = self._apply_local_stop_now(
-                execution_id=message.execution_id,
-                network_operation_id=(
-                    f'alarm-stop-{message.pc_id}-{message.sequence}'
-                ),
-            )
-            with self._lock:
-                self._execution.stop_now(error=True)
-                self._clear_active_execution()
-            if not outcome.local_success:
-                self._publish_coordination_error(
-                    code='GROUP_LOCAL_STOP_FAILED',
-                    message=(
-                        'Servo 알람 이후 이 PC의 즉시 정지를 확인하지 못했습니다: '
-                        f'{outcome.local_result.get("message") or "응답 없음"}'
-                    ),
-                    execution_id=message.execution_id,
-                    details={'local_stop': dict(outcome.local_result)},
-                )
+        # GroupAlarm only shares status. Motion control is delivered once on
+        # the ordered GroupCommand path (stop_after_cycle or stop_now).
 
     def _handle_local_request(
         self, request: Mapping[str, Any]
@@ -1083,7 +892,7 @@ class MotionCoordinationNode(Node):
                 self._joined = True
                 result = {'success': True, 'message': 'DDS 그룹 참가'}
             elif command == 'leave':
-                if self._session.execution_id:
+                if self._execution.execution_id:
                     raise ValueError('그룹 실행 중에는 그룹에서 나갈 수 없습니다')
                 if self._joined and self._config.configured:
                     self._publish_heartbeat(joined=False)
@@ -1105,7 +914,6 @@ class MotionCoordinationNode(Node):
 
     def _start_group_execution(
         self, *, participants_override: Optional[tuple[str, ...]] = None,
-        retry_attempt: int = 0, retry_root_execution_id: str = '',
     ) -> Dict[str, Any]:
         if not self._joined:
             raise ValueError('먼저 DDS 그룹에 참가하세요')
@@ -1155,46 +963,32 @@ class MotionCoordinationNode(Node):
                 'trigger_sync_uncertainty_ms': 0.0,
                 'trigger_sync_source': 'dds_relative_monotonic',
             }
-            self._session.activate(
-                execution_id, self._config.pc_id, participants,
-            )
-            self._session.retry_attempt = int(retry_attempt)
-            self._session.retry_root_execution_id = (
-                str(retry_root_execution_id) or execution_id
-            )
-            self._session.retry_pending = {}
-            self._session.stop_confirmation_deadline = 0.0
-            if self._session.retry_attempt == 0:
-                self._last_failure = {}
             command = self._new_command(
                 command='prepare', execution_id=execution_id,
                 cycle_number=0, participants=participants,
             )
-            self._session.pending_command = 'prepare'
-            self._session.pending_command_id = command.command_id
-            self._session.pending_acks.clear()
-            self._session.pending_ack_deadline = (
+            self._execution.pending_command = 'prepare'
+            self._execution.pending_command_id = command.command_id
+            self._execution.pending_acks.clear()
+            self._execution.pending_ack_deadline = (
                 time.monotonic() + self._config.prepare_timeout_sec
             )
-            self._session.pending_scheduled_at = 0.0
+            self._execution.pending_scheduled_at = 0.0
             self._command_pub.publish(command)
         return {
             'success': True,
             'message': '그룹 실행 준비 확인 시작',
             'execution_id': execution_id,
             'participants': list(participants),
-            'retry_attempt': self._session.retry_attempt,
         }
 
     def _request_group_stop(self, *, after_cycle: bool) -> Dict[str, Any]:
         with self._lock:
-            if not self._session.execution_id:
+            if not self._execution.execution_id:
                 raise ValueError('활성 그룹 실행이 없습니다')
             command = 'stop_after_cycle' if after_cycle else 'stop_now'
-            execution_id = self._session.execution_id
-            participants = (
-                self._session.participants or self._execution.participants
-            )
+            execution_id = self._execution.execution_id
+            participants = self._execution.participants
             cycle_number = self._execution.cycle_number
         if after_cycle:
             stop_message = self._new_command(
@@ -1216,11 +1010,12 @@ class MotionCoordinationNode(Node):
             local = outcome.local_result
             dds_stop_published = outcome.dds_stop_published
         with self._lock:
-            if self._session.execution_id == execution_id:
+            if self._execution.execution_id == execution_id:
                 if after_cycle:
                     self._execution.request_stop_after_cycle()
                 else:
                     self._execution.stop_now()
+                    self._clear_active_execution()
         local_success = bool(local.get('success'))
         if not local_success and not after_cycle:
             self._publish_coordination_error(
@@ -1230,7 +1025,6 @@ class MotionCoordinationNode(Node):
                     f'{local.get("message") or "응답 없음"}'
                 ),
                 execution_id=execution_id,
-                details={'local_result': dict(local)},
             )
         return {
             'success': local_success,
@@ -1254,16 +1048,15 @@ class MotionCoordinationNode(Node):
             command_id=action.command_id,
             scheduled_monotonic=action.scheduled_at,
         )
-        self._session.pending_command = action.command
-        self._session.pending_command_id = action.command_id
-        self._session.pending_acks.clear()
-        self._session.pending_ack_deadline = (
+        self._execution.pending_command = action.command
+        self._execution.pending_command_id = action.command_id
+        self._execution.pending_acks.clear()
+        self._execution.pending_ack_deadline = (
             action.scheduled_at - self._config.schedule_ack_margin_sec
         )
-        self._session.pending_scheduled_at = float(action.scheduled_at)
+        self._execution.pending_scheduled_at = float(action.scheduled_at)
         if action.command == 'start_at':
-            self._session.motion_start_report_cycle = int(action.cycle_number)
-            self._session.motion_start_report_deadline = (
+            self._execution.motion_start_report_deadline = (
                 float(action.scheduled_at)
                 + self._config.trigger_report_timeout_sec
             )
@@ -1280,30 +1073,30 @@ class MotionCoordinationNode(Node):
         self._begin_trigger_sync('start')
 
     def _record_schedule_ack(self, message: GroupEvent) -> None:
-        if message.command_id != self._session.pending_command_id:
+        if message.command_id != self._execution.pending_command_id:
             return
-        self._session.pending_acks.add(message.pc_id)
-        if self._session.pending_acks >= set(self._execution.participants):
-            self._session.pending_command = ''
-            self._session.pending_command_id = ''
-            self._session.pending_ack_deadline = 0.0
-            self._session.pending_scheduled_at = 0.0
+        self._execution.pending_acks.add(message.pc_id)
+        if self._execution.pending_acks >= set(self._execution.participants):
+            self._execution.pending_command = ''
+            self._execution.pending_command_id = ''
+            self._execution.pending_ack_deadline = 0.0
+            self._execution.pending_scheduled_at = 0.0
 
     def _enforce_schedule_ack_deadline(self) -> None:
         reason = ''
         command = ''
         with self._lock:
-            if not self._session.pending_command_id or time.monotonic() < self._session.pending_ack_deadline:
+            if not self._execution.pending_command_id or time.monotonic() < self._execution.pending_ack_deadline:
                 return
-            missing = sorted(set(self._session.participants) - self._session.pending_acks)
+            missing = sorted(set(self._execution.participants) - self._execution.pending_acks)
             if not missing:
                 return
-            scheduled_at = self._session.pending_scheduled_at
-            command = 'cancel_before_start' if self._session.pending_command in {
+            scheduled_at = self._execution.pending_scheduled_at
+            command = 'cancel_before_start' if self._execution.pending_command in {
                 'prepare', 'initialize_at', 'start_at'
             } else 'stop_now'
             if (
-                self._session.pending_command == 'start_at'
+                self._execution.pending_command == 'start_at'
                 and scheduled_at > 0.0
                 and time.monotonic() >= scheduled_at
             ):
@@ -1319,9 +1112,9 @@ class MotionCoordinationNode(Node):
     def _enforce_motion_start_report_deadline(self) -> None:
         with self._lock:
             if (
-                not self._session.motion_start_report_deadline
-                or time.monotonic() < self._session.motion_start_report_deadline
-                or not self._session.execution_id
+                not self._execution.motion_start_report_deadline
+                or time.monotonic() < self._execution.motion_start_report_deadline
+                or not self._execution.execution_id
                 or self._execution.coordinator_id != self._config.pc_id
             ):
                 return
@@ -1330,33 +1123,26 @@ class MotionCoordinationNode(Node):
                 - set(self._execution.triggered)
             )
             if not missing:
-                self._session.motion_start_report_deadline = 0.0
-                self._session.motion_start_report_cycle = 0
+                self._execution.motion_start_report_deadline = 0.0
                 return
-            execution_id = self._session.execution_id
-            cycle_number = self._session.motion_start_report_cycle
-            self._session.motion_start_report_deadline = 0.0
-            self._session.motion_start_report_cycle = 0
+            execution_id = self._execution.execution_id
+            self._execution.motion_start_report_deadline = 0.0
         reason = '모션 시작 트리거 보고 제한시간 초과: ' + ', '.join(missing)
         self._stop_for_peer_failure(reason)
         self._publish_coordination_error(
             code='GROUP_MOTION_START_REPORT_TIMEOUT',
             message=reason,
             execution_id=execution_id,
-            details={
-                'cycle_number': cycle_number,
-                'missing': missing,
-            },
         )
 
     def _broadcast_stop(self, command: str) -> None:
-        if not self._session.execution_id:
+        if not self._execution.execution_id:
             return
         message = self._new_command(
             command=command,
-            execution_id=self._session.execution_id,
+            execution_id=self._execution.execution_id,
             cycle_number=self._execution.cycle_number,
-            participants=self._session.participants or self._execution.participants,
+            participants=self._execution.participants,
         )
         self._command_pub.publish(message)
 
@@ -1426,7 +1212,7 @@ class MotionCoordinationNode(Node):
             if not status.get('group_execution'):
                 return
             execution_id = str(status.get('execution_id') or '')
-            if not execution_id or execution_id != self._session.execution_id:
+            if not execution_id or execution_id != self._execution.execution_id:
                 return
             phase = str(status.get('phase') or '')
             cycle = int(status.get('group_cycle_number') or status.get('current_cycle') or 0)
@@ -1470,26 +1256,24 @@ class MotionCoordinationNode(Node):
 
     def _enforce_execution_membership(self) -> None:
         with self._lock:
-            if not self._session.execution_id:
+            if not self._execution.execution_id:
                 return
             missing = [
-                pc_id for pc_id in self._session.participants
+                pc_id for pc_id in self._execution.participants
                 if pc_id != self._config.pc_id
                 and self._registry.status(pc_id) == 'offline'
             ]
             if not missing:
                 return
-            execution_id = self._session.execution_id
-            participants = (
-                self._session.participants or self._execution.participants
-            )
+            execution_id = self._execution.execution_id
+            participants = self._execution.participants
             cycle_number = self._execution.cycle_number
-        outcome = self._issue_stop_now(
+        self._issue_stop_now(
             execution_id=execution_id, participants=participants,
             cycle_number=cycle_number,
         )
         with self._lock:
-            if self._session.execution_id == execution_id:
+            if self._execution.execution_id == execution_id:
                 self._execution.stop_now(error=True)
                 self._clear_active_execution()
         self.get_logger().error(
@@ -1499,10 +1283,6 @@ class MotionCoordinationNode(Node):
             code='GROUP_PARTICIPANT_DISCONNECTED',
             message='그룹 참가 PC 통신 단절: ' + ', '.join(missing),
             execution_id=execution_id,
-            details={
-                'missing': missing,
-                'local_stop': dict(outcome.local_result),
-            },
         )
 
     def _accept_execution_claim(
@@ -1519,13 +1299,13 @@ class MotionCoordinationNode(Node):
                     'PC별 그룹 참가 목록이 일치하지 않습니다: '
                     f'수신={list(participants)}, 로컬={list(expected)}'
                 )
-            if self._session.execution_id and self._session.execution_id != message.execution_id:
+            if self._execution.execution_id and self._execution.execution_id != message.execution_id:
                 # Deterministic arbitration prevents two simultaneous initiators
                 # from leaving the group split between different executions.
-                winner = min(self._session.coordinator_id, message.coordinator_id)
+                winner = min(self._execution.coordinator_id, message.coordinator_id)
                 if winner != message.coordinator_id:
                     raise ValueError('다른 임시 진행 PC의 그룹 실행이 이미 활성 상태입니다')
-                previous_execution_id = self._session.execution_id
+                previous_execution_id = self._execution.execution_id
                 self._call_local_control({
                     'command': 'group_cancel',
                     'execution_id': previous_execution_id,
@@ -1533,13 +1313,13 @@ class MotionCoordinationNode(Node):
                 })
                 self._execution.reset()
                 self._clear_active_execution()
-            if self._session.execution_id != message.execution_id:
-                self._session.activate(
+            if self._execution.execution_id != message.execution_id:
+                self._execution.activate_claim(
                     message.execution_id, message.coordinator_id, participants,
                 )
             else:
-                self._session.coordinator_id = message.coordinator_id
-                self._session.participants = participants
+                self._execution.coordinator_id = message.coordinator_id
+                self._execution.participants = participants
             if message.coordinator_id != self._config.pc_id:
                 self._trigger_sync_status = {
                     'trigger_sync_state': 'sync_waiting',
@@ -1553,9 +1333,9 @@ class MotionCoordinationNode(Node):
     ) -> None:
         with self._lock:
             if (
-                message.execution_id != self._session.execution_id
-                or message.coordinator_id != self._session.coordinator_id
-                or participants != self._session.participants
+                message.execution_id != self._execution.execution_id
+                or message.coordinator_id != self._execution.coordinator_id
+                or participants != self._execution.participants
             ):
                 raise ValueError('그룹 실행 ID·임시 진행 PC·참가 목록이 일치하지 않습니다')
 
@@ -1564,9 +1344,9 @@ class MotionCoordinationNode(Node):
     ) -> None:
         with self._lock:
             if (
-                message.execution_id != self._session.execution_id
-                or participants != self._session.participants
-                or message.coordinator_id not in self._session.participants
+                message.execution_id != self._execution.execution_id
+                or participants != self._execution.participants
+                or message.coordinator_id not in self._execution.participants
             ):
                 raise ValueError('그룹 정지 요청의 실행 ID·참가 목록이 일치하지 않습니다')
 
@@ -1598,6 +1378,8 @@ class MotionCoordinationNode(Node):
         self, *, execution_id: str, participants: tuple[str, ...],
         cycle_number: int, command_id: str = '',
     ) -> SafetyStopOutcome:
+        with self._lock:
+            self._cancelled_execution_ids.add(str(execution_id))
         stop_message = self._new_command(
             command='stop_now', execution_id=execution_id,
             cycle_number=cycle_number, participants=participants,
@@ -1610,17 +1392,6 @@ class MotionCoordinationNode(Node):
                 'network_operation_id': stop_message.command_id,
             }, timeout_sec=0.25),
             lambda: self._command_pub.publish(stop_message),
-        )
-
-    def _apply_local_stop_now(
-        self, *, execution_id: str, network_operation_id: str,
-    ) -> SafetyStopOutcome:
-        return self._safety_stop.stop_now(
-            lambda: self._call_local_control({
-                'command': 'stop_now',
-                'execution_id': execution_id,
-                'network_operation_id': network_operation_id,
-            }, timeout_sec=0.25),
         )
 
     def _local_http(
@@ -1663,7 +1434,7 @@ class MotionCoordinationNode(Node):
             sample.get('active_since_monotonic') or 0.0
         )
         with self._lock:
-            execution_active = bool(self._session.execution_id)
+            execution_active = bool(self._execution.execution_id)
         now = time.monotonic()
         waiting_for_active_sample = bool(
             execution_active
@@ -1708,7 +1479,7 @@ class MotionCoordinationNode(Node):
         self._last_alarm_key = key
         message = GroupAlarm()
         message.group_id = self._config.group_id
-        message.execution_id = self._session.execution_id
+        message.execution_id = self._execution.execution_id
         message.pc_id = self._config.pc_id
         message.boot_id = self._boot_id
         message.sequence = self._next_sequence()
@@ -1726,11 +1497,9 @@ class MotionCoordinationNode(Node):
         message.active = grade > 0
         if self._joined and self._config.group_id:
             self._alarm_pub.publish(message)
-        if grade >= 2 and self._session.execution_id:
-            execution_id = self._session.execution_id
-            participants = (
-                self._session.participants or self._execution.participants
-            )
+        if grade >= 2 and self._execution.execution_id:
+            execution_id = self._execution.execution_id
+            participants = self._execution.participants
             self._issue_stop_now(
                 execution_id=execution_id, participants=participants,
                 cycle_number=self._execution.cycle_number,
@@ -1738,11 +1507,11 @@ class MotionCoordinationNode(Node):
             )
             self._execution.stop_now(error=True)
             self._clear_active_execution()
-        elif grade == 1 and self._session.execution_id:
+        elif grade == 1 and self._execution.execution_id:
             self._execution.stop_after_cycle = True
             self._call_local_control({
                 'command': 'stop_after_cycle',
-                'execution_id': self._session.execution_id,
+                'execution_id': self._execution.execution_id,
                 'network_operation_id': f'local-grade1-{message.sequence}',
             })
             if self._execution.coordinator_id == self._config.pc_id:
@@ -1774,12 +1543,12 @@ class MotionCoordinationNode(Node):
             participants = self._execution.participants
             cycle_number = self._execution.cycle_number
             if (
-                self._session.execution_id
-                and self._session.coordinator_id != self._config.pc_id
+                self._execution.execution_id
+                and self._execution.coordinator_id != self._config.pc_id
             ):
                 execution_state = self._local_group_state()
-                execution_id = self._session.execution_id
-                participants = self._session.participants
+                execution_id = self._execution.execution_id
+                participants = self._execution.participants
                 cycle_number = int(
                     local_status.get('group_cycle_number')
                     or local_status.get('current_cycle') or 0
@@ -1819,19 +1588,15 @@ class MotionCoordinationNode(Node):
                 'execution': {
                     'state': execution_state,
                     'execution_id': execution_id,
-                    'coordinator_id': self._session.coordinator_id,
+                    'coordinator_id': self._execution.coordinator_id,
                     'participants': list(participants),
                     'cycle_number': cycle_number,
                     'initialize_spread_ms': self._execution.last_initialize_spread_ms,
                     'initialize_within_20ms': self._execution.initialize_within_tolerance(),
                     'start_spread_ms': self._execution.last_start_spread_ms,
                     'start_within_20ms': self._execution.trigger_within_tolerance(),
-                    'retry_attempt': self._session.retry_attempt,
-                    'retry_pending': bool(self._session.retry_pending),
-                    'retry_root_execution_id': self._session.retry_root_execution_id,
                 },
                 'trigger_sync': dict(self._trigger_sync_status),
-                'last_failure': dict(self._last_failure),
                 'coordination_error': dict(self._coordination_error),
                 'timeouts': {
                     'heartbeat_sec': self._config.heartbeat_sec,
@@ -1871,11 +1636,11 @@ class MotionCoordinationNode(Node):
                 rows = sorted(self._seen_commands.items(), key=lambda item: item[1])[-4096:]
                 self._seen_commands = dict(rows)
             if len(self._cancelled_execution_ids) > 4096:
-                active = self._session.execution_id
+                active = self._execution.execution_id
                 self._cancelled_execution_ids = {active} if active else set()
 
     def _clear_active_execution(self) -> None:
-        self._session.clear_active()
+        self._execution.clear_active()
         self._sync_estimators.clear()
         self._sync_sent_samples.clear()
         self._sync_probes.clear()
@@ -1893,7 +1658,7 @@ class MotionCoordinationNode(Node):
     def _execution_unhealthy_members(self) -> list[str]:
         unhealthy = []
         with self._lock:
-            for pc_id in self._session.participants:
+            for pc_id in self._execution.participants:
                 if pc_id == self._config.pc_id:
                     continue
                 member = self._registry.member(pc_id)
@@ -1907,14 +1672,12 @@ class MotionCoordinationNode(Node):
 
     def _stop_for_peer_failure(self, reason: str) -> None:
         with self._lock:
-            if not self._session.execution_id:
+            if not self._execution.execution_id:
                 return
-            execution_id = self._session.execution_id
-            participants = (
-                self._session.participants or self._execution.participants
-            )
+            execution_id = self._execution.execution_id
+            participants = self._execution.participants
             cycle_number = self._execution.cycle_number
-        outcome = self._issue_stop_now(
+        self._issue_stop_now(
             execution_id=execution_id, participants=participants,
             cycle_number=cycle_number,
             command_id=f'peer-failure-{uuid.uuid4().hex}',
@@ -1927,7 +1690,6 @@ class MotionCoordinationNode(Node):
             code='GROUP_PARTICIPANT_FAILURE',
             message=f'그룹 참가 PC 오류: {reason}',
             execution_id=execution_id,
-            details={'local_stop': dict(outcome.local_result)},
         )
 
     def _next_sequence(self) -> int:
@@ -1937,12 +1699,10 @@ class MotionCoordinationNode(Node):
 
     def _stop_active_execution_for_shutdown(self) -> None:
         with self._lock:
-            execution_id = self._session.execution_id
+            execution_id = self._execution.execution_id
             if not execution_id:
                 return
-            participants = (
-                self._session.participants or self._execution.participants
-            )
+            participants = self._execution.participants
             cycle_number = self._execution.cycle_number
         outcome = self._issue_stop_now(
             execution_id=execution_id,

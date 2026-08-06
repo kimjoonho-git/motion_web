@@ -75,7 +75,6 @@ export function createCoordinationController({ el }) {
     const peers = Array.isArray(runtime.peers) ? runtime.peers : [];
     const fixedParticipants = new Set(Array.isArray(execution.participants) ? execution.participants : []);
     const coordinationError = runtime.coordination_error || {};
-    const lastFailure = runtime.last_failure || {};
     const alarms = new Map(
       (Array.isArray(runtime.alarms) ? runtime.alarms : [])
         .map((alarm) => [alarm.pc_id, alarm]),
@@ -111,8 +110,7 @@ export function createCoordinationController({ el }) {
       const coordinator = execution.coordinator_id ? ` · 진행 ${execution.coordinator_id}` : '';
       const cycle = Number(execution.cycle_number || 0) > 0 ? ` · ${execution.cycle_number}회차` : '';
       const spread = execution.start_spread_ms == null ? '' : ` · 시작 편차 ${Number(execution.start_spread_ms).toFixed(3)}ms`;
-      const retry = Number(execution.retry_attempt || 0) > 0 ? ` · 자동 재시도 ${execution.retry_attempt}/1` : '';
-      el.coordinationExecutionState.textContent = `그룹 실행 · ${stateText(execution.state)}${coordinator}${cycle}${spread}${retry}`;
+      el.coordinationExecutionState.textContent = `그룹 실행 · ${stateText(execution.state)}${coordinator}${cycle}${spread}`;
       el.coordinationExecutionState.className = execution.start_within_20ms === false
         ? 'coordination-state-bad' : stateClass(execution.state);
     }
@@ -126,11 +124,10 @@ export function createCoordinationController({ el }) {
     if (el.coordinationStopNowButton) el.coordinationStopNowButton.disabled = loading || !active;
     if (el.coordinationAcknowledgeErrorButton) el.coordinationAcknowledgeErrorButton.disabled = loading || !groupErrorActive;
     if (el.coordinationErrorSummary) {
-      const failure = coordinationError.message || lastFailure.message || '';
-      const code = coordinationError.code || lastFailure.code || '';
-      const failedPc = lastFailure.pc_id ? ` · PC ${lastFailure.pc_id}` : '';
-      const stage = lastFailure.stage ? ` · 단계 ${lastFailure.stage}` : '';
-      el.coordinationErrorSummary.textContent = failure ? `${code || 'GROUP_ERROR'}${failedPc}${stage} · ${failure}` : '';
+      const failure = coordinationError.message || '';
+      const code = coordinationError.code || '';
+      const failedPc = coordinationError.pc_id ? ` · PC ${coordinationError.pc_id}` : '';
+      el.coordinationErrorSummary.textContent = failure ? `${code || 'GROUP_ERROR'}${failedPc} · ${failure}` : '';
       el.coordinationErrorSummary.classList.toggle('hidden', !failure);
       el.coordinationErrorSummary.classList.toggle('coordination-state-bad', Boolean(failure));
     }

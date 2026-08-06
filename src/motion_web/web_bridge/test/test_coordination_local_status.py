@@ -98,3 +98,23 @@ def test_coordination_stop_still_stops_motion_when_safety_publish_fails():
     assert events == ['motion_run_stop']
     assert result['success'] is False
     assert result['safety_stop']['success'] is False
+
+
+def test_coordination_stop_still_stops_when_start_cancel_raises():
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    events = []
+    bridge.cancel_pending_motion_studio_start = lambda: (_ for _ in ()).throw(
+        RuntimeError('cancel unavailable')
+    )
+    bridge.publish_safety_stop = (
+        lambda emergency: events.append(('safety', emergency)) or 'safety-a'
+    )
+    bridge.motion_run_stop = (
+        lambda: events.append('motion_run_stop') or {'success': True}
+    )
+
+    result = bridge.coordination_stop_now()
+
+    assert events == [('safety', False), 'motion_run_stop']
+    assert result['success'] is False
+    assert '시작 예약 취소 실패' in result['message']

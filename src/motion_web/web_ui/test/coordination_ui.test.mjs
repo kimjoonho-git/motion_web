@@ -48,7 +48,6 @@ function snapshot(peer, coordinationError = {}) {
       alarms: [],
       execution: { state: 'idle', participants: [] },
       coordination_error: coordinationError,
-      last_failure: {},
     },
   };
 }

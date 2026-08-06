@@ -1291,9 +1291,13 @@ class MotionWebBridge(Node):
 
     def coordination_stop_now(self) -> Dict[str, Any]:
         """Publish the final-output safety command before stopping motion run."""
+        errors = []
         cancel_pending = getattr(self, 'cancel_pending_motion_studio_start', None)
         if callable(cancel_pending):
-            cancel_pending()
+            try:
+                cancel_pending()
+            except Exception as exc:
+                errors.append(f'시작 예약 취소 실패: {exc}')
         try:
             request_id = self.publish_safety_stop(False)
             safety_stop = {
@@ -1309,17 +1313,24 @@ class MotionWebBridge(Node):
                 'acknowledgement_pending': False,
                 'message': f'최종 모터 출력 정지 명령 전송 실패: {exc}',
             }
-        result = self.motion_run_stop()
+            errors.append(str(safety_stop['message']))
+        try:
+            result = self.motion_run_stop()
+        except Exception as exc:
+            result = {
+                'success': False,
+                'message': f'motion_run_manager 정지 요청 실패: {exc}',
+            }
         result = dict(result) if isinstance(result, dict) else {
             'success': False,
             'message': 'motion_run_manager 정지 응답 형식 오류',
         }
         result['safety_stop'] = safety_stop
-        if not safety_stop['success']:
+        if errors:
             source_message = str(result.get('message') or '')
             result['success'] = False
             result['message'] = ' · '.join(filter(None, (
-                str(safety_stop['message']), source_message,
+                *errors, source_message,
             )))
         return result
 

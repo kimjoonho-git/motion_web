@@ -392,13 +392,7 @@ def test_two_processes_complete_two_barrier_cycles_over_typed_dds(tmp_path):
             bridge.close()
 
 
-@pytest.mark.parametrize(
-    ('delayed_starts', 'expect_error', 'domain_id'),
-    [([0.04, 0.0], False, 79), ([0.04, 0.04], True, 80)],
-)
-def test_trigger_spread_stops_then_retries_once_or_blocks(
-    tmp_path, delayed_starts, expect_error, domain_id,
-):
+def test_trigger_spread_stops_once_and_blocks(tmp_path):
     executable = Path(
         os.environ.get('MOTION_COORDINATION_EXECUTABLE')
         or Path.cwd()
@@ -411,15 +405,15 @@ def test_trigger_spread_stops_then_retries_once_or_blocks(
         _FakeLocalWebBridge(cycle_duration_sec=0.15),
         _FakeLocalWebBridge(
             cycle_duration_sec=0.15,
-            start_trigger_delays=delayed_starts,
+            start_trigger_delays=[0.04],
         ),
     ]
     ports = [_free_port(), _free_port()]
     configs = []
-    for pc_id in ('dds-retry-a', 'dds-retry-b'):
+    for pc_id in ('dds-spread-a', 'dds-spread-b'):
         path = tmp_path / f'{pc_id}.yaml'
         save_group_config(path, GroupConfig(
-            pc_id, pc_id, True, f'dds-retry-{domain_id}', domain_id,
+            pc_id, pc_id, True, 'dds-spread-79', 79,
             heartbeat_sec=0.1, warning_timeout_sec=0.8,
             peer_timeout_sec=1.6, start_lead_sec=0.5,
             schedule_ack_margin_sec=0.1,
@@ -448,43 +442,23 @@ def test_trigger_spread_stops_then_retries_once_or_blocks(
         for port in ports:
             _wait(lambda port=port: _one_peer_snapshot(port))
         assert _post(ports[0], 'start_group')['success'] is True
-        _wait(lambda: len(bridges[1].calls('group_start_at')) >= 2, timeout=15.0)
-        _wait(lambda: len(bridges[0].calls('group_prepare')) >= 2, timeout=10.0)
-
-        retry_starts = bridges[1].calls('group_start_at')[:2]
-        assert retry_starts[0]['execution_id'] != retry_starts[1]['execution_id']
-        assert [row['cycle_number'] for row in retry_starts] == [1, 1]
-        assert bridges[0].calls('stop_now')
-        assert bridges[1].calls('stop_now')
-
-        if expect_error:
-            failed = _wait(
-                lambda: (
-                    _get(ports[0])
-                    if _get(ports[0]).get('coordination_error', {}).get('active')
-                    else None
-                ),
-                timeout=10.0,
-            )
-            assert failed['coordination_error']['code'] == (
-                'GROUP_TRIGGER_SPREAD_EXCEEDED'
-            )
-            blocked = _post(ports[0], 'start_group')
-            assert blocked['success'] is False
-            assert _post(ports[0], 'acknowledge_group_error')['success'] is True
-        else:
-            recovered = _wait(
-                lambda: (
-                    _get(ports[0])
-                    if _get(ports[0]).get('execution', {}).get(
-                        'start_within_20ms'
-                    ) is True
-                    else None
-                ),
-                timeout=10.0,
-            )
-            assert recovered.get('coordination_error') == {}
-            assert _post(ports[0], 'stop_now')['dds_stop_published'] is True
+        _wait(lambda: bridges[0].calls('stop_now'), timeout=10.0)
+        _wait(lambda: bridges[1].calls('stop_now'), timeout=10.0)
+        failed = _wait(
+            lambda: (
+                _get(ports[0])
+                if _get(ports[0]).get('coordination_error', {}).get('active')
+                else None
+            ),
+            timeout=10.0,
+        )
+        assert failed['coordination_error']['code'] == (
+            'GROUP_TRIGGER_SPREAD_EXCEEDED'
+        )
+        assert len(bridges[0].calls('group_prepare')) == 1
+        assert len(bridges[1].calls('group_start_at')) == 1
+        assert _post(ports[0], 'start_group')['success'] is False
+        assert _post(ports[0], 'acknowledge_group_error')['success'] is True
     finally:
         for process in processes:
             process.terminate()
