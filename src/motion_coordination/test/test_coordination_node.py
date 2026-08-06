@@ -1,184 +1,863 @@
+import time
 from types import SimpleNamespace
 
+import pytest
 from rclpy.executors import ExternalShutdownException
+from motion_coordination_interfaces.msg import (
+    GroupAlarm, GroupCommand, GroupEvent, GroupHeartbeat, GroupTimeSync,
+)
 
 import motion_coordination.coordination_node as coordination_node
-from motion_coordination.execution_control import ExecutionLease, OperationJournal
+from motion_coordination.group_execution import GroupExecution, Member, MemberRegistry
 
 
-class _NoopLock:
-    def release(self):
-        pass
+class _Publisher:
+    def __init__(self, events=None):
+        self.messages = []
+        self.events = events
+
+    def publish(self, message):
+        self.messages.append(message)
+        if self.events is not None:
+            self.events.append(('dds', getattr(message, 'command', '')))
 
 
-def _coordinator_node():
+def _node():
     node = coordination_node.MotionCoordinationNode.__new__(
         coordination_node.MotionCoordinationNode
     )
     node._config = SimpleNamespace(
-        machine_id='pc-a',
-        display_name='PC A',
-        role='coordinator',
-        mode='participant',
-        peers=(),
+        pc_id='pc-a', group_id='stage-a', schedule_ack_margin_sec=0.1,
+        display_name='PC A', enabled=True, dds_domain_id=21,
+        heartbeat_sec=0.5, warning_timeout_sec=1.5,
+        peer_timeout_sec=3.0, start_lead_sec=0.5,
+        max_trigger_sync_uncertainty_ms=5.0,
+        trigger_sync_samples=3,
+        prepare_timeout_sec=6.0,
+        trigger_report_timeout_sec=1.0,
+        configured=True,
     )
-    node._coordinator_lease_id = 'lease-a'
-    node._synchronized_operation_active = False
-    node._readiness_lock = _NoopLock()
-    node._publish_response = lambda payload: None
+    node._seen_commands = {}
+    node._sequence = 0
+    import threading
+    node._lock = threading.RLock()
+    node._active_execution_id = ''
+    node._active_command_coordinator = ''
+    node._active_participants = ()
+    node._stopped_members = set()
+    node._pending_command = ''
+    node._pending_command_id = ''
+    node._pending_acks = set()
+    node._pending_ack_deadline = 0.0
+    node._pending_scheduled_at = 0.0
+    node._motion_start_report_deadline = 0.0
+    node._motion_start_report_cycle = 0
+    node._last_failure = {}
+    node._coordination_error = {}
+    node._duplicate_pc_boot_id = ''
+    node._trigger_retry_attempt = 0
+    node._retry_root_execution_id = ''
+    node._retry_pending = {}
+    node._stop_confirmation_deadline = 0.0
+    node._peer_alarms = {}
+    node._alarm_versions = {}
+    node._registry = MemberRegistry()
+    node._local_status = {}
+    node._sync_estimators = {}
+    node._sync_sent_samples = {}
+    node._sync_probes = {}
+    node._sync_ready = set()
+    node._sync_next_action = ''
+    node._sync_deadline = 0.0
+    node._sync_last_probe_at = 0.0
+    node._local_sync_offset_ns = 0
+    node._trigger_sync_status = {
+        'trigger_sync_state': 'idle',
+        'trigger_sync_uncertainty_ms': 0.0,
+        'trigger_sync_source': 'dds_relative_monotonic',
+    }
     return node
 
 
-def test_direct_motion_commands_use_the_acquired_coordinator_lease():
-    node = _coordinator_node()
-    sent = []
-    responses = []
-    node._broadcast_control = lambda payload: (
-        sent.append(dict(payload))
-        or {'success': True, 'message': 'ok', 'results': []}
-    )
-    node._publish_response = lambda payload: responses.append(dict(payload))
-
-    node._run_control('request-a', {'command': 'run_once'})
-    node._run_control('request-b', {'command': 'initialize'})
-
-    assert [payload['lease_id'] for payload in sent] == ['lease-a', 'lease-a']
-    assert all(response['success'] for response in responses)
+def test_command_ids_are_accepted_once():
+    node = _node()
+    assert node._command_seen('command-a') is False
+    assert node._command_seen('command-a') is True
 
 
-def test_direct_motion_command_is_rejected_without_acquired_lease():
-    node = _coordinator_node()
-    node._coordinator_lease_id = ''
-    sent = []
-    responses = []
-    node._broadcast_control = lambda payload: sent.append(dict(payload))
-    node._publish_response = lambda payload: responses.append(dict(payload))
-
-    node._run_control('request-a', {'command': 'run_once'})
-
-    assert sent == []
-    assert responses[0]['success'] is False
-    assert 'lease_id' in responses[0]['message']
+def test_scheduled_command_requires_ack_margin():
+    node = _node()
+    node._trigger_sync_status['trigger_sync_state'] = 'ready'
+    command = GroupCommand()
+    command.scheduled_monotonic_ns = time.monotonic_ns() + 200_000_000
+    assert node._local_schedule_ns(command) > time.monotonic_ns()
+    command.scheduled_monotonic_ns = time.monotonic_ns() + 50_000_000
+    with pytest.raises(ValueError, match='여유'):
+        node._local_schedule_ns(command)
 
 
-def test_local_motion_execution_rejects_a_mismatched_lease(tmp_path):
-    node = _coordinator_node()
-    node._operation_journal = OperationJournal(tmp_path / 'operations.json')
-    node._execution_lease = ExecutionLease()
-    node._execution_lease.acquire('pc-a', lease_id='lease-a')
-    local_calls = []
+def test_immediate_group_stop_applies_local_stop_before_dds_publish():
+    node = _node()
+    node._active_execution_id = 'exec-a'
+    node._active_participants = ('pc-a', 'pc-b')
+    node._execution = GroupExecution()
+    node._execution.begin('pc-a', node._active_participants)
+    events = []
     node._call_local_control = lambda payload: (
-        local_calls.append(dict(payload)) or {'success': True}
+        events.append(('local', payload['command'])) or {'success': True}
     )
+    node._command_pub = _Publisher(events)
 
-    rejected = node._execute_control('pc-a', {
-        'network_operation_id': 'run-with-wrong-lease',
-        'command': 'run_once',
-        'lease_id': 'lease-b',
-    })
-    accepted = node._execute_control('pc-a', {
-        'network_operation_id': 'run-with-correct-lease',
-        'command': 'run_once',
-        'lease_id': 'lease-a',
-    })
+    result = node._request_group_stop(after_cycle=False)
 
-    assert rejected['success'] is False
-    assert accepted['success'] is True
-    assert len(local_calls) == 1
+    assert result['success'] is True
+    assert result['dds_stop_published'] is True
+    assert events == [('local', 'stop_now'), ('dds', 'stop_now')]
+    assert node._active_execution_id == 'exec-a'
+    assert node._execution.state == 'stopped'
 
 
-def test_snapshot_exposes_synchronized_execution_state():
-    node = _coordinator_node()
-    published = []
-    node._runtime = SimpleNamespace(snapshot=lambda: {'mode': 'participant'})
-    node._execution_lease = SimpleNamespace(
-        snapshot=lambda: {'state': 'network'}
-    )
-    node._synchronized_operation_active = True
-    node._publisher = SimpleNamespace(
-        publish=lambda message: published.append(message)
-    )
+def test_local_stop_failure_is_reported_but_dds_stop_is_still_published():
+    node = _node()
+    node._active_execution_id = 'exec-a'
+    node._active_participants = ('pc-a', 'pc-b')
+    node._execution = GroupExecution()
+    node._execution.begin('pc-a', node._active_participants)
+    node._call_local_control = lambda _payload: {
+        'success': False, 'message': '로컬 응답 없음',
+    }
+    node._command_pub = _Publisher()
 
-    node._publish_snapshot()
-
-    assert '"synchronized_operation_active":true' in published[0].data
-
-
-def test_manual_release_is_rejected_during_synchronized_execution():
-    node = _coordinator_node()
-    node._synchronized_operation_active = True
-    sent = []
-    responses = []
-    node._broadcast_control = lambda payload: sent.append(dict(payload))
-    node._publish_response = lambda payload: responses.append(dict(payload))
-
-    node._run_control('request-a', {'command': 'release_control'})
-
-    assert sent == []
-    assert responses[0]['success'] is False
-    assert '동기 실행 중' in responses[0]['message']
-
-
-def test_partial_start_is_cancelled_before_lease_is_released():
-    node = _coordinator_node()
-    node._config.peers = (SimpleNamespace(machine_id='pc-b', url='http://pc-b'),)
-    calls = []
-
-    def execute(_sender, payload):
-        calls.append(('local', payload['command']))
-        return {'success': True, 'state': 'accepted'}
-
-    def request(_peer_id, _peer_url, payload):
-        calls.append(('peer', payload['command']))
-        if payload['command'] == 'start_at':
-            return {'success': False, 'state': 'rejected'}
-        return {'success': True, 'state': 'accepted'}
-
-    node._execute_control = execute
-    node._request_peer_control = request
-
-    result = node._broadcast_control({
-        'network_operation_id': 'start-operation',
-        'command': 'start_at',
-        'lease_id': 'lease-a',
-        'start_at': 100.0,
-        'cycle_sec': 1.0,
-        'repeat_count': 1,
-    })
+    result = node._request_group_stop(after_cycle=False)
 
     assert result['success'] is False
-    assert calls == [
-        ('local', 'start_at'),
-        ('peer', 'start_at'),
-        ('local', 'cancel_before_start'),
-        ('peer', 'cancel_before_start'),
-        ('local', 'release_control'),
-        ('peer', 'release_control'),
-    ]
+    assert result['dds_stop_published'] is True
+    assert node._command_pub.messages[0].command == 'stop_now'
+
+
+def test_cancel_failure_escalates_to_local_and_dds_stop_now():
+    node = _node()
+    node._joined = True
+    node._boot_id = 'boot-a'
+    node._execution = GroupExecution()
+    execution_id = node._execution.begin('pc-a', ('pc-a', 'pc-b'))
+    node._active_execution_id = execution_id
+    node._active_command_coordinator = 'pc-a'
+    node._active_participants = ('pc-a', 'pc-b')
+    calls = []
+
+    def local(payload):
+        calls.append(payload['command'])
+        return {
+            'success': payload['command'] == 'stop_now',
+            'message': payload['command'],
+        }
+
+    node._call_local_control = local
+    node._command_pub = _Publisher()
+    node._alarm_pub = _Publisher()
+
+    node._cancel_before_start('prepare failed', code='GROUP_START_REJECTED')
+
+    assert calls == ['group_cancel', 'stop_now']
+    assert node._command_pub.messages[-1].command == 'stop_now'
+    assert node._coordination_error['code'] == 'GROUP_LOCAL_CANCEL_FAILED'
+
+
+def test_stop_after_cycle_applies_local_request_before_dds_publish():
+    node = _node()
+    node._active_execution_id = 'exec-a'
+    node._active_participants = ('pc-a', 'pc-b')
+    node._execution = GroupExecution()
+    node._execution.begin('pc-a', node._active_participants)
+    events = []
+    node._call_local_control = lambda payload: (
+        events.append(('local', payload['command'])) or {'success': True}
+    )
+    node._command_pub = _Publisher(events)
+
+    result = node._request_group_stop(after_cycle=True)
+
+    assert result['success'] is True
+    assert events == [('local', 'stop_after_cycle'), ('dds', 'stop_after_cycle')]
+    assert node._execution.stop_after_cycle is True
+
+
+def test_fixed_roster_participant_can_issue_group_stop():
+    node = _node()
+    node._active_execution_id = 'exec-a'
+    node._active_command_coordinator = 'pc-a'
+    node._active_participants = ('pc-a', 'pc-b')
+    command = GroupCommand(
+        group_id='stage-a', execution_id='exec-a', coordinator_id='pc-b',
+        command='stop_now', participant_ids=['pc-a', 'pc-b'],
+    )
+    node._require_stop_command(command, ('pc-a', 'pc-b'))
+    command.coordinator_id = 'pc-c'
+    with pytest.raises(ValueError, match='정지 요청'):
+        node._require_stop_command(command, ('pc-a', 'pc-b'))
+
+
+def test_alarm_on_execution_member_blocks_next_cycle():
+    node = _node()
+    node._active_participants = ('pc-a', 'pc-b')
+    node._registry = MemberRegistry(warning_timeout_sec=1.5, timeout_sec=3.0)
+    node._registry.update(Member(
+        'pc-b', 'boot-b', True, 'ready', 'idle', 0.0, 2,
+        time.monotonic(),
+    ))
+    assert node._execution_unhealthy_members() == ['pc-b']
+
+
+def test_peer_timeout_stops_local_then_broadcasts_before_clearing_roster():
+    node = _node()
+    node._active_execution_id = 'exec-a'
+    node._active_participants = ('pc-a', 'pc-b')
+    node._registry = MemberRegistry(warning_timeout_sec=0.1, timeout_sec=0.2)
+    node._registry.update(Member(
+        'pc-b', 'boot-b', True, 'running', 'ready', 1.0, 0,
+        time.monotonic() - 1.0,
+    ))
+    node._execution = GroupExecution()
+    node._execution.begin('pc-a', node._active_participants)
+    events = []
+    node._call_local_control = lambda payload: (
+        events.append(('local', payload['command'])) or {'success': True}
+    )
+    node._command_pub = _Publisher(events)
+    node.get_logger = lambda: SimpleNamespace(error=lambda _message: None)
+
+    node._enforce_execution_membership()
+
+    assert events == [('local', 'stop_now'), ('dds', 'stop_now')]
+    assert node._command_pub.messages[0].participant_ids == ['pc-a', 'pc-b']
+    assert node._active_execution_id == ''
+    assert node._execution.state == 'error'
+
+
+def test_peer_restart_stops_local_then_broadcasts_and_clears_execution():
+    node = _node()
+    node._active_execution_id = 'exec-a'
+    node._active_participants = ('pc-a', 'pc-b')
+    node._execution = GroupExecution()
+    node._execution.begin('pc-a', node._active_participants)
+    events = []
+    node._call_local_control = lambda payload: (
+        events.append(('local', payload['command'])) or {'success': True}
+    )
+    node._command_pub = _Publisher(events)
+    node.get_logger = lambda: SimpleNamespace(error=lambda _message: None)
+
+    node._stop_for_peer_failure('pc-b 프로그램 재시작')
+
+    assert events == [('local', 'stop_now'), ('dds', 'stop_now')]
+    assert node._active_execution_id == ''
+    assert node._execution.state == 'error'
+
+
+def test_missing_prepare_ack_cancels_every_participant_before_start():
+    node = _node()
+    node._active_execution_id = 'exec-a'
+    node._active_participants = ('pc-a', 'pc-b')
+    node._execution = GroupExecution()
+    node._execution.begin('pc-a', node._active_participants)
+    node._pending_command = 'prepare'
+    node._pending_command_id = 'prepare-command'
+    node._pending_acks = {'pc-a'}
+    node._pending_ack_deadline = time.monotonic() - 0.1
+    sent = []
+    node._call_local_control = lambda payload: (
+        sent.append(('local', payload['command'])) or {'success': True}
+    )
+    node._command_pub = _Publisher(sent)
+    node.get_logger = lambda: SimpleNamespace(error=lambda _message: None)
+
+    node._enforce_schedule_ack_deadline()
+
+    assert sent == [('local', 'group_cancel'), ('dds', 'cancel_before_start')]
+    assert node._execution.state == 'error'
+    assert node._pending_command_id == ''
+    assert node._active_execution_id == ''
+
+
+def test_late_start_ack_timeout_uses_stop_now_instead_of_cancel():
+    node = _node()
+    node._active_execution_id = 'exec-a'
+    node._active_participants = ('pc-a', 'pc-b')
+    node._execution = GroupExecution()
+    node._execution.begin('pc-a', node._active_participants)
+    node._pending_command = 'start_at'
+    node._pending_command_id = 'start-command'
+    node._pending_acks = {'pc-a'}
+    node._pending_ack_deadline = time.monotonic() - 0.2
+    node._pending_scheduled_at = time.monotonic() - 0.1
+    events = []
+    node._call_local_control = lambda payload: (
+        events.append(('local', payload['command'])) or {'success': True}
+    )
+    node._command_pub = _Publisher(events)
+    node.get_logger = lambda: SimpleNamespace(error=lambda _message: None)
+
+    node._enforce_schedule_ack_deadline()
+
+    assert events == [('local', 'stop_now'), ('dds', 'stop_now')]
+    assert node._active_execution_id == ''
+
+
+def test_warning_joined_member_is_visible_and_blocks_partial_group_start():
+    node = _node()
+    node._joined = True
+    node._execution = GroupExecution()
+    node._registry = MemberRegistry(warning_timeout_sec=0.1, timeout_sec=3.0)
+    node._registry.update(Member(
+        'pc-b', 'boot-b', True, 'ready', 'idle', 0.0, 0,
+        time.monotonic() - 0.2, 1, 'PC B',
+    ))
+
+    snapshot = node.snapshot()
+
+    assert snapshot['peers'][0]['state'] == 'warning'
+    with pytest.raises(ValueError, match=r'pc-b\(warning\)'):
+        node._start_group_execution()
+
+
+def test_leave_publishes_explicit_not_joined_heartbeat():
+    node = _node()
+    node._joined = True
+    node._execution = GroupExecution()
+    node._heartbeat_pub = _Publisher()
+    node._boot_id = 'boot-a'
+
+    result = node._handle_local_request({'command': 'leave'})
+
+    assert result['success'] is True
+    assert node._joined is False
+    assert node._heartbeat_pub.messages[-1].joined is False
+
+
+def test_rejected_prepare_cancels_local_session_and_releases_lease():
+    node = _node()
+    node._execution = GroupExecution()
+    execution_id = node._execution.begin('pc-a', ('pc-a', 'pc-b'))
+    node._active_execution_id = execution_id
+    node._active_command_coordinator = 'pc-a'
+    node._active_participants = ('pc-a', 'pc-b')
+    events = []
+    node._call_local_control = lambda payload: (
+        events.append(('local', payload['command'])) or {'success': True}
+    )
+    node._command_pub = _Publisher(events)
+    rejected = GroupEvent(
+        group_id='stage-a', execution_id=execution_id, pc_id='pc-b',
+        event='rejected', success=False, message='not ready',
+    )
+
+    node._event_callback(rejected)
+
+    assert events == [('local', 'group_cancel'), ('dds', 'cancel_before_start')]
+    assert node._active_execution_id == ''
+    assert node._pending_command_id == ''
+    assert node._last_failure['code'] == 'GROUP_START_REJECTED'
+
+
+def test_winning_simultaneous_claim_cancels_and_resets_losing_coordinator():
+    node = _node()
+    node._active_execution_id = 'exec-b'
+    node._active_command_coordinator = 'pc-b'
+    node._active_participants = ('pc-a', 'pc-b')
+    node._execution = GroupExecution()
+    node._execution.begin('pc-b', node._active_participants)
+    node._registry.update(Member(
+        'pc-b', 'boot-b', True, 'ready', 'idle', 0.0, 0,
+        time.monotonic(), 1,
+    ))
+    node._pending_command = 'prepare'
+    node._pending_command_id = 'old-command'
+    node._pending_acks = {'pc-b'}
+    node._pending_ack_deadline = time.monotonic() + 5.0
+    calls = []
+    node._call_local_control = lambda payload: calls.append(dict(payload)) or {
+        'success': True,
+    }
+    incoming = GroupCommand(
+        group_id='stage-a', execution_id='exec-a', coordinator_id='pc-a',
+        command='prepare', participant_ids=['pc-a', 'pc-b'],
+    )
+
+    node._accept_execution_claim(incoming, ('pc-a', 'pc-b'))
+
+    assert calls[0]['command'] == 'group_cancel'
+    assert calls[0]['execution_id'] == 'exec-b'
+    assert node._execution.state == 'idle'
+    assert node._execution.execution_id == ''
+    assert node._pending_command == ''
+    assert node._pending_command_id == ''
+    assert node._pending_acks == set()
+    assert node._pending_ack_deadline == 0.0
+    assert node._active_execution_id == 'exec-a'
+    assert node._active_command_coordinator == 'pc-a'
+
+
+def test_execution_claim_rejects_different_local_joined_roster():
+    node = _node()
+    node._registry.update(Member(
+        'pc-b', 'boot-b', True, 'ready', 'idle', 0.0, 0,
+        time.monotonic(), 1,
+    ))
+    node._registry.update(Member(
+        'pc-c', 'boot-c', True, 'ready', 'idle', 0.0, 0,
+        time.monotonic(), 1,
+    ))
+    command = GroupCommand(
+        group_id='stage-a', execution_id='exec-a', coordinator_id='pc-a',
+        command='prepare', participant_ids=['pc-a', 'pc-b'],
+    )
+
+    with pytest.raises(ValueError, match='참가 목록'):
+        node._accept_execution_claim(command, ('pc-a', 'pc-b'))
+
+
+def test_duplicate_pc_id_blocks_join_and_group_execution():
+    node = _node()
+    node._boot_id = 'boot-a'
+    node._joined = False
+    node._alarm_pub = _Publisher()
+    node._command_pub = _Publisher()
+    node.get_logger = lambda: SimpleNamespace(error=lambda _message: None)
+    heartbeat = GroupHeartbeat(
+        group_id='stage-a', pc_id='pc-a', boot_id='boot-other', joined=True,
+    )
+
+    node._heartbeat_callback(heartbeat)
+
+    assert node._coordination_error['code'] == 'DUPLICATE_PC_ID'
+    assert node._handle_local_request({'command': 'join'})['success'] is False
+    assert node._handle_local_request({
+        'command': 'acknowledge_group_error',
+    })['success'] is False
+
+
+def test_execution_claim_coordinator_must_be_in_fixed_roster():
+    node = _node()
+    node._execution = GroupExecution()
+    command = GroupCommand(
+        group_id='stage-a', execution_id='exec-x', coordinator_id='pc-x',
+        command='prepare', participant_ids=['pc-a', 'pc-b'],
+    )
+    with pytest.raises(ValueError, match='참가 목록'):
+        node._accept_execution_claim(command, ('pc-a', 'pc-b'))
+
+
+def test_alarm_grades_map_to_cycle_stop_and_immediate_stop():
+    node = _node()
+    node._active_execution_id = 'exec-a'
+    node._active_command_coordinator = 'pc-a'
+    node._active_participants = ('pc-a', 'pc-b')
+    node._execution = GroupExecution()
+    node._execution.begin('pc-a', node._active_participants)
+    calls = []
+    broadcasts = []
+    node._call_local_control = lambda payload: calls.append(dict(payload)) or {'success': True}
+    node._broadcast_stop = broadcasts.append
+
+    grade1 = GroupAlarm(group_id='stage-a', execution_id='exec-a', pc_id='pc-b')
+    grade1.active = True
+    grade1.grade = 1
+    grade1.sequence = 1
+    node._alarm_callback(grade1)
+    assert calls[-1]['command'] == 'stop_after_cycle'
+    assert broadcasts[-1] == 'stop_after_cycle'
+
+    grade2 = GroupAlarm(group_id='stage-a', execution_id='exec-a', pc_id='pc-b')
+    grade2.active = True
+    grade2.grade = 2
+    grade2.sequence = 2
+    node._alarm_callback(grade2)
+    assert calls[-1]['command'] == 'stop_now'
+    assert node._active_execution_id == ''
+
+
+def test_alarm_callback_ignores_duplicate_older_and_previous_boot_messages():
+    node = _node()
+    node._registry.update(Member(
+        'pc-b', 'boot-b', True, 'ready', 'idle', 0.0, 0,
+        time.monotonic(), 1,
+    ))
+    active = GroupAlarm(
+        group_id='stage-a', pc_id='pc-b', boot_id='boot-b',
+        active=True, grade=2, sequence=5, error_source='servo_alarm',
+    )
+    node._alarm_callback(active)
+    assert node._peer_alarms['pc-b']['grade'] == 2
+
+    older_clear = GroupAlarm(
+        group_id='stage-a', pc_id='pc-b', boot_id='boot-b',
+        active=False, grade=0, sequence=4, error_source='servo_alarm',
+    )
+    node._alarm_callback(older_clear)
+    assert 'pc-b' in node._peer_alarms
+
+    previous_boot_clear = GroupAlarm(
+        group_id='stage-a', pc_id='pc-b', boot_id='boot-old',
+        active=False, grade=0, sequence=99, error_source='servo_alarm',
+    )
+    node._alarm_callback(previous_boot_clear)
+    assert 'pc-b' in node._peer_alarms
+
+
+def test_grade_three_alarm_uses_immediate_stop_and_blocks_new_execution():
+    node = _node()
+    node._active_execution_id = 'exec-a'
+    node._active_command_coordinator = 'pc-a'
+    node._active_participants = ('pc-a', 'pc-b')
+    node._execution = GroupExecution()
+    node._execution.begin('pc-a', node._active_participants)
+    calls = []
+    node._call_local_control = lambda payload: calls.append(dict(payload)) or {
+        'success': True,
+    }
+    grade3 = GroupAlarm(
+        group_id='stage-a', execution_id='exec-a', pc_id='pc-b',
+        active=True, grade=3, sequence=3,
+    )
+
+    node._alarm_callback(grade3)
+
+    assert calls[-1]['command'] == 'stop_now'
+    assert node._active_execution_id == ''
+    assert node._peer_alarms['pc-b']['grade'] == 3
+
+
+def test_local_alarm_blocks_new_group_execution_before_prepare():
+    node = _node()
+    node._joined = True
+    node._local_status = {'safety_status': {'servo_alarm_grade': 3}}
+    node._execution = GroupExecution()
+
+    with pytest.raises(ValueError, match='Servo 알람'):
+        node._start_group_execution()
+
+
+def test_local_grade_three_alarm_stops_before_broadcast_and_clears_execution():
+    node = _node()
+    node._boot_id = 'boot-a'
+    node._joined = True
+    node._last_alarm_key = ()
+    node._active_execution_id = 'exec-a'
+    node._active_command_coordinator = 'pc-a'
+    node._active_participants = ('pc-a', 'pc-b')
+    node._execution = GroupExecution()
+    node._execution.begin('pc-a', node._active_participants)
+    node._local_status = {
+        'safety_status': {
+            'servo_alarm_grade': 3,
+            'servo_alarm_active': [{'axis': 2, 'code': 17, 'grade': 3}],
+            'message': 'critical',
+        },
+    }
+    events = []
+    node._call_local_control = lambda payload: (
+        events.append(('local', payload['command'])) or {'success': True}
+    )
+    node._command_pub = _Publisher(events)
+    node._alarm_pub = _Publisher()
+
+    node._publish_local_alarm_if_changed()
+
+    assert events == [('local', 'stop_now'), ('dds', 'stop_now')]
+    assert node._alarm_pub.messages[0].grade == 3
+    assert node._execution.state == 'error'
+    assert node._active_execution_id == ''
+
+
+def test_alarm_from_previous_execution_cannot_stop_current_or_standalone_motion():
+    node = _node()
+    calls = []
+    node._call_local_control = lambda payload: calls.append(dict(payload)) or {'success': True}
+    alarm = GroupAlarm(
+        group_id='stage-a', execution_id='old-exec', pc_id='pc-b',
+        active=True, grade=2, sequence=1,
+    )
+    node._alarm_callback(alarm)
+    node._active_execution_id = 'current-exec'
+    node._alarm_callback(alarm)
+    assert calls == []
+
+
+def test_snapshot_reports_software_trigger_spreads():
+    node = _node()
+    node._registry = MemberRegistry()
+    node._execution = GroupExecution()
+    node._execution.begin('pc-a', ['pc-a', 'pc-b'])
+    for pc in node._execution.participants:
+        node._execution.mark_ready(pc)
+    node._execution.initialize_action(now=1.0)
+    node._execution.mark_armed('pc-a', 1.300)
+    node._execution.mark_armed('pc-b', 1.312)
+    node._execution.start_action(now=2.0)
+    node._execution.mark_triggered('pc-a', 1, 2.300)
+    node._execution.mark_triggered('pc-b', 1, 2.319)
+    node._local_status = {}
+    node._active_execution_id = node._execution.execution_id
+    node._active_command_coordinator = 'pc-a'
+    node._active_participants = node._execution.participants
+    node._joined = True
+    node._trigger_sync_status = {
+        'trigger_sync_state': 'ready',
+        'trigger_sync_uncertainty_ms': 1.0,
+        'trigger_sync_source': 'dds_relative_monotonic',
+    }
+
+    snapshot = node.snapshot()
+
+    assert snapshot['execution']['initialize_spread_ms'] == pytest.approx(12.0)
+    assert snapshot['execution']['initialize_within_20ms'] is True
+    assert snapshot['execution']['start_spread_ms'] == pytest.approx(19.0)
+    assert snapshot['execution']['start_within_20ms'] is True
+
+
+def test_sync_result_maps_coordinator_deadline_to_local_monotonic():
+    node = _node()
+    node._joined = True
+    node._active_execution_id = 'exec-a'
+    node._active_command_coordinator = 'pc-a'
+    node._active_participants = ('pc-a', 'pc-b')
+    node._time_sync_pub = _Publisher()
+    result = GroupTimeSync(
+        group_id='stage-a', execution_id='exec-a', coordinator_id='pc-a',
+        target_pc_id='pc-a', kind='result', offset_ns=25_000_000,
+        uncertainty_ns=2_000_000,
+    )
+
+    node._time_sync_callback(result)
+
+    assert node._local_sync_offset_ns == 25_000_000
+    assert node._trigger_sync_status['trigger_sync_state'] == 'ready'
+    assert node._time_sync_pub.messages[-1].kind == 'result_ack'
+    command = GroupCommand()
+    command.scheduled_monotonic_ns = time.monotonic_ns() + 300_000_000
+    local_target = node._local_schedule_ns(command)
+    assert local_target - command.scheduled_monotonic_ns == 25_000_000
+
+
+def test_missing_sync_responses_cancel_group_before_initialization():
+    node = _node()
+    node._joined = True
+    node._execution = GroupExecution()
+    execution_id = node._execution.begin('pc-a', ('pc-a', 'pc-b'))
+    node._active_execution_id = execution_id
+    node._active_command_coordinator = 'pc-a'
+    node._active_participants = ('pc-a', 'pc-b')
+    node._sync_next_action = 'initialize'
+    node._sync_deadline = time.monotonic() - 0.01
+    node._sync_ready = {'pc-a'}
+    events = []
+    node._call_local_control = lambda payload: (
+        events.append(('local', payload['command'])) or {'success': True}
+    )
+    node._command_pub = _Publisher(events)
+    node.get_logger = lambda: SimpleNamespace(error=lambda _message: None)
+
+    node._drive_trigger_sync()
+
+    assert events == [('local', 'group_cancel'), ('dds', 'cancel_before_start')]
+    assert node._active_execution_id == ''
+    assert node._execution.state == 'error'
+    assert node._trigger_sync_status['trigger_sync_state'] == 'failed'
+
+
+def test_first_trigger_spread_excess_stops_now_and_queues_one_retry():
+    node = _node()
+    node._execution = GroupExecution()
+    execution_id = node._execution.begin('pc-a', ('pc-a', 'pc-b'))
+    node._active_execution_id = execution_id
+    node._active_command_coordinator = 'pc-a'
+    node._active_participants = ('pc-a', 'pc-b')
+    node._command_pub = _Publisher()
+    node._call_local_control = lambda payload: {'success': True, 'message': payload['command']}
+
+    node._handle_trigger_spread_exceeded({
+        'execution_id': execution_id,
+        'participants': ('pc-a', 'pc-b'),
+        'cycle_number': 1,
+        'spread_ms': 24.0,
+        'triggered': {'pc-a': 1.0, 'pc-b': 1.024},
+        'retry_attempt': 0,
+        'root_execution_id': execution_id,
+    })
+
+    assert node._command_pub.messages[-1].command == 'stop_now'
+    assert node._retry_pending['retry_attempt'] == 1
+    assert node._stop_confirmation_deadline > time.monotonic()
+    assert node._coordination_error == {}
+
+
+def test_first_initialize_spread_excess_stops_and_queues_one_retry():
+    node = _node()
+    node._execution = GroupExecution()
+    execution_id = node._execution.begin('pc-a', ('pc-a', 'pc-b'))
+    node._active_execution_id = execution_id
+    node._active_command_coordinator = 'pc-a'
+    node._active_participants = ('pc-a', 'pc-b')
+    node._command_pub = _Publisher()
+    node._call_local_control = lambda payload: {
+        'success': True, 'message': payload['command'],
+    }
+
+    node._handle_trigger_spread_exceeded({
+        'stage': 'initialize',
+        'execution_id': execution_id,
+        'participants': ('pc-a', 'pc-b'),
+        'cycle_number': 0,
+        'spread_ms': 24.0,
+        'triggered': {'pc-a': 1.0, 'pc-b': 1.024},
+        'retry_attempt': 0,
+        'root_execution_id': execution_id,
+    })
+
+    assert node._command_pub.messages[-1].command == 'stop_now'
+    assert node._retry_pending['stage'] == 'initialize'
+    assert node._last_failure['code'] == (
+        'GROUP_INITIALIZE_TRIGGER_SPREAD_EXCEEDED'
+    )
+
+
+def test_missing_motion_started_report_stops_and_blocks_group():
+    node = _node()
+    node._joined = True
+    node._boot_id = 'boot-a'
+    node._execution = GroupExecution()
+    execution_id = node._execution.begin('pc-a', ('pc-a', 'pc-b'))
+    node._active_execution_id = execution_id
+    node._active_command_coordinator = 'pc-a'
+    node._active_participants = ('pc-a', 'pc-b')
+    node._motion_start_report_deadline = time.monotonic() - 0.1
+    node._motion_start_report_cycle = 1
+    events = []
+    node._call_local_control = lambda payload: (
+        events.append(('local', payload['command'])) or {'success': True}
+    )
+    node._command_pub = _Publisher(events)
+    node._alarm_pub = _Publisher()
+    node.get_logger = lambda: SimpleNamespace(error=lambda _message: None)
+
+    node._enforce_motion_start_report_deadline()
+
+    assert events == [('local', 'stop_now'), ('dds', 'stop_now')]
+    assert node._coordination_error['code'] == (
+        'GROUP_MOTION_START_REPORT_TIMEOUT'
+    )
+    assert node._coordination_error['details']['missing'] == ['pc-a', 'pc-b']
+
+
+def test_repeated_trigger_spread_excess_stops_and_blocks_group_execution():
+    node = _node()
+    node._joined = True
+    node._boot_id = 'boot-a'
+    node._execution = GroupExecution()
+    execution_id = node._execution.begin('pc-a', ('pc-a', 'pc-b'))
+    node._active_execution_id = execution_id
+    node._active_command_coordinator = 'pc-a'
+    node._active_participants = ('pc-a', 'pc-b')
+    node._command_pub = _Publisher()
+    node._alarm_pub = _Publisher()
+    node._call_local_control = lambda _payload: {'success': True}
+
+    node._handle_trigger_spread_exceeded({
+        'execution_id': execution_id,
+        'participants': ('pc-a', 'pc-b'),
+        'cycle_number': 1,
+        'spread_ms': 25.0,
+        'triggered': {'pc-a': 1.0, 'pc-b': 1.025},
+        'retry_attempt': 1,
+        'root_execution_id': 'root-exec',
+    })
+
+    assert node._retry_pending == {}
+    assert node._coordination_error['code'] == 'GROUP_TRIGGER_SPREAD_EXCEEDED'
+    assert node._alarm_pub.messages[-1].error_source == 'group_coordination'
+    with pytest.raises(ValueError, match='그룹 동기화 오류'):
+        node._start_group_execution()
+
+
+def test_group_error_acknowledgement_is_shared_and_unblocks_group_only():
+    node = _node()
+    node._joined = True
+    node._boot_id = 'boot-a'
+    node._coordination_error = {
+        'active': True, 'code': 'GROUP_TRIGGER_SPREAD_EXCEEDED',
+        'execution_id': 'exec-a', 'message': 'spread',
+    }
+    node._last_failure = {'active': True}
+    node._alarm_pub = _Publisher()
+
+    result = node._acknowledge_coordination_error()
+
+    assert result['success'] is True
+    assert node._coordination_error == {}
+    assert node._last_failure == {}
+    assert node._alarm_pub.messages[-1].active is False
+    assert node._alarm_pub.messages[-1].error_source == 'group_coordination'
+
+
+def test_shared_group_error_clear_removes_coordination_alarm_from_every_peer():
+    node = _node()
+    node._peer_alarms = {
+        'pc-b': {'error_source': 'group_coordination'},
+        'pc-c': {'error_source': 'servo_alarm'},
+    }
+    node._coordination_error = {'active': True}
+    clear = GroupAlarm(
+        group_id='stage-a', pc_id='pc-b', active=False,
+        error_source='group_coordination',
+    )
+
+    node._alarm_callback(clear)
+
+    assert node._coordination_error == {}
+    assert set(node._peer_alarms) == {'pc-c'}
+
+
+def test_stop_confirmation_timeout_cancels_retry_and_raises_group_error():
+    node = _node()
+    node._joined = True
+    node._boot_id = 'boot-a'
+    node._execution = GroupExecution()
+    execution_id = node._execution.begin('pc-a', ('pc-a', 'pc-b'))
+    node._active_execution_id = execution_id
+    node._active_command_coordinator = 'pc-a'
+    node._active_participants = ('pc-a', 'pc-b')
+    node._retry_pending = {'retry_attempt': 1}
+    node._stop_confirmation_deadline = time.monotonic() - 0.1
+    node._stopped_members = {'pc-a'}
+    node._alarm_pub = _Publisher()
+
+    node._enforce_stop_confirmation_deadline()
+
+    assert node._retry_pending == {}
+    assert node._active_execution_id == ''
+    assert node._coordination_error['code'] == 'GROUP_STOP_CONFIRMATION_TIMEOUT'
+    assert node._coordination_error['details']['missing'] == ['pc-b']
 
 
 def test_main_treats_external_shutdown_as_a_clean_stop(monkeypatch):
     calls = []
 
     class FakeNode:
+        def __init__(self, _config=None):
+            pass
+
         def destroy_node(self):
             calls.append('destroy')
 
-    monkeypatch.setattr(coordination_node.rclpy, 'init', lambda args=None: None)
+    monkeypatch.setattr(coordination_node.rclpy, 'init', lambda **_kwargs: None)
+    monkeypatch.setattr(coordination_node, 'MotionCoordinationNode', FakeNode)
     monkeypatch.setattr(
-        coordination_node, 'MotionCoordinationNode', FakeNode
-    )
-    monkeypatch.setattr(
-        coordination_node.rclpy,
-        'spin',
+        coordination_node.rclpy, 'spin',
         lambda _node: (_ for _ in ()).throw(ExternalShutdownException()),
     )
     monkeypatch.setattr(coordination_node.rclpy, 'ok', lambda: False)
-    monkeypatch.setattr(
-        coordination_node.rclpy,
-        'shutdown',
-        lambda: calls.append('shutdown'),
-    )
+    monkeypatch.setattr(coordination_node.rclpy, 'shutdown', lambda: calls.append('shutdown'))
 
     coordination_node.main()
 

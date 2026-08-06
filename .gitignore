@@ -21,9 +21,8 @@ backups/
 /motion_data/
 /runtime/
 
-# Per-PC network coordination settings and HMAC credentials
+# Per-PC global DDS coordination settings
 /config/motion_coordination.yaml
-/config/motion_coordination.credentials.yaml
 /config/.motion_coordination.yaml.lock
 /config/.motion_coordination.yaml.transaction.json
 

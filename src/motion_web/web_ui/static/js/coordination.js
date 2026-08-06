@@ -1,11 +1,8 @@
 import {
-  checkCoordinationReadiness,
   fetchCoordinationStatus,
-  joinCoordinationPairing,
   sendCoordinationControl,
   saveCoordinationSettings,
-  startCoordinationPairing,
-} from './api.js?v=20260805-pairing-safety-v2';
+} from './api.js?v=20260806-dds-trigger-sync';
 
 function text(value) {
   return String(value ?? '').replace(/[&<>"']/g, (character) => ({
@@ -13,13 +10,14 @@ function text(value) {
   }[character]));
 }
 
-const modeLabels = { off: '연동 끔', status: '상태 공유', participant: '연동 참여' };
-const roleLabels = { peer: '참여 PC', coordinator: '중앙 PC' };
 const stateLabels = {
-  ready: '준비 완료', rejected: '확인 필요', unavailable: '응답 없음',
-  online: '정상', offline: '연결 끊김', error: '오류', unknown: '확인 불가',
-  blocked: '차단', running: '실행 중', waiting: '대기', completed: '완료',
-  active: '활성', waiting_start: '시작 대기', initializing: '초기화 중',
+  idle: '대기', preparing: '준비 확인', initializing: '초기위치 이동',
+  armed: '시작 대기', start_scheduled: '예약됨', waiting: '예약 대기', running: '모션 실행 중',
+  waiting_cycle_ready: '회차 준비 중', cycle_ready: '다음 시작 준비',
+  stop_after_cycle: '현재 회차 후 정지 대기', stopped: '정지', error: '오류',
+  online: '정상', warning: '지연', offline: '통신 단절', ready: '정상',
+  unavailable: '확인 불가', out_of_tolerance: '동기화 불량', unknown: '확인 불가',
+  syncing: '측정 중', sync_waiting: '측정 대기', failed: '측정 실패',
 };
 
 function stateText(value) {
@@ -28,161 +26,124 @@ function stateText(value) {
 }
 
 function stateClass(value) {
-  if (['ready', 'online', 'active', 'completed'].includes(value)) return 'coordination-state-ok';
-  if (['error', 'blocked', 'rejected', 'conflict'].includes(value)) return 'coordination-state-bad';
+  if (['online', 'ready', 'armed', 'cycle_ready'].includes(value)) return 'coordination-state-ok';
+  if (['offline', 'error', 'unsynchronized', 'failed', 'out_of_tolerance'].includes(value)) return 'coordination-state-bad';
   return 'coordination-state-warn';
 }
+
+const activeStates = new Set([
+  'preparing', 'initializing', 'armed', 'start_scheduled', 'waiting', 'running',
+  'waiting_cycle_ready', 'cycle_ready', 'stop_after_cycle',
+]);
 
 export function createCoordinationController({ el }) {
   let snapshot = null;
   let loading = false;
-  let readiness = new Map();
   let timer = null;
   let formDirty = false;
-  let pairingIdentityDirty = false;
 
-  function renderSettings(config = {}, force = false) {
-    if (formDirty && !force) return;
-    if (el.coordinationModeSelect) el.coordinationModeSelect.value = config.mode || 'off';
-    if (el.coordinationRoleSelect) el.coordinationRoleSelect.value = config.role || 'peer';
-    if (el.coordinationCoordinatorInput) {
-      el.coordinationCoordinatorInput.value = config.coordinator_machine_id || '';
-      el.coordinationCoordinatorInput.disabled = config.role === 'coordinator' || config.mode === 'off';
-    }
-    if (el.coordinationRoleSelect) el.coordinationRoleSelect.disabled = config.mode === 'off';
+  function renderSettings(config = {}) {
+    if (formDirty) return;
+    if (el.coordinationPcId) el.coordinationPcId.value = config.pc_id || '';
+    if (el.coordinationDisplayName) el.coordinationDisplayName.value = config.display_name || '';
+    if (el.coordinationGroupId) el.coordinationGroupId.value = config.group_id || '';
+    if (el.coordinationDomainId) el.coordinationDomainId.value = Number(config.dds_domain_id ?? 21);
+    if (el.coordinationEnabled) el.coordinationEnabled.value = config.enabled ? 'true' : 'false';
   }
 
-  function peerRow(machineId, payload = {}, local = false) {
-    const coordination = payload.coordination || {};
-    let ready = readiness.get(machineId);
-    if (
-      ready
-      && payload.session?.readiness_session_id
-      && ready.readiness_session_id !== payload.session.readiness_session_id
-    ) {
-      readiness.delete(machineId);
-      ready = null;
-    }
-    const readinessCell = ready
-      ? `<strong class="${stateClass(ready.state)}">${text(ready.message || stateText(ready.state))}</strong>`
-      : '<span class="empty">미확인</span>';
-    const label = payload.display_name || machineId;
+  function peerRow(peer = {}, fixedParticipants = new Set()) {
+    const alarm = peer.alarm || {};
+    const alarmText = Number(peer.servo_alarm_grade || 0) > 0
+      ? `${Number(peer.servo_alarm_grade)} · ${alarm.message || alarm.error_code || '확인 필요'}`
+      : '0';
     return `<tr>
-      <td><strong>${text(label)}</strong><small>${local ? '이 PC' : text(machineId)}</small></td>
-      <td>${text(modeLabels[coordination.mode] || coordination.mode || '-')} · ${text(roleLabels[coordination.role] || coordination.role || '-')}</td>
-      <td class="${stateClass(payload.program?.state)}">${text(stateText(payload.program?.state))}</td>
-      <td class="${stateClass(payload.motors?.state)}">${text(stateText(payload.motors?.state))} ${Number(payload.motors?.online_count || 0)}/${Number(payload.motors?.total_count || 0)}축</td>
-      <td class="${stateClass(payload.safety?.state)}">${text(stateText(payload.safety?.state))}</td>
-      <td class="${stateClass(payload.motion?.state)}">${text(stateText(payload.motion?.state))}</td>
-      <td>${readinessCell}</td>
+      <td><strong>${text(peer.display_name || peer.pc_id || '-')}</strong><small>${peer.display_name ? text(peer.pc_id || '') : ''}</small></td>
+      <td class="${stateClass(peer.state)}">${text(stateText(peer.state))}</td>
+      <td>${fixedParticipants.has(peer.pc_id) ? '고정 참가' : '대기'}</td>
+      <td>${text(stateText(peer.motion_state))}</td>
+      <td class="${stateClass(peer.trigger_sync_state)}">${text(stateText(peer.trigger_sync_state))}</td>
+      <td>${Number(peer.trigger_sync_uncertainty_ms || 0).toFixed(3)} ms</td>
+      <td class="${Number(peer.servo_alarm_grade || 0) > 0 ? 'coordination-state-bad' : 'coordination-state-ok'}">${text(alarmText)}</td>
     </tr>`;
   }
 
   function render() {
     const config = snapshot?.config || {};
     const runtime = snapshot?.runtime || {};
+    const runtimeConfig = runtime.config || config;
+    const execution = runtime.execution || { state: 'idle', participants: [] };
     const peers = Array.isArray(runtime.peers) ? runtime.peers : [];
-    const coordinator = runtime.coordinator || {};
-    const executionControl = runtime.execution_control || { state: 'local' };
-    const synchronizedActive = runtime.synchronized_operation_active === true;
-    const pairing = snapshot?.pairing || { state: 'idle' };
-    const identityLocked = config.identity_locked === true;
+    const fixedParticipants = new Set(Array.isArray(execution.participants) ? execution.participants : []);
+    const coordinationError = runtime.coordination_error || {};
+    const lastFailure = runtime.last_failure || {};
+    const alarms = new Map(
+      (Array.isArray(runtime.alarms) ? runtime.alarms : [])
+        .map((alarm) => [alarm.pc_id, alarm]),
+    );
+    peers.forEach((peer) => { peer.alarm = alarms.get(peer.pc_id) || null; });
+    const joined = runtime.joined === true;
+    const active = activeStates.has(execution.state);
+    const configured = config.enabled === true && Boolean(config.group_id);
     renderSettings(config);
-    if (!pairingIdentityDirty) {
-      if (el.coordinationPairingMachineId) {
-        el.coordinationPairingMachineId.value = config.machine_id || '';
-      }
-      if (el.coordinationPairingDisplayName) {
-        el.coordinationPairingDisplayName.value = config.display_name || config.machine_id || '';
-      }
-    }
-    if (el.coordinationPairingMachineId) {
-      el.coordinationPairingMachineId.readOnly = identityLocked;
-      el.coordinationPairingMachineId.title = identityLocked
-        ? '기존 연동이 있어 PC ID가 고정되었습니다.' : '';
-    }
-    if (el.coordinationPairingMachineIdHint) {
-      el.coordinationPairingMachineIdHint.textContent = identityLocked
-        ? '기존 연동이 있어 PC ID가 고정되었습니다.'
-        : '최초 연동 후에는 변경할 수 없습니다.';
-    }
-    if (el.coordinationPairingLocalAddress) {
-      const host = window.location.hostname || '';
-      el.coordinationPairingLocalAddress.textContent = ['localhost', '127.0.0.1'].includes(host)
-        ? '다른 PC에는 이 PC의 내부망 IPv4를 입력하세요.'
-        : `참여 PC에 입력할 주소 · ${host}`;
-    }
+
     if (el.coordinationNodeState) {
-      el.coordinationNodeState.textContent = snapshot?.node_connected ? '연동 노드 연결됨' : '연동 노드 응답 없음';
+      el.coordinationNodeState.textContent = snapshot?.node_connected ? 'DDS 연동 노드 연결됨' : 'DDS 연동 노드 응답 없음';
       el.coordinationNodeState.className = snapshot?.node_connected ? 'coordination-state-ok' : 'coordination-state-warn';
     }
     if (el.coordinationConfigMessage) {
       el.coordinationConfigMessage.textContent = snapshot?.config_error
-        || (config.access_enabled || config.mode === 'off'
-          ? '전역 설정과 등록 peer를 기준으로 동작합니다.'
-          : '활성 모드 사용 전 내부망 IP·허용 네트워크·peer·HMAC 키 설정이 필요합니다.');
+        || 'PC 전역 설정 · 같은 그룹 ID와 DDS Domain ID를 입력한 PC끼리 통신합니다.';
     }
     if (el.coordinationUpdatedAt) {
-      el.coordinationUpdatedAt.textContent = snapshot?.status_age_sec === null
-        ? '수신 없음' : `${Number(snapshot?.status_age_sec || 0).toFixed(1)}초 전`;
+      el.coordinationUpdatedAt.textContent = snapshot?.status_age_sec == null
+        ? '수신 없음' : `${Number(snapshot.status_age_sec).toFixed(1)}초 전`;
     }
-    if (el.coordinationMachineId) el.coordinationMachineId.textContent = config.machine_id || '-';
-    if (el.coordinationModeRole) {
-      el.coordinationModeRole.textContent = `${modeLabels[config.mode] || '-'} · ${roleLabels[config.role] || '-'}`;
+    if (el.coordinationMachineId) el.coordinationMachineId.textContent = config.pc_id || '-';
+    if (el.coordinationGroupDomain) {
+      el.coordinationGroupDomain.textContent = `${config.group_id || '-'} · ${config.dds_domain_id ?? '-'}`;
     }
-    if (el.coordinationCoordinatorState) {
-      el.coordinationCoordinatorState.textContent = coordinator.state === 'conflict'
-        ? `중복 중앙: ${(coordinator.claims || []).join(', ')}`
-        : `${stateText(coordinator.state)}${coordinator.machine_id ? ` · ${coordinator.machine_id}` : ''}`;
-      el.coordinationCoordinatorState.className = stateClass(coordinator.state);
+    if (el.coordinationJoinState) {
+      el.coordinationJoinState.textContent = joined ? '참가 중' : '나감';
+      el.coordinationJoinState.className = joined ? 'coordination-state-ok' : 'coordination-state-warn';
     }
-    if (el.coordinationPeerCount) el.coordinationPeerCount.textContent = `${peers.length}대`;
-    if (el.coordinationPairingMessage && pairing.state !== 'idle') {
-      const pairingMessage = {
-        waiting: '연동 코드 입력 대기 중 · 5분 안에 참여 PC에서 연결하세요.',
-        paired: `연동 설정 완료${pairing.paired_peer ? ` · ${pairing.paired_peer}` : ''}`,
-        expired: '연동 코드가 만료되었습니다. 새 코드를 생성하세요.',
-        blocked: '연동 코드 확인 횟수를 초과했습니다. 새 코드를 생성하세요.',
-      };
-      el.coordinationPairingMessage.textContent = pairingMessage[pairing.state] || 'PC 연동 상태 확인 필요';
+    if (el.coordinationPeerCount) el.coordinationPeerCount.textContent = `${peers.length + (joined ? 1 : 0)}대`;
+    if (el.coordinationExecutionState) {
+      const coordinator = execution.coordinator_id ? ` · 진행 ${execution.coordinator_id}` : '';
+      const cycle = Number(execution.cycle_number || 0) > 0 ? ` · ${execution.cycle_number}회차` : '';
+      const spread = execution.start_spread_ms == null ? '' : ` · 시작 편차 ${Number(execution.start_spread_ms).toFixed(3)}ms`;
+      const retry = Number(execution.retry_attempt || 0) > 0 ? ` · 자동 재시도 ${execution.retry_attempt}/1` : '';
+      el.coordinationExecutionState.textContent = `그룹 실행 · ${stateText(execution.state)}${coordinator}${cycle}${spread}${retry}`;
+      el.coordinationExecutionState.className = execution.start_within_20ms === false
+        ? 'coordination-state-bad' : stateClass(execution.state);
     }
-    if (el.coordinationPairingStartButton) el.coordinationPairingStartButton.disabled = loading;
-    if (el.coordinationPairingJoinButton) el.coordinationPairingJoinButton.disabled = loading;
-    const canCheck = snapshot?.node_connected
-      && runtime.mode === 'participant'
-      && runtime.role === 'coordinator'
-      && coordinator.authority_allowed === true;
-    const networkOwned = executionControl.state === 'network';
-    if (el.coordinationExecutionOwner) {
-      el.coordinationExecutionOwner.textContent = networkOwned
-        ? `모션 실행 제어권 · 네트워크 (${executionControl.owner || '-'})`
-        : '모션 실행 제어권 · 로컬';
-    }
-    if (el.coordinationAcquireButton) el.coordinationAcquireButton.disabled = loading || !canCheck || networkOwned;
-    if (el.coordinationReleaseButton) {
-      el.coordinationReleaseButton.disabled = loading || !canCheck || !networkOwned || synchronizedActive;
-      el.coordinationReleaseButton.title = synchronizedActive ? '동기 실행을 정지한 후 제어권을 반환하세요' : '';
-    }
-    if (el.coordinationReadinessButton) {
-      el.coordinationReadinessButton.disabled = loading || !canCheck;
-      el.coordinationReadinessButton.title = canCheck ? '' : '연동 참여 중앙 PC가 활성 상태여야 합니다';
-    }
-    [el.coordinationRunOnceButton, el.coordinationInitializeButton].forEach((button) => {
-      if (button) button.disabled = loading || !canCheck || !networkOwned || synchronizedActive;
-    });
-    [el.coordinationMotionStopButton, el.coordinationInitializeStopButton].forEach((button) => {
-      if (button) button.disabled = loading || !canCheck;
-    });
-    if (el.coordinationSynchronizedRunButton) {
-      el.coordinationSynchronizedRunButton.disabled = loading || !canCheck || networkOwned || synchronizedActive;
+    const nodeReady = snapshot?.node_connected === true && configured;
+    const unhealthyPeer = peers.some((peer) => peer.state !== 'online' || Number(peer.servo_alarm_grade || 0) > 0);
+    const groupErrorActive = coordinationError.active === true;
+    if (el.coordinationJoinButton) el.coordinationJoinButton.disabled = loading || !nodeReady || joined || active;
+    if (el.coordinationLeaveButton) el.coordinationLeaveButton.disabled = loading || !joined || active;
+    if (el.coordinationStartButton) el.coordinationStartButton.disabled = loading || !joined || active || peers.length < 1 || unhealthyPeer || groupErrorActive;
+    if (el.coordinationStopAfterButton) el.coordinationStopAfterButton.disabled = loading || !active;
+    if (el.coordinationStopNowButton) el.coordinationStopNowButton.disabled = loading || !active;
+    if (el.coordinationAcknowledgeErrorButton) el.coordinationAcknowledgeErrorButton.disabled = loading || !groupErrorActive;
+    if (el.coordinationErrorSummary) {
+      const failure = coordinationError.message || lastFailure.message || '';
+      const code = coordinationError.code || lastFailure.code || '';
+      const failedPc = lastFailure.pc_id ? ` · PC ${lastFailure.pc_id}` : '';
+      const stage = lastFailure.stage ? ` · 단계 ${lastFailure.stage}` : '';
+      el.coordinationErrorSummary.textContent = failure ? `${code || 'GROUP_ERROR'}${failedPc}${stage} · ${failure}` : '';
+      el.coordinationErrorSummary.classList.toggle('hidden', !failure);
+      el.coordinationErrorSummary.classList.toggle('coordination-state-bad', Boolean(failure));
     }
     if (el.coordinationPeerRows) {
       const rows = [];
-      if (runtime.local && runtime.machine_id) rows.push(peerRow(runtime.machine_id, runtime.local, true));
-      peers.forEach((record) => rows.push(peerRow(record.machine_id, record.payload || {}, false)));
+      if (joined) rows.push(peerRow({
+        ...(runtime.local || {}),
+        display_name: `${runtime.local?.display_name || runtimeConfig.display_name || config.pc_id} (이 PC)`,
+        state: 'online', motion_state: execution.state,
+      }, fixedParticipants));
+      peers.forEach((peer) => rows.push(peerRow(peer, fixedParticipants)));
       el.coordinationPeerRows.innerHTML = rows.length
-        ? rows.join('')
-        : '<tr><td colspan="7" class="empty">연결된 PC가 없습니다</td></tr>';
+        ? rows.join('') : '<tr><td colspan="7" class="empty">그룹에 참가하면 PC 상태가 표시됩니다</td></tr>';
     }
   }
 
@@ -199,110 +160,19 @@ export function createCoordinationController({ el }) {
     if (loading) return;
     loading = true;
     render();
-    const button = el.coordinationSaveButton;
-    const original = button?.textContent || '';
-    if (button) {
-      button.disabled = true;
-      button.textContent = '저장 중';
-    }
     try {
       const result = await saveCoordinationSettings({
-        mode: el.coordinationModeSelect?.value || 'off',
-        role: el.coordinationRoleSelect?.value || 'peer',
-        coordinator_machine_id: el.coordinationCoordinatorInput?.value || '',
+        enabled: el.coordinationEnabled?.value === 'true',
+        group_id: el.coordinationGroupId?.value?.trim() || '',
+        dds_domain_id: Number(el.coordinationDomainId?.value ?? 21),
+        display_name: el.coordinationDisplayName?.value?.trim() || '',
       });
-      if (result.saved) formDirty = false;
+      formDirty = false;
       if (el.coordinationConfigMessage) el.coordinationConfigMessage.textContent = result.message || '';
-      if (result.success === false) window.alert(result.message || '연동 설정 적용 실패');
+      if (!result.success) window.alert(result.message || 'DDS 그룹 설정 적용 실패');
       window.setTimeout(refresh, 1200);
     } catch (error) {
       window.alert(error?.message || String(error));
-    } finally {
-      loading = false;
-      if (button) {
-        button.disabled = false;
-        button.textContent = original;
-      }
-      render();
-    }
-  }
-
-  function pairingIdentity() {
-    return {
-      machine_id: el.coordinationPairingMachineId?.value?.trim() || '',
-      display_name: el.coordinationPairingDisplayName?.value?.trim() || '',
-    };
-  }
-
-  async function startPairing() {
-    if (loading) return;
-    const identity = pairingIdentity();
-    if (!identity.machine_id) {
-      window.alert('이 PC ID를 입력하세요.');
-      return;
-    }
-    loading = true;
-    render();
-    try {
-      const result = await startCoordinationPairing(identity);
-      if (el.coordinationPairingCode) el.coordinationPairingCode.textContent = result.pairing_code || '----';
-      if (el.coordinationPairingMessage) {
-        const serviceMessage = result.service?.installed ? '' : ' · 서비스 설치가 필요합니다.';
-        el.coordinationPairingMessage.textContent = `참여 PC에서 중앙 PC IP와 이 코드를 입력하세요. 코드는 5분 동안 한 번만 사용할 수 있습니다.${serviceMessage}`;
-      }
-    } catch (error) {
-      window.alert(error?.message || String(error));
-    } finally {
-      loading = false;
-      render();
-    }
-  }
-
-  async function joinPairing() {
-    if (loading) return;
-    const identity = pairingIdentity();
-    const coordinatorHost = el.coordinationPairingHost?.value?.trim() || '';
-    const pairingCode = el.coordinationPairingCodeInput?.value?.trim() || '';
-    if (!identity.machine_id || !coordinatorHost || !pairingCode) {
-      window.alert('이 PC ID, 중앙 PC IP와 연동 코드를 모두 입력하세요.');
-      return;
-    }
-    loading = true;
-    if (el.coordinationPairingMessage) el.coordinationPairingMessage.textContent = '암호화 키 교환과 PC 설정 저장 중';
-    render();
-    try {
-      const result = await joinCoordinationPairing({
-        ...identity,
-        coordinator_host: coordinatorHost,
-        pairing_code: pairingCode,
-      });
-      pairingIdentityDirty = false;
-      if (el.coordinationPairingCodeInput) el.coordinationPairingCodeInput.value = '';
-      if (el.coordinationPairingMessage) el.coordinationPairingMessage.textContent = result.message || 'PC 연동 설정 완료';
-      if (result.operation_state === 'partial') window.alert(result.message);
-      window.setTimeout(refresh, 1500);
-    } catch (error) {
-      if (el.coordinationPairingMessage) el.coordinationPairingMessage.textContent = error?.message || 'PC 연동 실패';
-      window.alert(error?.message || String(error));
-    } finally {
-      loading = false;
-      render();
-    }
-  }
-
-  async function checkReadiness() {
-    if (loading) return;
-    loading = true;
-    readiness = new Map();
-    if (el.coordinationReadinessSummary) el.coordinationReadinessSummary.textContent = '각 PC의 로컬 실행 준비 확인 중';
-    render();
-    try {
-      const result = await checkCoordinationReadiness();
-      (result.results || []).forEach((item) => readiness.set(item.machine_id, item));
-      if (el.coordinationReadinessSummary) el.coordinationReadinessSummary.textContent = result.message || '준비 확인 완료';
-      if (result.stale_project_generation) window.alert(result.message);
-    } catch (error) {
-      if (el.coordinationReadinessSummary) el.coordinationReadinessSummary.textContent = error?.message || '준비 확인 실패';
     } finally {
       loading = false;
       render();
@@ -315,20 +185,10 @@ export function createCoordinationController({ el }) {
     if (el.coordinationControlSummary) el.coordinationControlSummary.textContent = '명령 전달 중';
     render();
     try {
-      const payload = { command };
-      if (command === 'synchronized_run') {
-        payload.repeat_count = Number(el.coordinationRepeatCountInput?.value || 1);
-        payload.dwell_sec = Number(el.coordinationDwellInput?.value || 0);
-        payload.lead_sec = Number(el.coordinationLeadInput?.value || 15);
-      }
-      const result = await sendCoordinationControl(payload);
-      if (el.coordinationControlSummary) {
-        const schedule = result.schedule;
-        el.coordinationControlSummary.textContent = schedule
-          ? `${result.message} · 최장 ${Number(schedule.longest_motion_sec).toFixed(2)}초 · 공통 주기 ${Number(schedule.cycle_sec).toFixed(2)}초`
-          : (result.message || '명령 처리 완료');
-      }
-      if (!result.success) window.alert(result.message || '연동 실행 명령 실패');
+      const result = await sendCoordinationControl({ command });
+      if (el.coordinationControlSummary) el.coordinationControlSummary.textContent = result.message || '명령 처리 완료';
+      if (!result.success) window.alert(result.message || '그룹 명령 실패');
+      await refresh();
     } catch (error) {
       if (el.coordinationControlSummary) el.coordinationControlSummary.textContent = error?.message || '명령 전달 실패';
     } finally {
@@ -340,42 +200,14 @@ export function createCoordinationController({ el }) {
   function bindEvents() {
     el.coordinationRefreshButton?.addEventListener('click', refresh);
     el.coordinationSaveButton?.addEventListener('click', save);
-    el.coordinationPairingStartButton?.addEventListener('click', startPairing);
-    el.coordinationPairingJoinButton?.addEventListener('click', joinPairing);
-    el.coordinationReadinessButton?.addEventListener('click', checkReadiness);
-    el.coordinationAcquireButton?.addEventListener('click', () => control('acquire_control'));
-    el.coordinationReleaseButton?.addEventListener('click', () => control('release_control'));
-    el.coordinationRunOnceButton?.addEventListener('click', () => control('run_once'));
-    el.coordinationMotionStopButton?.addEventListener('click', () => control('stop_motion'));
-    el.coordinationInitializeButton?.addEventListener('click', () => control('initialize'));
-    el.coordinationInitializeStopButton?.addEventListener('click', () => control('stop_initialize'));
-    el.coordinationSynchronizedRunButton?.addEventListener('click', () => control('synchronized_run'));
-    el.coordinationModeSelect?.addEventListener('change', () => {
-      formDirty = true;
-      const off = el.coordinationModeSelect.value === 'off';
-      if (off && el.coordinationRoleSelect) el.coordinationRoleSelect.value = 'peer';
-      renderSettings({
-        ...(snapshot?.config || {}),
-        mode: el.coordinationModeSelect.value,
-        role: el.coordinationRoleSelect?.value || 'peer',
-        coordinator_machine_id: el.coordinationCoordinatorInput?.value || '',
-      }, true);
-    });
-    el.coordinationRoleSelect?.addEventListener('change', () => {
-      formDirty = true;
-      if (el.coordinationRoleSelect.value === 'coordinator' && el.coordinationCoordinatorInput) {
-        el.coordinationCoordinatorInput.value = snapshot?.config?.machine_id || '';
-      }
-      renderSettings({
-        ...(snapshot?.config || {}),
-        mode: el.coordinationModeSelect?.value || 'off',
-        role: el.coordinationRoleSelect?.value || 'peer',
-        coordinator_machine_id: el.coordinationCoordinatorInput?.value || '',
-      }, true);
-    });
-    el.coordinationCoordinatorInput?.addEventListener('input', () => { formDirty = true; });
-    el.coordinationPairingMachineId?.addEventListener('input', () => { pairingIdentityDirty = true; });
-    el.coordinationPairingDisplayName?.addEventListener('input', () => { pairingIdentityDirty = true; });
+    el.coordinationJoinButton?.addEventListener('click', () => control('join'));
+    el.coordinationLeaveButton?.addEventListener('click', () => control('leave'));
+    el.coordinationStartButton?.addEventListener('click', () => control('start_group'));
+    el.coordinationStopAfterButton?.addEventListener('click', () => control('stop_after_cycle'));
+    el.coordinationStopNowButton?.addEventListener('click', () => control('stop_now'));
+    el.coordinationAcknowledgeErrorButton?.addEventListener('click', () => control('acknowledge_group_error'));
+    [el.coordinationDisplayName, el.coordinationGroupId, el.coordinationDomainId, el.coordinationEnabled]
+      .forEach((field) => field?.addEventListener('input', () => { formDirty = true; }));
   }
 
   function start() {
@@ -384,5 +216,10 @@ export function createCoordinationController({ el }) {
     if (!timer) timer = window.setInterval(refresh, 1000);
   }
 
-  return { start, refresh, render };
+  function renderSnapshot(value) {
+    snapshot = value;
+    render();
+  }
+
+  return { start, refresh, render, renderSnapshot };
 }

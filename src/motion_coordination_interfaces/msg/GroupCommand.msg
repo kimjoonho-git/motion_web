@@ -1,0 +1,10 @@
+string group_id
+string execution_id
+string command_id
+string coordinator_id
+string command
+uint64 sequence
+uint32 cycle_number
+builtin_interfaces/Time sent_at
+int64 scheduled_monotonic_ns
+string[] participant_ids

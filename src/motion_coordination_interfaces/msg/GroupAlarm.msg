@@ -1,0 +1,13 @@
+string group_id
+string execution_id
+string pc_id
+string boot_id
+uint64 sequence
+builtin_interfaces/Time occurred_at
+int32 grade
+int32 motor_axis
+string error_code
+string error_source
+string action
+string message
+bool active

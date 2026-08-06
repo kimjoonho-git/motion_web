@@ -150,37 +150,12 @@ export async function saveCoordinationSettings(payload) {
   return readJson(response);
 }
 
-export async function startCoordinationPairing(payload) {
-  return globalJson('/api/coordination/pairing/start', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-}
-
-export async function joinCoordinationPairing(payload) {
-  return globalJson('/api/coordination/pairing/join', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-    timeoutMs: 15000,
-  });
-}
-
-export async function checkCoordinationReadiness() {
-  const response = await projectFetch('/api/coordination/readiness', {
-    method: 'POST',
-    timeoutMs: 15000,
-  });
-  return readJson(response);
-}
-
 export async function sendCoordinationControl(payload) {
   const response = await projectFetch('/api/coordination/control', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
-    timeoutMs: 20000,
+    timeoutMs: 7000,
   });
   return readJson(response);
 }

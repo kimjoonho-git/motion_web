@@ -23,7 +23,10 @@ test('서보 에러 관리는 모터 관리와 같은 상위 설정 탭이다', 
   assert.match(index, /data-workspace-tab="config">모터 관리/);
   assert.match(index, /data-workspace-tab="servo-errors">서보 에러 관리/);
   assert.match(index, /data-workspace-panel="servo-errors"/);
-  assert.match(navigation, /setup: Object\.freeze\(\['system', 'config', 'servo-errors'\]\)/);
+  assert.match(
+    navigation,
+    /setup: Object\.freeze\(\['system', 'coordination', 'config', 'servo-errors'\]\)/,
+  );
 });
 
 test('프로젝트 등급 편집과 실제 안전상태 표시가 연결되어 있다', () => {

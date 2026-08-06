@@ -1,44 +1,21 @@
-version: 1
+version: 2
 
-# 프로젝트 파일과 분리된 전역 설정 예시입니다.
-# 기본 off 상태에서는 8010 수신 포트를 열지 않습니다.
-machine_id: pc-a
+# 프로젝트 파일과 분리된 PC 전역 DDS 그룹 설정 예시입니다.
+pc_id: pc-a
 display_name: PC A
-mode: off
-role: peer
-coordinator_machine_id: ''
-heartbeat_sec: 1.0
+enabled: false
+group_id: ''
+dds_domain_id: 21
+
+heartbeat_sec: 0.5
+warning_timeout_sec: 1.5
 peer_timeout_sec: 3.0
-peers: []
+start_lead_sec: 0.5
+schedule_ack_margin_sec: 0.1
+max_trigger_sync_uncertainty_ms: 5.0
+trigger_sync_samples: 5
+prepare_timeout_sec: 6.0
+trigger_report_timeout_sec: 1.0
 
-access:
-  web:
-    host: 0.0.0.0
-    port: 8000
-  coordination:
-    enabled: false
-    host: ''
-    port: 8010
-    allowed_peer_networks: []
-
-# HMAC 키는 이 파일에 직접 기록하지 않습니다.
-credential_file: config/motion_coordination.credentials.yaml
-
-# 활성 peer 예시:
-# mode: status                 # status 또는 participant
-# role: peer
-# coordinator_machine_id: pc-a
-# peers:
-#   - machine_id: pc-a
-#     url: http://192.168.10.10:8010
-# access:
-#   coordination:
-#     enabled: true
-#     host: 192.168.10.20      # 이 PC의 내부망 고정 IP
-#     port: 8010
-#     allowed_peer_networks: [192.168.10.0/24]
-#
-# 중앙 PC는 role: coordinator, coordinator_machine_id: pc-a로 지정하고
-# 등록한 각 peer의 ID·주소·HMAC 키를 별도 자격증명 파일에 넣습니다.
-# 동기 실행은 모든 참여 PC에서 chrony 동기화와 10ms 이하 오차가 확인될 때만
-# 예약되며, 화면의 시작 여유보다 초기 위치 이동 예상시간이 길면 자동으로 늘립니다.
+# 연동할 PC들에 같은 group_id와 dds_domain_id를 저장한 뒤,
+# 각 PC 웹에서 사용자가 직접 `그룹 참가`를 누릅니다.

@@ -18,7 +18,7 @@ setup(
     zip_safe=True,
     maintainer='joonho_test',
     maintainer_email='joonho_test@example.com',
-    description='Network status, access, and authentication contracts.',
+    description='DDS group motion coordination and local execution adapter.',
     license='Apache-2.0',
     tests_require=['pytest'],
     entry_points={

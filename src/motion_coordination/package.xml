@@ -2,17 +2,13 @@
 <package format="3">
   <name>motion_coordination</name>
   <version>0.1.0</version>
-  <description>Network status, access, and authentication contracts.</description>
+  <description>DDS group motion coordination and local execution adapter.</description>
   <maintainer email="joonho_test@example.com">joonho_test</maintainer>
   <license>Apache-2.0</license>
   <buildtool_depend>ament_python</buildtool_depend>
   <depend>rclpy</depend>
-  <depend>std_msgs</depend>
-  <exec_depend>python3-fastapi</exec_depend>
-  <exec_depend>python3-cryptography</exec_depend>
-  <exec_depend>python3-uvicorn</exec_depend>
+  <depend>motion_coordination_interfaces</depend>
   <exec_depend>python3-yaml</exec_depend>
-  <exec_depend>chrony</exec_depend>
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
   <export>

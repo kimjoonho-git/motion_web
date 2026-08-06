@@ -1,0 +1,13 @@
+string group_id
+string execution_id
+string command_id
+string pc_id
+string boot_id
+string event
+string state
+uint64 sequence
+uint32 cycle_number
+builtin_interfaces/Time occurred_at
+int64 triggered_monotonic_ns
+bool success
+string message

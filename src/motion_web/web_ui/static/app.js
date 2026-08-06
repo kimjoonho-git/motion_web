@@ -1,1 +1,1 @@
-import './js/main.js?v=20260805-pairing-safety-v2';
+import './js/main.js?v=20260806-dds-trigger-safety';

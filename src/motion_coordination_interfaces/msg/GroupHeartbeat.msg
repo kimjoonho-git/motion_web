@@ -1,0 +1,14 @@
+string group_id
+string pc_id
+string boot_id
+string display_name
+uint64 sequence
+builtin_interfaces/Time sent_at
+bool joined
+bool execution_active
+string execution_id
+uint32 cycle_number
+string state
+string trigger_sync_state
+float64 trigger_sync_uncertainty_ms
+int32 servo_alarm_grade

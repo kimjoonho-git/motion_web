@@ -1,39 +1,20 @@
 from pathlib import Path
 
-from motion_coordination.configuration import CoordinationConfig
-from motion_coordination.coordination_node import create_app
-from motion_coordination.runtime import (
-    CONTROL_PATH,
-    CoordinationRuntime,
-    READINESS_PATH,
-    STATUS_PATH,
-)
-
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE = PACKAGE_ROOT.parents[1]
 
 
-def test_off_mode_application_exposes_only_status_transport_route(tmp_path):
-    runtime = CoordinationRuntime(CoordinationConfig.disabled(tmp_path), {})
-    app = create_app(runtime)
-    application_routes = {
-        route.path for route in app.routes
-        if getattr(route, 'methods', None) and route.path.startswith('/coordination/')
-    }
-
-    assert application_routes == {STATUS_PATH, READINESS_PATH, CONTROL_PATH}
-
-
-def test_coordination_service_is_independent_from_local_control_services():
+def test_coordination_service_opens_ros_dds_only():
     unit = (PACKAGE_ROOT / 'deploy/motion-coordination.service.in').read_text(
         encoding='utf-8'
     )
 
     assert 'After=network-online.target' in unit
+    assert 'ROS_LOCALHOST_ONLY=0' in unit
+    assert '8010' not in unit
     assert 'motion-control.service' not in unit
     assert 'motion-motor.service' not in unit
-    assert 'ROS_LOCALHOST_ONLY=1' in unit
 
 
 def test_user_service_installer_registers_coordination_service():
@@ -42,18 +23,26 @@ def test_user_service_installer_registers_coordination_service():
     ).read_text(encoding='utf-8')
 
     assert 'COORDINATION_SERVICE_EXECUTABLE=' in installer
-    assert (
-        'src/motion_coordination/deploy/motion-coordination.service.in'
-        in installer
-    )
-    assert (
-        'src/motion_coordination/deploy/run_coordination_user_service.sh'
-        in installer
-    )
-    assert 'motion_control/motion_coordination' not in installer
-    enabled_services = (
+    assert 'src/motion_coordination/deploy/motion-coordination.service.in' in installer
+    assert 'src/motion_coordination/deploy/run_coordination_user_service.sh' in installer
+    expected = (
         'enable motion-motor.service motion-control.service '
         'motion-coordination.service'
     )
-    assert enabled_services in installer
+    assert expected in installer
     assert 'start motion-coordination.service' in installer
+
+
+def test_example_configuration_contains_only_dds_v2_fields():
+    example = (WORKSPACE / 'config/motion_coordination.example.yaml').read_text(
+        encoding='utf-8'
+    )
+
+    assert 'version: 2' in example
+    assert 'dds_domain_id:' in example
+    assert 'group_id:' in example
+    assert 'enabled: false' in example
+    assert '8010' not in example
+    assert 'HMAC' not in example
+    assert 'credential' not in example
+    assert 'pairing' not in example

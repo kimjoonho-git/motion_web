@@ -1,5 +1,5 @@
 [Unit]
-Description=Motion PC Coordination Status Service
+Description=Motion DDS Group Coordination Service
 After=network-online.target
 Wants=network-online.target
 
@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=@WORKSPACE@
 Environment="MOTION_WORKSPACE=@WORKSPACE@"
-Environment="ROS_LOCALHOST_ONLY=1"
+Environment="ROS_LOCALHOST_ONLY=0"
 ExecStart=/bin/bash @COORDINATION_SERVICE_RUNNER@
 Restart=on-failure
 RestartSec=3

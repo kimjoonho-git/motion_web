@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 WORKSPACE="${MOTION_WORKSPACE:?MOTION_WORKSPACE is required}"
-export ROS_LOCALHOST_ONLY="${ROS_LOCALHOST_ONLY:-1}"
+export ROS_LOCALHOST_ONLY="${ROS_LOCALHOST_ONLY:-0}"
 ROS_SETUP="/opt/ros/humble/setup.bash"
 WORKSPACE_SETUP="${WORKSPACE}/install/setup.bash"
 EXECUTABLE="${WORKSPACE}/install/motion_coordination/lib/motion_coordination/motion_coordination_node"

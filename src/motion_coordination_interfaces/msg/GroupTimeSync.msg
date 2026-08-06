@@ -1,0 +1,12 @@
+string group_id
+string execution_id
+string coordinator_id
+string target_pc_id
+string responder_pc_id
+string kind
+uint32 sample_number
+int64 t1_monotonic_ns
+int64 t2_monotonic_ns
+int64 t3_monotonic_ns
+int64 offset_ns
+uint64 uncertainty_ns
