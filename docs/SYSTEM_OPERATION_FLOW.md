@@ -2,7 +2,7 @@
 
 - 문서 기준일 · 2026-08-06
 - 구현 상태 · 코드 검증 완료 · 로컬 2프로세스 실행 검증 완료
-- 운영 상태 · 신규 코드 빌드·세 서비스 재시작 반영 완료 · 실제 2대 PC·모터 실물 미검증
+- 운영 상태 · 내부 구조 개선 소스·빌드·두 실행 서비스 재시작 반영 완료 · 실제 2대 PC·모터 실물 미검증
 - 범위 · PC 1~8대 · 사용자가 직접 그룹 참가·시작·정지
 
 ## 구조
@@ -21,6 +21,14 @@
 - 모터 제어 · 기존 `motion_system` 단일 통로 유지
 - `127.0.0.1:8011` · 같은 PC의 두 프로세스만 연결하는 로컬 API
 - 외부 `8010` HTTP·HMAC·페어링 · 제거됨
+
+`motion_coordination_node` 내부 책임은 다음과 같이 분리한다.
+
+- `ExecutionSession` · 실행 ID·고정 참가자·ACK·제한시간·재시도·정지 확인 소유
+- `CommandDispatcher` · 일반 DDS 명령 직렬 적용·`STOP_NOW`·시작 취소 전용 안전 처리
+- `LocalRuntimeMonitor` · ROS 실행 루프 밖에서 경량 로컬 상태 수집
+- `SafetyStopController` · 로컬 우선 즉시 정지·DDS 전파 순서 통일
+- `AlarmRegistry` · PC별 `boot_id`·sequence·재시작 전후 알람 순서 관리
 
 ## 단독 실행
 
@@ -100,6 +108,9 @@ trigger_report_timeout_sec: 1.0
 - 예약 수락 완료 한계 · 예약시각 100ms 전
 - 준비 응답 제한 · 6초
 - 모션 시작 트리거 보고 제한 · 예약시각 후 1초
+- 그룹 실행 중 로컬 런타임 상태 수집 · 50ms
+- 로컬 런타임 상태 중단 판정 · 500ms
+- 유휴→활성 전환 · 즉시 폴링·첫 활성 샘플 최대 500ms 대기
 - heartbeat · 0.5초
 - 통신 지연 경고 · 1.5초
 - 통신 단절 · 3초
@@ -117,13 +128,14 @@ trigger_report_timeout_sec: 1.0
 ## 정지·오류
 
 - `현재 회차 후 정지` · 실행 중인 로컬 모션만 완료 · dwell/reinitialize 생략 · 다음 `START_AT` 없음
-- `전체 즉시 정지` · 요청 PC의 로컬 motion_run 우선 정지 · 모든 참가 PC에 `STOP_NOW`
+- `전체 즉시 정지` · 요청 PC의 `motion_supervisor` 안전 정지 명령·로컬 motion_run 정지 · 모든 참가 PC에 `STOP_NOW`
 - 고정 참가 목록의 어느 PC에서도 두 정지를 요청할 수 있다.
 - 1등급 Servo 오류 · 오류축 차단 · 나머지 현재 회차 완료 · 다음 회차 차단
 - 2등급 Servo 오류 · 전체 즉시 정지
 - 3등급 Servo 오류 · 전체 즉시 정지 · 기존 supervisor의 재시작 전 모터 제어 차단 유지
 - 미분류 Servo 오류 · 기존 supervisor 정책에 따라 2등급
 - 참가 PC 통신 단절·프로그램 재시작 · 로컬 우선 정지 · 남은 고정 참가 PC에 `STOP_NOW`
+- 로컬 Web Bridge 상태 500ms 중단 · 로컬 우선 정지 시도·전체 `STOP_NOW`·그룹 재실행 차단
 - 동일 `pc_id`·다른 `boot_id` · `DUPLICATE_PC_ID`·그룹 참가와 실행 차단
 - `PREPARE` 참가 목록 불일치 · 전체 시작 전 취소
 - 예약 ACK 일부 누락 · 전체 `CANCEL_BEFORE_START`
@@ -137,24 +149,29 @@ trigger_report_timeout_sec: 1.0
 
 ## 검증 상태
 
-- 관련 Python 표준 자동 테스트 · 443개 통과
-- 로컬 API·독립 DDS 2프로세스 실행 테스트 · 8개 통과
+- 관련 Python 표준 자동 테스트 · 426개 통과·2개 선택 실행 제외
+- 독립 DDS 2프로세스 실행 테스트 · 6개 통과
 - Web UI Node 테스트 · 그룹 상태 DOM 동작 테스트 포함 38개 통과
 - typed DDS 인터페이스 생성·빌드 · 확인됨
 - 1~8 PC 상태기계·전체 barrier 시뮬레이션 · 코드 검증 확인됨
 - 단독 1회·자동 반복 회귀 테스트 · 확인됨
 - 두 로컬 프로세스의 DDS 발견·heartbeat · 실행 검증 확인됨
 - 두 로컬 프로세스의 `PREPARE`→`ARMED`→`START_AT`→`CYCLE_READY` 2회차 · 실행 검증 확인됨
+- heartbeat 1초·모션 시작 보고 제한 1초 조합의 2회차 실행 · 실행 검증 확인됨
 - 서로 다른 회차 완료시간·전체 barrier·회차당 시작 1회 · 실행 검증 확인됨
 - 실제 콜백 monotonic 기준 첫 20ms 초과·즉시 정지·새 실행 자동 재시도 · 로컬 실행 검증 확인됨
 - 자동 재시도 중 두 번째 20ms 초과·오류 공유·재실행 차단·사용자 확인 · 로컬 실행 검증 확인됨
 - loopback 로컬 API · 실행 검증 확인됨
 - 현재 PC의 systemd unit 환경 · `ROS_LOCALHOST_ONLY=0`·`127.0.0.1:8011`·외부 `8010` 미사용 확인됨
-- 이번 DDS 참가자 합의·20ms 자동 재시도·오류 차단 신규 코드 · 실행 서비스 반영 확인됨
+- 내부 상태 소유권·명령 직렬화·실행 중 안전 정지 선점·로컬 상태 비동기화·안전 정지 통합 · 코드 검증 확인됨
+- 위 내부 구조 개선 코드의 현재 실행 서비스 반영 · 두 서비스 재시작·로컬 API 응답 확인됨
 - 현재 PC의 version 1 설정 변환 · `pc_id`·`display_name` 보존·version 2 `enabled: false` 확인됨
 - chrony·NTP·고정 시간 기준 PC 의존 제거 · 코드 검증 확인됨
 - 현재 PC의 `trigger_sync` API·500ms 예약 여유·5회 DDS 측정 설정 · 실행 검증 확인됨
 - 실제 서로 다른 PC 2대 · 실물 미검증
 - 실제 모터 초기화·모션 시작 편차 20ms · 실물 미검증
+
+독립 DDS 테스트는 두 실제 DDS 프로세스와 가짜 로컬 Web Bridge를 사용한다. 실제
+`motion_run_manager`·모터까지 포함한 결과로 확대하지 않는다.
 
 실제 장비 검증은 [DDS_MULTI_PC_VALIDATION.md](DDS_MULTI_PC_VALIDATION.md)를 따른다.

@@ -78,7 +78,7 @@ class _FakeLocalWebBridge:
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):  # noqa: N802
-                if self.path != '/api/status':
+                if self.path != '/api/coordination/local-status':
                     self._send(404, {'success': False})
                     return
                 with owner._lock:
@@ -327,12 +327,13 @@ def test_two_processes_complete_two_barrier_cycles_over_typed_dds(tmp_path):
         path = tmp_path / f'{pc_id}.yaml'
         save_group_config(path, GroupConfig(
             pc_id, pc_id, True, 'dds-flow-test', 78,
-            heartbeat_sec=0.1, warning_timeout_sec=0.8,
-            peer_timeout_sec=1.6, start_lead_sec=0.5,
+            heartbeat_sec=1.0, warning_timeout_sec=1.5,
+            peer_timeout_sec=3.0, start_lead_sec=0.5,
             schedule_ack_margin_sec=0.1,
             max_trigger_sync_uncertainty_ms=5.0,
             trigger_sync_samples=5,
             prepare_timeout_sec=3.0,
+            trigger_report_timeout_sec=1.0,
         ))
         configs.append(path)
     processes = []
@@ -374,7 +375,10 @@ def test_two_processes_complete_two_barrier_cycles_over_typed_dds(tmp_path):
         assert synchronized['trigger_sync']['trigger_sync_source'] == (
             'dds_relative_monotonic'
         )
-        assert _post(ports[0], 'stop_now')['dds_stop_published'] is True
+        processes[1].terminate()
+        processes[1].wait(timeout=5.0)
+        _wait(lambda: bridges[1].calls('stop_now'), timeout=3.0)
+        _wait(lambda: bridges[0].calls('stop_now'), timeout=6.0)
     finally:
         for process in processes:
             process.terminate()

@@ -497,6 +497,9 @@ class MotionWebBridge(Node):
         self._motion_run_lock = threading.Lock()
         self._motion_run_results: Dict[str, Dict[str, Any]] = {}
         self._motion_run_status: Dict[str, Any] = {}
+        self._coordination_poll_lock = threading.Lock()
+        self._coordination_poll_received_monotonic = 0.0
+        self._coordination_watchdog_stop_execution_id = ''
         self._midi_monitor_lock = threading.Lock()
         self._midi_monitor_status: Dict[str, Any] = {}
         self._midi_monitor_results: Dict[str, Dict[str, Any]] = {}
@@ -675,6 +678,9 @@ class MotionWebBridge(Node):
         )
         self._motor_operation_reconcile_timer = self.create_timer(
             0.2, self._motor_operation_reconcile_callback
+        )
+        self._coordination_watchdog_timer = self.create_timer(
+            0.1, self._coordination_watchdog_callback
         )
 
         self.get_logger().info(
@@ -1229,6 +1235,52 @@ class MotionWebBridge(Node):
         """Check the currently active local execution files and safety state."""
         return local_motion_readiness(self)
 
+    def coordination_local_status(self) -> Dict[str, Any]:
+        """Return only the runtime fields needed by the loopback DDS adapter."""
+        with self._coordination_poll_lock:
+            self._coordination_poll_received_monotonic = time.monotonic()
+        with self._motion_run_lock:
+            motion_run_status = (
+                dict(self._motion_run_status) if self._motion_run_status else {}
+            )
+        with self._safety_status_lock:
+            safety_status = (
+                dict(self._safety_status) if self._safety_status else {}
+            )
+        return {
+            'bridge_state': 'ok',
+            'sampled_monotonic': time.monotonic(),
+            'motion_run_status': motion_run_status,
+            'safety_status': safety_status,
+        }
+
+    def _coordination_watchdog_callback(self) -> None:
+        """Stop a local group run if its coordination process disappears."""
+        with self._motion_run_lock:
+            status = dict(self._motion_run_status or {})
+        execution_id = str(status.get('execution_id') or '')
+        phase = str(status.get('phase') or '')
+        active = bool(
+            status.get('group_execution')
+            and execution_id
+            and phase not in {'stopped', 'group_motion_completed', 'error'}
+        )
+        if not active:
+            self._coordination_watchdog_stop_execution_id = ''
+            return
+        with self._coordination_poll_lock:
+            received = self._coordination_poll_received_monotonic
+        if received and time.monotonic() - received <= 1.0:
+            return
+        if self._coordination_watchdog_stop_execution_id == execution_id:
+            return
+        self._coordination_watchdog_stop_execution_id = execution_id
+        threading.Thread(
+            target=self.coordination_stop_now,
+            name='coordination-watchdog-stop',
+            daemon=True,
+        ).start()
+
     def coordination_control(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Send one manual group operation through the local ROS adapter."""
         return self._coordination_web_bridge.request_control(payload)
@@ -1236,6 +1288,40 @@ class MotionWebBridge(Node):
     def coordination_local_control(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a validated loopback request through motion_run_manager."""
         return local_motion_control(self, payload)
+
+    def coordination_stop_now(self) -> Dict[str, Any]:
+        """Publish the final-output safety command before stopping motion run."""
+        cancel_pending = getattr(self, 'cancel_pending_motion_studio_start', None)
+        if callable(cancel_pending):
+            cancel_pending()
+        try:
+            request_id = self.publish_safety_stop(False)
+            safety_stop = {
+                'success': True,
+                'request_id': request_id,
+                'acknowledgement_pending': True,
+                'message': '최종 모터 출력 정지 명령 우선 전송 완료',
+            }
+        except Exception as exc:
+            safety_stop = {
+                'success': False,
+                'request_id': '',
+                'acknowledgement_pending': False,
+                'message': f'최종 모터 출력 정지 명령 전송 실패: {exc}',
+            }
+        result = self.motion_run_stop()
+        result = dict(result) if isinstance(result, dict) else {
+            'success': False,
+            'message': 'motion_run_manager 정지 응답 형식 오류',
+        }
+        result['safety_stop'] = safety_stop
+        if not safety_stop['success']:
+            source_message = str(result.get('message') or '')
+            result['success'] = False
+            result['message'] = ' · '.join(filter(None, (
+                str(safety_stop['message']), source_message,
+            )))
+        return result
 
     def _reconcile_motor_operation_status(
         self,
@@ -7433,6 +7519,13 @@ def create_app(bridge: MotionWebBridge) -> FastAPI:
     @app.post('/api/coordination/local-readiness')
     async def coordination_local_readiness():
         return await asyncio.to_thread(bridge.coordination_local_readiness)
+
+    @app.get('/api/coordination/local-status')
+    async def coordination_local_status(request: Request):
+        remote_ip = request.client.host if request.client else ''
+        if remote_ip not in {'127.0.0.1', '::1'}:
+            raise HTTPException(status_code=403, detail='loopback only')
+        return bridge.coordination_local_status()
 
     @app.post('/api/coordination/control')
     async def coordination_control(request: Request):

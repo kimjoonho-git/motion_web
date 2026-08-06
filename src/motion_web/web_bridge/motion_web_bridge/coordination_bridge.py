@@ -251,7 +251,7 @@ def local_motion_control(bridge: Any, payload: Mapping[str, Any]) -> Dict[str, A
     """Execute one loopback-only high-level command through motion_run_manager."""
     command = str(payload.get('command') or '')
     if command in {'stop_motion', 'stop_initialize', 'stop_now'}:
-        return bridge.motion_run_stop()
+        return bridge.coordination_stop_now()
     if command in {'cancel_before_start', 'group_cancel'}:
         return bridge.motion_group_cancel({
             'execution_id': str(payload.get('execution_id') or ''),

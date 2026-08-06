@@ -32,6 +32,7 @@ def test_user_web_exposes_only_local_high_level_group_control():
     assert "@app.put('/api/coordination/settings')" in source
     assert "@app.post('/api/coordination/control')" in source
     assert "@app.post('/api/coordination/local-control')" in source
+    assert "@app.get('/api/coordination/local-status')" in source
     assert '/api/coordination/pairing/' not in source
     assert '8010' not in source
 

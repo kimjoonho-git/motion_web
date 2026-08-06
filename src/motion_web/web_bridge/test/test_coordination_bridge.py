@@ -58,6 +58,10 @@ class _Bridge:
     def motion_run_stop(self):
         return {'success': True}
 
+    def coordination_stop_now(self):
+        self.payload = {'command': 'coordination_stop_now'}
+        return {'success': True}
+
     def motion_run_stop_after_cycle(self):
         return {'success': True}
 
@@ -109,6 +113,15 @@ def test_each_group_start_at_schedules_exactly_one_cycle(tmp_path):
     assert bridge.payload['run_mode'] == 'once'
     assert bridge.payload['cycle_number'] == 3
     assert bridge.payload['start_monotonic'] == 100.0
+
+
+def test_stop_now_uses_coordination_safety_stop_path(tmp_path):
+    bridge = _Bridge(_Repository(tmp_path))
+
+    result = local_motion_control(bridge, {'command': 'stop_now'})
+
+    assert result['success'] is True
+    assert bridge.payload == {'command': 'coordination_stop_now'}
 
 
 def test_control_uses_loopback_local_api(tmp_path):
