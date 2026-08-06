@@ -6,6 +6,7 @@ const html = readFileSync(new URL('../static/index.html', import.meta.url), 'utf
 const dom = readFileSync(new URL('../static/js/dom.js', import.meta.url), 'utf8');
 const controller = readFileSync(new URL('../static/js/motion_data.js', import.meta.url), 'utf8');
 const api = readFileSync(new URL('../static/js/api.js', import.meta.url), 'utf8');
+const main = readFileSync(new URL('../static/js/main.js', import.meta.url), 'utf8');
 
 const actionIds = [
   'refreshMotionMappingsButton',
@@ -60,4 +61,24 @@ test('MIDI-only saves use the mapping-section revision without discarding the dr
   assert.match(controller, /fileId !== selectedMappingId/);
   assert.match(controller, /mappingRevision = revision/);
   assert.match(controller, /syncMappingFileRevision,/);
+});
+
+test('mapping revision conflicts explain recovery and block blind retries', () => {
+  assert.match(controller, /function isMappingRevisionConflict\(message\)/);
+  assert.match(controller, /저장된 모션축 설정과 이 화면이 기준으로 삼은 설정이 다릅니다/);
+  assert.match(controller, /confirmLabel: '저장된 내용 불러오기'/);
+  assert.match(controller, /if \(mappingRevisionConflict\)/);
+  assert.match(controller, /await selectMapping\(selectedMappingId\)/);
+});
+
+test('program reconnect refreshes clean mappings and preserves dirty drafts', () => {
+  const start = controller.indexOf('async function refreshMappingAfterReconnect()');
+  const end = controller.indexOf('\n  function ', start);
+  const body = controller.slice(start, end > start ? end : undefined);
+  assert.match(body, /if \(!mappingDirty\)/);
+  assert.match(body, /await selectMapping\(selectedMappingId\)/);
+  assert.match(body, /if \(currentRevision && currentRevision !== mappingRevision\)/);
+  assert.match(body, /편집 내용은 유지 중/);
+  assert.match(controller, /refreshMappingAfterReconnect,/);
+  assert.match(main, /motionData\?\.refreshMappingAfterReconnect\?\.\(\)/);
 });

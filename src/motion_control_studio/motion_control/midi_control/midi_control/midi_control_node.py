@@ -822,6 +822,7 @@ class MidiControlNode(Node):
 
     def _midi_callback(self, msg: Midi) -> None:
         now = time.monotonic()
+        motor_request_payload = None
         with self._lock:
             self._ensure_pickup_state_locked()
             select_lock_reason = self._select_lock_reason_locked()
@@ -1263,35 +1264,47 @@ class MidiControlNode(Node):
                         )
             self._last_received_monotonic = now
             self._last_received_wall = time.time()
+            # Publish the command produced by this MIDI input immediately.
+            # A continuously-ready MIDI subscription can delay an independent
+            # timer callback, leaving a valid command stuck in "pending".
+            motor_request_payload = self._take_motor_request_batch_locked()
 
-    def _publish_motor_request_batch(self) -> None:
-        with self._lock:
-            if not self._pending_motor_requests:
-                return
-            targets = list(self._pending_motor_requests.values())
-            self._pending_motor_requests.clear()
-            now = time.monotonic()
-            for target in targets:
-                channel = int(target['channel'])
-                self._last_motor_command_at[channel] = now
-                self._motor_command_message[channel] = '다축 모터 위치 명령 전달 중'
-            self._request_sequence += 1
-            generation = int(
-                getattr(self, '_execution_context', {}).get('project_generation') or 0
-            )
-            request_id = f'midi-batch-g{generation}-{self._request_sequence}'
-            counts: Dict[int, int] = {}
-            for target in targets:
-                channel = int(target['channel'])
-                counts[channel] = counts.get(channel, 0) + 1
-        self._publish_json(self._motor_request_publisher, {
+        if motor_request_payload is not None:
+            self._publish_json(self._motor_request_publisher, motor_request_payload)
+
+    def _take_motor_request_batch_locked(self) -> Dict[str, Any] | None:
+        if not self._pending_motor_requests:
+            return None
+        targets = list(self._pending_motor_requests.values())
+        self._pending_motor_requests.clear()
+        now = time.monotonic()
+        for target in targets:
+            channel = int(target['channel'])
+            self._last_motor_command_at[channel] = now
+            self._motor_command_message[channel] = '다축 모터 위치 명령 전달 중'
+        self._request_sequence += 1
+        generation = int(
+            getattr(self, '_execution_context', {}).get('project_generation') or 0
+        )
+        request_id = f'midi-batch-g{generation}-{self._request_sequence}'
+        counts: Dict[int, int] = {}
+        for target in targets:
+            channel = int(target['channel'])
+            counts[channel] = counts.get(channel, 0) + 1
+        return {
             'request_id': request_id,
             'project_generation': generation,
             'targets': targets,
             'atomic_channels': [
                 channel for channel, count in counts.items() if count > 1
             ],
-        })
+        }
+
+    def _publish_motor_request_batch(self) -> None:
+        with self._lock:
+            payload = self._take_motor_request_batch_locked()
+        if payload is not None:
+            self._publish_json(self._motor_request_publisher, payload)
 
     def _deactivate_control_channel_locked(
         self, channel: int, *, request_motor_hold: bool = True

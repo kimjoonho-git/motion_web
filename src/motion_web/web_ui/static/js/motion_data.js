@@ -512,6 +512,7 @@ export function createMotionDataController({
   let fileLoadToken = 0;
   let mappingLoadToken = 0;
   let mappingRevision = '';
+  let mappingRevisionConflict = false;
   let activeMotionPanel = 'files';
   let motionRunStatus = null;
   let motionRunLastResult = null;
@@ -535,6 +536,29 @@ export function createMotionDataController({
   function markMappingDirty() {
     mappingDirty = true;
     onWorkContextChange?.();
+  }
+
+  function isMappingRevisionConflict(message) {
+    const text = String(message || '');
+    return text.includes('모션축 설정이 화면을 불러온 뒤 변경')
+      || text.includes('모션축 설정 버전 정보가 없습니다');
+  }
+
+  async function resolveMappingRevisionConflict(message) {
+    mappingRevisionConflict = true;
+    setMappingMessage(`매핑 저장 실패: ${message}`);
+    const reload = await showConfirm(
+      '저장된 모션축 설정과 이 화면이 기준으로 삼은 설정이 다릅니다.\n'
+      + '현재 편집 내용은 저장되지 않았습니다.\n\n'
+      + '저장된 내용으로 되돌린 후 다시 변경·저장하시겠습니까?',
+      {
+        title: '모션축 설정 저장 충돌',
+        confirmLabel: '저장된 내용 불러오기',
+        cancelLabel: '편집 내용 유지',
+        tone: 'warning',
+      },
+    );
+    if (reload && selectedMappingId) await selectMapping(selectedMappingId);
   }
 
   function mappingFileRevision(file) {
@@ -1964,6 +1988,7 @@ export function createMotionDataController({
         mappingRawText = '';
         mappingValidation = null;
         mappingDirty = false;
+        mappingRevisionConflict = false;
       }
       setMappingMessage(payload.message || '매핑 목록 갱신 완료');
     } catch (error) {
@@ -1988,6 +2013,7 @@ export function createMotionDataController({
       mappingValidation = null;
       mappingMotionFileDetail = null;
       mappingDirty = false;
+      mappingRevisionConflict = false;
       mappingRevision = '';
       renderMappingPanel();
       return;
@@ -2025,6 +2051,7 @@ export function createMotionDataController({
       mappingMotionFileDetail = loadedMotionFileDetail;
       normalizeDynamixelGearRatios();
       mappingDirty = false;
+      mappingRevisionConflict = false;
       const midiWarning = String(payload.midi_banks_warning || '').trim();
       const mappingFileName = payload.file?.filename || payload.file?.id || selectedMappingId || '-';
       const motionFileName = mappingDraft.motion_file_id || '-';
@@ -2077,6 +2104,7 @@ export function createMotionDataController({
       mappings: baseFile ? mappingRowsFromMotionFile(baseFile) : [],
     };
     mappingDirty = true;
+    mappingRevisionConflict = false;
     forceMappingNameInput(enteredName);
     setMappingMessage(`새 매핑 작성 중: ${enteredName} · 아직 파일로 저장되지 않음`);
     renderMappingPanel();
@@ -2175,6 +2203,12 @@ export function createMotionDataController({
   }
 
   async function saveCurrentMapping() {
+    if (mappingRevisionConflict) {
+      await resolveMappingRevisionConflict(
+        '최신 저장 내용을 다시 불러와야 저장할 수 있습니다.',
+      );
+      return;
+    }
     const draftError = validateMappingDraft();
     if (draftError) {
       mappingValidation = null;
@@ -2208,6 +2242,10 @@ export function createMotionDataController({
       mappingValidation = payload.validation || null;
       if (payload.success === false) {
         mappingDraft = payload.mapping || mappingDraft;
+        if (isMappingRevisionConflict(payload.message)) {
+          await resolveMappingRevisionConflict(payload.message);
+          return;
+        }
         setMappingMessage(`매핑 저장 실패: ${payload.message || '검증 실패'}`);
         return;
       }
@@ -2218,6 +2256,7 @@ export function createMotionDataController({
       mappingRevision = mappingFileRevision(payload.file);
       mappingRawText = payload.content || '';
       mappingDirty = false;
+      mappingRevisionConflict = false;
       setMappingMessage(payload.message || (
         payload.runtime_applied
           ? `모션축 설정 저장 완료: ${selectedMappingId} · MIDI 적용 완료`
@@ -2225,6 +2264,10 @@ export function createMotionDataController({
       ));
       await onProjectFilesChange?.();
     } catch (error) {
+      if (isMappingRevisionConflict(error?.message || error)) {
+        await resolveMappingRevisionConflict(error?.message || error);
+        return;
+      }
       setMappingMessage(`매핑 저장 실패: ${error?.message || error}`);
     } finally {
       mappingLoading = false;
@@ -2249,9 +2292,33 @@ export function createMotionDataController({
     mappingRawText = '';
     mappingValidation = null;
     mappingDirty = false;
+    mappingRevisionConflict = false;
     forceMappingNameInput('');
     setMappingMessage(`${label}의 저장하지 않은 편집 내용을 버렸습니다`);
     renderMappingPanel();
+  }
+
+  async function refreshMappingAfterReconnect() {
+    if (!selectedMappingId) return;
+    if (!mappingDirty) {
+      await selectMapping(selectedMappingId);
+      return;
+    }
+    try {
+      const payload = await fetchMotionMapping(selectedMappingId);
+      const currentRevision = mappingFileRevision(payload.file);
+      if (currentRevision && currentRevision !== mappingRevision) {
+        mappingRevisionConflict = true;
+        setMappingMessage(
+          '프로그램 재연결 후 저장된 설정 변경을 확인했습니다 · '
+          + '편집 내용은 유지 중이며 저장 전 저장된 내용을 다시 불러와야 합니다',
+        );
+      }
+    } catch (error) {
+      if (!error?.staleProjectResponse) {
+        setMappingMessage(`재연결 후 모션축 설정 확인 실패: ${error?.message || error}`);
+      }
+    }
   }
 
   async function deleteCurrentMapping() {
@@ -2274,6 +2341,7 @@ export function createMotionDataController({
       mappingRawText = '';
       mappingValidation = null;
       mappingDirty = false;
+      mappingRevisionConflict = false;
       setMappingMessage(payload.message || '매핑 삭제 완료');
       await onProjectFilesChange?.();
     } catch (error) {
@@ -2370,6 +2438,7 @@ export function createMotionDataController({
     mappingValidation = null;
     mappingMotionFileDetail = null;
     mappingDirty = false;
+    mappingRevisionConflict = false;
     fileLoadToken += 1;
     mappingLoadToken += 1;
     forceMappingNameInput('');
@@ -2911,6 +2980,7 @@ export function createMotionDataController({
       if (category === 'motions') await loadFiles(fileName);
       if (category === 'motion_axis_matching') await loadMappings(fileName);
     },
+    refreshMappingAfterReconnect,
     syncMappingFileRevision,
     getWorkContext,
     render,

@@ -14,7 +14,7 @@ import {
 import { getElements } from './dom.js?v=20260804-point-actions-range-1';
 import { createMotorEventLogController } from './event_log.js?v=20260727-popup-common-3';
 import { createMidiMonitorController } from './midi_monitor.js?v=20260731-midi-health-1';
-import { createMotionDataController } from './motion_data.js?v=20260731-studio-performance-1';
+import { createMotionDataController } from './motion_data.js?v=20260806-mapping-revision-reconnect-1';
 import { createMotionStudioController } from './motion_studio.js?v=20260804-point-actions-range-1';
 import { createMotionTestController } from './motion_test.js?v=20260728-servo-alarm-2';
 import { createMotorConfigController } from './motor_config.js?v=20260731-project-compatible-scan-1';
@@ -336,7 +336,15 @@ function motionStateFromPayload(payload) {
 
 function renderServiceManagement(payload) {
   const incomingBridgeInstanceId = String(payload?.bridge_instance_id || '');
+  const previousBridgeInstanceId = appState.bridgeInstanceId;
   if (incomingBridgeInstanceId) appState.bridgeInstanceId = incomingBridgeInstanceId;
+  if (
+    previousBridgeInstanceId
+    && incomingBridgeInstanceId
+    && incomingBridgeInstanceId !== previousBridgeInstanceId
+  ) {
+    Promise.resolve(motionData?.refreshMappingAfterReconnect?.()).catch(() => {});
+  }
   const managed = Boolean(payload?.service_management?.managed);
   const motorManaged = Boolean(payload?.service_management?.motor_managed);
   const motorConfigApplied = Boolean(payload?.project_scope?.motor_config_applied);

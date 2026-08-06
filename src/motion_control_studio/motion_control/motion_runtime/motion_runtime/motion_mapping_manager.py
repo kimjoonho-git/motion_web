@@ -303,6 +303,14 @@ class MotionMappingManager(Node):
             )
             actual_mapping_revision = self._mapping_revision(current_mapping)
             if expected_mapping_revision != actual_mapping_revision:
+                logger = getattr(self, '_logger', None)
+                if logger is not None:
+                    logger.warning(
+                        'motion mapping revision conflict: '
+                        f'file_id={source_path.name}, '
+                        f'expected={expected_mapping_revision}, '
+                        f'actual={actual_mapping_revision}'
+                    )
                 raise ValueError(
                     '모션축 설정이 화면을 불러온 뒤 변경됐습니다. '
                     '현재 설정 보호를 위해 저장을 거부했습니다. 파일을 다시 불러오세요'

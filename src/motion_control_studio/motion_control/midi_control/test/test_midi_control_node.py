@@ -1218,10 +1218,13 @@ def test_one_selected_fader_creates_same_motion_value_for_two_linked_axes():
     assert node._pending_motor_requests == {}
     node._midi_callback(message(touch=True, value=MIDI_VALUE_MAX))
 
-    targets = list(node._pending_motor_requests.values())
+    assert node._pending_motor_requests == {}
+    request = json.loads(node._motor_request_publisher.messages[-1].data)
+    targets = request['targets']
     assert {target['axis'] for target in targets} == {2, 3}
     assert {target['motion_id'] for target in targets} == {'1-1', '1-2'}
     assert {target['motion_deg'] for target in targets} == {20.0}
+    assert request['atomic_channels'] == [0]
 
 
 def test_percent_output_range_and_reverse():
@@ -1849,7 +1852,12 @@ def test_hand_movement_commands_only_after_soft_takeover_pickup():
 
     node._midi_callback(message(select=False, touched=True, value=9000))
     assert node._motor_follow_active[0] is True
-    assert (0, 2) in node._pending_motor_requests
+    assert node._pending_motor_requests == {}
+    assert len(node._motor_request_publisher.messages) == 1
+    request = json.loads(node._motor_request_publisher.messages[0].data)
+    assert request['targets'][0]['axis'] == 2
+    assert request['targets'][0]['motion_id'] == '1-1'
+    assert node._motor_command_message[0] == '다축 모터 위치 명령 전달 중'
 
 
 def test_only_one_selected_midi_line_can_own_the_same_motion_axis():
