@@ -189,6 +189,11 @@ export async function restartMotorControlSystem() {
   return readJson(response);
 }
 
+export async function clearMotorRuntimeApplication() {
+  const response = await projectFetch('/api/system/motor-runtime/clear', { method: 'POST' });
+  return readJson(response);
+}
+
 async function motionStudioRequest(path = '', method = 'GET', payload = null) {
   const options = { method };
   if (payload !== null) {

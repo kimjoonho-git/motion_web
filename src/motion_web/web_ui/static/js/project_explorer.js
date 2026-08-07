@@ -1,5 +1,6 @@
 import {
   activateProjectFile,
+  clearMotorRuntimeApplication,
   copyProjectFile,
   createProject,
   deleteProject,
@@ -14,8 +15,8 @@ import {
   renameProjectFile,
   saveProjectMemo,
   selectProject,
-} from './api.js?v=20260729-motion-file-studio-export-1';
-import { showConfirm, showPrompt } from './ui_dialogs.js?v=20260727-popup-common-3';
+} from './api.js?v=20260807-runtime-clear-1';
+import { showAlert, showConfirm, showPrompt } from './ui_dialogs.js?v=20260727-popup-common-3';
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (character) => ({
@@ -76,6 +77,33 @@ export function createProjectExplorerController({
     if (!el.projectExplorerMessage) return;
     el.projectExplorerMessage.textContent = message || '';
     el.projectExplorerMessage.classList.toggle('error-text', error);
+  }
+
+  function projectDeleteBlockedMessage(project = state.project, detail = '') {
+    const name = String(project?.name || project?.project_id || '선택한 프로젝트');
+    const serverDetail = String(detail || '').trim();
+    const runtimeOwned = Boolean(
+      project?.project_id
+      && state.runtimeProjectId
+      && project.project_id === state.runtimeProjectId
+    );
+    if (
+      runtimeOwned
+      || /모터에 적용된 프로젝트|모터 실행 설정이 사용하는 프로젝트/.test(serverDetail)
+    ) {
+      return (
+        `'${name}' 프로젝트를 삭제할 수 없습니다.\n\n`
+        + '현재 이 프로젝트의 모터축 설정이 실행 시스템에 적용되어 있습니다.\n'
+        + '프로그램 재시작·전체 동작 정지만으로는 적용이 해제되지 않습니다.\n\n'
+        + '삭제하려면 다음 순서로 진행하세요.\n'
+        + '1. 「전체 동작 정지」를 실행합니다.\n'
+        + '2. 「실행 적용 해제」를 실행합니다.\n'
+        + '3. 이 프로젝트를 다시 삭제합니다.\n\n'
+        + '또는 다른 프로젝트에서 「설정 적용 및 재시작」을 한 뒤 삭제할 수도 있습니다.'
+      );
+    }
+    return serverDetail
+      || `'${name}' 프로젝트를 삭제할 수 없습니다.`;
   }
 
   function renderProjectList() {
@@ -369,6 +397,13 @@ export function createProjectExplorerController({
         : '프로젝트 변경은 프로젝트·장비 > 시스템 정보에서만 가능합니다';
     }
     if (el.projectImportFileButton) el.projectImportFileButton.disabled = state.busy || !hasProject;
+    if (el.clearMotorRuntimeButton) {
+      const hasRuntime = Boolean(state.runtimeProjectId);
+      el.clearMotorRuntimeButton.disabled = state.busy || !hasRuntime;
+      el.clearMotorRuntimeButton.title = hasRuntime
+        ? 'Motor Manager 실행 적용을 해제해 프로젝트 삭제가 가능하게 합니다'
+        : '해제할 모터 실행 적용이 없습니다';
+    }
     if (el.projectDeleteButton) el.projectDeleteButton.disabled = state.busy || !hasProject;
     if (el.projectCopySourceProject) el.projectCopySourceProject.disabled = state.busy || !hasProject;
     if (el.projectCopySourceFile) {
@@ -654,8 +689,72 @@ export function createProjectExplorerController({
       );
       if (created) await onProjectChange(state.project, state.projectGeneration);
     });
+    el.clearMotorRuntimeButton?.addEventListener('click', async () => {
+      if (state.busy || !state.runtimeProjectId) return;
+      const runtimeName = state.projects.find(
+        (item) => item.project_id === state.runtimeProjectId,
+      )?.name || state.runtimeProjectId;
+      const confirmed = await showConfirm(
+        `모터 실행 적용을 해제합니다.\n\n`
+        + `적용 중 프로젝트: ${runtimeName}\n`
+        + 'Motor Manager가 정지되며, 다시 사용하려면 「설정 적용 및 재시작」이 필요합니다.\n'
+        + '모든 모션이 정지된 상태에서 「전체 동작 정지」를 먼저 실행했는지 확인하세요.',
+        {
+          title: '실행 적용 해제',
+          confirmLabel: '적용 해제',
+          tone: 'warning',
+        },
+      );
+      if (!confirmed) return;
+      state.busy = true;
+      renderControls();
+      try {
+        const result = await clearMotorRuntimeApplication();
+        if (result?.success === false) {
+          throw new Error(result.message || '실행 적용 해제 실패');
+        }
+        if (Number.isInteger(Number(result.project_generation))) {
+          state.projectGeneration = Number(result.project_generation);
+        }
+        if (Array.isArray(result.projects)) {
+          state.projects = result.projects;
+        }
+        state.runtimeProjectId = result.runtime_project_id || '';
+        setMessage(result.message || '모터 실행 적용을 해제했습니다');
+        await showAlert(result.message || '모터 실행 적용을 해제했습니다', {
+          title: '실행 적용 해제 완료',
+          confirmLabel: '확인',
+          tone: 'info',
+        });
+        await onProjectChange(state.project, state.projectGeneration);
+      } catch (error) {
+        const message = error?.message || String(error);
+        setMessage(message, true);
+        await showAlert(message, {
+          title: '실행 적용 해제 실패',
+          confirmLabel: '확인',
+          tone: 'danger',
+        });
+      } finally {
+        state.busy = false;
+        render();
+      }
+    });
     el.projectDeleteButton?.addEventListener('click', async () => {
       if (!state.project || state.busy) return;
+      if (
+        state.runtimeProjectId
+        && state.project.project_id === state.runtimeProjectId
+      ) {
+        const blocked = projectDeleteBlockedMessage(state.project);
+        setMessage(blocked, true);
+        await showAlert(blocked, {
+          title: '프로젝트 삭제 불가',
+          confirmLabel: '확인',
+          tone: 'warning',
+        });
+        return;
+      }
       const expected = String(state.project.name || '');
       const entered = await showPrompt(
         `프로젝트와 관련 파일을 복구할 수 없도록 영구 삭제합니다.\n확인하려면 프로젝트 이름을 입력하세요.\n\n${expected}`,
@@ -689,7 +788,16 @@ export function createProjectExplorerController({
         setMessage(result.message || '프로젝트와 관련 파일을 영구 삭제했습니다');
         await onProjectChange(null, state.projectGeneration);
       } catch (error) {
-        setMessage(error.message, true);
+        const blocked = projectDeleteBlockedMessage(
+          state.project,
+          error?.message || String(error),
+        );
+        setMessage(blocked, true);
+        await showAlert(blocked, {
+          title: '프로젝트 삭제 불가',
+          confirmLabel: '확인',
+          tone: 'warning',
+        });
       } finally {
         state.busy = false;
         render();

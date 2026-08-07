@@ -10,6 +10,7 @@ export function getElements() {
     desktopShortcutButton: document.getElementById('desktopShortcutButton'),
     programRestartButton: document.getElementById('programRestartButton'),
     motorControlRestartButton: document.getElementById('motorControlRestartButton'),
+    clearMotorRuntimeButton: document.getElementById('clearMotorRuntimeButton'),
     headerProgramRestartButton: document.getElementById('headerProgramRestartButton'),
     headerMotionStopButton: document.getElementById('headerMotionStopButton'),
     headerEmergencyStopButton: document.getElementById('headerEmergencyStopButton'),

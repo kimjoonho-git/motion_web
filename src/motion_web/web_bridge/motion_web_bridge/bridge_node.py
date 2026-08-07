@@ -3993,6 +3993,7 @@ class MotionWebBridge(Node):
         if str(project_id or '') == self._runtime_project_id():
             raise ValueError(
                 '현재 모터에 적용된 프로젝트는 삭제할 수 없습니다. '
+                '「전체 동작 정지」 후 「실행 적용 해제」를 실행하거나, '
                 '다른 프로젝트를 적용한 뒤 삭제하세요'
             )
         previous_generation = self._current_project_generation()
@@ -4365,6 +4366,58 @@ class MotionWebBridge(Node):
         result['project_sync'] = sync
         return result
 
+    def _motor_config_payload_from_path(
+        self,
+        config_file: Path,
+        *,
+        message: str = 'motor config YAML loaded',
+    ) -> Dict[str, Any]:
+        """Build the UI/API payload from one concrete motor_axes YAML path."""
+        path = Path(config_file)
+        if not path.is_file():
+            return {
+                'success': False,
+                'message': 'motor config YAML not found',
+                'config_file': str(path),
+                'config_revision': '',
+                'content': '',
+                'registry': self._empty_motor_registry(),
+            }
+        try:
+            raw = path.read_bytes()
+            content = raw.decode('utf-8')
+            config = yaml.safe_load(content) or {}
+        except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+            return {
+                'success': False,
+                'message': f'failed to load motor config YAML: {exc}',
+                'config_file': str(path),
+                'config_revision': '',
+                'content': '',
+                'registry': self._empty_motor_registry(),
+            }
+        if not isinstance(config, dict):
+            return {
+                'success': False,
+                'message': 'motor config YAML root must be an object',
+                'config_file': str(path),
+                'config_revision': '',
+                'content': '',
+                'registry': self._empty_motor_registry(),
+            }
+        axis_config = self._expand_shared_driver_profiles(config)
+        if axis_config != config:
+            content = yaml.safe_dump(axis_config, sort_keys=False, allow_unicode=True)
+        self.motor_config_file = path
+        return {
+            'success': True,
+            'message': message,
+            'config_file': str(path),
+            'config_revision': hashlib.sha256(raw).hexdigest(),
+            'content': content,
+            'registry': self._registry_from_motor_config(axis_config),
+        }
+
     def load_motor_config(self) -> Dict[str, Any]:
         try:
             self.motor_config_file = self._selected_motor_config_path()
@@ -4387,43 +4440,7 @@ class MotionWebBridge(Node):
                 'content': '',
                 'registry': self._empty_motor_registry(),
             }
-        if not self.motor_config_file.is_file():
-            return {
-                'success': False,
-                'message': 'motor config YAML not found',
-                'config_file': str(self.motor_config_file),
-                'config_revision': '',
-                'content': '',
-                'registry': self._empty_motor_registry(),
-            }
-
-        try:
-            content = self.motor_config_file.read_text(encoding='utf-8')
-            config = yaml.safe_load(content) or {}
-        except (OSError, yaml.YAMLError) as exc:
-            return {
-                'success': False,
-                'message': f'failed to load motor config YAML: {exc}',
-                'config_file': str(self.motor_config_file),
-                'config_revision': '',
-                'content': '',
-                'registry': self._empty_motor_registry(),
-            }
-
-        axis_config = self._expand_shared_driver_profiles(config)
-        if axis_config != config:
-            content = yaml.safe_dump(axis_config, sort_keys=False, allow_unicode=True)
-
-        return {
-            'success': True,
-            'message': 'motor config YAML loaded',
-            'config_file': str(self.motor_config_file),
-            'config_revision': hashlib.sha256(
-                self.motor_config_file.read_bytes()
-            ).hexdigest(),
-            'content': content,
-            'registry': self._registry_from_motor_config(axis_config),
-        }
+        return self._motor_config_payload_from_path(self.motor_config_file)
 
     def save_motor_config(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         try:
@@ -4486,9 +4503,39 @@ class MotionWebBridge(Node):
                 'registry': self._empty_motor_registry(),
             }
 
-        result = self.load_motor_config()
-        result['message'] = 'motor config YAML saved; restart motor_manager_node to apply'
-        return self._sync_project_file(result, 'motor_axes', self.motor_config_file)
+        # Persist project ownership of the written file, then return that same
+        # file as the save response. Do not rebuild the response through the
+        # active-file selector alone: a new project has an empty
+        # active_files.motor_axes until sync finishes, and an empty registry
+        # response would wipe the UI axis list (names/aliases) and leave
+        # "설정 적용 및 재시작" disabled until a manual reload.
+        synced = self._sync_project_file({}, 'motor_axes', target_file)
+        result = self._motor_config_payload_from_path(
+            target_file,
+            message=(
+                'motor config YAML saved; restart motor_manager_node to apply'
+            ),
+        )
+        if not result.get('success'):
+            return result
+        saved_motors = (result.get('registry') or {}).get('motors') or []
+        if len(saved_motors) == 0:
+            return {
+                'success': False,
+                'message': (
+                    '모터축 설정 파일은 저장됐지만 저장 응답에 축 목록이 없습니다. '
+                    '설정 불러오기로 파일을 다시 확인하세요'
+                ),
+                'config_file': str(target_file),
+                'config_revision': '',
+                'content': '',
+                'registry': self._empty_motor_registry(),
+            }
+        if 'project_sync' in synced:
+            result['project_sync'] = synced['project_sync']
+        if 'project_sync_warning' in synced:
+            result['project_sync_warning'] = synced['project_sync_warning']
+        return result
 
     def apply_motor_config(self) -> Dict[str, Any]:
         if not self.restart_script.is_file():
@@ -4868,6 +4915,144 @@ class MotionWebBridge(Node):
             ),
             'restart_mode': 'motor_service',
             'motor_operation': self.project_repository.motor_operation_status(),
+            **self.snapshot(),
+        }
+
+    def clear_motor_runtime_application(self) -> Dict[str, Any]:
+        """Stop Motor Manager and clear runtime ownership for project deletion."""
+        motor_service = str(
+            os.environ.get('MOTION_MOTOR_SERVICE_UNIT') or ''
+        ).strip()
+        if motor_service != 'motion-motor.service':
+            return {
+                'success': False,
+                'message': (
+                    'Motor Manager 분리 서비스가 설치되지 않았습니다. '
+                    '최초 설치를 다시 실행하세요'
+                ),
+                **self.snapshot(),
+            }
+        runtime_state = self.project_repository.motor_runtime_state()
+        runtime_project_id = str(runtime_state.get('target_project_id') or '').strip()
+        if not runtime_project_id:
+            return {
+                'success': True,
+                'cleared': False,
+                'message': '해제할 모터 실행 적용이 없습니다',
+                'runtime_project_id': '',
+                **self.snapshot(),
+            }
+        try:
+            self._ensure_project_change_allowed()
+        except ValueError as exc:
+            return {
+                'success': False,
+                'message': str(exc),
+                **self.snapshot(),
+            }
+        execution_blocker = self._coordination_execution_blocker()
+        if execution_blocker:
+            return {
+                'success': False,
+                'message': f'실행 적용 해제 미실행: {execution_blocker}',
+                **self.snapshot(),
+            }
+        moving_blocker = self._ethercat_scan_safety_blocker(
+            require_fresh_motor_state=self._managed_user_service_active(motor_service),
+        )
+        if moving_blocker:
+            return {
+                'success': False,
+                'message': (
+                    f'실행 적용 해제 미실행: {moving_blocker}. '
+                    '먼저 「전체 동작 정지」를 실행하세요'
+                ),
+                **self.snapshot(),
+            }
+        lifecycle_lock = getattr(self, '_motor_lifecycle_lock', None)
+        if lifecycle_lock is None:
+            lifecycle_lock = threading.Lock()
+            self._motor_lifecycle_lock = lifecycle_lock
+        if not lifecycle_lock.acquire(blocking=False):
+            return {
+                'success': False,
+                'message': '다른 모터 설정·검색·재시작 작업이 진행 중입니다',
+                **self.snapshot(),
+            }
+        operation: Dict[str, Any] = {}
+        cleared: Dict[str, Any] = {}
+        try:
+            operation = self.project_repository.begin_motor_operation(
+                'motor_runtime_clear',
+                'preparing',
+                timeout_sec=30.0,
+                details={'previous_project_id': runtime_project_id},
+            )
+            try:
+                self.motion_run_stop()
+            except Exception:
+                pass
+            try:
+                self.publish_safety_stop(False)
+            except Exception:
+                pass
+            if self._managed_user_service_active(motor_service):
+                self.project_repository.update_motor_operation(
+                    str(operation['operation_id']),
+                    'stopping_runtime',
+                    message='Motor Manager 정지 및 EtherCAT 소유권 해제 중',
+                )
+                self._run_managed_user_service('stop', motor_service)
+                try:
+                    self._wait_for_ethercat_release(8.0)
+                except Exception:
+                    pass
+            cleared = self.project_repository.clear_motor_runtime_target()
+            self._clear_motor_config_selection()
+            # Drop launch-time ownership so delete / runtime_project_id update
+            # without waiting for a Bridge restart.
+            self.applied_motor_config_file = Path()
+            self.project_repository.finish_motor_operation(
+                str(operation['operation_id']),
+                'success',
+                phase='completed',
+                message=str(cleared.get('message') or '모터 실행 적용 해제 완료'),
+                details={
+                    'previous_project_id': cleared.get('previous_project_id') or '',
+                    'motor_service_stopped': True,
+                },
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            operation_id = str(operation.get('operation_id') or '')
+            if operation_id:
+                try:
+                    self.project_repository.finish_motor_operation(
+                        operation_id,
+                        'failure',
+                        phase='failed',
+                        error=str(exc),
+                    )
+                except ValueError:
+                    pass
+            return {
+                'success': False,
+                'message': f'실행 적용 해제 실패: {exc}',
+                **self.snapshot(),
+            }
+        finally:
+            lifecycle_lock.release()
+        return {
+            'success': True,
+            'cleared': bool(cleared.get('cleared')),
+            'previous_project_id': cleared.get('previous_project_id') or '',
+            'message': (
+                f"{cleared.get('message') or '모터 실행 적용을 해제했습니다'}. "
+                'Motor Manager는 정지 상태입니다. '
+                '다시 사용하려면 프로젝트에서 「설정 적용 및 재시작」을 실행하세요'
+            ),
+            'runtime_project_id': '',
+            'motor_operation': self.project_repository.motor_operation_status(),
+            **self.list_motion_projects(),
             **self.snapshot(),
         }
 
@@ -7780,6 +7965,13 @@ def create_app(bridge: MotionWebBridge) -> FastAPI:
         return await asyncio.to_thread(
             project_call,
             bridge.restart_motor_control_system,
+        )
+
+    @app.post('/api/system/motor-runtime/clear')
+    async def clear_motor_runtime_application():
+        return await asyncio.to_thread(
+            project_call,
+            bridge.clear_motor_runtime_application,
         )
 
     @app.get('/api/motion-files')

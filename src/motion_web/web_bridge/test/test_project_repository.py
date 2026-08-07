@@ -355,6 +355,76 @@ def test_unconfirmed_ac_servo_can_be_saved_but_not_applied(tmp_path):
         repository.prepare_runtime_motor_config(project_id)
 
 
+def test_first_motor_config_save_returns_persisted_axes_before_apply(tmp_path):
+    """New projects have no active motor_axes file until the first save.
+
+    The save response must register that file and return the persisted axes so
+    the UI can satisfy hasConfiguredAxes && !changed without a manual reload.
+    """
+    repository = ProjectRepository(tmp_path / 'projects')
+    project_id = repository.create_project('first save apply ready')['project']['project_id']
+    assert repository.get_project(project_id)['project']['active_files']['motor_axes'] == ''
+
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge.project_repository = repository
+    bridge.workspace_root = tmp_path
+    bridge.motor_config_file = (
+        tmp_path / 'projects' / project_id / 'motor_axes' / 'motor_axes.yaml'
+    )
+    config = yaml.safe_load(
+        'period: 1000000\nmasters:\n- id: 0\n  type: ethercat\n  slaves:\n'
+        '  - controller_index: 0\n    driver_id: 0\n    alias: 101\n    position: 0\n'
+        '    vendor_id: 1647\n    product_id: 1614282756\n'
+        'web_axis_identities:\n- controller_index: 0\n  eeprom_alias: 101\n'
+        '  slave_position: 0\n  vendor_id: 1647\n  product_id: 1614282756\n'
+        '  revision_number: 65536\n  serial_number: 123456\n'
+        '  identity_source: physical_sii\n'
+        'web_axis_profiles:\n- controller_index: 0\n  driver_model: MADLN05BE\n'
+        '  model_confirmed: true\n  model_source: user_nameplate\n'
+        'drivers:\n- id: 0\n  type: minas\n  driver_model: MADLN05BE\n'
+        '  profile_velocity: 18000\n  profile_acceleration: 180000\n'
+        '  profile_deceleration: 180000\n'
+    )
+    registry = bridge._registry_from_motor_config(config)
+
+    result = bridge.save_motor_config({
+        'registry': registry,
+        'file_name': 'motor_axes.yaml',
+        'base_revision': '',
+    })
+
+    assert result['success'] is True
+    assert result.get('project_sync', {}).get('synced') is True
+    assert repository.get_project(project_id)['project']['active_files']['motor_axes'] == (
+        'motor_axes.yaml'
+    )
+    assert result['config_file'].endswith('motor_axes.yaml')
+    assert result['config_revision']
+    assert len(result['registry'].get('motors') or []) == 1
+    assert int(result['registry']['motors'][0]['axis']) == 0
+    assert int(result['registry']['motors'][0]['identity']['ethercat_alias']) == 101
+    assert result['content']
+
+    renamed = bridge._registry_from_motor_config(config)
+    renamed['motors'][0]['name'] = '왼쪽 서보'
+    renamed['motors'][0]['identity']['ethercat_alias'] = 101
+    second = bridge.save_motor_config({
+        'registry': renamed,
+        'file_name': 'motor_axes.yaml',
+        'base_revision': result['config_revision'],
+    })
+    assert second['success'] is True
+    assert second['registry']['motors'][0]['name'] == '왼쪽 서보'
+    assert int(second['registry']['motors'][0]['identity']['ethercat_alias']) == 101
+    assert second['config_revision'] != result['config_revision']
+
+    reloaded = bridge.load_motor_config()
+    assert reloaded['success'] is True
+    assert len(reloaded['registry'].get('motors') or []) == 1
+    assert reloaded['registry']['motors'][0]['name'] == '왼쪽 서보'
+    assert reloaded['config_revision'] == second['config_revision']
+
+
 def test_runtime_uses_separate_axis_model_profile_confirmation(tmp_path):
     repository = ProjectRepository(tmp_path / 'projects')
     project_id = repository.create_project('separate model profile')['project']['project_id']
@@ -2397,6 +2467,91 @@ def test_delete_project_rejects_the_active_motor_runtime_owner(tmp_path):
 
     assert (tmp_path / 'projects' / project_id).is_dir()
     assert repository.applied_runtime_motor_config() is not None
+
+
+def test_clear_motor_runtime_target_allows_project_delete(tmp_path):
+    repository = ProjectRepository(tmp_path / 'projects')
+    project_id = repository.create_project('running')['project']['project_id']
+    repository.save_file(
+        project_id,
+        'motor_axes',
+        'motor_axes.yaml',
+        'period: 1000000\nmasters:\n- id: 0\n  type: ethercat\n  slaves:\n'
+        '  - controller_index: 0\n    driver_id: 0\ndrivers:\n- id: 0\n  type: minas\n'
+        '  profile_velocity: 18000\n  profile_acceleration: 180000\n'
+        '  profile_deceleration: 180000\n',
+    )
+    repository.prepare_runtime_motor_config(project_id)
+    repository.mark_runtime_motor_config_applied(project_id)
+
+    cleared = repository.clear_motor_runtime_target()
+
+    assert cleared['cleared'] is True
+    assert cleared['previous_project_id'] == project_id
+    assert repository.motor_runtime_state().get('target_project_id') in ('', None)
+    result = repository.delete_project(project_id)
+    assert result['permanently_deleted'] is True
+    assert not (tmp_path / 'projects' / project_id).exists()
+
+
+def test_clear_motor_runtime_application_stops_and_allows_delete(
+    tmp_path, monkeypatch
+):
+    workspace = tmp_path / 'workspace'
+    repository = ProjectRepository(workspace / 'motion_projects')
+    project_id = repository.create_project('running')['project']['project_id']
+    repository.save_file(
+        project_id,
+        'motor_axes',
+        'motor_axes.yaml',
+        'period: 1000000\nmasters:\n- id: 0\n  type: ethercat\n  slaves:\n'
+        '  - controller_index: 0\n    driver_id: 0\ndrivers:\n- id: 0\n  type: minas\n'
+        '  profile_velocity: 18000\n  profile_acceleration: 180000\n'
+        '  profile_deceleration: 180000\n',
+    )
+    repository.prepare_runtime_motor_config(project_id)
+    runtime_file = repository.mark_runtime_motor_config_applied(project_id)
+
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge.project_repository = repository
+    bridge.workspace_root = workspace
+    bridge.motion_projects_dir = workspace / 'motion_projects'
+    bridge.applied_motor_config_file = Path(runtime_file).resolve()
+    bridge.motor_config_file = Path(runtime_file).resolve()
+    bridge.snapshot = lambda: {}
+    bridge.list_motion_projects = lambda: {
+        'projects': [],
+        'runtime_project_id': '',
+        'selected_project_id': project_id,
+    }
+    bridge._ensure_project_change_allowed = lambda: None
+    bridge._coordination_execution_blocker = lambda: ''
+    bridge._ethercat_scan_safety_blocker = lambda **_kwargs: ''
+    bridge._managed_user_service_active = lambda _unit: True
+    bridge._run_managed_user_service = lambda *_args, **_kwargs: None
+    bridge._wait_for_ethercat_release = lambda *_args, **_kwargs: None
+    bridge.motion_run_stop = lambda: None
+    bridge.publish_safety_stop = lambda *_args, **_kwargs: None
+    bridge._clear_motor_config_selection = lambda: None
+    bridge._motor_lifecycle_lock = threading.Lock()
+    bridge._execution_context_apply_lock = threading.Lock()
+    bridge._project_generation = 1
+    bridge._project_generation_lock = threading.Lock()
+    bridge._invalidate_execution_nodes = lambda *_args, **_kwargs: None
+    monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
+
+    assert bridge._runtime_project_id() == project_id
+    result = bridge.clear_motor_runtime_application()
+
+    assert result['success'] is True
+    assert result['cleared'] is True
+    assert result['previous_project_id'] == project_id
+    assert result['runtime_project_id'] == ''
+    assert bridge.applied_motor_config_file == Path()
+    assert bridge._runtime_project_id() == ''
+    assert repository.motor_runtime_state().get('target_project_id') in ('', None)
+    deleted = bridge.delete_motion_project(project_id)
+    assert deleted['permanently_deleted'] is True
 
 
 def test_delete_project_permanently_removes_folder_and_older_archives(tmp_path):

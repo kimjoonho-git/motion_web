@@ -835,13 +835,53 @@ class ProjectRepository:
             return None
         return Path(str(state['config_file']))
 
+    @_motor_runtime_locked
+    def clear_motor_runtime_target(self) -> Dict[str, Any]:
+        """Release Motor Manager ownership without applying another project."""
+        existing = self._read_motor_runtime_payload() or {'version': 1}
+        operation = existing.get('operation')
+        now = time.time()
+        if (
+            isinstance(operation, dict)
+            and operation.get('status') == 'running'
+            and float(operation.get('deadline_at') or 0.0) > now
+            and operation.get('type') != 'motor_runtime_clear'
+        ):
+            raise ValueError('다른 모터 설정·검색·재시작 작업이 진행 중입니다')
+        previous_project_id = str(existing.get('target_project_id') or '').strip()
+        if not previous_project_id:
+            return {
+                'cleared': False,
+                'previous_project_id': '',
+                'message': '해제할 모터 실행 적용이 없습니다',
+            }
+        self._write_motor_runtime_state({
+            'version': 1,
+            'target_project_id': '',
+            'session_id': '',
+            'config_relpath': '',
+            'config_sha256': '',
+            'project_generation': self.project_generation(),
+            'cleared_at': now,
+            'cleared_from_project_id': previous_project_id,
+            'operation': dict(operation) if isinstance(operation, dict) else {},
+        })
+        return {
+            'cleared': True,
+            'previous_project_id': previous_project_id,
+            'message': (
+                f"프로젝트 '{previous_project_id}'의 모터 실행 적용을 해제했습니다"
+            ),
+        }
+
     def delete_project(self, project_id: Any) -> Dict[str, Any]:
         project_dir = self._project_dir(project_id)
         runtime_target = self.motor_runtime_state()
         if runtime_target.get('target_project_id') == project_dir.name:
             raise ValueError(
                 '현재 모터 실행 설정이 사용하는 프로젝트는 삭제할 수 없습니다. '
-                '다른 프로젝트의 모터 설정을 적용한 후 다시 시도하세요'
+                '「전체 동작 정지」 후 「실행 적용 해제」를 실행하거나, '
+                '다른 프로젝트의 모터 설정을 적용한 뒤 다시 시도하세요'
             )
         manifest = self._read_manifest(project_dir)
         project_name = str(manifest.get('name') or project_dir.name)

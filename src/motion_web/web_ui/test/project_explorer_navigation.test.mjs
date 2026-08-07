@@ -131,3 +131,16 @@ test('project explorer hides recoverable trash without deleting backend data', (
   assert.match(projectExplorer, /const folders = visibleTree\.map/);
   assert.doesNotMatch(projectExplorer, /trash: \{ icon:/);
 });
+
+test('runtime clear button and delete-blocked popup guide the stop-clear-delete path', () => {
+  const html = readFileSync(new URL('../static/index.html', import.meta.url), 'utf8');
+  const api = readFileSync(new URL('../static/js/api.js', import.meta.url), 'utf8');
+  assert.match(html, /id="clearMotorRuntimeButton"[^>]*>실행 적용 해제</);
+  assert.match(api, /clearMotorRuntimeApplication[\s\S]*?\/api\/system\/motor-runtime\/clear/);
+  assert.match(projectExplorer, /clearMotorRuntimeApplication/);
+  assert.match(projectExplorer, /clearMotorRuntimeButton\.disabled = state\.busy \|\| !hasRuntime/);
+  assert.match(
+    projectExplorer,
+    /1\. 「전체 동작 정지」를 실행합니다\.[\s\S]*2\. 「실행 적용 해제」를 실행합니다\.[\s\S]*3\. 이 프로젝트를 다시 삭제합니다\./,
+  );
+});
