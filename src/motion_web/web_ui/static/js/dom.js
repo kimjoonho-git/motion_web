@@ -90,6 +90,7 @@ export function getElements() {
     coordinationExecutionState: document.getElementById('coordinationExecutionState'),
     coordinationJoinButton: document.getElementById('coordinationJoinButton'),
     coordinationLeaveButton: document.getElementById('coordinationLeaveButton'),
+    coordinationTemporaryDisableButton: document.getElementById('coordinationTemporaryDisableButton'),
     coordinationStartButton: document.getElementById('coordinationStartButton'),
     coordinationStopAfterButton: document.getElementById('coordinationStopAfterButton'),
     coordinationStopNowButton: document.getElementById('coordinationStopNowButton'),

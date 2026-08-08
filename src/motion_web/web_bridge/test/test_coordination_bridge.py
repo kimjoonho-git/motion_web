@@ -159,6 +159,16 @@ def test_active_dds_execution_blocks_local_start(tmp_path):
     assert 'DDS 그룹 실행' in service.local_execution_blocker()
 
 
+def test_stale_dds_display_state_without_lease_does_not_block_local_start(tmp_path):
+    node = _Node()
+    service = CoordinationWebBridge(node, tmp_path, lambda: node.generation[0])
+    service._local_api = lambda *_args, **_kwargs: {
+        'execution': {'state': 'preparing', 'execution_id': ''},
+    }
+
+    assert service.local_execution_blocker() == ''
+
+
 def test_control_response_is_discarded_after_project_transition(tmp_path):
     node = _Node()
     node.change_generation_on_publish = True

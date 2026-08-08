@@ -832,6 +832,42 @@ class MotionCoordinationNode(Node):
             self._alarm_pub.publish(alarm)
         return {'success': True, 'message': '그룹 동기화 오류 확인 완료'}
 
+    def _temporarily_disable_coordination(self) -> Dict[str, Any]:
+        """Stop any owned group run, then leave this PC without peer approval."""
+        with self._lock:
+            execution_id = str(self._execution.execution_id or '')
+            execution_state = str(self._execution.state or 'idle')
+
+        stop_message = ''
+        if execution_id:
+            stopped = self._request_group_stop(after_cycle=False)
+            stop_message = str(stopped.get('message') or '')
+        elif execution_state not in {'idle', 'stopped', 'error'}:
+            # A failed prepare can leave a display-only state with no execution
+            # lease. Release it locally so the user can continue standalone work.
+            with self._lock:
+                self._execution.reset()
+                self._clear_active_execution()
+        else:
+            with self._lock:
+                self._clear_active_execution()
+
+        with self._lock:
+            self._coordination_error = {}
+            self._alarm_registry.clear_coordination()
+            joined = self._joined
+            self._joined = False
+        if joined and self._config.configured:
+            self._publish_heartbeat(joined=False)
+        return {
+            'success': True,
+            'message': (
+                '이 PC의 DDS 연동을 일시 해제했습니다. '
+                '단독 모션·모션 스튜디오를 사용할 수 있습니다.'
+                + (f' {stop_message}' if stop_message else '')
+            ),
+        }
+
     def _alarm_callback(self, message: GroupAlarm) -> None:
         if message.group_id != self._config.group_id:
             return
@@ -898,6 +934,8 @@ class MotionCoordinationNode(Node):
                     self._publish_heartbeat(joined=False)
                 self._joined = False
                 result = {'success': True, 'message': 'DDS 그룹 나가기'}
+            elif command == 'temporarily_disable':
+                result = self._temporarily_disable_coordination()
             elif command in {'start_group', 'synchronized_run'}:
                 result = self._start_group_execution()
             elif command == 'stop_after_cycle':

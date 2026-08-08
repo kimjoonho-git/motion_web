@@ -289,6 +289,12 @@ class MotionStudioSync:
         if prepared.get('success') is False:
             return prepared
         if command in {'record', 'play', 'initialize'}:
+            conflict = bridge._coordination_execution_blocker()
+            if conflict:
+                return {
+                    'success': False,
+                    'message': f'모션 스튜디오 동작 불가: {conflict}',
+                }
             blocker = bridge._motor_runtime_control_blocker()
             if blocker:
                 return {

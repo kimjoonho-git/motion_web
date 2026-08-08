@@ -187,3 +187,17 @@ test('external JSON upload is not exposed by the motion file UI or API client', 
   assert.doesNotMatch(html, /option value="motions">모션 파일/);
   assert.doesNotMatch(projectExplorer, /'motor_axes', 'motion_axis_matching', 'motions', 'layers'/);
 });
+
+test('DDS execution blocks show a recovery popup and expose local temporary disable', () => {
+  const coordination = readFileSync(
+    new URL('../static/js/coordination.js', import.meta.url),
+    'utf8',
+  );
+  assert.match(controller, /async function showMotionRunFailure/);
+  assert.match(controller, /DDS 그룹 실행이 로컬 모션 실행을 사용 중입니다/);
+  assert.match(controller, /「연동 일시 해제」를 실행한 뒤 다시 시도하세요/);
+  assert.match(html, /id="coordinationTemporaryDisableButton"[^>]*>연동 일시 해제</);
+  assert.match(dom, /coordinationTemporaryDisableButton/);
+  assert.match(coordination, /control\('temporarily_disable'\)/);
+  assert.match(coordination, /다른 PC의 확인 없이 이 PC가 그룹에서 나갑니다/);
+});

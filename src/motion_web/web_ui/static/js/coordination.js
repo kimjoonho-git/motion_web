@@ -3,6 +3,7 @@ import {
   sendCoordinationControl,
   saveCoordinationSettings,
 } from './api.js?v=20260806-dds-trigger-sync';
+import { showConfirm } from './ui_dialogs.js?v=20260727-popup-common-3';
 
 function text(value) {
   return String(value ?? '').replace(/[&<>"']/g, (character) => ({
@@ -119,6 +120,12 @@ export function createCoordinationController({ el }) {
     const groupErrorActive = coordinationError.active === true;
     if (el.coordinationJoinButton) el.coordinationJoinButton.disabled = loading || !nodeReady || joined || active;
     if (el.coordinationLeaveButton) el.coordinationLeaveButton.disabled = loading || !joined || active;
+    if (el.coordinationTemporaryDisableButton) {
+      el.coordinationTemporaryDisableButton.disabled = loading || !nodeReady || !joined;
+      el.coordinationTemporaryDisableButton.title = active
+        ? '이 PC와 다른 PC의 그룹 모션을 즉시 정지한 뒤 이 PC의 연동을 해제합니다'
+        : '이 PC의 연동을 해제해 단독 모션·모션 스튜디오를 사용합니다';
+    }
     if (el.coordinationStartButton) el.coordinationStartButton.disabled = loading || !joined || active || peers.length < 1 || unhealthyPeer || groupErrorActive;
     if (el.coordinationStopAfterButton) el.coordinationStopAfterButton.disabled = loading || !active;
     if (el.coordinationStopNowButton) el.coordinationStopNowButton.disabled = loading || !active;
@@ -194,11 +201,33 @@ export function createCoordinationController({ el }) {
     }
   }
 
+  async function temporarilyDisable() {
+    if (loading) return;
+    const active = activeStates.has(snapshot?.runtime?.execution?.state);
+    const confirmed = await showConfirm(
+      active
+        ? '이 PC의 DDS 연동을 일시 해제합니다.\n\n'
+          + '진행 중이거나 준비 중인 그룹 모션은 두 PC 모두 즉시 정지됩니다. '
+          + '다른 PC의 확인 없이 이 PC가 그룹에서 나갑니다.'
+        : '이 PC의 DDS 연동을 일시 해제합니다.\n\n'
+          + '다른 PC의 확인 없이 이 PC가 그룹에서 나갑니다. '
+          + '단독 모션·모션 스튜디오를 사용할 수 있으며, 다시 연동하려면 「그룹 참가」를 누르세요.',
+      {
+        title: '연동 일시 해제',
+        confirmLabel: '연동 해제',
+        tone: 'warning',
+      },
+    );
+    if (!confirmed) return;
+    await control('temporarily_disable');
+  }
+
   function bindEvents() {
     el.coordinationRefreshButton?.addEventListener('click', refresh);
     el.coordinationSaveButton?.addEventListener('click', save);
     el.coordinationJoinButton?.addEventListener('click', () => control('join'));
     el.coordinationLeaveButton?.addEventListener('click', () => control('leave'));
+    el.coordinationTemporaryDisableButton?.addEventListener('click', temporarilyDisable);
     el.coordinationStartButton?.addEventListener('click', () => control('start_group'));
     el.coordinationStopAfterButton?.addEventListener('click', () => control('stop_after_cycle'));
     el.coordinationStopNowButton?.addEventListener('click', () => control('stop_now'));

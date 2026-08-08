@@ -82,6 +82,7 @@ class CoordinationWebBridge:
         }
         if (
             connected and isinstance(execution, Mapping)
+            and str(execution.get('execution_id') or '').strip()
             and execution.get('state') in active_states
         ):
             return 'DDS 그룹 실행이 로컬 모션 실행을 사용 중입니다'
@@ -172,7 +173,7 @@ class CoordinationWebBridge:
         command = str(payload.get('command') or '').strip()
         allowed = {
             'join', 'leave', 'start_group', 'stop_after_cycle', 'stop_now',
-            'acknowledge_group_error',
+            'acknowledge_group_error', 'temporarily_disable',
         }
         if command not in allowed:
             raise ValueError('지원하지 않는 DDS 그룹 실행 요청입니다')

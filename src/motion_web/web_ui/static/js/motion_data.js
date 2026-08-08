@@ -599,6 +599,22 @@ export function createMotionDataController({
     if (el.motionRunMessage) el.motionRunMessage.textContent = message;
   }
 
+  async function showMotionRunFailure(message, title) {
+    const detail = String(message || '모션 실행 요청이 실패했습니다');
+    const blockedByCoordination = /DDS 그룹 실행이 로컬 모션 실행을 사용 중입니다/.test(detail);
+    await showAlert(
+      blockedByCoordination
+        ? `${detail}\n\n`
+          + 'DDS 그룹 연동에서 그룹 실행을 종료하거나 「연동 일시 해제」를 실행한 뒤 다시 시도하세요.'
+        : detail,
+      {
+        title: blockedByCoordination ? 'DDS 그룹 실행 중' : title,
+        confirmLabel: '확인',
+        tone: 'danger',
+      },
+    );
+  }
+
   function emptyMappingDraft() {
     return {
       file_id: '',
@@ -2662,8 +2678,13 @@ export function createMotionDataController({
       motionRunStatus = payload.status || motionRunStatus || null;
       motionRunLastResult = payload;
       setMotionRunMessage(payload.message || (payload.success ? '초기 위치 이동 시작' : '초기 위치 이동 실패'));
+      if (payload.success === false) {
+        await showMotionRunFailure(payload.message, '초기 위치 이동 실패');
+      }
     } catch (error) {
-      setMotionRunMessage(`초기 위치 이동 실패: ${error?.message || error}`);
+      const message = error?.message || String(error);
+      setMotionRunMessage(`초기 위치 이동 실패: ${message}`);
+      await showMotionRunFailure(message, '초기 위치 이동 실패');
     } finally {
       motionRunLoading = false;
       renderMotionRunPanel();
@@ -2692,8 +2713,13 @@ export function createMotionDataController({
       motionRunStatus = payload.status || motionRunStatus || null;
       motionRunLastResult = payload;
       setMotionRunMessage(payload.message || (payload.success ? '모션 실행 시작' : '모션 실행 실패'));
+      if (payload.success === false) {
+        await showMotionRunFailure(payload.message, '모션 실행 실패');
+      }
     } catch (error) {
-      setMotionRunMessage(`모션 실행 실패: ${error?.message || error}`);
+      const message = error?.message || String(error);
+      setMotionRunMessage(`모션 실행 실패: ${message}`);
+      await showMotionRunFailure(message, '모션 실행 실패');
     } finally {
       motionRunLoading = false;
       renderMotionRunPanel();
@@ -2775,16 +2801,10 @@ export function createMotionDataController({
       motionRunStatus = payload.status || motionRunStatus || null;
       motionRunLastResult = payload;
       if (payload.success === false) {
-        await showAlert(payload.message || '자동 반복 시작 실패', {
-          title: '자동 반복 시작',
-          tone: 'danger',
-        });
+        await showMotionRunFailure(payload.message, '자동 반복 시작 실패');
       }
     } catch (error) {
-      await showAlert(error?.message || String(error), {
-        title: '자동 반복 시작 실패',
-        tone: 'danger',
-      });
+      await showMotionRunFailure(error?.message || String(error), '자동 반복 시작 실패');
     } finally {
       motionRunLoading = false;
       renderMotionRunPanel();

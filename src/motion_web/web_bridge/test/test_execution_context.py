@@ -1744,3 +1744,24 @@ def test_record_does_not_start_when_unified_project_prepare_fails():
     result = bridge.request_prepared_motion_studio('record', {'mode': 'record'})
 
     assert result == {'success': False, 'message': 'project prepare failed'}
+
+
+def test_motion_studio_is_blocked_while_dds_group_owns_local_execution():
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge.prepare_unified_motion_studio = lambda: {'success': True}
+    bridge._coordination_execution_blocker = (
+        lambda: 'DDS 그룹 실행이 로컬 모션 실행을 사용 중입니다'
+    )
+    bridge.request_motion_studio = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError('DDS 그룹 실행 중에는 모션 스튜디오를 요청하면 안 됩니다')
+    )
+
+    result = bridge.request_prepared_motion_studio('play', {})
+
+    assert result == {
+        'success': False,
+        'message': (
+            '모션 스튜디오 동작 불가: '
+            'DDS 그룹 실행이 로컬 모션 실행을 사용 중입니다'
+        ),
+    }

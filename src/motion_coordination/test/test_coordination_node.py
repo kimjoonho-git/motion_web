@@ -525,6 +525,23 @@ def test_leave_publishes_explicit_not_joined_heartbeat():
     assert node._heartbeat_pub.messages[-1].joined is False
 
 
+def test_temporary_disable_releases_stale_prepare_without_peer_approval():
+    node = _node()
+    node._joined = True
+    node._heartbeat_pub = _Publisher()
+    node._execution.state = 'preparing'
+    node._coordination_error = {'active': True, 'code': 'GROUP_START_REJECTED'}
+
+    result = node._handle_local_request({'command': 'temporarily_disable'})
+
+    assert result['success'] is True
+    assert node._joined is False
+    assert node._execution.state == 'idle'
+    assert node._execution.execution_id == ''
+    assert node._coordination_error == {}
+    assert node._heartbeat_pub.messages[-1].joined is False
+
+
 def test_rejected_prepare_cancels_execution_and_releases_lease():
     node = _node()
     node._execution = GroupExecution()

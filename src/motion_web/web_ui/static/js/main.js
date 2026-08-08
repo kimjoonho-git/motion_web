@@ -14,7 +14,7 @@ import {
 import { getElements } from './dom.js?v=20260807-runtime-clear-1';
 import { createMotorEventLogController } from './event_log.js?v=20260727-popup-common-3';
 import { createMidiMonitorController } from './midi_monitor.js?v=20260806-midi-pickup-reconnect-1';
-import { createMotionDataController } from './motion_data.js?v=20260806-mapping-revision-reconnect-1';
+import { createMotionDataController } from './motion_data.js?v=20260808-coordination-ownership-1';
 import { createMotionStudioController } from './motion_studio.js?v=20260804-point-actions-range-1';
 import { createMotionTestController } from './motion_test.js?v=20260728-servo-alarm-2';
 import { createMotorConfigController } from './motor_config.js?v=20260731-project-compatible-scan-1';
@@ -38,7 +38,7 @@ import {
 } from './workspace_navigation.js?v=20260729-motion-files-execution-1';
 import { installFeedbackPresentation } from './ui_feedback.js?v=20260724-ui-finish-1';
 import { createServoAlarmController } from './servo_alarm.js?v=20260728-servo-alarm-2';
-import { createCoordinationController } from './coordination.js?v=20260806-dds-trigger-safety';
+import { createCoordinationController } from './coordination.js?v=20260808-coordination-ownership-1';
 
 const el = getElements();
 const operationProgress = createOperationProgressManager({ el });
