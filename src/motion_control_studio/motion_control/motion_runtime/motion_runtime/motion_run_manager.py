@@ -1110,7 +1110,7 @@ class MotionRunManager(Node):
         cycle_number: int,
     ) -> bool:
         mode = str(plan.get('repeat_mode') or 'direct')
-        if mode == 'dwell':
+        if mode in {'dwell', 'dwell_reinitialize'}:
             duration = max(float(plan.get('dwell_sec') or 0.0), 0.0)
             deadline = time.monotonic() + duration
             self._update_status({
@@ -1124,7 +1124,7 @@ class MotionRunManager(Node):
                 if self._stop_event.is_set() or self._graceful_stop_event.is_set():
                     return False
                 time.sleep(min(0.05, deadline - time.monotonic()))
-        elif mode == 'reinitialize':
+        if mode in {'reinitialize', 'dwell_reinitialize'}:
             self._run_initialization(initialization_plan)
             if self._stop_event.is_set() or self.status().get('state') != 'initialized':
                 return False
@@ -1969,7 +1969,7 @@ class MotionRunManager(Node):
     def _motion_auto_start_guard_error(plan: Dict[str, Any]) -> str:
         if (
             plan.get('run_mode') == 'continuous'
-            and plan.get('repeat_mode') != 'reinitialize'
+            and plan.get('repeat_mode') not in {'reinitialize', 'dwell_reinitialize'}
         ):
             capability = plan.get('capabilities', {}).get('continuous_run', {})
             if not capability.get('available'):

@@ -94,6 +94,9 @@ class GroupExecution:
         self.scheduled: set[str] = set()
         self.triggered: Dict[str, float] = {}
         self.stop_after_cycle = False
+        self.run_mode = 'continuous'
+        self.repeat_mode = 'direct'
+        self.dwell_sec = 0.0
         self.last_start_spread_ms: Optional[float] = None
         self.last_initialize_spread_ms: Optional[float] = None
         self.pending_command = ''
@@ -126,7 +129,15 @@ class GroupExecution:
         self.pending_scheduled_at = 0.0
         self.motion_start_report_deadline = 0.0
 
-    def begin(self, coordinator_id: str, participants: Iterable[str]) -> str:
+    def begin(
+        self,
+        coordinator_id: str,
+        participants: Iterable[str],
+        *,
+        run_mode: str = 'continuous',
+        repeat_mode: str = 'direct',
+        dwell_sec: float = 0.0,
+    ) -> str:
         selected = tuple(sorted(set(str(value) for value in participants if str(value))))
         if not 1 <= len(selected) <= 8:
             raise ValueError('그룹 실행 참가 PC는 1~8대여야 합니다')
@@ -138,6 +149,9 @@ class GroupExecution:
         self.execution_id = f'exec-{uuid.uuid4().hex}'
         self.coordinator_id = coordinator_id
         self.participants = selected
+        self.run_mode = str(run_mode)
+        self.repeat_mode = str(repeat_mode)
+        self.dwell_sec = float(dwell_sec)
         self.state = 'preparing'
         return self.execution_id
 

@@ -11,7 +11,7 @@ from typing import Any, Dict
 
 
 AUTOMATION_VERSION = 1
-REPEAT_MODES = {'direct', 'dwell', 'reinitialize'}
+REPEAT_MODES = {'direct', 'dwell', 'reinitialize', 'dwell_reinitialize'}
 
 
 def default_automation_state() -> Dict[str, Any]:

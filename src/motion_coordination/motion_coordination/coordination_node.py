@@ -508,6 +508,11 @@ class MotionCoordinationNode(Node):
                 raise ValueError('그룹 실행 참가 PC는 1~8대여야 합니다')
             if command == 'prepare':
                 self._accept_execution_claim(message, participants)
+                with self._lock:
+                    self._execution.repeat_mode = (
+                        str(message.repeat_mode or 'direct').strip().lower()
+                    )
+                    self._execution.dwell_sec = max(float(message.dwell_sec), 0.0)
                 result = self._local_readiness()
                 event = 'ready' if result.get('success') else 'rejected'
                 self._publish_event(
@@ -526,6 +531,8 @@ class MotionCoordinationNode(Node):
                     'execution_id': message.execution_id,
                     'initialize_monotonic': local_target_ns / 1_000_000_000.0,
                     'network_operation_id': message.command_id,
+                    'repeat_mode': self._execution.repeat_mode,
+                    'dwell_sec': self._execution.dwell_sec,
                 })
                 event = 'initialize_scheduled'
             elif command == 'start_at':
@@ -674,11 +681,14 @@ class MotionCoordinationNode(Node):
                 elif message.event == 'cycle_ready' and message.success:
                     self._execution.mark_cycle_ready(message.pc_id, int(message.cycle_number))
                     if self._execution.state == 'cycle_ready':
-                        if self._execution.stop_after_cycle:
+                        if (
+                            self._execution.stop_after_cycle
+                            or self._execution.run_mode == 'once'
+                        ):
                             self._execution.stop_now()
                             self._clear_active_execution()
                         else:
-                            self._publish_next_start()
+                            self._publish_next_cycle()
                 elif message.event == 'stopped':
                     self._execution.stop_now()
                 elif message.event == 'error':
@@ -937,7 +947,7 @@ class MotionCoordinationNode(Node):
             elif command == 'temporarily_disable':
                 result = self._temporarily_disable_coordination()
             elif command in {'start_group', 'synchronized_run'}:
-                result = self._start_group_execution()
+                result = self._start_group_execution(request=request)
             elif command == 'stop_after_cycle':
                 result = self._request_group_stop(after_cycle=True)
             elif command in {'stop_now', 'stop_motion'}:
@@ -951,10 +961,28 @@ class MotionCoordinationNode(Node):
         return result
 
     def _start_group_execution(
-        self, *, participants_override: Optional[tuple[str, ...]] = None,
+        self,
+        *,
+        participants_override: Optional[tuple[str, ...]] = None,
+        request: Optional[Mapping[str, Any]] = None,
     ) -> Dict[str, Any]:
         if not self._joined:
             raise ValueError('먼저 DDS 그룹에 참가하세요')
+        request = request or {}
+        run_mode = str(request.get('run_mode') or 'continuous').strip().lower()
+        repeat_mode = str(request.get('repeat_mode') or 'direct').strip().lower()
+        try:
+            dwell_sec = float(request.get('dwell_sec') or 0.0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError('그룹 대기 시간은 숫자여야 합니다') from exc
+        if run_mode not in {'once', 'continuous'}:
+            raise ValueError('그룹 실행 방식은 1회 또는 연속이어야 합니다')
+        if repeat_mode not in {'direct', 'dwell', 'reinitialize', 'dwell_reinitialize'}:
+            raise ValueError('지원하지 않는 그룹 회차 사이 동작입니다')
+        if dwell_sec < 0.0:
+            raise ValueError('그룹 대기 시간은 0초 이상이어야 합니다')
+        if repeat_mode not in {'dwell', 'dwell_reinitialize'}:
+            dwell_sec = 0.0
         with self._lock:
             if self._duplicate_pc_boot_id:
                 raise ValueError('중복 PC ID를 수정하고 연동 서비스를 재시작하세요')
@@ -989,7 +1017,10 @@ class MotionCoordinationNode(Node):
                     '그룹 참가 PC 상태 때문에 실행을 시작할 수 없습니다: '
                     + ', '.join(unhealthy)
                 )
-            execution_id = self._execution.begin(self._config.pc_id, participants)
+            execution_id = self._execution.begin(
+                self._config.pc_id, participants,
+                run_mode=run_mode, repeat_mode=repeat_mode, dwell_sec=dwell_sec,
+            )
             self._sync_estimators.clear()
             self._sync_sent_samples.clear()
             self._sync_probes.clear()
@@ -1004,6 +1035,7 @@ class MotionCoordinationNode(Node):
             command = self._new_command(
                 command='prepare', execution_id=execution_id,
                 cycle_number=0, participants=participants,
+                repeat_mode=repeat_mode, dwell_sec=dwell_sec,
             )
             self._execution.pending_command = 'prepare'
             self._execution.pending_command_id = command.command_id
@@ -1018,6 +1050,9 @@ class MotionCoordinationNode(Node):
             'message': '그룹 실행 준비 확인 시작',
             'execution_id': execution_id,
             'participants': list(participants),
+            'run_mode': run_mode,
+            'repeat_mode': repeat_mode,
+            'dwell_sec': dwell_sec,
         }
 
     def _request_group_stop(self, *, after_cycle: bool) -> Dict[str, Any]:
@@ -1110,6 +1145,27 @@ class MotionCoordinationNode(Node):
             raise ValueError(reason)
         self._begin_trigger_sync('start')
 
+    def _publish_next_cycle(self) -> None:
+        """Apply the common group repeat policy after every completed cycle."""
+        with self._lock:
+            execution_id = self._execution.execution_id
+            repeat_mode = self._execution.repeat_mode
+            dwell_sec = self._execution.dwell_sec
+
+        def schedule() -> None:
+            with self._lock:
+                if self._execution.execution_id != execution_id:
+                    return
+            if repeat_mode in {'reinitialize', 'dwell_reinitialize'}:
+                self._begin_trigger_sync('initialize')
+            else:
+                self._publish_next_start()
+
+        if repeat_mode in {'dwell', 'dwell_reinitialize'} and dwell_sec > 0.0:
+            threading.Timer(dwell_sec, schedule).start()
+        else:
+            schedule()
+
     def _record_schedule_ack(self, message: GroupEvent) -> None:
         if message.command_id != self._execution.pending_command_id:
             return
@@ -1188,6 +1244,7 @@ class MotionCoordinationNode(Node):
         self, *, command: str, execution_id: str, cycle_number: int,
         participants: tuple[str, ...], command_id: str = '',
         scheduled_monotonic: float = 0.0,
+        repeat_mode: str = '', dwell_sec: float = 0.0,
     ) -> GroupCommand:
         message = GroupCommand()
         message.group_id = self._config.group_id
@@ -1202,6 +1259,8 @@ class MotionCoordinationNode(Node):
             max(float(scheduled_monotonic), 0.0) * 1_000_000_000
         )
         message.participant_ids = list(participants)
+        message.repeat_mode = str(repeat_mode)
+        message.dwell_sec = float(dwell_sec)
         return message
 
     def _publish_event(

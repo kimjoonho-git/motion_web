@@ -126,7 +126,11 @@ export function createCoordinationController({ el }) {
         ? '이 PC와 다른 PC의 그룹 모션을 즉시 정지한 뒤 이 PC의 연동을 해제합니다'
         : '이 PC의 연동을 해제해 단독 모션·모션 스튜디오를 사용합니다';
     }
-    if (el.coordinationStartButton) el.coordinationStartButton.disabled = loading || !joined || active || peers.length < 1 || unhealthyPeer || groupErrorActive;
+    const startDisabled = loading || !joined || active || peers.length < 1 || unhealthyPeer || groupErrorActive;
+    if (el.coordinationStartButton) el.coordinationStartButton.disabled = startDisabled;
+    if (el.coordinationContinuousStartButton) el.coordinationContinuousStartButton.disabled = startDisabled;
+    if (el.coordinationRepeatMode) el.coordinationRepeatMode.disabled = loading || active;
+    if (el.coordinationDwellSec) el.coordinationDwellSec.disabled = loading || active;
     if (el.coordinationStopAfterButton) el.coordinationStopAfterButton.disabled = loading || !active;
     if (el.coordinationStopNowButton) el.coordinationStopNowButton.disabled = loading || !active;
     if (el.coordinationAcknowledgeErrorButton) el.coordinationAcknowledgeErrorButton.disabled = loading || !groupErrorActive;
@@ -183,13 +187,13 @@ export function createCoordinationController({ el }) {
     }
   }
 
-  async function control(command) {
+  async function control(command, details = {}) {
     if (loading) return;
     loading = true;
     if (el.coordinationControlSummary) el.coordinationControlSummary.textContent = '명령 전달 중';
     render();
     try {
-      const result = await sendCoordinationControl({ command });
+      const result = await sendCoordinationControl({ command, ...details });
       if (el.coordinationControlSummary) el.coordinationControlSummary.textContent = result.message || '명령 처리 완료';
       if (!result.success) window.alert(result.message || '그룹 명령 실패');
       await refresh();
@@ -222,13 +226,24 @@ export function createCoordinationController({ el }) {
     await control('temporarily_disable');
   }
 
+  function groupRunOptions(runMode) {
+    const repeatMode = String(el.coordinationRepeatMode?.value || 'direct');
+    const dwellSec = Number(el.coordinationDwellSec?.value);
+    return {
+      run_mode: runMode,
+      repeat_mode: repeatMode,
+      dwell_sec: Number.isFinite(dwellSec) && dwellSec >= 0 ? dwellSec : 0,
+    };
+  }
+
   function bindEvents() {
     el.coordinationRefreshButton?.addEventListener('click', refresh);
     el.coordinationSaveButton?.addEventListener('click', save);
     el.coordinationJoinButton?.addEventListener('click', () => control('join'));
     el.coordinationLeaveButton?.addEventListener('click', () => control('leave'));
     el.coordinationTemporaryDisableButton?.addEventListener('click', temporarilyDisable);
-    el.coordinationStartButton?.addEventListener('click', () => control('start_group'));
+    el.coordinationStartButton?.addEventListener('click', () => control('start_group', groupRunOptions('once')));
+    el.coordinationContinuousStartButton?.addEventListener('click', () => control('start_group', groupRunOptions('continuous')));
     el.coordinationStopAfterButton?.addEventListener('click', () => control('stop_after_cycle'));
     el.coordinationStopNowButton?.addEventListener('click', () => control('stop_now'));
     el.coordinationAcknowledgeErrorButton?.addEventListener('click', () => control('acknowledge_group_error'));

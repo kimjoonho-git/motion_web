@@ -8,3 +8,5 @@ uint32 cycle_number
 builtin_interfaces/Time sent_at
 int64 scheduled_monotonic_ns
 string[] participant_ids
+string repeat_mode
+float64 dwell_sec

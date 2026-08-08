@@ -179,7 +179,14 @@ class CoordinationWebBridge:
             raise ValueError('지원하지 않는 DDS 그룹 실행 요청입니다')
         start_generation = int(self._project_generation())
         try:
-            result = self._local_api('/control', {'command': command})
+            request = {'command': command}
+            if command == 'start_group':
+                request.update({
+                    'run_mode': payload.get('run_mode', 'continuous'),
+                    'repeat_mode': payload.get('repeat_mode', 'direct'),
+                    'dwell_sec': payload.get('dwell_sec', 0.0),
+                })
+            result = self._local_api('/control', request)
         except (OSError, ValueError) as exc:
             result = {'success': False, 'message': str(exc)}
         if int(self._project_generation()) != start_generation:
@@ -258,7 +265,17 @@ def local_motion_control(bridge: Any, payload: Mapping[str, Any]) -> Dict[str, A
             'execution_id': str(payload.get('execution_id') or ''),
         })
     if command == 'stop_after_cycle':
-        return bridge.motion_run_stop_after_cycle()
+        result = bridge.motion_run_stop_after_cycle()
+        if (
+            result.get('success') is False
+            and '활성 그룹 실행이 없습니다' in str(result.get('message') or '')
+        ):
+            return {
+                'success': True,
+                'already_completed': True,
+                'message': '현재 그룹 회차가 이미 완료되어 다음 회차를 시작하지 않습니다',
+            }
+        return result
     try:
         selection = _local_motion_selection(bridge)
     except ValueError as exc:
@@ -271,18 +288,31 @@ def local_motion_control(bridge: Any, payload: Mapping[str, Any]) -> Dict[str, A
         'network_operation_id': str(payload.get('network_operation_id') or ''),
     }
     if command == 'group_prepare':
-        run_status = bridge.motion_run_status()
-        automation = (
-            (run_status.get('status') or {}).get('automation')
-            if isinstance(run_status, Mapping) else {}
-        )
-        automation = automation if isinstance(automation, Mapping) else {}
+        repeat_mode = str(payload.get('repeat_mode') or '').strip()
+        dwell_sec = payload.get('dwell_sec')
+        if not repeat_mode:
+            run_status = bridge.motion_run_status()
+            automation = (
+                (run_status.get('status') or {}).get('automation')
+                if isinstance(run_status, Mapping) else {}
+            )
+            automation = automation if isinstance(automation, Mapping) else {}
+            repeat_mode = str(automation.get('repeat_mode') or 'direct')
+            dwell_sec = float(automation.get('dwell_sec') or 0.0)
         request.update({
             'execution_id': str(payload.get('execution_id') or ''),
             'initialize_monotonic': payload.get('initialize_monotonic'),
             'group_execution': True,
-            'repeat_mode': str(automation.get('repeat_mode') or 'direct'),
-            'dwell_sec': float(automation.get('dwell_sec') or 0.0),
+            'repeat_mode': repeat_mode,
+            'dwell_sec': float(dwell_sec or 0.0),
+            # Direct repetition must use the same continuity validation as a
+            # local continuous run. Reinitializing policies deliberately
+            # bypass that check because every cycle returns to the start pose.
+            'run_mode': (
+                'continuous'
+                if repeat_mode in {'direct', 'dwell'}
+                else 'once'
+            ),
         })
         return bridge.motion_group_prepare(request)
     if command == 'group_start_at':
