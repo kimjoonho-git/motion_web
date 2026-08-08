@@ -959,6 +959,26 @@ class MotionRunManager(Node):
     ) -> None:
         execution_id = str(payload.get('execution_id') or '')
         try:
+            validation_payload = {
+                **payload,
+                # A direct group repeat has the same end-to-start continuity
+                # requirement as a local continuous run. Validate it before
+                # the per-cycle plan is deliberately converted to one-shot.
+                'run_mode': (
+                    'continuous'
+                    if (
+                        not payload.get('initialization_only')
+                        and str(payload.get('repeat_mode') or 'direct')
+                        in {'direct', 'dwell'}
+                    ) else 'once'
+                ),
+            }
+            validation_plan = self._build_plan(
+                validation_payload, motors_snapshot=motors_snapshot,
+            )
+            guard_error = self._motion_auto_start_guard_error(validation_plan)
+            if guard_error:
+                raise ValueError(guard_error)
             motion_payload = {
                 **payload,
                 'run_mode': 'once',

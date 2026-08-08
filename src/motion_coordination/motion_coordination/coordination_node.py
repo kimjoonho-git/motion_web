@@ -516,6 +516,9 @@ class MotionCoordinationNode(Node):
                     self._execution.initialization_only = bool(
                         message.initialization_only
                     )
+                    self._execution.run_mode = str(
+                        message.run_mode or 'continuous'
+                    ).strip().lower()
                 result = self._local_readiness()
                 event = 'ready' if result.get('success') else 'rejected'
                 self._publish_event(
@@ -691,6 +694,7 @@ class MotionCoordinationNode(Node):
                             self._execution.stop_after_cycle
                             or self._execution.run_mode == 'once'
                         ):
+                            self._broadcast_stop('cancel_before_start')
                             self._execution.stop_now()
                             self._clear_active_execution()
                         else:
@@ -1049,6 +1053,7 @@ class MotionCoordinationNode(Node):
                 cycle_number=0, participants=participants,
                 repeat_mode=repeat_mode, dwell_sec=dwell_sec,
                 initialization_only=initialization_only,
+                run_mode=run_mode,
             )
             self._execution.pending_command = 'prepare'
             self._execution.pending_command_id = command.command_id
@@ -1207,10 +1212,11 @@ class MotionCoordinationNode(Node):
             with self._lock:
                 if self._execution.execution_id != execution_id:
                     return
-            if repeat_mode in {'reinitialize', 'dwell_reinitialize'}:
-                self._begin_trigger_sync('initialize')
-            else:
-                self._publish_next_start()
+            # Each PC performs the configured dwell/reinitialization before
+            # reporting cycle_ready. The coordinator must only schedule the
+            # next motion; a second initialize_at would be a duplicate
+            # request against the still-active local group session.
+            self._publish_next_start()
 
         if repeat_mode in {'dwell', 'dwell_reinitialize'} and dwell_sec > 0.0:
             threading.Timer(dwell_sec, schedule).start()
@@ -1297,6 +1303,7 @@ class MotionCoordinationNode(Node):
         scheduled_monotonic: float = 0.0,
         repeat_mode: str = '', dwell_sec: float = 0.0,
         initialization_only: bool = False,
+        run_mode: str = '',
     ) -> GroupCommand:
         message = GroupCommand()
         message.group_id = self._config.group_id
@@ -1314,6 +1321,7 @@ class MotionCoordinationNode(Node):
         message.repeat_mode = str(repeat_mode)
         message.dwell_sec = float(dwell_sec)
         message.initialization_only = bool(initialization_only)
+        message.run_mode = str(run_mode)
         return message
 
     def _publish_event(

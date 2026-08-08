@@ -41,6 +41,7 @@ def test_one_start_at_runs_exactly_one_motion_then_waits_for_next_cycle():
         'run_mode': payload.get('run_mode', 'once'),
         'repeat_mode': 'direct', 'dwell_sec': 0.0,
         'group_execution': True,
+        'capabilities': {'continuous_run': {'available': True}},
     }
     manager._wait_group_deadline = lambda *_args, **_kwargs: None
     manager._run_initialization = lambda _plan: manager._status.update({
