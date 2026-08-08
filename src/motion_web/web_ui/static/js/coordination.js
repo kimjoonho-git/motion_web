@@ -42,6 +42,9 @@ export function createCoordinationController({ el }) {
   let loading = false;
   let timer = null;
   let formDirty = false;
+  let shownCoordinationError = '';
+  let pendingInitializationId = '';
+  let initializationStarted = false;
 
   function renderSettings(config = {}) {
     if (formDirty) return;
@@ -57,11 +60,19 @@ export function createCoordinationController({ el }) {
     const alarmText = Number(peer.servo_alarm_grade || 0) > 0
       ? `${Number(peer.servo_alarm_grade)} · ${alarm.message || alarm.error_code || '확인 필요'}`
       : '0';
+    const duration = Number(peer.motion_duration_sec || 0);
+    const elapsed = Number(peer.motion_elapsed_sec || 0);
+    const progress = duration > 0
+      ? ` · ${elapsed.toFixed(2)} / ${duration.toFixed(2)}초 · ${Math.round(Number(peer.motion_progress_ratio || 0) * 100)}%`
+      : '';
+    const cycle = Number(peer.current_cycle || 0);
+    const cycleText = cycle > 0 ? ` · ${cycle}회차` : '';
+    const phase = peer.motion_phase ? ` · ${text(stateText(peer.motion_phase))}` : '';
     return `<tr>
       <td><strong>${text(peer.display_name || peer.pc_id || '-')}</strong><small>${peer.display_name ? text(peer.pc_id || '') : ''}</small></td>
       <td class="${stateClass(peer.state)}">${text(stateText(peer.state))}</td>
       <td>${fixedParticipants.has(peer.pc_id) ? '고정 참가' : '대기'}</td>
-      <td>${text(stateText(peer.motion_state))}</td>
+      <td>${text(stateText(peer.motion_state))}${phase}${cycleText}${progress}</td>
       <td class="${stateClass(peer.trigger_sync_state)}">${text(stateText(peer.trigger_sync_state))}</td>
       <td>${Number(peer.trigger_sync_uncertainty_ms || 0).toFixed(3)} ms</td>
       <td class="${Number(peer.servo_alarm_grade || 0) > 0 ? 'coordination-state-bad' : 'coordination-state-ok'}">${text(alarmText)}</td>
@@ -76,6 +87,7 @@ export function createCoordinationController({ el }) {
     const peers = Array.isArray(runtime.peers) ? runtime.peers : [];
     const fixedParticipants = new Set(Array.isArray(execution.participants) ? execution.participants : []);
     const coordinationError = runtime.coordination_error || {};
+    const failure = coordinationError.message || '';
     const alarms = new Map(
       (Array.isArray(runtime.alarms) ? runtime.alarms : [])
         .map((alarm) => [alarm.pc_id, alarm]),
@@ -121,6 +133,24 @@ export function createCoordinationController({ el }) {
     const nodeReady = snapshot?.node_connected === true && configured;
     const unhealthyPeer = peers.some((peer) => peer.state !== 'online' || Number(peer.servo_alarm_grade || 0) > 0);
     const groupErrorActive = coordinationError.active === true;
+    if (pendingInitializationId) {
+      if (execution.execution_id === pendingInitializationId) {
+        initializationStarted = true;
+      } else if (groupErrorActive) {
+        pendingInitializationId = '';
+        initializationStarted = false;
+      } else if (initializationStarted && !execution.execution_id) {
+        const completedId = pendingInitializationId;
+        pendingInitializationId = '';
+        initializationStarted = false;
+        if (typeof document !== 'undefined') {
+          queueMicrotask(() => showAlert(
+            '참가한 모든 PC의 그룹 초기 위치 이동이 완료되었습니다.',
+            { title: '그룹 초기 위치 이동 완료', confirmLabel: '확인', tone: 'info' },
+          ));
+        }
+      }
+    }
     if (el.coordinationJoinButton) el.coordinationJoinButton.disabled = loading || !nodeReady || joined || active;
     if (el.coordinationLeaveButton) el.coordinationLeaveButton.disabled = loading || !joined || active;
     if (el.coordinationTemporaryDisableButton) {
@@ -139,12 +169,32 @@ export function createCoordinationController({ el }) {
     if (el.coordinationStopNowButton) el.coordinationStopNowButton.disabled = loading || !active;
     if (el.coordinationAcknowledgeErrorButton) el.coordinationAcknowledgeErrorButton.disabled = loading || !groupErrorActive;
     if (el.coordinationErrorSummary) {
-      const failure = coordinationError.message || '';
       const code = coordinationError.code || '';
       const failedPc = coordinationError.pc_id ? ` · PC ${coordinationError.pc_id}` : '';
       el.coordinationErrorSummary.textContent = failure ? `${code || 'GROUP_ERROR'}${failedPc} · ${failure}` : '';
       el.coordinationErrorSummary.classList.toggle('hidden', !failure);
       el.coordinationErrorSummary.classList.toggle('coordination-state-bad', Boolean(failure));
+    }
+    if (groupErrorActive && failure) {
+      const errorKey = [
+        coordinationError.execution_id || 'no-execution',
+        coordinationError.code || 'GROUP_ERROR',
+        failure,
+      ].join('|');
+      if (shownCoordinationError !== errorKey && typeof document !== 'undefined') {
+        shownCoordinationError = errorKey;
+        const pc = coordinationError.pc_id ? `\n발생 PC: ${coordinationError.pc_id}` : '';
+        const cycle = Number(execution.cycle_number || 0);
+        const cycleText = cycle > 0 ? `\n회차: ${cycle}회차` : '';
+        queueMicrotask(() => showAlert(
+          `${failure}${pc}${cycleText}\n\n그룹 오류를 확인하고 원인을 해소한 뒤 다시 실행하세요.`,
+          {
+            title: `${coordinationError.code || '그룹 모션'} 정지`,
+            confirmLabel: '확인',
+            tone: 'danger',
+          },
+        ));
+      }
     }
     if (el.coordinationPeerRows) {
       const rows = [];
@@ -249,8 +299,10 @@ export function createCoordinationController({ el }) {
     if (!confirmed) return;
     const result = await control('initialize_group');
     if (result?.success) {
-      await showAlert(result.message || '그룹 초기 위치 이동을 시작했습니다', {
-        title: '그룹 초기 위치 이동',
+      pendingInitializationId = String(result.execution_id || '');
+      initializationStarted = false;
+      await showAlert(result.message || '그룹 초기 위치 이동 준비를 시작했습니다', {
+        title: '그룹 초기 위치 이동 준비',
         confirmLabel: '확인',
         tone: 'info',
       });

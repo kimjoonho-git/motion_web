@@ -200,6 +200,17 @@ class MotionCoordinationNode(Node):
                 ) or 0.0
             )
             message.servo_alarm_grade = self._local_alarm_grade()
+            local_status = self._local_status.get('motion_run_status')
+            local_status = local_status if isinstance(local_status, Mapping) else {}
+            progress = local_status.get('progress')
+            progress = progress if isinstance(progress, Mapping) else {}
+            message.motion_phase = str(local_status.get('phase') or '')
+            message.motion_elapsed_sec = float(progress.get('elapsed_sec') or 0.0)
+            message.motion_duration_sec = float(progress.get('duration_sec') or 0.0)
+            message.motion_progress_ratio = float(progress.get('ratio') or 0.0)
+            message.current_cycle = int(
+                local_status.get('current_cycle') or self._execution.cycle_number
+            )
         self._heartbeat_pub.publish(message)
 
     def _state_tick(self) -> None:
@@ -236,6 +247,11 @@ class MotionCoordinationNode(Node):
             received_monotonic=time.monotonic(),
             sequence=int(message.sequence),
             display_name=str(message.display_name),
+            motion_phase=str(message.motion_phase),
+            motion_elapsed_sec=float(message.motion_elapsed_sec),
+            motion_duration_sec=float(message.motion_duration_sec),
+            motion_progress_ratio=float(message.motion_progress_ratio),
+            current_cycle=int(message.current_cycle),
         ))
         pending_alarm = self._alarm_registry.member_boot_changed(
             message.pc_id, message.boot_id,
@@ -540,6 +556,7 @@ class MotionCoordinationNode(Node):
                     'repeat_mode': self._execution.repeat_mode,
                     'dwell_sec': self._execution.dwell_sec,
                     'initialization_only': self._execution.initialization_only,
+                    'run_mode': self._execution.run_mode,
                 })
                 event = 'initialize_scheduled'
             elif command == 'start_at':
@@ -1692,6 +1709,11 @@ class MotionCoordinationNode(Node):
                     member.trigger_sync_uncertainty_ms
                 ),
                 'servo_alarm_grade': member.alarm_grade,
+                'motion_phase': member.motion_phase,
+                'motion_elapsed_sec': member.motion_elapsed_sec,
+                'motion_duration_sec': member.motion_duration_sec,
+                'motion_progress_ratio': member.motion_progress_ratio,
+                'current_cycle': member.current_cycle,
             })
         with self._lock:
             local_status = self._local_status.get('motion_run_status')
@@ -1737,6 +1759,19 @@ class MotionCoordinationNode(Node):
                         ) or 0.0
                     ),
                     'servo_alarm_grade': self._local_alarm_grade(),
+                    'motion_phase': str(local_status.get('phase') or ''),
+                    'motion_elapsed_sec': float(
+                        (local_status.get('progress') or {}).get('elapsed_sec') or 0.0
+                    ),
+                    'motion_duration_sec': float(
+                        (local_status.get('progress') or {}).get('duration_sec') or 0.0
+                    ),
+                    'motion_progress_ratio': float(
+                        (local_status.get('progress') or {}).get('ratio') or 0.0
+                    ),
+                    'current_cycle': int(
+                        local_status.get('current_cycle') or cycle_number
+                    ),
                 },
                 'peers': peers,
                 'alarms': [

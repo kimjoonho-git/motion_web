@@ -968,6 +968,7 @@ class MotionRunManager(Node):
                     'continuous'
                     if (
                         not payload.get('initialization_only')
+                        and str(payload.get('run_mode') or 'once') == 'continuous'
                         and str(payload.get('repeat_mode') or 'direct')
                         in {'direct', 'dwell'}
                     ) else 'once'

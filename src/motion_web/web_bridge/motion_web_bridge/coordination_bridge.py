@@ -303,6 +303,7 @@ def local_motion_control(bridge: Any, payload: Mapping[str, Any]) -> Dict[str, A
         repeat_mode = str(payload.get('repeat_mode') or '').strip()
         dwell_sec = payload.get('dwell_sec')
         initialization_only = bool(payload.get('initialization_only'))
+        run_mode = str(payload.get('run_mode') or 'once').strip().lower()
         if not repeat_mode:
             run_status = bridge.motion_run_status()
             automation = (
@@ -322,11 +323,7 @@ def local_motion_control(bridge: Any, payload: Mapping[str, Any]) -> Dict[str, A
             # Direct repetition must use the same continuity validation as a
             # local continuous run. Reinitializing policies deliberately
             # bypass that check because every cycle returns to the start pose.
-            'run_mode': (
-                'continuous'
-                if not initialization_only and repeat_mode in {'direct', 'dwell'}
-                else 'once'
-            ),
+            'run_mode': 'once' if initialization_only else run_mode,
         })
         return bridge.motion_group_prepare(request)
     if command == 'group_start_at':

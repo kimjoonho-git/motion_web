@@ -20,6 +20,11 @@ class Member:
     received_monotonic: float
     sequence: int = 0
     display_name: str = ''
+    motion_phase: str = ''
+    motion_elapsed_sec: float = 0.0
+    motion_duration_sec: float = 0.0
+    motion_progress_ratio: float = 0.0
+    current_cycle: int = 0
 
 
 class MemberRegistry:
