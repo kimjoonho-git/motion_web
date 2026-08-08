@@ -1243,6 +1243,21 @@ class MotionRunManager(Node):
             self._stop_event.set()
             self._group_session.update({'active': False, 'state': 'stopped'})
             self._group_condition.notify_all()
+            worker = getattr(self, '_run_thread', None)
+        # Do not report the group session as released until its worker has
+        # observed cancellation. Starting another group session earlier races
+        # the shared stop event and causes "previous motion run task" errors.
+        if (
+            worker is not None and worker.is_alive()
+            and worker is not threading.current_thread()
+        ):
+            worker.join(timeout=1.0)
+        if worker is not None and worker.is_alive():
+            return {
+                'success': False,
+                'message': '이전 그룹 실행 정리 중입니다. 잠시 후 다시 시도하세요',
+                'status': self.status(),
+            }
         self._update_status({
             'state': 'stopped',
             'phase': 'stopped',
