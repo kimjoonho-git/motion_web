@@ -25,7 +25,7 @@ function fixture() {
     'coordinationMachineId', 'coordinationGroupDomain',
     'coordinationJoinState', 'coordinationPeerCount',
     'coordinationExecutionState', 'coordinationJoinButton',
-    'coordinationLeaveButton', 'coordinationStartButton',
+    'coordinationLeaveButton', 'coordinationInitializeButton', 'coordinationStartButton',
     'coordinationStopAfterButton', 'coordinationStopNowButton',
     'coordinationAcknowledgeErrorButton', 'coordinationErrorSummary',
     'coordinationPeerRows',
@@ -64,10 +64,12 @@ test('online participant enables start and warning participant blocks it', () =>
   controller.renderSnapshot(snapshot(peer));
   assert.equal(el.coordinationPeerCount.textContent, '2대');
   assert.equal(el.coordinationStartButton.disabled, false);
+  assert.equal(el.coordinationInitializeButton.disabled, false);
   assert.match(el.coordinationPeerRows.innerHTML, /PC B/);
 
   controller.renderSnapshot(snapshot({ ...peer, state: 'warning' }));
   assert.equal(el.coordinationStartButton.disabled, true);
+  assert.equal(el.coordinationInitializeButton.disabled, true);
   assert.match(el.coordinationPeerRows.innerHTML, /지연/);
 });
 

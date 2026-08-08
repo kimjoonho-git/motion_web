@@ -28,7 +28,7 @@ class GroupConfig:
     peer_timeout_sec: float = 3.0
     start_lead_sec: float = 0.5
     schedule_ack_margin_sec: float = 0.1
-    max_trigger_sync_uncertainty_ms: float = 5.0
+    max_trigger_sync_uncertainty_ms: float = 20.0
     trigger_sync_samples: int = 5
     prepare_timeout_sec: float = 6.0
     trigger_report_timeout_sec: float = 1.0
@@ -77,9 +77,14 @@ def load_group_config(path: Path) -> GroupConfig:
         value.get(
             'max_trigger_sync_uncertainty_ms', value.get('max_clock_offset_ms')
         ),
-        5.0,
+        20.0,
         'max_trigger_sync_uncertainty_ms',
     )
+    # 5 ms was the previous fixed default. Existing installations did not
+    # expose this value in the Web UI, so migrate that legacy default to the
+    # new group trigger tolerance while preserving explicit custom values.
+    if max_uncertainty == 5.0:
+        max_uncertainty = 20.0
     sync_samples = _integer(value.get('trigger_sync_samples'), 5, 'trigger_sync_samples')
     if not 3 <= sync_samples <= 20:
         raise ValueError('trigger_sync_samples는 3~20이어야 합니다')
@@ -218,7 +223,7 @@ def validate_group_config(config: GroupConfig) -> None:
         raise ValueError('start_lead_sec는 schedule_ack_margin_sec보다 커야 합니다')
     _positive(
         config.max_trigger_sync_uncertainty_ms,
-        5.0,
+        20.0,
         'max_trigger_sync_uncertainty_ms',
     )
     if not 3 <= int(config.trigger_sync_samples) <= 20:

@@ -45,7 +45,7 @@ def test_version_one_file_is_replaced_with_only_disabled_dds_fields(tmp_path):
     assert stored['warning_timeout_sec'] == 1.5
     assert stored['peer_timeout_sec'] == 3.0
     assert stored['start_lead_sec'] == 0.5
-    assert stored['max_trigger_sync_uncertainty_ms'] == 5.0
+    assert stored['max_trigger_sync_uncertainty_ms'] == 20.0
     assert stored['trigger_sync_samples'] == 5
     assert stored['trigger_report_timeout_sec'] == 1.0
     assert 'role' not in stored
@@ -76,9 +76,9 @@ def test_old_clock_field_is_rewritten_as_relative_trigger_sync_setting(tmp_path)
 
     assert migrated is True
     assert config.start_lead_sec == 0.5
-    assert config.max_trigger_sync_uncertainty_ms == 5.0
+    assert config.max_trigger_sync_uncertainty_ms == 20.0
     assert 'max_clock_offset_ms' not in stored
-    assert stored['max_trigger_sync_uncertainty_ms'] == 5.0
+    assert stored['max_trigger_sync_uncertainty_ms'] == 20.0
 
 
 def test_invalid_timeout_order_is_rejected(tmp_path):

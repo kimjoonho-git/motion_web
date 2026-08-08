@@ -3,7 +3,7 @@ import {
   sendCoordinationControl,
   saveCoordinationSettings,
 } from './api.js?v=20260806-dds-trigger-sync';
-import { showConfirm } from './ui_dialogs.js?v=20260727-popup-common-3';
+import { showAlert, showConfirm } from './ui_dialogs.js?v=20260727-popup-common-3';
 
 function text(value) {
   return String(value ?? '').replace(/[&<>"']/g, (character) => ({
@@ -92,7 +92,10 @@ export function createCoordinationController({ el }) {
     }
     if (el.coordinationConfigMessage) {
       el.coordinationConfigMessage.textContent = snapshot?.config_error
-        || 'PC 전역 설정 · 같은 그룹 ID와 DDS Domain ID를 입력한 PC끼리 통신합니다.';
+        || (
+          'PC 전역 설정 · 같은 그룹 ID와 DDS Domain ID를 입력한 PC끼리 통신합니다. '
+          + `트리거 동기화 허용값 ${Number(runtimeConfig.max_trigger_sync_uncertainty_ms ?? 20).toFixed(0)} ms`
+        );
     }
     if (el.coordinationUpdatedAt) {
       el.coordinationUpdatedAt.textContent = snapshot?.status_age_sec == null
@@ -127,6 +130,7 @@ export function createCoordinationController({ el }) {
         : '이 PC의 연동을 해제해 단독 모션·모션 스튜디오를 사용합니다';
     }
     const startDisabled = loading || !joined || active || peers.length < 1 || unhealthyPeer || groupErrorActive;
+    if (el.coordinationInitializeButton) el.coordinationInitializeButton.disabled = startDisabled;
     if (el.coordinationStartButton) el.coordinationStartButton.disabled = startDisabled;
     if (el.coordinationContinuousStartButton) el.coordinationContinuousStartButton.disabled = startDisabled;
     if (el.coordinationRepeatMode) el.coordinationRepeatMode.disabled = loading || active;
@@ -177,10 +181,36 @@ export function createCoordinationController({ el }) {
       });
       formDirty = false;
       if (el.coordinationConfigMessage) el.coordinationConfigMessage.textContent = result.message || '';
-      if (!result.success) window.alert(result.message || 'DDS 그룹 설정 적용 실패');
-      window.setTimeout(refresh, 1200);
+      if (!result.success) {
+        await showAlert(result.message || 'DDS 그룹 설정 적용 실패', {
+          title: '연동 재시작 실패',
+          confirmLabel: '확인',
+          tone: 'danger',
+        });
+        return;
+      }
+      if (el.coordinationConfigMessage) {
+        el.coordinationConfigMessage.textContent = 'DDS 연동 서비스 재시작 확인 중';
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 1500));
+      await refresh();
+      const restarted = snapshot?.node_connected === true;
+      await showAlert(
+        restarted
+          ? 'DDS 연동 설정 저장 및 재시작 완료'
+          : '설정은 저장됐지만 DDS 연동 노드 재시작을 확인하지 못했습니다.',
+        {
+          title: restarted ? '연동 재시작 완료' : '연동 재시작 확인 실패',
+          confirmLabel: '확인',
+          tone: restarted ? 'info' : 'danger',
+        },
+      );
     } catch (error) {
-      window.alert(error?.message || String(error));
+      await showAlert(error?.message || String(error), {
+        title: '연동 재시작 실패',
+        confirmLabel: '확인',
+        tone: 'danger',
+      });
     } finally {
       loading = false;
       render();
@@ -197,11 +227,33 @@ export function createCoordinationController({ el }) {
       if (el.coordinationControlSummary) el.coordinationControlSummary.textContent = result.message || '명령 처리 완료';
       if (!result.success) window.alert(result.message || '그룹 명령 실패');
       await refresh();
+      return result;
     } catch (error) {
       if (el.coordinationControlSummary) el.coordinationControlSummary.textContent = error?.message || '명령 전달 실패';
+      return { success: false, message: error?.message || String(error) };
     } finally {
       loading = false;
       render();
+    }
+  }
+
+  async function initializeGroup() {
+    const confirmed = await showConfirm(
+      '참가한 모든 PC를 각자의 모션 초기 위치로 동시에 이동합니다.\n모션 재생은 시작하지 않습니다.',
+      {
+        title: '그룹 초기 위치 이동',
+        confirmLabel: '초기 위치 이동',
+        tone: 'warning',
+      },
+    );
+    if (!confirmed) return;
+    const result = await control('initialize_group');
+    if (result?.success) {
+      await showAlert(result.message || '그룹 초기 위치 이동을 시작했습니다', {
+        title: '그룹 초기 위치 이동',
+        confirmLabel: '확인',
+        tone: 'info',
+      });
     }
   }
 
@@ -242,6 +294,7 @@ export function createCoordinationController({ el }) {
     el.coordinationJoinButton?.addEventListener('click', () => control('join'));
     el.coordinationLeaveButton?.addEventListener('click', () => control('leave'));
     el.coordinationTemporaryDisableButton?.addEventListener('click', temporarilyDisable);
+    el.coordinationInitializeButton?.addEventListener('click', initializeGroup);
     el.coordinationStartButton?.addEventListener('click', () => control('start_group', groupRunOptions('once')));
     el.coordinationContinuousStartButton?.addEventListener('click', () => control('start_group', groupRunOptions('continuous')));
     el.coordinationStopAfterButton?.addEventListener('click', () => control('stop_after_cycle'));

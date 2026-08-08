@@ -91,6 +91,7 @@ export function getElements() {
     coordinationJoinButton: document.getElementById('coordinationJoinButton'),
     coordinationLeaveButton: document.getElementById('coordinationLeaveButton'),
     coordinationTemporaryDisableButton: document.getElementById('coordinationTemporaryDisableButton'),
+    coordinationInitializeButton: document.getElementById('coordinationInitializeButton'),
     coordinationStartButton: document.getElementById('coordinationStartButton'),
     coordinationContinuousStartButton: document.getElementById('coordinationContinuousStartButton'),
     coordinationRepeatMode: document.getElementById('coordinationRepeatMode'),

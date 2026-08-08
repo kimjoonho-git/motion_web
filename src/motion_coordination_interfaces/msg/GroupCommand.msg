@@ -10,3 +10,4 @@ int64 scheduled_monotonic_ns
 string[] participant_ids
 string repeat_mode
 float64 dwell_sec
+bool initialization_only

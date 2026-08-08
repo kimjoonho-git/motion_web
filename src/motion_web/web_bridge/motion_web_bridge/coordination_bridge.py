@@ -173,14 +173,14 @@ class CoordinationWebBridge:
         command = str(payload.get('command') or '').strip()
         allowed = {
             'join', 'leave', 'start_group', 'stop_after_cycle', 'stop_now',
-            'acknowledge_group_error', 'temporarily_disable',
+            'acknowledge_group_error', 'temporarily_disable', 'initialize_group',
         }
         if command not in allowed:
             raise ValueError('지원하지 않는 DDS 그룹 실행 요청입니다')
         start_generation = int(self._project_generation())
         try:
             request = {'command': command}
-            if command == 'start_group':
+            if command in {'start_group', 'initialize_group'}:
                 request.update({
                     'run_mode': payload.get('run_mode', 'continuous'),
                     'repeat_mode': payload.get('repeat_mode', 'direct'),
@@ -261,9 +261,21 @@ def local_motion_control(bridge: Any, payload: Mapping[str, Any]) -> Dict[str, A
     if command in {'stop_motion', 'stop_initialize', 'stop_now'}:
         return bridge.coordination_stop_now()
     if command in {'cancel_before_start', 'group_cancel'}:
-        return bridge.motion_group_cancel({
+        result = bridge.motion_group_cancel({
             'execution_id': str(payload.get('execution_id') or ''),
         })
+        if (
+            result.get('success') is False
+            and '그룹 실행 세션이 일치하지 않습니다' in str(
+                result.get('message') or ''
+            )
+        ):
+            return {
+                'success': True,
+                'already_released': True,
+                'message': '이미 정리된 그룹 실행 세션입니다',
+            }
+        return result
     if command == 'stop_after_cycle':
         result = bridge.motion_run_stop_after_cycle()
         if (
@@ -290,6 +302,7 @@ def local_motion_control(bridge: Any, payload: Mapping[str, Any]) -> Dict[str, A
     if command == 'group_prepare':
         repeat_mode = str(payload.get('repeat_mode') or '').strip()
         dwell_sec = payload.get('dwell_sec')
+        initialization_only = bool(payload.get('initialization_only'))
         if not repeat_mode:
             run_status = bridge.motion_run_status()
             automation = (
@@ -303,6 +316,7 @@ def local_motion_control(bridge: Any, payload: Mapping[str, Any]) -> Dict[str, A
             'execution_id': str(payload.get('execution_id') or ''),
             'initialize_monotonic': payload.get('initialize_monotonic'),
             'group_execution': True,
+            'initialization_only': initialization_only,
             'repeat_mode': repeat_mode,
             'dwell_sec': float(dwell_sec or 0.0),
             # Direct repetition must use the same continuity validation as a
@@ -310,7 +324,7 @@ def local_motion_control(bridge: Any, payload: Mapping[str, Any]) -> Dict[str, A
             # bypass that check because every cycle returns to the start pose.
             'run_mode': (
                 'continuous'
-                if repeat_mode in {'direct', 'dwell'}
+                if not initialization_only and repeat_mode in {'direct', 'dwell'}
                 else 'once'
             ),
         })

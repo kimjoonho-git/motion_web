@@ -244,6 +244,7 @@
                 <button id="coordinationJoinButton" type="button" disabled>그룹 참가</button>
                 <button id="coordinationLeaveButton" type="button" disabled>그룹 나가기</button>
                 <button id="coordinationTemporaryDisableButton" type="button" disabled>연동 일시 해제</button>
+                <button id="coordinationInitializeButton" type="button" disabled>그룹 초기 위치 이동</button>
                 <label class="compact-field"><span>연속 회차 사이</span><select id="coordinationRepeatMode" class="compact-select"><option value="direct">바로 다음 모션</option><option value="dwell">대기 후 다음 모션</option><option value="reinitialize">초기 위치 이동 후 다음 모션</option><option value="dwell_reinitialize">대기 후 초기 위치 이동 → 다음 모션</option></select></label>
                 <label class="compact-field"><span>대기 시간(초)</span><input id="coordinationDwellSec" type="number" min="0" max="86400" step="0.1" value="0"></label>
                 <button id="coordinationStartButton" class="primary" type="button" disabled>그룹 1회 모션 시작</button>
@@ -1757,6 +1758,6 @@
       </div>
     </div>
 
-    <script type="module" src="/static/app.js?v=20260808-group-repeat-1"></script>
+    <script type="module" src="/static/app.js?v=20260808-group-init-1"></script>
   </body>
 </html>

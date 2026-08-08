@@ -97,6 +97,7 @@ class GroupExecution:
         self.run_mode = 'continuous'
         self.repeat_mode = 'direct'
         self.dwell_sec = 0.0
+        self.initialization_only = False
         self.last_start_spread_ms: Optional[float] = None
         self.last_initialize_spread_ms: Optional[float] = None
         self.pending_command = ''
@@ -137,6 +138,7 @@ class GroupExecution:
         run_mode: str = 'continuous',
         repeat_mode: str = 'direct',
         dwell_sec: float = 0.0,
+        initialization_only: bool = False,
     ) -> str:
         selected = tuple(sorted(set(str(value) for value in participants if str(value))))
         if not 1 <= len(selected) <= 8:
@@ -152,6 +154,7 @@ class GroupExecution:
         self.run_mode = str(run_mode)
         self.repeat_mode = str(repeat_mode)
         self.dwell_sec = float(dwell_sec)
+        self.initialization_only = bool(initialization_only)
         self.state = 'preparing'
         return self.execution_id
 

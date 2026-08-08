@@ -513,6 +513,9 @@ class MotionCoordinationNode(Node):
                         str(message.repeat_mode or 'direct').strip().lower()
                     )
                     self._execution.dwell_sec = max(float(message.dwell_sec), 0.0)
+                    self._execution.initialization_only = bool(
+                        message.initialization_only
+                    )
                 result = self._local_readiness()
                 event = 'ready' if result.get('success') else 'rejected'
                 self._publish_event(
@@ -533,6 +536,7 @@ class MotionCoordinationNode(Node):
                     'network_operation_id': message.command_id,
                     'repeat_mode': self._execution.repeat_mode,
                     'dwell_sec': self._execution.dwell_sec,
+                    'initialization_only': self._execution.initialization_only,
                 })
                 event = 'initialize_scheduled'
             elif command == 'start_at':
@@ -648,6 +652,8 @@ class MotionCoordinationNode(Node):
                                     self._execution.initialize_triggered
                                 ),
                             }
+                        elif self._execution.initialization_only:
+                            self._finish_group_initialization()
                         else:
                             self._publish_next_start()
                 elif message.event == 'initialize_scheduled' and message.success:
@@ -948,6 +954,10 @@ class MotionCoordinationNode(Node):
                 result = self._temporarily_disable_coordination()
             elif command in {'start_group', 'synchronized_run'}:
                 result = self._start_group_execution(request=request)
+            elif command == 'initialize_group':
+                result = self._start_group_execution(
+                    request=request, initialization_only=True,
+                )
             elif command == 'stop_after_cycle':
                 result = self._request_group_stop(after_cycle=True)
             elif command in {'stop_now', 'stop_motion'}:
@@ -965,6 +975,7 @@ class MotionCoordinationNode(Node):
         *,
         participants_override: Optional[tuple[str, ...]] = None,
         request: Optional[Mapping[str, Any]] = None,
+        initialization_only: bool = False,
     ) -> Dict[str, Any]:
         if not self._joined:
             raise ValueError('먼저 DDS 그룹에 참가하세요')
@@ -1020,6 +1031,7 @@ class MotionCoordinationNode(Node):
             execution_id = self._execution.begin(
                 self._config.pc_id, participants,
                 run_mode=run_mode, repeat_mode=repeat_mode, dwell_sec=dwell_sec,
+                initialization_only=initialization_only,
             )
             self._sync_estimators.clear()
             self._sync_sent_samples.clear()
@@ -1036,6 +1048,7 @@ class MotionCoordinationNode(Node):
                 command='prepare', execution_id=execution_id,
                 cycle_number=0, participants=participants,
                 repeat_mode=repeat_mode, dwell_sec=dwell_sec,
+                initialization_only=initialization_only,
             )
             self._execution.pending_command = 'prepare'
             self._execution.pending_command_id = command.command_id
@@ -1047,12 +1060,16 @@ class MotionCoordinationNode(Node):
             self._command_pub.publish(command)
         return {
             'success': True,
-            'message': '그룹 실행 준비 확인 시작',
+            'message': (
+                '그룹 초기 위치 이동 준비 확인 시작'
+                if initialization_only else '그룹 실행 준비 확인 시작'
+            ),
             'execution_id': execution_id,
             'participants': list(participants),
             'run_mode': run_mode,
             'repeat_mode': repeat_mode,
             'dwell_sec': dwell_sec,
+            'initialization_only': initialization_only,
         }
 
     def _request_group_stop(self, *, after_cycle: bool) -> Dict[str, Any]:
@@ -1144,6 +1161,40 @@ class MotionCoordinationNode(Node):
             self._stop_for_peer_failure(reason)
             raise ValueError(reason)
         self._begin_trigger_sync('start')
+
+    def _finish_group_initialization(self) -> None:
+        """Release prepared group sessions after a successful init-only move."""
+        with self._lock:
+            execution_id = self._execution.execution_id
+            if not execution_id:
+                return
+            message = self._new_command(
+                command='cancel_before_start',
+                execution_id=execution_id,
+                cycle_number=self._execution.cycle_number,
+                participants=self._execution.participants,
+            )
+        local = self._call_local_control({
+            'command': 'group_cancel',
+            'execution_id': execution_id,
+            'network_operation_id': message.command_id,
+        })
+        # A group session may have already released itself after the
+        # initialization callback. That is a successful cleanup, not a
+        # group-initialization failure.
+        if not local.get('success') and '세션이 일치하지 않습니다' not in str(
+            local.get('message') or ''
+        ):
+            self._publish_coordination_error(
+                code='GROUP_INITIALIZE_RELEASE_FAILED',
+                message=str(local.get('message') or '그룹 초기 위치 이동 정리 실패'),
+                execution_id=execution_id,
+            )
+        self._command_pub.publish(message)
+        with self._lock:
+            if self._execution.execution_id == execution_id:
+                self._execution.stop_now()
+                self._clear_active_execution()
 
     def _publish_next_cycle(self) -> None:
         """Apply the common group repeat policy after every completed cycle."""
@@ -1245,6 +1296,7 @@ class MotionCoordinationNode(Node):
         participants: tuple[str, ...], command_id: str = '',
         scheduled_monotonic: float = 0.0,
         repeat_mode: str = '', dwell_sec: float = 0.0,
+        initialization_only: bool = False,
     ) -> GroupCommand:
         message = GroupCommand()
         message.group_id = self._config.group_id
@@ -1261,6 +1313,7 @@ class MotionCoordinationNode(Node):
         message.participant_ids = list(participants)
         message.repeat_mode = str(repeat_mode)
         message.dwell_sec = float(dwell_sec)
+        message.initialization_only = bool(initialization_only)
         return message
 
     def _publish_event(
