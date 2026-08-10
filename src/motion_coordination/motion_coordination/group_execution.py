@@ -102,7 +102,7 @@ class GroupExecution:
         self.triggered: Dict[str, float] = {}
         self.stop_after_cycle = False
         self.run_mode = 'continuous'
-        self.repeat_mode = 'direct'
+        self.repeat_mode = 'reinitialize'
         self.dwell_sec = 0.0
         self.initialization_only = False
         self.last_start_spread_ms: Optional[float] = None
@@ -113,6 +113,7 @@ class GroupExecution:
         self.pending_ack_deadline = 0.0
         self.pending_scheduled_at = 0.0
         self.motion_start_report_deadline = 0.0
+        self.release_error = False
 
     def activate_claim(
         self, execution_id: str, coordinator_id: str,
@@ -136,6 +137,7 @@ class GroupExecution:
         self.pending_ack_deadline = 0.0
         self.pending_scheduled_at = 0.0
         self.motion_start_report_deadline = 0.0
+        self.release_error = False
 
     def begin(
         self,
@@ -143,7 +145,7 @@ class GroupExecution:
         participants: Iterable[str],
         *,
         run_mode: str = 'continuous',
-        repeat_mode: str = 'direct',
+        repeat_mode: str = 'reinitialize',
         dwell_sec: float = 0.0,
         initialization_only: bool = False,
     ) -> str:

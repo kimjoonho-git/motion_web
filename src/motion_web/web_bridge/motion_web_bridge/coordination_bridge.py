@@ -79,6 +79,7 @@ class CoordinationWebBridge:
         active_states = {
             'preparing', 'initializing', 'armed', 'start_scheduled', 'waiting',
             'running', 'waiting_cycle_ready', 'cycle_ready', 'stop_after_cycle',
+            'releasing',
         }
         if (
             connected and isinstance(execution, Mapping)
@@ -243,6 +244,21 @@ class CoordinationWebBridge:
 
 def local_motion_readiness(bridge: Any) -> Dict[str, Any]:
     """Run the existing local motion readiness check using local active files."""
+    # A group prepare must not race the periodic project-context reconciler.
+    # Apply and verify the context synchronously before reporting this PC ready.
+    reconcile = getattr(bridge, '_reconcile_execution_context_blocking', None)
+    if callable(reconcile):
+        context = reconcile(timeout_sec=10.0)
+    else:
+        context = bridge._reconcile_execution_context()
+    if not context.get('ready'):
+        return {
+            'success': False,
+            'message': (
+                '현재 프로젝트 실행 컨텍스트를 적용할 수 없습니다: '
+                + str(context.get('message') or '적용 대기 중')
+            ),
+        }
     try:
         selection = _local_motion_selection(bridge)
     except ValueError as exc:

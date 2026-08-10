@@ -40,6 +40,12 @@ class _Bridge:
         self.payload = payload
         return {'success': True, 'status': {'state': 'ready'}}
 
+    def _reconcile_execution_context(self):
+        return {'ready': True, 'message': 'applied'}
+
+    def _reconcile_execution_context_blocking(self, *, timeout_sec=10.0):
+        return self._reconcile_execution_context()
+
     def motion_run_status(self):
         return {'status': {'automation': {'repeat_mode': 'dwell', 'dwell_sec': 0.25}}}
 

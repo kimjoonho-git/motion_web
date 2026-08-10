@@ -2146,6 +2146,26 @@ class MotionWebBridge(Node):
         finally:
             self._execution_context_apply_lock.release()
 
+    def _reconcile_execution_context_blocking(
+        self, *, timeout_sec: float = 10.0, poll_interval: float = 0.1,
+    ) -> Dict[str, Any]:
+        """Wait until project execution context is ready or a terminal state is reached."""
+        terminal_states = {
+            'ready', 'error', 'configuration_required', 'no_project',
+        }
+        deadline = time.monotonic() + max(float(timeout_sec), 0.0)
+        last_status = self.execution_context_status()
+        while time.monotonic() < deadline:
+            if self._execution_context_apply_lock.locked():
+                time.sleep(min(poll_interval, 0.05))
+                continue
+            last_status = self._reconcile_execution_context()
+            state = str(last_status.get('state') or '')
+            if state in terminal_states:
+                return last_status
+            time.sleep(poll_interval)
+        return last_status
+
     def _runtime_service_status(self, motion_state: Any) -> Dict[str, Any]:
         runtime_path = Path(getattr(self, 'applied_motor_config_file', Path()))
         runtime_config = str(runtime_path) if runtime_path.is_file() else ''
@@ -4698,8 +4718,14 @@ class MotionWebBridge(Node):
                 **self.snapshot(),
             }
         self._ensure_project_change_allowed()
+        restart_services = [managed_service]
+        coordination_service = str(
+            os.environ.get('MOTION_COORDINATION_SERVICE_UNIT') or ''
+        ).strip()
+        if coordination_service == 'motion-coordination.service':
+            restart_services.append(coordination_service)
         try:
-            self._schedule_managed_service_restart(managed_service)
+            self._schedule_managed_service_restart(*restart_services)
         except OSError as exc:
             return {
                 'success': False,
@@ -5066,7 +5092,11 @@ class MotionWebBridge(Node):
         validated service.  Positional arguments keep the service name out of
         shell parsing.
         """
-        allowed_services = {'motion-control.service', 'motion-motor.service'}
+        allowed_services = {
+            'motion-control.service',
+            'motion-motor.service',
+            'motion-coordination.service',
+        }
         if (
             not managed_services
             or any(service not in allowed_services for service in managed_services)

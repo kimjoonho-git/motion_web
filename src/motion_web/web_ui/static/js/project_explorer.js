@@ -15,7 +15,7 @@ import {
   renameProjectFile,
   saveProjectMemo,
   selectProject,
-} from './api.js?v=20260807-runtime-clear-1';
+} from './api.js?v=20260810-dds-release-1';
 import { showAlert, showConfirm, showPrompt } from './ui_dialogs.js?v=20260727-popup-common-3';
 
 function escapeHtml(value) {

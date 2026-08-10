@@ -590,14 +590,21 @@ class MotionCoordinationNode(Node):
                         self._execution.stop_after_cycle = True
                 event = 'stop_after_cycle_accepted'
             elif command in {'stop_now', 'cancel_before_start'}:
+                release_timeout = (
+                    0.25 if command == 'stop_now'
+                    else self._LOCAL_WORKER_RELEASE_TIMEOUT_SEC
+                )
                 result = self._call_local_control({
                     'command': 'stop_now' if command == 'stop_now' else 'group_cancel',
                     'execution_id': message.execution_id,
                     'network_operation_id': message.command_id,
-                }, timeout_sec=0.25 if command == 'stop_now' else 1.0)
+                }, timeout_sec=release_timeout)
                 event = 'stopped'
                 with self._lock:
-                    if self._execution.coordinator_id != self._config.pc_id:
+                    if (
+                        self._execution.coordinator_id != self._config.pc_id
+                        and result.get('success')
+                    ):
                         self._clear_active_execution()
             else:
                 raise ValueError('지원하지 않는 그룹 명령입니다')
@@ -745,8 +752,14 @@ class MotionCoordinationNode(Node):
                         if self._execution.pending_acks >= set(
                             self._execution.participants
                         ):
-                            self._execution.stop_now()
+                            self._execution.stop_now(
+                                error=bool(self._execution.release_error),
+                            )
                             self._clear_active_execution()
+                    elif self._execution.pending_command == 'cancel_before_start':
+                        # Runtime-only stopped events use synthetic IDs and must
+                        # not interfere with the release ACK barrier.
+                        pass
                     elif (
                         self._execution.stop_after_cycle
                         or self._execution.run_mode == 'once'
@@ -754,7 +767,7 @@ class MotionCoordinationNode(Node):
                         # Runtime stop-after-cycle completes without emitting
                         # cycle_ready. Start the same release handshake here.
                         self._begin_group_release()
-                    else:
+                    elif self._execution.state != 'releasing':
                         self._execution.stop_now()
                 elif message.event == 'error':
                     runtime_error = (
@@ -770,6 +783,66 @@ class MotionCoordinationNode(Node):
         if runtime_error:
             self._stop_for_peer_failure(runtime_error)
 
+    _LOCAL_WORKER_RELEASE_TIMEOUT_SEC = 5.0
+
+    def _release_local_worker(
+        self,
+        execution_id: str,
+        *,
+        network_operation_id: str = '',
+        timeout_sec: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Stop the local group worker and wait until its thread exits."""
+        release_timeout = (
+            float(timeout_sec)
+            if timeout_sec is not None
+            else self._LOCAL_WORKER_RELEASE_TIMEOUT_SEC
+        )
+        cancel_result = self._call_local_control({
+            'command': 'group_cancel',
+            'execution_id': execution_id,
+            'network_operation_id': network_operation_id,
+        }, timeout_sec=release_timeout)
+        if cancel_result.get('success'):
+            return cancel_result
+        stop_outcome = self._issue_stop_now(
+            execution_id=execution_id,
+            participants=(self._config.pc_id,),
+            cycle_number=0,
+            command_id=network_operation_id or f'local-release-{uuid.uuid4().hex}',
+        )
+        return stop_outcome.local_result
+
+    def _enter_group_release(
+        self,
+        cancel_message: GroupCommand,
+        *,
+        local_release: Mapping[str, Any],
+        error: bool = False,
+    ) -> None:
+        """Begin or advance the multi-PC release barrier."""
+        with self._lock:
+            execution_id = self._execution.execution_id
+            if not execution_id or execution_id != cancel_message.execution_id:
+                return
+            participants = set(self._execution.participants)
+            self._execution.pending_command = 'cancel_before_start'
+            self._execution.state = 'releasing'
+            self._execution.pending_command_id = cancel_message.command_id
+            self._execution.pending_acks.clear()
+            if local_release.get('success'):
+                self._execution.pending_acks.add(self._config.pc_id)
+            self._execution.pending_ack_deadline = (
+                time.monotonic() + self._config.prepare_timeout_sec
+            )
+            self._execution.release_error = error
+            release_complete = self._execution.pending_acks >= participants
+            if release_complete:
+                self._execution.stop_now(error=error)
+                self._clear_active_execution()
+                return
+        self._command_pub.publish(cancel_message)
+
     def _cancel_before_start(self, reason: str, *, code: str) -> None:
         """Cancel a pre-start session locally, notify peers, then release its lease."""
         with self._lock:
@@ -777,41 +850,41 @@ class MotionCoordinationNode(Node):
             if not execution_id:
                 return
             participants = self._execution.participants
+            is_coordinator = self._execution.coordinator_id == self._config.pc_id
             cancel_message = self._new_command(
                 command='cancel_before_start',
                 execution_id=execution_id,
                 cycle_number=self._execution.cycle_number,
                 participants=participants,
             )
-        local_cancel = self._call_local_control({
-            'command': 'group_cancel',
-            'execution_id': execution_id,
-            'network_operation_id': cancel_message.command_id,
-        })
-        local_cancel_failed = not bool(local_cancel.get('success'))
-        if local_cancel_failed:
-            stop_outcome = self._issue_stop_now(
-                execution_id=execution_id, participants=participants,
-                cycle_number=self._execution.cycle_number,
-            )
-            local_stop = stop_outcome.local_result
-        else:
-            local_stop = {'success': True}
-            self._command_pub.publish(cancel_message)
-        with self._lock:
-            self._execution.stop_now(error=True)
-            self._clear_active_execution()
+        local_release = self._release_local_worker(
+            execution_id,
+            network_operation_id=cancel_message.command_id,
+        )
         message = str(reason)
-        if local_cancel_failed:
+        if not local_release.get('success'):
             message += (
-                ' · 로컬 취소 실패 후 즉시 정지 요청: '
-                f'{local_cancel.get("message") or "응답 없음"}'
+                ' · 로컬 worker 정리 실패: '
+                f'{local_release.get("message") or "응답 없음"}'
             )
-            if not local_stop.get('success'):
-                message += (
-                    ' · 로컬 즉시 정지 실패: '
-                    f'{local_stop.get("message") or "응답 없음"}'
-                )
+            with self._lock:
+                if self._execution.execution_id == execution_id:
+                    self._execution.stop_now(error=True)
+            self._publish_coordination_error(
+                code='GROUP_WORKER_STILL_RUNNING',
+                message=message,
+                execution_id=execution_id,
+            )
+            return
+        if is_coordinator and len(participants) > 1:
+            self._enter_group_release(
+                cancel_message, local_release=local_release, error=True,
+            )
+        else:
+            with self._lock:
+                if self._execution.execution_id == execution_id:
+                    self._execution.stop_now(error=True)
+                    self._clear_active_execution()
         self._publish_coordination_error(
             code=code, message=message, execution_id=execution_id,
         )
@@ -833,7 +906,8 @@ class MotionCoordinationNode(Node):
         )
         with self._lock:
             self._execution.stop_now(error=True)
-            self._clear_active_execution()
+            if stop_outcome.local_success:
+                self._clear_active_execution()
         self._publish_coordination_error(
             code=error_code,
             message=(
@@ -1040,7 +1114,7 @@ class MotionCoordinationNode(Node):
             raise ValueError('먼저 DDS 그룹에 참가하세요')
         request = request or {}
         run_mode = str(request.get('run_mode') or 'continuous').strip().lower()
-        repeat_mode = str(request.get('repeat_mode') or 'direct').strip().lower()
+        repeat_mode = str(request.get('repeat_mode') or 'reinitialize').strip().lower()
         try:
             dwell_sec = float(request.get('dwell_sec') or 0.0)
         except (TypeError, ValueError) as exc:
@@ -1305,7 +1379,8 @@ class MotionCoordinationNode(Node):
                 return
             scheduled_at = self._execution.pending_scheduled_at
             command = 'cancel_before_start' if self._execution.pending_command in {
-                'prepare', 'initialize_at', 'cycle_initialize_at', 'start_at'
+                'prepare', 'initialize_at', 'cycle_initialize_at', 'start_at',
+                'cancel_before_start',
             } else 'stop_now'
             if (
                 self._execution.pending_command == 'start_at'
@@ -1360,22 +1435,28 @@ class MotionCoordinationNode(Node):
 
     def _begin_group_release(self) -> None:
         """Keep the lease until every participant confirms worker release."""
-        if not self._execution.execution_id:
-            return
-        message = self._new_command(
-            command='cancel_before_start',
-            execution_id=self._execution.execution_id,
-            cycle_number=self._execution.cycle_number,
-            participants=self._execution.participants,
+        with self._lock:
+            if not self._execution.execution_id:
+                return
+            if self._execution.pending_command == 'cancel_before_start':
+                return
+            execution_id = self._execution.execution_id
+            message = self._new_command(
+                command='cancel_before_start',
+                execution_id=execution_id,
+                cycle_number=self._execution.cycle_number,
+                participants=self._execution.participants,
+            )
+        local_release = self._release_local_worker(
+            execution_id,
+            network_operation_id=message.command_id,
         )
-        self._execution.pending_command = 'cancel_before_start'
-        self._execution.state = 'releasing'
-        self._execution.pending_command_id = message.command_id
-        self._execution.pending_acks.clear()
-        self._execution.pending_ack_deadline = (
-            time.monotonic() + self._config.prepare_timeout_sec
-        )
-        self._command_pub.publish(message)
+        if not local_release.get('success'):
+            self.get_logger().error(
+                '그룹 해제 전 로컬 worker 정리 실패: '
+                f'{local_release.get("message") or "응답 없음"}'
+            )
+        self._enter_group_release(cancel_message=message, local_release=local_release)
 
     def _new_command(
         self, *, command: str, execution_id: str, cycle_number: int,
@@ -1479,6 +1560,8 @@ class MotionCoordinationNode(Node):
                 event = 'error'
                 success = False
             elif phase == 'stopped':
+                if self._execution.pending_command == 'cancel_before_start':
+                    return
                 event = 'stopped'
             if not event:
                 return
@@ -1506,14 +1589,15 @@ class MotionCoordinationNode(Node):
             execution_id = self._execution.execution_id
             participants = self._execution.participants
             cycle_number = self._execution.cycle_number
-        self._issue_stop_now(
+        stop_outcome = self._issue_stop_now(
             execution_id=execution_id, participants=participants,
             cycle_number=cycle_number,
         )
         with self._lock:
             if self._execution.execution_id == execution_id:
                 self._execution.stop_now(error=True)
-                self._clear_active_execution()
+                if stop_outcome.local_success:
+                    self._clear_active_execution()
         self.get_logger().error(
             f'그룹 참가 PC 통신 단절 · 전체 정지: {", ".join(missing)}'
         )
@@ -1933,14 +2017,15 @@ class MotionCoordinationNode(Node):
             execution_id = self._execution.execution_id
             participants = self._execution.participants
             cycle_number = self._execution.cycle_number
-        self._issue_stop_now(
+        stop_outcome = self._issue_stop_now(
             execution_id=execution_id, participants=participants,
             cycle_number=cycle_number,
             command_id=f'peer-failure-{uuid.uuid4().hex}',
         )
         with self._lock:
             self._execution.stop_now(error=True)
-            self._clear_active_execution()
+            if stop_outcome.local_success:
+                self._clear_active_execution()
         self.get_logger().error(f'그룹 참가 PC 오류 · 전체 정지: {reason}')
         self._publish_coordination_error(
             code='GROUP_PARTICIPANT_FAILURE',

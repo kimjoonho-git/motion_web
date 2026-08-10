@@ -15,7 +15,7 @@ import {
   startMotionRun,
   stopMotionRun,
   validateMotionMapping,
-} from './api.js?v=20260729-motion-automation-1';
+} from './api.js?v=20260810-dds-release-1';
 import {
   displayText,
   formatInt,

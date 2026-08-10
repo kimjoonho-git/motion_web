@@ -2228,6 +2228,7 @@ def test_user_can_request_managed_program_restart_from_web(monkeypatch):
     commands = []
     monkeypatch.setenv('MOTION_CONTROL_SERVICE_UNIT', 'motion-control.service')
     monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
+    monkeypatch.setenv('MOTION_COORDINATION_SERVICE_UNIT', 'motion-coordination.service')
     monkeypatch.setattr(
         'motion_web_bridge.bridge_node.subprocess.Popen',
         lambda command, **kwargs: commands.append((command, kwargs)),
@@ -2236,7 +2237,10 @@ def test_user_can_request_managed_program_restart_from_web(monkeypatch):
     result = bridge.restart_managed_program()
 
     assert result['success'] is True
-    assert commands[0][0][-1] == 'motion-control.service'
+    assert commands[0][0][-2:] == [
+        'motion-control.service',
+        'motion-coordination.service',
+    ]
 
 
 def test_program_restart_button_requires_installed_service(monkeypatch):

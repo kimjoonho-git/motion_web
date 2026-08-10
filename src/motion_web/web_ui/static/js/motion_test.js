@@ -11,7 +11,7 @@ import {
   requestDynamixelAction,
   requestDynamixelJog,
   requestMotionSafetyStop,
-} from './api.js?v=20260722-motor-config-delete';
+} from './api.js?v=20260810-dds-release-1';
 import { showConfirm } from './ui_dialogs.js?v=20260727-popup-common-3';
 
 const DEFAULT_MAX_JOG_DELTA_DEG = 360.0;

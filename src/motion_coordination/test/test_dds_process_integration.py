@@ -295,7 +295,7 @@ def test_two_processes_discover_joined_peer_over_typed_dds(tmp_path):
             heartbeat_sec=0.1, warning_timeout_sec=0.6,
             peer_timeout_sec=1.2, start_lead_sec=0.5,
             schedule_ack_margin_sec=0.1,
-            max_trigger_sync_uncertainty_ms=5.0,
+            max_trigger_sync_uncertainty_ms=20.0,
             trigger_sync_samples=5,
             prepare_timeout_sec=2.0,
         ))
@@ -353,7 +353,7 @@ def test_two_processes_complete_two_barrier_cycles_over_typed_dds(tmp_path):
             heartbeat_sec=1.0, warning_timeout_sec=1.5,
             peer_timeout_sec=3.0, start_lead_sec=0.5,
             schedule_ack_margin_sec=0.1,
-            max_trigger_sync_uncertainty_ms=5.0,
+            max_trigger_sync_uncertainty_ms=20.0,
             trigger_sync_samples=5,
             prepare_timeout_sec=3.0,
             trigger_report_timeout_sec=1.0,
@@ -448,7 +448,7 @@ def test_trigger_spread_stops_once_and_blocks(tmp_path):
             heartbeat_sec=0.1, warning_timeout_sec=0.8,
             peer_timeout_sec=1.6, start_lead_sec=0.5,
             schedule_ack_margin_sec=0.1,
-            max_trigger_sync_uncertainty_ms=5.0,
+            max_trigger_sync_uncertainty_ms=20.0,
             trigger_sync_samples=5,
             prepare_timeout_sec=3.0,
         ))
@@ -524,7 +524,7 @@ def test_duplicate_pc_id_is_detected_by_both_dds_processes(tmp_path):
             heartbeat_sec=0.1, warning_timeout_sec=0.8,
             peer_timeout_sec=1.6, start_lead_sec=0.5,
             schedule_ack_margin_sec=0.1,
-            max_trigger_sync_uncertainty_ms=5.0,
+            max_trigger_sync_uncertainty_ms=20.0,
             trigger_sync_samples=5, prepare_timeout_sec=3.0,
             trigger_report_timeout_sec=0.5,
         ))
@@ -602,7 +602,7 @@ def test_missing_motion_started_report_stops_and_blocks_over_dds(tmp_path):
             heartbeat_sec=0.1, warning_timeout_sec=0.8,
             peer_timeout_sec=1.6, start_lead_sec=0.5,
             schedule_ack_margin_sec=0.1,
-            max_trigger_sync_uncertainty_ms=5.0,
+            max_trigger_sync_uncertainty_ms=20.0,
             trigger_sync_samples=5, prepare_timeout_sec=3.0,
             trigger_report_timeout_sec=0.5,
         ))

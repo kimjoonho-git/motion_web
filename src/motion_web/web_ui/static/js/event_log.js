@@ -2,7 +2,7 @@ import {
   clearMotorEvents,
   deleteMotorEventLogFile,
   fetchMotorEvents,
-} from './api.js?v=20260722-motor-config-delete';
+} from './api.js?v=20260810-dds-release-1';
 import { showConfirm } from './ui_dialogs.js?v=20260727-popup-common-3';
 
 const CATEGORY_LABELS = {

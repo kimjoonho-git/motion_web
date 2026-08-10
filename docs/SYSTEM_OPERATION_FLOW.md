@@ -57,7 +57,7 @@ warning_timeout_sec: 1.5
 peer_timeout_sec: 3.0
 start_lead_sec: 0.5
 schedule_ack_margin_sec: 0.1
-max_trigger_sync_uncertainty_ms: 5.0
+max_trigger_sync_uncertainty_ms: 20.0
 trigger_sync_samples: 5
 prepare_timeout_sec: 6.0
 trigger_report_timeout_sec: 1.0
@@ -103,7 +103,7 @@ trigger_report_timeout_sec: 1.0
 - 고정 시간 기준 PC · 없음
 - 실행 기준 · 실행 요청 PC의 해당 실행 monotonic 시간
 - 상대시간 측정 · DDS 왕복 5회 · 지연이 작은 측정값 우선
-- 최대 추정 불확실성 · 5ms
+- 최대 추정 불확실성 · 20ms
 - 예약 여유 · 500ms
 - 예약 수락 완료 한계 · 예약시각 100ms 전
 - 준비 응답 제한 · 6초
@@ -118,7 +118,7 @@ trigger_report_timeout_sec: 1.0
 - 목표 편차 · 각 트리거별 PC 간 20ms 이내
 
 각 참가 PC는 coordinator monotonic 목표를 실행별 offset으로 로컬 monotonic
-마감시각으로 변환한다. DDS 측정 불확실성이 5ms를 넘으면 실행을 취소한다. 초기화 또는
+마감시각으로 변환한다. DDS 측정 불확실성이 20ms를 넘으면 실행을 취소한다. 초기화 또는
 모션 시작 트리거가 20ms를 넘으면 전체 `STOP_NOW`와 오류를 공유하고 사용자 확인 전
 그룹 재실행을 차단한다. 자동 재시도와 PC별 정지 확인 상태는 사용하지 않는다. 이 값은
 모터축의 물리 움직임 측정값이 아니다.

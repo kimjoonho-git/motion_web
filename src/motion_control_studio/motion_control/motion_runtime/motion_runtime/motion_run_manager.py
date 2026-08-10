@@ -1317,7 +1317,7 @@ class MotionRunManager(Node):
             worker is not None and worker.is_alive()
             and worker is not threading.current_thread()
         ):
-            worker.join(timeout=1.0)
+            worker.join(timeout=5.0)
         if worker is not None and worker.is_alive():
             return {
                 'success': False,
@@ -1334,8 +1334,15 @@ class MotionRunManager(Node):
 
     def _finish_group_session(self, message: str) -> None:
         with self._group_condition:
+            self._stop_event.set()
             self._group_session.update({'active': False, 'state': 'stopped'})
             self._group_condition.notify_all()
+            worker = getattr(self, '_run_thread', None)
+        if (
+            worker is not None and worker.is_alive()
+            and worker is not threading.current_thread()
+        ):
+            worker.join(timeout=5.0)
         self._update_status({
             'state': 'stopped',
             'phase': 'stopped',

@@ -8,7 +8,7 @@ import {
   writeEthercatAlias,
   saveMotorConfig,
   deleteMotorConfig,
-} from './api.js?v=20260722-motor-config-delete';
+} from './api.js?v=20260810-dds-release-1';
 import {
   clone,
   displayText,

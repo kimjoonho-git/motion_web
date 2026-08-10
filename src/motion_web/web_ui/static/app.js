@@ -1,1 +1,1 @@
-import './js/main.js?v=20260808-group-redesign-2';
+import './js/main.js?v=20260810-dds-release-1';

@@ -2,7 +2,7 @@ import {
   fetchCoordinationStatus,
   sendCoordinationControl,
   saveCoordinationSettings,
-} from './api.js?v=20260806-dds-trigger-sync';
+} from './api.js?v=20260810-dds-release-1';
 import { showAlert, showConfirm } from './ui_dialogs.js?v=20260727-popup-common-3';
 
 function text(value) {

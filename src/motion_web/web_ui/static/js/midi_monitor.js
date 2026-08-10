@@ -8,7 +8,7 @@ import {
   resetMidiRuntimeValues,
   selectMidiBank,
   updateMidiBank,
-} from './api.js?v=20260722-motor-config-delete';
+} from './api.js?v=20260810-dds-release-1';
 import { showConfirm } from './ui_dialogs.js?v=20260727-popup-common-3';
 
 const MIDI_MAX = 16383;

@@ -24,6 +24,18 @@ class _Publisher:
             self.events.append(('dds', getattr(message, 'command', '')))
 
 
+def _peer_release_ack(node, *, pc_id='pc-b', group_id='stage-a'):
+    release_id = node._execution.pending_command_id
+    node._event_callback(GroupEvent(
+        group_id=group_id,
+        execution_id=node._execution.execution_id,
+        pc_id=pc_id,
+        event='stopped',
+        command_id=release_id,
+        success=True,
+    ))
+
+
 def _node():
     node = coordination_node.MotionCoordinationNode.__new__(
         coordination_node.MotionCoordinationNode
@@ -33,7 +45,7 @@ def _node():
         display_name='PC A', enabled=True, dds_domain_id=21,
         heartbeat_sec=0.5, warning_timeout_sec=1.5,
         peer_timeout_sec=3.0, start_lead_sec=0.5,
-        max_trigger_sync_uncertainty_ms=5.0,
+        max_trigger_sync_uncertainty_ms=20.0,
         trigger_sync_samples=3,
         prepare_timeout_sec=6.0,
         trigger_report_timeout_sec=1.0,
@@ -358,7 +370,10 @@ def test_cancel_failure_escalates_to_local_and_dds_stop_now():
     node._cancel_before_start('prepare failed', code='GROUP_START_REJECTED')
 
     assert calls == ['group_cancel', 'stop_now']
-    assert node._command_pub.messages[-1].command == 'stop_now'
+    assert node._command_pub.messages[-1].command == 'cancel_before_start'
+    assert node._execution.state == 'releasing'
+    _peer_release_ack(node)
+    assert node._execution.execution_id == ''
     assert node._coordination_error['code'] == 'GROUP_START_REJECTED'
 
 
@@ -507,6 +522,9 @@ def test_missing_prepare_ack_cancels_every_participant_before_start():
     node._enforce_schedule_ack_deadline()
 
     assert sent == [('local', 'group_cancel'), ('dds', 'cancel_before_start')]
+    assert node._execution.state == 'releasing'
+    assert node._execution.pending_command == 'cancel_before_start'
+    _peer_release_ack(node)
     assert node._execution.state == 'error'
     assert node._execution.pending_command_id == ''
     assert node._execution.execution_id == ''
@@ -602,6 +620,8 @@ def test_rejected_prepare_cancels_execution_and_releases_lease():
     node._event_callback(rejected)
 
     assert events == [('local', 'group_cancel'), ('dds', 'cancel_before_start')]
+    assert node._execution.state == 'releasing'
+    _peer_release_ack(node)
     assert node._execution.execution_id == ''
     assert node._execution.pending_command_id == ''
     assert node._coordination_error['code'] == 'GROUP_START_REJECTED'
@@ -875,9 +895,11 @@ def test_missing_sync_responses_cancel_group_before_initialization():
     node._drive_trigger_sync()
 
     assert events == [('local', 'group_cancel'), ('dds', 'cancel_before_start')]
+    assert node._execution.state == 'releasing'
+    assert node._trigger_sync_status['trigger_sync_state'] == 'failed'
+    _peer_release_ack(node)
     assert node._execution.execution_id == ''
     assert node._execution.state == 'error'
-    assert node._trigger_sync_status['trigger_sync_state'] == 'failed'
 
 
 def test_trigger_spread_excess_stops_once_and_blocks_group():
@@ -993,6 +1015,31 @@ def test_shared_group_error_clear_removes_coordination_alarm_from_every_peer():
 
     assert node._coordination_error == {}
     assert set(node._alarm_registry.alarms) == {'pc-c'}
+
+
+def test_begin_group_release_completes_after_all_stopped_acks():
+    node = _node()
+    node._execution = GroupExecution()
+    execution_id = node._execution.begin('pc-a', ('pc-a', 'pc-b'))
+    node._execution.execution_id = execution_id
+    node._execution.coordinator_id = 'pc-a'
+    node._execution.participants = ('pc-a', 'pc-b')
+    node._execution.run_mode = 'once'
+    node._execution.state = 'running'
+    events = []
+    node._call_local_control = lambda payload, **_kwargs: (
+        events.append(('local', payload['command'])) or {'success': True}
+    )
+    node._command_pub = _Publisher(events)
+
+    node._begin_group_release()
+
+    assert events == [('local', 'group_cancel'), ('dds', 'cancel_before_start')]
+    assert node._execution.state == 'releasing'
+    assert node._execution.execution_id == execution_id
+    _peer_release_ack(node)
+    assert node._execution.execution_id == ''
+    assert node._execution.state == 'stopped'
 
 
 def test_shutdown_stops_active_local_execution_before_dds_notification():

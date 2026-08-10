@@ -10,7 +10,7 @@ import {
   stopMotionRun,
   stopMotionStudio,
   setProjectGeneration,
-} from './api.js?v=20260729-motion-automation-1';
+} from './api.js?v=20260810-dds-release-1';
 import { getElements } from './dom.js?v=20260807-runtime-clear-1';
 import { createMotorEventLogController } from './event_log.js?v=20260727-popup-common-3';
 import { createMidiMonitorController } from './midi_monitor.js?v=20260806-midi-pickup-reconnect-1';
@@ -38,7 +38,7 @@ import {
 } from './workspace_navigation.js?v=20260729-motion-files-execution-1';
 import { installFeedbackPresentation } from './ui_feedback.js?v=20260724-ui-finish-1';
 import { createServoAlarmController } from './servo_alarm.js?v=20260728-servo-alarm-2';
-import { createCoordinationController } from './coordination.js?v=20260808-group-redesign-2';
+import { createCoordinationController } from './coordination.js?v=20260810-dds-release-1';
 
 const el = getElements();
 const operationProgress = createOperationProgressManager({ el });
