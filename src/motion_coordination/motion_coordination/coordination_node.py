@@ -711,13 +711,23 @@ class MotionCoordinationNode(Node):
                             self._execution.stop_after_cycle
                             or self._execution.run_mode == 'once'
                         ):
-                            self._broadcast_stop('cancel_before_start')
-                            self._execution.stop_now()
-                            self._clear_active_execution()
+                            self._begin_group_release()
                         else:
                             self._publish_next_cycle()
                 elif message.event == 'stopped':
-                    self._execution.stop_now()
+                    if (
+                        self._execution.pending_command == 'cancel_before_start'
+                        and message.command_id
+                        == self._execution.pending_command_id
+                    ):
+                        self._record_schedule_ack(message)
+                        if self._execution.pending_acks >= set(
+                            self._execution.participants
+                        ):
+                            self._execution.stop_now()
+                            self._clear_active_execution()
+                    else:
+                        self._execution.stop_now()
                 elif message.event == 'error':
                     runtime_error = (
                         f'{message.pc_id} 로컬 그룹 실행 오류: '
@@ -1311,6 +1321,24 @@ class MotionCoordinationNode(Node):
             execution_id=self._execution.execution_id,
             cycle_number=self._execution.cycle_number,
             participants=self._execution.participants,
+        )
+        self._command_pub.publish(message)
+
+    def _begin_group_release(self) -> None:
+        """Keep the lease until every participant confirms worker release."""
+        if not self._execution.execution_id:
+            return
+        message = self._new_command(
+            command='cancel_before_start',
+            execution_id=self._execution.execution_id,
+            cycle_number=self._execution.cycle_number,
+            participants=self._execution.participants,
+        )
+        self._execution.pending_command = 'cancel_before_start'
+        self._execution.pending_command_id = message.command_id
+        self._execution.pending_acks.clear()
+        self._execution.pending_ack_deadline = (
+            time.monotonic() + self._config.prepare_timeout_sec
         )
         self._command_pub.publish(message)
 

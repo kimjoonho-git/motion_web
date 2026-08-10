@@ -150,6 +150,8 @@ class GroupExecution:
             raise ValueError('그룹 실행 참가 PC는 1~8대여야 합니다')
         if coordinator_id not in selected:
             raise ValueError('임시 진행 PC가 참가 목록에 없습니다')
+        if self.execution_id:
+            raise ValueError('이전 그룹 실행 정리 확인 중입니다')
         if self.state not in {'idle', 'stopped', 'error'}:
             raise ValueError('다른 그룹 실행이 진행 중입니다')
         self.reset()
