@@ -499,9 +499,9 @@ class MotionCoordinationNode(Node):
             participants = tuple(sorted(set(message.participant_ids)))
             urgent_stop = bool(
                 message.command in {'stop_now', 'cancel_before_start'}
-                and message.execution_id == self._execution.execution_id
-                and participants == self._execution.participants
-                and message.coordinator_id in self._execution.participants
+                and self._config.pc_id in set(message.participant_ids)
+                and message.coordinator_id in set(message.participant_ids)
+                and self._stop_command_matches(message.execution_id, participants)
             )
             if urgent_stop:
                 self._cancelled_execution_ids.add(message.execution_id)
@@ -791,6 +791,7 @@ class MotionCoordinationNode(Node):
         *,
         network_operation_id: str = '',
         timeout_sec: Optional[float] = None,
+        participants: Optional[tuple[str, ...]] = None,
     ) -> Dict[str, Any]:
         """Stop the local group worker and wait until its thread exits."""
         release_timeout = (
@@ -805,9 +806,15 @@ class MotionCoordinationNode(Node):
         }, timeout_sec=release_timeout)
         if cancel_result.get('success'):
             return cancel_result
+        stop_participants = participants
+        if not stop_participants:
+            with self._lock:
+                stop_participants = self._execution.participants
+        if not stop_participants:
+            stop_participants = (self._config.pc_id,)
         stop_outcome = self._issue_stop_now(
             execution_id=execution_id,
-            participants=(self._config.pc_id,),
+            participants=stop_participants,
             cycle_number=0,
             command_id=network_operation_id or f'local-release-{uuid.uuid4().hex}',
         )
@@ -860,6 +867,7 @@ class MotionCoordinationNode(Node):
         local_release = self._release_local_worker(
             execution_id,
             network_operation_id=cancel_message.command_id,
+            participants=participants,
         )
         message = str(reason)
         if not local_release.get('success'):
@@ -1447,9 +1455,11 @@ class MotionCoordinationNode(Node):
                 cycle_number=self._execution.cycle_number,
                 participants=self._execution.participants,
             )
+            release_participants = self._execution.participants
         local_release = self._release_local_worker(
             execution_id,
             network_operation_id=message.command_id,
+            participants=release_participants,
         )
         if not local_release.get('success'):
             self.get_logger().error(
@@ -1661,16 +1671,40 @@ class MotionCoordinationNode(Node):
             ):
                 raise ValueError('그룹 실행 ID·임시 진행 PC·참가 목록이 일치하지 않습니다')
 
+    def _local_group_execution_id(self) -> str:
+        status = self._local_status.get('motion_run_status')
+        if isinstance(status, Mapping) and status.get('group_execution'):
+            return str(status.get('execution_id') or '')
+        return ''
+
+    def _stop_command_matches(
+        self, execution_id: str, participants: tuple[str, ...],
+    ) -> bool:
+        if not execution_id:
+            return False
+        with self._lock:
+            local_execution_id = self._execution.execution_id
+            local_participants = self._execution.participants
+        if (
+            execution_id == local_execution_id
+            and (
+                not local_participants
+                or set(local_participants) == set(participants)
+            )
+        ):
+            return True
+        return execution_id == self._local_group_execution_id()
+
     def _require_stop_command(
         self, message: GroupCommand, participants: tuple[str, ...]
     ) -> None:
-        with self._lock:
-            if (
-                message.execution_id != self._execution.execution_id
-                or participants != self._execution.participants
-                or message.coordinator_id not in self._execution.participants
-            ):
-                raise ValueError('그룹 정지 요청의 실행 ID·참가 목록이 일치하지 않습니다')
+        if self._config.pc_id not in participants:
+            raise ValueError('그룹 정지 요청에 이 PC가 포함되어 있지 않습니다')
+        if message.coordinator_id not in participants:
+            raise ValueError('그룹 정지 요청 발신 PC가 참가 목록에 없습니다')
+        if self._stop_command_matches(message.execution_id, participants):
+            return
+        raise ValueError('그룹 정지 요청의 실행 ID·참가 목록이 일치하지 않습니다')
 
     def _local_schedule_ns(self, message: GroupCommand) -> int:
         with self._lock:

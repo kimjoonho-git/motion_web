@@ -2,7 +2,7 @@ import {
   fetchCoordinationStatus,
   sendCoordinationControl,
   saveCoordinationSettings,
-} from './api.js?v=20260810-dds-release-1';
+} from './api.js?v=20260810-dds-release-2';
 import { showAlert, showConfirm } from './ui_dialogs.js?v=20260727-popup-common-3';
 
 function text(value) {
@@ -15,11 +15,27 @@ const stateLabels = {
   idle: '대기', preparing: '준비 확인', initializing: '초기위치 이동',
   armed: '시작 대기', start_scheduled: '예약됨', waiting: '예약 대기', running: '모션 실행 중',
   waiting_cycle_ready: '회차 준비 중', cycle_ready: '다음 시작 준비',
-  stop_after_cycle: '현재 회차 후 정지 대기', releasing: '이전 그룹 실행 정리 확인 중', stopped: '정지', error: '오류',
-  online: '정상', warning: '지연', offline: '통신 단절', ready: '정상',
+  stop_after_cycle: '현재 회차 후 정지 대기', releasing: '이전 그룹 실행 정리 확인 중',
+  stopped: '정지', error: '오류', motion_completed: '회차 완료',
+  initialized: '초기화 완료', countdown: '시작 카운트',
+  group_preparing: '그룹 준비', group_armed: '시작 대기',
+  group_start_scheduled: '시작 예약', group_initialize_scheduled: '초기화 예약',
+  group_motion_completed: '회차 완료', group_cycle_initialized: '회차 초기화 완료',
+  group_cycle_initialize_scheduled: '회차 초기화 예약',
+  online: '정상', warning: '지연', offline: '통신 단절', ready: '그룹 대기',
   unavailable: '확인 불가', out_of_tolerance: '동기화 불량', unknown: '확인 불가',
   syncing: '측정 중', sync_waiting: '측정 대기', failed: '측정 실패',
 };
+
+const GROUP_IDLE_STATES = new Set(['', 'ready', 'idle', 'stopped', 'error']);
+const GROUP_PROGRESS_PHASES = new Set([
+  'running', 'initializing', 'preparing', 'countdown',
+  'group_preparing', 'group_armed', 'group_start_scheduled',
+  'group_initialize_scheduled', 'group_cycle_initialize_scheduled',
+]);
+const GROUP_PROGRESS_STATES = new Set([
+  'running', 'initializing', 'preparing', 'countdown', 'armed', 'start_scheduled',
+]);
 
 function stateText(value) {
   const key = String(value || 'unknown');
@@ -37,6 +53,53 @@ const activeStates = new Set([
   'waiting_cycle_ready', 'cycle_ready', 'stop_after_cycle',
   'releasing',
 ]);
+
+function peerMotionPhase(peer = {}) {
+  const phase = String(peer.motion_phase || '').trim();
+  if (phase) return stateText(phase);
+  const state = String(peer.motion_state || '').trim();
+  if (state && !GROUP_IDLE_STATES.has(state)) return stateText(state);
+  return state ? stateText(state) : '그룹 대기';
+}
+
+function peerCycleText(peer = {}, execution = {}) {
+  const executionActive = Boolean(execution.execution_id);
+  const motionState = String(peer.motion_state || '');
+  const motionPhase = String(peer.motion_phase || '');
+  if (
+    !executionActive
+    && GROUP_IDLE_STATES.has(motionState)
+    && !motionPhase.startsWith('group_')
+  ) {
+    return '-';
+  }
+  const cycle = Number(peer.current_cycle || 0);
+  if (cycle > 0) return `${cycle}회차`;
+  const groupCycle = Number(execution.cycle_number || 0);
+  if (executionActive && groupCycle > 0) return `${groupCycle}회차`;
+  return '-';
+}
+
+function peerProgressText(peer = {}) {
+  const phase = String(peer.motion_phase || '');
+  const state = String(peer.motion_state || '');
+  const showProgress = GROUP_PROGRESS_PHASES.has(phase) || GROUP_PROGRESS_STATES.has(state);
+  const duration = Number(peer.motion_duration_sec || 0);
+  const elapsed = Number(peer.motion_elapsed_sec || 0);
+  if (!showProgress || duration <= 0) return '-';
+  return `${elapsed.toFixed(2)} / ${duration.toFixed(2)}초 · ${Math.round(Number(peer.motion_progress_ratio || 0) * 100)}%`;
+}
+
+function peerPhaseClass(peer = {}) {
+  const phase = String(peer.motion_phase || peer.motion_state || 'unknown');
+  if (['error', 'stopped', 'motion_completed', 'group_motion_completed'].includes(phase)) {
+    return stateClass(phase === 'error' ? 'error' : 'stopped');
+  }
+  if (GROUP_PROGRESS_PHASES.has(phase) || GROUP_PROGRESS_STATES.has(String(peer.motion_state || ''))) {
+    return 'coordination-state-warn';
+  }
+  return stateClass(peer.motion_state || 'ready');
+}
 
 export function createCoordinationController({ el }) {
   let snapshot = null;
@@ -56,24 +119,18 @@ export function createCoordinationController({ el }) {
     if (el.coordinationEnabled) el.coordinationEnabled.value = config.enabled ? 'true' : 'false';
   }
 
-  function peerRow(peer = {}, fixedParticipants = new Set()) {
+  function peerRow(peer = {}, fixedParticipants = new Set(), execution = {}) {
     const alarm = peer.alarm || {};
     const alarmText = Number(peer.servo_alarm_grade || 0) > 0
       ? `${Number(peer.servo_alarm_grade)} · ${alarm.message || alarm.error_code || '확인 필요'}`
       : '0';
-    const duration = Number(peer.motion_duration_sec || 0);
-    const elapsed = Number(peer.motion_elapsed_sec || 0);
-    const progress = duration > 0
-      ? ` · ${elapsed.toFixed(2)} / ${duration.toFixed(2)}초 · ${Math.round(Number(peer.motion_progress_ratio || 0) * 100)}%`
-      : '';
-    const cycle = Number(peer.current_cycle || 0);
-    const cycleText = cycle > 0 ? ` · ${cycle}회차` : '';
-    const phase = peer.motion_phase ? ` · ${text(stateText(peer.motion_phase))}` : '';
     return `<tr>
       <td><strong>${text(peer.display_name || peer.pc_id || '-')}</strong><small>${peer.display_name ? text(peer.pc_id || '') : ''}</small></td>
       <td class="${stateClass(peer.state)}">${text(stateText(peer.state))}</td>
       <td>${fixedParticipants.has(peer.pc_id) ? '고정 참가' : '대기'}</td>
-      <td>${text(stateText(peer.motion_state))}${phase}${cycleText}${progress}</td>
+      <td>${text(peerCycleText(peer, execution))}</td>
+      <td class="${peerPhaseClass(peer)}">${text(peerMotionPhase(peer))}</td>
+      <td>${text(peerProgressText(peer))}</td>
       <td class="${stateClass(peer.trigger_sync_state)}">${text(stateText(peer.trigger_sync_state))}</td>
       <td>${Number(peer.trigger_sync_uncertainty_ms || 0).toFixed(3)} ms</td>
       <td class="${Number(peer.servo_alarm_grade || 0) > 0 ? 'coordination-state-bad' : 'coordination-state-ok'}">${text(alarmText)}</td>
@@ -141,7 +198,6 @@ export function createCoordinationController({ el }) {
         pendingInitializationId = '';
         initializationStarted = false;
       } else if (initializationStarted && !execution.execution_id) {
-        const completedId = pendingInitializationId;
         pendingInitializationId = '';
         initializationStarted = false;
         if (typeof document !== 'undefined') {
@@ -202,12 +258,13 @@ export function createCoordinationController({ el }) {
       const rows = [];
       if (joined) rows.push(peerRow({
         ...(runtime.local || {}),
+        pc_id: runtime.local?.pc_id || config.pc_id,
         display_name: `${runtime.local?.display_name || runtimeConfig.display_name || config.pc_id} (이 PC)`,
-        state: 'online', motion_state: execution.state,
-      }, fixedParticipants));
-      peers.forEach((peer) => rows.push(peerRow(peer, fixedParticipants)));
+        state: 'online',
+      }, fixedParticipants, execution));
+      peers.forEach((peer) => rows.push(peerRow(peer, fixedParticipants, execution)));
       el.coordinationPeerRows.innerHTML = rows.length
-        ? rows.join('') : '<tr><td colspan="7" class="empty">그룹에 참가하면 PC 상태가 표시됩니다</td></tr>';
+        ? rows.join('') : '<tr><td colspan="9" class="empty">그룹에 참가하면 PC 상태가 표시됩니다</td></tr>';
     }
   }
 

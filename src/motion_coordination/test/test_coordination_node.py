@@ -409,6 +409,48 @@ def test_fixed_roster_participant_can_issue_group_stop():
         node._require_stop_command(command, ('pc-a', 'pc-b'))
 
 
+def test_stop_now_accepted_when_lease_cleared_but_group_worker_active():
+    node = _node()
+    node._config.pc_id = 'pc-b'
+    node._execution.clear_active()
+    node._execution.state = 'running'
+    node._local_status['motion_run_status'] = {
+        'group_execution': True,
+        'execution_id': 'exec-a',
+        'state': 'running',
+        'phase': 'running',
+    }
+    command = GroupCommand(
+        group_id='stage-a', execution_id='exec-a', coordinator_id='pc-a',
+        command='stop_now', participant_ids=['pc-a', 'pc-b'],
+    )
+    node._require_stop_command(command, ('pc-a', 'pc-b'))
+
+
+def test_release_worker_escalation_broadcasts_full_participant_roster():
+    node = _node()
+    node._execution.execution_id = 'exec-a'
+    node._execution.participants = ('pc-a', 'pc-b')
+    published = []
+    node._issue_stop_now = lambda **kwargs: (
+        published.append(kwargs) or SimpleNamespace(local_result={'success': True})
+    )
+    node._call_local_control = lambda *_args, **_kwargs: {'success': False}
+
+    node._release_local_worker(
+        'exec-a',
+        network_operation_id='release-1',
+        participants=('pc-a', 'pc-b'),
+    )
+
+    assert published == [{
+        'execution_id': 'exec-a',
+        'participants': ('pc-a', 'pc-b'),
+        'cycle_number': 0,
+        'command_id': 'release-1',
+    }]
+
+
 def test_alarm_on_execution_member_blocks_next_cycle():
     node = _node()
     node._execution.participants = ('pc-a', 'pc-b')
