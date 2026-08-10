@@ -15,7 +15,7 @@ const stateLabels = {
   idle: '대기', preparing: '준비 확인', initializing: '초기위치 이동',
   armed: '시작 대기', start_scheduled: '예약됨', waiting: '예약 대기', running: '모션 실행 중',
   waiting_cycle_ready: '회차 준비 중', cycle_ready: '다음 시작 준비',
-  stop_after_cycle: '현재 회차 후 정지 대기', stopped: '정지', error: '오류',
+  stop_after_cycle: '현재 회차 후 정지 대기', releasing: '이전 그룹 실행 정리 확인 중', stopped: '정지', error: '오류',
   online: '정상', warning: '지연', offline: '통신 단절', ready: '정상',
   unavailable: '확인 불가', out_of_tolerance: '동기화 불량', unknown: '확인 불가',
   syncing: '측정 중', sync_waiting: '측정 대기', failed: '측정 실패',
@@ -35,6 +35,7 @@ function stateClass(value) {
 const activeStates = new Set([
   'preparing', 'initializing', 'armed', 'start_scheduled', 'waiting', 'running',
   'waiting_cycle_ready', 'cycle_ready', 'stop_after_cycle',
+  'releasing',
 ]);
 
 export function createCoordinationController({ el }) {
@@ -159,7 +160,8 @@ export function createCoordinationController({ el }) {
         ? '이 PC와 다른 PC의 그룹 모션을 즉시 정지한 뒤 이 PC의 연동을 해제합니다'
         : '이 PC의 연동을 해제해 단독 모션·모션 스튜디오를 사용합니다';
     }
-    const startDisabled = loading || !joined || active || peers.length < 1 || unhealthyPeer || groupErrorActive;
+    const releasePending = Boolean(execution.execution_id);
+    const startDisabled = loading || !joined || active || releasePending || peers.length < 1 || unhealthyPeer || groupErrorActive;
     if (el.coordinationInitializeButton) el.coordinationInitializeButton.disabled = startDisabled;
     if (el.coordinationStartButton) el.coordinationStartButton.disabled = startDisabled;
     if (el.coordinationContinuousStartButton) el.coordinationContinuousStartButton.disabled = startDisabled;

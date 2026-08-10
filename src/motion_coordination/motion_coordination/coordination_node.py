@@ -726,6 +726,13 @@ class MotionCoordinationNode(Node):
                         ):
                             self._execution.stop_now()
                             self._clear_active_execution()
+                    elif (
+                        self._execution.stop_after_cycle
+                        or self._execution.run_mode == 'once'
+                    ) and self._execution.pending_command != 'cancel_before_start':
+                        # Runtime stop-after-cycle completes without emitting
+                        # cycle_ready. Start the same release handshake here.
+                        self._begin_group_release()
                     else:
                         self._execution.stop_now()
                 elif message.event == 'error':
@@ -1335,6 +1342,7 @@ class MotionCoordinationNode(Node):
             participants=self._execution.participants,
         )
         self._execution.pending_command = 'cancel_before_start'
+        self._execution.state = 'releasing'
         self._execution.pending_command_id = message.command_id
         self._execution.pending_acks.clear()
         self._execution.pending_ack_deadline = (
