@@ -179,6 +179,54 @@ def test_motion_automation_commands_use_current_execution_context():
     ]
 
 
+def test_group_motion_commands_include_execution_context_id():
+    bridge = make_bridge()
+    bridge._execution_context_status = {
+        'state': 'ready',
+        'ready': True,
+        'context_id': 'context-sha',
+        'nodes': {},
+    }
+    bridge._motor_runtime_control_blocker = lambda: ''
+    bridge._request_motion_run = MotionWebBridge._request_motion_run.__get__(
+        bridge, MotionWebBridge,
+    )
+    published = []
+    bridge._motion_run_request_publisher = type('Publisher', (), {
+        'publish': lambda _self, message: published.append(json.loads(message.data)),
+    })()
+    bridge._wait_for_motion_run_result = lambda request_id, **_kwargs: {
+        'success': True,
+        'request_id': request_id,
+        'status': {},
+    }
+    bridge._new_project_request_id = lambda _prefix: 'req-1'
+    bridge._current_project_generation = lambda: 1
+
+    assert bridge.motion_group_prepare({
+        'execution_id': 'exec-a',
+        'motion_file_id': 'motion.json',
+        'mapping_file_id': 'mapping.yaml',
+    })['success']
+    assert bridge.motion_group_start_at({
+        'execution_id': 'exec-a',
+        'cycle_number': 1,
+        'start_monotonic': 100.0,
+    })['success']
+    assert bridge.motion_group_initialize_at({
+        'execution_id': 'exec-a',
+        'cycle_number': 1,
+        'initialize_monotonic': 100.0,
+    })['success']
+    payloads = [message['payload'] for message in published]
+    assert [message['command'] for message in published] == [
+        'group_prepare',
+        'group_start_at',
+        'group_initialize_at',
+    ]
+    assert all(payload.get('context_id') == 'context-sha' for payload in payloads)
+
+
 def test_motion_automation_start_obeys_motor_runtime_blocker():
     bridge = make_bridge()
     calls = []

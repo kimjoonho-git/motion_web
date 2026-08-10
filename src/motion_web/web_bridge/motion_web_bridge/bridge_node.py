@@ -5545,6 +5545,7 @@ class MotionWebBridge(Node):
             'start',
             'group_prepare',
             'group_start_at',
+            'group_initialize_at',
             'automation_configure',
             'automation_start',
             'automation_disable',
