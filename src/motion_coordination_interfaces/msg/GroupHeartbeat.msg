@@ -13,6 +13,7 @@ string trigger_sync_state
 float64 trigger_sync_uncertainty_ms
 int32 servo_alarm_grade
 string motion_phase
+string display_step
 float64 motion_elapsed_sec
 float64 motion_duration_sec
 float64 motion_progress_ratio

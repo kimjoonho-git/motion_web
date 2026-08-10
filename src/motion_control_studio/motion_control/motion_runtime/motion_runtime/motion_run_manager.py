@@ -26,6 +26,7 @@ from .motion_automation_store import (
     default_automation_state,
     normalize_automation_state,
 )
+from .motion_group_display import apply_group_display
 
 
 ID_CONTROLWORD = 0
@@ -1066,6 +1067,7 @@ class MotionRunManager(Node):
                     'execution_id': execution_id,
                     'cycle_count': cycle_number,
                     'current_cycle': cycle_number,
+                    'group_cycle_number': cycle_number,
                     'cycle_triggered_at': triggered_at,
                 })
                 with self._group_condition:
@@ -1083,12 +1085,11 @@ class MotionRunManager(Node):
                 if scheduled_initialize is None:
                     break
                 initialized_cycle, initialize_at = scheduled_initialize
-                next_cycle = initialized_cycle + 1
                 initialization_plan = {
                     **initialization_plan,
                     'group_execution': True,
                     'execution_id': execution_id,
-                    'group_cycle_number': next_cycle,
+                    'group_cycle_number': initialized_cycle,
                 }
                 self._wait_group_deadline(
                     initialize_at,
@@ -1117,6 +1118,7 @@ class MotionRunManager(Node):
                     'execution_id': execution_id,
                     'cycle_count': cycle_number,
                     'current_cycle': cycle_number,
+                    'group_cycle_number': cycle_number,
                 })
         except InterruptedError:
             pass
@@ -1171,6 +1173,7 @@ class MotionRunManager(Node):
             'group_execution': True,
             'execution_id': execution_id,
             'current_cycle': cycle_number,
+            'group_cycle_number': cycle_number,
             'scheduled_start_monotonic': float(scheduled_monotonic),
         })
         while time.monotonic() < deadline:
@@ -3629,6 +3632,8 @@ class MotionRunManager(Node):
         self._response_pub.publish(msg)
 
     def _publish_status(self) -> None:
+        with self._run_lock:
+            self._status = apply_group_display(dict(self._status))
         msg = String()
         msg.data = json.dumps(self.status(), ensure_ascii=False)
         self._status_pub.publish(msg)

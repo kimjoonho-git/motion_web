@@ -206,12 +206,12 @@ class MotionCoordinationNode(Node):
             progress = local_status.get('progress')
             progress = progress if isinstance(progress, Mapping) else {}
             message.motion_phase = str(local_status.get('phase') or '')
+            message.display_step = str(local_status.get('display_step') or '')
             message.motion_elapsed_sec = float(progress.get('elapsed_sec') or 0.0)
             message.motion_duration_sec = float(progress.get('duration_sec') or 0.0)
             message.motion_progress_ratio = float(progress.get('ratio') or 0.0)
             message.current_cycle = int(
                 self._resolve_motion_cycle(local_status)
-                or self._execution.cycle_number
             )
         self._heartbeat_pub.publish(message)
 
@@ -254,6 +254,7 @@ class MotionCoordinationNode(Node):
             motion_duration_sec=float(message.motion_duration_sec),
             motion_progress_ratio=float(message.motion_progress_ratio),
             current_cycle=int(message.current_cycle),
+            display_step=str(message.display_step),
         ))
         pending_alarm = self._alarm_registry.member_boot_changed(
             message.pc_id, message.boot_id,
@@ -1681,11 +1682,12 @@ class MotionCoordinationNode(Node):
 
     @staticmethod
     def _resolve_motion_cycle(local_status: Mapping[str, Any]) -> int:
-        """Return the motion cycle currently shown to operators."""
+        """Return motion_run display_cycle when available."""
         if not isinstance(local_status, Mapping):
             return 0
         return int(
-            local_status.get('group_cycle_number')
+            local_status.get('display_cycle')
+            or local_status.get('group_cycle_number')
             or local_status.get('current_cycle')
             or 0
         )
@@ -1890,7 +1892,6 @@ class MotionCoordinationNode(Node):
         now = time.monotonic()
         with self._lock:
             execution_id = self._execution.execution_id
-            execution_cycle = int(self._execution.cycle_number)
         execution_active = bool(execution_id)
         peers = []
         for pc_id in self._registry.joined():
@@ -1912,7 +1913,9 @@ class MotionCoordinationNode(Node):
                 'motion_duration_sec': member.motion_duration_sec,
                 'motion_progress_ratio': member.motion_progress_ratio,
                 'current_cycle': member.current_cycle,
-            }, execution_active=execution_active, execution_cycle=execution_cycle))
+                'display_cycle': member.current_cycle,
+                'display_step': member.display_step,
+            }, execution_active=execution_active))
         with self._lock:
             local_status = self._local_status.get('motion_run_status')
             local_status = local_status if isinstance(local_status, Mapping) else {}
@@ -1955,10 +1958,10 @@ class MotionCoordinationNode(Node):
                 'motion_progress_ratio': float(
                     (local_status.get('progress') or {}).get('ratio') or 0.0
                 ),
-                'current_cycle': int(
-                    motion_cycle or cycle_number
-                ),
-            }, execution_active=execution_active, execution_cycle=execution_cycle)
+                'current_cycle': motion_cycle,
+                'display_cycle': motion_cycle,
+                'display_step': str(local_status.get('display_step') or ''),
+            }, execution_active=execution_active)
             if local_peer.get('motion_cycle'):
                 cycle_number = int(local_peer['motion_cycle'])
             return {

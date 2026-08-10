@@ -451,9 +451,14 @@ def test_release_worker_escalation_broadcasts_full_participant_roster():
     }]
 
 
-def test_resolve_motion_cycle_prefers_group_cycle_number():
+def test_resolve_motion_cycle_prefers_display_cycle():
     from motion_coordination.coordination_node import MotionCoordinationNode
 
+    assert MotionCoordinationNode._resolve_motion_cycle({
+        'display_cycle': 4,
+        'group_cycle_number': 2,
+        'current_cycle': 1,
+    }) == 4
     assert MotionCoordinationNode._resolve_motion_cycle({
         'group_cycle_number': 2,
         'current_cycle': 1,

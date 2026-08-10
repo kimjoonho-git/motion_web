@@ -170,10 +170,26 @@ colcon build --symlink-install
 source install/setup.bash
 ```
 
-`motion_coordination` 또는 Web Bridge 코드를 변경한 뒤에는 `프로그램 재시작` 또는
-`systemctl --user restart motion-coordination.service`로 연동 서비스까지 반영해야
-합니다. `motion-control.service`만 재시작하면 DDS 연동 노드는 이전 코드가 계속
-실행될 수 있습니다.
+코드를 받은 뒤 배포·재시작은 **항상 아래 한 줄**만 사용합니다. 패키지별 빌드는
+하지 않습니다.
+
+```bash
+cd ~/ros2_ws
+bash scripts/sync_branch.sh
+```
+
+동작 · `git pull` + submodule 갱신 + 전체 빌드 + 서비스 재시작.
+
+커밋도 **한 줄**로 처리합니다. (내부 submodule 포함)
+
+```bash
+cd ~/ros2_ws
+bash scripts/commit_branch.sh "커밋 메시지" --push
+```
+
+`--push` 없이 커밋만 하려면 마지막 `--push`를 빼면 됩니다.
+
+브랜치 · `fix/coordination-safety`
 
 `rosdep`이 이미 초기화되어 있으면 `sudo rosdep init`은 생략합니다.
 
