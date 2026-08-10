@@ -1083,6 +1083,13 @@ class MotionRunManager(Node):
                 if scheduled_initialize is None:
                     break
                 initialized_cycle, initialize_at = scheduled_initialize
+                next_cycle = initialized_cycle + 1
+                initialization_plan = {
+                    **initialization_plan,
+                    'group_execution': True,
+                    'execution_id': execution_id,
+                    'group_cycle_number': next_cycle,
+                }
                 self._wait_group_deadline(
                     initialize_at,
                     phase='group_cycle_initialize_scheduled',
@@ -1500,15 +1507,36 @@ class MotionRunManager(Node):
             'status': self.status(),
         }
 
+    def _group_cycle_context(self, plan: Mapping[str, Any]) -> Dict[str, int]:
+        current = self.status()
+        cycle = int(
+            plan.get('group_cycle_number')
+            or current.get('group_cycle_number')
+            or current.get('current_cycle')
+            or 0
+        )
+        if cycle <= 0:
+            return {}
+        return {
+            'group_execution': True,
+            'execution_id': str(
+                plan.get('execution_id') or current.get('execution_id') or ''
+            ),
+            'group_cycle_number': cycle,
+            'current_cycle': cycle,
+        }
+
     def _run_initialization(self, plan: Dict[str, Any]) -> None:
         try:
             if self._stop_event.is_set():
                 raise InterruptedError()
+            group_cycle_context = self._group_cycle_context(plan)
             init_axes = list(plan['axes'])
             if not init_axes:
                 now = time.time()
                 status = self._status_from_plan('initialized', '초기 위치 이동 대상이 없습니다', plan)
                 status['phase'] = 'initialized'
+                status.update(group_cycle_context)
                 status['phase_started_at'] = now
                 status['phase_finished_at'] = now
                 status['lifecycle'] = {
@@ -1542,6 +1570,7 @@ class MotionRunManager(Node):
             initial_started_at = time.time()
             status = self._status_from_plan('initializing', '초기 위치 이동 중', plan)
             status['phase'] = 'initializing'
+            status.update(group_cycle_context)
             status['phase_started_at'] = initial_started_at
             status['phase_finished_at'] = None
             status['lifecycle'] = {
@@ -1578,6 +1607,7 @@ class MotionRunManager(Node):
             initial_finished_at = time.time()
             status = self._status_from_plan('initialized', '초기 위치 이동 완료', plan)
             status['phase'] = 'initialized'
+            status.update(group_cycle_context)
             status['phase_started_at'] = initial_started_at
             status['phase_finished_at'] = initial_finished_at
             status['lifecycle'] = {

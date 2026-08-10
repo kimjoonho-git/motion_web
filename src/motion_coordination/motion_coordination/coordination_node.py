@@ -36,6 +36,7 @@ from .group_configuration import (
     migrate_legacy_group_config,
 )
 from .group_execution import GroupExecution, Member, MemberRegistry, ScheduledAction
+from .group_peer_display import enrich_peer_row
 from .local_api import LocalCoordinationApi
 from .local_runtime_monitor import LocalRuntimeMonitor
 from .safety_stop import SafetyStopController, SafetyStopOutcome
@@ -1887,12 +1888,16 @@ class MotionCoordinationNode(Node):
 
     def snapshot(self) -> Dict[str, Any]:
         now = time.monotonic()
+        with self._lock:
+            execution_id = self._execution.execution_id
+            execution_cycle = int(self._execution.cycle_number)
+        execution_active = bool(execution_id)
         peers = []
         for pc_id in self._registry.joined():
             member = self._registry.member(pc_id)
             if member is None:
                 continue
-            peers.append({
+            peers.append(enrich_peer_row({
                 'pc_id': pc_id,
                 'display_name': member.display_name,
                 'state': self._registry.status(pc_id, now=now),
@@ -1907,7 +1912,7 @@ class MotionCoordinationNode(Node):
                 'motion_duration_sec': member.motion_duration_sec,
                 'motion_progress_ratio': member.motion_progress_ratio,
                 'current_cycle': member.current_cycle,
-            })
+            }, execution_active=execution_active, execution_cycle=execution_cycle))
         with self._lock:
             local_status = self._local_status.get('motion_run_status')
             local_status = local_status if isinstance(local_status, Mapping) else {}
@@ -1925,6 +1930,37 @@ class MotionCoordinationNode(Node):
                 execution_state = self._local_group_state()
                 execution_id = self._execution.execution_id
                 participants = self._execution.participants
+            local_peer = enrich_peer_row({
+                'pc_id': self._config.pc_id,
+                'display_name': self._config.display_name,
+                'motion_state': self._local_group_state(),
+                'trigger_sync_state': str(
+                    self._trigger_sync_status.get(
+                        'trigger_sync_state'
+                    ) or 'idle'
+                ),
+                'trigger_sync_uncertainty_ms': float(
+                    self._trigger_sync_status.get(
+                        'trigger_sync_uncertainty_ms'
+                    ) or 0.0
+                ),
+                'servo_alarm_grade': self._local_alarm_grade(),
+                'motion_phase': str(local_status.get('phase') or ''),
+                'motion_elapsed_sec': float(
+                    (local_status.get('progress') or {}).get('elapsed_sec') or 0.0
+                ),
+                'motion_duration_sec': float(
+                    (local_status.get('progress') or {}).get('duration_sec') or 0.0
+                ),
+                'motion_progress_ratio': float(
+                    (local_status.get('progress') or {}).get('ratio') or 0.0
+                ),
+                'current_cycle': int(
+                    motion_cycle or cycle_number
+                ),
+            }, execution_active=execution_active, execution_cycle=execution_cycle)
+            if local_peer.get('motion_cycle'):
+                cycle_number = int(local_peer['motion_cycle'])
             return {
                 'node_connected': True,
                 'transport': 'ros2_dds',
@@ -1936,35 +1972,7 @@ class MotionCoordinationNode(Node):
                     'dds_domain_id': self._config.dds_domain_id,
                 },
                 'joined': self._joined,
-                'local': {
-                    'pc_id': self._config.pc_id,
-                    'display_name': self._config.display_name,
-                    'motion_state': self._local_group_state(),
-                    'trigger_sync_state': str(
-                        self._trigger_sync_status.get(
-                            'trigger_sync_state'
-                        ) or 'idle'
-                    ),
-                    'trigger_sync_uncertainty_ms': float(
-                        self._trigger_sync_status.get(
-                            'trigger_sync_uncertainty_ms'
-                        ) or 0.0
-                    ),
-                    'servo_alarm_grade': self._local_alarm_grade(),
-                    'motion_phase': str(local_status.get('phase') or ''),
-                    'motion_elapsed_sec': float(
-                        (local_status.get('progress') or {}).get('elapsed_sec') or 0.0
-                    ),
-                    'motion_duration_sec': float(
-                        (local_status.get('progress') or {}).get('duration_sec') or 0.0
-                    ),
-                    'motion_progress_ratio': float(
-                        (local_status.get('progress') or {}).get('ratio') or 0.0
-                    ),
-                    'current_cycle': int(
-                        motion_cycle or cycle_number
-                    ),
-                },
+                'local': local_peer,
                 'peers': peers,
                 'alarms': [
                     dict(self._alarm_registry.alarms[pc_id])
