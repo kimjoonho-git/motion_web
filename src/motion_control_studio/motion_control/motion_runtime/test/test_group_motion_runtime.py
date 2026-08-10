@@ -72,6 +72,12 @@ def test_one_start_at_runs_exactly_one_motion_then_waits_for_next_cycle():
         'start_monotonic': time.monotonic() + 1.0,
     })
     assert first['success'] is True
+    _wait_until(lambda: manager._group_session.get('state') == 'motion_completed')
+    initialize = manager._schedule_group_initialization({
+        'execution_id': 'exec-a', 'cycle_number': 1,
+        'initialize_monotonic': time.monotonic() + 0.05,
+    })
+    assert initialize['success'] is True
     _wait_until(lambda: manager._group_session.get('state') == 'cycle_ready')
     assert calls == [1]
     time.sleep(0.03)
@@ -103,6 +109,26 @@ def test_duplicate_start_at_does_not_schedule_a_second_local_cycle():
     assert first['success'] is True
     assert duplicate['duplicate'] is True
     assert manager._group_session['next_cycle_number'] == 1
+
+
+def test_duplicate_cycle_initialize_does_not_start_another_worker():
+    manager = _group_manager()
+    manager._group_session.update({
+        'state': 'motion_completed',
+        'cycle_number': 1,
+    })
+    scheduled_at = time.monotonic() + 1.0
+    first = manager._schedule_group_initialization({
+        'execution_id': 'exec-a', 'cycle_number': 1,
+        'initialize_monotonic': scheduled_at,
+    })
+    duplicate = manager._schedule_group_initialization({
+        'execution_id': 'exec-a', 'cycle_number': 1,
+        'initialize_monotonic': scheduled_at,
+    })
+    assert first['success'] is True
+    assert duplicate['duplicate'] is True
+    assert manager._group_session['next_initialize_cycle_number'] == 1
 
 
 def test_group_stop_after_cycle_does_not_interrupt_running_cycle():

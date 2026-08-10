@@ -393,7 +393,7 @@ class MotionCoordinationNode(Node):
                 self._complete_trigger_sync_if_ready()
 
     def _begin_trigger_sync(self, next_action: str) -> None:
-        if next_action not in {'initialize', 'start'}:
+        if next_action not in {'initialize', 'cycle_initialize', 'start'}:
             raise ValueError('DDS 트리거 동기화 후속 동작이 올바르지 않습니다')
         with self._lock:
             if self._execution.coordinator_id != self._config.pc_id:
@@ -471,6 +471,8 @@ class MotionCoordinationNode(Node):
         self._trigger_sync_status.update({'trigger_sync_state': 'ready'})
         if next_action == 'initialize':
             action = self._execution.initialize_action(now=time.monotonic())
+        elif next_action == 'cycle_initialize':
+            action = self._execution.cycle_initialize_action(now=time.monotonic())
         else:
             action = self._execution.start_action(now=time.monotonic())
         self._publish_action(action)
@@ -546,11 +548,16 @@ class MotionCoordinationNode(Node):
                 self._require_stop_command(message, participants)
             else:
                 self._require_active_command(message, participants)
-            if command == 'initialize_at':
+            if command in {'initialize_at', 'cycle_initialize_at'}:
                 local_target_ns = self._local_schedule_ns(message)
+                control_command = (
+                    'group_prepare'
+                    if command == 'initialize_at' else 'group_initialize_at'
+                )
                 result = self._call_local_control({
-                    'command': 'group_prepare',
+                    'command': control_command,
                     'execution_id': message.execution_id,
+                    'cycle_number': int(message.cycle_number),
                     'initialize_monotonic': local_target_ns / 1_000_000_000.0,
                     'network_operation_id': message.command_id,
                     'repeat_mode': self._execution.repeat_mode,
@@ -558,7 +565,10 @@ class MotionCoordinationNode(Node):
                     'initialization_only': self._execution.initialization_only,
                     'run_mode': self._execution.run_mode,
                 })
-                event = 'initialize_scheduled'
+                event = (
+                    'initialize_scheduled'
+                    if command == 'initialize_at' else 'cycle_initialize_scheduled'
+                )
             elif command == 'start_at':
                 local_target_ns = self._local_schedule_ns(message)
                 result = self._call_local_control({
@@ -591,7 +601,7 @@ class MotionCoordinationNode(Node):
                         self._clear_active_execution()
             else:
                 raise ValueError('지원하지 않는 그룹 명령입니다')
-            if command in {'initialize_at', 'start_at'}:
+            if command in {'initialize_at', 'cycle_initialize_at', 'start_at'}:
                 with self._lock:
                     execution_cancelled = (
                         message.execution_id in self._cancelled_execution_ids
@@ -639,7 +649,8 @@ class MotionCoordinationNode(Node):
                         self._begin_trigger_sync('initialize')
                 elif message.event == 'rejected':
                     if self._execution.state in {
-                        'preparing', 'initializing', 'armed', 'start_scheduled'
+                        'preparing', 'initializing', 'armed', 'start_scheduled',
+                        'motion_completed', 'cycle_initializing',
                     }:
                         cancel_reason = (
                             f'{message.pc_id} 그룹 시작 거부: '
@@ -678,6 +689,8 @@ class MotionCoordinationNode(Node):
                             self._publish_next_start()
                 elif message.event == 'initialize_scheduled' and message.success:
                     self._record_schedule_ack(message)
+                elif message.event == 'cycle_initialize_scheduled' and message.success:
+                    self._record_schedule_ack(message)
                 elif message.event == 'start_scheduled' and message.success:
                     self._execution.mark_scheduled(message.pc_id, int(message.cycle_number))
                     self._record_schedule_ack(message)
@@ -704,9 +717,11 @@ class MotionCoordinationNode(Node):
                             'spread_ms': self._execution.last_start_spread_ms,
                             'triggered': dict(self._execution.triggered),
                         }
-                elif message.event == 'cycle_ready' and message.success:
-                    self._execution.mark_cycle_ready(message.pc_id, int(message.cycle_number))
-                    if self._execution.state == 'cycle_ready':
+                elif message.event == 'motion_completed' and message.success:
+                    self._execution.mark_motion_completed(
+                        message.pc_id, int(message.cycle_number),
+                    )
+                    if self._execution.state == 'motion_completed':
                         if (
                             self._execution.stop_after_cycle
                             or self._execution.run_mode == 'once'
@@ -714,6 +729,12 @@ class MotionCoordinationNode(Node):
                             self._begin_group_release()
                         else:
                             self._publish_next_cycle()
+                elif message.event == 'cycle_initialized' and message.success:
+                    self._execution.mark_cycle_initialized(
+                        message.pc_id, int(message.cycle_number),
+                    )
+                    if self._execution.state == 'cycle_ready':
+                        self._publish_next_start()
                 elif message.event == 'stopped':
                     if (
                         self._execution.pending_command == 'cancel_before_start'
@@ -1246,16 +1267,22 @@ class MotionCoordinationNode(Node):
             with self._lock:
                 if self._execution.execution_id != execution_id:
                     return
-            # Each PC performs the configured dwell/reinitialization before
-            # reporting cycle_ready. The coordinator must only schedule the
-            # next motion; a second initialize_at would be a duplicate
-            # request against the still-active local group session.
-            self._publish_next_start()
+            self._publish_next_cycle_initialization()
 
         if repeat_mode in {'dwell', 'dwell_reinitialize'} and dwell_sec > 0.0:
             threading.Timer(dwell_sec, schedule).start()
         else:
             schedule()
+
+    def _publish_next_cycle_initialization(self) -> None:
+        unhealthy = self._execution_unhealthy_members()
+        if unhealthy:
+            reason = (
+                f'그룹 회차 초기화 차단: {", ".join(unhealthy)} 상태 확인 필요'
+            )
+            self._stop_for_peer_failure(reason)
+            raise ValueError(reason)
+        self._begin_trigger_sync('cycle_initialize')
 
     def _record_schedule_ack(self, message: GroupEvent) -> None:
         if message.command_id != self._execution.pending_command_id:
@@ -1278,7 +1305,7 @@ class MotionCoordinationNode(Node):
                 return
             scheduled_at = self._execution.pending_scheduled_at
             command = 'cancel_before_start' if self._execution.pending_command in {
-                'prepare', 'initialize_at', 'start_at'
+                'prepare', 'initialize_at', 'cycle_initialize_at', 'start_at'
             } else 'stop_now'
             if (
                 self._execution.pending_command == 'start_at'
@@ -1445,8 +1472,8 @@ class MotionCoordinationNode(Node):
             elif phase == 'group_motion_completed':
                 event = 'motion_completed'
                 cycle = int(status.get('current_cycle') or cycle)
-            elif phase == 'group_cycle_ready':
-                event = 'cycle_ready'
+            elif phase == 'group_cycle_initialized':
+                event = 'cycle_initialized'
                 cycle = int(status.get('current_cycle') or cycle)
             elif phase == 'error':
                 event = 'error'

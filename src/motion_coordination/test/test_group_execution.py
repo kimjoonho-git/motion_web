@@ -20,7 +20,12 @@ def test_group_barrier_supports_one_to_eight_pcs(count):
         execution.mark_scheduled(pc, 1)
         execution.mark_triggered(pc, 1, 200.3 + (pcs.index(pc) * 0.001))
     for pc in pcs:
-        execution.mark_cycle_ready(pc, 1)
+        execution.mark_motion_completed(pc, 1)
+    assert execution.state == 'motion_completed'
+    cycle_initialize = execution.cycle_initialize_action(now=205.0)
+    assert cycle_initialize.command == 'cycle_initialize_at'
+    for pc in pcs:
+        execution.mark_cycle_initialized(pc, 1)
     assert execution.state == 'cycle_ready'
     second = execution.start_action(now=210.0)
     assert second.cycle_number == 2
@@ -78,7 +83,7 @@ def test_stop_after_cycle_before_running_stops_without_next_start():
     assert execution.state == 'stopped'
 
 
-def test_next_start_is_blocked_until_every_pc_reports_cycle_ready():
+def test_next_start_waits_for_motion_and_cycle_initialization_barriers():
     execution = GroupExecution()
     execution.begin('a', ['a', 'b', 'c'])
     for pc in execution.participants:
@@ -89,9 +94,15 @@ def test_next_start_is_blocked_until_every_pc_reports_cycle_ready():
     execution.start_action(now=2.0)
     for pc in execution.participants:
         execution.mark_triggered(pc, 1, 2.3)
-    execution.mark_cycle_ready('a', 1)
-    execution.mark_cycle_ready('b', 1)
+    execution.mark_motion_completed('a', 1)
+    execution.mark_motion_completed('b', 1)
     with pytest.raises(ValueError, match='전체 PC'):
-        execution.start_action(now=3.0)
-    execution.mark_cycle_ready('c', 1)
-    assert execution.start_action(now=3.0).cycle_number == 2
+        execution.cycle_initialize_action(now=3.0)
+    execution.mark_motion_completed('c', 1)
+    execution.cycle_initialize_action(now=3.0)
+    execution.mark_cycle_initialized('a', 1)
+    execution.mark_cycle_initialized('b', 1)
+    with pytest.raises(ValueError, match='전체 PC'):
+        execution.start_action(now=4.0)
+    execution.mark_cycle_initialized('c', 1)
+    assert execution.start_action(now=4.0).cycle_number == 2

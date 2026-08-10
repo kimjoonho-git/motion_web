@@ -334,6 +334,14 @@ def local_motion_control(bridge: Any, payload: Mapping[str, Any]) -> Dict[str, A
             'group_execution': True,
         })
         return bridge.motion_group_start_at(request)
+    if command == 'group_initialize_at':
+        request.update({
+            'execution_id': str(payload.get('execution_id') or ''),
+            'cycle_number': payload.get('cycle_number'),
+            'initialize_monotonic': payload.get('initialize_monotonic'),
+            'group_execution': True,
+        })
+        return bridge.motion_group_initialize_at(request)
     return {'success': False, 'message': '지원하지 않는 로컬 연동 실행 명령입니다'}
 
 

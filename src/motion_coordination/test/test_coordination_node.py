@@ -405,6 +405,46 @@ def test_alarm_on_execution_member_blocks_next_cycle():
     assert node._execution_unhealthy_members() == ['pc-b']
 
 
+def test_cycle_barrier_schedules_initialization_only_after_all_motion_completed():
+    node = _node()
+    node._execution = GroupExecution()
+    execution_id = node._execution.begin('pc-a', ('pc-a', 'pc-b'))
+    for pc_id in ('pc-a', 'pc-b'):
+        node._execution.mark_ready(pc_id)
+    node._execution.initialize_action(now=1.0)
+    for pc_id in ('pc-a', 'pc-b'):
+        node._execution.mark_armed(pc_id)
+    node._execution.start_action(now=2.0)
+    for pc_id in ('pc-a', 'pc-b'):
+        node._execution.mark_triggered(pc_id, 1, 2.1)
+    scheduled = []
+    next_starts = []
+    node._publish_next_cycle = lambda: scheduled.append('initialize')
+    node._publish_next_start = lambda: next_starts.append('start')
+
+    node._event_callback(GroupEvent(
+        group_id='stage-a', execution_id=execution_id, pc_id='pc-a',
+        event='motion_completed', cycle_number=1, success=True,
+    ))
+    assert scheduled == []
+    node._event_callback(GroupEvent(
+        group_id='stage-a', execution_id=execution_id, pc_id='pc-b',
+        event='motion_completed', cycle_number=1, success=True,
+    ))
+    assert scheduled == ['initialize']
+    node._execution.cycle_initialize_action(now=3.0)
+    node._event_callback(GroupEvent(
+        group_id='stage-a', execution_id=execution_id, pc_id='pc-a',
+        event='cycle_initialized', cycle_number=1, success=True,
+    ))
+    assert next_starts == []
+    node._event_callback(GroupEvent(
+        group_id='stage-a', execution_id=execution_id, pc_id='pc-b',
+        event='cycle_initialized', cycle_number=1, success=True,
+    ))
+    assert next_starts == ['start']
+
+
 def test_peer_timeout_stops_local_then_broadcasts_before_clearing_roster():
     node = _node()
     node._registry = MemberRegistry(warning_timeout_sec=0.1, timeout_sec=0.2)

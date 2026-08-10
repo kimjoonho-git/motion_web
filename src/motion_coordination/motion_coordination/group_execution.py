@@ -96,6 +96,8 @@ class GroupExecution:
         self.armed: set[str] = set()
         self.initialize_triggered: Dict[str, float] = {}
         self.cycle_ready: set[str] = set()
+        self.motion_completed: set[str] = set()
+        self.cycle_initialized: set[str] = set()
         self.scheduled: set[str] = set()
         self.triggered: Dict[str, float] = {}
         self.stop_after_cycle = False
@@ -197,12 +199,16 @@ class GroupExecution:
     def start_action(self, *, now: float) -> ScheduledAction:
         if self.state == 'armed':
             next_cycle = 1
-        elif self.state == 'cycle_ready' and self.cycle_ready == set(self.participants):
+        elif (
+            self.state == 'cycle_ready'
+            and self.cycle_initialized == set(self.participants)
+        ):
             next_cycle = self.cycle_number + 1
         else:
             raise ValueError('전체 PC가 다음 모션을 시작할 준비가 되지 않았습니다')
         self.state = 'start_scheduled'
         self.cycle_ready.clear()
+        self.motion_completed.clear()
         self.scheduled.clear()
         self.triggered.clear()
         return ScheduledAction(
@@ -233,6 +239,38 @@ class GroupExecution:
             raise ValueError('준비 완료 회차가 일치하지 않습니다')
         self.cycle_ready.add(pc_id)
         if self.cycle_ready == set(self.participants):
+            self.state = 'cycle_ready'
+
+    def mark_motion_completed(self, pc_id: str, cycle_number: int) -> None:
+        """Hold every participant at the motion-completed barrier."""
+        self._participant(pc_id)
+        if self.state != 'running' or cycle_number != self.cycle_number:
+            raise ValueError('모션 완료 회차가 일치하지 않습니다')
+        self.motion_completed.add(pc_id)
+        if self.motion_completed == set(self.participants):
+            self.state = 'motion_completed'
+
+    def cycle_initialize_action(self, *, now: float) -> ScheduledAction:
+        """Schedule the next cycle's initialization only after all motions finish."""
+        if (
+            self.state != 'motion_completed'
+            or self.motion_completed != set(self.participants)
+        ):
+            raise ValueError('전체 PC 모션 완료 전에는 회차 초기화를 시작할 수 없습니다')
+        self.state = 'cycle_initializing'
+        self.cycle_initialized.clear()
+        self.scheduled.clear()
+        return ScheduledAction(
+            'cycle_initialize_at', self.execution_id, self.cycle_number,
+            float(now) + self.start_lead_sec,
+        )
+
+    def mark_cycle_initialized(self, pc_id: str, cycle_number: int) -> None:
+        self._participant(pc_id)
+        if self.state != 'cycle_initializing' or cycle_number != self.cycle_number:
+            raise ValueError('회차 초기화 완료 회차가 일치하지 않습니다')
+        self.cycle_initialized.add(pc_id)
+        if self.cycle_initialized == set(self.participants):
             self.state = 'cycle_ready'
 
     def request_stop_after_cycle(self) -> None:

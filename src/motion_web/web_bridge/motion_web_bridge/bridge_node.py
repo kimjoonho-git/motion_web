@@ -5315,6 +5315,9 @@ class MotionWebBridge(Node):
     def motion_group_start_at(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self._request_motion_run('group_start_at', payload, timeout_sec=2.0)
 
+    def motion_group_initialize_at(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self._request_motion_run('group_initialize_at', payload, timeout_sec=2.0)
+
     def motion_group_cancel(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self._request_motion_run('group_cancel', payload, timeout_sec=2.0)
 

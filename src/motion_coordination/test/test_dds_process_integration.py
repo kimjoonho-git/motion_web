@@ -71,6 +71,7 @@ class _FakeLocalWebBridge:
         self.cycle_duration_sec = float(cycle_duration_sec)
         self.control_calls = []
         self.cycle_ready_at = {}
+        self.cycle_initialized_at = {}
         self.motion_started_at = {}
         self.start_trigger_delays = list(start_trigger_delays or [])
         self._motion_status = {}
@@ -157,10 +158,20 @@ class _FakeLocalWebBridge:
             })
             self._later(
                 delay + self.cycle_duration_sec,
-                self._cycle_ready,
+                self._motion_completed,
                 execution_id,
                 cycle,
                 start_at,
+            )
+        elif command == 'group_initialize_at':
+            execution_id = str(payload['execution_id'])
+            cycle = int(payload['cycle_number'])
+            initialize_at = float(payload['initialize_monotonic'])
+            self._later(
+                max(initialize_at - now, 0.0) + 0.05,
+                self._cycle_initialized,
+                execution_id,
+                cycle,
             )
         elif command in {'stop_now', 'group_cancel'}:
             self._set_status({
@@ -173,14 +184,14 @@ class _FakeLocalWebBridge:
             pass
         return {'success': True, 'message': command}
 
-    def _cycle_ready(self, execution_id, cycle, start_at):
+    def _motion_completed(self, execution_id, cycle, start_at):
         with self._lock:
             self.cycle_ready_at[int(cycle)] = time.monotonic()
         self._set_status({
             'group_execution': True,
             'execution_id': execution_id,
-            'state': 'cycle_ready',
-            'phase': 'group_cycle_ready',
+            'state': 'motion_completed',
+            'phase': 'group_motion_completed',
             'group_cycle_number': int(cycle),
             'current_cycle': int(cycle),
             'lifecycle': {
@@ -188,6 +199,18 @@ class _FakeLocalWebBridge:
                     self.motion_started_at.get(int(cycle), start_at)
                 ),
             },
+        })
+
+    def _cycle_initialized(self, execution_id, cycle):
+        with self._lock:
+            self.cycle_initialized_at[int(cycle)] = time.monotonic()
+        self._set_status({
+            'group_execution': True,
+            'execution_id': execution_id,
+            'state': 'cycle_ready',
+            'phase': 'group_cycle_initialized',
+            'group_cycle_number': int(cycle),
+            'current_cycle': int(cycle),
         })
 
     def _arm(self, execution_id):
@@ -359,11 +382,19 @@ def test_two_processes_complete_two_barrier_cycles_over_typed_dds(tmp_path):
         assert started['success'] is True, started
         _wait(lambda: all(bridge.start_cycles() == [1] for bridge in bridges), timeout=8.0)
         _wait(lambda: all(1 in bridge.cycle_ready_at for bridge in bridges), timeout=8.0)
+        _wait(
+            lambda: all(1 in bridge.cycle_initialized_at for bridge in bridges),
+            timeout=8.0,
+        )
         _wait(lambda: all(bridge.start_cycles() == [1, 2] for bridge in bridges), timeout=8.0)
 
         latest_ready = max(bridge.cycle_ready_at[1] for bridge in bridges)
+        latest_initialized = max(
+            bridge.cycle_initialized_at[1] for bridge in bridges
+        )
         for bridge in bridges:
             assert bridge.start_call(2)['received_at'] >= latest_ready
+            assert bridge.start_call(2)['received_at'] >= latest_initialized
             assert bridge.start_cycles().count(1) == 1
             assert bridge.start_cycles().count(2) == 1
         _wait(lambda: (

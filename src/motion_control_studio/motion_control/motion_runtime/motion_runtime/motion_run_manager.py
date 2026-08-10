@@ -355,6 +355,9 @@ class MotionRunManager(Node):
             elif command == 'group_start_at':
                 self._require_execution_context(payload)
                 response = self._schedule_group_cycle(payload)
+            elif command == 'group_initialize_at':
+                self._require_execution_context(payload)
+                response = self._schedule_group_initialization(payload)
             elif command == 'group_cancel':
                 response = self._cancel_group_session(payload)
             elif command == 'stop':
@@ -924,6 +927,8 @@ class MotionRunManager(Node):
                 'cycle_number': 0,
                 'next_start_at': 0.0,
                 'next_cycle_number': 0,
+                'next_initialize_at': 0.0,
+                'next_initialize_cycle_number': 0,
                 'stop_after_cycle': False,
             }
             status = self._empty_status()
@@ -1064,15 +1069,31 @@ class MotionRunManager(Node):
                     'cycle_triggered_at': triggered_at,
                 })
                 with self._group_condition:
+                    self._group_session.update({
+                        'state': 'motion_completed',
+                        'cycle_number': cycle_number,
+                    })
                     stop_after_cycle = bool(self._group_session.get('stop_after_cycle'))
                 if stop_after_cycle:
                     self._finish_group_session('현재 그룹 모션 회차 완료 후 정지')
                     return
-                if not self._run_group_between_cycle(
-                    plan, initialization_plan, execution_id, cycle_number
-                ):
-                    if self._graceful_stop_event.is_set() and not self._stop_event.is_set():
-                        self._finish_group_session('현재 그룹 모션 회차 완료 후 정지')
+                scheduled_initialize = self._wait_for_group_initialization(
+                    execution_id,
+                )
+                if scheduled_initialize is None:
+                    break
+                initialized_cycle, initialize_at = scheduled_initialize
+                self._wait_group_deadline(
+                    initialize_at,
+                    phase='group_cycle_initialize_scheduled',
+                    message=f'그룹 모션 {initialized_cycle}회차 후 초기화 대기',
+                    execution_id=execution_id,
+                    cycle_number=initialized_cycle,
+                )
+                if self._stop_event.is_set():
+                    break
+                self._run_initialization(initialization_plan)
+                if self._stop_event.is_set() or self.status().get('state') != 'initialized':
                     break
                 with self._group_condition:
                     self._group_session.update({
@@ -1083,8 +1104,8 @@ class MotionRunManager(Node):
                     })
                 self._update_status({
                     'state': 'cycle_ready',
-                    'phase': 'group_cycle_ready',
-                    'message': f'그룹 모션 {cycle_number + 1}회차 시작 준비 완료',
+                    'phase': 'group_cycle_initialized',
+                    'message': f'그룹 모션 {cycle_number}회차 후 초기화 완료',
                     'group_execution': True,
                     'execution_id': execution_id,
                     'cycle_count': cycle_number,
@@ -1123,34 +1144,6 @@ class MotionRunManager(Node):
                     'phase_finished_at': time.time(),
                 })
 
-    def _run_group_between_cycle(
-        self,
-        plan: Dict[str, Any],
-        initialization_plan: Dict[str, Any],
-        execution_id: str,
-        cycle_number: int,
-    ) -> bool:
-        mode = str(plan.get('repeat_mode') or 'direct')
-        if mode in {'dwell', 'dwell_reinitialize'}:
-            duration = max(float(plan.get('dwell_sec') or 0.0), 0.0)
-            deadline = time.monotonic() + duration
-            self._update_status({
-                'state': 'waiting',
-                'phase': 'group_dwell',
-                'message': f'그룹 모션 {cycle_number}회차 후 로컬 대기',
-                'group_execution': True,
-                'execution_id': execution_id,
-            })
-            while time.monotonic() < deadline:
-                if self._stop_event.is_set() or self._graceful_stop_event.is_set():
-                    return False
-                time.sleep(min(0.05, deadline - time.monotonic()))
-        if mode in {'reinitialize', 'dwell_reinitialize'}:
-            self._run_initialization(initialization_plan)
-            if self._stop_event.is_set() or self.status().get('state') != 'initialized':
-                return False
-        return not self._stop_event.is_set()
-
     def _wait_group_deadline(
         self,
         scheduled_monotonic: float,
@@ -1188,6 +1181,27 @@ class MotionRunManager(Node):
                 if cycle > 0 and start_at > 0.0:
                     self._group_session['state'] = 'start_scheduled'
                     return cycle, start_at
+                self._group_condition.wait(timeout=0.2)
+        return None
+
+    def _wait_for_group_initialization(
+        self, execution_id: str,
+    ) -> Optional[tuple[int, float]]:
+        with self._group_condition:
+            while not self._stop_event.is_set():
+                if self._group_session.get('execution_id') != execution_id:
+                    return None
+                cycle = int(
+                    self._group_session.get('next_initialize_cycle_number') or 0
+                )
+                initialize_at = float(
+                    self._group_session.get('next_initialize_at') or 0.0
+                )
+                if cycle > 0 and initialize_at > 0.0:
+                    self._group_session['state'] = 'cycle_initialize_scheduled'
+                    self._group_session['next_initialize_cycle_number'] = 0
+                    self._group_session['next_initialize_at'] = 0.0
+                    return cycle, initialize_at
                 self._group_condition.wait(timeout=0.2)
         return None
 
@@ -1232,6 +1246,58 @@ class MotionRunManager(Node):
             'execution_id': execution_id,
             'cycle_number': cycle_number,
             'start_monotonic': float(start_monotonic),
+            'status': self.status(),
+        }
+
+    def _schedule_group_initialization(
+        self, payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        execution_id = str(payload.get('execution_id') or '').strip()
+        initialize_monotonic = self._finite_float(payload.get('initialize_monotonic'))
+        try:
+            cycle_number = int(payload.get('cycle_number'))
+        except (TypeError, ValueError) as exc:
+            raise ValueError('그룹 회차 번호가 필요합니다') from exc
+        if initialize_monotonic is None or initialize_monotonic <= time.monotonic():
+            raise ValueError('그룹 회차 초기화 트리거가 이미 지났습니다')
+        with self._group_condition:
+            session = self._group_session
+            if not session.get('active') or session.get('execution_id') != execution_id:
+                raise ValueError('활성 그룹 실행 세션이 일치하지 않습니다')
+            if session.get('state') not in {
+                'motion_completed', 'cycle_initialize_scheduled',
+            }:
+                raise ValueError('그룹 회차 초기화를 예약할 수 있는 상태가 아닙니다')
+            if cycle_number != int(session.get('cycle_number') or 0):
+                raise ValueError('그룹 회차 초기화 번호가 일치하지 않습니다')
+            existing_cycle = int(
+                session.get('next_initialize_cycle_number') or 0
+            )
+            existing_at = float(session.get('next_initialize_at') or 0.0)
+            if existing_cycle:
+                if (
+                    existing_cycle == cycle_number
+                    and existing_at == float(initialize_monotonic)
+                ):
+                    return {
+                        'success': True,
+                        'duplicate': True,
+                        'message': '이미 예약된 그룹 회차 초기화 명령',
+                        'status': self.status(),
+                    }
+                raise ValueError('다른 그룹 회차 초기화 명령이 이미 예약되었습니다')
+            session.update({
+                'next_initialize_cycle_number': cycle_number,
+                'next_initialize_at': float(initialize_monotonic),
+                'state': 'cycle_initialize_scheduled',
+            })
+            self._group_condition.notify_all()
+        return {
+            'success': True,
+            'message': f'그룹 모션 {cycle_number}회차 후 초기화 예약',
+            'execution_id': execution_id,
+            'cycle_number': cycle_number,
+            'initialize_monotonic': float(initialize_monotonic),
             'status': self.status(),
         }
 
