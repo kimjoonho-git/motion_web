@@ -2,7 +2,7 @@ import {
   fetchCoordinationStatus,
   sendCoordinationControl,
   saveCoordinationSettings,
-} from './api.js?v=20260810-dds-release-2';
+} from './api.js?v=20260810-dds-release-3';
 import { showAlert, showConfirm } from './ui_dialogs.js?v=20260727-popup-common-3';
 
 function text(value) {
@@ -63,20 +63,9 @@ function peerMotionPhase(peer = {}) {
 }
 
 function peerCycleText(peer = {}, execution = {}) {
-  const executionActive = Boolean(execution.execution_id);
-  const motionState = String(peer.motion_state || '');
-  const motionPhase = String(peer.motion_phase || '');
-  if (
-    !executionActive
-    && GROUP_IDLE_STATES.has(motionState)
-    && !motionPhase.startsWith('group_')
-  ) {
-    return '-';
-  }
+  if (!execution.execution_id) return '-';
   const cycle = Number(peer.current_cycle || 0);
   if (cycle > 0) return `${cycle}회차`;
-  const groupCycle = Number(execution.cycle_number || 0);
-  if (executionActive && groupCycle > 0) return `${groupCycle}회차`;
   return '-';
 }
 

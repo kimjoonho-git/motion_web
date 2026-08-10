@@ -11,7 +11,7 @@ import time
 from urllib.parse import quote
 import traceback
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 import rclpy
 import yaml
@@ -1731,6 +1731,9 @@ class MotionRunManager(Node):
                         'state': 'running',
                         'message': running_message,
                     })
+            playback_cycle = self._playback_cycle_number(plan, 0)
+            if playback_cycle > 0:
+                status['current_cycle'] = playback_cycle
             self._set_status(status)
             samples = plan['samples']
             cycle_count = 0
@@ -1765,7 +1768,9 @@ class MotionRunManager(Node):
                         len(positions),
                         run_mode=run_mode,
                         cycle_count=cycle_count,
-                        current_cycle=cycle_count + 1,
+                        current_cycle=self._playback_cycle_number(
+                            plan, cycle_count,
+                        ),
                     )
                     self._sleep_until(cycle_started + ((index + 1) * self.period_sec))
                 cycle_count += 1
@@ -3536,6 +3541,15 @@ class MotionRunManager(Node):
         with self._run_lock:
             lifecycle = self._status.get('lifecycle', {})
         return dict(lifecycle) if isinstance(lifecycle, dict) else {}
+
+    @staticmethod
+    def _playback_cycle_number(plan: Mapping[str, Any], cycle_count: int) -> int:
+        """Return the user-visible motion cycle for playback progress."""
+        if bool(plan.get('group_execution')):
+            group_cycle = int(plan.get('group_cycle_number') or 0)
+            if group_cycle > 0:
+                return group_cycle
+        return int(cycle_count) + 1
 
     def _update_progress(
         self,

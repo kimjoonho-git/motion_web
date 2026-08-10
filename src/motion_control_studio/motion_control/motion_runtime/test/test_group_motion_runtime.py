@@ -147,3 +147,15 @@ def test_group_stop_after_cycle_before_motion_prevents_next_start():
     result = manager._handle_stop_after_cycle()
     assert result['success'] is True
     assert manager._stop_event.is_set()
+
+
+def test_playback_cycle_number_uses_group_cycle_for_network_motion():
+    plan = {'group_execution': True, 'group_cycle_number': 36}
+    assert MotionRunManager._playback_cycle_number(plan, 0) == 36
+    assert MotionRunManager._playback_cycle_number(plan, 2) == 36
+
+
+def test_playback_cycle_number_uses_local_counter_for_standalone_motion():
+    plan = {'group_execution': False}
+    assert MotionRunManager._playback_cycle_number(plan, 0) == 1
+    assert MotionRunManager._playback_cycle_number(plan, 2) == 3

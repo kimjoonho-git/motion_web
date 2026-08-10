@@ -451,6 +451,18 @@ def test_release_worker_escalation_broadcasts_full_participant_roster():
     }]
 
 
+def test_resolve_motion_cycle_prefers_group_cycle_number():
+    from motion_coordination.coordination_node import MotionCoordinationNode
+
+    assert MotionCoordinationNode._resolve_motion_cycle({
+        'group_cycle_number': 2,
+        'current_cycle': 1,
+    }) == 2
+    assert MotionCoordinationNode._resolve_motion_cycle({
+        'current_cycle': 3,
+    }) == 3
+
+
 def test_alarm_on_execution_member_blocks_next_cycle():
     node = _node()
     node._execution.participants = ('pc-a', 'pc-b')

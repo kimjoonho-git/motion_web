@@ -209,7 +209,8 @@ class MotionCoordinationNode(Node):
             message.motion_duration_sec = float(progress.get('duration_sec') or 0.0)
             message.motion_progress_ratio = float(progress.get('ratio') or 0.0)
             message.current_cycle = int(
-                local_status.get('current_cycle') or self._execution.cycle_number
+                self._resolve_motion_cycle(local_status)
+                or self._execution.cycle_number
             )
         self._heartbeat_pub.publish(message)
 
@@ -1677,6 +1678,17 @@ class MotionCoordinationNode(Node):
             return str(status.get('execution_id') or '')
         return ''
 
+    @staticmethod
+    def _resolve_motion_cycle(local_status: Mapping[str, Any]) -> int:
+        """Return the motion cycle currently shown to operators."""
+        if not isinstance(local_status, Mapping):
+            return 0
+        return int(
+            local_status.get('group_cycle_number')
+            or local_status.get('current_cycle')
+            or 0
+        )
+
     def _stop_command_matches(
         self, execution_id: str, participants: tuple[str, ...],
     ) -> bool:
@@ -1903,6 +1915,9 @@ class MotionCoordinationNode(Node):
             execution_id = self._execution.execution_id
             participants = self._execution.participants
             cycle_number = self._execution.cycle_number
+            motion_cycle = self._resolve_motion_cycle(local_status)
+            if self._execution.execution_id and motion_cycle > 0:
+                cycle_number = motion_cycle
             if (
                 self._execution.execution_id
                 and self._execution.coordinator_id != self._config.pc_id
@@ -1910,10 +1925,6 @@ class MotionCoordinationNode(Node):
                 execution_state = self._local_group_state()
                 execution_id = self._execution.execution_id
                 participants = self._execution.participants
-                cycle_number = int(
-                    local_status.get('group_cycle_number')
-                    or local_status.get('current_cycle') or 0
-                )
             return {
                 'node_connected': True,
                 'transport': 'ros2_dds',
@@ -1951,7 +1962,7 @@ class MotionCoordinationNode(Node):
                         (local_status.get('progress') or {}).get('ratio') or 0.0
                     ),
                     'current_cycle': int(
-                        local_status.get('current_cycle') or cycle_number
+                        motion_cycle or cycle_number
                     ),
                 },
                 'peers': peers,
