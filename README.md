@@ -29,41 +29,52 @@ EtherLab·IgH EtherCAT / Dynamixel
 
 ```text
 ros2_ws/
+├── config/                         # PC 전역 설정 (프로젝트와 분리)
+│   └── motion_coordination.example.yaml
+├── scripts/                        # pull·빌드·재시작·커밋 편의 스크립트
+├── docs/                           # 운영·DDS 검증 문서
 ├── src/motion_web
 │   ├── web_bridge
 │   └── web_ui
 ├── src/motion_control_studio
 │   ├── motion_control
 │   └── motion_studio
-├── src/motion_coordination       # PC 간 상태 공유·실행 조정
-└── src/motion_system              # Git submodule
+├── src/motion_coordination         # PC 간 상태 공유·실행 조정
+├── src/motion_coordination_interfaces  # DDS 메시지 정의
+└── src/motion_system               # Git submodule
 ```
 
 ## 검증 기준 버전
 
-아래 값은 현재 개발 PC에서 확인한 기준입니다. EtherCAT 커널과 NIC 드라이버는
-새 PC의 하드웨어에 맞아야 합니다.
+아래 값은 **2026-08-11** 기준 개발 PC에서 확인한 조합입니다. EtherCAT
+커널과 NIC 드라이버는 새 PC의 하드웨어에 맞아야 합니다.
 
 | 대상 | 검증 버전 |
 |---|---|
 | Ubuntu | 22.04.5 LTS |
 | Linux kernel | 6.8.0-124-generic |
-| ROS 2 | Humble |
+| ROS 2 | Humble (`/opt/ros/humble`) |
 | Python | 3.10.12 |
 | Git | 2.34.1 |
 | CMake | 3.22.1 |
-| colcon extensions | 0.3.0 |
+| colcon-core | 0.20.1 |
+| colcon-common-extensions (apt) | 0.3.0 |
 | FastAPI | 0.63.0 |
 | Uvicorn | 0.15.0 |
 | PyYAML | 5.4.1 |
 | EtherLab/IgH EtherCAT Master | 1.6.9 (`1.6.9-8-gbeb2bf07`) |
 | Motion Web packages | 0.1.0 |
 | Motion Control Studio packages | 0.1.0 |
+| Motion Coordination packages | 0.1.0 |
+| Motion Coordination Interfaces | 0.1.0 |
 | Motion System | 서브모듈 커밋 `5ec1909` |
 
-애플리케이션 패키지 버전만으로는 전체 호환 조합을 식별할 수 없습니다. 실제
-설치 버전은 상위 Git 커밋과 그 커밋이 기록한 Motion System 서브모듈 커밋을
-함께 사용합니다.
+애플리케이션 `package.xml` 버전(0.1.0)만으로는 전체 호환 조합을 식별할 수
+없습니다. 실제 설치 조합은 **상위 Git 커밋**과 그 커밋이 기록한 **Motion
+System 서브모듈 커밋**을 함께 사용합니다. 위 표 작성 시점의 상위 저장소
+기준 커밋은 `2a271d6` (`main`)입니다.
+
+운영 브랜치 · `main`
 
 ## Git 저장소
 
@@ -142,56 +153,93 @@ ethercat slaves
 
 ## 3. 전체 소스 설치
 
-상위 저장소와 모든 서브모듈을 한 번에 받습니다.
+상위 저장소(`main`)와 모든 서브모듈을 한 번에 받습니다.
 
 ```bash
 cd ~
-git clone --recurse-submodules \
+git clone -b main --recurse-submodules \
   https://github.com/kimjoonho-git/motion_web.git ros2_ws
 cd ~/ros2_ws
 ```
 
-이미 복제한 저장소라면 다음 명령으로 기록된 서브모듈 버전을 맞춥니다.
+이미 복제한 저장소라면 다음 명령으로 `main`과 기록된 서브모듈 버전을
+맞춥니다.
 
 ```bash
+cd ~/ros2_ws
+git fetch origin
+git checkout main
+git pull origin main
 git submodule update --init --recursive
 ```
 
+DDS 그룹 연동을 처음 켜는 PC는 예시 설정을 복사해 PC별로 편집합니다.
+프로젝트 파일과 분리된 전역 설정입니다.
+
+```bash
+cp config/motion_coordination.example.yaml config/motion_coordination.yaml
+# pc_id, display_name, group_id, dds_domain_id 등을 PC마다 다르게 지정
+```
+
+웹 UI의 `장비 연동 상태 → DDS 그룹 연동`에서 저장해도 같은 파일이
+갱신됩니다.
+
 ## 4. ROS 의존성 설치와 빌드
+
+### 4-1. 최초 설치 (PC에 작업공간을 처음 만든 경우)
 
 `rosdep`을 처음 사용하는 PC에서만 초기화한 뒤 의존성을 설치합니다.
 
 ```bash
+cd ~/ros2_ws
 source /opt/ros/humble/setup.bash
-sudo rosdep init
+sudo rosdep init    # 이미 초기화되어 있으면 생략
 rosdep update
 rosdep install --from-paths src --ignore-src -r -y
 colcon build --symlink-install
 source install/setup.bash
 ```
 
-코드를 받은 뒤 배포·재시작은 **항상 아래 한 줄**만 사용합니다. 패키지별 빌드는
+### 4-2. 코드 갱신 (이미 설치된 PC)
+
+코드를 받은 뒤 배포·재시작은 **아래 한 줄**을 사용합니다. 패키지별 빌드는
 하지 않습니다.
 
 ```bash
 cd ~/ros2_ws
+MOTION_WEB_BRANCH=main bash scripts/sync_branch.sh
+```
+
+동작 · `git pull` + submodule 갱신 + `colcon build --symlink-install` +
+`motion-control.service`·`motion-coordination.service` 재시작.
+
+`scripts/sync_branch.sh`의 기본 브랜치는 `fix/coordination-safety`이므로
+운영 시에는 위처럼 `MOTION_WEB_BRANCH=main`을 붙이거나, 셸 기본값으로
+지정합니다.
+
+```bash
+export MOTION_WEB_BRANCH=main
 bash scripts/sync_branch.sh
 ```
 
-동작 · `git pull` + submodule 갱신 + 전체 빌드 + 서비스 재시작.
+`motion-motor.service`는 sync 스크립트에서 재시작하지 않습니다. 모터
+설정을 바꾼 뒤에는 별도로 재시작합니다.
 
-커밋도 **한 줄**로 처리합니다. (내부 submodule 포함)
+```bash
+systemctl --user restart motion-motor.service
+```
+
+### 4-3. 커밋·푸시 (개발 PC)
 
 ```bash
 cd ~/ros2_ws
-bash scripts/commit_branch.sh "커밋 메시지" --push
+MOTION_WEB_BRANCH=main bash scripts/commit_branch.sh "커밋 메시지" --push
 ```
 
-`--push` 없이 커밋만 하려면 마지막 `--push`를 빼면 됩니다.
+`--push` 없이 커밋만 하려면 마지막 `--push`를 빼면 됩니다. 이 스크립트는
+`motion_system` submodule 변경이 있으면 중단합니다.
 
-브랜치 · `fix/coordination-safety`
-
-`rosdep`이 이미 초기화되어 있으면 `sudo rosdep init`은 생략합니다.
+수동으로 커밋할 때는 [8. Git 작업 방법](#8-git-작업-방법)을 따릅니다.
 
 ## 5. 자동실행 등록
 
@@ -212,7 +260,7 @@ sudo loginctl enable-linger "$(id -un)"
 
 - `motion-control.service`: 웹·프로젝트·모션 제어 서비스
 - `motion-motor.service`: 검증된 프로젝트 모터 실행 설정이 있을 때 Motor Manager
-- `motion-coordination.service`: PC 상태 공유·인증된 고수준 모션 실행 연동
+- `motion-coordination.service`: PC 간 DDS 그룹 상태 공유·실행 조정
 
 새 PC에 검증된 모터 실행 설정이 없으면 웹은 실행되지만 Motor Manager 시작은
 보류됩니다. 브라우저 창은 자동으로 열리지 않습니다.
@@ -264,26 +312,40 @@ ss -ltnp | grep ':8000'
   `그룹 ID`와 `DDS Domain ID`를 저장한 뒤 사용자가 직접 `그룹 참가`를 누릅니다.
 - 고정 마스터는 없으며 `그룹 모션 시작`을 누른 PC가 해당 실행의 임시 진행 PC가
   됩니다. 그룹 실행은 참가자 목록이 모든 PC에서 일치할 때만 시작합니다.
-- 시스템 UTC·chrony·NTP는 사용하지 않습니다. 실행마다 DDS 왕복 측정으로 각 PC의
-  monotonic 트리거를 맞춥니다.
+- 그룹 실행 동기화에 시스템 UTC·NTP는 사용하지 않습니다. 실행마다 DDS 왕복
+  측정으로 각 PC의 monotonic 트리거를 맞춥니다. (`chrony` 패키지는 OS
+  시간 유지용이며 그룹 트리거 동기화와는 무관합니다.)
 - 같은 Wi-Fi 구간에서 ROS 2 DDS UDP 통신을 허용해야 하며, 무선 공유기의 AP
   isolation 기능은 꺼야 합니다.
 - 동기 실행 코드는 포함되지만 실제 여러 PC와 모터의 시작 오차는 실물 검증 전입니다.
 
 ## 8. Git 작업 방법
 
-Motion Web, Motion Control Studio와 Motion Coordination은 상위 저장소에서
-함께 커밋합니다.
+Motion Web, Motion Control Studio, Motion Coordination과 관련 문서·설정
+예시는 상위 저장소(`main`)에서 함께 커밋합니다.
 
 ```bash
 cd ~/ros2_ws
-git add src/motion_web src/motion_control_studio src/motion_coordination
+git add \
+  README.md docs scripts config \
+  src/motion_web \
+  src/motion_control_studio \
+  src/motion_coordination \
+  src/motion_coordination_interfaces
 git commit -m "변경 내용"
+git push origin main
 ```
 
 Motion System을 수정하지 않았다면 서브모듈 커밋은 필요하지 않습니다. Motion
 System을 명시적으로 수정할 때만 하위 저장소에서 먼저 커밋·푸시하고, 상위
 저장소에서 변경된 서브모듈 커밋 위치를 기록합니다.
+
+관련 문서:
+
+- [`docs/SYSTEM_OPERATION_FLOW.md`](docs/SYSTEM_OPERATION_FLOW.md) — 실행·DDS
+  그룹 연동 흐름
+- [`docs/DDS_MULTI_PC_VALIDATION.md`](docs/DDS_MULTI_PC_VALIDATION.md) — 2PC
+  실물 검증 절차
 
 ## 제외 대상
 
