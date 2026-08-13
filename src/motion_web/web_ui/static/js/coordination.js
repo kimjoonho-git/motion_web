@@ -125,6 +125,18 @@ export function createCoordinationController({ el }) {
     const active = activeStates.has(execution.state);
     const configured = config.enabled === true && Boolean(config.group_id);
     renderSettings(config);
+    
+    const rosterDisplay = document.getElementById('coordinationConfirmedRosterDisplay');
+    if (rosterDisplay) {
+      const required = Array.isArray(config.required_peers) ? config.required_peers : [];
+      if (required.length > 0) {
+        rosterDisplay.textContent = `[ 확정 명단: ${required.join(', ')} ]`;
+        rosterDisplay.style.color = 'var(--color-primary)';
+      } else {
+        rosterDisplay.textContent = `[ 명단 미확정 ]`;
+        rosterDisplay.style.color = 'var(--color-danger)';
+      }
+    }
 
     if (el.coordinationNodeState) {
       el.coordinationNodeState.textContent = snapshot?.node_connected ? 'DDS 연동 노드 연결됨' : 'DDS 연동 노드 응답 없음';
@@ -264,7 +276,7 @@ export function createCoordinationController({ el }) {
     }
   }
 
-  async function save() {
+  async function save(customSuccessMessage = null, customSuccessTitle = null) {
     if (loading) return;
     loading = true;
     render();
@@ -291,15 +303,15 @@ export function createCoordinationController({ el }) {
       if (el.coordinationConfigMessage) {
         el.coordinationConfigMessage.textContent = 'DDS 연동 서비스 재시작 확인 중';
       }
-      await new Promise((resolve) => window.setTimeout(resolve, 1500));
+      await new Promise((resolve) => window.setTimeout(resolve, 2000));
       await refresh();
       const restarted = snapshot?.node_connected === true;
       await showAlert(
         restarted
-          ? 'DDS 연동 설정 저장 및 재시작 완료'
+          ? (customSuccessMessage || 'DDS 연동 설정 저장 및 재시작 완료')
           : '설정은 저장됐지만 DDS 연동 노드 재시작을 확인하지 못했습니다.',
         {
-          title: restarted ? '연동 재시작 완료' : '연동 재시작 확인 실패',
+          title: restarted ? (customSuccessTitle || '연동 재시작 완료') : '연동 재시작 확인 실패',
           confirmLabel: '확인',
           tone: restarted ? 'info' : 'danger',
         },
@@ -418,7 +430,9 @@ export function createCoordinationController({ el }) {
       if (ids.size > 0 && el.coordinationRequiredPeers) {
         el.coordinationRequiredPeers.value = Array.from(ids).join(', ');
         formDirty = true;
-        save();
+        save(`[ ${Array.from(ids).join(', ')} ]\n\n위 인원으로 명단이 확정되고 시스템에 저장되었습니다.`, '명단 확정 완료');
+      } else {
+        showAlert('현재 방에 접속한 참가자가 없거나 네트워크 오류입니다.', { title: '명단 확정 실패', tone: 'danger' });
       }
     });
   }
