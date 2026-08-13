@@ -19,14 +19,50 @@
 
 .coordination-settings-fields {
   display: grid;
-  grid-template-columns: repeat(3, minmax(140px, 1fr)) auto;
-  align-items: end;
-  gap: 10px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-items: stretch;
+  gap: 12px;
 }
 
 .coordination-settings-fields input,
 .coordination-settings-fields select {
   width: 100%;
+  min-height: 34px;
+  border: 1px solid var(--line-color, #d8e1ea);
+  border-radius: 6px;
+  padding: 0 8px;
+  font: inherit;
+  background: #ffffff;
+}
+
+.coordination-settings-fields .span-2 {
+  grid-column: span 2;
+}
+
+.coordination-settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+.coordination-settings-fields .compact-field {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.input-with-button {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+}
+.input-with-button input {
+  flex: 1;
+  min-width: 0;
+}
+.input-with-button button {
+  white-space: nowrap;
 }
 
 .coordination-status-strip {

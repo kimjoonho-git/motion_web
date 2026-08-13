@@ -242,12 +242,14 @@
                   <option value="true">마스터</option>
                 </select>
               </label>
-              <label class="compact-field"><span>필수 참가 명단</span>
+              <label class="compact-field span-2"><span>필수 참가 명단</span>
                 <div class="input-with-button">
                   <input id="coordinationRequiredPeers" type="text" placeholder="예: pc-1, pc-2">
-                  <button type="button" id="coordinationAddCurrentPeersButton" class="small-button" title="현재 접속된 PC 일괄 등록">접속 PC 등록</button>
+                  <button type="button" id="coordinationAddCurrentPeersButton" class="secondary" title="현재 접속된 PC 일괄 등록">접속 PC 등록</button>
                 </div>
               </label>
+            </div>
+            <div class="coordination-settings-actions">
               <button id="coordinationSaveButton" class="primary" type="button">설정 저장·연동 재시작</button>
             </div>
             <div id="coordinationConfigMessage" class="registry-message">전역 연동 설정을 확인하고 있습니다.</div>
@@ -1228,50 +1230,62 @@
               <div id="motionRunSummary" class="motion-file-summary motion-run-summary">
                 <div class="empty">선택된 모션 파일과 매핑 파일 기준으로 실행합니다</div>
               </div>
-              <div class="registry-actions">
-                <label class="compact-field">
-                  <span>초기 이동 시간</span>
-                  <select id="motionRunInitialMoveTime" class="compact-select">
-                    <option value="mapping">매핑 설정 사용</option>
-                    <option value="5" selected>5초 일괄 적용</option>
-                    <option value="7">7초 일괄 적용</option>
-                    <option value="10">10초 일괄 적용</option>
-                  </select>
-                </label>
-                <button id="motionRunCheckButton" type="button">실행 준비 검사</button>
-                <button id="motionRunInitializeButton" type="button" disabled>초기 위치 이동</button>
-                <button id="motionRunStartButton" class="primary" type="button" disabled>1회 모션 시작</button>
-                <button id="motionRunContinuousStartButton" class="primary" type="button" disabled>연속 모션 시작</button>
-                <button id="motionRunStopButton" class="off" type="button" disabled>모션 재생 정지</button>
-                <button id="motionRunRefreshButton" type="button">상태 새로고침</button>
-              </div>
-            </section>
 
-            <section class="motion-file-subsection motion-automation-card" aria-label="자동 반복">
-              <div class="section-head compact">
-                <strong>자동 반복</strong>
-                <span id="motionAutomationStatus">사용 안 함</span>
-              </div>
-              <div class="motion-automation-controls">
-                <label class="motion-automation-toggle">
-                  <input id="motionAutomationEnabled" type="checkbox">
-                  <span>자동 반복 사용</span>
-                </label>
-                <label class="compact-field">
-                  <span>회차 사이 동작</span>
-                  <select id="motionAutomationRepeatMode" class="compact-select" disabled>
-                    <option value="direct">바로 다음 모션</option>
-                    <option value="dwell">대기 후 다음 모션</option>
-                    <option value="reinitialize">초기 위치 이동 후 다음 모션</option>
-                    <option value="dwell_reinitialize">대기 후 초기 위치 이동 → 다음 모션</option>
-                  </select>
-                </label>
-                <label id="motionAutomationDwellWrap" class="compact-field hidden">
-                  <span>대기 시간(초)</span>
-                  <input id="motionAutomationDwellSec" type="number" min="0" max="86400" step="0.1" value="5.0" disabled>
-                </label>
-                <button id="motionAutomationReserveButton" class="secondary" type="button" disabled title="모션을 당장 실행하지 않고 다음 번 부팅 시 자동 시작을 예약합니다">부팅 시 예약</button>
-                <button id="motionAutomationStartButton" class="primary" type="button" disabled>즉시 시작</button>
+              <div class="coordination-control-panel">
+                <div class="coord-control-groups">
+                  <div class="coord-group autoplay-group">
+                  <span class="coord-group-label">자동 재생 (부팅 시)</span>
+                  <div class="coord-group-buttons">
+                    <label class="motion-automation-toggle">
+                      <input id="motionAutomationEnabled" type="checkbox">
+                      <span>부팅 시 자동 재생 예약</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div class="coord-group motion-group">
+                  <span class="coord-group-label">모션 제어</span>
+                  <div class="coord-motion-options">
+                    <label class="compact-field"><span>초기 이동 시간</span>
+                      <select id="motionRunInitialMoveTime" class="compact-select">
+                        <option value="mapping">매핑 설정 사용</option>
+                        <option value="5" selected>5초 일괄 적용</option>
+                        <option value="7">7초 일괄 적용</option>
+                        <option value="10">10초 일괄 적용</option>
+                      </select>
+                    </label>
+                    <label class="compact-field"><span>회차 사이 동작</span>
+                      <select id="motionAutomationRepeatMode" class="compact-select" disabled>
+                        <option value="direct">바로 다음 모션</option>
+                        <option value="dwell">대기 후 다음 모션</option>
+                        <option value="reinitialize">초기 위치 이동 후 다음</option>
+                        <option value="dwell_reinitialize">대기 후 초기위치 → 다음</option>
+                      </select>
+                    </label>
+                    <label id="motionAutomationDwellWrap" class="compact-field hidden"><span>대기 시간(초)</span>
+                      <input id="motionAutomationDwellSec" type="number" min="0" max="86400" step="0.1" value="5.0" disabled>
+                    </label>
+                  </div>
+                  <div class="coord-group-buttons">
+                    <button id="motionRunCheckButton" type="button">실행 준비 검사</button>
+                    <button id="motionRunInitializeButton" type="button" disabled>초기 위치 이동</button>
+                    <button id="motionRunStartButton" class="primary" type="button" disabled>1회 시작</button>
+                    <!-- Hide legacy continuous run, use automation start as the real continuous start -->
+                    <button id="motionRunContinuousStartButton" type="button" style="display:none;" disabled>연속 시작 (구형)</button>
+                    <button id="motionAutomationStartButton" class="primary" type="button" disabled>연속 시작</button>
+                    <!-- Keep reserve button hidden to avoid breaking JS, functionality is handled by the checkbox -->
+                    <button id="motionAutomationReserveButton" type="button" style="display:none;" disabled>부팅 시 예약</button>
+                  </div>
+                </div>
+
+                <div class="coord-group safety-group">
+                  <span class="coord-group-label">정지 및 상태</span>
+                  <div class="coord-group-buttons">
+                    <button id="motionRunStopButton" class="danger" type="button" disabled>즉시 정지</button>
+                    <button id="motionRunRefreshButton" type="button">상태 새로고침</button>
+                  </div>
+                </div>
+                </div>
               </div>
               <div id="motionAutomationDetail" class="motion-automation-detail">재생 등록 파일과 현재 모션축 설정을 사용합니다.</div>
             </section>
