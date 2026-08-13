@@ -76,7 +76,16 @@ export function createCoordinationController({ el }) {
     if (el.coordinationDisplayName) el.coordinationDisplayName.value = config.display_name || '';
     if (el.coordinationGroupId) el.coordinationGroupId.value = config.group_id || '';
     if (el.coordinationDomainId) el.coordinationDomainId.value = Number(config.dds_domain_id ?? 21);
-    if (el.coordinationEnabled) el.coordinationEnabled.value = config.enabled ? 'true' : 'false';
+    if (el.coordinationEnabled && el.coordinationEnabled.value !== String(config.enabled === true)) {
+      el.coordinationEnabled.value = String(config.enabled === true);
+    }
+    if (el.coordinationIsMaster && el.coordinationIsMaster.value !== String(config.is_master === true)) {
+      el.coordinationIsMaster.value = String(config.is_master === true);
+    }
+    if (el.coordinationAutoPlayToggle && el.coordinationAutoPlayToggle.checked !== (config.auto_play === true)) {
+      el.coordinationAutoPlayToggle.checked = config.auto_play === true;
+    }
+    if (el.coordinationRequiredPeers) el.coordinationRequiredPeers.value = Array.isArray(config.required_peers) ? config.required_peers.join(', ') : '';
   }
 
   function peerRow(peer = {}, fixedParticipants = new Set()) {
@@ -142,6 +151,20 @@ export function createCoordinationController({ el }) {
         el.coordJoinBadge.classList.toggle('active', joined);
       }
     }
+    
+    let currentMaster = '';
+    if (config.is_master) currentMaster = config.display_name || config.pc_id;
+    peers.forEach((p) => { if (p.is_master) currentMaster = p.display_name || p.pc_id; });
+    
+    if (el.coordMasterBadge) {
+      el.coordMasterBadge.style.display = currentMaster ? 'flex' : 'none';
+      if (el.coordinationMasterName) el.coordinationMasterName.textContent = currentMaster || '-';
+    }
+
+    if (el.coordinationAutoPlayGroup) {
+      el.coordinationAutoPlayGroup.style.display = config.is_master ? 'flex' : 'none';
+    }
+
     if (el.coordinationPeerCount) el.coordinationPeerCount.textContent = `${peers.length + (joined ? 1 : 0)}대`;
     if (el.coordinationExecutionState) {
       const coordinator = execution.coordinator_id ? ` · 진행 ${execution.coordinator_id}` : '';
@@ -247,6 +270,9 @@ export function createCoordinationController({ el }) {
     try {
       const result = await saveCoordinationSettings({
         enabled: el.coordinationEnabled?.value === 'true',
+        is_master: el.coordinationIsMaster?.value === 'true',
+        auto_play: el.coordinationAutoPlayToggle?.checked === true,
+        required_peers: el.coordinationRequiredPeers?.value?.split(',').map(s => s.trim()).filter(Boolean) || [],
         group_id: el.coordinationGroupId?.value?.trim() || '',
         dds_domain_id: Number(el.coordinationDomainId?.value ?? 21),
         display_name: el.coordinationDisplayName?.value?.trim() || '',
@@ -374,8 +400,24 @@ export function createCoordinationController({ el }) {
     el.coordinationStopAfterButton?.addEventListener('click', () => control('stop_after_cycle'));
     el.coordinationStopNowButton?.addEventListener('click', () => control('stop_now'));
     el.coordinationAcknowledgeErrorButton?.addEventListener('click', () => control('acknowledge_group_error'));
-    [el.coordinationDisplayName, el.coordinationGroupId, el.coordinationDomainId, el.coordinationEnabled]
+    [el.coordinationDisplayName, el.coordinationGroupId, el.coordinationDomainId, el.coordinationEnabled, el.coordinationIsMaster, el.coordinationRequiredPeers]
       .forEach((field) => field?.addEventListener('input', () => { formDirty = true; }));
+      
+    el.coordinationAutoPlayToggle?.addEventListener('change', () => {
+      formDirty = true;
+      save();
+    });
+    
+    el.coordinationAddCurrentPeersButton?.addEventListener('click', () => {
+      const peers = Array.isArray(snapshot?.runtime?.peers) ? snapshot.runtime.peers : [];
+      const ids = peers.map(p => p.pc_id);
+      if (ids.length > 0) {
+        if (el.coordinationRequiredPeers) {
+          el.coordinationRequiredPeers.value = ids.join(', ');
+          formDirty = true;
+        }
+      }
+    });
   }
 
   function start() {

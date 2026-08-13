@@ -5325,6 +5325,16 @@ class MotionWebBridge(Node):
             'automation_start', payload, timeout_sec=2.0
         )
 
+    def motion_automation_reserve(
+        self, payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        conflict = self._coordination_execution_blocker()
+        if conflict:
+            return {'success': False, 'message': f'자동 반복 예약 불가: {conflict}'}
+        return self._request_motion_run(
+            'automation_reserve', payload, timeout_sec=2.0
+        )
+
     def motion_automation_disable(self) -> Dict[str, Any]:
         return self._request_motion_run(
             'automation_disable', {}, timeout_sec=2.0
@@ -8084,6 +8094,13 @@ def create_app(bridge: MotionWebBridge) -> FastAPI:
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail='request body must be an object')
         return await asyncio.to_thread(bridge.motion_automation_start, body)
+
+    @app.post('/api/motion-run/automation/reserve')
+    async def motion_automation_reserve(request: Request):
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail='request body must be an object')
+        return await asyncio.to_thread(bridge.motion_automation_reserve, body)
 
     @app.post('/api/motion-run/automation/disable')
     async def motion_automation_disable():

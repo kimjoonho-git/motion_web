@@ -235,6 +235,18 @@
                   <option value="true">사용</option>
                 </select>
               </label>
+              <label class="compact-field"><span>역할</span>
+                <select id="coordinationIsMaster" class="compact-select">
+                  <option value="false">참가자 (슬레이브)</option>
+                  <option value="true">마스터</option>
+                </select>
+              </label>
+              <label class="compact-field"><span>필수 참가 명단</span>
+                <div class="input-with-button">
+                  <input id="coordinationRequiredPeers" type="text" placeholder="예: pc-1, pc-2">
+                  <button type="button" id="coordinationAddCurrentPeersButton" class="small-button" title="현재 접속된 PC 일괄 등록">접속 PC 등록</button>
+                </div>
+              </label>
               <button id="coordinationSaveButton" class="primary" type="button">설정 저장·연동 재시작</button>
             </div>
             <div id="coordinationConfigMessage" class="registry-message">전역 연동 설정을 확인하고 있습니다.</div>
@@ -252,6 +264,12 @@
                 <div class="coord-badge-info">
                   <span>그룹 참가</span>
                   <strong id="coordinationJoinState">나감</strong>
+                </div>
+              </div>
+              <div class="coord-badge coord-badge-master" id="coordMasterBadge" style="display: none;">
+                <div class="coord-badge-info">
+                  <span>👑 현재 마스터</span>
+                  <strong id="coordinationMasterName">-</strong>
                 </div>
               </div>
               <div class="coord-badge coord-badge-peers">
@@ -282,6 +300,16 @@
                     <button id="coordinationJoinButton" type="button" disabled>그룹 참가</button>
                     <button id="coordinationLeaveButton" type="button" disabled>그룹 나가기</button>
                     <button id="coordinationTemporaryDisableButton" type="button" disabled>연동 일시 해제</button>
+                  </div>
+                </div>
+
+                <div class="coord-group autoplay-group" id="coordinationAutoPlayGroup" style="display: none;">
+                  <span class="coord-group-label">자동 재생 (마스터)</span>
+                  <div class="coord-group-buttons">
+                    <label class="motion-automation-toggle">
+                      <input id="coordinationAutoPlayToggle" type="checkbox">
+                      <span>부팅 시 자동 재생 예약</span>
+                    </label>
                   </div>
                 </div>
 
@@ -1241,7 +1269,8 @@
                   <span>대기 시간(초)</span>
                   <input id="motionAutomationDwellSec" type="number" min="0" max="86400" step="0.1" value="5.0" disabled>
                 </label>
-                <button id="motionAutomationStartButton" class="primary" type="button" disabled>자동 반복 시작</button>
+                <button id="motionAutomationReserveButton" class="secondary" type="button" disabled title="모션을 당장 실행하지 않고 다음 번 부팅 시 자동 시작을 예약합니다">부팅 시 예약</button>
+                <button id="motionAutomationStartButton" class="primary" type="button" disabled>즉시 시작</button>
               </div>
               <div id="motionAutomationDetail" class="motion-automation-detail">재생 등록 파일과 현재 모션축 설정을 사용합니다.</div>
             </section>

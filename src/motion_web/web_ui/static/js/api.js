@@ -530,6 +530,15 @@ export async function startMotionAutomation(payload) {
   return readJson(response);
 }
 
+export async function reserveMotionAutomation(payload) {
+  const response = await projectFetch('/api/motion-run/automation/reserve', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return readJson(response);
+}
+
 export async function disableMotionAutomation() {
   const response = await projectFetch('/api/motion-run/automation/disable', {
     method: 'POST',

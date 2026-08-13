@@ -1329,6 +1329,11 @@ export function createMotionDataController({
         motionRunLoading || !enabled || armed || !hasFiles || !contextReady
       );
     }
+    if (el.motionAutomationReserveButton) {
+      el.motionAutomationReserveButton.disabled = (
+        motionRunLoading || !enabled || !hasFiles || !contextReady
+      );
+    }
     if (el.motionAutomationStatus) {
       el.motionAutomationStatus.textContent = motionAutomationStateText(
         automation.state,
@@ -2848,6 +2853,40 @@ export function createMotionDataController({
     }
   }
 
+  async function reserveCurrentMotionAutomation() {
+    const confirmed = await showConfirm(
+      '현재 모션을 출발시키지 않고 다음 번 부팅(또는 재시작) 시에 자동으로 시작하도록 예약합니다.\n'
+      + '재생 등록된 모션 파일과 매핑 설정을 사용합니다.',
+      {
+        title: '부팅 시 자동 반복 예약',
+        confirmLabel: '예약',
+        tone: 'info',
+      },
+    );
+    if (!confirmed) return;
+    motionRunLoading = true;
+    renderMotionRunPanel();
+    try {
+      await ensureMotionRunMotionFileDetail();
+      const payload = await reserveMotionAutomation(motionRunPayload());
+      motionRunStatus = payload.status || motionRunStatus || null;
+      motionRunLastResult = payload;
+      if (payload.success === false) {
+        await showMotionRunFailure(payload.message, '자동 반복 예약 실패');
+      } else {
+        await showAlert('자동 반복 예약이 완료되었습니다.\n다음 번 부팅 시 지정된 모션이 자동으로 시작됩니다.', {
+          title: '자동 반복 예약 완료',
+          tone: 'info',
+        });
+      }
+    } catch (error) {
+      await showMotionRunFailure(error?.message || String(error), '자동 반복 예약 실패');
+    } finally {
+      motionRunLoading = false;
+      renderMotionRunPanel();
+    }
+  }
+
   function bindEvents() {
     if (el.motionFileRows) {
       el.motionFileRows.addEventListener('click', (event) => {
@@ -2915,6 +2954,10 @@ export function createMotionDataController({
     el.motionAutomationStartButton?.addEventListener(
       'click',
       startCurrentMotionAutomation,
+    );
+    el.motionAutomationReserveButton?.addEventListener(
+      'click',
+      reserveCurrentMotionAutomation,
     );
     if (el.motionRunGraphAxisToggles) {
       el.motionRunGraphAxisToggles.addEventListener('click', (event) => {
