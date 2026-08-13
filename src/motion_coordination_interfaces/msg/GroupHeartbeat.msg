@@ -5,6 +5,7 @@ string display_name
 uint64 sequence
 builtin_interfaces/Time sent_at
 bool joined
+bool is_master
 bool execution_active
 string execution_id
 uint32 cycle_number
