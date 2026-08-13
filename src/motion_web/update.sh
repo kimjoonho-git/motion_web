@@ -1,17 +1,21 @@
 #!/bin/bash
-# 테스트 단계용 원클릭 자동 업데이트 스크립트
+# 테스트 단계용 원클릭 자동 업데이트 스크립트 (모든 PC 호환)
+
+# 스크립트가 위치한 폴더(src/motion_web)와 최상위 워크스페이스 폴더 자동 계산
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORKSPACE_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 echo "========================================="
-echo "1. Git 최신 코드 가져오는 중..."
+echo "1. Git 최신 코드 가져오는 중... ($SCRIPT_DIR)"
 echo "========================================="
-cd ~/ros2_ws/src/motion_web || exit
+cd "$SCRIPT_DIR" || exit
 git pull origin main
 
 echo ""
 echo "========================================="
-echo "2. ROS 2 패키지 자동 빌드 중..."
+echo "2. ROS 2 패키지 자동 빌드 중... ($WORKSPACE_DIR)"
 echo "========================================="
-cd ~/ros2_ws || exit
+cd "$WORKSPACE_DIR" || exit
 colcon build --packages-select motion_web_ui motion_web_bridge motion_coordination motion_control_studio
 
 echo ""
