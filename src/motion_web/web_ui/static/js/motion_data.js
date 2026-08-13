@@ -14,6 +14,8 @@ import {
   startMotionAutomation,
   startMotionRun,
   stopMotionRun,
+  stopMotionRunAfterCycle,
+  requestMotionSafetyStop,
   validateMotionMapping,
 } from './api.js?v=20260810-dds-release-1';
 import {
@@ -1434,6 +1436,9 @@ export function createMotionDataController({
     if (el.motionRunStopButton) {
       el.motionRunStopButton.disabled = motionRunLoading || !running;
     }
+    if (el.motionRunStopAfterButton) {
+      el.motionRunStopAfterButton.disabled = motionRunLoading || !running;
+    }
     if (el.motionRunRefreshButton) {
       el.motionRunRefreshButton.disabled = motionRunLoading;
     }
@@ -2785,6 +2790,23 @@ export function createMotionDataController({
     }
   }
 
+  async function stopCurrentMotionRunAfterCycle() {
+    motionRunLoading = true;
+    setMotionRunMessage('현재 회차 후 정지 대기 중');
+    renderMotionRunPanel();
+    try {
+      const payload = await stopMotionRunAfterCycle();
+      motionRunStatus = payload.status || motionRunStatus || null;
+      motionRunLastResult = payload;
+      setMotionRunMessage(payload.message || '회차 후 정지 대기 중');
+    } catch (error) {
+      setMotionRunMessage(`정지 요청 실패: ${error?.message || error}`);
+    } finally {
+      motionRunLoading = false;
+      renderMotionRunPanel();
+    }
+  }
+
   function motionAutomationSettings(enabled = true) {
     const repeatMode = String(
       el.motionAutomationRepeatMode?.value
@@ -2937,6 +2959,9 @@ export function createMotionDataController({
     }
     if (el.motionRunStopButton) {
       el.motionRunStopButton.addEventListener('click', stopCurrentMotionRun);
+    }
+    if (el.motionRunStopAfterButton) {
+      el.motionRunStopAfterButton.addEventListener('click', stopCurrentMotionRunAfterCycle);
     }
     if (el.motionRunRefreshButton) {
       el.motionRunRefreshButton.addEventListener('click', refreshMotionRunStatus);

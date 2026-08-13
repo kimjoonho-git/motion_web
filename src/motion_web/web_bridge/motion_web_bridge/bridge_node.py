@@ -8122,6 +8122,10 @@ def create_app(bridge: MotionWebBridge) -> FastAPI:
     async def motion_run_stop():
         return await asyncio.to_thread(_safety_first_stop, bridge, bridge.motion_run_stop)
 
+    @app.post('/api/motion-run/stop-after-cycle')
+    async def motion_run_stop_after_cycle_api():
+        return await asyncio.to_thread(bridge.motion_run_stop_after_cycle)
+
     @app.post('/api/safety/motion-stop')
     async def safety_motion_stop():
         cancel_pending = getattr(bridge, 'cancel_pending_motion_studio_start', None)

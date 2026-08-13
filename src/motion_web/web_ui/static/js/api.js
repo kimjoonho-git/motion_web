@@ -556,6 +556,11 @@ export async function stopMotionRun() {
   return readJson(response);
 }
 
+export async function stopMotionRunAfterCycle() {
+  const response = await projectFetch('/api/motion-run/stop-after-cycle', { method: 'POST' });
+  return readJson(response);
+}
+
 export async function requestMotionSafetyStop() {
   const response = await projectFetch('/api/safety/motion-stop', { method: 'POST' });
   return readJson(response);
