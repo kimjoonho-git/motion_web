@@ -86,6 +86,31 @@ Motion Control Studio는 상위 저장소에 통합되어 있으므로 별도로
 않습니다. Motion System과 그 내부 의존 저장소는 `--recurse-submodules`로
 받습니다.
 
+## 0. ROS 2 Humble 설치
+
+Ubuntu 22.04 데스크톱 환경에 ROS 2 Humble을 설치합니다. 이미 설치된 PC라면 이 단계를 건너뜁니다.
+
+```bash
+# 1. 로케일 설정 (UTF-8)
+sudo apt update && sudo apt install locales
+sudo locale-gen en_US en_US.UTF-8
+sudo update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
+export LANG=en_US.UTF-8
+
+# 2. Ubuntu Universe 저장소 활성화
+sudo apt install software-properties-common
+sudo add-apt-repository universe
+
+# 3. ROS 2 GPG 키 및 저장소 추가
+sudo apt update && sudo apt install curl -y
+sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
+
+# 4. ROS 2 패키지 설치
+sudo apt update
+sudo apt install -y ros-humble-desktop
+```
+
 ## 1. 기본 환경 준비
 
 Ubuntu 22.04와 ROS 2 Humble을 먼저 설치합니다. 다음은 현재 작업공간에서
