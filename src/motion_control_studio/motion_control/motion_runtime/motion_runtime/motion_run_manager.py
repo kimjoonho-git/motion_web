@@ -339,6 +339,9 @@ class MotionRunManager(Node):
             elif command == 'automation_start':
                 self._require_execution_context(payload)
                 response = self._start_automation(payload)
+            elif command == 'automation_reserve':
+                self._require_execution_context(payload)
+                response = self._reserve_automation(payload)
             elif command == 'automation_disable':
                 response = self._disable_automation(payload)
             elif command == 'check':
@@ -632,6 +635,50 @@ class MotionRunManager(Node):
             }
         result['automation'] = self._automation_snapshot()
         return result
+
+    def _reserve_automation(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        with self._run_lock:
+            configured = dict(self._automation_state)
+        if not configured.get('enabled'):
+            return {
+                'success': False,
+                'message': '자동 반복 사용을 먼저 켜세요',
+                'automation': self._automation_snapshot(),
+                'status': self.status(),
+            }
+        motion_file_id = str(payload.get('motion_file_id') or '').strip()
+        mapping_file_id = str(payload.get('mapping_file_id') or '').strip()
+        if not motion_file_id or not mapping_file_id:
+            return {
+                'success': False,
+                'message': '재생 등록된 모션 파일과 모션축 설정이 필요합니다',
+                'automation': self._automation_snapshot(),
+                'status': self.status(),
+            }
+        project_id, motions_dir, mappings_dir = self._project_asset_dirs(payload)
+        motion_path = self._motion_file_path(motion_file_id, motions_dir)
+        mapping_path = self._mapping_file_path(mapping_file_id, mappings_dir)
+        saved = self._save_automation(
+            {
+                'enabled': True,
+                'armed': True,
+                'repeat_mode': configured.get('repeat_mode', 'direct'),
+                'dwell_sec': configured.get('dwell_sec', 0.0),
+                'motion_file_id': motion_path.name,
+                'mapping_file_id': mapping_path.name,
+                'motion_sha256': hashlib.sha256(motion_path.read_bytes()).hexdigest(),
+                'mapping_sha256': hashlib.sha256(mapping_path.read_bytes()).hexdigest(),
+                'last_error': '',
+            },
+            runtime_state='ready',
+            runtime_message='부팅 시 자동 반복이 예약되었습니다',
+        )
+        return {
+            'success': True,
+            'message': '부팅 시 자동 시작 예약 완료',
+            'automation': self._automation_snapshot(),
+            'status': self.status(),
+        }
 
     def _disable_automation(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         project_id = str(payload.get('project_id') or '').strip()
