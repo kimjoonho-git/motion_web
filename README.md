@@ -203,28 +203,17 @@ source install/setup.bash
 
 ### 4-2. 코드 갱신 (이미 설치된 PC)
 
-코드를 받은 뒤 배포·재시작은 **아래 한 줄**을 사용합니다. 패키지별 빌드는
-하지 않습니다.
+코드를 새로 다운로드받고 빌드 및 재시작하는 가장 쉬운 방법은 **원클릭 자동 업데이트 스크립트**를 사용하는 것입니다. 패키지별 빌드나 서비스 재시작 명령어를 직접 입력할 필요가 없습니다.
 
 ```bash
-cd ~/ros2_ws
-MOTION_WEB_BRANCH=main bash scripts/sync_branch.sh
+~/ros2_ws/src/motion_web/update.sh
 ```
 
-동작 · `git pull` + submodule 갱신 + `colcon build --symlink-install` +
-`motion-control.service`·`motion-coordination.service` 재시작.
+동작 · `git pull` + `colcon build` + `motion-control.service` 재시작이 자동으로 연속 진행되며 설치 경로를 스스로 계산하므로 다른 PC에서도 동일하게 사용할 수 있습니다.
 
-`scripts/sync_branch.sh`의 기본 브랜치는 `fix/coordination-safety`이므로
-운영 시에는 위처럼 `MOTION_WEB_BRANCH=main`을 붙이거나, 셸 기본값으로
-지정합니다.
+(기존 `scripts/sync_branch.sh` 스크립트를 통한 특정 브랜치 동기화 기능도 여전히 지원됩니다.)
 
-```bash
-export MOTION_WEB_BRANCH=main
-bash scripts/sync_branch.sh
-```
-
-`motion-motor.service`는 sync 스크립트에서 재시작하지 않습니다. 모터
-설정을 바꾼 뒤에는 별도로 재시작합니다.
+`motion-motor.service`는 스크립트에서 재시작하지 않습니다. 모터 설정을 바꾼 뒤에는 별도로 재시작합니다.
 
 ```bash
 systemctl --user restart motion-motor.service
