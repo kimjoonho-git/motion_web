@@ -411,12 +411,13 @@ export function createCoordinationController({ el }) {
     
     el.coordinationAddCurrentPeersButton?.addEventListener('click', () => {
       const peers = Array.isArray(snapshot?.runtime?.peers) ? snapshot.runtime.peers : [];
-      const ids = peers.map(p => p.pc_id);
-      if (ids.length > 0) {
-        if (el.coordinationRequiredPeers) {
-          el.coordinationRequiredPeers.value = ids.join(', ');
-          formDirty = true;
-        }
+      const ids = new Set(peers.map(p => p.pc_id));
+      const localId = el.coordinationPcId?.value || snapshot?.config?.pc_id;
+      if (localId) ids.add(localId);
+      
+      if (ids.size > 0 && el.coordinationRequiredPeers) {
+        el.coordinationRequiredPeers.value = Array.from(ids).join(', ');
+        formDirty = true;
       }
     });
   }
