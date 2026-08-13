@@ -103,6 +103,7 @@ export function createCoordinationController({ el }) {
       <td class="${stateClass(peer.trigger_sync_state)}">${text(stateText(peer.trigger_sync_state))}</td>
       <td>${Number(peer.trigger_sync_uncertainty_ms || 0).toFixed(3)} ms</td>
       <td class="${Number(peer.servo_alarm_grade || 0) > 0 ? 'coordination-state-bad' : 'coordination-state-ok'}">${text(alarmText)}</td>
+      <td title="${text(peer.git_message || '')}">[${text(peer.git_branch || '?')}] ${text(peer.git_hash || '-')}</td>
     </tr>`;
   }
 

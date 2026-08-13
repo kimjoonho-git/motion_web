@@ -7745,6 +7745,18 @@ def create_app(bridge: MotionWebBridge) -> FastAPI:
     async def status():
         return bridge.snapshot()
 
+    @app.get('/api/system/version')
+    async def system_version():
+        import subprocess
+        try:
+            cwd = '/home/joonho_test/ros2_ws'
+            branch = subprocess.check_output(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], cwd=cwd).decode('utf-8').strip()
+            hash_str = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD'], cwd=cwd).decode('utf-8').strip()
+            msg = subprocess.check_output(['git', 'log', '-1', '--format=%s'], cwd=cwd).decode('utf-8').strip()
+            return {'branch': branch, 'hash': hash_str, 'message': msg}
+        except Exception:
+            return {'branch': 'unknown', 'hash': 'unknown', 'message': ''}
+
     @app.get('/api/coordination')
     async def coordination_status():
         return bridge.coordination_status()

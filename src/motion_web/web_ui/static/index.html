@@ -12,6 +12,7 @@
         <div class="app-title">
           <h1>모션 녹화 시스템</h1>
           <span class="version-badge">버전 0.5.0</span>
+          <span id="globalGitVersion" class="version-badge git-version-badge" title="Git 상태 로드 중..." style="margin-left: 8px; cursor: help; display: none;"></span>
           <div
             id="motorActivityBanner"
             class="motor-activity-banner"
@@ -358,8 +359,8 @@
           <div class="section-head compact"><strong>그룹 참가 PC</strong><span>경고 1.5초 · 통신 단절 3초 · 실행 참가 목록은 시작 시 고정</span></div>
           <div class="table-wrap">
             <table class="coordination-peer-table">
-              <thead><tr><th>PC</th><th>통신</th><th>실행 참가</th><th>모션 회차</th><th>모션 단계</th><th>진행</th><th>트리거 동기화</th><th>추정 불확실성</th><th>알람 등급</th></tr></thead>
-              <tbody id="coordinationPeerRows"><tr><td colspan="9" class="empty">그룹 상태 수신 대기</td></tr></tbody>
+              <thead><tr><th>PC</th><th>통신</th><th>실행 참가</th><th>모션 회차</th><th>모션 단계</th><th>진행</th><th>트리거 동기화</th><th>추정 불확실성</th><th>알람 등급</th><th>버전 (Git)</th></tr></thead>
+              <tbody id="coordinationPeerRows"><tr><td colspan="10" class="empty">그룹 상태 수신 대기</td></tr></tbody>
             </table>
           </div>
         </section>

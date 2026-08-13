@@ -10,7 +10,8 @@ import {
   stopMotionRun,
   stopMotionStudio,
   setProjectGeneration,
-} from './api.js?v=20260810-dds-release-1';
+  fetchSystemVersion,
+} from './api.js?v=20260813-git-monitor-1';
 import { getElements } from './dom.js?v=20260807-runtime-clear-1';
 import { createMotorEventLogController } from './event_log.js?v=20260727-popup-common-3';
 import { createMidiMonitorController } from './midi_monitor.js?v=20260806-midi-pickup-reconnect-1';
@@ -38,7 +39,7 @@ import {
 } from './workspace_navigation.js?v=20260729-motion-files-execution-1';
 import { installFeedbackPresentation } from './ui_feedback.js?v=20260724-ui-finish-1';
 import { createServoAlarmController } from './servo_alarm.js?v=20260728-servo-alarm-2';
-import { createCoordinationController } from './coordination.js?v=20260810-dds-release-6';
+import { createCoordinationController } from './coordination.js?v=20260813-git-monitor-1';
 
 const el = getElements();
 const operationProgress = createOperationProgressManager({ el });
@@ -1618,3 +1619,19 @@ motionData.fetchFiles();
 motionStudio.refresh(false);
 projectExplorer.refresh(true);
 servoAlarm.refresh();
+
+async function initGlobalSystemVersion() {
+  const badge = document.getElementById('globalGitVersion');
+  if (!badge) return;
+  try {
+    const version = await fetchSystemVersion();
+    if (version && version.hash && version.hash !== 'unknown') {
+      badge.textContent = `[${version.branch}] ${version.hash}`;
+      badge.title = version.message || '커밋 메시지 없음';
+      badge.style.display = '';
+    }
+  } catch (error) {
+    console.error('Failed to fetch system version:', error);
+  }
+}
+initGlobalSystemVersion();

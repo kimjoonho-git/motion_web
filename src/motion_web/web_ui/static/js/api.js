@@ -136,6 +136,11 @@ export async function fetchStatusSnapshot(timeoutMs = 5000) {
   return readJson(response);
 }
 
+export async function fetchSystemVersion() {
+  const response = await projectFetch('/api/system/version');
+  return readJson(response);
+}
+
 export async function fetchCoordinationStatus() {
   const response = await projectFetch('/api/coordination');
   return readJson(response);

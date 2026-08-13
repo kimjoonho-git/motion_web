@@ -1,1 +1,1 @@
-import './js/main.js?v=20260810-dds-release-1';
+import './js/main.js?v=20260813-git-monitor-1';

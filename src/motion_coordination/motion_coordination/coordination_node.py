@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import threading
 import time
 import urllib.error
@@ -24,6 +25,7 @@ from motion_coordination_interfaces.msg import (
     GroupEvent,
     GroupHeartbeat,
     GroupTimeSync,
+    GroupSystemInfo,
 )
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
@@ -76,6 +78,16 @@ class MotionCoordinationNode(Node):
         self._boot_id = f'boot-{uuid.uuid4().hex}'
         self._joined = False
         self._sequence = 0
+        self._git_branch = ''
+        self._git_hash = ''
+        self._git_message = ''
+        try:
+            cwd = '/home/joonho_test/ros2_ws'
+            self._git_branch = subprocess.check_output(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], cwd=cwd).decode('utf-8').strip()
+            self._git_hash = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD'], cwd=cwd).decode('utf-8').strip()
+            self._git_message = subprocess.check_output(['git', 'log', '-1', '--format=%s'], cwd=cwd).decode('utf-8').strip()
+        except Exception:
+            pass
         self._lock = threading.RLock()
         self._trigger_sync_status: Dict[str, Any] = {
             'trigger_sync_state': 'idle',
@@ -96,6 +108,7 @@ class MotionCoordinationNode(Node):
         self._last_alarm_key: tuple[Any, ...] = ()
         self._alarm_registry = AlarmRegistry()
         self._seen_commands: Dict[str, float] = {}
+        self._system_info_cache: Dict[str, GroupSystemInfo] = {}
         self._cancelled_execution_ids: set[str] = set()
         self._coordination_error: Dict[str, Any] = {}
         self._duplicate_pc_boot_id = ''
@@ -128,8 +141,16 @@ class MotionCoordinationNode(Node):
             reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
         )
+        system_info_qos = QoSProfile(
+            depth=16,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
         self._heartbeat_pub = self.create_publisher(
             GroupHeartbeat, '/motion_group/heartbeat', heartbeat_qos
+        )
+        self._system_info_pub = self.create_publisher(
+            GroupSystemInfo, '/motion_group/system_info', system_info_qos
         )
         self._command_pub = self.create_publisher(
             GroupCommand, '/motion_group/command', reliable
@@ -145,6 +166,9 @@ class MotionCoordinationNode(Node):
         )
         self._heartbeat_sub = self.create_subscription(
             GroupHeartbeat, '/motion_group/heartbeat', self._heartbeat_callback, heartbeat_qos
+        )
+        self._system_info_sub = self.create_subscription(
+            GroupSystemInfo, '/motion_group/system_info', self._system_info_callback, system_info_qos
         )
         self._command_sub = self.create_subscription(
             GroupCommand, '/motion_group/command', self._command_callback, reliable
@@ -174,6 +198,25 @@ class MotionCoordinationNode(Node):
             f'pc={self._config.pc_id} · group={self._config.group_id or "none"} · '
             f'domain={self._config.dds_domain_id} · joined=false'
         )
+        self._publish_system_info()
+
+    def _publish_system_info(self) -> None:
+        message = GroupSystemInfo()
+        message.pc_id = self._config.pc_id
+        message.git_branch = self._git_branch
+        message.git_hash = self._git_hash
+        message.git_message = self._git_message
+        self._system_info_pub.publish(message)
+
+    def _system_info_callback(self, message: GroupSystemInfo) -> None:
+        if message.pc_id == self._config.pc_id:
+            return
+        self._system_info_cache[message.pc_id] = message
+        member = self._registry.member(message.pc_id)
+        if member:
+            member.git_branch = message.git_branch
+            member.git_hash = message.git_hash
+            member.git_message = message.git_message
 
     def _heartbeat_tick(self) -> None:
         if self._config.configured and self._joined:
@@ -240,11 +283,15 @@ class MotionCoordinationNode(Node):
             return
         previous = self._registry.member(message.pc_id)
         restarted = bool(previous and previous.boot_id != message.boot_id)
+        info = self._system_info_cache.get(message.pc_id)
         self._registry.update(Member(
             pc_id=message.pc_id,
             boot_id=message.boot_id,
             joined=bool(message.joined),
             is_master=bool(message.is_master),
+            git_branch=str(info.git_branch) if info else '',
+            git_hash=str(info.git_hash) if info else '',
+            git_message=str(info.git_message) if info else '',
             state=message.state,
             trigger_sync_state=message.trigger_sync_state,
             trigger_sync_uncertainty_ms=float(
@@ -1979,6 +2026,10 @@ class MotionCoordinationNode(Node):
             peers.append(enrich_peer_row({
                 'pc_id': pc_id,
                 'display_name': member.display_name,
+                'is_master': member.is_master,
+                'git_branch': member.git_branch,
+                'git_hash': member.git_hash,
+                'git_message': member.git_message,
                 'state': self._registry.status(pc_id, now=now),
                 'motion_state': member.state,
                 'trigger_sync_state': member.trigger_sync_state,

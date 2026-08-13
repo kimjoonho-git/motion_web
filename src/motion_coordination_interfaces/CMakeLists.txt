@@ -11,6 +11,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/GroupHeartbeat.msg"
   "msg/GroupTimeSync.msg"
   "msg/GroupAlarm.msg"
+  "msg/GroupSystemInfo.msg"
   DEPENDENCIES builtin_interfaces
 )
 

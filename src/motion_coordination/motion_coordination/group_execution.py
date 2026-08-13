@@ -21,6 +21,9 @@ class Member:
     received_monotonic: float
     sequence: int = 0
     display_name: str = ''
+    git_branch: str = ''
+    git_hash: str = ''
+    git_message: str = ''
     motion_phase: str = ''
     motion_elapsed_sec: float = 0.0
     motion_duration_sec: float = 0.0
