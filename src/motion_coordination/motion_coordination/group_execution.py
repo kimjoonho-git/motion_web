@@ -13,6 +13,7 @@ class Member:
     pc_id: str
     boot_id: str
     joined: bool
+    is_master: bool
     state: str
     trigger_sync_state: str
     trigger_sync_uncertainty_ms: float

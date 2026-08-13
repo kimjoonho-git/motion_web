@@ -82,6 +82,7 @@ class MotionCoordinationNode(Node):
             'trigger_sync_uncertainty_ms': 0.0,
             'trigger_sync_source': 'dds_relative_monotonic',
         }
+        self._auto_play_triggered = False
         self._local_sync_offset_ns = 0
         self._sync_estimators: Dict[str, TriggerSyncEstimator] = {}
         self._sync_sent_samples: Dict[str, int] = {}
@@ -187,6 +188,7 @@ class MotionCoordinationNode(Node):
         message.sequence = self._next_sequence()
         _set_stamp(message.sent_at, time.time())
         message.joined = bool(joined)
+        message.is_master = bool(self._config.is_master)
         with self._lock:
             message.execution_active = bool(self._execution.execution_id)
             message.execution_id = self._execution.execution_id
@@ -226,6 +228,8 @@ class MotionCoordinationNode(Node):
         self._enforce_motion_start_report_deadline()
         self._drive_trigger_sync()
         self._prune_seen_commands()
+        self._check_multiple_masters()
+        self._drive_auto_play()
 
     def _heartbeat_callback(self, message: GroupHeartbeat) -> None:
         if message.group_id != self._config.group_id:
@@ -240,6 +244,7 @@ class MotionCoordinationNode(Node):
             pc_id=message.pc_id,
             boot_id=message.boot_id,
             joined=bool(message.joined),
+            is_master=bool(message.is_master),
             state=message.state,
             trigger_sync_state=message.trigger_sync_state,
             trigger_sync_uncertainty_ms=float(
@@ -292,6 +297,79 @@ class MotionCoordinationNode(Node):
             ),
             execution_id=execution_id,
         )
+
+    def _check_multiple_masters(self) -> None:
+        if not self._config.is_master:
+            return
+        masters = [
+            pc_id for pc_id in self._registry.live_joined()
+            if self._registry.member(pc_id) and self._registry.member(pc_id).is_master
+        ]
+        if not masters:
+            return
+        with self._lock:
+            current = self._coordination_error
+            if (
+                current.get('active')
+                and current.get('code') == 'MULTIPLE_MASTERS'
+            ):
+                return
+            execution_id = self._execution.execution_id
+        if execution_id:
+            self._stop_for_peer_failure('다중 마스터 충돌 감지')
+        self._publish_coordination_error(
+            code='MULTIPLE_MASTERS',
+            message=(
+                f'그룹 내에 마스터 역할을 가진 PC가 여러 대 있습니다: '
+                f'{self._config.pc_id}, {", ".join(masters)}'
+            ),
+            execution_id=execution_id,
+        )
+
+    def _drive_auto_play(self) -> None:
+        if not self._config.is_master or not self._config.auto_play:
+            return
+        if not self._joined or not self._config.required_peers:
+            return
+        with self._lock:
+            if self._execution.execution_id or self._coordination_error.get('active'):
+                self._auto_play_triggered = False
+                return
+            if self._auto_play_triggered:
+                return
+        now = time.monotonic()
+        missing_or_unhealthy = []
+        for pc_id in self._config.required_peers:
+            if pc_id == self._config.pc_id:
+                status = 'online'
+                alarm = self._local_alarm_grade()
+            else:
+                status = self._registry.status(pc_id, now=now)
+                member = self._registry.member(pc_id)
+                alarm = member.alarm_grade if member else 0
+            if status != 'online' or alarm > 0:
+                missing_or_unhealthy.append(pc_id)
+        if missing_or_unhealthy:
+            return
+        
+        # All required peers are online and healthy. We can start the group execution.
+        try:
+            with self._lock:
+                self._auto_play_triggered = True
+            self._start_group_execution(
+                participants_override=tuple(self._config.required_peers),
+                request={
+                    'run_mode': 'continuous',
+                    'repeat_mode': 'reinitialize',
+                    'dwell_sec': 0.0,
+                },
+                initialization_only=False,
+            )
+            self.get_logger().info('마스터 권한으로 그룹 자동 재생을 시작했습니다')
+        except Exception as exc:
+            with self._lock:
+                self._auto_play_triggered = False
+            self.get_logger().error(f'자동 재생 시작 실패: {exc}')
 
     def _time_sync_callback(self, message: GroupTimeSync) -> None:
         """Handle one execution-local DDS monotonic clock exchange."""
