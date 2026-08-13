@@ -2151,7 +2151,7 @@ def test_selected_mapping_context_is_used_when_no_run_mapping_is_active(tmp_path
     assert node._preferred_mapping_file_id == 'running.yaml'
     assert node._bank_config_file == selected
     assert node._requested_mapping_file({
-        'config_file': '/home/joonho_test/ros2_ws/config/active_motor_config.yaml'
+        'config_file': '/mock_workspace/config/active_motor_config.yaml'
     }) == selected
 
     node._motion_run_status_callback(SimpleNamespace(
