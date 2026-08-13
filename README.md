@@ -96,7 +96,8 @@ sudo apt update
 sudo apt install -y \
   git build-essential cmake \
   python3-rosdep python3-colcon-common-extensions \
-  python3-fastapi python3-uvicorn python3-yaml chrony
+  python3-fastapi python3-uvicorn python3-yaml chrony \
+  btop ttyd
 ```
 
 Dynamixel 직렬 통신과 MIDI 장치를 사용하는 계정에는 필요한 그룹 권한을
@@ -261,6 +262,15 @@ sudo loginctl enable-linger "$(id -un)"
 - `motion-control.service`: 웹·프로젝트·모션 제어 서비스
 - `motion-motor.service`: 검증된 프로젝트 모터 실행 설정이 있을 때 Motor Manager
 - `motion-coordination.service`: PC 간 DDS 그룹 상태 공유·실행 조정
+
+웹 UI의 **PC 성능 (btop)** 탭을 사용하기 위해 `btop`을 자동 실행하려면 아래 명령어로 서비스를 등록합니다.
+
+```bash
+cd ~/ros2_ws
+cp src/motion_web/web_bridge/deploy/motion-btop.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now motion-btop.service
+```
 
 새 PC에 검증된 모터 실행 설정이 없으면 웹은 실행되지만 Motor Manager 시작은
 보류됩니다. 브라우저 창은 자동으로 열리지 않습니다.

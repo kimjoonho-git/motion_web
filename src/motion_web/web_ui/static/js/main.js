@@ -152,6 +152,9 @@ function renderWorkspacePanel() {
       panel.classList.toggle('hidden', panel.dataset.workspacePanel !== activePanel);
     });
   }
+  if (activePanel === 'btop' && el.btopIframe && !el.btopIframe.src) {
+    el.btopIframe.src = `http://${window.location.hostname}:8080/`;
+  }
   const motionTab = motionTabForWorkspace(activeWorkspace);
   if (motionTab) {
     motionData.showTab(motionTab);

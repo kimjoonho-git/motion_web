@@ -86,7 +86,7 @@ export function createCoordinationController({ el }) {
       : '0';
     return `<tr>
       <td><strong>${text(peer.display_name || peer.pc_id || '-')}</strong><small>${peer.display_name ? text(peer.pc_id || '') : ''}</small></td>
-      <td class="${stateClass(peer.state)}">${text(stateText(peer.state))}</td>
+      <td class="${stateClass(peer.state)}"><span class="peer-status-dot ${peer.state || 'offline'}"></span>${text(stateText(peer.state))}</td>
       <td>${fixedParticipants.has(peer.pc_id) ? '고정 참가' : '대기'}</td>
       <td>${text(peerCycleText(peer))}</td>
       <td class="${peerPhaseClass(peer)}">${text(peerMotionStep(peer))}</td>
@@ -138,6 +138,9 @@ export function createCoordinationController({ el }) {
     if (el.coordinationJoinState) {
       el.coordinationJoinState.textContent = joined ? '참가 중' : '나감';
       el.coordinationJoinState.className = joined ? 'coordination-state-ok' : 'coordination-state-warn';
+      if (el.coordJoinBadge) {
+        el.coordJoinBadge.classList.toggle('active', joined);
+      }
     }
     if (el.coordinationPeerCount) el.coordinationPeerCount.textContent = `${peers.length + (joined ? 1 : 0)}대`;
     if (el.coordinationExecutionState) {
