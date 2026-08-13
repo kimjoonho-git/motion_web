@@ -409,7 +409,7 @@ export function createCoordinationController({ el }) {
       save();
     });
     
-    el.coordinationAddCurrentPeersButton?.addEventListener('click', () => {
+    el.coordinationConfirmRosterButton?.addEventListener('click', () => {
       const peers = Array.isArray(snapshot?.runtime?.peers) ? snapshot.runtime.peers : [];
       const ids = new Set(peers.map(p => p.pc_id));
       const localId = el.coordinationPcId?.value || snapshot?.config?.pc_id;
@@ -418,6 +418,7 @@ export function createCoordinationController({ el }) {
       if (ids.size > 0 && el.coordinationRequiredPeers) {
         el.coordinationRequiredPeers.value = Array.from(ids).join(', ');
         formDirty = true;
+        save();
       }
     });
   }

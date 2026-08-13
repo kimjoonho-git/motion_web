@@ -243,10 +243,7 @@
                 </select>
               </label>
               <label class="compact-field span-2"><span>필수 참가 명단</span>
-                <div class="input-with-button">
-                  <input id="coordinationRequiredPeers" type="text" placeholder="예: pc-1, pc-2">
-                  <button type="button" id="coordinationAddCurrentPeersButton" class="secondary" title="현재 접속된 PC 일괄 등록">접속 PC 등록</button>
-                </div>
+                <input id="coordinationRequiredPeers" type="text" placeholder="예: pc-1, pc-2">
               </label>
             </div>
             <div class="coordination-settings-actions">
@@ -358,7 +355,11 @@
         </div>
 
         <section class="motion-file-subsection" aria-label="연결 PC 상태">
-          <div class="section-head compact"><strong>그룹 참가 PC</strong><span>경고 1.5초 · 통신 단절 3초 · 실행 참가 목록은 시작 시 고정</span></div>
+          <div class="section-head compact">
+            <strong>그룹 참가 PC</strong>
+            <span>경고 1.5초 · 통신 단절 3초 · 실행 참가 목록은 시작 시 고정</span>
+            <button type="button" id="coordinationConfirmRosterButton" class="secondary" style="margin-left: auto;">현재 표의 인원으로 명단 확정</button>
+          </div>
           <div class="table-wrap">
             <table class="coordination-peer-table">
               <thead><tr><th>PC</th><th>통신</th><th>실행 참가</th><th>모션 회차</th><th>모션 단계</th><th>진행</th><th>트리거 동기화</th><th>추정 불확실성</th><th>알람 등급</th><th>버전 (Git)</th></tr></thead>
