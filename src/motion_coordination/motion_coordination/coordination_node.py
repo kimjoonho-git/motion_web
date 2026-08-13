@@ -82,7 +82,6 @@ class MotionCoordinationNode(Node):
         self._git_hash = ''
         self._git_message = ''
         try:
-            import os
             cwd = os.environ.get('MOTION_WORKSPACE', os.getcwd())
             self._git_branch = subprocess.check_output(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], cwd=cwd).decode('utf-8').strip()
             self._git_hash = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD'], cwd=cwd).decode('utf-8').strip()
