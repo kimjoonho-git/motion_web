@@ -740,6 +740,8 @@ class MotionRunManager(Node):
                 'dwell_sec': state.get('dwell_sec', 0.0),
             }
             result = self._start_thread('run', payload)
+            if not result.get('success'):
+                raise RuntimeError(str(result.get('message') or '자동 반복 재시작 대기 중'))
         except Exception as exc:
             with self._run_lock:
                 still_pending = self._automation_resume_pending
@@ -752,21 +754,12 @@ class MotionRunManager(Node):
                     'resume_pending': True,
                 })
             return
-        if result.get('success'):
-            with self._run_lock:
-                self._automation_resume_pending = False
-                self._automation_runtime.update({
-                    'state': 'starting',
-                    'message': '재시작 후 자동 반복 시작',
-                    'resume_pending': False,
-                })
-        else:
-            with self._run_lock:
-                self._automation_runtime.update({
-                    'state': 'waiting',
-                    'message': f"자동 반복 시작 대기: {result.get('message') or '준비되지 않음'}",
-                    'resume_pending': True,
-                })
+        with self._run_lock:
+            self._automation_resume_pending = False
+            self._automation_runtime.update({
+                'state': 'starting',
+                'message': '재시작 후 자동 반복 시작',
+            })
 
     def _verify_automation_files(
         self,
@@ -1360,6 +1353,49 @@ class MotionRunManager(Node):
             'phase_finished_at': time.time(),
         })
 
+    def _wait_for_automation_ready(self, payload: Dict[str, Any], timeout_sec: float = 60.0) -> None:
+        deadline = time.monotonic() + timeout_sec
+        last_error = ''
+        while True:
+            if self._stop_event.is_set():
+                raise InterruptedError()
+            error = self._playback_ownership_error()
+            if not error:
+                motors = self._current_motors()
+                if not motors:
+                    error = '모터 통신 대기 중'
+                else:
+                    try:
+                        plan = self._build_plan(payload, motors_snapshot=motors)
+                        init_plan = self._build_plan(
+                            payload,
+                            initialization_only=True,
+                            motors_snapshot=motors,
+                        )
+                        axes_to_check = {int(axis['motor_axis']) for axis in plan.get('axes', [])}
+                        axes_to_check.update(int(axis['motor_axis']) for axis in init_plan.get('axes', []))
+                        
+                        for motor_axis in sorted(axes_to_check):
+                            motor = self._motor_for_axis(motor_axis, motors)
+                            motor_error = self._motor_ready_error(
+                                motor or {'controller_index': motor_axis}
+                            )
+                            if motor_error:
+                                error = motor_error
+                                break
+                    except ValueError as exc:
+                        error = str(exc)
+            if not error:
+                return
+            if time.monotonic() > deadline:
+                raise ValueError(f"자동 반복 준비 대기 시간 초과: {error}")
+            if error != last_error:
+                last_error = error
+                with self._run_lock:
+                    self._automation_runtime['message'] = f"자동 반복 준비 대기 중: {error}"
+                self._publish_status()
+            time.sleep(0.5)
+
     def _prepare_and_run(
         self,
         mode: str,
@@ -1367,6 +1403,12 @@ class MotionRunManager(Node):
         motors_snapshot: List[Dict[str, Any]],
     ) -> None:
         try:
+            if bool(payload.get('automation_run')):
+                self._wait_for_automation_ready(payload)
+                motors_snapshot = self._current_motors()
+                with self._run_lock:
+                    self._automation_runtime['resume_pending'] = False
+
             if mode == 'initialize':
                 plan = self._build_plan(
                     payload,
@@ -1664,7 +1706,7 @@ class MotionRunManager(Node):
                 '초기위치 이동 완료 후 자동 반복 정지',
             )
             return
-        if motion_plan.get('repeat_mode') == 'reinitialize':
+        if motion_plan.get('repeat_mode') in {'reinitialize', 'dwell_reinitialize'}:
             self._run_motion(motion_plan, initialization_plan)
         else:
             self._run_motion(motion_plan)
@@ -1844,7 +1886,7 @@ class MotionRunManager(Node):
                         '현재 모션 회차 완료 후 자동 반복 정지',
                     )
                     return
-                if repeat_mode == 'dwell' and dwell_sec > 0.0:
+                if repeat_mode in {'dwell', 'dwell_reinitialize'} and dwell_sec > 0.0:
                     if not self._wait_between_cycles(
                         plan,
                         motion_started_at,
@@ -1852,7 +1894,7 @@ class MotionRunManager(Node):
                         dwell_sec,
                     ):
                         return
-                elif repeat_mode == 'reinitialize':
+                if repeat_mode in {'reinitialize', 'dwell_reinitialize'}:
                     if initialization_plan is None:
                         raise RuntimeError('반복 초기위치 이동 계획이 없습니다')
                     self._run_initialization(initialization_plan)
@@ -2483,7 +2525,7 @@ class MotionRunManager(Node):
                 errors.append(f'Motion ID {motion_id}: Axis {motor_axis} not found')
                 continue
             motor_error = self._motor_ready_error(motor)
-            if motor_error:
+            if motor_error and not automation_run:
                 errors.append(f'Motion ID {motion_id}: {motor_error}')
 
             motion_values = [record['value'] for record in groups[motion_id]]

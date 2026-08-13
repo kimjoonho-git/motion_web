@@ -1164,13 +1164,14 @@
                 <label class="compact-field">
                   <span>회차 사이 동작</span>
                   <select id="motionAutomationRepeatMode" class="compact-select" disabled>
-                    <option value="direct">바로 반복</option>
-                    <option value="dwell">정지 후 반복</option>
-                    <option value="reinitialize">초기 위치 이동 후 반복</option>
+                    <option value="direct">바로 다음 모션</option>
+                    <option value="dwell">대기 후 다음 모션</option>
+                    <option value="reinitialize">초기 위치 이동 후 다음 모션</option>
+                    <option value="dwell_reinitialize">대기 후 초기 위치 이동 → 다음 모션</option>
                   </select>
                 </label>
                 <label id="motionAutomationDwellWrap" class="compact-field hidden">
-                  <span>정지 시간(초)</span>
+                  <span>대기 시간(초)</span>
                   <input id="motionAutomationDwellSec" type="number" min="0" max="86400" step="0.1" value="5.0" disabled>
                 </label>
                 <button id="motionAutomationStartButton" class="primary" type="button" disabled>자동 반복 시작</button>
@@ -1741,6 +1742,23 @@
         <div class="app-dialog-actions">
           <button id="appDialogCancelButton" type="button">취소</button>
           <button id="appDialogConfirmButton" class="primary" type="button">확인</button>
+        </div>
+      </section>
+    </div>
+
+    <div id="automationResumeModal" class="operation-progress-overlay hidden" role="dialog" aria-live="polite" aria-modal="true" aria-labelledby="automationResumeTitle">
+      <section class="operation-progress-dialog">
+        <div class="operation-progress-head">
+          <div class="operation-progress-spinner" aria-hidden="true"></div>
+          <div>
+            <strong id="automationResumeTitle">전원 재부팅 감지 · 자동 모션 복구 중</strong>
+            <span id="automationResumeStage">상태 확인 중</span>
+          </div>
+        </div>
+        <p id="automationResumeMessage">하드웨어 연결 상태를 점검하고 있습니다.</p>
+        <div class="operation-progress-actions">
+          <button id="automationResumeHideButton" type="button">알림 숨기기</button>
+          <button id="automationResumeCancelButton" class="danger" type="button">자동 반복 취소</button>
         </div>
       </section>
     </div>

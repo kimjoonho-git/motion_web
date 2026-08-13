@@ -524,6 +524,7 @@ export function createMotionDataController({
   let motionRunGraphFileId = '';
   let motionRunGraphToggleSignature = '';
   const motionRunGraphHiddenIds = new Set();
+  let automationResumeModalHidden = false;
 
   function setMessage(message) {
     if (el.motionFileMessage) el.motionFileMessage.textContent = message;
@@ -1313,7 +1314,7 @@ export function createMotionDataController({
       }
       el.motionAutomationRepeatMode.disabled = !enabled || busy;
     }
-    const showDwell = repeatMode === 'dwell';
+    const showDwell = repeatMode === 'dwell' || repeatMode === 'dwell_reinitialize';
     el.motionAutomationDwellWrap?.classList.toggle('hidden', !showDwell);
     if (el.motionAutomationDwellSec) {
       if (document.activeElement !== el.motionAutomationDwellSec) {
@@ -1346,6 +1347,41 @@ export function createMotionDataController({
           : repeatMode === 'dwell'
             ? `${Number.isFinite(dwellSec) ? dwellSec : 0}초 정지 후 반복`
             : '초기 위치 이동 후 반복'}`;
+    }
+  }
+
+  function renderAutomationResumeModal() {
+    const modal = document.getElementById('automationResumeModal');
+    if (!modal) return;
+    
+    const status = motionRunStatus || {};
+    const automation = status.automation || {};
+    const pending = Boolean(automation.resume_pending);
+    
+    // Automatically reset hidden state when pending becomes false (recovery completed or cancelled)
+    if (!pending) {
+      automationResumeModalHidden = false;
+    }
+    
+    if (pending && !automationResumeModalHidden) {
+      modal.classList.remove('hidden');
+      
+      const stageEl = document.getElementById('automationResumeStage');
+      if (stageEl) {
+        const stage = automation.stage || 'waiting';
+        let stageText = '상태 확인 중';
+        if (stage === 'waiting') stageText = '하드웨어 준비 대기 중';
+        else if (stage === 'starting') stageText = '초기 위치 이동 중';
+        else if (stage === 'running') stageText = '모션 실행 중';
+        stageEl.textContent = stageText;
+      }
+      
+      const messageEl = document.getElementById('automationResumeMessage');
+      if (messageEl) {
+        messageEl.textContent = automation.message || '하드웨어 연결 상태를 점검하고 있습니다.';
+      }
+    } else {
+      modal.classList.add('hidden');
     }
   }
 
@@ -1419,6 +1455,7 @@ export function createMotionDataController({
     stopMotionRunGraphAnimationIfIdle();
     renderMotionRunAxes();
     renderMotionAutomation();
+    renderAutomationResumeModal();
   }
 
   function renderMotionTabs(active = null) {
@@ -2984,6 +3021,23 @@ export function createMotionDataController({
         const row = event.target.closest('tr[data-mapping-index]');
         if (!row) return;
         updateMappingRow(row.dataset.mappingIndex, field, event.target.value, event.target.checked);
+      });
+    }
+
+    const automationHideBtn = document.getElementById('automationResumeHideButton');
+    if (automationHideBtn) {
+      automationHideBtn.addEventListener('click', () => {
+        automationResumeModalHidden = true;
+        renderAutomationResumeModal();
+      });
+    }
+
+    const automationCancelBtn = document.getElementById('automationResumeCancelButton');
+    if (automationCancelBtn) {
+      automationCancelBtn.addEventListener('click', async () => {
+        automationResumeModalHidden = true;
+        renderAutomationResumeModal();
+        await saveMotionAutomation(false);
       });
     }
   }
