@@ -7749,7 +7749,8 @@ def create_app(bridge: MotionWebBridge) -> FastAPI:
     async def system_version():
         import subprocess
         try:
-            cwd = '/home/joonho_test/ros2_ws'
+            import os
+            cwd = os.environ.get('MOTION_WORKSPACE', os.getcwd())
             branch = subprocess.check_output(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], cwd=cwd).decode('utf-8').strip()
             hash_str = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD'], cwd=cwd).decode('utf-8').strip()
             msg = subprocess.check_output(['git', 'log', '-1', '--format=%s'], cwd=cwd).decode('utf-8').strip()
