@@ -132,16 +132,64 @@ Dynamixel 직렬 통신과 MIDI 장치를 사용하는 계정에는 필요한 �
 sudo usermod -aG dialout,audio "$USER"
 ```
 
+## 1-1. Ubuntu 원격 접속 (GNOME RDP) 설정
+
+여러 대의 PC에 RDP 접속 환경을 일관되게 구성하려면 xrdp 대신 Ubuntu 기본 GNOME RDP를 사용합니다.
+
+1. **자동 로그인 켜기**: `설정 → 사용자`에서 Automatic Login: ON
+2. **화면 잠금 끄기**: `설정 → Privacy → Screen Lock`에서 Automatic Screen Lock: OFF, Suspend 후 화면 잠금: OFF
+3. **절전 모드 끄기**: `설정 → Power`에서 Screen Blank: Never, Automatic Suspend: Off
+4. **원격 데스크톱 켜기**: `설정 → Sharing → Remote Desktop`에서 Remote Desktop: ON, Remote Control: ON
+5. **Keyring 암호 해제**: `seahorse` 실행 → Default keyring 자체의 Change Password 실행 → 기존 암호 입력 후 새 암호는 빈칸으로 저장 (경고 허용)
+
+**부팅 시 RDP 자동 실행 서비스 등록**
+
+```bash
+mkdir -p ~/.local/bin ~/.config/systemd/user
+
+# 1. RDP 자격증명 스크립트 생성 (<사용자명>과 <RDP비밀번호> 변경)
+cat << 'EOF' > ~/.local/bin/setup-rdp-after-login.sh
+#!/bin/bash
+sleep 5
+/usr/bin/grdctl rdp set-credentials <사용자명> '<RDP비밀번호>'
+/usr/bin/grdctl rdp enable
+/bin/systemctl --user restart gnome-remote-desktop.service
+EOF
+chmod 700 ~/.local/bin/setup-rdp-after-login.sh
+
+# 2. 사용자 Systemd 서비스 등록
+cat << 'EOF' > ~/.config/systemd/user/rdp-after-login.service
+[Unit]
+Description=Configure GNOME RDP after automatic login
+After=gnome-remote-desktop.service
+Wants=gnome-remote-desktop.service
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/setup-rdp-after-login.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=default.target
+EOF
+
+# 3. 서비스 활성화
+systemctl --user daemon-reload
+systemctl --user enable rdp-after-login.service
+```
+
+설정 후 재부팅하면 사용자 조작 없이 백그라운드에서 GNOME RDP가 자동 실행됩니다.
+
 ## 2. EtherLab/IgH EtherCAT 준비
 
 EtherLab은 Git 작업공간에 포함되지 않으며 PC마다 별도로 설치합니다. 현재
 검증 버전은 1.6.9입니다.
 
-먼저 EtherCAT 전용 NIC 이름과 커널 드라이버를 확인합니다.
+먼저 EtherCAT 전용 랜카드의 **MAC 주소**와 커널 드라이버를 확인합니다. (랜카드 이름이 enp2s0 등에서 재부팅 시 변경될 수 있으므로, 설정 파일에는 반드시 고유한 MAC 주소를 사용하는 것이 안전합니다.)
 
 ```bash
 ip -br link
-ethtool -i <EtherCAT-NIC>
+ethtool -i <EtherCAT-NIC-이름>
 ```
 
 EtherLab 소스 빌드에는 다음 도구가 필요합니다.
@@ -153,19 +201,26 @@ git clone https://gitlab.com/etherlab.org/ethercat.git
 
 빌드할 때는 해당 PC에서 확인한 NIC 드라이버에 맞는 EtherLab 1.6 계열 커널
 모듈을 활성화해야 합니다. 자세한 빌드 옵션은
-[`EtherCAT 설치 문서`](src/motion_system/lib/motor_manager/communications/ethercat/README.md)를
+[EtherCAT 설치 문서(서브모듈 링크)](https://github.com/kimjoonho-git/motion_system_ros2/blob/main/lib/motor_manager/communications/ethercat/README.md)를
 따릅니다.
 
-`/etc/ethercat.conf`의 장치 이름은 예시를 그대로 복사하지 말고 새 PC에서
-확인한 값으로 지정합니다.
+`/etc/ethercat.conf` 설정 시, 장치 이름(enp~ 등) 대신 **위에서 확인한 MAC 주소**를 기입해야 재부팅 시 꼬임 현상을 방지할 수 있습니다.
 
 ```text
-MASTER0_DEVICE="<EtherCAT-NIC>"
+MASTER0_DEVICE="<랜카드의 MAC 주소 예: 00:11:22:33:44:55>"
 DEVICE_MODULES="<generic 또는 해당 EtherCAT 드라이버>"
-UPDOWN_INTERFACES="<EtherCAT-NIC>"
+UPDOWN_INTERFACES="<EtherCAT-NIC-이름>"
 ```
 
-설치·설정 후 확인:
+일반 계정(`ros2` 등)에서 `sudo` 없이 모터에 접근하려면 udev 권한 설정이 필수입니다. 다음 명령어로 권한을 추가합니다.
+
+```bash
+echo 'KERNEL=="EtherCAT[0-9]*", MODE="0666"' | sudo tee /etc/udev/rules.d/99-ethercat.rules
+sudo udevadm control --reload-rules
+sudo udevadm trigger
+```
+
+설치·설정 후 서비스 시작 및 확인:
 
 ```bash
 sudo systemctl enable --now ethercat
@@ -175,7 +230,7 @@ ethercat slaves
 ```
 
 `ethercat slaves`의 실제 장치 표시는 서보 전원, 배선과 Slave 연결 상태에
-따라 달라집니다. 일반 LAN과 EtherCAT에는 서로 다른 NIC를 사용합니다.
+따라 달라집니다. 일반 LAN과 EtherCAT에는 절대로 동일한 랜카드를 혼용하지 마십시오.
 
 ## 3. 전체 소스 설치
 
