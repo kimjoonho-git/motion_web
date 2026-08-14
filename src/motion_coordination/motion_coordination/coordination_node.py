@@ -1717,6 +1717,8 @@ class MotionCoordinationNode(Node):
         with self._lock:
             if not self._execution.execution_id:
                 return
+            if self._execution.state in {'stopped', 'error', 'releasing'}:
+                return
             missing = [
                 pc_id for pc_id in self._execution.participants
                 if pc_id != self._config.pc_id

@@ -224,6 +224,47 @@ export function createCoordinationController({ el }) {
     if (el.coordinationDwellSec) el.coordinationDwellSec.disabled = loading || active;
     if (el.coordinationStopAfterButton) el.coordinationStopAfterButton.disabled = loading || !active;
     if (el.coordinationStopNowButton) el.coordinationStopNowButton.disabled = loading || !active;
+    
+    if (el.coordinationTargetStopButton && el.coordinationTargetStopCycle) {
+      el.coordinationTargetStopButton.disabled = loading || !active;
+      const target = parseInt(el.coordinationTargetStopCycle.value, 10);
+      if (!isNaN(target) && target > 0) {
+        let maxMotion = 0;
+        peers.forEach((p) => {
+          if (p.motion_duration_sec > maxMotion) maxMotion = p.motion_duration_sec;
+        });
+        if (maxMotion === 0) maxMotion = 1.0;
+        
+        const currentCycle = execution.cycle_number || 0;
+        const remaining = Math.max(0, target - currentCycle);
+        
+        let sec = remaining * maxMotion;
+        if (['idle', 'preparing', 'initializing'].includes(execution.state)) {
+          sec += 5.0; // 예상 초기화 대기 시간 추가
+        }
+        
+        const h = Math.floor(sec / 3600);
+        const m = Math.floor((sec % 3600) / 60);
+        const s = Math.floor(sec % 60);
+        let timeStr = '';
+        if (h > 0) timeStr += `${h}시간 `;
+        if (m > 0 || h > 0) timeStr += `${m}분 `;
+        timeStr += `${s}초`;
+        
+        if (el.coordinationTargetStopEstimate) {
+          el.coordinationTargetStopEstimate.textContent = remaining > 0 ? `예상 남은 시간: 약 ${timeStr}` : '목표 회차 도달됨';
+        }
+        
+        if (currentCycle >= target && active && execution.stop_after_cycle !== true && !loading) {
+          el.coordinationTargetStopCycle.value = '';
+          if (el.coordinationTargetStopEstimate) el.coordinationTargetStopEstimate.textContent = '지정 회차 도달: 정지 명령 전송됨';
+          control('stop_after_cycle');
+        }
+      } else if (el.coordinationTargetStopEstimate) {
+        el.coordinationTargetStopEstimate.textContent = '';
+      }
+    }
+
     if (el.coordinationAcknowledgeErrorButton) el.coordinationAcknowledgeErrorButton.disabled = loading || !groupErrorActive;
     if (el.coordinationErrorSummary) {
       const code = coordinationError.code || '';
@@ -243,12 +284,17 @@ export function createCoordinationController({ el }) {
         const pc = coordinationError.pc_id ? `\n발생 PC: ${coordinationError.pc_id}` : '';
         const cycle = Number(execution.cycle_number || 0);
         const cycleText = cycle > 0 ? `\n회차: ${cycle}회차` : '';
+        const isDisconnect = coordinationError.code === 'GROUP_PARTICIPANT_DISCONNECTED';
+        const messageBody = isDisconnect
+          ? `${failure}${pc}${cycleText}\n\n다른 PC의 통신이 끊어져 안전을 위해 주행을 일시 정지했습니다.\n(PC 재부팅 또는 네트워크 확인 필요)`
+          : `${failure}${pc}${cycleText}\n\n그룹 오류를 확인하고 원인을 해소한 뒤 다시 실행하세요.`;
+          
         queueMicrotask(() => showAlert(
-          `${failure}${pc}${cycleText}\n\n그룹 오류를 확인하고 원인을 해소한 뒤 다시 실행하세요.`,
+          messageBody,
           {
-            title: `${coordinationError.code || '그룹 모션'} 정지`,
+            title: isDisconnect ? '그룹 통신 지연 안전 정지' : `${coordinationError.code || '그룹 모션'} 정지`,
             confirmLabel: '확인',
-            tone: 'danger',
+            tone: isDisconnect ? 'warning' : 'danger',
           },
         ));
       }
@@ -410,8 +456,22 @@ export function createCoordinationController({ el }) {
     el.coordinationInitializeButton?.addEventListener('click', initializeGroup);
     el.coordinationStartButton?.addEventListener('click', () => control('start_group', groupRunOptions('once')));
     el.coordinationContinuousStartButton?.addEventListener('click', () => control('start_group', groupRunOptions('continuous')));
-    el.coordinationStopAfterButton?.addEventListener('click', () => control('stop_after_cycle'));
+    el.coordinationStopAfterButton?.addEventListener('click', () => {
+      const state = snapshot?.execution?.state;
+      if (['preparing', 'initializing', 'armed', 'start_scheduled'].includes(state)) {
+        control('stop_now');
+      } else {
+        control('stop_after_cycle');
+      }
+    });
     el.coordinationStopNowButton?.addEventListener('click', () => control('stop_now'));
+    
+    el.coordinationTargetStopButton?.addEventListener('click', () => {
+      if (el.coordinationTargetStopCycle && el.coordinationTargetStopCycle.value) {
+        showAlert(`목표 회차(${el.coordinationTargetStopCycle.value}회)가 설정되었습니다. 해당 회차 도달 시 자동으로 '현재 회차 후 정지'가 전송됩니다.`, {title: '지정 회차 정지 예약', tone: 'info'});
+      }
+    });
+
     el.coordinationAcknowledgeErrorButton?.addEventListener('click', () => control('acknowledge_group_error'));
     [el.coordinationDisplayName, el.coordinationGroupId, el.coordinationDomainId, el.coordinationEnabled, el.coordinationIsMaster, el.coordinationRequiredPeers]
       .forEach((field) => field?.addEventListener('input', () => { formDirty = true; }));
