@@ -185,12 +185,20 @@ systemctl --user enable rdp-after-login.service
 EtherLab은 Git 작업공간에 포함되지 않으며 PC마다 별도로 설치합니다. 현재
 검증 버전은 1.6.9입니다.
 
-먼저 EtherCAT 전용 랜카드의 **MAC 주소**와 커널 드라이버를 확인합니다. (랜카드 이름이 enp2s0 등에서 재부팅 시 변경될 수 있으므로, 설정 파일에는 반드시 고유한 MAC 주소를 사용하는 것이 안전합니다.)
+먼저 EtherCAT 전용 랜카드의 **MAC 주소**와 커널 드라이버를 확인해야 합니다. (랜카드 이름은 재부팅 시 수시로 변경될 수 있으므로, 설정 파일에는 반드시 고유한 MAC 주소를 사용하는 것이 꼬임 방지에 필수적입니다.)
 
+**1. 랜카드 이름 및 MAC 주소 찾기**
 ```bash
 ip -br link
-ethtool -i <EtherCAT-NIC-이름>
 ```
+*(출력 예시: `enp2s0    UP    00:11:22:33:44:55 ...` 에서 3번째 항목인 `00:11:22:33:44:55`가 MAC 주소입니다)*
+
+**2. 커널 드라이버 이름 찾기**
+```bash
+# 위에서 찾은 랜카드 이름(예: enp2s0)을 대입합니다.
+ethtool -i enp2s0
+```
+*(출력 중 `driver: r8169` 또는 `driver: e1000e`, `driver: igc` 등의 값을 확인합니다)*
 
 EtherLab 소스 빌드에는 다음 도구가 필요합니다.
 
@@ -199,10 +207,23 @@ sudo apt install -y autoconf automake libtool pkg-config build-essential git
 git clone https://gitlab.com/etherlab.org/ethercat.git
 ```
 
-빌드할 때는 해당 PC에서 확인한 NIC 드라이버에 맞는 EtherLab 1.6 계열 커널
-모듈을 활성화해야 합니다. 자세한 빌드 옵션은
-[EtherCAT 설치 문서(서브모듈 링크)](https://github.com/kimjoonho-git/motion_system_ros2/blob/main/lib/motor_manager/communications/ethercat/README.md)를
-따릅니다.
+빌드할 때는 해당 PC에서 확인한 커널 드라이버에 맞춰 모듈을 활성화해야 합니다. (상세 원본 문서는 로컬의 [`EtherCAT 설치 문서`](src/motion_system/lib/motor_manager/communications/ethercat/README.md) 파일을 직접 열어보시거나, [웹 링크](https://github.com/SeonilChoi/motor_manager/blob/main/communications/ethercat/README.md)를 참조하세요.)
+**빠른 한글 요약 빌드 과정**은 다음과 같습니다.
+
+```bash
+cd ethercat
+./bootstrap
+
+# 위에서 확인한 드라이버가 r8169 인 경우 (해당 드라이버만 yes로 변경):
+./configure --disable-8139too --enable-generic=no --enable-r8169=yes
+
+# 만약 전용 드라이버 빌드가 실패하거나 호환되지 않을 경우 범용(generic) 모드로 빌드:
+# ./configure --disable-8139too --enable-generic=yes
+
+make all modules
+sudo make modules_install install
+sudo depmod
+```
 
 `/etc/ethercat.conf` 설정 시, 장치 이름(enp~ 등) 대신 **위에서 확인한 MAC 주소**를 기입해야 재부팅 시 꼬임 현상을 방지할 수 있습니다.
 
