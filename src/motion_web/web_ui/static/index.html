@@ -1260,7 +1260,7 @@
                       <select id="motionAutomationRepeatMode" class="compact-select" disabled>
                         <option value="direct">바로 다음 모션</option>
                         <option value="dwell">대기 후 다음 모션</option>
-                        <option value="reinitialize">초기 위치 이동 후 다음</option>
+                        <option value="reinitialize" selected>초기 위치 이동 후 다음</option>
                         <option value="dwell_reinitialize">대기 후 초기위치 → 다음</option>
                       </select>
                     </label>
@@ -1272,10 +1272,8 @@
                     <button id="motionRunCheckButton" type="button">실행 준비 검사</button>
                     <button id="motionRunInitializeButton" type="button" disabled>초기 위치 이동</button>
                     <button id="motionRunStartButton" class="primary" type="button" disabled>1회 시작</button>
-                    <!-- Hide legacy continuous run, use automation start as the real continuous start -->
-                    <button id="motionRunContinuousStartButton" type="button" style="display:none;" disabled>연속 시작 (구형)</button>
-                    <button id="motionAutomationStartButton" class="primary" type="button" disabled>연속 시작</button>
-                    <!-- Keep reserve button hidden to avoid breaking JS, functionality is handled by the checkbox -->
+                    <button id="motionRunContinuousStartButton" class="primary" type="button" disabled>연속 시작</button>
+                    <button id="motionAutomationStartButton" type="button" style="display:none;" disabled>자동 반복 예약 (숨김)</button>
                     <button id="motionAutomationReserveButton" type="button" style="display:none;" disabled>부팅 시 예약</button>
                   </div>
                 </div>

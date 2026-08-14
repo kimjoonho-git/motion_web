@@ -217,9 +217,27 @@ export function createCoordinationController({ el }) {
     }
     const releasePending = Boolean(execution.execution_id);
     const startDisabled = loading || !joined || active || releasePending || peers.length < 1 || unhealthyPeer || groupErrorActive;
+
+    let continuousUnavailable = false;
+    let continuousReason = '';
+    const globalState = typeof getLatestState === 'function' ? getLatestState() : null;
+    const continuousCapability = globalState?.motion_run_status?.capabilities?.continuous_run;
+    if (continuousCapability && continuousCapability.available === false) {
+      const repeatMode = String(el.coordinationRepeatMode?.value || 'reinitialize');
+      if (repeatMode !== 'reinitialize' && repeatMode !== 'dwell_reinitialize') {
+        continuousUnavailable = true;
+        continuousReason = continuousCapability.reason || '단차 5도 초과';
+      }
+    }
+
     if (el.coordinationInitializeButton) el.coordinationInitializeButton.disabled = startDisabled;
     if (el.coordinationStartButton) el.coordinationStartButton.disabled = startDisabled;
-    if (el.coordinationContinuousStartButton) el.coordinationContinuousStartButton.disabled = startDisabled;
+    if (el.coordinationContinuousStartButton) {
+      el.coordinationContinuousStartButton.disabled = startDisabled || continuousUnavailable;
+      el.coordinationContinuousStartButton.title = continuousUnavailable 
+        ? `연속 모션 불가: ${continuousReason}` 
+        : '';
+    }
     if (el.coordinationRepeatMode) el.coordinationRepeatMode.disabled = loading || active;
     if (el.coordinationDwellSec) el.coordinationDwellSec.disabled = loading || active;
     if (el.coordinationStopAfterButton) el.coordinationStopAfterButton.disabled = loading || !active;

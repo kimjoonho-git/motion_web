@@ -16,7 +16,7 @@ echo "========================================="
 echo "2. ROS 2 패키지 자동 빌드 중... ($WORKSPACE_DIR)"
 echo "========================================="
 cd "$WORKSPACE_DIR" || exit
-colcon build --packages-select motion_web_ui motion_web_bridge motion_coordination motion_control_studio
+colcon build --packages-select motion_web_ui motion_web_bridge motion_coordination motion_runtime
 
 echo ""
 echo "========================================="

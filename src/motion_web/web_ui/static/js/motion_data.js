@@ -831,11 +831,15 @@ export function createMotionDataController({
 
   function motionRunPayload() {
     const initialMoveTimeSec = motionRunInitialMoveTimeSec();
+    const repeatMode = String(el.motionAutomationRepeatMode?.value || 'reinitialize');
+    const dwellSec = Number(el.motionAutomationDwellSec?.value);
     return {
       motion_file_id: registeredMotionFileId({ motion_file_id: registeredMotionFileIdValue }),
       mapping_file_id: selectedMappingId || '',
       initial_move_time_sec: initialMoveTimeSec,
       run_mode: 'once',
+      repeat_mode: repeatMode,
+      dwell_sec: Number.isFinite(dwellSec) ? dwellSec : 0.0,
     };
   }
 
@@ -1222,11 +1226,20 @@ export function createMotionDataController({
     const progress = motionRunEffectiveProgress(status);
     const capabilities = status.capabilities || {};
     const warnings = Array.isArray(status.warnings) ? status.warnings : [];
+    const ratio = Number(progress.ratio);
+    const repeatMode = String(el.motionAutomationRepeatMode?.value || 'reinitialize');
+    const continuousText = (() => {
+      const cap = capabilities.continuous_run;
+      if (!cap || typeof cap.available !== 'boolean') return '검사 전';
+      if (cap.available === false && (repeatMode === 'reinitialize' || repeatMode === 'dwell_reinitialize')) {
+        return '가능 — 초기 위치 이동 설정으로 안전 가드 통과';
+      }
+      return `${cap.available ? '가능' : '불가'} — ${cap.reason || '-'}`;
+    })();
     const capabilityText = (capability) => {
       if (!capability || typeof capability.available !== 'boolean') return '검사 전';
       return `${capability.available ? '가능' : '불가'} — ${capability.reason || '-'}`;
     };
-    const ratio = Number(progress.ratio);
     el.motionRunStatus.innerHTML = `
       <table class="motion-state-table motion-run-status-table">
         <tbody>
@@ -1240,7 +1253,7 @@ export function createMotionDataController({
           </tr>
           <tr><th>초기 위치</th><td colspan="3">${displayText(capabilityText(capabilities.initial_position))}</td></tr>
           <tr><th>1회 모션</th><td colspan="3">${displayText(capabilityText(capabilities.single_run))}</td></tr>
-          <tr><th>연속 모션</th><td colspan="3">${displayText(capabilityText(capabilities.continuous_run))}</td></tr>
+          <tr><th>연속 모션</th><td colspan="3">${displayText(continuousText)}</td></tr>
           <tr><th>범위 제한</th><td colspan="3">${displayText(warnings.length ? warnings.join(' / ') : '제한 적용 없음')}</td></tr>
           <tr><th>메시지</th><td colspan="3">${displayText(status.message || '-')}</td></tr>
           <tr><th>갱신</th><td colspan="3">${displayText(timeText(status.updated_at))}</td></tr>
@@ -1311,20 +1324,16 @@ export function createMotionDataController({
       el.motionAutomationEnabled.disabled = motionRunLoading;
     }
     if (el.motionAutomationRepeatMode) {
-      if (document.activeElement !== el.motionAutomationRepeatMode) {
+      if (enabled) {
         el.motionAutomationRepeatMode.value = repeatMode;
       }
-      el.motionAutomationRepeatMode.disabled = !enabled || busy;
+      el.motionAutomationRepeatMode.disabled = busy;
     }
-    const showDwell = repeatMode === 'dwell' || repeatMode === 'dwell_reinitialize';
+    const currentRepeatMode = el.motionAutomationRepeatMode?.value || repeatMode;
+    const showDwell = currentRepeatMode === 'dwell' || currentRepeatMode === 'dwell_reinitialize';
     el.motionAutomationDwellWrap?.classList.toggle('hidden', !showDwell);
     if (el.motionAutomationDwellSec) {
-      if (document.activeElement !== el.motionAutomationDwellSec) {
-        el.motionAutomationDwellSec.value = String(
-          Number.isFinite(dwellSec) ? dwellSec : 0,
-        );
-      }
-      el.motionAutomationDwellSec.disabled = !enabled || busy;
+      el.motionAutomationDwellSec.disabled = busy;
     }
     if (el.motionAutomationStartButton) {
       el.motionAutomationStartButton.disabled = (
@@ -1409,7 +1418,12 @@ export function createMotionDataController({
     const continuousCapability = statusMatchesFiles
       ? status.capabilities?.continuous_run
       : null;
-    const continuousUnavailable = continuousCapability?.available === false;
+    const continuousUnavailable = (() => {
+      if (continuousCapability?.available !== false) return false;
+      const repeatMode = String(el.motionAutomationRepeatMode?.value || 'reinitialize');
+      if (repeatMode === 'reinitialize' || repeatMode === 'dwell_reinitialize') return false;
+      return true;
+    })();
     if (el.motionRunCheckButton) {
       el.motionRunCheckButton.disabled = motionRunLoading || !contextReady || !hasRequiredFiles || running;
       el.motionRunCheckButton.title = contextReady ? '' : contextMessage;
@@ -2971,10 +2985,14 @@ export function createMotionDataController({
     });
     el.motionAutomationRepeatMode?.addEventListener('change', () => {
       renderMotionAutomation();
-      void saveMotionAutomation(true);
+      if (el.motionAutomationEnabled?.checked) {
+        void saveMotionAutomation(true);
+      }
     });
     el.motionAutomationDwellSec?.addEventListener('change', () => {
-      void saveMotionAutomation(true);
+      if (el.motionAutomationEnabled?.checked) {
+        void saveMotionAutomation(true);
+      }
     });
     el.motionAutomationStartButton?.addEventListener(
       'click',

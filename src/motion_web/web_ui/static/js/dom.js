@@ -293,6 +293,7 @@ export function getElements() {
     motionRunCheckButton: document.getElementById('motionRunCheckButton'),
     motionRunInitializeButton: document.getElementById('motionRunInitializeButton'),
     motionRunStartButton: document.getElementById('motionRunStartButton'),
+    motionRunContinuousStartButton: document.getElementById('motionRunContinuousStartButton'),
     motionRunStopButton: document.getElementById('motionRunStopButton'),
     motionRunStopAfterButton: document.getElementById('motionRunStopAfterButton'),
     motionRunRefreshButton: document.getElementById('motionRunRefreshButton'),

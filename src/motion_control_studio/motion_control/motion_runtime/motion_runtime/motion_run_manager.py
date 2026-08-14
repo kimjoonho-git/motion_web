@@ -1517,7 +1517,7 @@ class MotionRunManager(Node):
 
     def _handle_stop(self) -> Dict[str, Any]:
         current = self.status()
-        if current.get('automation_run'):
+        if current.get('automation_run') or current.get('automation', {}).get('armed'):
             try:
                 self._save_automation(
                     {
@@ -1586,10 +1586,14 @@ class MotionRunManager(Node):
                 'message': '현재 그룹 모션 회차 완료 후 정지 요청',
                 'status': self.status(),
             }
-        if not int(current.get('synchronized_repeat_count') or 0):
+        is_sync_repeat = bool(int(current.get('synchronized_repeat_count') or 0))
+        is_continuous = current.get('run_mode') == 'continuous'
+        is_automation = bool(current.get('automation_run'))
+
+        if not (is_sync_repeat or is_continuous or is_automation):
             return {
                 'success': False,
-                'message': '동기 반복 실행 중일 때만 현재 회차 후 정지를 사용할 수 있습니다',
+                'message': '반복 모션 실행 중일 때만 현재 회차 후 정지를 사용할 수 있습니다',
                 'status': current,
             }
         self._graceful_stop_event.set()
@@ -1925,12 +1929,12 @@ class MotionRunManager(Node):
                         state='error',
                     )
                     return
-                if automation_run and self._graceful_stop_event.is_set():
+                if self._graceful_stop_event.is_set():
                     self._finish_cycle_stop(
                         plan,
                         motion_started_at,
                         cycle_count,
-                        '현재 모션 회차 완료 후 자동 반복 정지',
+                        '현재 모션 회차 완료 후 정지',
                     )
                     return
                 if repeat_mode in {'dwell', 'dwell_reinitialize'} and dwell_sec > 0.0:
@@ -1952,12 +1956,12 @@ class MotionRunManager(Node):
                             self.status().get('message')
                             or '반복 초기위치 이동 실패'
                         )
-                    if automation_run and self._graceful_stop_event.is_set():
+                    if self._graceful_stop_event.is_set():
                         self._finish_cycle_stop(
                             plan,
                             motion_started_at,
                             cycle_count,
-                            '반복 초기위치 이동 완료 후 자동 반복 정지',
+                            '반복 초기위치 이동 완료 후 정지',
                         )
                         return
                     self._require_playback_command_allowed()
@@ -2434,7 +2438,7 @@ class MotionRunManager(Node):
         if operation_generation < 0:
             raise ValueError('작업 세대 값은 0 이상이어야 합니다')
         group_execution = bool(payload.get('group_execution'))
-        if not automation_run and not group_execution:
+        if not automation_run and not group_execution and run_mode != 'continuous':
             repeat_mode = 'direct'
             dwell_sec = 0.0
         motion_file_id = str(payload.get('motion_file_id') or '').strip()
