@@ -39,7 +39,7 @@ import {
 } from './workspace_navigation.js?v=20260729-motion-files-execution-1';
 import { installFeedbackPresentation } from './ui_feedback.js?v=20260724-ui-finish-1';
 import { createServoAlarmController } from './servo_alarm.js?v=20260728-servo-alarm-2';
-import { createCoordinationController } from './coordination.js?v=20260813-git-monitor-1';
+import { createCoordinationController } from './coordination.js?v=20260818-roster-remove-1';
 
 const el = getElements();
 const operationProgress = createOperationProgressManager({ el });
