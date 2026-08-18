@@ -1872,7 +1872,12 @@ class MotionCoordinationNode(Node):
             raise ValueError('그룹 정지 요청에 이 PC가 포함되어 있지 않습니다')
         if message.coordinator_id not in participants:
             raise ValueError('그룹 정지 요청 발신 PC가 참가 목록에 없습니다')
+        if not message.execution_id:
+            return
         if self._stop_command_matches(message.execution_id, participants):
+            return
+        # Allow stopping if the master explicitly targets this PC, even if participants list changed
+        if message.execution_id == self._execution.execution_id:
             return
         raise ValueError('그룹 정지 요청의 실행 ID·참가 목록이 일치하지 않습니다')
 

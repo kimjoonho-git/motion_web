@@ -80,12 +80,8 @@ sync_git_repository() {
     git -C "${WORKSPACE_DIR}" status --short
     return 0
   fi
-  if ! git -C "${WORKSPACE_DIR}" pull --recurse-submodules --ff-only; then
-    echo "경고: Git pull 실패 (무시하고 진행)" >&2
-  fi
-  if ! git -C "${WORKSPACE_DIR}" submodule update --init --recursive; then
-    echo "경고: 하위 모듈(Submodule) 동기화 실패 (무시하고 진행)" >&2
-  fi
+  git -C "${WORKSPACE_DIR}" pull --recurse-submodules --ff-only
+  git -C "${WORKSPACE_DIR}" submodule update --init --recursive
 }
 
 configure_locale_and_groups() {
