@@ -2222,8 +2222,8 @@ def test_user_can_request_managed_program_restart_from_web(monkeypatch):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge._motion_run_lock = threading.Lock()
     bridge._motion_studio_lock = threading.Lock()
-    bridge._motion_run_status = {'state': 'idle'}
-    bridge._motion_studio_status = {'state': 'idle'}
+    bridge._motion_run_status = {'state': 'stopping'}
+    bridge._motion_studio_status = {'state': 'stopping'}
     bridge.snapshot = lambda: {}
     commands = []
     monkeypatch.setenv('MOTION_CONTROL_SERVICE_UNIT', 'motion-control.service')
@@ -2241,6 +2241,8 @@ def test_user_can_request_managed_program_restart_from_web(monkeypatch):
         'motion-control.service',
         'motion-coordination.service',
     ]
+    assert bridge._motion_run_status['state'] == 'stopped'
+    assert bridge._motion_studio_status['state'] == 'idle'
 
 
 def test_program_restart_button_requires_installed_service(monkeypatch):
@@ -2366,6 +2368,10 @@ def test_motor_restart_worker_records_new_service_generation_before_verifying(
 
 def test_motor_control_restart_rejects_project_without_applied_motor_config(monkeypatch):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_run_lock = threading.Lock()
+    bridge._motion_studio_lock = threading.Lock()
+    bridge._motion_run_status = {'state': 'stopping'}
+    bridge._motion_studio_status = {'state': 'stopping'}
     bridge.snapshot = lambda: {}
     bridge.project_repository = type(
         'Repository',
@@ -2384,6 +2390,8 @@ def test_motor_control_restart_rejects_project_without_applied_motor_config(monk
     assert result['success'] is False
     assert '설정 적용·재시작' in result['message']
     assert commands == []
+    assert bridge._motion_run_status['state'] == 'stopped'
+    assert bridge._motion_studio_status['state'] == 'idle'
 
 
 @pytest.mark.parametrize(

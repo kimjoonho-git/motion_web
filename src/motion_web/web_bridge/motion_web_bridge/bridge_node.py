@@ -4762,16 +4762,19 @@ class MotionWebBridge(Node):
 
     def restart_managed_program(self) -> Dict[str, Any]:
         """Restart only upper-level nodes while Motor Manager keeps running."""
+        self._clear_stopping_project_release_state()
         managed_service = str(
             os.environ.get('MOTION_CONTROL_SERVICE_UNIT') or ''
         ).strip()
         if managed_service != 'motion-control.service':
+            self._clear_stopping_project_release_state()
             return {
                 'success': False,
                 'message': '자동실행 서비스가 설치되지 않았습니다. 최초 설치를 먼저 완료하세요',
                 **self.snapshot(),
             }
         if os.environ.get('MOTION_MOTOR_SERVICE_UNIT') != 'motion-motor.service':
+            self._clear_stopping_project_release_state()
             return {
                 'success': False,
                 'message': (
@@ -4790,6 +4793,7 @@ class MotionWebBridge(Node):
         try:
             self._schedule_managed_service_restart(*restart_services)
         except OSError as exc:
+            self._clear_stopping_project_release_state()
             return {
                 'success': False,
                 'message': f'프로그램 재시작 요청에 실패했습니다: {exc}',
@@ -4929,10 +4933,12 @@ class MotionWebBridge(Node):
 
     def restart_motor_control_system(self) -> Dict[str, Any]:
         """Restart the persistent Motor Manager only after explicit confirmation."""
+        self._clear_stopping_project_release_state()
         motor_service = str(
             os.environ.get('MOTION_MOTOR_SERVICE_UNIT') or ''
         ).strip()
         if motor_service != 'motion-motor.service':
+            self._clear_stopping_project_release_state()
             return {
                 'success': False,
                 'message': (
@@ -4943,6 +4949,7 @@ class MotionWebBridge(Node):
             }
         runtime_config = self.project_repository.selected_runtime_motor_config()
         if runtime_config is None:
+            self._clear_stopping_project_release_state()
             return {
                 'success': False,
                 'message': (
@@ -4953,6 +4960,7 @@ class MotionWebBridge(Node):
             }
         expected_axes = self._configured_axes_from_runtime_file(runtime_config)
         if not expected_axes:
+            self._clear_stopping_project_release_state()
             return {
                 'success': False,
                 'message': '현재 모터 실행 설정에서 대상 축을 확인할 수 없습니다',
@@ -4964,6 +4972,7 @@ class MotionWebBridge(Node):
             lifecycle_lock = threading.Lock()
             self._motor_lifecycle_lock = lifecycle_lock
         if not lifecycle_lock.acquire(blocking=False):
+            self._clear_stopping_project_release_state()
             return {
                 'success': False,
                 'message': '다른 모터 설정·검색·재시작 작업이 진행 중입니다',
