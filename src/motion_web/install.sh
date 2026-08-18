@@ -101,6 +101,7 @@ build_workspace() {
   # shellcheck disable=SC1091
   source /opt/ros/humble/setup.bash
   rosdep install --from-paths "${WORKSPACE_DIR}/src" --ignore-src -r -y
+  rm -rf "${WORKSPACE_DIR}/build/motion_web_ui" "${WORKSPACE_DIR}/install/motion_web_ui"
   colcon build --symlink-install --base-paths "${WORKSPACE_DIR}/src"
   if command -v ros2 >/dev/null 2>&1; then
     ros2 daemon stop || true
