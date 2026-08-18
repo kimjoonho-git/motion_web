@@ -4745,6 +4745,7 @@ class MotionWebBridge(Node):
                 environment = dict(os.environ)
                 environment['MOTOR_CONFIG_FILE'] = str(runtime_file)
                 environment['MOTION_WORKSPACE'] = str(self.workspace_root)
+                environment['START_MOTOR_MANAGER'] = 'true'
                 subprocess.Popen(
                     ['/bin/bash', str(self.restart_script)],
                     cwd=str(self.restart_script.parent.parent),

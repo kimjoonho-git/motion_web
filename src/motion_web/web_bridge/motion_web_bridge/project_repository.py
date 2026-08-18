@@ -1922,6 +1922,13 @@ class ProjectRepository:
             or not manifest_path.is_file()
         ):
             raise ValueError(f'프로젝트를 찾을 수 없습니다: {name}')
+            
+        for category in PROJECT_CATEGORIES:
+            (path / category).mkdir(exist_ok=True)
+        (path / 'logs').mkdir(exist_ok=True)
+        (path / 'runtime').mkdir(exist_ok=True)
+        (path / 'trash').mkdir(exist_ok=True)
+            
         return path
 
     def _read_manifest(self, project_dir: Path) -> Dict[str, Any]:
