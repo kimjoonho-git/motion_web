@@ -109,12 +109,15 @@ bash src/motion_web/install.sh
 설치 스크립트가 처리하는 항목:
 
 - ROS 2 Humble 저장소 등록
+- Git 최신 코드 수신
 - 필수 프로그램 설치
 - 사용자 권한 설정
 - rosdep 설치·갱신
 - 전체 colcon 빌드
 - 자동실행 서비스 등록
 - 실시간 우선순위 권한 설정 확인
+- ROS 2 daemon 초기화
+- 서비스 적용
 
 `실시간 우선순위 권한 설정 필요` 또는 `재부팅 후 다시 실행` 안내가 나오면 재부팅합니다.
 
@@ -437,51 +440,40 @@ source install/setup.bash
 
 ### 4-2. 코드 갱신 (이미 설치된 PC)
 
-이미 설치된 다른 PC는 먼저 사용자가 직접 Git 변경분을 받은 뒤 업데이트
-스크립트를 실행합니다. 이 스크립트는 자동 `git pull`을 하지 않습니다.
+이미 설치된 PC도 설치 때와 같은 명령 하나만 사용합니다.
 
 ```bash
 cd ~/ros2_ws
-git fetch origin
-git checkout main
-git pull origin main
-git submodule update --init --recursive
-```
-
-Git 수신이 끝나면 다음 스크립트 하나로 메시지 인터페이스 빌드, 관련 패키지
-빌드, ROS 2 daemon 초기화와 서비스 재시작을 일괄 적용합니다.
-
-```bash
-cd ~/ros2_ws
-./src/motion_web/update.sh
+bash src/motion_web/install.sh
 ```
 
 동작:
 
 ```text
-git status 확인
-motion_coordination_interfaces 빌드
-motion_coordination 빌드
-motion_runtime 빌드
-motion_web_bridge 빌드
-motion_web_ui 빌드
-ros2 daemon stop/start
-motion-coordination.service 재시작
+Git 최신 코드 수신
+서브모듈 갱신
+필수 프로그램 확인
+전체 colcon 빌드
+ROS 2 daemon stop/start
+자동실행 서비스 등록
 motion-control.service 재시작
+motion-coordination.service 재시작
+```
+
+로컬 수정 파일이 있으면 자동 Git 수신만 건너뛰고 나머지 설치·빌드는 계속
+진행합니다. Git 수신을 일부러 막으려면 아래처럼 실행합니다.
+
+```bash
+MOTION_WEB_SKIP_GIT_PULL=1 bash src/motion_web/install.sh
 ```
 
 `GroupCommand` 같은 DDS 메시지 정의가 바뀐 경우에는
-`motion_coordination_interfaces` 빌드와 `ros2 daemon` 초기화가 필수입니다.
-이 단계를 건너뛰면 다른 PC에서 구버전 메시지 클래스를 계속 사용해 PC 연동이
-거부될 수 있습니다.
+통합 설치 스크립트가 메시지 인터페이스 빌드와 `ros2 daemon` 초기화를 함께
+수행합니다.
 
 (기존 `scripts/sync_branch.sh` 스크립트를 통한 특정 브랜치 동기화 기능도 여전히 지원됩니다.)
 
-`motion-motor.service`는 스크립트에서 재시작하지 않습니다. 모터 설정을 바꾼 뒤에는 별도로 재시작합니다.
-
-```bash
-systemctl --user restart motion-motor.service
-```
+`update.sh`는 호환용 별칭입니다. 내부에서 같은 `install.sh`를 실행합니다.
 
 ### 4-3. 커밋·푸시 (개발 PC)
 
@@ -510,8 +502,8 @@ src/motion_system은 명시 요청 없으면 수정하지 마.
 기존 PC 업데이트:
 
 ```text
-README의 코드 갱신 절차대로 main 수동 수신 후 update.sh까지 실행해줘.
-motion_coordination_interfaces 빌드, ros2 daemon 초기화, motion-coordination.service 재시작 여부를 확인해줘.
+README의 코드 갱신 절차대로 bash src/motion_web/install.sh를 실행해줘.
+Git 수신, 전체 빌드, ros2 daemon 초기화, 서비스 재시작 여부를 확인해줘.
 src/motion_system은 명시 요청 없으면 수정하지 마.
 실행 검증과 실물 검증을 구분해서 보고해줘.
 ```
@@ -528,7 +520,8 @@ cd ~/ros2_ws
 bash src/motion_web/install.sh
 ```
 
-서비스만 다시 등록해야 할 때는 아래 명령을 사용합니다.
+서비스만 다시 등록해야 하는 특수 상황에서는 아래 명령을 사용할 수 있습니다.
+일반 사용자는 위 `install.sh` 하나만 사용합니다.
 
 ```bash
 cd ~/ros2_ws

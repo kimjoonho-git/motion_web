@@ -1669,16 +1669,35 @@ def test_motion_web_install_script_runs_full_first_install_flow():
         Path(__file__).resolve().parents[2]
         / 'install.sh'
     ).read_text(encoding='utf-8')
+    updater = (
+        Path(__file__).resolve().parents[2]
+        / 'update.sh'
+    ).read_text(encoding='utf-8')
 
     assert 'require_ubuntu_2204' in installer
+    assert 'sync_git_repository' in installer
+    assert 'git -C "${WORKSPACE_DIR}" pull --recurse-submodules --ff-only' in installer
+    assert 'git -C "${WORKSPACE_DIR}" submodule update --init --recursive' in installer
+    assert 'MOTION_WEB_SKIP_GIT_PULL' in installer
     assert 'ensure_ros_apt_source' in installer
+    assert 'sudo apt install -y curl gnupg lsb-release software-properties-common' in installer
+    assert (
+        installer.index('software-properties-common')
+        < installer.index('sudo add-apt-repository -y universe')
+    )
     assert 'install_system_packages' in installer
     assert 'configure_locale_and_groups' in installer
     assert 'initialize_rosdep' in installer
     assert 'colcon build --symlink-install' in installer
+    assert 'ros2 daemon stop' in installer
+    assert 'ros2 daemon start' in installer
     assert 'install_user_services' in installer
     assert 'web_bridge/deploy/install_user_service.sh' in installer
+    assert 'restart_user_services' in installer
+    assert 'systemctl --user restart motion-control.service' in installer
+    assert 'systemctl --user restart motion-coordination.service' in installer
     assert 'sudo reboot' in installer
+    assert 'exec bash "${SCRIPT_DIR}/install.sh" "$@"' in updater
 
 
 def test_managed_service_restores_last_applied_config_after_project_edit(tmp_path):

@@ -3644,6 +3644,22 @@ class MotionWebBridge(Node):
         }
 
     @staticmethod
+    def _scan_item_has_detected_devices(scan_item: Any) -> bool:
+        if not isinstance(scan_item, dict) or scan_item.get('skipped') is True:
+            return False
+        for key in ('slaves_count', 'devices_count'):
+            try:
+                if int(scan_item.get(key) or 0) > 0:
+                    return True
+            except (TypeError, ValueError):
+                pass
+        for key in ('slaves', 'devices'):
+            value = scan_item.get(key)
+            if isinstance(value, list) and len(value) > 0:
+                return True
+        return False
+
+    @staticmethod
     def _scan_result_message(
         success: bool,
         scan: Any,
@@ -3679,13 +3695,23 @@ class MotionWebBridge(Node):
             isinstance(ethercat_project, dict)
             and ethercat_project.get('compatible') is True
         )
+        project_incompatible = bool(
+            isinstance(ethercat_project, dict)
+            and ethercat_project.get('available') is True
+            and ethercat_project.get('compatible') is not True
+        )
         partial = bool(
             not success
+            and not project_incompatible
             and (
                 project_compatible
                 or (
                     any(item.get('complete') is True for item in requested)
                     and any(item.get('complete') is not True for item in requested)
+                )
+                or any(
+                    MotionWebBridge._scan_item_has_detected_devices(item)
+                    for item in requested
                 )
             )
         )
@@ -3786,17 +3812,29 @@ class MotionWebBridge(Node):
         requested = [item for item in requested if isinstance(item, dict)]
         if not requested:
             return 'success' if fallback_success else 'failure'
-        completed = [item.get('complete') is True for item in requested]
-        if all(completed):
-            return 'success'
-        if any(completed):
-            return 'partial'
         project_comparison = scan.get('project_comparison')
         ethercat_project = (
             project_comparison.get('ethercat_project')
             if isinstance(project_comparison, dict)
             else None
         )
+        if (
+            operation_type in {'full_scan', 'ac_servo_scan'}
+            and isinstance(ethercat_project, dict)
+            and ethercat_project.get('available') is True
+            and ethercat_project.get('compatible') is not True
+        ):
+            return 'failure'
+        completed = [item.get('complete') is True for item in requested]
+        if all(completed):
+            return 'success'
+        if any(completed):
+            return 'partial'
+        if any(
+            MotionWebBridge._scan_item_has_detected_devices(item)
+            for item in requested
+        ):
+            return 'partial'
         if (
             operation_type in {'full_scan', 'ac_servo_scan'}
             and isinstance(ethercat_project, dict)

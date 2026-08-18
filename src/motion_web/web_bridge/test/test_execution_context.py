@@ -886,6 +886,164 @@ def test_scan_result_marks_unused_disconnected_master_as_project_compatible_part
     assert '미사용 Master 1 미연결 허용' in message
 
 
+def test_scan_result_marks_detected_ac_servo_as_partial_without_project_config():
+    scan = {
+        'scan_id': 'first-connect-dual-master',
+        'ethercat_scan': {
+            'available': True,
+            'complete': False,
+            'slaves_count': 1,
+            'masters': [
+                {'master_index': 0, 'complete': True, 'slaves_count': 1},
+                {
+                    'master_index': 1,
+                    'complete': False,
+                    'slaves_count': 0,
+                    'error': '재스캔 후 응답한 Slave가 없습니다',
+                },
+            ],
+            'slaves': [{
+                'master_index': 0,
+                'slave_position': 0,
+                'vendor_id': 0x66F,
+                'product_code': 0x60380004,
+                'serial_number': 402982152,
+                'order_number': 'MADLN05BE',
+                'direct_read_complete': True,
+            }],
+            'error': 'Master 1: 재스캔 후 응답한 Slave가 없습니다',
+        },
+        'dynamixel_scan': {'skipped': True},
+        'scan_errors': [{
+            'transport': 'ethercat',
+            'message': 'Master 1: 재스캔 후 응답한 Slave가 없습니다',
+        }],
+    }
+
+    assert MotionWebBridge._scan_operation_outcome(
+        scan,
+        operation_type='ac_servo_scan',
+        fallback_success=False,
+    ) == 'partial'
+    message = MotionWebBridge._scan_result_message(False, scan, 'raw failure')
+    assert message.startswith('모터 검색 부분 완료')
+    assert 'AC Servo 1축' in message
+    assert 'Master 0 1축 / Master 1 0축' in message
+
+
+def test_scan_result_handles_multiple_ac_servo_masters_as_success():
+    scan = {
+        'scan_id': 'multi-master-ac',
+        'ethercat_scan': {
+            'available': True,
+            'complete': True,
+            'slaves_count': 5,
+            'masters': [
+                {'master_index': 0, 'complete': True, 'slaves_count': 2},
+                {'master_index': 1, 'complete': True, 'slaves_count': 3},
+            ],
+            'slaves': [
+                {
+                    'master_index': 0 if axis < 2 else 1,
+                    'slave_position': axis if axis < 2 else axis - 2,
+                    'direct_read_complete': True,
+                }
+                for axis in range(5)
+            ],
+        },
+        'dynamixel_scan': {'skipped': True},
+    }
+
+    assert MotionWebBridge._scan_operation_outcome(
+        scan,
+        operation_type='ac_servo_scan',
+        fallback_success=False,
+    ) == 'success'
+    message = MotionWebBridge._scan_result_message(True, scan, 'raw success')
+    assert message.startswith('모터 검색 완료')
+    assert 'AC Servo 5축' in message
+    assert 'Master 0 2축 / Master 1 3축' in message
+
+
+def test_full_scan_marks_mixed_ac_success_and_dynamixel_missing_as_partial():
+    scan = {
+        'scan_id': 'mixed-ac-dynamixel',
+        'ethercat_scan': {
+            'available': True,
+            'complete': True,
+            'slaves_count': 4,
+            'slaves': [{'slave_position': axis} for axis in range(4)],
+        },
+        'dynamixel_scan': {
+            'available': False,
+            'complete': False,
+            'skipped': False,
+            'devices_count': 0,
+            'devices': [],
+            'error': 'Dynamixel 직렬 포트를 찾지 못했습니다',
+        },
+        'scan_errors': [{
+            'transport': 'dynamixel',
+            'message': 'Dynamixel 직렬 포트를 찾지 못했습니다',
+        }],
+    }
+
+    assert MotionWebBridge._scan_operation_outcome(
+        scan,
+        operation_type='full_scan',
+        fallback_success=False,
+    ) == 'partial'
+    message = MotionWebBridge._scan_result_message(False, scan, 'raw failure')
+    assert message.startswith('모터 검색 부분 완료')
+    assert 'AC Servo 4축' in message
+    assert 'Dynamixel 0축' in message
+
+
+def test_dynamixel_scan_with_detected_devices_is_not_reported_as_failure():
+    scan = {
+        'scan_id': 'dynamixel-partial',
+        'dynamixel_scan': {
+            'available': True,
+            'complete': False,
+            'devices_count': 2,
+            'devices': [{'id': 1}, {'id': 2}],
+            'error': '일부 ID 응답 없음',
+        },
+        'ethercat_scan': {'skipped': True},
+    }
+
+    assert MotionWebBridge._scan_operation_outcome(
+        scan,
+        operation_type='dynamixel_scan',
+        fallback_success=False,
+    ) == 'partial'
+    message = MotionWebBridge._scan_result_message(False, scan, 'raw failure')
+    assert message.startswith('모터 검색 부분 완료')
+    assert 'Dynamixel 2축' in message
+
+
+def test_scan_result_keeps_failure_when_no_requested_device_is_detected():
+    scan = {
+        'scan_id': 'empty-ac',
+        'ethercat_scan': {
+            'available': True,
+            'complete': False,
+            'slaves_count': 0,
+            'slaves': [],
+            'error': '재스캔 후 응답한 Slave가 없습니다',
+        },
+        'dynamixel_scan': {'skipped': True},
+    }
+
+    assert MotionWebBridge._scan_operation_outcome(
+        scan,
+        operation_type='ac_servo_scan',
+        fallback_success=False,
+    ) == 'failure'
+    message = MotionWebBridge._scan_result_message(False, scan, 'raw failure')
+    assert message.startswith('모터 검색 실패')
+
+
 def test_scan_result_keeps_failure_when_required_project_master_is_missing():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge.load_motor_config = lambda: {
