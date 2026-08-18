@@ -88,60 +88,48 @@ Motion Control Studio는 상위 저장소에 통합되어 있으므로 별도로
 
 ## Ubuntu만 설치된 새 PC 설치
 
-새 PC는 이 순서대로 진행합니다. 웹 화면과 DDS 그룹 연동 테스트는 이 절차만으로
-가능합니다. 실제 모터 제어 PC는 설치 후 [2. EtherLab/IgH EtherCAT 준비](#2-etherlabigh-ethercat-준비)를
+새 PC는 아래 명령만 먼저 실행합니다. 웹 화면과 DDS 그룹 연동 테스트는 이 절차로
+준비됩니다. 실제 모터 제어 PC는 설치 후 [2. EtherLab/IgH EtherCAT 준비](#2-etherlabigh-ethercat-준비)를
 추가로 진행합니다.
 
-### A. 기본 프로그램 설치
-
-```bash
-sudo apt update
-sudo apt install -y curl git build-essential cmake software-properties-common locales
-sudo locale-gen en_US en_US.UTF-8
-sudo update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
-export LANG=en_US.UTF-8
-```
-
-### B. ROS 2 Humble 설치
-
-```bash
-sudo add-apt-repository universe
-sudo apt update
-sudo apt install -y curl
-sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
-sudo apt update
-sudo apt install -y ros-humble-desktop python3-rosdep python3-colcon-common-extensions python3-fastapi python3-uvicorn python3-yaml chrony btop ttyd
-```
-
-### C. 사용자 권한 추가
-
-```bash
-sudo usermod -aG dialout,audio "$USER"
-```
-
-여기까지 끝나면 PC를 재부팅합니다.
-
-### D. 코드 받기·빌드·서비스 등록
+### A. 코드 받기
 
 ```bash
 cd ~
 git clone -b main --recurse-submodules https://github.com/kimjoonho-git/motion_web.git ros2_ws
 cd ~/ros2_ws
-source /opt/ros/humble/setup.bash
-sudo rosdep init || true
-rosdep update
-rosdep install --from-paths src --ignore-src -r -y
-colcon build --symlink-install
-source install/setup.bash
-bash src/motion_web/web_bridge/deploy/install_user_service.sh
 ```
 
-`sudo rosdep init`에서 이미 초기화되었다는 메시지가 나와도 계속 진행합니다.
-설치 명령이 `실시간 우선순위 권한 설정 필요`를 표시하면 안내대로 PC를 재부팅한 뒤
-같은 설치 명령을 한 번 더 실행합니다.
+### B. 설치 실행
 
-### E. 실행 확인
+```bash
+bash src/motion_web/install.sh
+```
+
+설치 스크립트가 처리하는 항목:
+
+- ROS 2 Humble 저장소 등록
+- 필수 프로그램 설치
+- 사용자 권한 설정
+- rosdep 설치·갱신
+- 전체 colcon 빌드
+- 자동실행 서비스 등록
+- 실시간 우선순위 권한 설정 확인
+
+`실시간 우선순위 권한 설정 필요` 또는 `재부팅 후 다시 실행` 안내가 나오면 재부팅합니다.
+
+```bash
+sudo reboot
+```
+
+재부팅 후 같은 설치 명령을 다시 실행합니다.
+
+```bash
+cd ~/ros2_ws
+bash src/motion_web/install.sh
+```
+
+### C. 실행 확인
 
 ```bash
 systemctl --user status --no-pager motion-control.service motion-coordination.service
@@ -151,7 +139,7 @@ systemctl --user status --no-pager motion-control.service motion-coordination.se
 http://localhost:8000
 ```
 
-### F. DDS 그룹 연동 첫 설정
+### D. DDS 그룹 연동 첫 설정
 
 연동할 모든 PC에서 웹 화면을 열고 같은 순서로 설정합니다.
 
@@ -533,16 +521,23 @@ Codex가 수정이나 설치를 수행한 뒤에는 변경 파일, 실행한 명
 
 ## 5. 자동실행 등록
 
-빌드가 끝난 뒤 사용자 서비스를 한 번 등록합니다.
+최초 설치는 통합 설치 스크립트가 자동실행 서비스까지 등록합니다.
+
+```bash
+cd ~/ros2_ws
+bash src/motion_web/install.sh
+```
+
+서비스만 다시 등록해야 할 때는 아래 명령을 사용합니다.
 
 ```bash
 cd ~/ros2_ws
 bash src/motion_web/web_bridge/deploy/install_user_service.sh
 ```
 
-처음 실행 시 `실시간 우선순위 권한 설정 필요`가 표시될 수 있습니다. 이 경우
-설치 스크립트가 `/etc/security/limits.d/99-motion-control.conf`를 작성하므로,
-PC를 재부팅한 뒤 위 설치 명령을 다시 실행합니다.
+`실시간 우선순위 권한 설정 필요`가 표시되면 설치 스크립트가
+`/etc/security/limits.d/99-motion-control.conf`를 작성합니다. PC를 재부팅한 뒤
+같은 명령을 다시 실행합니다.
 
 로그인 전 부팅 단계부터 실행하려면 PC마다 최초 한 번 다음 설정을 추가합니다.
 

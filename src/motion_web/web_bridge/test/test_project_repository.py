@@ -1664,6 +1664,23 @@ def test_service_installer_validates_motor_runtime_before_stopping_services():
     assert 'LimitMEMLOCK=infinity' in motor_unit
 
 
+def test_motion_web_install_script_runs_full_first_install_flow():
+    installer = (
+        Path(__file__).resolve().parents[2]
+        / 'install.sh'
+    ).read_text(encoding='utf-8')
+
+    assert 'require_ubuntu_2204' in installer
+    assert 'ensure_ros_apt_source' in installer
+    assert 'install_system_packages' in installer
+    assert 'configure_locale_and_groups' in installer
+    assert 'initialize_rosdep' in installer
+    assert 'colcon build --symlink-install' in installer
+    assert 'install_user_services' in installer
+    assert 'web_bridge/deploy/install_user_service.sh' in installer
+    assert 'sudo reboot' in installer
+
+
 def test_managed_service_restores_last_applied_config_after_project_edit(tmp_path):
     workspace = tmp_path / 'workspace'
     repository = ProjectRepository(workspace / 'motion_projects')
