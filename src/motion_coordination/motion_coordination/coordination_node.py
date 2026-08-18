@@ -298,7 +298,10 @@ class MotionCoordinationNode(Node):
             }:
                 return
         
-        required_peers = tuple(self._config.required_peers)
+        required_peers = (
+            tuple(self._config.required_peers)
+            or tuple(self._coordination_error.get('participants') or ())
+        )
         if not required_peers:
             return
             
@@ -1109,6 +1112,7 @@ class MotionCoordinationNode(Node):
 
     def _publish_coordination_error(
         self, *, code: str, message: str, execution_id: str,
+        participants: tuple[str, ...] = (),
     ) -> None:
         error = {
             'active': True,
@@ -1116,6 +1120,7 @@ class MotionCoordinationNode(Node):
             'error_source': 'group_coordination',
             'grade': 2,
             'execution_id': str(execution_id),
+            'participants': list(participants),
             'message': str(message),
             'occurred_at': time.time(),
         }
@@ -1807,6 +1812,7 @@ class MotionCoordinationNode(Node):
             code='GROUP_PARTICIPANT_DISCONNECTED',
             message='그룹 참가 PC 통신 단절: ' + ', '.join(missing),
             execution_id=execution_id,
+            participants=participants,
         )
 
     def _accept_execution_claim(
