@@ -102,8 +102,9 @@ initialize_rosdep() {
 }
 
 build_workspace() {
-  # shellcheck disable=SC1091
+  set +u
   source /opt/ros/humble/setup.bash
+  set -u
   rosdep install --from-paths "${WORKSPACE_DIR}/src" --ignore-src -r -y
   rm -rf "${WORKSPACE_DIR}/build/motion_web_ui" "${WORKSPACE_DIR}/install/motion_web_ui"
   colcon build --symlink-install --base-paths "${WORKSPACE_DIR}/src"
@@ -115,8 +116,9 @@ build_workspace() {
 }
 
 install_user_services() {
-  # shellcheck disable=SC1091
+  set +u
   source "${WORKSPACE_DIR}/install/setup.bash"
+  set -u
   bash "${SCRIPT_DIR}/web_bridge/deploy/install_user_service.sh"
 }
 
