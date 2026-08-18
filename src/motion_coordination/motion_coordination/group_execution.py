@@ -37,6 +37,15 @@ class MemberRegistry:
         self.warning_timeout_sec = float(warning_timeout_sec)
         self.timeout_sec = float(timeout_sec)
         self._members: Dict[str, Member] = {}
+        self._seen_boot_ids: Dict[str, set[str]] = {}
+
+    def is_outdated_boot_id(self, pc_id: str, boot_id: str) -> bool:
+        """Check if this boot_id is an old one that we have already seen and moved on from."""
+        current = self._members.get(pc_id)
+        if current and current.boot_id != boot_id:
+            if boot_id in self._seen_boot_ids.get(pc_id, set()):
+                return True
+        return False
 
     def update(self, member: Member) -> None:
         previous = self._members.get(member.pc_id)
@@ -45,6 +54,9 @@ class MemberRegistry:
                 return
             if member.received_monotonic < previous.received_monotonic:
                 return
+        if member.pc_id not in self._seen_boot_ids:
+            self._seen_boot_ids[member.pc_id] = set()
+        self._seen_boot_ids[member.pc_id].add(member.boot_id)
         self._members[member.pc_id] = member
 
     def status(self, pc_id: str, *, now: Optional[float] = None) -> str:

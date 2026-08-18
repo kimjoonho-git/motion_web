@@ -290,6 +290,8 @@ class MotionCoordinationNode(Node):
             if message.boot_id and message.boot_id != self._boot_id:
                 self._handle_duplicate_pc_id(message.boot_id)
             return
+        if self._registry.is_outdated_boot_id(message.pc_id, message.boot_id):
+            return
         previous = self._registry.member(message.pc_id)
         restarted = bool(previous and previous.boot_id != message.boot_id)
         info = self._system_info_cache.get(message.pc_id)
@@ -1018,6 +1020,7 @@ class MotionCoordinationNode(Node):
             with self._lock:
                 if self._execution.execution_id == execution_id:
                     self._execution.stop_now(error=True)
+                    self._clear_active_execution()
             self._publish_coordination_error(
                 code='GROUP_WORKER_STILL_RUNNING',
                 message=message,
@@ -1081,6 +1084,7 @@ class MotionCoordinationNode(Node):
         }
         with self._lock:
             self._coordination_error = error
+            self._auto_play_triggered = True
         alarm = GroupAlarm()
         alarm.group_id = self._config.group_id
         alarm.execution_id = str(execution_id)
@@ -1535,7 +1539,6 @@ class MotionCoordinationNode(Node):
             scheduled_at = self._execution.pending_scheduled_at
             command = 'cancel_before_start' if self._execution.pending_command in {
                 'prepare', 'initialize_at', 'cycle_initialize_at', 'start_at',
-                'cancel_before_start',
             } else 'stop_now'
             if (
                 self._execution.pending_command == 'start_at'
@@ -1918,7 +1921,7 @@ class MotionCoordinationNode(Node):
                 'command': 'stop_now',
                 'execution_id': execution_id,
                 'network_operation_id': stop_message.command_id,
-            }, timeout_sec=0.25),
+            }, timeout_sec=3.0),
             lambda: self._command_pub.publish(stop_message),
         )
 

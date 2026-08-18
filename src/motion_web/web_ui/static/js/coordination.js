@@ -88,15 +88,27 @@ export function createCoordinationController({ el }) {
     if (el.coordinationRequiredPeers) el.coordinationRequiredPeers.value = Array.isArray(config.required_peers) ? config.required_peers.join(', ') : '';
   }
 
-  function peerRow(peer = {}, fixedParticipants = new Set()) {
+  function peerRow(peer = {}, requiredPeers = new Set(), fixedParticipants = new Set()) {
     const alarm = peer.alarm || {};
     const alarmText = Number(peer.servo_alarm_grade || 0) > 0
       ? `${Number(peer.servo_alarm_grade)} · ${alarm.message || alarm.error_code || '확인 필요'}`
       : '0';
+    
+    const isRequired = requiredPeers.has(peer.pc_id);
+    const pcNameHtml = `<strong>${text(peer.display_name || peer.pc_id || '-')}</strong><small>${peer.display_name ? text(peer.pc_id || '') : ''}</small>`;
+    const badgeHtml = isRequired ? `<span style="display: inline-block; margin-left: 6px; padding: 2px 6px; background-color: var(--color-primary); color: white; border-radius: 4px; font-size: 10px; font-weight: bold;">⭐ 필수</span>` : '';
+    
+    const executionStateText = fixedParticipants.has(peer.pc_id) ? '고정 참가' : (isRequired ? '명단 포함' : '대기');
+    const executionStateClass = fixedParticipants.has(peer.pc_id) ? 'coordination-state-ok' : (isRequired ? 'coordination-state-ok' : 'coordination-state-warn');
+    
+    const actionButton = isRequired
+      ? `<button type="button" class="danger remove-peer-btn" data-pc-id="${text(peer.pc_id)}" style="padding: 2px 8px; font-size: 11px; cursor: pointer;">명단 제외</button>`
+      : `<button type="button" class="primary add-peer-btn" data-pc-id="${text(peer.pc_id)}" style="padding: 2px 8px; font-size: 11px; cursor: pointer;">명단 추가</button>`;
+
     return `<tr>
-      <td><strong>${text(peer.display_name || peer.pc_id || '-')}</strong><small>${peer.display_name ? text(peer.pc_id || '') : ''}</small></td>
+      <td>${pcNameHtml}${badgeHtml}</td>
       <td class="${stateClass(peer.state)}"><span class="peer-status-dot ${peer.state || 'offline'}"></span>${text(stateText(peer.state))}</td>
-      <td>${fixedParticipants.has(peer.pc_id) ? '고정 참가' : '대기'}</td>
+      <td class="${executionStateClass}"><strong>${executionStateText}</strong></td>
       <td>${text(peerCycleText(peer))}</td>
       <td class="${peerPhaseClass(peer)}">${text(peerMotionStep(peer))}</td>
       <td>${text(peerProgressText(peer))}</td>
@@ -104,7 +116,7 @@ export function createCoordinationController({ el }) {
       <td>${Number(peer.trigger_sync_uncertainty_ms || 0).toFixed(3)} ms</td>
       <td class="${Number(peer.servo_alarm_grade || 0) > 0 ? 'coordination-state-bad' : 'coordination-state-ok'}">${text(alarmText)}</td>
       <td title="${text(peer.git_message || '')}">[${text(peer.git_branch || '?')}] ${text(peer.git_hash || '-')}</td>
-      <td style="text-align: center;"><button type="button" class="secondary remove-peer-btn" data-pc-id="${text(peer.pc_id)}" style="padding: 2px 8px; font-size: 11px; cursor: pointer;">명단 제외</button></td>
+      <td style="text-align: center;">${actionButton}</td>
     </tr>`;
   }
 
@@ -115,6 +127,8 @@ export function createCoordinationController({ el }) {
     const execution = runtime.execution || { state: 'idle', participants: [] };
     const peers = Array.isArray(runtime.peers) ? runtime.peers : [];
     const fixedParticipants = new Set(Array.isArray(execution.participants) ? execution.participants : []);
+    const requiredPeersList = Array.isArray(config.required_peers) ? config.required_peers : [];
+    const requiredPeers = new Set(requiredPeersList);
     const coordinationError = runtime.coordination_error || {};
     const failure = coordinationError.message || '';
     const alarms = new Map(
@@ -123,19 +137,21 @@ export function createCoordinationController({ el }) {
     );
     peers.forEach((peer) => { peer.alarm = alarms.get(peer.pc_id) || null; });
     const joined = runtime.joined === true;
-    const active = activeStates.has(execution.state);
+    const active = Boolean(execution.execution_id);
     const configured = config.enabled === true && Boolean(config.group_id);
     renderSettings(config);
     
-    const rosterDisplay = document.getElementById('coordinationConfirmedRosterDisplay');
-    if (rosterDisplay) {
-      const required = Array.isArray(config.required_peers) ? config.required_peers : [];
-      if (required.length > 0) {
-        rosterDisplay.textContent = `[ 확정 명단: ${required.join(', ')} ]`;
-        rosterDisplay.style.color = 'var(--color-primary)';
+    const rosterBanner = document.getElementById('coordinationConfirmedRosterBanner');
+    if (rosterBanner) {
+      if (requiredPeersList.length > 0) {
+        rosterBanner.innerHTML = `<span style="color: var(--color-primary);">✅ 현재 그룹 필수 참가 명단:</span> ${requiredPeersList.join(', ')}`;
+        rosterBanner.style.backgroundColor = 'rgba(16, 185, 129, 0.1)';
+        rosterBanner.style.border = '1px solid var(--color-primary)';
       } else {
-        rosterDisplay.textContent = `[ 명단 미확정 ]`;
-        rosterDisplay.style.color = 'var(--color-danger)';
+        rosterBanner.innerHTML = `⚠️ 시스템을 시작하려면 아래 표에서 명단을 확정하세요 (명단 미확정)`;
+        rosterBanner.style.backgroundColor = 'rgba(239, 68, 68, 0.1)';
+        rosterBanner.style.border = '1px solid var(--color-danger)';
+        rosterBanner.style.color = 'var(--color-danger)';
       }
     }
 
@@ -291,13 +307,34 @@ export function createCoordinationController({ el }) {
     }
     if (el.coordinationPeerRows) {
       const rows = [];
-      if (joined) rows.push(peerRow({
-        ...(runtime.local || {}),
-        pc_id: runtime.local?.pc_id || config.pc_id,
-        display_name: `${runtime.local?.display_name || runtimeConfig.display_name || config.pc_id} (이 PC)`,
-        state: 'online',
-      }, fixedParticipants));
-      peers.forEach((peer) => rows.push(peerRow(peer, fixedParticipants)));
+      const seenPcs = new Set();
+      
+      const localId = runtime.local?.pc_id || config.pc_id;
+      if (joined) {
+        rows.push(peerRow({
+          ...(runtime.local || {}),
+          pc_id: localId,
+          display_name: `${runtime.local?.display_name || runtimeConfig.display_name || config.pc_id} (이 PC)`,
+          state: 'online',
+        }, requiredPeers, fixedParticipants));
+        if (localId) seenPcs.add(localId);
+      }
+      
+      peers.forEach((peer) => {
+        rows.push(peerRow(peer, requiredPeers, fixedParticipants));
+        if (peer.pc_id) seenPcs.add(peer.pc_id);
+      });
+      
+      requiredPeers.forEach((requiredId) => {
+        if (!seenPcs.has(requiredId)) {
+          rows.push(peerRow({
+            pc_id: requiredId,
+            display_name: '(통신 단절 / 재부팅 대기)',
+            state: 'offline',
+          }, requiredPeers, fixedParticipants));
+        }
+      });
+      
       el.coordinationPeerRows.innerHTML = rows.length
         ? rows.join('') : '<tr><td colspan="11" class="empty">그룹에 참가하면 PC 상태가 표시됩니다</td></tr>';
     }
@@ -408,7 +445,7 @@ export function createCoordinationController({ el }) {
 
   async function temporarilyDisable() {
     if (loading) return;
-    const active = activeStates.has(snapshot?.runtime?.execution?.state);
+    const active = Boolean(snapshot?.runtime?.execution?.execution_id);
     const confirmed = await showConfirm(
       active
         ? '이 PC의 DDS 연동을 일시 해제합니다.\n\n'
@@ -501,17 +538,23 @@ export function createCoordinationController({ el }) {
     });
 
     el.coordinationPeerRows?.addEventListener('click', async (event) => {
-      const btn = event.target.closest('.remove-peer-btn');
+      const removeBtn = event.target.closest('.remove-peer-btn');
+      const addBtn = event.target.closest('.add-peer-btn');
+      const btn = removeBtn || addBtn;
       if (!btn) return;
+      
       const targetPcId = btn.dataset.pcId;
+      const isRemoving = Boolean(removeBtn);
       if (!targetPcId) return;
 
       const confirmed = await showConfirm(
-        `PC [ ${targetPcId} ]를 그룹 필수 참가 명단에서 제외하시겠습니까?\n\n제외 후 저장하면 부팅 자동 재생 시 해당 PC를 기다리지 않고 모션이 시작될 수 있습니다.`,
+        isRemoving
+          ? `PC [ ${targetPcId} ]를 그룹 필수 참가 명단에서 제외하시겠습니까?\n\n제외 후 저장하면 부팅 자동 재생 시 해당 PC를 기다리지 않고 모션이 시작될 수 있습니다.`
+          : `PC [ ${targetPcId} ]를 그룹 필수 참가 명단에 추가하시겠습니까?\n\n추가 후 저장하면 부팅 자동 재생 시 해당 PC가 켜질 때까지 대기하게 됩니다.`,
         {
-          title: '참가 PC 명단 제외 확인',
-          confirmLabel: '명단에서 제외',
-          tone: 'danger',
+          title: isRemoving ? '참가 PC 명단 제외 확인' : '참가 PC 명단 추가 확인',
+          confirmLabel: isRemoving ? '명단에서 제외' : '명단에 추가',
+          tone: isRemoving ? 'danger' : 'info',
         },
       );
       if (!confirmed) return;
@@ -522,14 +565,20 @@ export function createCoordinationController({ el }) {
         .filter(Boolean);
 
       let updatedList = [];
-      if (currentRequired.length > 0) {
-        updatedList = currentRequired.filter(id => id !== targetPcId);
+      if (isRemoving) {
+        if (currentRequired.length > 0) {
+          updatedList = currentRequired.filter(id => id !== targetPcId);
+        } else {
+          const peers = Array.isArray(snapshot?.runtime?.peers) ? snapshot.runtime.peers : [];
+          const ids = new Set(peers.map(p => p.pc_id));
+          const localId = el.coordinationPcId?.value || snapshot?.config?.pc_id;
+          if (localId) ids.add(localId);
+          ids.delete(targetPcId);
+          updatedList = Array.from(ids);
+        }
       } else {
-        const peers = Array.isArray(snapshot?.runtime?.peers) ? snapshot.runtime.peers : [];
-        const ids = new Set(peers.map(p => p.pc_id));
-        const localId = el.coordinationPcId?.value || snapshot?.config?.pc_id;
-        if (localId) ids.add(localId);
-        ids.delete(targetPcId);
+        const ids = new Set(currentRequired);
+        ids.add(targetPcId);
         updatedList = Array.from(ids);
       }
 
@@ -537,8 +586,10 @@ export function createCoordinationController({ el }) {
         el.coordinationRequiredPeers.value = updatedList.join(', ');
         formDirty = true;
         await save(
-          `PC [ ${targetPcId} ]를 필수 참가 명단에서 제외했습니다.\n\n[ 변경된 확정 명단: ${updatedList.join(', ') || '없음'} ]`,
-          '명단 제외 저장 완료',
+          isRemoving
+            ? `PC [ ${targetPcId} ]를 필수 참가 명단에서 제외했습니다.\n\n[ 변경된 확정 명단: ${updatedList.join(', ') || '없음'} ]`
+            : `PC [ ${targetPcId} ]를 필수 참가 명단에 추가했습니다.\n\n[ 변경된 확정 명단: ${updatedList.join(', ')} ]`,
+          isRemoving ? '명단 제외 저장 완료' : '명단 추가 저장 완료',
         );
       }
     });
