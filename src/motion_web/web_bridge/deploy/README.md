@@ -6,6 +6,10 @@
 bash src/motion_web/web_bridge/deploy/install_user_service.sh
 ```
 
+처음 실행 시 `실시간 우선순위 권한 설정 필요`가 표시되면 정상입니다. 설치 스크립트가
+`/etc/security/limits.d/99-motion-control.conf`를 작성하므로 PC를 재부팅한 뒤
+같은 명령을 다시 실행합니다.
+
 등록 후에는 컴퓨터 로그인 시 웹과 프로젝트 서비스가 자동으로 시작되고,
 프로세스가 비정상 종료돼도 자동으로 복구됩니다. 이후 프로젝트 생성·변경,
 설정 저장과 실제 시스템 적용은 웹 UI에서 수행합니다. 웹의 `시스템 정보`에서

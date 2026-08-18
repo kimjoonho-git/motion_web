@@ -138,6 +138,8 @@ bash src/motion_web/web_bridge/deploy/install_user_service.sh
 ```
 
 `sudo rosdep init`에서 이미 초기화되었다는 메시지가 나와도 계속 진행합니다.
+설치 명령이 `실시간 우선순위 권한 설정 필요`를 표시하면 안내대로 PC를 재부팅한 뒤
+같은 설치 명령을 한 번 더 실행합니다.
 
 ### E. 실행 확인
 
@@ -537,6 +539,10 @@ Codex가 수정이나 설치를 수행한 뒤에는 변경 파일, 실행한 명
 cd ~/ros2_ws
 bash src/motion_web/web_bridge/deploy/install_user_service.sh
 ```
+
+처음 실행 시 `실시간 우선순위 권한 설정 필요`가 표시될 수 있습니다. 이 경우
+설치 스크립트가 `/etc/security/limits.d/99-motion-control.conf`를 작성하므로,
+PC를 재부팅한 뒤 위 설치 명령을 다시 실행합니다.
 
 로그인 전 부팅 단계부터 실행하려면 PC마다 최초 한 번 다음 설정을 추가합니다.
 

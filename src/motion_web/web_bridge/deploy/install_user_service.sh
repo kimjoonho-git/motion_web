@@ -22,6 +22,7 @@ INSTALL_COMPLETE=false
 CONTROL_WAS_ACTIVE=false
 MOTOR_WAS_ACTIVE=false
 COORDINATION_WAS_ACTIVE=false
+REALTIME_LIMIT_FILE="/etc/security/limits.d/99-motion-control.conf"
 
 cleanup_install_tmp() {
   if [[ -n "${INSTALL_TMP}" && -d "${INSTALL_TMP}" ]]; then
@@ -57,6 +58,25 @@ restore_previous_install_on_error() {
 }
 
 trap restore_previous_install_on_error EXIT
+
+ensure_realtime_limits() {
+  local rtprio
+  rtprio="$(ulimit -r 2>/dev/null || echo 0)"
+  if [[ "${rtprio}" =~ ^[0-9]+$ && "${rtprio}" -ge 99 ]]; then
+    return 0
+  fi
+
+  echo "실시간 우선순위 권한 설정 필요 · 현재 rtprio=${rtprio}" >&2
+  echo "설정 파일 작성: ${REALTIME_LIMIT_FILE}" >&2
+  printf "%s soft rtprio 99\n%s hard rtprio 99\n%s soft memlock unlimited\n%s hard memlock unlimited\n" \
+    "$(id -un)" "$(id -un)" "$(id -un)" "$(id -un)" \
+    | sudo tee "${REALTIME_LIMIT_FILE}" >/dev/null
+  echo "실시간 권한 설정 완료 · PC 재부팅 후 설치 명령을 다시 실행하세요." >&2
+  echo "재부팅 후 확인: ulimit -r  # 99" >&2
+  exit 78
+}
+
+ensure_realtime_limits
 
 if [[ ! -x "${SERVICE_EXECUTABLE}" ]]; then
   echo "설치 실행 파일이 없습니다: ${SERVICE_EXECUTABLE}" >&2

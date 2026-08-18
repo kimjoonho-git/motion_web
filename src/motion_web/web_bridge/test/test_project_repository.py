@@ -1634,15 +1634,24 @@ def test_service_installer_validates_motor_runtime_before_stopping_services():
         / 'deploy'
         / 'install_user_service.sh'
     ).read_text(encoding='utf-8')
+    motor_unit = (
+        Path(__file__).resolve().parents[1]
+        / 'deploy'
+        / 'motion-motor.service.in'
+    ).read_text(encoding='utf-8')
 
+    realtime_preflight = 'ensure_realtime_limits'
     preflight = 'MOTOR_CONFIG="$("${MOTOR_SERVICE_EXECUTABLE}" --print-config)"'
     render_control = (
         '"${CONTROL_TEMPLATE}" > "${INSTALL_TMP}/motion-control.service"'
     )
     stop_motor = 'systemctl --user stop motion-motor.service'
+    assert installer.index(realtime_preflight) < installer.index(preflight)
     assert installer.index(preflight) < installer.index(stop_motor)
     assert installer.index(render_control) < installer.index(stop_motor)
     assert installer.index('SERVICES_STOPPED=true') < installer.index(stop_motor)
+    assert '/etc/security/limits.d/99-motion-control.conf' in installer
+    assert 'ulimit -r' in installer
     assert (
         'systemctl --user is-active --quiet motion-motor.service'
         in installer
@@ -1651,6 +1660,8 @@ def test_service_installer_validates_motor_runtime_before_stopping_services():
     assert 'motion-control.service.previous' in installer
     assert 'motion-motor.service.previous' in installer
     assert 'exit 78' in installer
+    assert 'LimitRTPRIO=99' in motor_unit
+    assert 'LimitMEMLOCK=infinity' in motor_unit
 
 
 def test_managed_service_restores_last_applied_config_after_project_edit(tmp_path):
