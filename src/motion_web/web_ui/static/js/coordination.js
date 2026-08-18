@@ -104,6 +104,7 @@ export function createCoordinationController({ el }) {
       <td>${Number(peer.trigger_sync_uncertainty_ms || 0).toFixed(3)} ms</td>
       <td class="${Number(peer.servo_alarm_grade || 0) > 0 ? 'coordination-state-bad' : 'coordination-state-ok'}">${text(alarmText)}</td>
       <td title="${text(peer.git_message || '')}">[${text(peer.git_branch || '?')}] ${text(peer.git_hash || '-')}</td>
+      <td style="text-align: center;"><button type="button" class="secondary remove-peer-btn" data-pc-id="${text(peer.pc_id)}" style="padding: 2px 8px; font-size: 11px; cursor: pointer;">명단 제외</button></td>
     </tr>`;
   }
 
@@ -298,7 +299,7 @@ export function createCoordinationController({ el }) {
       }, fixedParticipants));
       peers.forEach((peer) => rows.push(peerRow(peer, fixedParticipants)));
       el.coordinationPeerRows.innerHTML = rows.length
-        ? rows.join('') : '<tr><td colspan="9" class="empty">그룹에 참가하면 PC 상태가 표시됩니다</td></tr>';
+        ? rows.join('') : '<tr><td colspan="11" class="empty">그룹에 참가하면 PC 상태가 표시됩니다</td></tr>';
     }
   }
 
@@ -466,18 +467,79 @@ export function createCoordinationController({ el }) {
       save();
     });
     
-    el.coordinationConfirmRosterButton?.addEventListener('click', () => {
+    el.coordinationConfirmRosterButton?.addEventListener('click', async () => {
       const peers = Array.isArray(snapshot?.runtime?.peers) ? snapshot.runtime.peers : [];
       const ids = new Set(peers.map(p => p.pc_id));
       const localId = el.coordinationPcId?.value || snapshot?.config?.pc_id;
       if (localId) ids.add(localId);
       
-      if (ids.size > 0 && el.coordinationRequiredPeers) {
-        el.coordinationRequiredPeers.value = Array.from(ids).join(', ');
+      const rosterList = Array.from(ids);
+      if (rosterList.length > 0 && el.coordinationRequiredPeers) {
+        const confirmed = await showConfirm(
+          `현재 접속된 아래 PC 인원으로 필수 참가 명단을 확정하고 시스템에 저장하시겠습니까?\n\n`
+          + `[ 확정 명단 (${rosterList.length}대) ]\n`
+          + `${rosterList.join(', ')}\n\n`
+          + `(부팅 자동 재생 시 위 PC들이 모두 켜진 후 모션이 시작됩니다)`,
+          {
+            title: 'DDS 그룹 필수 참가 명단 확정',
+            confirmLabel: '명단 확정 및 저장',
+            tone: 'info',
+          },
+        );
+        if (!confirmed) return;
+        el.coordinationRequiredPeers.value = rosterList.join(', ');
         formDirty = true;
-        save(`[ ${Array.from(ids).join(', ')} ]\n\n위 인원으로 명단이 확정되고 시스템에 저장되었습니다.`, '명단 확정 완료');
+        await save(
+          `[ 확정 명단: ${rosterList.join(', ')} ]\n\n`
+          + `필수 참가 명단 확정이 완료되었습니다.\n`
+          + `PC 재부팅 시 해당 명단의 모든 PC가 준비되면 모션이 자동 시작됩니다.`,
+          '명단 확정 저장 완료',
+        );
       } else {
-        showAlert('현재 방에 접속한 참가자가 없거나 네트워크 오류입니다.', { title: '명단 확정 실패', tone: 'danger' });
+        await showAlert('현재 방에 접속한 참가 PC가 없거나 네트워크 통신 연결을 확인해야 합니다.', { title: '명단 확정 불가', tone: 'danger' });
+      }
+    });
+
+    el.coordinationPeerRows?.addEventListener('click', async (event) => {
+      const btn = event.target.closest('.remove-peer-btn');
+      if (!btn) return;
+      const targetPcId = btn.dataset.pcId;
+      if (!targetPcId) return;
+
+      const confirmed = await showConfirm(
+        `PC [ ${targetPcId} ]를 그룹 필수 참가 명단에서 제외하시겠습니까?\n\n제외 후 저장하면 부팅 자동 재생 시 해당 PC를 기다리지 않고 모션이 시작될 수 있습니다.`,
+        {
+          title: '참가 PC 명단 제외 확인',
+          confirmLabel: '명단에서 제외',
+          tone: 'danger',
+        },
+      );
+      if (!confirmed) return;
+
+      const currentRequired = (el.coordinationRequiredPeers?.value || '')
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean);
+
+      let updatedList = [];
+      if (currentRequired.length > 0) {
+        updatedList = currentRequired.filter(id => id !== targetPcId);
+      } else {
+        const peers = Array.isArray(snapshot?.runtime?.peers) ? snapshot.runtime.peers : [];
+        const ids = new Set(peers.map(p => p.pc_id));
+        const localId = el.coordinationPcId?.value || snapshot?.config?.pc_id;
+        if (localId) ids.add(localId);
+        ids.delete(targetPcId);
+        updatedList = Array.from(ids);
+      }
+
+      if (el.coordinationRequiredPeers) {
+        el.coordinationRequiredPeers.value = updatedList.join(', ');
+        formDirty = true;
+        await save(
+          `PC [ ${targetPcId} ]를 필수 참가 명단에서 제외했습니다.\n\n[ 변경된 확정 명단: ${updatedList.join(', ') || '없음'} ]`,
+          '명단 제외 저장 완료',
+        );
       }
     });
   }

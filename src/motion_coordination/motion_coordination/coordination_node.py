@@ -205,7 +205,7 @@ class MotionCoordinationNode(Node):
         self.get_logger().info(
             'DDS group coordination initialized · '
             f'pc={self._config.pc_id} · group={self._config.group_id or "none"} · '
-            f'domain={self._config.dds_domain_id} · joined=false'
+            f'domain={self._config.dds_domain_id} · joined={str(self._joined).lower()}'
         )
         self._publish_system_info()
 
@@ -2095,6 +2095,9 @@ class MotionCoordinationNode(Node):
             local_peer = enrich_peer_row({
                 'pc_id': self._config.pc_id,
                 'display_name': self._config.display_name,
+                'git_branch': self._git_branch,
+                'git_hash': self._git_hash,
+                'git_message': self._git_message,
                 'motion_state': self._local_group_state(),
                 'trigger_sync_state': str(
                     self._trigger_sync_status.get(
