@@ -391,10 +391,9 @@ class MotionCoordinationNode(Node):
         if len(required_peers) < 2:
             return
         with self._lock:
-            if self._execution.execution_id or self._coordination_error.get('active'):
-                self._auto_play_triggered = False
-                return
             if self._auto_play_triggered:
+                return
+            if self._execution.execution_id or self._coordination_error.get('active'):
                 return
         now = time.monotonic()
         missing_or_unhealthy = []
@@ -1055,8 +1054,7 @@ class MotionCoordinationNode(Node):
         )
         with self._lock:
             self._execution.stop_now(error=True)
-            if stop_outcome.local_success:
-                self._clear_active_execution()
+            self._clear_active_execution()
         self._publish_coordination_error(
             code=error_code,
             message=(
@@ -1761,8 +1759,7 @@ class MotionCoordinationNode(Node):
         with self._lock:
             if self._execution.execution_id == execution_id:
                 self._execution.stop_now(error=True)
-                if stop_outcome.local_success:
-                    self._clear_active_execution()
+                self._clear_active_execution()
         self.get_logger().error(
             f'그룹 참가 PC 통신 단절 · 전체 정지: {", ".join(missing)}'
         )
@@ -2249,8 +2246,7 @@ class MotionCoordinationNode(Node):
         )
         with self._lock:
             self._execution.stop_now(error=True)
-            if stop_outcome.local_success:
-                self._clear_active_execution()
+            self._clear_active_execution()
         self.get_logger().error(f'그룹 참가 PC 오류 · 전체 정지: {reason}')
         self._publish_coordination_error(
             code='GROUP_PARTICIPANT_FAILURE',
