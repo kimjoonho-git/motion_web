@@ -86,6 +86,149 @@ Motion Control Studio는 상위 저장소에 통합되어 있으므로 별도로
 않습니다. Motion System과 그 내부 의존 저장소는 `--recurse-submodules`로
 받습니다.
 
+## Ubuntu만 설치된 새 PC 설치
+
+새 PC는 이 순서대로 진행합니다. 웹 화면과 DDS 그룹 연동 테스트는 이 절차만으로
+가능합니다. 실제 모터 제어 PC는 설치 후 [2. EtherLab/IgH EtherCAT 준비](#2-etherlabigh-ethercat-준비)를
+추가로 진행합니다.
+
+### A. 기본 프로그램 설치
+
+```bash
+sudo apt update
+sudo apt install -y curl git build-essential cmake software-properties-common locales
+sudo locale-gen en_US en_US.UTF-8
+sudo update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
+export LANG=en_US.UTF-8
+```
+
+### B. ROS 2 Humble 설치
+
+```bash
+sudo add-apt-repository universe
+sudo apt update
+sudo apt install -y curl
+sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
+sudo apt update
+sudo apt install -y ros-humble-desktop python3-rosdep python3-colcon-common-extensions python3-fastapi python3-uvicorn python3-yaml chrony btop ttyd
+```
+
+### C. 사용자 권한 추가
+
+```bash
+sudo usermod -aG dialout,audio "$USER"
+```
+
+여기까지 끝나면 PC를 재부팅합니다.
+
+### D. 코드 받기·빌드·서비스 등록
+
+```bash
+cd ~
+git clone -b main --recurse-submodules https://github.com/kimjoonho-git/motion_web.git ros2_ws
+cd ~/ros2_ws
+source /opt/ros/humble/setup.bash
+sudo rosdep init || true
+rosdep update
+rosdep install --from-paths src --ignore-src -r -y
+colcon build --symlink-install
+source install/setup.bash
+bash src/motion_web/web_bridge/deploy/install_user_service.sh
+```
+
+`sudo rosdep init`에서 이미 초기화되었다는 메시지가 나와도 계속 진행합니다.
+
+### E. 실행 확인
+
+```bash
+systemctl --user status --no-pager motion-control.service motion-coordination.service
+```
+
+```text
+http://localhost:8000
+```
+
+### F. DDS 그룹 연동 첫 설정
+
+연동할 모든 PC에서 웹 화면을 열고 같은 순서로 설정합니다.
+
+1. `장비 연동 상태` 열기
+2. `DDS 그룹 연동` 열기
+3. `이 PC ID` 입력
+4. `표시 이름` 입력
+5. `그룹 ID` 입력
+6. `DDS Domain ID` 입력
+7. `저장`
+8. `그룹 참가`
+
+입력 예시:
+
+```text
+1번 PC
+이 PC ID: pc-a
+표시 이름: PC A
+그룹 ID: stage-a
+DDS Domain ID: 23
+
+2번 PC
+이 PC ID: pc-b
+표시 이름: PC B
+그룹 ID: stage-a
+DDS Domain ID: 23
+```
+
+규칙:
+
+```text
+이 PC ID: PC마다 다르게 입력
+표시 이름: PC마다 다르게 입력
+그룹 ID: 연동할 PC끼리 같게 입력
+DDS Domain ID: 연동할 PC끼리 같게 입력
+```
+
+성공 기준:
+
+```text
+각 PC에서 그룹 참가 상태 표시
+상대 PC가 peer 목록에 표시
+오류 없음
+```
+
+### G. 기존 PC 업데이트
+
+작업공간 경로를 모르면 먼저 찾습니다.
+
+```bash
+find ~ -maxdepth 3 -type d -path '*/src/motion_web' 2>/dev/null
+```
+
+출력이 `/home/user/ros2_ws/src/motion_web`이면 작업공간은
+`/home/user/ros2_ws`입니다.
+
+```bash
+cd <ros2_ws_경로>
+git fetch origin
+git checkout main
+git pull origin main
+git submodule update --init --recursive
+./src/motion_web/update.sh
+systemctl --user status --no-pager motion-control.service motion-coordination.service
+```
+
+### H. Codex에게 맡기는 문장
+
+다른 PC의 Codex에게 맡길 때는 아래 문장을 그대로 전달합니다.
+
+```text
+Ubuntu만 설치된 새 PC 기준으로 이 README의 설치 절차를 진행해줘.
+웹 화면과 DDS 그룹 연동 테스트가 가능할 때까지 설치해줘.
+모터 제어용 EtherCAT 설정은 NIC 이름, MAC 주소, 드라이버를 확인한 뒤 멈추고 사용자 확인을 받아줘.
+기존 설치가 있으면 작업공간 경로를 찾아서 업데이트 절차로 진행해줘.
+src/motion_system은 명시 요청 없으면 수정하지 마.
+실행 검증과 실물 검증을 구분해서 보고해줘.
+```
+
 ## 0. ROS 2 Humble 설치
 
 Ubuntu 22.04 데스크톱 환경에 ROS 2 Humble을 설치합니다. 이미 설치된 PC라면 이 단계를 건너뜁니다.
