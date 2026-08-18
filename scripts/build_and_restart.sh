@@ -18,6 +18,8 @@ source "${ROS_SETUP}"
 set -u
 
 echo "[1/3] 전체 빌드: colcon build --symlink-install"
+# UI 정적 자산 업데이트가 누락되지 않도록 기존 UI 빌드 캐시 강제 삭제
+rm -rf "${WORKSPACE}/build/motion_web_ui" "${WORKSPACE}/install/motion_web_ui"
 colcon build --symlink-install
 
 if [[ ! -f "${WORKSPACE_SETUP}" ]]; then
