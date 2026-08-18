@@ -85,7 +85,7 @@ class MotionCoordinationNode(Node):
         ).expanduser()
         self._config = config or load_group_config(config_path)
         self._boot_id = f'boot-{uuid.uuid4().hex}'
-        self._joined = bool(self._config.configured and self._config.auto_play)
+        self._joined = bool(self._config.configured)
         self._sequence = 0
         self._git_branch = ''
         self._git_hash = ''
@@ -385,7 +385,10 @@ class MotionCoordinationNode(Node):
     def _drive_auto_play(self) -> None:
         if not self._config.is_master or not self._config.auto_play:
             return
-        if not self._joined or not self._config.required_peers:
+        if not self._joined:
+            return
+        required_peers = tuple(self._config.required_peers) or tuple(sorted(set((self._config.pc_id, *self._registry.joined()))))
+        if len(required_peers) < 2:
             return
         with self._lock:
             if self._execution.execution_id or self._coordination_error.get('active'):
@@ -395,7 +398,7 @@ class MotionCoordinationNode(Node):
                 return
         now = time.monotonic()
         missing_or_unhealthy = []
-        for pc_id in self._config.required_peers:
+        for pc_id in required_peers:
             if pc_id == self._config.pc_id:
                 status = 'online'
                 alarm = self._local_alarm_grade()
@@ -414,7 +417,7 @@ class MotionCoordinationNode(Node):
             with self._lock:
                 self._auto_play_triggered = True
             self._start_group_execution(
-                participants_override=tuple(self._config.required_peers),
+                participants_override=required_peers,
                 request={
                     'run_mode': 'continuous',
                     'repeat_mode': 'reinitialize',
