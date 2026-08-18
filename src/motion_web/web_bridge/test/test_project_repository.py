@@ -2528,7 +2528,10 @@ def test_clear_motor_runtime_application_stops_and_allows_delete(
         'runtime_project_id': '',
         'selected_project_id': project_id,
     }
-    bridge._ensure_project_change_allowed = lambda: None
+    bridge._motion_run_status = {'state': 'stopping'}
+    bridge._motion_studio_status = {'state': 'stopping'}
+    bridge._motion_run_lock = threading.Lock()
+    bridge._motion_studio_lock = threading.Lock()
     bridge._coordination_execution_blocker = lambda: ''
     bridge._ethercat_scan_safety_blocker = lambda **_kwargs: ''
     bridge._managed_user_service_active = lambda _unit: True
@@ -2553,9 +2556,30 @@ def test_clear_motor_runtime_application_stops_and_allows_delete(
     assert result['runtime_project_id'] == ''
     assert bridge.applied_motor_config_file == Path()
     assert bridge._runtime_project_id() == ''
+    assert bridge._motion_run_status['state'] == 'stopped'
+    assert bridge._motion_studio_status['state'] == 'idle'
     assert repository.motor_runtime_state().get('target_project_id') in ('', None)
     deleted = bridge.delete_motion_project(project_id)
     assert deleted['permanently_deleted'] is True
+
+
+def test_project_change_blocker_allows_stopping_only_when_requested(tmp_path):
+    repository = ProjectRepository(tmp_path / 'projects')
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge.project_repository = repository
+    bridge._motion_run_status = {'state': 'idle'}
+    bridge._motion_studio_status = {'state': 'stopping'}
+    bridge._motion_run_lock = threading.Lock()
+    bridge._motion_studio_lock = threading.Lock()
+
+    assert 'stopping' in bridge._project_change_blocker()
+    assert bridge._project_change_blocker(allow_studio_stopping=True) == ''
+
+    bridge._motion_studio_status = {'state': 'playing'}
+
+    assert 'playing' in bridge._project_change_blocker(
+        allow_studio_stopping=True
+    )
 
 
 def test_delete_project_permanently_removes_folder_and_older_archives(tmp_path):

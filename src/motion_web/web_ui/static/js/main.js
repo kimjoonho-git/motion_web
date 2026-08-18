@@ -359,7 +359,15 @@ function renderServiceManagement(payload) {
       : '수동 실행';
     el.serviceMode.classList.toggle('warning-text', !managed || !motorManaged);
   }
-  if (el.programRestartButton) el.programRestartButton.disabled = !(managed && motorManaged);
+  const programRestartBlockedReason = !managed
+    ? '상위 프로그램 자동 실행 서비스가 설치되지 않았습니다'
+    : !motorManaged
+      ? 'Motor Manager 분리 서비스가 설치되지 않았습니다'
+      : '';
+  if (el.programRestartButton) {
+    el.programRestartButton.disabled = Boolean(programRestartBlockedReason);
+    el.programRestartButton.title = programRestartBlockedReason || '상위 프로그램을 재시작합니다';
+  }
   if (el.motorControlRestartButton) {
     el.motorControlRestartButton.disabled = (
       !(motorManaged && motorConfigApplied)
@@ -373,7 +381,8 @@ function renderServiceManagement(payload) {
         : '현재 프로젝트의 모터축 설정을 먼저 적용하세요';
   }
   if (el.headerProgramRestartButton) {
-    el.headerProgramRestartButton.disabled = !(managed && motorManaged);
+    el.headerProgramRestartButton.disabled = Boolean(programRestartBlockedReason);
+    el.headerProgramRestartButton.title = programRestartBlockedReason || '상위 프로그램을 재시작합니다';
   }
   appState.emergencyLatched = Boolean(payload?.safety_status?.emergency_latched);
   appState.executionContext = payload?.execution_context || null;

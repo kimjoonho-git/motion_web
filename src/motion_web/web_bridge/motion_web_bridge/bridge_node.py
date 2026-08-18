@@ -3078,8 +3078,14 @@ class MotionWebBridge(Node):
         self,
         *,
         require_fresh_motor_state: bool = True,
+        allow_run_stopping: bool = False,
+        allow_studio_stopping: bool = False,
     ) -> str:
-        blocker = self._project_change_blocker(ignore_motor_lifecycle=True)
+        blocker = self._project_change_blocker(
+            ignore_motor_lifecycle=True,
+            allow_run_stopping=allow_run_stopping,
+            allow_studio_stopping=allow_studio_stopping,
+        )
         if blocker:
             return blocker
 
@@ -3936,7 +3942,13 @@ class MotionWebBridge(Node):
             with scan_progress_lock:
                 self._scan_progress = empty_scan_progress
 
-    def _project_change_blocker(self, *, ignore_motor_lifecycle: bool = False) -> str:
+    def _project_change_blocker(
+        self,
+        *,
+        ignore_motor_lifecycle: bool = False,
+        allow_run_stopping: bool = False,
+        allow_studio_stopping: bool = False,
+    ) -> str:
         lifecycle_lock = getattr(self, '_motor_lifecycle_lock', None)
         if (
             not ignore_motor_lifecycle
@@ -3967,16 +3979,24 @@ class MotionWebBridge(Node):
                 studio_status = dict(getattr(self, '_motion_studio_status', {}) or {})
         run_state = str((run_status or {}).get('state') or 'idle')
         studio_state = str((studio_status or {}).get('state') or 'idle')
-        if run_state in {
+        blocked_run_states = {
             'initializing',
             'initialized',
             'running',
             'waiting',
             'verifying',
             'stopping',
-        }:
+        }
+        if allow_run_stopping:
+            blocked_run_states.discard('stopping')
+        if run_state in blocked_run_states:
             return f'모션 동작 상태가 {run_state}이므로 프로젝트를 변경할 수 없습니다'
-        if studio_state in {'initializing', 'countdown', 'recording', 'playing', 'stopping'}:
+        blocked_studio_states = {
+            'initializing', 'countdown', 'recording', 'playing', 'stopping',
+        }
+        if allow_studio_stopping:
+            blocked_studio_states.discard('stopping')
+        if studio_state in blocked_studio_states:
             return f'모션 스튜디오 상태가 {studio_state}이므로 프로젝트를 변경할 수 없습니다'
         return ''
 
@@ -3992,6 +4012,44 @@ class MotionWebBridge(Node):
     def _ensure_selected_project(self, project_id: Any) -> None:
         if str(project_id or '') != self.project_repository.selected_project_id():
             raise ValueError('현재 선택한 프로젝트 파일만 사용할 수 있습니다')
+
+    def _clear_stopping_project_release_state(self) -> None:
+        run_lock = getattr(self, '_motion_run_lock', None)
+        if run_lock is None:
+            run_status = getattr(self, '_motion_run_status', {}) or {}
+            if str(run_status.get('state') or '') == 'stopping':
+                self._motion_run_status = {
+                    **dict(run_status),
+                    'state': 'stopped',
+                    'message': '실행 적용 해제로 정지 상태를 정리했습니다',
+                }
+        else:
+            with run_lock:
+                run_status = getattr(self, '_motion_run_status', {}) or {}
+                if str(run_status.get('state') or '') == 'stopping':
+                    self._motion_run_status = {
+                        **dict(run_status),
+                        'state': 'stopped',
+                        'message': '실행 적용 해제로 정지 상태를 정리했습니다',
+                    }
+        studio_lock = getattr(self, '_motion_studio_lock', None)
+        if studio_lock is None:
+            studio_status = getattr(self, '_motion_studio_status', {}) or {}
+            if str(studio_status.get('state') or '') == 'stopping':
+                self._motion_studio_status = {
+                    **dict(studio_status),
+                    'state': 'idle',
+                    'message': '실행 적용 해제로 정지 상태를 정리했습니다',
+                }
+        else:
+            with studio_lock:
+                studio_status = getattr(self, '_motion_studio_status', {}) or {}
+                if str(studio_status.get('state') or '') == 'stopping':
+                    self._motion_studio_status = {
+                        **dict(studio_status),
+                        'state': 'idle',
+                        'message': '실행 적용 해제로 정지 상태를 정리했습니다',
+                    }
 
     def create_motion_project(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         self._ensure_project_change_allowed()
@@ -4968,12 +5026,14 @@ class MotionWebBridge(Node):
                 'runtime_project_id': '',
                 **self.snapshot(),
             }
-        try:
-            self._ensure_project_change_allowed()
-        except ValueError as exc:
+        project_blocker = self._project_change_blocker(
+            allow_run_stopping=True,
+            allow_studio_stopping=True,
+        )
+        if project_blocker:
             return {
                 'success': False,
-                'message': str(exc),
+                'message': project_blocker,
                 **self.snapshot(),
             }
         execution_blocker = self._coordination_execution_blocker()
@@ -4985,6 +5045,8 @@ class MotionWebBridge(Node):
             }
         moving_blocker = self._ethercat_scan_safety_blocker(
             require_fresh_motor_state=self._managed_user_service_active(motor_service),
+            allow_run_stopping=True,
+            allow_studio_stopping=True,
         )
         if moving_blocker:
             return {
@@ -5035,6 +5097,7 @@ class MotionWebBridge(Node):
                     pass
             cleared = self.project_repository.clear_motor_runtime_target()
             self._clear_motor_config_selection()
+            self._clear_stopping_project_release_state()
             # Drop launch-time ownership so delete / runtime_project_id update
             # without waiting for a Bridge restart.
             self.applied_motor_config_file = Path()
