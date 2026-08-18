@@ -85,7 +85,7 @@ class MotionCoordinationNode(Node):
         ).expanduser()
         self._config = config or load_group_config(config_path)
         self._boot_id = f'boot-{uuid.uuid4().hex}'
-        self._joined = False
+        self._joined = bool(self._config.configured and self._config.auto_play)
         self._sequence = 0
         self._git_branch = ''
         self._git_hash = ''
@@ -402,8 +402,9 @@ class MotionCoordinationNode(Node):
             else:
                 status = self._registry.status(pc_id, now=now)
                 member = self._registry.member(pc_id)
+                joined = member.joined if member else False
                 alarm = member.alarm_grade if member else 0
-            if status != 'online' or alarm > 0:
+            if status != 'online' or not joined or alarm > 0:
                 missing_or_unhealthy.append(pc_id)
         if missing_or_unhealthy:
             return
