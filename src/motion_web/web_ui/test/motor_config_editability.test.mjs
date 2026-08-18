@@ -8,6 +8,7 @@ import {
   motorControlConfigurationError,
   motorConfigApplyIdentityBlock,
   motorModelProfileApplyBlock,
+  motorRuntimeReadyForAppliedConfig,
 } from '../static/js/motor_config.js';
 
 
@@ -62,6 +63,34 @@ test('motion control requires applied project config without depending on scan h
       motor_config_applied: true,
     }, 5),
     '',
+  );
+});
+
+
+test('applied config is complete only after runtime feedback is ready', () => {
+  assert.equal(
+    motorRuntimeReadyForAppliedConfig({
+      project_scope: {
+        runtime_matches_selected: true,
+        motor_config_applied: true,
+      },
+      service_management: {
+        runtime: { phase: 'waiting_motor_feedback' },
+      },
+    }),
+    false,
+  );
+  assert.equal(
+    motorRuntimeReadyForAppliedConfig({
+      project_scope: {
+        runtime_matches_selected: true,
+        motor_config_applied: true,
+      },
+      service_management: {
+        runtime: { phase: 'ready' },
+      },
+    }),
+    true,
   );
 });
 

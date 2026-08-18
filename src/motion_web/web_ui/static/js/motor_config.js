@@ -126,6 +126,14 @@ export function motorModelProfileApplyBlock(motors) {
     + '프로젝트 저장은 가능하지만 모터 실행 설정으로 적용할 수 없습니다.';
 }
 
+export function motorRuntimeReadyForAppliedConfig(state) {
+  const scope = state?.project_scope || {};
+  const runtime = state?.service_management?.runtime || {};
+  return scope.runtime_matches_selected === true
+    && scope.motor_config_applied === true
+    && runtime.phase === 'ready';
+}
+
 export function createMotorConfigController({
   el,
   operationProgress,
@@ -413,8 +421,7 @@ export function createMotorConfigController({
   }
 
   function selectedMotorConfigAlreadyApplied() {
-    const scope = getLatestState?.()?.project_scope || {};
-    return scope.runtime_matches_selected === true && scope.motor_config_applied === true;
+    return motorRuntimeReadyForAppliedConfig(getLatestState?.() || {});
   }
 
   function directEthercatScanAvailable() {
