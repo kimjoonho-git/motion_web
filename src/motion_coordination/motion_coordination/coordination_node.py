@@ -66,6 +66,15 @@ def _set_stamp(stamp: Any, value: float) -> None:
         stamp.nanosec = 0
 
 
+def _message_uint32(message: Any, field_name: str, default: int = 0) -> int:
+    return int(getattr(message, field_name, default) or 0)
+
+
+def _set_optional_message_field(message: Any, field_name: str, value: Any) -> None:
+    if hasattr(message, field_name):
+        setattr(message, field_name, value)
+
+
 class MotionCoordinationNode(Node):
     def __init__(self, config: Optional[GroupConfig] = None) -> None:
         super().__init__('motion_group_coordinator')
@@ -1628,7 +1637,9 @@ class MotionCoordinationNode(Node):
         message.participant_ids = list(participants)
         message.repeat_mode = str(repeat_mode)
         message.dwell_sec = float(dwell_sec)
-        message.target_cycle_count = int(target_cycle_count)
+        _set_optional_message_field(
+            message, 'target_cycle_count', int(target_cycle_count)
+        )
         message.initialization_only = bool(initialization_only)
         message.run_mode = str(run_mode)
         return message
@@ -1789,7 +1800,9 @@ class MotionCoordinationNode(Node):
                 self._execution.activate_claim(
                     message.execution_id, message.coordinator_id, participants,
                 )
-                self._execution.target_cycle_count = message.target_cycle_count
+                self._execution.target_cycle_count = _message_uint32(
+                    message, 'target_cycle_count'
+                )
             else:
                 self._execution.coordinator_id = message.coordinator_id
                 self._execution.participants = participants

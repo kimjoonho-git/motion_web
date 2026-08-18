@@ -304,13 +304,43 @@ source install/setup.bash
 
 ### 4-2. 코드 갱신 (이미 설치된 PC)
 
-코드를 새로 다운로드받고 빌드 및 재시작하는 가장 쉬운 방법은 **원클릭 자동 업데이트 스크립트**를 사용하는 것입니다. 패키지별 빌드나 서비스 재시작 명령어를 직접 입력할 필요가 없습니다.
+이미 설치된 다른 PC는 먼저 사용자가 직접 Git 변경분을 받은 뒤 업데이트
+스크립트를 실행합니다. 이 스크립트는 자동 `git pull`을 하지 않습니다.
 
 ```bash
-~/ros2_ws/src/motion_web/update.sh
+cd ~/ros2_ws
+git fetch origin
+git checkout main
+git pull origin main
+git submodule update --init --recursive
 ```
 
-동작 · `git pull` + `colcon build` + `motion-control.service` 재시작이 자동으로 연속 진행되며 설치 경로를 스스로 계산하므로 다른 PC에서도 동일하게 사용할 수 있습니다.
+Git 수신이 끝나면 다음 스크립트 하나로 메시지 인터페이스 빌드, 관련 패키지
+빌드, ROS 2 daemon 초기화와 서비스 재시작을 일괄 적용합니다.
+
+```bash
+cd ~/ros2_ws
+./src/motion_web/update.sh
+```
+
+동작:
+
+```text
+git status 확인
+motion_coordination_interfaces 빌드
+motion_coordination 빌드
+motion_runtime 빌드
+motion_web_bridge 빌드
+motion_web_ui 빌드
+ros2 daemon stop/start
+motion-coordination.service 재시작
+motion-control.service 재시작
+```
+
+`GroupCommand` 같은 DDS 메시지 정의가 바뀐 경우에는
+`motion_coordination_interfaces` 빌드와 `ros2 daemon` 초기화가 필수입니다.
+이 단계를 건너뛰면 다른 PC에서 구버전 메시지 클래스를 계속 사용해 PC 연동이
+거부될 수 있습니다.
 
 (기존 `scripts/sync_branch.sh` 스크립트를 통한 특정 브랜치 동기화 기능도 여전히 지원됩니다.)
 
@@ -331,6 +361,30 @@ MOTION_WEB_BRANCH=main bash scripts/commit_branch.sh "커밋 메시지" --push
 `motion_system` submodule 변경이 있으면 중단합니다.
 
 수동으로 커밋할 때는 [8. Git 작업 방법](#8-git-작업-방법)을 따릅니다.
+
+### 4-4. Codex 자동 설치·업데이트 지시문
+
+다른 PC에서 Codex에게 작업을 맡길 때는 아래 문장을 그대로 전달합니다.
+
+최초 설치:
+
+```text
+README의 최초 설치 절차대로 이 PC에 설치해줘.
+src/motion_system은 명시 요청 없으면 수정하지 마.
+실행 검증과 실물 검증을 구분해서 보고해줘.
+```
+
+기존 PC 업데이트:
+
+```text
+README의 코드 갱신 절차대로 main 수동 수신 후 update.sh까지 실행해줘.
+motion_coordination_interfaces 빌드, ros2 daemon 초기화, motion-coordination.service 재시작 여부를 확인해줘.
+src/motion_system은 명시 요청 없으면 수정하지 마.
+실행 검증과 실물 검증을 구분해서 보고해줘.
+```
+
+Codex가 수정이나 설치를 수행한 뒤에는 변경 파일, 실행한 명령, 성공·실패
+결과와 실물 검증 여부를 분리해서 확인합니다.
 
 ## 5. 자동실행 등록
 
@@ -392,6 +446,42 @@ loginctl show-user "$(id -un)" -p Linger
 systemctl --user is-enabled motion-control.service motion-motor.service motion-coordination.service
 ss -ltnp | grep ':8000'
 ```
+
+### 6-1. PC 연동 업데이트 문제 해결
+
+`GROUP_START_REJECTED`와 함께 다음 형태의 오류가 나오면 다른 PC의 DDS 메시지
+산출물이 구버전일 가능성이 큽니다.
+
+```text
+'GroupCommand' object has no attribute 'target_cycle_count'
+```
+
+조치 순서:
+
+```bash
+cd ~/ros2_ws
+git fetch origin
+git checkout main
+git pull origin main
+git submodule update --init --recursive
+./src/motion_web/update.sh
+systemctl --user status motion-coordination.service motion-control.service
+journalctl --user -u motion-coordination.service -n 80
+```
+
+확인 기준:
+
+```text
+motion_coordination_interfaces 빌드 완료
+ros2 daemon stop/start 완료
+motion-coordination.service 재시작 완료
+motion-control.service 재시작 완료
+브라우저 Ctrl+F5 후 DDS 그룹 참가 상태 확인
+```
+
+여러 PC 중 한 대만 업데이트해도 메시지 구조가 맞지 않으면 연동이 실패할 수
+있습니다. PC 연동에 참가하는 모든 PC에서 같은 Git 커밋과 같은 메시지 빌드
+상태를 맞춥니다.
 
 ## 7. 네트워크 주의사항
 

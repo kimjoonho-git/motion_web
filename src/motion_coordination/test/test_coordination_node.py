@@ -722,6 +722,19 @@ def test_winning_simultaneous_claim_cancels_and_resets_losing_coordinator():
     assert node._execution.coordinator_id == 'pc-a'
 
 
+def test_execution_claim_defaults_missing_target_cycle_count():
+    node = _node()
+    incoming = SimpleNamespace(
+        execution_id='exec-a',
+        coordinator_id='pc-a',
+    )
+
+    node._accept_execution_claim(incoming, ('pc-a',))
+
+    assert node._execution.execution_id == 'exec-a'
+    assert node._execution.target_cycle_count == 0
+
+
 def test_execution_claim_rejects_different_local_joined_roster():
     node = _node()
     node._registry.update(Member(

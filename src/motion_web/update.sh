@@ -1,28 +1,43 @@
-#!/bin/bash
-# 테스트 단계용 원클릭 자동 업데이트 스크립트 (모든 PC 호환)
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# 수동 Git 수신 후 적용 스크립트 (모든 PC 호환)
 
 # 스크립트가 위치한 폴더(src/motion_web)와 최상위 워크스페이스 폴더 자동 계산
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 echo "========================================="
-echo "1. Git 최신 코드 가져오는 중... ($SCRIPT_DIR)"
+echo "1. 수동 Git 수신 확인... ($SCRIPT_DIR)"
 echo "========================================="
-cd "$SCRIPT_DIR" || exit
-git pull origin main
+cd "$SCRIPT_DIR"
+git status --short
 
 echo ""
 echo "========================================="
 echo "2. ROS 2 패키지 자동 빌드 중... ($WORKSPACE_DIR)"
 echo "========================================="
-cd "$WORKSPACE_DIR" || exit
-colcon build --packages-select motion_web_ui motion_web_bridge motion_coordination motion_runtime
+cd "$WORKSPACE_DIR"
+colcon build --packages-select \
+  motion_coordination_interfaces \
+  motion_coordination \
+  motion_runtime \
+  motion_web_bridge \
+  motion_web_ui
 
 echo ""
 echo "========================================="
-echo "3. 서비스 재시작 및 적용 중..."
+echo "3. ROS 2 daemon 초기화 중..."
+echo "========================================="
+ros2 daemon stop || true
+ros2 daemon start
+
+echo ""
+echo "========================================="
+echo "4. 서비스 재시작 및 적용 중..."
 echo "========================================="
 systemctl --user daemon-reload
+systemctl --user restart motion-coordination.service
 systemctl --user restart motion-control.service
 
 echo ""
