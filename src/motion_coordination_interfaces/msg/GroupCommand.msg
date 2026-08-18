@@ -12,3 +12,4 @@ string repeat_mode
 float64 dwell_sec
 bool initialization_only
 string run_mode
+uint32 target_cycle_count

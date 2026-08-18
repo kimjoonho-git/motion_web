@@ -181,7 +181,14 @@ export function createCoordinationController({ el }) {
     if (el.coordinationPeerCount) el.coordinationPeerCount.textContent = `${peers.length + (joined ? 1 : 0)}대`;
     if (el.coordinationExecutionState) {
       const coordinator = execution.coordinator_id ? ` · 진행 ${execution.coordinator_id}` : '';
-      const cycle = Number(execution.cycle_number || 0) > 0 ? ` · ${execution.cycle_number}회차` : '';
+      const tc = Number(execution.target_cycle_count || 0);
+      const stopAfter = execution.stop_after_cycle === true;
+      let cycle = '';
+      if (tc > 0) {
+        cycle = ` · [${Number(execution.cycle_number || 0)} / ${tc}회차]${stopAfter ? '(정지 중)' : ''}`;
+      } else if (Number(execution.cycle_number || 0) > 0) {
+        cycle = ` · ${execution.cycle_number}회차${stopAfter ? '(정지 중)' : ''}`;
+      }
       const spread = execution.start_spread_ms == null ? '' : ` · 시작 편차 ${Number(execution.start_spread_ms).toFixed(3)}ms`;
       el.coordinationExecutionState.textContent = `그룹 실행 · ${stateText(execution.state)}${coordinator}${cycle}${spread}`;
       el.coordinationExecutionState.className = execution.start_within_20ms === false
@@ -243,44 +250,8 @@ export function createCoordinationController({ el }) {
     if (el.coordinationStopAfterButton) el.coordinationStopAfterButton.disabled = loading || !active;
     if (el.coordinationStopNowButton) el.coordinationStopNowButton.disabled = loading || !active;
     
-    if (el.coordinationTargetStopButton && el.coordinationTargetStopCycle) {
-      el.coordinationTargetStopButton.disabled = loading || !active;
-      const target = parseInt(el.coordinationTargetStopCycle.value, 10);
-      if (!isNaN(target) && target > 0) {
-        let maxMotion = 0;
-        peers.forEach((p) => {
-          if (p.motion_duration_sec > maxMotion) maxMotion = p.motion_duration_sec;
-        });
-        if (maxMotion === 0) maxMotion = 1.0;
-        
-        const currentCycle = execution.cycle_number || 0;
-        const remaining = Math.max(0, target - currentCycle);
-        
-        let sec = remaining * maxMotion;
-        if (['idle', 'preparing', 'initializing'].includes(execution.state)) {
-          sec += 5.0; // 예상 초기화 대기 시간 추가
-        }
-        
-        const h = Math.floor(sec / 3600);
-        const m = Math.floor((sec % 3600) / 60);
-        const s = Math.floor(sec % 60);
-        let timeStr = '';
-        if (h > 0) timeStr += `${h}시간 `;
-        if (m > 0 || h > 0) timeStr += `${m}분 `;
-        timeStr += `${s}초`;
-        
-        if (el.coordinationTargetStopEstimate) {
-          el.coordinationTargetStopEstimate.textContent = remaining > 0 ? `예상 남은 시간: 약 ${timeStr}` : '목표 회차 도달됨';
-        }
-        
-        if (currentCycle >= target && active && execution.stop_after_cycle !== true && !loading) {
-          el.coordinationTargetStopCycle.value = '';
-          if (el.coordinationTargetStopEstimate) el.coordinationTargetStopEstimate.textContent = '지정 회차 도달: 정지 명령 전송됨';
-          control('stop_after_cycle');
-        }
-      } else if (el.coordinationTargetStopEstimate) {
-        el.coordinationTargetStopEstimate.textContent = '';
-      }
+    if (el.coordinationTargetStopCycle) {
+      el.coordinationTargetStopCycle.disabled = loading || active;
     }
 
     if (el.coordinationAcknowledgeErrorButton) el.coordinationAcknowledgeErrorButton.disabled = loading || !groupErrorActive;
@@ -458,10 +429,12 @@ export function createCoordinationController({ el }) {
   function groupRunOptions(runMode) {
     const repeatMode = String(el.coordinationRepeatMode?.value || 'direct');
     const dwellSec = Number(el.coordinationDwellSec?.value);
+    const targetCycleCount = Math.max(0, parseInt(el.coordinationTargetStopCycle?.value || '0', 10));
     return {
       run_mode: runMode,
       repeat_mode: repeatMode,
       dwell_sec: Number.isFinite(dwellSec) && dwellSec >= 0 ? dwellSec : 0,
+      target_cycle_count: Number.isFinite(targetCycleCount) ? targetCycleCount : 0,
     };
   }
 
@@ -483,12 +456,6 @@ export function createCoordinationController({ el }) {
       }
     });
     el.coordinationStopNowButton?.addEventListener('click', () => control('stop_now'));
-    
-    el.coordinationTargetStopButton?.addEventListener('click', () => {
-      if (el.coordinationTargetStopCycle && el.coordinationTargetStopCycle.value) {
-        showAlert(`목표 회차(${el.coordinationTargetStopCycle.value}회)가 설정되었습니다. 해당 회차 도달 시 자동으로 '현재 회차 후 정지'가 전송됩니다.`, {title: '지정 회차 정지 예약', tone: 'info'});
-      }
-    });
 
     el.coordinationAcknowledgeErrorButton?.addEventListener('click', () => control('acknowledge_group_error'));
     [el.coordinationDisplayName, el.coordinationGroupId, el.coordinationDomainId, el.coordinationEnabled, el.coordinationIsMaster, el.coordinationRequiredPeers]

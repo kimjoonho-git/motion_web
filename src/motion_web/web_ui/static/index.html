@@ -327,6 +327,9 @@
                     <label class="compact-field"><span>대기 시간(초)</span>
                       <input id="coordinationDwellSec" type="number" min="0" max="86400" step="0.1" value="0">
                     </label>
+                    <label class="compact-field"><span>정지 목표(N)회차</span>
+                      <input id="coordinationTargetStopCycle" type="number" min="0" max="10000" step="1" value="0" title="0은 무한 반복입니다">
+                    </label>
                   </div>
                   <div class="coord-group-buttons">
                     <button id="coordinationInitializeButton" type="button" disabled>초기 위치 이동</button>
@@ -1266,6 +1269,9 @@
                     </label>
                     <label id="motionAutomationDwellWrap" class="compact-field hidden"><span>대기 시간(초)</span>
                       <input id="motionAutomationDwellSec" type="number" min="0" max="86400" step="0.1" value="5.0" disabled>
+                    </label>
+                    <label id="motionRunTargetCycleWrap" class="compact-field"><span>정지 목표(N)회차</span>
+                      <input id="motionRunTargetCycle" type="number" min="0" max="10000" step="1" value="0" title="0은 무한 반복입니다">
                     </label>
                   </div>
                   <div class="coord-group-buttons">

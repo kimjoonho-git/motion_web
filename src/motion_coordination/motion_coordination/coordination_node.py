@@ -1255,6 +1255,12 @@ class MotionCoordinationNode(Node):
             dwell_sec = float(request.get('dwell_sec') or 0.0)
         except (TypeError, ValueError) as exc:
             raise ValueError('그룹 대기 시간은 숫자여야 합니다') from exc
+        try:
+            target_cycle_count = int(request.get('target_cycle_count') or 0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError('목표 정지 회차가 올바르지 않습니다') from exc
+        if target_cycle_count < 0:
+            raise ValueError('목표 정지 회차는 0 이상이어야 합니다')
         if run_mode not in {'once', 'continuous'}:
             raise ValueError('그룹 실행 방식은 1회 또는 연속이어야 합니다')
         if repeat_mode not in {'direct', 'dwell', 'reinitialize', 'dwell_reinitialize'}:
@@ -1300,6 +1306,7 @@ class MotionCoordinationNode(Node):
             execution_id = self._execution.begin(
                 self._config.pc_id, participants,
                 run_mode=run_mode, repeat_mode=repeat_mode, dwell_sec=dwell_sec,
+                target_cycle_count=target_cycle_count,
                 initialization_only=initialization_only,
             )
             self._sync_estimators.clear()
@@ -1317,6 +1324,7 @@ class MotionCoordinationNode(Node):
                 command='prepare', execution_id=execution_id,
                 cycle_number=0, participants=participants,
                 repeat_mode=repeat_mode, dwell_sec=dwell_sec,
+                target_cycle_count=target_cycle_count,
                 initialization_only=initialization_only,
                 run_mode=run_mode,
             )
@@ -1601,6 +1609,7 @@ class MotionCoordinationNode(Node):
         participants: tuple[str, ...], command_id: str = '',
         scheduled_monotonic: float = 0.0,
         repeat_mode: str = '', dwell_sec: float = 0.0,
+        target_cycle_count: int = 0,
         initialization_only: bool = False,
         run_mode: str = '',
     ) -> GroupCommand:
@@ -1619,6 +1628,7 @@ class MotionCoordinationNode(Node):
         message.participant_ids = list(participants)
         message.repeat_mode = str(repeat_mode)
         message.dwell_sec = float(dwell_sec)
+        message.target_cycle_count = int(target_cycle_count)
         message.initialization_only = bool(initialization_only)
         message.run_mode = str(run_mode)
         return message
@@ -1779,6 +1789,7 @@ class MotionCoordinationNode(Node):
                 self._execution.activate_claim(
                     message.execution_id, message.coordinator_id, participants,
                 )
+                self._execution.target_cycle_count = message.target_cycle_count
             else:
                 self._execution.coordinator_id = message.coordinator_id
                 self._execution.participants = participants
@@ -2118,6 +2129,8 @@ class MotionCoordinationNode(Node):
                     'coordinator_id': self._execution.coordinator_id,
                     'participants': list(participants),
                     'cycle_number': cycle_number,
+                    'target_cycle_count': self._execution.target_cycle_count,
+                    'stop_after_cycle': self._execution.stop_after_cycle,
                     'initialize_spread_ms': self._execution.last_initialize_spread_ms,
                     'initialize_within_20ms': self._execution.initialize_within_tolerance(),
                     'start_spread_ms': self._execution.last_start_spread_ms,

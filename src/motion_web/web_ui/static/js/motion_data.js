@@ -1,3 +1,4 @@
+import { createMotionFileManager } from './motion_file_manager.js';
 import {
   checkMotionRun,
   configureMotionAutomation,
@@ -833,6 +834,7 @@ export function createMotionDataController({
     const initialMoveTimeSec = motionRunInitialMoveTimeSec();
     const repeatMode = String(el.motionAutomationRepeatMode?.value || 'reinitialize');
     const dwellSec = Number(el.motionAutomationDwellSec?.value);
+    const targetCycleCount = Math.max(0, parseInt(el.motionRunTargetCycle?.value || '0', 10));
     return {
       motion_file_id: registeredMotionFileId({ motion_file_id: registeredMotionFileIdValue }),
       mapping_file_id: selectedMappingId || '',
@@ -840,6 +842,7 @@ export function createMotionDataController({
       run_mode: 'once',
       repeat_mode: repeatMode,
       dwell_sec: Number.isFinite(dwellSec) ? dwellSec : 0.0,
+      target_cycle_count: Number.isFinite(targetCycleCount) ? targetCycleCount : 0,
     };
   }
 
@@ -950,11 +953,17 @@ export function createMotionDataController({
   function motionRunProgressText(status = motionRunStatus || {}) {
     const state = String(status?.state || 'idle');
     const progress = motionRunEffectiveProgress(status);
+    const targetCycle = Number(status?.summary?.target_cycle_count) || 0;
+    const currentCycle = Number(status?.current_cycle) || 0;
+    const cycleText = targetCycle > 0 
+      ? ` [${formatInt(currentCycle)} / ${formatInt(targetCycle)}회차]` 
+      : (currentCycle > 0 ? ` [${formatInt(currentCycle)}회차]` : '');
+    
     if (state === 'initializing') {
-      return `초기 위치 이동 ${formatNumber(progress.elapsed_sec, 2)} / ${formatNumber(progress.duration_sec, 2)} s`;
+      return `초기 위치 이동 ${formatNumber(progress.elapsed_sec, 2)} / ${formatNumber(progress.duration_sec, 2)} s${cycleText}`;
     }
     if (state === 'running' || state === 'stopping') {
-      return `모션 진행 ${formatNumber(progress.elapsed_sec, 2)} / ${formatNumber(progress.duration_sec, 2)} s`;
+      return `모션 진행 ${formatNumber(progress.elapsed_sec, 2)} / ${formatNumber(progress.duration_sec, 2)} s${cycleText}`;
     }
     if (state === 'waiting') return String(status?.message || '반복 대기 중');
     if (state === 'verifying') return '최종 위치 확인 중';
@@ -2533,159 +2542,24 @@ export function createMotionDataController({
     renderMotionRunPanel();
   }
 
-  async function loadFiles(selectFileId = selectedFileId) {
-    const loadToken = ++fileLoadToken;
-    loading = true;
-    setMessage('파일 목록 불러오는 중');
-    render();
-    try {
-      const payload = await fetchMotionFiles();
-      if (loadToken !== fileLoadToken) return;
-      files = Array.isArray(payload.files) ? payload.files : [];
-      if (selectFileId && files.some((file) => file.id === selectFileId)) {
-        await selectFile(selectFileId, loadToken);
-        return;
-      }
-      if (selectedFileId && !files.some((file) => file.id === selectedFileId)) {
-        selectedFileId = null;
-        selectedFile = null;
-      }
-      setMessage(payload.message || '파일 목록 갱신 완료');
-    } catch (error) {
-      if (loadToken !== fileLoadToken || error?.staleProjectResponse) return;
-      setMessage(`파일 목록 실패: ${error?.message || error}`);
-    } finally {
-      if (loadToken !== fileLoadToken) return;
-      loading = false;
-      render();
-    }
-  }
-
-  async function selectFile(fileId, requestToken = null) {
-    const loadToken = requestToken ?? ++fileLoadToken;
-    if (loadToken !== fileLoadToken) return;
-    selectedFileId = fileId;
-    loading = true;
-    setMessage('파일 상세 불러오는 중');
-    render();
-    try {
-      const payload = await fetchMotionFile(fileId);
-      if (loadToken !== fileLoadToken) return;
-      selectedFile = payload.file || null;
-      files = Array.isArray(payload.files) ? payload.files : files;
-      setMessage(payload.message || '파일 상세 갱신 완료');
-    } catch (error) {
-      if (loadToken !== fileLoadToken || error?.staleProjectResponse) return;
-      selectedFile = null;
-      setMessage(`파일 상세 실패: ${error?.message || error}`);
-    } finally {
-      if (loadToken !== fileLoadToken) return;
-      loading = false;
-      render();
-    }
-  }
-
-  async function exportSelectedFileToStudio() {
-    const file = selectedFile;
-    if (!file) {
-      await showAlert(
-        '스튜디오로 내보낼 모션 파일을 먼저 선택하세요.',
-        { title: '스튜디오 내보내기', confirmLabel: '확인', tone: 'warning' },
-      );
-      return;
-    }
-    loading = true;
-    setMessage(`${file.filename} 스튜디오 내보내기 중`);
-    render();
-    try {
-      const result = await onExportMotionFileToStudio(file.id);
-      if (!result || result.success === false) {
-        throw new Error(result?.message || '스튜디오가 모션 파일을 받지 못했습니다');
-      }
-      const layers = Array.isArray(result.project?.layers)
-        ? result.project.layers
-        : (result.project_patch?.upsert_layers || []);
-      const exportedLayer = [...layers].reverse().find(
-        (layer) => layer?.source_motion_file_id === file.id,
-      );
-      const layerName = String(
-        exportedLayer?.name || file.filename.replace(/\.json$/i, ''),
-      );
-      setMessage(`스튜디오 내보내기 완료: ${file.filename} → ${layerName}`);
+  const fileManager = createMotionFileManager({
+    onFilesChanged: (newFiles) => { files = newFiles; render(); },
+    onFileSelected: (id, file) => { selectedFileId = id; selectedFile = file; render(); },
+    onExportToStudio: async (id) => {
+      const result = await onExportMotionFileToStudio(id);
       await onProjectFilesChange?.();
-      await showAlert(
-        `모션 파일을 스튜디오의 독립 레이어로 내보냈습니다.\n`
-        + `파일 · ${file.filename}\n레이어 · ${layerName}`,
-        { title: '스튜디오 내보내기 완료', confirmLabel: '확인', tone: 'info' },
-      );
-    } catch (error) {
-      const message = error?.message || String(error);
-      setMessage(`스튜디오 내보내기 실패: ${message}`);
-      await showAlert(
-        `모션 파일을 스튜디오로 내보내지 못했습니다.\n원인 · ${message}`,
-        { title: '스튜디오 내보내기 실패', confirmLabel: '확인', tone: 'danger' },
-      );
-    } finally {
-      loading = false;
-      render();
-    }
-  }
+      return result;
+    },
+    setMessage: setMessage,
+    setLoading: (l) => { loading = l; render(); },
+    checkIsFileRegistered: (id) => id === registeredMotionFileIdValue,
+  });
 
-  async function showMotionFileDeleteFailure(message) {
-    await showAlert(
-      String(message || '모션 파일을 삭제할 수 없습니다'),
-      { title: '모션 파일 삭제 불가', confirmLabel: '확인', tone: 'warning' },
-    );
-  }
+  async function loadFiles(id) { return fileManager.loadFiles(id); }
+  async function selectFile(id, token) { return fileManager.selectFile(id, token); }
+  async function exportSelectedFileToStudio() { return fileManager.exportSelectedFileToStudio(); }
+  async function deleteSelectedFile() { return fileManager.deleteSelectedFile(); }
 
-  async function deleteSelectedFile() {
-    if (!selectedFileId) return;
-    if (selectedFileId === registeredMotionFileIdValue) {
-      await showMotionFileDeleteFailure(
-        '재생 등록된 모션 파일은 삭제할 수 없습니다.\n'
-        + '먼저 재생 등록을 해제한 뒤 다시 삭제하세요.',
-      );
-      return;
-    }
-    const confirmed = await showConfirm(
-      `선택한 모션 파일을 삭제합니다.\n${selectedFileId}`,
-      { title: '모션 파일 삭제', confirmLabel: '삭제', tone: 'danger' },
-    );
-    if (!confirmed) return;
-    loading = true;
-    setMessage('파일 삭제 중');
-    render();
-    try {
-      const payload = await deleteMotionFile(selectedFileId);
-      files = Array.isArray(payload.files) ? payload.files : [];
-      if (payload.success === false) {
-        const message = payload.message || '모션 파일을 삭제할 수 없습니다';
-        setMessage(`삭제 실패: ${message}`);
-        await showMotionFileDeleteFailure(message);
-        return;
-      }
-      selectedFileId = null;
-      selectedFile = null;
-      setMessage(payload.message || '파일 삭제 완료');
-      try {
-        await onProjectFilesChange?.();
-      } catch (refreshError) {
-        const refreshMessage = refreshError?.message || String(refreshError);
-        setMessage(`파일 삭제 완료 · 프로젝트 목록 갱신 실패: ${refreshMessage}`);
-        await showAlert(
-          `모션 파일은 삭제됐지만 프로젝트 목록을 갱신하지 못했습니다.\n${refreshMessage}`,
-          { title: '프로젝트 목록 갱신 필요', confirmLabel: '확인', tone: 'warning' },
-        );
-      }
-    } catch (error) {
-      const message = error?.message || String(error);
-      setMessage(`삭제 실패: ${message}`);
-      await showMotionFileDeleteFailure(message);
-    } finally {
-      loading = false;
-      render();
-    }
-  }
 
   async function refreshMotionRunStatus() {
     motionRunLoading = true;

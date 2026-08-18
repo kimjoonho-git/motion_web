@@ -109,6 +109,7 @@ class GroupExecution:
         self.run_mode = 'continuous'
         self.repeat_mode = 'reinitialize'
         self.dwell_sec = 0.0
+        self.target_cycle_count = 0
         self.initialization_only = False
         self.last_start_spread_ms: Optional[float] = None
         self.last_initialize_spread_ms: Optional[float] = None
@@ -152,6 +153,7 @@ class GroupExecution:
         run_mode: str = 'continuous',
         repeat_mode: str = 'reinitialize',
         dwell_sec: float = 0.0,
+        target_cycle_count: int = 0,
         initialization_only: bool = False,
     ) -> str:
         selected = tuple(sorted(set(str(value) for value in participants if str(value))))
@@ -170,6 +172,7 @@ class GroupExecution:
         self.run_mode = str(run_mode)
         self.repeat_mode = str(repeat_mode)
         self.dwell_sec = float(dwell_sec)
+        self.target_cycle_count = int(target_cycle_count)
         self.initialization_only = bool(initialization_only)
         self.state = 'preparing'
         return self.execution_id
@@ -256,6 +259,8 @@ class GroupExecution:
         self.motion_completed.add(pc_id)
         if self.motion_completed == set(self.participants):
             self.state = 'motion_completed'
+            if self.target_cycle_count > 0 and self.cycle_number >= self.target_cycle_count:
+                self.request_stop_after_cycle()
 
     def cycle_initialize_action(self, *, now: float) -> ScheduledAction:
         """Schedule the next cycle's initialization only after all motions finish."""

@@ -1929,14 +1929,20 @@ class MotionRunManager(Node):
                         state='error',
                     )
                     return
-                if self._graceful_stop_event.is_set():
-                    self._finish_cycle_stop(
-                        plan,
-                        motion_started_at,
-                        cycle_count,
-                        '현재 모션 회차 완료 후 정지',
-                    )
-                    return
+                target_cycle_count = int(plan['summary'].get('target_cycle_count') or 0)
+                reached_target = target_cycle_count > 0 and cycle_count >= target_cycle_count
+                if self._graceful_stop_event.is_set() or reached_target:
+                    stop_message = '설정된 목표 회차 도달로 자동 정지' if reached_target and not self._graceful_stop_event.is_set() else '현재 모션 회차 완료 후 정지'
+                    if automation_run:
+                        self._finish_cycle_stop(
+                            plan,
+                            motion_started_at,
+                            cycle_count,
+                            stop_message,
+                        )
+                        return
+                    else:
+                        break
                 if repeat_mode in {'dwell', 'dwell_reinitialize'} and dwell_sec > 0.0:
                     if not self._wait_between_cycles(
                         plan,
@@ -2426,6 +2432,12 @@ class MotionRunManager(Node):
             synchronized_repeat_count = int(payload.get('synchronized_repeat_count') or 0)
         except (TypeError, ValueError) as exc:
             raise ValueError('동기 반복 횟수가 올바르지 않습니다') from exc
+        try:
+            target_cycle_count = int(payload.get('target_cycle_count') or 0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError('목표 정지 회차가 올바르지 않습니다') from exc
+        if target_cycle_count < 0:
+            raise ValueError('목표 정지 회차는 0 이상이어야 합니다')
         if synchronized_repeat_count and (
             scheduled_start_at <= time.time() or synchronized_cycle_sec <= 0.0
             or not 1 <= synchronized_repeat_count <= 10000
@@ -2808,6 +2820,7 @@ class MotionRunManager(Node):
                 'synchronized_cycle_sec': synchronized_cycle_sec,
                 'synchronized_repeat_count': synchronized_repeat_count,
                 'operation_generation': operation_generation,
+                'target_cycle_count': target_cycle_count,
             },
         }
 

@@ -189,6 +189,7 @@ class CoordinationWebBridge:
                     'run_mode': payload.get('run_mode', 'continuous'),
                     'repeat_mode': payload.get('repeat_mode', 'direct'),
                     'dwell_sec': payload.get('dwell_sec', 0.0),
+                    'target_cycle_count': payload.get('target_cycle_count', 0),
                 })
             result = self._local_api('/control', request)
         except (OSError, ValueError) as exc:
