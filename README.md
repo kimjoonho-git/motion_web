@@ -540,8 +540,8 @@ sudo loginctl enable-linger "$(id -un)"
 
 이후에는 재부팅할 때 다음 서비스가 자동으로 실행됩니다.
 
-- `motion-control.service`: 웹·프로젝트·모션 제어 서비스
-- `motion-motor.service`: 검증된 프로젝트 모터 실행 설정이 있을 때 Motor Manager
+- `motion-control.service`: 웹·프로젝트·모션 제어 서비스 (`LimitRTPRIO=99`, `LimitMEMLOCK=infinity` 적용 - 하위 모터 재시작 스크립트 및 런타임 RT 권한 보장)
+- `motion-motor.service`: 검증된 프로젝트 모터 실행 설정이 있을 때 Motor Manager (`LimitRTPRIO=99`, `LimitMEMLOCK=infinity` 적용)
 - `motion-coordination.service`: PC 간 DDS 그룹 상태 공유·실행 조정
 
 웹 UI의 **PC 성능 (btop)** 탭을 사용하기 위해 `btop`을 자동 실행하려면 아래 명령어로 서비스를 등록합니다.
