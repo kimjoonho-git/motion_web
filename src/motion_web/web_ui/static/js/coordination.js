@@ -3,7 +3,7 @@ import {
   sendCoordinationControl,
   saveCoordinationSettings,
 } from './api.js?v=20260810-dds-release-6';
-import { showAlert, showConfirm } from './ui_dialogs.js?v=20260727-popup-common-3';
+import { showAlert, showConfirm, dismissAllDialogs } from './ui_dialogs.js?v=20260727-popup-common-3';
 
 function text(value) {
   return String(value ?? '').replace(/[&<>"']/g, (character) => ({
@@ -280,30 +280,39 @@ export function createCoordinationController({ el }) {
       el.coordinationErrorSummary.classList.toggle('coordination-state-bad', Boolean(failure));
     }
     if (groupErrorActive && failure) {
-      const errorKey = [
-        coordinationError.execution_id || 'no-execution',
-        coordinationError.code || 'GROUP_ERROR',
-        failure,
-      ].join('|');
-      if (shownCoordinationError !== errorKey && typeof document !== 'undefined') {
-        shownCoordinationError = errorKey;
-        const pc = coordinationError.pc_id ? `\n발생 PC: ${coordinationError.pc_id}` : '';
-        const cycle = Number(execution.cycle_number || 0);
-        const cycleText = cycle > 0 ? `\n회차: ${cycle}회차` : '';
-        const isDisconnect = coordinationError.code === 'GROUP_PARTICIPANT_DISCONNECTED';
-        const messageBody = isDisconnect
-          ? `${failure}${pc}${cycleText}\n\n다른 PC의 통신이 끊어져 안전을 위해 주행을 일시 정지했습니다.\n(PC 재부팅 또는 네트워크 확인 필요)`
-          : `${failure}${pc}${cycleText}\n\n그룹 오류를 확인하고 원인을 해소한 뒤 다시 실행하세요.`;
-          
-        queueMicrotask(() => showAlert(
-          messageBody,
-          {
-            title: isDisconnect ? '그룹 통신 지연 안전 정지' : `${coordinationError.code || '그룹 모션'} 정지`,
-            confirmLabel: '확인',
-            tone: isDisconnect ? 'warning' : 'danger',
-          },
-        ));
+      const code = coordinationError.code || '';
+      const isTransientRecoveryError = [
+        'GROUP_PARTICIPANT_DISCONNECTED',
+        'GROUP_SCHEDULE_ACK_TIMEOUT',
+        'GROUP_MOTION_START_REPORT_TIMEOUT',
+      ].includes(code) || config.auto_play;
+
+      if (!isTransientRecoveryError) {
+        const errorKey = [
+          coordinationError.execution_id || 'no-execution',
+          code || 'GROUP_ERROR',
+          failure,
+        ].join('|');
+        if (shownCoordinationError !== errorKey && typeof document !== 'undefined') {
+          shownCoordinationError = errorKey;
+          const pc = coordinationError.pc_id ? `\n발생 PC: ${coordinationError.pc_id}` : '';
+          const cycle = Number(execution.cycle_number || 0);
+          const cycleText = cycle > 0 ? `\n회차: ${cycle}회차` : '';
+          const messageBody = `${failure}${pc}${cycleText}\n\n그룹 오류를 확인하고 원인을 해소한 뒤 다시 실행하세요.`;
+            
+          queueMicrotask(() => showAlert(
+            messageBody,
+            {
+              title: `${coordinationError.code || '그룹 모션'} 정지`,
+              confirmLabel: '확인',
+              tone: 'danger',
+            },
+          ));
+        }
       }
+    } else if (shownCoordinationError) {
+      shownCoordinationError = '';
+      dismissAllDialogs();
     }
     if (el.coordinationPeerRows) {
       const rows = [];

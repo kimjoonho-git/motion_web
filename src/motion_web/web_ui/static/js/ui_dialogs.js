@@ -136,7 +136,16 @@ export function createDialogManager({ el } = {}) {
   });
   setVisible(false);
 
-  return { alert, confirm, prompt };
+  return { alert, confirm, prompt, dismissAll: () => {
+    queue.length = 0;
+    if (active) {
+      const { resolve, previousFocus } = active;
+      active = null;
+      setVisible(false);
+      resolve(false);
+      previousFocus?.focus?.();
+    }
+  } };
 }
 
 export function installDialogManager(options) {
@@ -159,4 +168,8 @@ export function showConfirm(message, options) {
 
 export function showPrompt(message, options) {
   return dialogs().prompt(message, options);
+}
+
+export function dismissAllDialogs() {
+  installedDialogs?.dismissAll();
 }
