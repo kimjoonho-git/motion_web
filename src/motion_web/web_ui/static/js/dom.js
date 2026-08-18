@@ -88,6 +88,7 @@ export function getElements() {
     coordinationEnabled: document.getElementById('coordinationEnabled'),
     coordinationIsMaster: document.getElementById('coordinationIsMaster'),
     coordinationRequiredPeers: document.getElementById('coordinationRequiredPeers'),
+    coordinationConfirmRosterButton: document.getElementById('coordinationConfirmRosterButton'),
     coordinationAddCurrentPeersButton: document.getElementById('coordinationAddCurrentPeersButton'),
     coordinationSaveButton: document.getElementById('coordinationSaveButton'),
     coordinationConfigMessage: document.getElementById('coordinationConfigMessage'),
