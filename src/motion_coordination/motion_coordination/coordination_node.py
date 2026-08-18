@@ -281,7 +281,44 @@ class MotionCoordinationNode(Node):
         self._drive_trigger_sync()
         self._prune_seen_commands()
         self._check_multiple_masters()
+        self._auto_recover_group_errors()
         self._drive_auto_play()
+
+    def _auto_recover_group_errors(self) -> None:
+        if not self._joined:
+            return
+        with self._lock:
+            if not self._coordination_error.get('active'):
+                return
+            code = self._coordination_error.get('code')
+            if code not in {
+                'GROUP_PARTICIPANT_DISCONNECTED',
+                'GROUP_SCHEDULE_ACK_TIMEOUT',
+                'GROUP_MOTION_START_REPORT_TIMEOUT'
+            }:
+                return
+        
+        required_peers = tuple(self._config.required_peers)
+        if not required_peers:
+            return
+            
+        now = time.monotonic()
+        for pc_id in required_peers:
+            if pc_id == self._config.pc_id:
+                if self._local_alarm_grade() > 0:
+                    return
+                continue
+            if self._registry.status(pc_id, now=now) != 'online':
+                return
+            member = self._registry.member(pc_id)
+            if not member or not member.joined or member.alarm_grade > 0:
+                return
+                
+        # All required peers are back and healthy! Auto-clear the error.
+        self.get_logger().info(f'통신 단절 복구 감지: {code} 자동 해제 및 복구 진행')
+        with self._lock:
+            self._auto_play_triggered = False
+        self._acknowledge_coordination_error()
 
     def _heartbeat_callback(self, message: GroupHeartbeat) -> None:
         if message.group_id != self._config.group_id:

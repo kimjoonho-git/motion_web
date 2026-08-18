@@ -118,9 +118,9 @@ class CoordinationWebBridge:
         restart = self._restart_coordination_service()
         if not restart['service_installed']:
             return {
-                'success': False,
+                'success': True,
                 'saved': True,
-                'message': f'설정 저장 완료 · {restart["message"]}',
+                'message': f'설정 저장 완료 (수동 재시작 필요: {restart["message"]})',
                 'config': self._config_summary(config),
             }
         if not restart['restart_pending']:
