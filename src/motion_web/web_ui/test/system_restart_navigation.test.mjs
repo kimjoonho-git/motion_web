@@ -38,6 +38,24 @@ test('system information creates only the packaged desktop shortcut', () => {
   assert.doesNotMatch(shortcutHandler, /restartMotorControlSystem\(\)/);
 });
 
+test('system information displays host and workspace paths', () => {
+  assert.match(html, /id="systemHostname"/);
+  assert.match(html, /id="systemWorkspacePath"/);
+  assert.match(html, /id="systemProjectsPath"/);
+  assert.match(html, /id="systemGitRemote"/);
+  assert.match(html, /id="systemGitBranch"/);
+  assert.match(html, /id="systemGitHead"/);
+  assert.match(html, /id="globalGitVersion"[\s\S]*?href="#"/);
+  assert.match(main, /const systemInfo = payload\?\.system_info \|\| \{\}/);
+  assert.match(main, /systemInfo\.hostname/);
+  assert.match(main, /systemInfo\.workspace_root/);
+  assert.match(main, /systemInfo\.motion_projects_dir/);
+  assert.match(main, /function renderGitVersion/);
+  assert.match(main, /branch === 'main' \? 'main' : `\$\{branch\} \(main 아님\)`/);
+  assert.match(main, /systemGitRemote\.href = remoteWebUrl/);
+  assert.match(main, /systemGitHead\.title = fullHash/);
+});
+
 test('program restart stays in the header and motor restart stays in motor management', () => {
   assert.doesNotMatch(html, /id="headerMotorControlRestartButton"/);
   assert.match(html, /id="headerProgramRestartButton"/);

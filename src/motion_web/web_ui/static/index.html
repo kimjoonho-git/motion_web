@@ -12,7 +12,7 @@
         <div class="app-title">
           <h1>모션 녹화 시스템</h1>
           <span class="version-badge">버전 0.5.0</span>
-          <span id="globalGitVersion" class="version-badge git-version-badge" title="Git 상태 로드 중..." style="margin-left: 8px; cursor: help; display: none;"></span>
+          <a id="globalGitVersion" class="version-badge git-version-badge" title="Git 상태 로드 중..." href="#" target="_blank" rel="noopener" style="margin-left: 8px; cursor: help; display: none;"></a>
           <div
             id="motorActivityBanner"
             class="motor-activity-banner"
@@ -125,6 +125,12 @@
               <div><span>런타임 오류</span><strong id="systemFaultCount">0축</strong></div>
             </div>
             <div class="status-strip system-status-secondary" aria-label="세부 상태">
+              <div><span>컴퓨터 명</span><strong id="systemHostname">-</strong></div>
+              <div><span>작업공간</span><strong id="systemWorkspacePath">-</strong></div>
+              <div><span>프로젝트 폴더</span><strong id="systemProjectsPath">-</strong></div>
+              <div><span>Git 주소</span><strong><a id="systemGitRemote" href="#" target="_blank" rel="noopener">-</a></strong></div>
+              <div><span>Git 브랜치</span><strong id="systemGitBranch">-</strong></div>
+              <div><span>Git HEAD</span><strong id="systemGitHead">-</strong></div>
               <div><span>접속 주소</span><strong id="accessUrl">-</strong></div>
               <div><span>마지막 갱신</span><strong id="lastUpdate">-</strong></div>
             </div>

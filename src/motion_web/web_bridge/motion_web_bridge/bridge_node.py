@@ -1185,6 +1185,11 @@ class MotionWebBridge(Node):
             'bridge_instance_id': str(getattr(self, '_bridge_instance_id', '')),
             'bridge_started_at': getattr(self, '_bridge_started_at', None),
             'project_generation': self._current_project_generation(),
+            'system_info': {
+                'hostname': socket.gethostname(),
+                'workspace_root': str(Path(getattr(self, 'workspace_root', Path.cwd())).resolve()),
+                'motion_projects_dir': str(Path(getattr(self, 'motion_projects_dir', Path.cwd())).resolve()),
+            },
             'service_management': {
                 'managed': bool(os.environ.get('MOTION_CONTROL_SERVICE_UNIT')),
                 'mode': 'automatic' if os.environ.get('MOTION_CONTROL_SERVICE_UNIT') else 'manual',
@@ -7810,16 +7815,44 @@ def create_app(bridge: MotionWebBridge) -> FastAPI:
 
     @app.get('/api/system/version')
     async def system_version():
-        import subprocess
+        def _git_text(args: List[str], cwd: str) -> str:
+            return subprocess.check_output(
+                ['git', *args], cwd=cwd, stderr=subprocess.DEVNULL
+            ).decode('utf-8').strip()
+
+        def _web_url(remote: str) -> str:
+            if remote.startswith('git@github.com:'):
+                return 'https://github.com/' + remote.split(':', 1)[1].removesuffix('.git')
+            if remote.startswith('https://github.com/'):
+                return remote.removesuffix('.git')
+            return remote
+
         try:
-            import os
             cwd = os.environ.get('MOTION_WORKSPACE', os.getcwd())
-            branch = subprocess.check_output(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], cwd=cwd).decode('utf-8').strip()
-            hash_str = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD'], cwd=cwd).decode('utf-8').strip()
-            msg = subprocess.check_output(['git', 'log', '-1', '--format=%s'], cwd=cwd).decode('utf-8').strip()
-            return {'branch': branch, 'hash': hash_str, 'message': msg}
+            branch = _git_text(['rev-parse', '--abbrev-ref', 'HEAD'], cwd)
+            hash_str = _git_text(['rev-parse', '--short', 'HEAD'], cwd)
+            full_hash = _git_text(['rev-parse', 'HEAD'], cwd)
+            msg = _git_text(['log', '-1', '--format=%s'], cwd)
+            remote = _git_text(['remote', 'get-url', 'origin'], cwd)
+            return {
+                'branch': branch,
+                'hash': hash_str,
+                'full_hash': full_hash,
+                'message': msg,
+                'remote_url': remote,
+                'remote_web_url': _web_url(remote),
+                'is_main': branch == 'main',
+            }
         except Exception:
-            return {'branch': 'unknown', 'hash': 'unknown', 'message': ''}
+            return {
+                'branch': 'unknown',
+                'hash': 'unknown',
+                'full_hash': '',
+                'message': '',
+                'remote_url': '',
+                'remote_web_url': '',
+                'is_main': False,
+            }
 
     @app.get('/api/coordination')
     async def coordination_status():

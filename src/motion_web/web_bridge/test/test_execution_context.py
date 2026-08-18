@@ -348,7 +348,7 @@ def test_frequent_status_read_does_not_rehash_project_files():
     assert calls == []
 
 
-def test_snapshot_reads_motor_operation_without_reconciling_it():
+def test_snapshot_reads_motor_operation_without_reconciling_it(tmp_path):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge._lock = threading.Lock()
     bridge._motion_state = None
@@ -365,6 +365,8 @@ def test_snapshot_reads_motor_operation_without_reconciling_it():
     bridge._safety_status = {}
     bridge._bridge_instance_id = 'bridge-1'
     bridge._bridge_started_at = 1.0
+    bridge.workspace_root = tmp_path / 'workspace'
+    bridge.motion_projects_dir = tmp_path / 'workspace' / 'motion_projects'
     bridge.motion_state_topic = '/motion_state'
     bridge.max_jog_delta_deg = 360.0
     bridge._web_access = {}
@@ -389,6 +391,11 @@ def test_snapshot_reads_motor_operation_without_reconciling_it():
 
     assert result['motor_operation']['operation_id'] == 'operation-1'
     assert result['motor_operation']['phase'] == 'verifying'
+    assert result['system_info']['hostname']
+    assert result['system_info']['workspace_root'] == str(bridge.workspace_root.resolve())
+    assert result['system_info']['motion_projects_dir'] == str(
+        bridge.motion_projects_dir.resolve()
+    )
 
 
 def test_motor_operation_coordinator_is_the_reconcile_writer():

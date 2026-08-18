@@ -1533,7 +1533,13 @@ body.emergency-latched .shell {
   color: var(--blue);
   font-size: 12px;
   font-weight: 700;
+  text-decoration: none;
   white-space: nowrap;
+}
+
+.git-version-badge.warning-text {
+  border-color: #d8a13b;
+  background: #fffaf0;
 }
 
 h1 {
@@ -6791,7 +6797,7 @@ body.app-dialog-open {
 }
 
 .system-status-secondary {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 }
 
 .system-status-secondary > div {
@@ -6805,7 +6811,19 @@ body.app-dialog-open {
 }
 
 .system-status-secondary strong {
+  overflow: hidden;
   font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.system-status-secondary strong a {
+  display: block;
+  overflow: hidden;
+  color: inherit;
+  text-decoration: underline;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .system-program-card {

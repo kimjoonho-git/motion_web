@@ -353,6 +353,22 @@ function renderServiceManagement(payload) {
   const motorManaged = Boolean(payload?.service_management?.motor_managed);
   const motorConfigApplied = Boolean(payload?.project_scope?.motor_config_applied);
   const motorOperationRunning = payload?.motor_operation?.status === 'running';
+  const systemInfo = payload?.system_info || {};
+  if (el.systemHostname) {
+    const hostname = String(systemInfo.hostname || '-');
+    el.systemHostname.textContent = hostname;
+    el.systemHostname.title = hostname;
+  }
+  if (el.systemWorkspacePath) {
+    const workspacePath = String(systemInfo.workspace_root || '-');
+    el.systemWorkspacePath.textContent = workspacePath;
+    el.systemWorkspacePath.title = workspacePath;
+  }
+  if (el.systemProjectsPath) {
+    const projectsPath = String(systemInfo.motion_projects_dir || '-');
+    el.systemProjectsPath.textContent = projectsPath;
+    el.systemProjectsPath.title = projectsPath;
+  }
   if (el.serviceMode) {
     el.serviceMode.textContent = managed
       ? (motorManaged ? '분리 자동 실행 · 자동 복구' : '분리 서비스 설치 필요')
@@ -427,6 +443,45 @@ function renderServiceManagement(payload) {
     );
   }
   enforceEmergencyUi();
+}
+
+function renderGitVersion(version = {}) {
+  const branch = String(version.branch || 'unknown');
+  const hash = String(version.hash || 'unknown');
+  const fullHash = String(version.full_hash || hash || '');
+  const message = String(version.message || '');
+  const remoteUrl = String(version.remote_url || '');
+  const remoteWebUrl = String(version.remote_web_url || remoteUrl || '');
+  const branchText = branch === 'main' ? 'main' : `${branch} (main 아님)`;
+  const detail = [
+    remoteUrl ? `주소: ${remoteUrl}` : '',
+    `브랜치: ${branchText}`,
+    fullHash ? `HEAD: ${fullHash}` : `HEAD: ${hash}`,
+    message ? `커밋: ${message}` : '',
+  ].filter(Boolean).join('\n');
+
+  const badge = document.getElementById('globalGitVersion');
+  if (badge && hash !== 'unknown') {
+    badge.textContent = `[${branchText}] ${hash}`;
+    badge.title = detail || 'Git 정보 없음';
+    badge.href = remoteWebUrl || '#';
+    badge.style.display = '';
+    badge.classList.toggle('warning-text', branch !== 'main');
+  }
+  if (el.systemGitRemote) {
+    el.systemGitRemote.textContent = remoteUrl || '-';
+    el.systemGitRemote.title = remoteUrl || 'Git 주소 없음';
+    el.systemGitRemote.href = remoteWebUrl || '#';
+  }
+  if (el.systemGitBranch) {
+    el.systemGitBranch.textContent = branchText;
+    el.systemGitBranch.title = branchText;
+    el.systemGitBranch.classList.toggle('warning-text', branch !== 'main');
+  }
+  if (el.systemGitHead) {
+    el.systemGitHead.textContent = hash;
+    el.systemGitHead.title = fullHash || hash;
+  }
 }
 
 function isAcServoMotor(motor) {
@@ -1630,15 +1685,9 @@ projectExplorer.refresh(true);
 servoAlarm.refresh();
 
 async function initGlobalSystemVersion() {
-  const badge = document.getElementById('globalGitVersion');
-  if (!badge) return;
   try {
     const version = await fetchSystemVersion();
-    if (version && version.hash && version.hash !== 'unknown') {
-      badge.textContent = `[${version.branch}] ${version.hash}`;
-      badge.title = version.message || '커밋 메시지 없음';
-      badge.style.display = '';
-    }
+    renderGitVersion(version);
   } catch (error) {
     console.error('Failed to fetch system version:', error);
   }
