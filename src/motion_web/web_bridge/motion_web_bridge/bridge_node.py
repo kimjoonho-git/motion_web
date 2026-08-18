@@ -7803,6 +7803,10 @@ def _safety_first_stop(bridge: MotionWebBridge, method, *args):
 def create_app(bridge: MotionWebBridge) -> FastAPI:
     app = FastAPI(title='Motion Web Bridge')
     ui_share = Path(get_package_share_directory('motion_web_ui')) / 'static'
+    workspace_dir = os.environ.get('MOTION_WORKSPACE', '')
+    dev_static = Path(workspace_dir) / 'src' / 'motion_web' / 'web_ui' / 'static'
+    if workspace_dir and dev_static.is_dir():
+        ui_share = dev_static
 
     @app.middleware('http')
     async def project_generation_boundary(request: Request, call_next):
