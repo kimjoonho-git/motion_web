@@ -878,9 +878,12 @@ class MotionRunManager(Node):
             or active_motion
         )
         if not motion_file_id and motions_dir.is_dir():
-            yaml_files = sorted(p.name for p in motions_dir.glob('*.yaml') if p.is_file())
-            if yaml_files:
-                motion_file_id = yaml_files[0]
+            files_found = sorted(
+                p.name for p in motions_dir.iterdir()
+                if p.is_file() and not p.name.startswith('.')
+            )
+            if files_found:
+                motion_file_id = files_found[0]
 
         mapping_file_id = (
             state.get('mapping_file_id')
@@ -888,14 +891,17 @@ class MotionRunManager(Node):
             or active_mapping
         )
         if not mapping_file_id and mappings_dir.is_dir():
-            yaml_files = sorted(p.name for p in mappings_dir.glob('*.yaml') if p.is_file())
-            if yaml_files:
-                mapping_file_id = yaml_files[0]
+            files_found = sorted(
+                p.name for p in mappings_dir.iterdir()
+                if p.is_file() and not p.name.startswith('.')
+            )
+            if files_found:
+                mapping_file_id = files_found[0]
 
         if not motion_file_id:
-            raise ValueError('프로젝트 내 실행할 모션 파일(.yaml)이 없습니다')
+            raise ValueError('프로젝트 내 실행할 모션 파일이 없습니다')
         if not mapping_file_id:
-            raise ValueError('프로젝트 내 실행할 모션축 매핑 파일(.yaml)이 없습니다')
+            raise ValueError('프로젝트 내 실행할 모션축 매핑 파일이 없습니다')
 
         motion_path = self._motion_file_path(motion_file_id, motions_dir)
         mapping_path = self._mapping_file_path(mapping_file_id, mappings_dir)
