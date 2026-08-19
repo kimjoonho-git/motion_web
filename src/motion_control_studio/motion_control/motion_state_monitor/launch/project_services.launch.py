@@ -119,6 +119,12 @@ def generate_launch_description():
             }],
         ),
         Node(
+            package='motion_schedule',
+            executable='motion_schedule_node',
+            name='motion_schedule_node',
+            output='screen',
+        ),
+        Node(
             package='motion_web_bridge',
             executable='motion_web_bridge',
             name='motion_web_bridge',

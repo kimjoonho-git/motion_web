@@ -4,6 +4,7 @@ from .motion_run_routes import register_motion_run_routes
 from .midi_routes import register_midi_routes
 from .safety_routes import register_safety_routes
 from .system_routes import register_system_routes
+from .schedule_routes import register_schedule_routes
 
 __all__ = [
     'register_project_routes',
@@ -12,4 +13,5 @@ __all__ = [
     'register_midi_routes',
     'register_safety_routes',
     'register_system_routes',
+    'register_schedule_routes',
 ]

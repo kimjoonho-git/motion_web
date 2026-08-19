@@ -12,6 +12,7 @@ class ScheduleStore:
         self.projects_dir = projects_dir
         self.current_project_id = current_project_id
         self._schedules: Dict[str, ScheduleItem] = {}
+        self._last_mtime: float = 0.0
         if current_project_id:
             self.load_project(current_project_id)
 
@@ -26,10 +27,12 @@ class ScheduleStore:
         file_path = self._get_store_path(project_id)
 
         if not os.path.exists(file_path):
+            self._last_mtime = 0.0
             logger.info(f"Schedule store file not found for project {project_id}. Starting empty.")
             return
 
         try:
+            self._last_mtime = os.path.getmtime(file_path)
             with open(file_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if isinstance(data, list):
@@ -39,6 +42,22 @@ class ScheduleStore:
             logger.info(f"Loaded {len(self._schedules)} schedules for project {project_id}.")
         except Exception as e:
             logger.error(f"Failed to load schedule_store.json for project {project_id}: {e}")
+
+    def check_and_reload(self) -> bool:
+        if not self.current_project_id:
+            return False
+        file_path = self._get_store_path(self.current_project_id)
+        if not os.path.exists(file_path):
+            return False
+        try:
+            current_mtime = os.path.getmtime(file_path)
+            if current_mtime > self._last_mtime:
+                logger.info(f"Detected schedule_store.json change (mtime: {current_mtime}). Reloading...")
+                self.load_project(self.current_project_id)
+                return True
+        except Exception as e:
+            logger.error(f"Error checking schedule mtime: {e}")
+        return False
 
     def save(self) -> bool:
         if not self.current_project_id:

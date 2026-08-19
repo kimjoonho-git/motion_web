@@ -1,10 +1,12 @@
 import os
 import json
+import urllib.request
+import urllib.error
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Dict, Any
 
 from .schedule_models import ScheduleItem
 from .schedule_store import ScheduleStore
@@ -24,9 +26,7 @@ class MotionScheduleNode(Node):
         self.store = ScheduleStore(projects_dir=self.projects_dir)
         self.engine = ScheduleEngine(grace_period_sec=30)
 
-        # Publishers for motion run command and coordination control
-        self.motion_run_req_pub = self.create_publisher(String, '/motion_control/motion_run_request', 10)
-        self.action_req_pub = self.create_publisher(String, '/motion_control/manual_action_request', 10)
+        # Status publisher
         self.status_pub = self.create_publisher(String, '/motion_schedule/status', 10)
 
         # Subscribers
@@ -43,12 +43,11 @@ class MotionScheduleNode(Node):
         # 1-second background timer for schedule checking
         self.timer = self.create_timer(1.0, self._on_timer_tick)
 
-        self.get_logger().info("motion_schedule_node started (Master Only & Stop-After-Cycle Support)")
+        self.get_logger().info("motion_schedule_node started (Master Only Coordinated Motion Scheduler)")
 
     def _is_master_pc(self) -> bool:
         """Check if current PC role is master."""
         if not os.path.exists(self.coordination_file):
-            # Default to master if file doesn't exist
             return True
 
         try:
@@ -80,8 +79,30 @@ class MotionScheduleNode(Node):
             self.get_logger().info(f"Switching schedule store to active project: {project_id}")
             self.store.load_project(project_id)
 
+    def _send_http_request(self, endpoint: str, payload: Dict[str, Any]) -> bool:
+        """Send HTTP POST request to local Web Bridge API."""
+        url = f"http://127.0.0.1:8000{endpoint}"
+        try:
+            data = json.dumps(payload).encode('utf-8')
+            req = urllib.request.Request(
+                url,
+                data=data,
+                headers={'Content-Type': 'application/json'},
+                method='POST'
+            )
+            with urllib.request.urlopen(req, timeout=5.0) as resp:
+                result = json.loads(resp.read().decode('utf-8'))
+                self.get_logger().info(f"HTTP Request [{endpoint}] success: {result}")
+                return True
+        except Exception as e:
+            self.get_logger().error(f"HTTP Request [{endpoint}] failed: {e}")
+            return False
+
     def _on_timer_tick(self):
-        # Master PC check
+        # 0. Realtime store mtime check & reload if store updated via web UI
+        self.store.check_and_reload()
+
+        # 1. Master PC check
         if not self._is_master_pc():
             # Slave PC: do not process local schedule triggers
             return
@@ -104,29 +125,23 @@ class MotionScheduleNode(Node):
 
     def _execute_start(self, item: ScheduleItem):
         self.get_logger().info(f"[SCHEDULE TRIGGER] START -> '{item.schedule_name}' (ID: {item.schedule_id})")
-        # Construct motion_run_request command (Continuous Motion Start)
+        # Trigger Coordinated Motion Continuous Start via Web Bridge API
         payload = {
-            "command": "start",
-            "schedule_id": item.schedule_id,
-            "repeat_mode": item.motion_config.repeat_mode or "continuous",
-            "target_cycles": item.motion_config.target_cycles,
-            "motion_file_id": item.motion_config.motion_file_id,
-            "mapping_file_id": item.motion_config.mapping_file_id
+            "command": "start_group",
+            "run_mode": "continuous",
+            "repeat_mode": item.motion_config.repeat_mode or "direct",
+            "schedule_id": item.schedule_id
         }
-        msg = String()
-        msg.data = json.dumps(payload)
-        self.motion_run_req_pub.publish(msg)
+        self._send_http_request("/api/coordination/control", payload)
 
     def _execute_stop_after_cycle(self, item: ScheduleItem):
         self.get_logger().info(f"[SCHEDULE TRIGGER] STOP-AFTER-CYCLE -> '{item.schedule_name}' (ID: {item.schedule_id})")
-        # Construct stop_after_cycle command
+        # Trigger Coordinated Motion Stop-After-Cycle via Web Bridge API
         payload = {
             "command": "stop_after_cycle",
             "schedule_id": item.schedule_id
         }
-        msg = String()
-        msg.data = json.dumps(payload)
-        self.motion_run_req_pub.publish(msg)
+        self._send_http_request("/api/coordination/control", payload)
 
     def _publish_status(self, now: datetime):
         status = {

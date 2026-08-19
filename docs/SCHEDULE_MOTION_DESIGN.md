@@ -1,32 +1,39 @@
 # 연동 모션 스케줄 제어 시스템 설계서
 
-## Schedule Motion Control Design — Master Only & Cycle Complete Stop
+## Schedule Motion Control Design — Master Only & Coordinated Motion Trigger
 
 ## 1. 목적
 
-설정된 로컬 시각에 기존 시스템의 **"연속 시작" 버튼 기능과 "현재 회차후 정지" (stop-after-cycle) 기능을 자동 호출**하는 스케줄 기능을 구현한다.
+설정된 로컬 시각에 기존 연동 시스템의 **"연동 연속 시작" 기능과 "현재 회차후 정지" (stop-after-cycle) 기능을 HTTP REST API (`/api/coordination/control`)로 자동 호출**하는 스케줄 기능을 구현한다.
 
-`motion_schedule_node`는 새로운 모션 제어 로직을 구현하지 않으며, **마스터 PC(Master Node)에서만 스케줄을 구동**한다.
+`motion_schedule_node`는 단일 PC 구동을 고려하지 않고 **마스터 PC(Master Node)에서 연동 모션 전용으로 구동**한다.
 
 핵심 개념은 다음과 같다.
 
 ```text
-마스터 PC (Master Node) 전용 스케줄 구동
+마스터 PC (Master Node) 전용 연동 스케줄 구동
     ↓
-시작 시각 도달 ➔ 기존 UI "연속 시작" 버튼 기능 자동 호출
+시작 시각 도달 ➔ 연동 모션 "연속 시작" API (POST /api/coordination/control: start_group) 자동 호출
     ↓
-지정 스케줄 시간 동안 연속 모션 구동
+지정 스케줄 시간 동안 그룹 연동 연속 모션 구동
     ↓
-종료 시각 / 유지시간 도달 ➔ 기존 UI "현재 회차후 정지" (stop-after-cycle) 버튼 기능 자동 호출 (진행 회차 안전 완료 후 정지)
+종료 시각 / 유지시간 도달 ➔ 연동 모션 "현재 회차후 정지" API (POST /api/coordination/control: stop_after_cycle) 자동 호출 (진행 회차 안전 완료 후 정지)
     ↓
 스케줄 외 시간 ➔ 모션 멈춤 대기 상태 유지
 ```
 
-즉 Scheduler는 모션 제어기가 아니라 **시간 기반 Trigger 역할만 담당**한다.
+즉 Scheduler는 모션 제어기가 아니라 **시간 기반 Trigger 및 HTTP REST 요청 전송 역할만 담당**한다.
 
 ---
 
 # 2. 핵심 설계 원칙
+
+1. **마스터 PC 전용 (Master Only)**
+   - 스케줄러는 마스터 PC에서만 구동되며 슬레이브 PC 스케줄링은 불필요.
+2. **연동 모션 전용 (Coordinated Motion Only)**
+   - 단일 PC 모션은 대상에서 제외하고, 연동 모션 API (`/api/coordination/control`)를 통해서만 트리거.
+3. **실시간 저장소 동기화 (mtime Auto Reload)**
+   - UI에서 스케줄을 저장(`save`)하거나 변경하면 `schedule_store.json` 파일의 수정 시각(`mtime`)을 감지하여 노드 재시작 없이 즉시 반영.
 
 ## 2.1 기존 모션 기능 재사용
 

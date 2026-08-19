@@ -61,6 +61,8 @@ patterns=(
   "install/motion_studio/lib/motion_studio/motion_studio_editor_node"
   "install/midi_control/lib/midi_control/midi_control_node"
   "install/motion_web_bridge/lib/motion_web_bridge/motion_web_bridge"
+  "install/motion_schedule/lib/motion_schedule/motion_schedule_node"
+  "ros2 run motion_schedule motion_schedule_node"
   "install/midi_input_bridge/lib/midi_input_bridge/midi_input_node"
   "ros2 launch midi_control midi_control.launch.py"
   # Stop legacy pre-refactor processes so they cannot publish duplicate MIDI
