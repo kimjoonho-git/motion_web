@@ -544,16 +544,19 @@ class MotionRunManager(Node):
         except (TypeError, ValueError):
             dwell_sec = 0.0
 
+        files = context.get('files') if isinstance(context.get('files'), dict) else {}
         motion_file_id = str(
             payload.get('motion_file_id')
             or current.get('motion_file_id')
             or context.get('motion_file_id')
+            or files.get('motions', {}).get('name')
             or ''
         ).strip()
         mapping_file_id = str(
             payload.get('mapping_file_id')
             or current.get('mapping_file_id')
             or context.get('mapping_file_id')
+            or files.get('motion_axis_matching', {}).get('name')
             or ''
         ).strip()
 
