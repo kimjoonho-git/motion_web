@@ -876,16 +876,10 @@ class MotionRunManager(Node):
 
         motion_path = self._motion_file_path(motion_file_id, motions_dir)
         mapping_path = self._mapping_file_path(mapping_file_id, mappings_dir)
-        motion_sha = hashlib.sha256(motion_path.read_bytes()).hexdigest()
-        mapping_sha = hashlib.sha256(mapping_path.read_bytes()).hexdigest()
-        expected_motion_sha = state.get('motion_sha256')
-        if expected_motion_sha and motion_sha != expected_motion_sha:
-            self._automation_failure('자동 반복 모션 파일이 시작 당시와 다릅니다')
-            raise ValueError('자동 반복 모션 파일이 시작 당시와 다릅니다')
-        expected_mapping_sha = state.get('mapping_sha256')
-        if expected_mapping_sha and mapping_sha != expected_mapping_sha:
-            self._automation_failure('자동 반복 모션축 설정이 시작 당시와 다릅니다')
-            raise ValueError('자동 반복 모션축 설정이 시작 당시와 다릅니다')
+        if not motion_path.is_file():
+            raise ValueError(f'실행할 모션 파일을 찾을 수 없습니다: {motion_file_id}')
+        if not mapping_path.is_file():
+            raise ValueError(f'실행할 모션축 설정 파일을 찾을 수 없습니다: {mapping_file_id}')
 
         return motion_file_id, mapping_file_id
 
