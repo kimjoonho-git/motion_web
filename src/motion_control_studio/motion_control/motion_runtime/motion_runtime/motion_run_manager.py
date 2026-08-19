@@ -823,7 +823,11 @@ class MotionRunManager(Node):
                 'mapping_file_id': state.get('mapping_file_id') or context.get('mapping_file_id') or '',
                 'run_mode': 'continuous',
                 'automation_run': True,
-                'repeat_mode': state.get('repeat_mode', 'reinitialize'),
+                'repeat_mode': (
+                    state.get('repeat_mode')
+                    if state.get('repeat_mode') in {'reinitialize', 'dwell_reinitialize'}
+                    else 'reinitialize'
+                ),
                 'dwell_sec': state.get('dwell_sec', 0.0),
             }
             result = self._start_thread('run', payload)
