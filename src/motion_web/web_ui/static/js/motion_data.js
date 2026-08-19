@@ -2705,7 +2705,8 @@ export function createMotionDataController({
     const motionFileId = motionRunSelectedMotionFile()?.filename
       || motionRunStatus?.automation?.motion_file_id
       || '';
-    const mappingFileId = motionRunSelectedMapping()?.name
+    const mappingFileId = selectedMappingFile()?.filename
+      || selectedMappingId
       || motionRunStatus?.automation?.mapping_file_id
       || '';
     return {
