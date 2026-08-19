@@ -88,9 +88,8 @@ Motion Control Studio는 상위 저장소에 통합되어 있으므로 별도로
 
 ## Ubuntu만 설치된 새 PC 설치
 
-새 PC는 아래 명령만 먼저 실행합니다. 웹 화면과 DDS 그룹 연동 테스트는 이 절차로
-준비됩니다. 실제 모터 제어 PC는 설치 후 [2. EtherLab/IgH EtherCAT 준비](#2-etherlabigh-ethercat-준비)를
-추가로 진행합니다.
+새 PC에서 전체 빌드를 진행하려면 모터 제어를 위한 EtherCAT 통신 환경이 먼저 구성되어야 합니다.
+따라서 아래 설치 스크립트를 실행하기 전에 반드시 **[2. EtherLab/IgH EtherCAT 준비](#2-etherlabigh-ethercat-준비)**를 먼저 완료하십시오.
 
 ### A. 코드 받기
 
@@ -113,6 +112,7 @@ bash src/motion_web/install.sh
 - 필수 프로그램 설치
 - 사용자 권한 설정
 - rosdep 설치·갱신
+- EtherCAT 설치 검사
 - 전체 colcon 빌드
 - 자동실행 서비스 등록
 - 실시간 우선순위 권한 설정 확인
@@ -256,6 +256,7 @@ Ubuntu 22.04와 ROS 2 Humble을 먼저 설치합니다. 다음은 현재 작업�
 sudo apt update
 sudo apt install -y \
   git build-essential cmake \
+  gcc-12 g++-12 librtmidi-dev ethtool \
   python3-rosdep python3-colcon-common-extensions \
   python3-fastapi python3-uvicorn python3-yaml chrony \
   btop ttyd
@@ -339,48 +340,61 @@ ethtool -i enp2s0
 EtherLab 소스 빌드에는 다음 도구가 필요합니다.
 
 ```bash
-sudo apt install -y autoconf automake libtool pkg-config build-essential git
+sudo apt install -y autoconf automake libtool pkg-config build-essential git gcc-12 g++-12 ethtool librtmidi-dev
 git clone https://gitlab.com/etherlab.org/ethercat.git
 ```
 
-빌드할 때는 해당 PC에서 확인한 커널 드라이버에 맞춰 모듈을 활성화해야 합니다. (상세 원본 문서는 로컬의 [`EtherCAT 설치 문서`](src/motion_system/lib/motor_manager/communications/ethercat/README.md) 파일을 직접 열어보시거나, [웹 링크](https://github.com/SeonilChoi/motor_manager/blob/main/communications/ethercat/README.md)를 참조하세요.)
-**빠른 한글 요약 빌드 과정**은 다음과 같습니다.
+빌드할 때는 해당 PC의 커널 버전과 드라이버 지원 여부에 맞춰 모듈을 설정해야 합니다.
+특히 Ubuntu 22.04의 최신 Linux 6.8+ 커널 환경에서는 r8169 등 전용 드라이버 모듈 빌드가 실패할 수 있으므로 **범용(generic) 모드** 사용을 권장합니다.
 
 ```bash
 cd ethercat
 ./bootstrap
 
-# 위에서 확인한 드라이버가 r8169 인 경우 (해당 드라이버만 yes로 변경):
-./configure --disable-8139too --enable-generic=no --enable-r8169=yes
+# 커널 6.8+ 환경 또는 전용 드라이버 빌드 실패 시 범용(generic) 모드로 빌드 (권장):
+./configure --disable-8139too --enable-generic=yes
 
-# 만약 전용 드라이버 빌드가 실패하거나 호환되지 않을 경우 범용(generic) 모드로 빌드:
-# ./configure --disable-8139too --enable-generic=yes
+# (참고) 커널 버전이 낮고 전용 드라이버가 빌드되는 경우:
+# ./configure --disable-8139too --enable-generic=no --enable-r8169=yes
 
 make all modules
 sudo make modules_install install
 sudo depmod
 ```
 
-`/etc/ethercat.conf` 설정 시, 장치 이름(enp~ 등) 대신 **위에서 확인한 MAC 주소**를 기입해야 재부팅 시 꼬임 현상을 방지할 수 있습니다.
+설정 파일은 빌드 방식에 따라 `/etc/ethercat.conf` 또는 `/usr/local/etc/ethercat.conf` 경로에 생성됩니다. 설정 파일 경로를 확인한 후 편집합니다.
+
+```bash
+# 설정 파일 경로 확인
+ls -l /etc/ethercat.conf /usr/local/etc/ethercat.conf 2>/dev/null
+```
+
+설정 파일 편집 시, 장치 이름(enp~ 등) 대신 **위에서 확인한 MAC 주소**를 기입해야 재부팅 시 꼬임 현상을 방지할 수 있습니다.
 
 ```text
 MASTER0_DEVICE="<랜카드의 MAC 주소 예: 00:11:22:33:44:55>"
-DEVICE_MODULES="<generic 또는 해당 EtherCAT 드라이버>"
+DEVICE_MODULES="generic"
 UPDOWN_INTERFACES="<EtherCAT-NIC-이름>"
 ```
 
-일반 계정(`ros2` 등)에서 `sudo` 없이 모터에 접근하려면 udev 권한 설정이 필수입니다. 다음 명령어로 권한을 추가합니다.
+일반 계정(`ros2` 등)에서 `sudo` 없이 모터에 접근하려면 udev 권한 설정이 필수입니다. 서비스 시작 전 권한을 설정합니다.
 
 ```bash
+# 1. udev 권한 규칙 등록
 echo 'KERNEL=="EtherCAT[0-9]*", MODE="0666"' | sudo tee /etc/udev/rules.d/99-ethercat.rules
 sudo udevadm control --reload-rules
 sudo udevadm trigger
 ```
 
-설치·설정 후 서비스 시작 및 확인:
+설정·권한 적용 후 EtherCAT 서비스 시작 및 동작 확인:
 
 ```bash
+# 2. 서비스 시작 및 모듈 로드 확인
 sudo systemctl enable --now ethercat
+lsmod | grep ec_master
+ls -l /dev/EtherCAT0
+
+# 3. 마스터 및 서보 슬레이브 응답 확인
 ethercat version
 ethercat master
 ethercat slaves
@@ -572,8 +586,7 @@ systemctl --user daemon-reload
 systemctl --user enable --now motion-btop.service
 ```
 
-새 PC에 검증된 모터 실행 설정이 없으면 웹은 실행되지만 Motor Manager 시작은
-보류됩니다. 브라우저 창은 자동으로 열리지 않습니다.
+새 PC에 검증된 모터 실행 설정이 없으면 웹(`motion-control.service`)은 정상 실행되지만 `motion-motor.service` 시작은 보류(inactive/dead)됩니다. 이는 모터 무단 구동을 방지하는 **정상 동작**입니다. 브라우저 창은 자동으로 열리지 않습니다.
 
 ## 6. 실행과 상태 확인
 
@@ -589,6 +602,9 @@ journalctl --user -u motion-control.service -n 100
 journalctl --user -u motion-motor.service -n 100
 journalctl --user -u motion-coordination.service -n 100
 ```
+
+> [!TIP]
+> 웹 서비스(`motion-control.service`)에서 프로젝트 적용 및 백그라운드 프로세스 재시작 중 발생한 ROS 노드 오류나 저수준 에러 로그는 작업공간의 **`log/web_apply_restart/restart-*.log`** 파일에서도 확인할 수 있습니다.
 
 웹 접속:
 

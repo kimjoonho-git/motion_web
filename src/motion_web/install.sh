@@ -50,7 +50,11 @@ install_system_packages() {
     chrony \
     cmake \
     curl \
+    ethtool \
+    gcc-12 \
+    g++-12 \
     git \
+    librtmidi-dev \
     locales \
     python3-colcon-common-extensions \
     python3-fastapi \
@@ -124,6 +128,42 @@ restart_user_services() {
   systemctl --user restart motion-coordination.service || true
 }
 
+check_ethercat_ready() {
+  local ethercat_missing=false
+  
+  if ! command -v ethercat >/dev/null 2>&1; then
+    echo "[EtherCAT 검사] ethercat 명령어를 찾을 수 없습니다." >&2
+    ethercat_missing=true
+  fi
+  
+  if [[ ! -f /opt/etherlab/include/ecrt.h ]] && [[ ! -f /usr/local/include/ecrt.h ]] && [[ ! -f /usr/include/ecrt.h ]]; then
+    echo "[EtherCAT 검사] ecrt.h 헤더 파일을 찾을 수 없습니다." >&2
+    ethercat_missing=true
+  fi
+  
+  if ! lsmod | grep -q ec_master && ! modinfo ec_master >/dev/null 2>&1; then
+    echo "[EtherCAT 검사] ec_master 커널 모듈을 찾을 수 없습니다." >&2
+    ethercat_missing=true
+  fi
+  
+  if [[ ! -c /dev/EtherCAT0 && ! -e /dev/EtherCAT0 ]]; then
+    echo "[EtherCAT 검사] /dev/EtherCAT0 장치가 존재하지 않습니다." >&2
+    ethercat_missing=true
+  fi
+  
+  if [[ "${ethercat_missing}" == true ]]; then
+    echo
+    echo "========================================="
+    echo "EtherCAT 설치 먼저 필요"
+    echo "========================================="
+    echo "모터 제어(motor_manager) 빌드에 필요한 EtherCAT 환경이 구성되지 않았습니다."
+    echo "README.md의 '2. EtherLab/IgH EtherCAT 준비'를 먼저 진행해 주세요."
+    echo "(NIC 이름, MAC 주소, 드라이버 확인 및 수동 설치가 필요합니다)"
+    echo "========================================="
+    exit 1
+  fi
+}
+
 print_step "1. Ubuntu 버전 확인"
 require_ubuntu_2204
 
@@ -142,14 +182,17 @@ configure_locale_and_groups
 print_step "6. rosdep 초기화"
 initialize_rosdep
 
-print_step "7. 전체 빌드"
+print_step "7. EtherCAT 설치 검사"
+check_ethercat_ready
+
+print_step "8. 전체 빌드"
 cd "${WORKSPACE_DIR}"
 build_workspace
 
-print_step "8. 자동실행 서비스 등록"
+print_step "9. 자동실행 서비스 등록"
 install_user_services
 
-print_step "9. 서비스 적용"
+print_step "10. 서비스 적용"
 restart_user_services
 
 print_step "설치 완료"
