@@ -19,7 +19,7 @@ def default_automation_state() -> Dict[str, Any]:
         'version': AUTOMATION_VERSION,
         'enabled': False,
         'armed': False,
-        'repeat_mode': 'reinitialize',
+        'repeat_mode': 'direct',
         'dwell_sec': 0.0,
         'motion_file_id': '',
         'mapping_file_id': '',
@@ -35,7 +35,7 @@ def normalize_automation_state(value: Any) -> Dict[str, Any]:
     state = default_automation_state()
     state['enabled'] = bool(source.get('enabled', False))
     state['armed'] = state['enabled']
-    repeat_mode = str(source.get('repeat_mode') or 'reinitialize').strip().lower()
+    repeat_mode = str(source.get('repeat_mode') or 'direct').strip().lower()
     if repeat_mode not in REPEAT_MODES:
         raise ValueError(f'지원하지 않는 자동 반복 방식입니다: {repeat_mode}')
     state['repeat_mode'] = repeat_mode

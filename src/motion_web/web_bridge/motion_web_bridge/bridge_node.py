@@ -1105,6 +1105,7 @@ class MotionWebBridge(Node):
                 motion_state,
                 execution_context,
             )
+            self._try_trigger_automation_resume(execution_context)
         except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
             self.get_logger().error(
                 f'Motor operation reconcile failed: {exc}'
@@ -2148,24 +2149,63 @@ class MotionWebBridge(Node):
                 verified_at=time.time(),
             )
             
-            # 부팅 시 자동 재생 (사용자 제안: 노드 검사 생략 후 가상 버튼 클릭 방식)
-            motion_status = self.motion_run_status()
-            automation = motion_status.get('automation') if isinstance(motion_status.get('automation'), dict) else {}
-            if automation.get('enabled') and automation.get('armed'):
-                triggered_id = getattr(self, '_automation_triggered_context_id', None)
-                if triggered_id != context_id:
-                    self._automation_triggered_context_id = context_id
-                    self.get_logger().info(f"자동 재생 예약 활성화됨. 가상 클릭 트리거: {automation.get('motion_file_id')}")
-                    self.motion_run_start({
-                        'run_mode': 'continuous',
-                        'motion_file_id': automation.get('motion_file_id', ''),
-                        'mapping_file_id': automation.get('mapping_file_id', ''),
-                        'request_source': 'network_control',
-                    })
+            # 부팅 시 자동 재생 (자동 반복 시작 핸들러 호출)
+            self._try_trigger_automation_resume()
             
             return self.execution_context_status()
         finally:
             self._execution_context_apply_lock.release()
+
+    def _try_trigger_automation_resume(
+        self, execution_context: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """Trigger autonomous motion start once execution context is ready and motor control blockers clear."""
+        context = (
+            execution_context
+            if isinstance(execution_context, dict)
+            else self.execution_context_status(validate_files=False)
+        )
+        if not context.get('ready'):
+            return
+        context_id = str(context.get('context_id') or '')
+        if not context_id:
+            return
+
+        triggered_id = getattr(self, '_automation_triggered_context_id', None)
+        if triggered_id == context_id:
+            return
+
+        motion_status = dict(getattr(self, '_motion_run_status', {}) or {})
+        automation = (
+            motion_status.get('automation')
+            if isinstance(motion_status.get('automation'), dict)
+            else {}
+        )
+        if not (automation.get('enabled') and automation.get('armed')):
+            return
+
+        if not automation.get('resume_pending'):
+            return
+
+        blocker = self._motor_runtime_control_blocker()
+        if blocker:
+            return
+
+        self.get_logger().info(
+            f"자동 재생 예약 활성화됨. 하드웨어 준비 완료. 트리거 시도: {automation.get('motion_file_id')}"
+        )
+        res = self.motion_automation_start({
+            'run_mode': 'continuous',
+            'motion_file_id': automation.get('motion_file_id', ''),
+            'mapping_file_id': automation.get('mapping_file_id', ''),
+            'request_source': 'network_control',
+        })
+        if isinstance(res, dict) and res.get('success'):
+            self._automation_triggered_context_id = context_id
+        else:
+            self.get_logger().warn(
+                f"자동 재생 트리거 대기 중: {res.get('message') if isinstance(res, dict) else res}"
+            )
 
     def _reconcile_execution_context_blocking(
         self, *, timeout_sec: float = 10.0, poll_interval: float = 0.1,
@@ -3984,6 +4024,7 @@ class MotionWebBridge(Node):
         with self._motion_run_lock:
             self._motion_run_results.clear()
             self._motion_run_status = {}
+            self._automation_triggered_context_id = None
         with self._midi_monitor_lock:
             self._midi_monitor_results.clear()
             self._midi_monitor_status = {}
@@ -5441,10 +5482,13 @@ class MotionWebBridge(Node):
         self, payload: Dict[str, Any]
     ) -> Dict[str, Any]:
         with self._lock:
-            context = dict(self._execution_context)
+            project_id = self.project_repository.selected_project_id()
+            context = self.project_repository.execution_context(project_id) if project_id else {}
             files = context.get('files') if isinstance(context.get('files'), dict) else {}
-            active_motion = str(files.get('motions', {}).get('name') or '').strip()
-            active_mapping = str(files.get('motion_axis_matching', {}).get('name') or '').strip()
+            motions = files.get('motions') if isinstance(files.get('motions'), dict) else {}
+            mapping = files.get('motion_axis_matching') if isinstance(files.get('motion_axis_matching'), dict) else {}
+            active_motion = str(motions.get('name') or '').strip()
+            active_mapping = str(mapping.get('name') or '').strip()
         
         request_payload = dict(payload if payload is not None else {})
         if not str(request_payload.get('motion_file_id') or '').strip():
@@ -8272,10 +8316,19 @@ def create_app(bridge: MotionWebBridge) -> FastAPI:
 
     @app.put('/api/motion-run/automation')
     async def motion_automation_configure(request: Request):
-        body = await request.json()
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail='request body must be an object')
-        return await asyncio.to_thread(bridge.motion_automation_configure, body)
+        try:
+            return await asyncio.to_thread(bridge.motion_automation_configure, body)
+        except Exception as exc:
+            import traceback
+            trace = traceback.format_exc()
+            bridge.get_logger().error(f'motion_automation_configure API error: {trace}')
+            return {'success': False, 'message': f'서버 내부 오류: {exc}'}
 
     @app.post('/api/motion-run/automation/start')
     async def motion_automation_start(request: Request):

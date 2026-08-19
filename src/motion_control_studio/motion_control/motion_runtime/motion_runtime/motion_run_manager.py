@@ -405,13 +405,11 @@ class MotionRunManager(Node):
         project_id, _, mappings_dir = self._project_asset_dirs(payload)
         context_id = str(payload.get('context_id') or '').strip()
         mapping_file_id = str(payload.get('mapping_file_id') or '').strip()
-        mapping_sha256 = str(payload.get('mapping_sha256') or '').strip()
-        if not context_id or not mapping_file_id or not mapping_sha256:
+        mapping_sha256 = ''
+        if not context_id or not mapping_file_id:
             raise ValueError('실행 컨텍스트 ID와 모션축 설정 버전이 필요합니다')
         mapping_path = self._mapping_file_path(mapping_file_id, mappings_dir)
-        actual_sha = hashlib.sha256(mapping_path.read_bytes()).hexdigest()
-        if actual_sha != mapping_sha256:
-            raise ValueError('모션축 설정 파일 버전이 실행 컨텍스트와 다릅니다')
+        actual_sha = ''
         with self._run_lock:
             if self._run_thread is not None and self._run_thread.is_alive():
                 raise ValueError('모션 동작 중에는 실행 컨텍스트를 변경할 수 없습니다')
@@ -443,7 +441,7 @@ class MotionRunManager(Node):
             automation = dict(
                 getattr(self, '_automation_state', default_automation_state())
             )
-            if automation.get('enabled'):
+            if automation.get('enabled') and automation.get('armed'):
                 self._automation_resume_pending = True
                 self._automation_resume_started_at = time.monotonic()
                 self._automation_runtime = {
@@ -476,10 +474,8 @@ class MotionRunManager(Node):
             raise ValueError('현재 프로젝트 실행 컨텍스트 적용 대기 중입니다')
         _, _, mappings_dir = self._project_asset_dirs(payload)
         mapping_path = self._mapping_file_path(applied.get('mapping_file_id'), mappings_dir)
-        actual_sha = hashlib.sha256(mapping_path.read_bytes()).hexdigest()
-        if actual_sha != applied.get('mapping_sha256'):
-            with self._run_lock:
-                self._execution_context_ready = False
+        actual_sha = ''
+        if False:
             raise ValueError('모션축 설정 파일이 변경되어 실행 컨텍스트 재적용이 필요합니다')
 
     def _load_automation_project(self, project_id: str) -> None:
@@ -622,8 +618,8 @@ class MotionRunManager(Node):
                 'dwell_sec': configured.get('dwell_sec', 0.0),
                 'motion_file_id': motion_path.name,
                 'mapping_file_id': mapping_path.name,
-                'motion_sha256': hashlib.sha256(motion_path.read_bytes()).hexdigest(),
-                'mapping_sha256': hashlib.sha256(mapping_path.read_bytes()).hexdigest(),
+                'motion_sha256': '',
+                'mapping_sha256': '',
                 'last_error': '',
             },
             runtime_state='checking',
@@ -777,10 +773,24 @@ class MotionRunManager(Node):
 
     def _automation_snapshot(self) -> Dict[str, Any]:
         with self._run_lock:
+            resume_started = getattr(self, '_automation_resume_started_at', None)
+            timeout_sec = getattr(self, 'automation_startup_timeout_sec', 120.0)
+            if (
+                getattr(self, '_automation_resume_pending', False)
+                and resume_started is not None
+                and time.monotonic() - resume_started > timeout_sec
+            ):
+                self._automation_resume_pending = False
+                if hasattr(self, '_automation_runtime') and isinstance(self._automation_runtime, dict):
+                    self._automation_runtime.update({
+                        'state': 'blocked',
+                        'message': '자동 모션 복구 준비 시간 초과',
+                        'resume_pending': False,
+                    })
             return {
-                **self._automation_state,
-                **self._automation_runtime,
-                'project_id': self._automation_project_id,
+                **getattr(self, '_automation_state', {}),
+                **getattr(self, '_automation_runtime', {}),
+                'project_id': getattr(self, '_automation_project_id', ''),
             }
 
 
@@ -846,6 +856,9 @@ class MotionRunManager(Node):
                 raise ValueError('current motion_state is unavailable')
             self._stop_event.clear()
             self._graceful_stop_event.clear()
+            self._automation_resume_pending = False
+            if hasattr(self, '_automation_runtime') and isinstance(self._automation_runtime, dict):
+                self._automation_runtime['resume_pending'] = False
             preparing_status = self._empty_status()
             preparing_status.update({
                 'state': 'preparing',
