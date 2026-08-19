@@ -6,7 +6,7 @@ from typing import List
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
-from ros2pkg.api import get_package_share_directory
+from ament_index_python.packages import get_package_share_directory
 
 
 def register_system_routes(app: FastAPI, bridge, project_call) -> None:
