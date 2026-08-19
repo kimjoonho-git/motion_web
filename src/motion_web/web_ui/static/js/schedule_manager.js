@@ -17,6 +17,10 @@ const ScheduleManager = {
         if (scheduleBtn) {
             scheduleBtn.addEventListener('click', () => this.openScheduleModal());
         }
+        const scheduleBtnCoord = document.getElementById('btnScheduleModalCoord');
+        if (scheduleBtnCoord) {
+            scheduleBtnCoord.addEventListener('click', () => this.openScheduleModal());
+        }
 
         const closeBtn = document.getElementById('btnCloseScheduleModal');
         if (closeBtn) {
@@ -53,13 +57,20 @@ const ScheduleManager = {
 
     updateStatusBadge() {
         const badge = document.getElementById('scheduleStatusBadge');
-        if (badge && this.status) {
-            if (this.status.is_master) {
-                badge.className = 'badge bg-success me-2';
-                badge.textContent = `스케줄러: 마스터 (${this.status.schedule_count || 0}개 등록)`;
-            } else {
-                badge.className = 'badge bg-secondary me-2';
-                badge.textContent = '스케줄러: 슬레이브 대기';
+        const badgeCoord = document.getElementById('scheduleStatusBadgeCoord');
+        if (this.status) {
+            const text = this.status.is_master
+                ? `스케줄러: 마스터 (${this.status.schedule_count || 0}개 등록)`
+                : '스케줄러: 슬레이브 대기';
+            const cls = this.status.is_master ? 'badge bg-success me-2' : 'badge bg-secondary me-2';
+
+            if (badge) {
+                badge.className = cls;
+                badge.textContent = text;
+            }
+            if (badgeCoord) {
+                badgeCoord.className = cls;
+                badgeCoord.textContent = text;
             }
         }
     },
