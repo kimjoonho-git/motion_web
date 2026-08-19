@@ -812,6 +812,14 @@ class MotionRunManager(Node):
         if started_at is not None and now - started_at > self.automation_startup_timeout_sec:
             self._automation_failure('자동 반복 시작 대기 시간 초과')
             return
+        if not self._current_motors():
+            with self._run_lock:
+                self._automation_runtime.update({
+                    'state': 'waiting',
+                    'message': '자동 연속 재생 준비 중 (모터 상태 대기)',
+                    'resume_pending': True,
+                })
+            return
         try:
             self._verify_automation_files(context, state)
             payload = {
