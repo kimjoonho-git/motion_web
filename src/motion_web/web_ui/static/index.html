@@ -36,7 +36,9 @@
               <button id="headerEmergencyStopButton" class="header-emergency-stop" type="button" aria-keyshortcuts="Control+Shift+E" title="전체 동작을 정지하고 AC 서보를 끈 뒤 명령을 잠급니다 (Ctrl+Shift+E)">긴급 정지</button>
             </div>
             <span class="topbar-operation-divider" aria-hidden="true"></span>
-            <div class="topbar-operation-group topbar-restart-actions" aria-label="재시작 조작">
+            <div class="topbar-operation-group topbar-restart-actions" aria-label="재시작 및 스케줄 조작">
+              <span id="scheduleStatusBadge" class="badge bg-secondary me-2" style="font-size: 12px; padding: 4px 8px; border-radius: 4px; background-color: #4a5568; color: #fff;">스케줄러: 확인 중</span>
+              <button id="btnScheduleModal" type="button" class="primary" style="background-color: #2b6cb0; color: #fff; border: none; padding: 4px 10px; border-radius: 4px; cursor: pointer;">📅 모션 스케줄</button>
               <button id="headerProgramRestartButton" type="button" disabled>프로그램 재시작</button>
             </div>
           </div>
@@ -1900,6 +1902,71 @@
       </div>
     </div>
 
+    <!-- Schedule Management Modal -->
+    <div id="scheduleModal" class="operation-progress-overlay" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.6); z-index: 9999;" role="dialog">
+      <div class="operation-progress-dialog" style="background: #1a202c; color: #fff; width: 680px; max-width: 90%; margin: 60px auto; padding: 24px; border-radius: 8px; border: 1px solid #2d3748; box-shadow: 0 10px 25px rgba(0,0,0,0.5);">
+        <div class="d-flex justify-content-between align-items-center mb-3" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+          <h4 style="margin: 0; font-size: 18px; font-weight: bold;">📅 모션 구동 스케줄 관리</h4>
+          <button id="btnCloseScheduleModal" type="button" style="background: none; border: none; color: #a0aec0; font-size: 20px; cursor: pointer;">&times;</button>
+        </div>
+        <p style="color: #a0aec0; font-size: 13px; margin-bottom: 16px;">
+          마스터 PC 전용 스케줄러. 시작 시각 도달 시 "연속 시작", 종료 도달 시 "현재 회차후 정지"를 실행합니다.
+        </p>
+        <div id="scheduleListContainer" style="max-height: 350px; overflow-y: auto; margin-bottom: 20px; background: #2d3748; padding: 12px; border-radius: 6px;">
+          <div class="text-center text-muted py-4">스케줄 목록을 불러오는 중...</div>
+        </div>
+        <div style="display: flex; justify-content: flex-end; gap: 8px;">
+          <button id="btnAddSchedule" type="button" style="background: #319795; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold;">+ 신규 스케줄 추가</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Schedule Edit/Create Modal -->
+    <div id="scheduleEditModal" class="operation-progress-overlay" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.7); z-index: 10000;" role="dialog">
+      <div class="operation-progress-dialog" style="background: #2d3748; color: #fff; width: 500px; max-width: 90%; margin: 80px auto; padding: 24px; border-radius: 8px; box-shadow: 0 10px 25px rgba(0,0,0,0.5);">
+        <h5 style="margin-top: 0; margin-bottom: 16px; font-weight: bold;">스케줄 설정</h5>
+        <input type="hidden" id="schedEditId">
+        <div style="display: flex; flex-direction: column; gap: 12px; font-size: 14px;">
+          <div>
+            <label style="display: block; margin-bottom: 4px;">스케줄 이름</label>
+            <input type="text" id="schedName" style="width: 100%; padding: 6px; background: #1a202c; border: 1px solid #4a5568; color: white; border-radius: 4px;">
+          </div>
+          <div>
+            <label style="display: block; margin-bottom: 4px;">시작 시각 (HH:MM:SS)</label>
+            <input type="text" id="schedStartTime" value="09:00:00" style="width: 100%; padding: 6px; background: #1a202c; border: 1px solid #4a5568; color: white; border-radius: 4px;">
+          </div>
+          <div>
+            <label style="display: block; margin-bottom: 4px;">정지 방식 선택</label>
+            <select id="schedStopMode" onchange="ScheduleManager.onStopModeChange()" style="width: 100%; padding: 6px; background: #1a202c; border: 1px solid #4a5568; color: white; border-radius: 4px;">
+              <option value="time">지정 시각 정지 (Time)</option>
+              <option value="duration">지정 유지시간 정지 (Duration)</option>
+            </select>
+          </div>
+          <div id="schedStopTimeGroup">
+            <label style="display: block; margin-bottom: 4px;">종료 시각 (HH:MM:SS)</label>
+            <input type="text" id="schedStopTime" value="18:00:00" style="width: 100%; padding: 6px; background: #1a202c; border: 1px solid #4a5568; color: white; border-radius: 4px;">
+          </div>
+          <div id="schedDurationGroup" style="display: none;">
+            <label style="display: block; margin-bottom: 4px;">유지시간 (초)</label>
+            <input type="number" id="schedDurationSec" value="3600" style="width: 100%; padding: 6px; background: #1a202c; border: 1px solid #4a5568; color: white; border-radius: 4px;">
+          </div>
+          <div>
+            <label style="display: block; margin-bottom: 4px;">반복 유형</label>
+            <select id="schedRepeatType" style="width: 100%; padding: 6px; background: #1a202c; border: 1px solid #4a5568; color: white; border-radius: 4px;">
+              <option value="daily">매일 (Daily)</option>
+              <option value="weekly">주간 지정 (Weekly)</option>
+              <option value="once">1회만 실행 (Once)</option>
+            </select>
+          </div>
+        </div>
+        <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px;">
+          <button id="btnCancelScheduleForm" type="button" style="background: #4a5568; color: white; border: none; padding: 6px 14px; border-radius: 4px; cursor: pointer;">취소</button>
+          <button id="btnSaveScheduleForm" type="button" style="background: #3182ce; color: white; border: none; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-weight: bold;">저장</button>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/static/js/schedule_manager.js?v=20260819-sched-1"></script>
     <script type="module" src="/static/app.js?v=20260818-roster-remove-1"></script>
   </body>
 </html>
