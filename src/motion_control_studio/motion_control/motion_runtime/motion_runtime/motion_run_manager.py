@@ -819,8 +819,8 @@ class MotionRunManager(Node):
                 'project_id': context.get('project_id'),
                 'project_generation': context.get('project_generation'),
                 'context_id': context.get('context_id'),
-                'motion_file_id': state.get('motion_file_id'),
-                'mapping_file_id': state.get('mapping_file_id'),
+                'motion_file_id': state.get('motion_file_id') or context.get('motion_file_id') or '',
+                'mapping_file_id': state.get('mapping_file_id') or context.get('mapping_file_id') or '',
                 'run_mode': 'continuous',
                 'automation_run': True,
                 'repeat_mode': state.get('repeat_mode', 'reinitialize'),
@@ -856,14 +856,18 @@ class MotionRunManager(Node):
         project_id, motions_dir, mappings_dir = self._project_asset_dirs(context)
         if project_id != self._automation_project_id:
             raise ValueError('자동 반복 프로젝트가 현재 프로젝트와 다릅니다')
-        motion_path = self._motion_file_path(state.get('motion_file_id'), motions_dir)
-        mapping_path = self._mapping_file_path(state.get('mapping_file_id'), mappings_dir)
+        motion_file_id = state.get('motion_file_id') or context.get('motion_file_id')
+        mapping_file_id = state.get('mapping_file_id') or context.get('mapping_file_id')
+        motion_path = self._motion_file_path(motion_file_id, motions_dir)
+        mapping_path = self._mapping_file_path(mapping_file_id, mappings_dir)
         motion_sha = hashlib.sha256(motion_path.read_bytes()).hexdigest()
         mapping_sha = hashlib.sha256(mapping_path.read_bytes()).hexdigest()
-        if motion_sha != state.get('motion_sha256'):
+        expected_motion_sha = state.get('motion_sha256')
+        if expected_motion_sha and motion_sha != expected_motion_sha:
             self._automation_failure('자동 반복 모션 파일이 시작 당시와 다릅니다')
             raise ValueError('자동 반복 모션 파일이 시작 당시와 다릅니다')
-        if mapping_sha != state.get('mapping_sha256'):
+        expected_mapping_sha = state.get('mapping_sha256')
+        if expected_mapping_sha and mapping_sha != expected_mapping_sha:
             self._automation_failure('자동 반복 모션축 설정이 시작 당시와 다릅니다')
             raise ValueError('자동 반복 모션축 설정이 시작 당시와 다릅니다')
 
