@@ -443,7 +443,7 @@ class MotionRunManager(Node):
             automation = dict(
                 getattr(self, '_automation_state', default_automation_state())
             )
-            if automation.get('enabled') and automation.get('armed'):
+            if automation.get('enabled'):
                 self._automation_resume_pending = True
                 self._automation_resume_started_at = time.monotonic()
                 self._automation_runtime = {
@@ -770,7 +770,6 @@ class MotionRunManager(Node):
         try:
             self._save_automation(
                 {
-                    'armed': False,
                     'last_error': text,
                 },
                 runtime_state='blocked',

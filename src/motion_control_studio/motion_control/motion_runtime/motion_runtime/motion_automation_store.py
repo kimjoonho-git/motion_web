@@ -34,7 +34,7 @@ def normalize_automation_state(value: Any) -> Dict[str, Any]:
     source = value if isinstance(value, dict) else {}
     state = default_automation_state()
     state['enabled'] = bool(source.get('enabled', False))
-    state['armed'] = bool(source.get('armed', False)) and state['enabled']
+    state['armed'] = state['enabled']
     repeat_mode = str(source.get('repeat_mode') or 'reinitialize').strip().lower()
     if repeat_mode not in REPEAT_MODES:
         raise ValueError(f'지원하지 않는 자동 반복 방식입니다: {repeat_mode}')
