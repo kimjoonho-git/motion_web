@@ -1,23 +1,25 @@
 # 연동 모션 스케줄 제어 시스템 설계서
 
-## Schedule Motion Control Design — Simplified Version
+## Schedule Motion Control Design — Master Only & Cycle Complete Stop
 
 ## 1. 목적
 
-설정된 로컬 시각에 기존 시스템의 **연속모션 시작 기능과 정지 기능을 자동 호출**하는 스케줄 기능을 구현한다.
+설정된 로컬 시각에 기존 시스템의 **"연속 시작" 버튼 기능과 "현재 회차후 정지" (stop-after-cycle) 기능을 자동 호출**하는 스케줄 기능을 구현한다.
 
-`motion_schedule_node`는 새로운 모션 제어 로직을 구현하지 않는다.
+`motion_schedule_node`는 새로운 모션 제어 로직을 구현하지 않으며, **마스터 PC(Master Node)에서만 스케줄을 구동**한다.
 
 핵심 개념은 다음과 같다.
 
 ```text
-시작 시각 도달
+마스터 PC (Master Node) 전용 스케줄 구동
     ↓
-기존 UI "연속모션 시작" 버튼과 동일한 기능 호출
-
-종료 시각 도달
+시작 시각 도달 ➔ 기존 UI "연속 시작" 버튼 기능 자동 호출
     ↓
-기존 UI "정지" 버튼과 동일한 기능 호출
+지정 스케줄 시간 동안 연속 모션 구동
+    ↓
+종료 시각 / 유지시간 도달 ➔ 기존 UI "현재 회차후 정지" (stop-after-cycle) 버튼 기능 자동 호출 (진행 회차 안전 완료 후 정지)
+    ↓
+스케줄 외 시간 ➔ 모션 멈춤 대기 상태 유지
 ```
 
 즉 Scheduler는 모션 제어기가 아니라 **시간 기반 Trigger 역할만 담당**한다.
