@@ -219,7 +219,7 @@ class MotionRunManager(Node):
         )
         self._action_request_pub = self.create_publisher(String, self.action_request_topic, 10)
         self._status_timer = self.create_timer(0.5, self._publish_status)
-        self._automation_timer = self.create_timer(1.0, self._automation_tick)
+        self._automation_timer = None
 
         self.get_logger().info(
             f'motion_run_manager started: state={self.motion_state_topic}, '
@@ -560,15 +560,7 @@ class MotionRunManager(Node):
         armed = False
 
         if motion_file_id and mapping_file_id:
-            try:
-                motion_path = self._project_motion_file_path(motion_file_id)
-                mapping_path = self._project_mapping_file_path(mapping_file_id)
-                if motion_path.is_file() and mapping_path.is_file():
-                    motion_sha = hashlib.sha256(motion_path.read_bytes()).hexdigest()
-                    mapping_sha = hashlib.sha256(mapping_path.read_bytes()).hexdigest()
-                    armed = True
-            except Exception:
-                armed = False
+            armed = True
 
         candidate = normalize_automation_state({
             **current,
@@ -791,97 +783,7 @@ class MotionRunManager(Node):
                 'project_id': self._automation_project_id,
             }
 
-    def _automation_tick(self) -> None:
-        with self._run_lock:
-            pending = self._automation_resume_pending
-            ready = self._execution_context_ready
-            context = dict(self._execution_context)
-            state = dict(self._automation_state)
-            thread_running = self._run_thread is not None and self._run_thread.is_alive()
-            started_at = self._automation_resume_started_at
-            last_attempt = self._automation_last_attempt_at
-        if not pending or not ready or thread_running:
-            return
-        now = time.monotonic()
-        if now - last_attempt < 1.0:
-            return
-        with self._run_lock:
-            self._automation_last_attempt_at = now
-        if started_at is not None and now - started_at > self.automation_startup_timeout_sec:
-            self._automation_failure('자동 반복 시작 대기 시간 초과')
-            return
-        if not self._current_motors():
-            with self._run_lock:
-                self._automation_runtime.update({
-                    'state': 'waiting',
-                    'message': '자동 연속 재생 준비 중 (모터 상태 대기)',
-                    'resume_pending': True,
-                })
-            return
-        try:
-            resolved_motion_id, resolved_mapping_id = self._verify_automation_files(context, state)
-            payload = {
-                'project_id': context.get('project_id'),
-                'project_generation': context.get('project_generation'),
-                'context_id': context.get('context_id'),
-                'motion_file_id': resolved_motion_id,
-                'mapping_file_id': resolved_mapping_id,
-                'run_mode': 'continuous',
-                'automation_run': True,
-                'repeat_mode': (
-                    state.get('repeat_mode')
-                    if state.get('repeat_mode') in {'reinitialize', 'dwell_reinitialize'}
-                    else 'reinitialize'
-                ),
-                'dwell_sec': state.get('dwell_sec', 0.0),
-            }
-            result = self._start_thread('run', payload)
-            if not result.get('success'):
-                raise RuntimeError(str(result.get('message') or '자동 반복 재시작 대기 중'))
-        except Exception as exc:
-            with self._run_lock:
-                still_pending = self._automation_resume_pending
-            if not still_pending:
-                return
-            with self._run_lock:
-                self._automation_runtime.update({
-                    'state': 'waiting',
-                    'message': f'자동 반복 시작 대기: {exc}',
-                    'resume_pending': True,
-                })
-            return
-        with self._run_lock:
-            self._automation_resume_pending = False
-            self._automation_runtime.update({
-                'state': 'starting',
-                'message': '재시작 후 자동 반복 시작',
-            })
 
-    def _verify_automation_files(
-        self,
-        context: Dict[str, Any],
-        state: Dict[str, Any],
-    ) -> tuple[str, str]:
-        project_id, motions_dir, mappings_dir = self._project_asset_dirs(context)
-        if project_id != self._automation_project_id:
-            raise ValueError('자동 반복 프로젝트가 현재 프로젝트와 다릅니다')
-        
-        motion_file_id = str(state.get('motion_file_id') or '').strip()
-        mapping_file_id = str(state.get('mapping_file_id') or '').strip()
-
-        if not motion_file_id:
-            raise ValueError('실행할 모션 파일이 선택되지 않았습니다')
-        if not mapping_file_id:
-            raise ValueError('실행할 모션축 매핑 파일이 선택되지 않았습니다')
-
-        motion_path = self._motion_file_path(motion_file_id, motions_dir)
-        mapping_path = self._mapping_file_path(mapping_file_id, mappings_dir)
-        if not motion_path.is_file():
-            raise ValueError(f'실행할 모션 파일을 찾을 수 없습니다: {motion_file_id}')
-        if not mapping_path.is_file():
-            raise ValueError(f'실행할 모션축 설정 파일을 찾을 수 없습니다: {mapping_file_id}')
-
-        return motion_file_id, mapping_file_id
 
     def _handle_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         try:

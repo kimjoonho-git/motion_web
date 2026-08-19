@@ -2147,6 +2147,22 @@ class MotionWebBridge(Node):
                 message='저장 설정과 실행 설정이 일치합니다 · 사용자 제어 가능',
                 verified_at=time.time(),
             )
+            
+            # 부팅 시 자동 재생 (사용자 제안: 노드 검사 생략 후 가상 버튼 클릭 방식)
+            motion_status = self.motion_run_status()
+            automation = motion_status.get('automation') if isinstance(motion_status.get('automation'), dict) else {}
+            if automation.get('enabled') and automation.get('armed'):
+                triggered_id = getattr(self, '_automation_triggered_context_id', None)
+                if triggered_id != context_id:
+                    self._automation_triggered_context_id = context_id
+                    self.get_logger().info(f"자동 재생 예약 활성화됨. 가상 클릭 트리거: {automation.get('motion_file_id')}")
+                    self.motion_run_start({
+                        'run_mode': 'continuous',
+                        'motion_file_id': automation.get('motion_file_id', ''),
+                        'mapping_file_id': automation.get('mapping_file_id', ''),
+                        'request_source': 'network_control',
+                    })
+            
             return self.execution_context_status()
         finally:
             self._execution_context_apply_lock.release()
@@ -5430,7 +5446,7 @@ class MotionWebBridge(Node):
             active_motion = str(files.get('motions', {}).get('name') or '').strip()
             active_mapping = str(files.get('motion_axis_matching', {}).get('name') or '').strip()
         
-        request_payload = dict(payload)
+        request_payload = dict(payload if payload is not None else {})
         if not str(request_payload.get('motion_file_id') or '').strip():
             request_payload['motion_file_id'] = active_motion
         if not str(request_payload.get('mapping_file_id') or '').strip():
