@@ -821,13 +821,13 @@ class MotionRunManager(Node):
                 })
             return
         try:
-            self._verify_automation_files(context, state)
+            resolved_motion_id, resolved_mapping_id = self._verify_automation_files(context, state)
             payload = {
                 'project_id': context.get('project_id'),
                 'project_generation': context.get('project_generation'),
                 'context_id': context.get('context_id'),
-                'motion_file_id': state.get('motion_file_id') or context.get('motion_file_id') or '',
-                'mapping_file_id': state.get('mapping_file_id') or context.get('mapping_file_id') or '',
+                'motion_file_id': resolved_motion_id,
+                'mapping_file_id': resolved_mapping_id,
                 'run_mode': 'continuous',
                 'automation_run': True,
                 'repeat_mode': (
@@ -863,12 +863,40 @@ class MotionRunManager(Node):
         self,
         context: Dict[str, Any],
         state: Dict[str, Any],
-    ) -> None:
+    ) -> tuple[str, str]:
         project_id, motions_dir, mappings_dir = self._project_asset_dirs(context)
         if project_id != self._automation_project_id:
             raise ValueError('자동 반복 프로젝트가 현재 프로젝트와 다릅니다')
-        motion_file_id = state.get('motion_file_id') or context.get('motion_file_id')
-        mapping_file_id = state.get('mapping_file_id') or context.get('mapping_file_id')
+        
+        files = context.get('files') if isinstance(context.get('files'), dict) else {}
+        active_motion = str(files.get('motions', {}).get('name') or '').strip()
+        active_mapping = str(files.get('motion_axis_matching', {}).get('name') or '').strip()
+
+        motion_file_id = (
+            state.get('motion_file_id')
+            or context.get('motion_file_id')
+            or active_motion
+        )
+        if not motion_file_id and motions_dir.is_dir():
+            yaml_files = sorted(p.name for p in motions_dir.glob('*.yaml') if p.is_file())
+            if yaml_files:
+                motion_file_id = yaml_files[0]
+
+        mapping_file_id = (
+            state.get('mapping_file_id')
+            or context.get('mapping_file_id')
+            or active_mapping
+        )
+        if not mapping_file_id and mappings_dir.is_dir():
+            yaml_files = sorted(p.name for p in mappings_dir.glob('*.yaml') if p.is_file())
+            if yaml_files:
+                mapping_file_id = yaml_files[0]
+
+        if not motion_file_id:
+            raise ValueError('프로젝트 내 실행할 모션 파일(.yaml)이 없습니다')
+        if not mapping_file_id:
+            raise ValueError('프로젝트 내 실행할 모션축 매핑 파일(.yaml)이 없습니다')
+
         motion_path = self._motion_file_path(motion_file_id, motions_dir)
         mapping_path = self._mapping_file_path(mapping_file_id, mappings_dir)
         motion_sha = hashlib.sha256(motion_path.read_bytes()).hexdigest()
