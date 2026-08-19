@@ -102,6 +102,8 @@ initialize_rosdep() {
 }
 
 build_workspace() {
+  systemctl --user stop motion-control.service motion-motor.service motion-coordination.service 2>/dev/null || true
+  systemctl --user reset-failed 2>/dev/null || true
   set +u
   source /opt/ros/humble/setup.bash
   set -u
