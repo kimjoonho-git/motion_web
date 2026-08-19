@@ -544,19 +544,14 @@ class MotionRunManager(Node):
         except (TypeError, ValueError):
             dwell_sec = 0.0
 
-        files = context.get('files') if isinstance(context.get('files'), dict) else {}
         motion_file_id = str(
             payload.get('motion_file_id')
             or current.get('motion_file_id')
-            or context.get('motion_file_id')
-            or files.get('motions', {}).get('name')
             or ''
         ).strip()
         mapping_file_id = str(
             payload.get('mapping_file_id')
             or current.get('mapping_file_id')
-            or context.get('mapping_file_id')
-            or files.get('motion_axis_matching', {}).get('name')
             or ''
         ).strip()
 
@@ -871,17 +866,9 @@ class MotionRunManager(Node):
         if project_id != self._automation_project_id:
             raise ValueError('자동 반복 프로젝트가 현재 프로젝트와 다릅니다')
         
-        files = context.get('files') if isinstance(context.get('files'), dict) else {}
-        motion_file_id = (
-            state.get('motion_file_id')
-            or context.get('motion_file_id')
-            or str(files.get('motions', {}).get('name') or '').strip()
-        )
-        mapping_file_id = (
-            state.get('mapping_file_id')
-            or context.get('mapping_file_id')
-            or str(files.get('motion_axis_matching', {}).get('name') or '').strip()
-        )
+        motion_file_id = str(state.get('motion_file_id') or '').strip()
+        mapping_file_id = str(state.get('mapping_file_id') or '').strip()
+
         if not motion_file_id:
             raise ValueError('실행할 모션 파일이 선택되지 않았습니다')
         if not mapping_file_id:
@@ -899,6 +886,8 @@ class MotionRunManager(Node):
         if expected_mapping_sha and mapping_sha != expected_mapping_sha:
             self._automation_failure('자동 반복 모션축 설정이 시작 당시와 다릅니다')
             raise ValueError('자동 반복 모션축 설정이 시작 당시와 다릅니다')
+
+        return motion_file_id, mapping_file_id
 
     def _handle_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         try:

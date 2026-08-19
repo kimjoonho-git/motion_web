@@ -5424,8 +5424,20 @@ class MotionWebBridge(Node):
     def motion_automation_configure(
         self, payload: Dict[str, Any]
     ) -> Dict[str, Any]:
+        with self._lock:
+            context = dict(self._execution_context)
+            files = context.get('files') if isinstance(context.get('files'), dict) else {}
+            active_motion = str(files.get('motions', {}).get('name') or '').strip()
+            active_mapping = str(files.get('motion_axis_matching', {}).get('name') or '').strip()
+        
+        request_payload = dict(payload)
+        if not str(request_payload.get('motion_file_id') or '').strip():
+            request_payload['motion_file_id'] = active_motion
+        if not str(request_payload.get('mapping_file_id') or '').strip():
+            request_payload['mapping_file_id'] = active_mapping
+
         return self._request_motion_run(
-            'automation_configure', payload, timeout_sec=2.0
+            'automation_configure', request_payload, timeout_sec=2.0
         )
 
     def motion_automation_start(
