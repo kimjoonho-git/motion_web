@@ -19,7 +19,7 @@ def default_automation_state() -> Dict[str, Any]:
         'version': AUTOMATION_VERSION,
         'enabled': False,
         'armed': False,
-        'repeat_mode': 'direct',
+        'repeat_mode': 'reinitialize',
         'dwell_sec': 0.0,
         'motion_file_id': '',
         'mapping_file_id': '',

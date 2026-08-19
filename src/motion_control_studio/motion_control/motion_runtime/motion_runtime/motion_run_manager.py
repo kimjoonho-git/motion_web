@@ -530,28 +530,68 @@ class MotionRunManager(Node):
     def _configure_automation(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         with self._run_lock:
             current = dict(self._automation_state)
+            context = dict(self._execution_context)
+
+        enabled = bool(payload.get('enabled', current.get('enabled', False)))
+        if not enabled:
+            return self._disable_automation(payload)
+
+        repeat_mode = str(
+            payload.get('repeat_mode') or current.get('repeat_mode') or 'reinitialize'
+        ).strip()
+        try:
+            dwell_sec = float(payload.get('dwell_sec', current.get('dwell_sec', 0.0)))
+        except (TypeError, ValueError):
+            dwell_sec = 0.0
+
+        motion_file_id = str(
+            payload.get('motion_file_id')
+            or current.get('motion_file_id')
+            or context.get('motion_file_id')
+            or ''
+        ).strip()
+        mapping_file_id = str(
+            payload.get('mapping_file_id')
+            or current.get('mapping_file_id')
+            or context.get('mapping_file_id')
+            or ''
+        ).strip()
+
+        motion_sha = ''
+        mapping_sha = ''
+        armed = False
+
+        if motion_file_id and mapping_file_id:
+            try:
+                motion_path = self._project_motion_file_path(motion_file_id)
+                mapping_path = self._project_mapping_file_path(mapping_file_id)
+                if motion_path.is_file() and mapping_path.is_file():
+                    motion_sha = hashlib.sha256(motion_path.read_bytes()).hexdigest()
+                    mapping_sha = hashlib.sha256(mapping_path.read_bytes()).hexdigest()
+                    armed = True
+            except Exception:
+                armed = False
+
         candidate = normalize_automation_state({
             **current,
-            'enabled': bool(payload.get('enabled', current.get('enabled', False))),
-            'repeat_mode': payload.get(
-                'repeat_mode',
-                current.get('repeat_mode', 'direct'),
-            ),
-            'dwell_sec': payload.get('dwell_sec', current.get('dwell_sec', 0.0)),
+            'enabled': True,
+            'armed': armed,
+            'repeat_mode': repeat_mode,
+            'dwell_sec': dwell_sec,
+            'motion_file_id': motion_file_id if armed else '',
+            'mapping_file_id': mapping_file_id if armed else '',
+            'motion_sha256': motion_sha,
+            'mapping_sha256': mapping_sha,
+            'last_error': '',
         })
-        if not candidate['enabled']:
-            return self._disable_automation(payload)
+
         saved = self._save_automation(
-            {
-                **candidate,
-                'enabled': True,
-                'last_error': '',
-            },
-            runtime_state='running' if current.get('armed') else 'ready',
+            candidate,
+            runtime_state='ready' if armed else 'blocked',
             runtime_message=(
-                '현재 실행에는 기존 설정을 유지하고 다음 시작부터 적용합니다'
-                if current.get('armed')
-                else '자동 반복 사용'
+                '부팅 시 자동 재생 예약 완료'
+                if armed
+                else '재생 등록 모션 및 매핑 파일이 필요합니다'
             ),
         )
         return {
@@ -783,7 +823,7 @@ class MotionRunManager(Node):
                 'mapping_file_id': state.get('mapping_file_id'),
                 'run_mode': 'continuous',
                 'automation_run': True,
-                'repeat_mode': state.get('repeat_mode', 'direct'),
+                'repeat_mode': state.get('repeat_mode', 'reinitialize'),
                 'dwell_sec': state.get('dwell_sec', 0.0),
             }
             result = self._start_thread('run', payload)
@@ -1429,6 +1469,9 @@ class MotionRunManager(Node):
                             )
                             if motor_error:
                                 error = motor_error
+                                break
+                            if self._motor_position_deg(motor) is None:
+                                error = f'Axis {motor_axis} position is unavailable'
                                 break
                     except ValueError as exc:
                         error = str(exc)

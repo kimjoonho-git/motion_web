@@ -2699,13 +2699,21 @@ export function createMotionDataController({
     const repeatMode = String(
       el.motionAutomationRepeatMode?.value
       || motionRunStatus?.automation?.repeat_mode
-      || 'direct',
+      || 'reinitialize',
     );
     const dwellSec = Number(el.motionAutomationDwellSec?.value);
+    const motionFileId = motionRunSelectedMotionFile()?.filename
+      || motionRunStatus?.automation?.motion_file_id
+      || '';
+    const mappingFileId = motionRunSelectedMapping()?.name
+      || motionRunStatus?.automation?.mapping_file_id
+      || '';
     return {
       enabled,
       repeat_mode: repeatMode,
       dwell_sec: Number.isFinite(dwellSec) && dwellSec >= 0 ? dwellSec : 0,
+      motion_file_id: motionFileId,
+      mapping_file_id: mappingFileId,
     };
   }
 
