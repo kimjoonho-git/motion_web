@@ -869,39 +869,20 @@ class MotionRunManager(Node):
             raise ValueError('자동 반복 프로젝트가 현재 프로젝트와 다릅니다')
         
         files = context.get('files') if isinstance(context.get('files'), dict) else {}
-        active_motion = str(files.get('motions', {}).get('name') or '').strip()
-        active_mapping = str(files.get('motion_axis_matching', {}).get('name') or '').strip()
-
         motion_file_id = (
             state.get('motion_file_id')
             or context.get('motion_file_id')
-            or active_motion
+            or str(files.get('motions', {}).get('name') or '').strip()
         )
-        if not motion_file_id and motions_dir.is_dir():
-            files_found = sorted(
-                p.name for p in motions_dir.iterdir()
-                if p.is_file() and not p.name.startswith('.')
-            )
-            if files_found:
-                motion_file_id = files_found[0]
-
         mapping_file_id = (
             state.get('mapping_file_id')
             or context.get('mapping_file_id')
-            or active_mapping
+            or str(files.get('motion_axis_matching', {}).get('name') or '').strip()
         )
-        if not mapping_file_id and mappings_dir.is_dir():
-            files_found = sorted(
-                p.name for p in mappings_dir.iterdir()
-                if p.is_file() and not p.name.startswith('.')
-            )
-            if files_found:
-                mapping_file_id = files_found[0]
-
         if not motion_file_id:
-            raise ValueError('프로젝트 내 실행할 모션 파일이 없습니다')
+            raise ValueError('실행할 모션 파일이 선택되지 않았습니다')
         if not mapping_file_id:
-            raise ValueError('프로젝트 내 실행할 모션축 매핑 파일이 없습니다')
+            raise ValueError('실행할 모션축 매핑 파일이 선택되지 않았습니다')
 
         motion_path = self._motion_file_path(motion_file_id, motions_dir)
         mapping_path = self._mapping_file_path(mapping_file_id, mappings_dir)
