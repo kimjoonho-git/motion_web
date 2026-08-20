@@ -81,18 +81,11 @@ class ScheduleEngine:
 
             # Check Start Trigger
             if start_key not in self.triggered_start_keys:
-                should_start = False
-                if self.previous_check_time and self.previous_check_time < scheduled_start <= now:
-                    should_start = True
-                elif not self.previous_check_time:
-                    # Initial tick check within grace period
-                    delay = (now - scheduled_start).total_seconds()
-                    if 0 <= delay <= self.grace_period_sec:
-                        should_start = True
-
-                if should_start:
+                delay = (now - scheduled_start).total_seconds()
+                # If current time is within 300 seconds after scheduled_start
+                if 0 <= delay <= 300:
                     self.triggered_start_keys.add(start_key)
-                    logger.info(f"[Engine] Start time matched for '{item.schedule_name}' ({item.start_time}). Triggering start.")
+                    logger.info(f"[Engine] Start time matched for '{item.schedule_name}' ({item.start_time}, delay={delay:.1f}s). Triggering start.")
                     actions.append(("start", item))
                     
                     if item.stop_mode == "duration" and item.duration_sec:
@@ -106,13 +99,10 @@ class ScheduleEngine:
                 scheduled_stop = now.replace(hour=eh, minute=em, second=es, microsecond=0)
 
                 if stop_key not in self.triggered_stop_keys:
-                    should_stop = False
-                    if self.previous_check_time and self.previous_check_time < scheduled_stop <= now:
-                        should_stop = True
-
-                    if should_stop:
+                    stop_delay = (now - scheduled_stop).total_seconds()
+                    if 0 <= stop_delay <= 60:
                         self.triggered_stop_keys.add(stop_key)
-                        logger.info(f"[Engine] Stop time matched for '{item.schedule_name}' ({item.stop_time}). Triggering stop-after-cycle.")
+                        logger.info(f"[Engine] Stop time matched for '{item.schedule_name}' ({item.stop_time}, delay={stop_delay:.1f}s). Triggering stop-after-cycle.")
                         actions.append(("stop-after-cycle", item))
                         if self.active_schedule_id == item.schedule_id:
                             self.active_schedule_id = None

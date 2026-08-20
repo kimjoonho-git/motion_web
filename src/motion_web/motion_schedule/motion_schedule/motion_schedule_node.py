@@ -8,9 +8,14 @@ from std_msgs.msg import String
 from datetime import datetime
 from typing import Optional, Dict, Any
 
-from .schedule_models import ScheduleItem
-from .schedule_store import ScheduleStore
-from .schedule_engine import ScheduleEngine
+try:
+    from motion_schedule.schedule_models import ScheduleItem
+    from motion_schedule.schedule_store import ScheduleStore
+    from motion_schedule.schedule_engine import ScheduleEngine
+except ImportError:
+    from .schedule_models import ScheduleItem
+    from .schedule_store import ScheduleStore
+    from .schedule_engine import ScheduleEngine
 
 
 class MotionScheduleNode(Node):
@@ -62,16 +67,34 @@ class MotionScheduleNode(Node):
         return True
 
     def _load_active_project_from_file(self):
-        active_file = os.path.join(self.projects_dir, 'active_project.json')
-        if os.path.exists(active_file):
+        project_id = None
+        
+        # 1. Single Source of Truth: .selected_project.json (written by project_repository.py)
+        selected_file = os.path.join(self.projects_dir, '.selected_project.json')
+        if os.path.exists(selected_file):
             try:
-                with open(active_file, 'r', encoding='utf-8') as f:
+                with open(selected_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                    project_id = data.get('active_project_id')
-                    if project_id:
-                        self.store.load_project(project_id)
+                    project_id = data.get('selected_project_id') or data.get('project_id')
             except Exception as e:
-                self.get_logger().warning(f"Failed to load active_project.json: {e}")
+                self.get_logger().warning(f"Failed to load .selected_project.json: {e}")
+
+        # 2. Legacy fallback
+        if not project_id:
+            active_file = os.path.join(self.projects_dir, 'active_project.json')
+            if os.path.exists(active_file):
+                try:
+                    with open(active_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                        project_id = data.get('active_project_id') or data.get('project_id')
+                except Exception:
+                    pass
+
+        if not project_id:
+            project_id = "default"
+
+        self.get_logger().info(f"Loading schedule store for project: {project_id}")
+        self.store.load_project(project_id)
 
     def _on_active_project_changed(self, msg: String):
         project_id = msg.data.strip()
@@ -99,15 +122,28 @@ class MotionScheduleNode(Node):
             return False
 
     def _on_timer_tick(self):
-        # 0. Realtime store mtime check & reload if store updated via web UI
+        # 0. Realtime Sync: Get current active project directly from Web Bridge
+        try:
+            import urllib.request
+            import json
+            with urllib.request.urlopen("http://127.0.0.1:8000/api/schedule/status", timeout=0.5) as response:
+                data = json.loads(response.read().decode())
+                api_proj = data.get("active_project_id")
+                if api_proj and api_proj != self.store.current_project_id:
+                    self.get_logger().info(f"Syncing active project from Web API: {api_proj}")
+                    self.store.load_project(api_proj)
+        except Exception:
+            pass
+
+        if not self.store.current_project_id:
+            self._load_active_project_from_file()
+
+        # 1. Realtime store mtime check & reload if store updated via web UI
         self.store.check_and_reload()
 
         # 1. Master PC check
         if not self._is_master_pc():
             # Slave PC: do not process local schedule triggers
-            return
-
-        if not self.store.current_project_id:
             return
 
         now = datetime.now().astimezone()
@@ -124,19 +160,33 @@ class MotionScheduleNode(Node):
         self._publish_status(now)
 
     def _execute_start(self, item: ScheduleItem):
-        self.get_logger().info(f"[SCHEDULE TRIGGER] START -> '{item.schedule_name}' (ID: {item.schedule_id})")
-        # Trigger Coordinated Motion Continuous Start via Web Bridge API
+        self.get_logger().info(f"[SCHEDULE TRIGGER] START -> {item.schedule_name} ({item.schedule_id})")
+        
+        # 스케줄러 자체 판단을 제거하고, 연동 설정 파일에 사용자가 저장한 값을 그대로 가져와 웹 UI와 100% 동일하게 쏩니다.
+        req_repeat_mode = "direct"
+        req_dwell_sec = 0.0
+        automation_file = os.path.join(self.projects_dir, self.store.current_project_id, "runtime", "motion_automation.json")
+        try:
+            if os.path.exists(automation_file):
+                with open(automation_file, "r", encoding="utf-8") as f:
+                    auto_config = json.load(f)
+                    req_repeat_mode = str(auto_config.get("repeat_mode", "direct"))
+                    req_dwell_sec = float(auto_config.get("dwell_sec", 0.0))
+        except Exception as e:
+            self.get_logger().warning(f"Failed to read motion_automation.json: {e}")
+            
         payload = {
             "command": "start_group",
             "run_mode": "continuous",
-            "repeat_mode": item.motion_config.repeat_mode or "direct",
+            "repeat_mode": req_repeat_mode,
+            "dwell_sec": req_dwell_sec,
+            "target_cycle_count": 0,
             "schedule_id": item.schedule_id
         }
         self._send_http_request("/api/coordination/control", payload)
 
     def _execute_stop_after_cycle(self, item: ScheduleItem):
         self.get_logger().info(f"[SCHEDULE TRIGGER] STOP-AFTER-CYCLE -> '{item.schedule_name}' (ID: {item.schedule_id})")
-        # Trigger Coordinated Motion Stop-After-Cycle via Web Bridge API
         payload = {
             "command": "stop_after_cycle",
             "schedule_id": item.schedule_id

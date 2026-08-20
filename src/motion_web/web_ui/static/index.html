@@ -1907,8 +1907,11 @@
     <!-- Schedule Management Modal -->
     <div id="scheduleModal" class="operation-progress-overlay" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.6); z-index: 9999;" role="dialog">
       <div class="operation-progress-dialog" style="background: #1a202c; color: #fff; width: 680px; max-width: 90%; margin: 60px auto; padding: 24px; border-radius: 8px; border: 1px solid #2d3748; box-shadow: 0 10px 25px rgba(0,0,0,0.5);">
-        <div class="d-flex justify-content-between align-items-center mb-3" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-          <h4 style="margin: 0; font-size: 18px; font-weight: bold;">📅 모션 구동 스케줄 관리</h4>
+        <div class="d-flex justify-content-between align-items-center mb-3" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+          <div style="display: flex; align-items: center; gap: 12px;">
+            <h4 style="margin: 0; font-size: 18px; font-weight: bold;">📅 모션 구동 스케줄 관리</h4>
+            <span id="schedulePcCurrentTime" style="font-size: 13px; color: #63b3ed; font-weight: bold; background: #2c5282; padding: 3px 10px; border-radius: 12px;">🕒 PC 시각: --:--:--</span>
+          </div>
           <button id="btnCloseScheduleModal" type="button" style="background: none; border: none; color: #a0aec0; font-size: 20px; cursor: pointer;">&times;</button>
         </div>
         <p style="color: #a0aec0; font-size: 13px; margin-bottom: 16px;">
@@ -1959,6 +1962,22 @@
               <option value="weekly">주간 지정 (Weekly)</option>
               <option value="once">1회만 실행 (Once)</option>
             </select>
+          </div>
+          <div id="schedWeeklyDaysGroup" style="display: none;">
+            <label style="display: block; margin-bottom: 4px;">구동 요일 선택</label>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap; font-size: 13px;">
+              <label style="display: flex; align-items: center; gap: 3px;"><input type="checkbox" class="sched-day-check" value="MON" checked> 월</label>
+              <label style="display: flex; align-items: center; gap: 3px;"><input type="checkbox" class="sched-day-check" value="TUE" checked> 화</label>
+              <label style="display: flex; align-items: center; gap: 3px;"><input type="checkbox" class="sched-day-check" value="WED" checked> 수</label>
+              <label style="display: flex; align-items: center; gap: 3px;"><input type="checkbox" class="sched-day-check" value="THU" checked> 목</label>
+              <label style="display: flex; align-items: center; gap: 3px;"><input type="checkbox" class="sched-day-check" value="FRI" checked> 금</label>
+              <label style="display: flex; align-items: center; gap: 3px;"><input type="checkbox" class="sched-day-check" value="SAT"> 토</label>
+              <label style="display: flex; align-items: center; gap: 3px;"><input type="checkbox" class="sched-day-check" value="SUN"> 일</label>
+            </div>
+          </div>
+          <div id="schedOnceDateGroup" style="display: none;">
+            <label style="display: block; margin-bottom: 4px;">실행 날짜 (YYYY-MM-DD)</label>
+            <input type="date" id="schedRunDate" style="width: 100%; padding: 6px; background: #1a202c; border: 1px solid #4a5568; color: white; border-radius: 4px;">
           </div>
         </div>
         <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px;">

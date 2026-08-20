@@ -18,12 +18,19 @@ def register_schedule_routes(app: FastAPI, bridge, project_call) -> None:
     store = ScheduleStore(projects_dir=projects_dir)
 
     def _sync_store_project():
-        curr_proj = getattr(bridge, "current_project_id", None)
-        if not curr_proj and hasattr(bridge, "project_repository"):
+        curr_proj = None
+        if hasattr(bridge, "project_repository"):
             try:
-                curr_proj = bridge.project_repository.get_active_project_id()
+                curr_proj = bridge.project_repository.selected_project_id()
             except Exception:
                 pass
+        
+        if not curr_proj:
+            curr_proj = getattr(bridge, "current_project_id", None)
+
+        if not curr_proj:
+            curr_proj = "default"
+
         if curr_proj and store.current_project_id != curr_proj:
             store.load_project(curr_proj)
 
@@ -38,13 +45,15 @@ def register_schedule_routes(app: FastAPI, bridge, project_call) -> None:
         _sync_store_project()
         try:
             data = await request.json()
+            if not isinstance(data, dict):
+                raise ValueError("Request body must be a JSON object")
             item = ScheduleItem.from_dict(data)
             success = store.upsert_schedule(item)
             if not success:
-                raise HTTPException(status_code=500, detail="Failed to save schedule to store.")
+                raise HTTPException(status_code=500, detail=f"Failed to save schedule to store for project '{store.current_project_id}'.")
             return {"status": "ok", "schedule": item.to_dict()}
         except Exception as e:
-            logger.error(f"Error saving schedule: {e}")
+            logger.error(f"Error saving schedule: {e}", exc_info=True)
             raise HTTPException(status_code=400, detail=str(e))
 
     @app.delete('/api/schedule/{schedule_id}')
