@@ -6,7 +6,7 @@ protocol:
   bulk_read: 146
   bulk_write: 147
 
-model_file: /home/joonho_test/ros2_ws/src/motion_system/lib/motor_manager/hardware/dynamixel/control_table/xm540_w270.model
+model_file: ../src/motion_system/lib/motor_manager/hardware/dynamixel/control_table/xm540_w270.model
 
 items: []
 
