@@ -98,7 +98,7 @@ class ScheduledAction:
 class GroupExecution:
     """Coordinator-side barrier state; it never executes a local motion itself."""
 
-    def __init__(self, *, start_lead_sec: float = 0.5, max_start_spread_ms: float = 50.0):
+    def __init__(self, *, start_lead_sec: float = 0.5, max_start_spread_ms: float = 70.0):
         self.start_lead_sec = float(start_lead_sec)
         self.max_start_spread_ms = float(max_start_spread_ms)
         self.reset()
