@@ -1101,7 +1101,7 @@ class MotionCoordinationNode(Node):
         self._publish_coordination_error(
             code=error_code,
             message=(
-                f'{label} 트리거 편차 20ms 초과: {spread_ms:.3f}ms'
+                f'{label} 트리거 편차 50ms 초과: {spread_ms:.3f}ms'
                 + (
                     '' if stop_outcome.local_success else
                     ' · 로컬 즉시 정지 요청 실패'

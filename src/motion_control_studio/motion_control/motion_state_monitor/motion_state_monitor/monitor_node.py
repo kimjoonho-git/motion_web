@@ -285,7 +285,9 @@ class MotionStateMonitor(Node):
             return info
 
         model_path = Path(model_file).expanduser()
-        info['dynamixel_model_file'] = str(model_path)
+        if not model_path.is_absolute():
+            model_path = param_path.parent / model_path
+        info['dynamixel_model_file'] = str(model_path.resolve())
         model_info = self._read_dynamixel_model_file(model_path)
         info.update(model_info)
 
