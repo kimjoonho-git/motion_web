@@ -66,7 +66,7 @@ class MotorService:
     # -------------------------------------------------------------------------
     # Motor Config Management
     # -------------------------------------------------------------------------
-    def load_motor_config() -> Dict[str, Any]:
+    def load_motor_config(self) -> Dict[str, Any]:
         return self.bridge.load_motor_config()
 
     def save_motor_config(self, payload: Dict[str, Any]) -> Dict[str, Any]:

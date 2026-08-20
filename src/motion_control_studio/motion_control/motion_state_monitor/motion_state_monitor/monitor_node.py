@@ -97,7 +97,7 @@ class MotionStateMonitor(Node):
             self.declare_parameter('dynamixel_scan_max_id', DYNAMIXEL_SCAN_MAX_ID).value
         )
         self.dynamixel_scan_timeout_sec = float(
-            self.declare_parameter('dynamixel_scan_timeout_sec', 0.08).value
+            self.declare_parameter('dynamixel_scan_timeout_sec', 0.02).value
         )
         self.dynamixel_broadcast_timeout_sec = float(
             self.declare_parameter('dynamixel_broadcast_timeout_sec', 0.5).value

@@ -2477,7 +2477,7 @@ class MotionWebBridge(Node):
             operation_type='ac_servo_scan',
         )
 
-    def scan_dynamixel_motors(self, timeout_sec: float = 20.0) -> Dict[str, Any]:
+    def scan_dynamixel_motors(self, timeout_sec: float = 40.0) -> Dict[str, Any]:
         return self._call_scan_service(
             self._scan_dynamixel_client,
             self.scan_dynamixel_service,
