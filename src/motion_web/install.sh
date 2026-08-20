@@ -138,7 +138,7 @@ check_ethercat_ready() {
     ethercat_missing=true
   fi
   
-  if [[ ! -f /opt/etherlab/include/ecrt.h ]] && [[ ! -f /usr/local/include/ecrt.h ]] && [[ ! -f /usr/include/ecrt.h ]]; then
+  if [[ ! -f /opt/etherlab/include/ecrt.h ]] && [[ ! -f /usr/local/include/ecrt.h ]] && [[ ! -f /usr/include/ecrt.h ]] && [[ ! -f /usr/local/src/ethercat/include/ecrt.h ]]; then
     echo "[EtherCAT 검사] ecrt.h 헤더 파일을 찾을 수 없습니다." >&2
     ethercat_missing=true
   fi
