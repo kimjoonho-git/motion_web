@@ -2,7 +2,7 @@ import {
   fetchMotionFile,
   fetchMotionFiles,
   deleteMotionFile,
-} from './api.js?v=20260810-dds-release-1';
+} from './api.js?v=20260821-api-single-1';
 import { showAlert, showConfirm } from './ui_dialogs.js?v=20260727-popup-common-3';
 
 export function createMotionFileManager({

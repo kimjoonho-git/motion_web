@@ -6,7 +6,9 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Dict, Any
+
+from motion_common.paths import config_file, motion_projects_dir, workspace_root
 
 try:
     from motion_schedule.schedule_models import ScheduleItem
@@ -17,15 +19,20 @@ except ImportError:
     from .schedule_store import ScheduleStore
     from .schedule_engine import ScheduleEngine
 
+PACKAGE_HINT = 'motion_schedule'
+
 
 class MotionScheduleNode(Node):
     def __init__(self):
         super().__init__('motion_schedule_node')
 
-        self.workspace_dir = os.environ.get('MOTION_WORKSPACE', '/home/joonho_test/ros2_ws')
-        self.projects_dir = os.path.join(self.workspace_dir, 'motion_projects')
+        self.workspace_dir = str(workspace_root(PACKAGE_HINT))
+        self.projects_dir = str(motion_projects_dir(PACKAGE_HINT))
 
-        self.declare_parameter('coordination_file', os.path.join(self.workspace_dir, 'config/coordination_settings.yaml'))
+        self.declare_parameter(
+            'coordination_file',
+            str(config_file('coordination_settings.yaml', PACKAGE_HINT)),
+        )
         self.coordination_file = self.get_parameter('coordination_file').value
 
         self.store = ScheduleStore(projects_dir=self.projects_dir)
@@ -87,8 +94,10 @@ class MotionScheduleNode(Node):
                     with open(active_file, 'r', encoding='utf-8') as f:
                         data = json.load(f)
                         project_id = data.get('active_project_id') or data.get('project_id')
-                except Exception:
-                    pass
+                except (OSError, ValueError) as exc:
+                    self.get_logger().warning(
+                        f"Failed to load active_project.json: {exc}"
+                    )
 
         if not project_id:
             project_id = "default"
@@ -124,16 +133,15 @@ class MotionScheduleNode(Node):
     def _on_timer_tick(self):
         # 0. Realtime Sync: Get current active project directly from Web Bridge
         try:
-            import urllib.request
-            import json
             with urllib.request.urlopen("http://127.0.0.1:8000/api/schedule/status", timeout=0.5) as response:
                 data = json.loads(response.read().decode())
                 api_proj = data.get("active_project_id")
                 if api_proj and api_proj != self.store.current_project_id:
                     self.get_logger().info(f"Syncing active project from Web API: {api_proj}")
                     self.store.load_project(api_proj)
-        except Exception:
-            pass
+        except (OSError, ValueError) as exc:
+            # 브리지 미기동·재시작 중에는 정상적으로 실패한다. 파일 기반 경로로 대체된다.
+            self.get_logger().debug(f"Active project sync from Web API skipped: {exc}")
 
         if not self.store.current_project_id:
             self._load_active_project_from_file()

@@ -17,13 +17,17 @@ from std_msgs.msg import String
 from .export_service import StudioExportService
 from .layer_commands import (
     StudioLayerCommands,
-    next_numbered_layer_name,
+    # 재수출 · 외부에서 studio_node 경유로 참조한다
+    next_numbered_layer_name,  # noqa: F401
 )
 from .operation_state import StudioOperationStateMachine
 from .constants import DEFAULT_PERIOD_SEC
 from .mapping_model import manual_initial_values, motion_ranges
-from .motion_model import layer_motion_ids
-from .playback_session import StudioPlaybackSession, project_initial_motion_values
+from .playback_session import (
+    StudioPlaybackSession,
+    # 재수출 · 외부에서 studio_node 경유로 참조한다
+    project_initial_motion_values,  # noqa: F401
+)
 from .project_commands import StudioProjectCommands
 from .project_store import ProjectStore
 from .recording_session import StudioRecordingSession

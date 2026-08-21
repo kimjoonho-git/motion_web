@@ -1,6 +1,6 @@
 import time
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import List, Optional, Tuple, Set
 from .schedule_models import ScheduleItem
 

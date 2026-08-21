@@ -1,7 +1,7 @@
 import os
 import json
 import logging
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict
 from .schedule_models import ScheduleItem
 
 logger = logging.getLogger("motion_schedule.store")

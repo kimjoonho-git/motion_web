@@ -1,5 +1,3 @@
-import asyncio
-import ast
 import copy
 import hashlib
 import json
@@ -20,8 +18,9 @@ import uvicorn
 from urllib.parse import quote
 import yaml
 from ament_index_python.packages import get_package_share_directory
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI, HTTPException, Request
+from motion_common import motion_table
+from fastapi.responses import JSONResponse
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
@@ -41,9 +40,6 @@ from .bridge_helpers import (
     add_monitoring_motion_values,
     motor_activity_snapshot,
     _monitoring_finite_float,
-    _monitoring_motor_ref,
-    _monitoring_motor_refs,
-    _safe_project_publish_stem,
     _workspace_root,
 )
 from .motor_service import MotorService
@@ -59,7 +55,8 @@ from .routes import (
 )
 from .motion_studio_sync import (
     MotionStudioSync,
-    _project_tree_category_signature,
+    # 재수출 · 외부에서 bridge_node 경유로 참조한다
+    _project_tree_category_signature,  # noqa: F401
 )
 from .project_repository import ProjectRepository
 from .servo_alarm_policy import (
@@ -1639,7 +1636,7 @@ class MotionWebBridge(Node):
             self._set_execution_context_status(
                 state='waiting_motor_runtime',
                 ready=False,
-                project_id=str(project_id),
+                project_id=str(self.project_repository.selected_project_id() or ''),
                 context_id='',
                 message='선택 프로젝트의 서보 에러 정책 적용 대기',
                 nodes={},
@@ -5914,226 +5911,54 @@ class MotionWebBridge(Node):
         result['message'] = 'motion data valid' if result['valid'] else 'motion data has errors'
         return result
 
-    def _extract_motion_rows(self, payload: Any) -> tuple[List[Any], List[str], str]:
-        if isinstance(payload, list):
-            if payload and isinstance(payload[0], list):
-                possible_header = [str(item) for item in payload[0]]
-                if self._header_has_required_columns(possible_header):
-                    return self._expand_motion_pair_rows(payload[1:], possible_header), possible_header, 'array_with_header'
-            return payload, [], 'array'
-
-        if isinstance(payload, dict):
-            headers = payload.get('header', payload.get('headers', payload.get('columns', [])))
-            if not isinstance(headers, list):
-                headers = []
-            headers = [str(item) for item in headers]
-            for key in ('data', 'rows', 'records', 'motion_data', 'motions', 'frames', 'values'):
-                value = payload.get(key)
-                if isinstance(value, list):
-                    if value and isinstance(value[0], list):
-                        possible_header = [str(item) for item in value[0]]
-                        if self._header_has_required_columns(possible_header):
-                            return self._expand_motion_pair_rows(value[1:], possible_header), possible_header, f'{key}_with_header'
-                    return self._expand_motion_pair_rows(value, headers), headers, key
-            if all(
-                self._motion_column_value(payload, name) is not None
-                for name in ('frame', 'time', 'motion_id', 'value')
-            ):
-                return [payload], headers, 'object'
-        return [], [], 'unknown'
-
-    def _extract_motion_rows_from_text(
-        self,
-        content: str,
-    ) -> tuple[List[Any], List[str], str, str]:
-        lines = [
-            line.strip()
-            for line in content.splitlines()
-            if line.strip() and not line.strip().startswith('#')
-        ]
-        if len(lines) < 2:
-            return [], [], 'text', 'text format requires a header line and at least one data row'
-
-        headers = self._parse_motion_header_line(lines[0])
-        if not self._header_has_required_columns(headers):
-            return [], [], 'text', 'required header not found: frame, time(sec), motion Id, value'
-
-        rows = []
-        skipped = 0
-        for line in lines[1:]:
-            row = self._parse_motion_text_row(line)
-            if row is None:
-                skipped += 1
-                continue
-            rows.append(row)
-
-        if not rows:
-            return [], headers, 'text_header_list_rows', 'bracket data rows not found'
-        rows = self._expand_motion_pair_rows(rows, headers)
-        if skipped:
-            return rows, headers, 'text_header_list_rows', f'skipped non-data lines: {skipped}'
-        return rows, headers, 'text_header_list_rows', ''
-
-    def _parse_motion_header_line(self, line: str) -> List[str]:
-        text = line.strip().strip('\ufeff').rstrip(',').strip()
-        if text.startswith('{') and text.endswith('}'):
-            header_obj = self._parse_motion_header_object(text)
-            fields = header_obj.get('fields') if isinstance(header_obj, dict) else None
-            if isinstance(fields, list):
-                return [str(item).strip() for item in fields]
-        if text.startswith('[') and text.endswith(']'):
-            parsed = self._parse_motion_text_row(text)
-            if parsed is not None:
-                return [str(item).strip() for item in parsed]
-        if ',' in text:
-            return [part.strip().strip('"\'') for part in text.split(',')]
-        if '\t' in text:
-            return [part.strip().strip('"\'') for part in text.split('\t')]
-        lowered = text.lower()
-        if all(token in lowered for token in ('frame', 'time', 'motion', 'value')):
-            return ['frame', 'time(sec)', 'motion Id', 'value']
-        return [text]
+    @staticmethod
+    def _extract_motion_rows(payload: Any) -> tuple[List[Any], List[str], str]:
+        return motion_table.extract_rows(payload)
 
     @staticmethod
-    def _parse_motion_header_object(text: str) -> Dict[str, Any]:
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError:
-            try:
-                parsed = ast.literal_eval(text)
-            except (SyntaxError, ValueError):
-                parsed = {}
-        return parsed if isinstance(parsed, dict) else {}
+    def _extract_motion_rows_from_text(
+        content: str,
+    ) -> tuple[List[Any], List[str], str, str]:
+        return motion_table.extract_rows_from_text(content)
 
-    def _parse_motion_text_row(self, line: str) -> Optional[List[Any]]:
-        text = line.strip().rstrip(',').strip()
-        if not text or text in ('[', ']'):
-            return None
-        if text.startswith('[') and text.endswith(']'):
-            try:
-                parsed = ast.literal_eval(text)
-            except (SyntaxError, ValueError):
-                parsed = None
-            if isinstance(parsed, list):
-                return parsed
-            text = text[1:-1]
-        if ',' not in text:
-            return None
-        return [part.strip().strip('"\'') for part in text.split(',')]
+    @staticmethod
+    def _parse_motion_header_line(line: str) -> List[str]:
+        return motion_table.parse_header_line(line)
 
-    def _expand_motion_pair_rows(self, rows: List[Any], headers: List[str]) -> List[Any]:
-        header_map = self._motion_header_map(headers)
-        if not header_map:
-            return rows
-        if (
-            header_map.get('frame') != 0
-            or header_map.get('time') != 1
-            or header_map.get('motion_id') != 2
-            or header_map.get('value') != 3
-        ):
-            return rows
+    @staticmethod
+    def _parse_motion_text_row(line: str) -> Optional[List[Any]]:
+        return motion_table.parse_text_row(line)
 
-        expanded: List[Any] = []
-        changed = False
-        for row in rows:
-            if not isinstance(row, list) or len(row) <= 4:
-                expanded.append(row)
-                continue
-            if (len(row) - 2) % 2 != 0:
-                expanded.append(row)
-                continue
-            frame = row[0]
-            time_sec = row[1]
-            for index in range(2, len(row), 2):
-                expanded.append([frame, time_sec, row[index], row[index + 1]])
-            changed = True
-        return expanded if changed else rows
+    @staticmethod
+    def _expand_motion_pair_rows(rows: List[Any], headers: List[str]) -> List[Any]:
+        return motion_table.expand_pair_rows(rows, headers)
 
+    @staticmethod
     def _parse_motion_row(
-        self,
         row: Any,
         headers: List[str],
     ) -> tuple[Optional[Dict[str, Any]], str]:
-        if isinstance(row, dict):
-            frame = self._motion_column_value(row, 'frame')
-            time_sec = self._motion_column_value(row, 'time')
-            motion_id = self._motion_column_value(row, 'motion_id')
-            value = self._motion_column_value(row, 'value')
-        elif isinstance(row, list):
-            values = row
-            header_map = self._motion_header_map(headers)
-            if not header_map and len(values) >= 4:
-                header_map = {'frame': 0, 'time': 1, 'motion_id': 2, 'value': 3}
-            try:
-                frame = values[header_map['frame']]
-                time_sec = values[header_map['time']]
-                motion_id = values[header_map['motion_id']]
-                value = values[header_map['value']]
-            except (KeyError, IndexError):
-                return None, 'required columns not found'
-        else:
-            return None, 'record must be an object or array'
+        return motion_table.parse_row(row, headers)
 
-        frame_value = self._optional_float(frame, None)
-        time_value = self._optional_float(time_sec, None)
-        value_number = self._optional_float(value, None)
-        motion_text = self._motion_id_text(motion_id)
-        if frame_value is None:
-            return None, 'frame must be numeric'
-        if time_value is None:
-            return None, 'time(sec) must be numeric'
-        if time_value < 0:
-            return None, 'time(sec) must be greater than or equal to 0'
-        if not motion_text:
-            return None, 'motion Id is required'
-        if value_number is None:
-            return None, 'value must be numeric'
-
-        return {
-            'frame': int(round(frame_value)),
-            'time_sec': time_value,
-            'motion_id': motion_text,
-            'value': value_number,
-        }, ''
-
-    def _motion_column_value(self, row: Dict[str, Any], target: str) -> Any:
-        for key, value in row.items():
-            if self._motion_column_key(str(key)) == target:
-                return value
-        return None
+    @staticmethod
+    def _motion_column_value(row: Dict[str, Any], target: str) -> Any:
+        return motion_table.column_value(row, target)
 
     @staticmethod
     def _motion_column_key(label: str) -> str:
-        compact = ''.join(char for char in label.lower() if char.isalnum())
-        if compact in ('frame', 'frameid', 'frameindex'):
-            return 'frame'
-        if compact in ('time', 'times', 'timesec', 'seconds', 'sec', 'timestamp'):
-            return 'time'
-        if compact in ('motionid', 'motion', 'id', 'jointid', 'channelid'):
-            return 'motion_id'
-        if compact in ('value', 'angle', 'angledeg', 'deg', 'position', 'positiondeg'):
-            return 'value'
-        return compact
+        return motion_table.column_key(label)
 
-    def _motion_header_map(self, headers: List[str]) -> Dict[str, int]:
-        mapping: Dict[str, int] = {}
-        for index, header in enumerate(headers):
-            key = self._motion_column_key(header)
-            if key in ('frame', 'time', 'motion_id', 'value') and key not in mapping:
-                mapping[key] = index
-        return mapping if all(key in mapping for key in ('frame', 'time', 'motion_id', 'value')) else {}
+    @staticmethod
+    def _motion_header_map(headers: List[str]) -> Dict[str, int]:
+        return motion_table.header_map(headers)
 
-    def _header_has_required_columns(self, headers: List[str]) -> bool:
-        return bool(self._motion_header_map(headers))
+    @staticmethod
+    def _header_has_required_columns(headers: List[str]) -> bool:
+        return motion_table.header_has_required(headers)
 
     @staticmethod
     def _motion_id_text(value: Any) -> str:
-        if value is None:
-            return ''
-        if isinstance(value, (int, float)) and math.isfinite(float(value)):
-            number = float(value)
-            return str(int(number)) if math.isclose(number, round(number)) else str(number)
-        return str(value).strip()
+        return motion_table.motion_id_text(value)
 
     @staticmethod
     def _motion_id_sort_key(value: str) -> tuple[int, Any]:

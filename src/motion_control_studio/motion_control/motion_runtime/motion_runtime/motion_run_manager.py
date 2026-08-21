@@ -1,6 +1,5 @@
 """Validate and execute motion plans independently from the web API process."""
 
-import ast
 from bisect import bisect_left
 import hashlib
 import json
@@ -15,6 +14,7 @@ from typing import Any, Dict, List, Mapping, Optional
 
 import rclpy
 import yaml
+from motion_common import motion_table
 from motion_control_msgs.msg import MotorStatus
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
@@ -62,9 +62,12 @@ class MotionRunManager(Node):
         self.motion_state_topic = str(
             self.declare_parameter('motion_state_topic', '/motion_control/motion_state').value
         )
-        self.motor_command_topic = str(
+        # 이 노드의 출력은 최종 하드웨어 명령이 아니라 supervisor로 보내는 합산 요청이다.
+        # motion_supervisor의 동명 파라미터(motor_command_topic)는 최종 출력 토픽이므로
+        # 이름을 분리해 launch 재정의 시 오배선을 막는다.
+        self.motion_run_command_topic = str(
             self.declare_parameter(
-                'motor_command_topic',
+                'motion_run_command_topic',
                 '/motion_control/motion_run_command',
             ).value
         )
@@ -208,7 +211,7 @@ class MotionRunManager(Node):
         )
         self._response_pub = self.create_publisher(String, self.response_topic, 10)
         self._status_pub = self.create_publisher(String, self.status_topic, 10)
-        self._command_pub = self.create_publisher(MotorStatus, self.motor_command_topic, qos)
+        self._command_pub = self.create_publisher(MotorStatus, self.motion_run_command_topic, qos)
         motion_value_qos = QoSProfile(
             depth=10,
             reliability=ReliabilityPolicy.RELIABLE,
@@ -223,7 +226,7 @@ class MotionRunManager(Node):
 
         self.get_logger().info(
             f'motion_run_manager started: state={self.motion_state_topic}, '
-            f'command={self.motor_command_topic}, request={self.request_topic}, '
+            f'command={self.motion_run_command_topic}, request={self.request_topic}, '
             f'action_request={self.action_request_topic}, '
             f'safety_status={self.safety_status_topic}, '
             f'period={self.period_sec * 1000.0:.3f} ms, '
@@ -3336,133 +3339,32 @@ class MotionRunManager(Node):
             raise ValueError('motion file has no valid records')
         return sorted(records, key=lambda item: (item['time_sec'], str(item['motion_id']), item['row_index']))
 
-    def _extract_motion_rows(self, content: str) -> tuple[List[Any], List[str]]:
-        try:
-            payload = json.loads(content)
-        except json.JSONDecodeError:
-            return self._extract_motion_rows_from_text(content)
+    @staticmethod
+    def _extract_motion_rows(content: str) -> tuple[List[Any], List[str]]:
+        rows, headers, _source, _warning = motion_table.extract_rows_from_content(content)
+        return rows, headers
 
-        if isinstance(payload, dict):
-            headers = payload.get('header', payload.get('headers', payload.get('columns', [])))
-            headers = [str(item) for item in headers] if isinstance(headers, list) else []
-            for key in ('data', 'rows', 'records', 'motion_data', 'motions', 'frames', 'values'):
-                value = payload.get(key)
-                if isinstance(value, list):
-                    if value and isinstance(value[0], list) and self._header_has_required(value[0]):
-                        return self._expand_pair_rows(value[1:]), [str(item) for item in value[0]]
-                    return self._expand_pair_rows(value), headers
-            return [payload], headers
-        if isinstance(payload, list):
-            if payload and isinstance(payload[0], list) and self._header_has_required(payload[0]):
-                return self._expand_pair_rows(payload[1:]), [str(item) for item in payload[0]]
-            return self._expand_pair_rows(payload), []
-        return [], []
+    @staticmethod
+    def _extract_motion_rows_from_text(content: str) -> tuple[List[Any], List[str]]:
+        rows, headers, _source, _warning = motion_table.extract_rows_from_text(content)
+        return rows, headers
 
-    def _extract_motion_rows_from_text(self, content: str) -> tuple[List[Any], List[str]]:
-        lines = [
-            line.strip()
-            for line in content.splitlines()
-            if line.strip() and not line.strip().startswith('#')
-        ]
-        if not lines:
-            return [], []
+    @staticmethod
+    def _parse_motion_row(row: Any, headers: List[str]) -> Optional[Dict[str, Any]]:
+        record, _error = motion_table.parse_row(row, headers)
+        return record
 
-        headers = self._parse_header_line(lines[0])
-        rows = []
-        for line in lines[1:]:
-            item = self._parse_text_row(line)
-            if item is not None:
-                rows.append(item)
-        return self._expand_pair_rows(rows), headers
+    @staticmethod
+    def _parse_header_line(line: str) -> List[str]:
+        return motion_table.parse_header_line(line)
 
-    def _parse_motion_row(
-        self,
-        row: Any,
-        headers: List[str],
-    ) -> Optional[Dict[str, Any]]:
-        if isinstance(row, dict):
-            frame = self._column_value(row, 'frame')
-            time_sec = self._column_value(row, 'time')
-            motion_id = self._column_value(row, 'motion_id')
-            value = self._column_value(row, 'value')
-        elif isinstance(row, list):
-            mapping = self._header_map(headers)
-            if not mapping and len(row) >= 4:
-                mapping = {'frame': 0, 'time': 1, 'motion_id': 2, 'value': 3}
-            try:
-                frame = row[mapping['frame']]
-                time_sec = row[mapping['time']]
-                motion_id = row[mapping['motion_id']]
-                value = row[mapping['value']]
-            except (KeyError, IndexError):
-                return None
-        else:
-            return None
+    @staticmethod
+    def _parse_text_row(line: str) -> Optional[List[Any]]:
+        return motion_table.parse_text_row(line)
 
-        frame_value = self._finite_float(frame)
-        time_value = self._finite_float(time_sec)
-        value_number = self._finite_float(value)
-        if frame_value is None or time_value is None or value_number is None:
-            return None
-        motion_text = str(motion_id).strip() if motion_id is not None else ''
-        if not motion_text:
-            return None
-        return {
-            'frame': int(round(frame_value)),
-            'time_sec': float(time_value),
-            'motion_id': motion_text,
-            'value': float(value_number),
-        }
-
-    def _parse_header_line(self, line: str) -> List[str]:
-        text = line.strip().strip('\ufeff').rstrip(',').strip()
-        if text.startswith('{') and text.endswith('}'):
-            try:
-                data = json.loads(text)
-            except json.JSONDecodeError:
-                try:
-                    data = ast.literal_eval(text)
-                except (ValueError, SyntaxError):
-                    data = {}
-            fields = data.get('fields') if isinstance(data, dict) else None
-            if isinstance(fields, list):
-                return [str(item).strip() for item in fields]
-        parsed = self._parse_text_row(text)
-        if isinstance(parsed, list):
-            return [str(item).strip() for item in parsed]
-        return ['frame', 'time(sec)', 'id', 'value']
-
-    def _parse_text_row(self, line: str) -> Optional[List[Any]]:
-        text = line.strip().rstrip(',').strip()
-        if not text:
-            return None
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError:
-            try:
-                parsed = ast.literal_eval(text)
-            except (ValueError, SyntaxError):
-                parsed = None
-        if isinstance(parsed, list):
-            return parsed
-        return None
-
-    def _expand_pair_rows(self, rows: List[Any]) -> List[Any]:
-        expanded = []
-        changed = False
-        for row in rows:
-            if not isinstance(row, list) or len(row) <= 4:
-                expanded.append(row)
-                continue
-            if (len(row) - 2) % 2 != 0:
-                expanded.append(row)
-                continue
-            frame = row[0]
-            time_sec = row[1]
-            for index in range(2, len(row), 2):
-                expanded.append([frame, time_sec, row[index], row[index + 1]])
-            changed = True
-        return expanded if changed else rows
+    @staticmethod
+    def _expand_pair_rows(rows: List[Any], headers: Any = None) -> List[Any]:
+        return motion_table.expand_pair_rows(rows, headers)
 
     def _motion_groups(
         self,
@@ -3747,36 +3649,19 @@ class MotionRunManager(Node):
 
     @staticmethod
     def _column_value(row: Dict[str, Any], target: str) -> Any:
-        for key, value in row.items():
-            if MotionRunManager._column_key(str(key)) == target:
-                return value
-        return None
+        return motion_table.column_value(row, target)
 
     @staticmethod
     def _header_map(headers: List[str]) -> Dict[str, int]:
-        mapping: Dict[str, int] = {}
-        for index, header in enumerate(headers):
-            key = MotionRunManager._column_key(str(header))
-            if key in ('frame', 'time', 'motion_id', 'value') and key not in mapping:
-                mapping[key] = index
-        return mapping if all(key in mapping for key in ('frame', 'time', 'motion_id', 'value')) else {}
+        return motion_table.header_map(headers)
 
     @staticmethod
     def _header_has_required(headers: List[Any]) -> bool:
-        return bool(MotionRunManager._header_map([str(item) for item in headers]))
+        return motion_table.header_has_required(headers)
 
     @staticmethod
     def _column_key(label: str) -> str:
-        compact = ''.join(char for char in label.lower() if char.isalnum())
-        if compact in ('frame', 'frameid', 'frameindex'):
-            return 'frame'
-        if compact in ('time', 'times', 'timesec', 'seconds', 'sec', 'timestamp'):
-            return 'time'
-        if compact in ('motionid', 'motion', 'id', 'jointid', 'channelid'):
-            return 'motion_id'
-        if compact in ('value', 'angle', 'angledeg', 'deg', 'position', 'positiondeg'):
-            return 'value'
-        return compact
+        return motion_table.column_key(label)
 
     @staticmethod
     def _optional_int(value: Any) -> Optional[int]:
@@ -3789,13 +3674,7 @@ class MotionRunManager(Node):
 
     @staticmethod
     def _finite_float(value: Any) -> Optional[float]:
-        if value is None or value == '':
-            return None
-        try:
-            number = float(value)
-        except (TypeError, ValueError):
-            return None
-        return number if math.isfinite(number) else None
+        return motion_table.finite_float(value)
 
 
 def main(args=None) -> None:

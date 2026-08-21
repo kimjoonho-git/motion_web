@@ -11,7 +11,7 @@ import {
   stopMotionStudio,
   setProjectGeneration,
   fetchSystemVersion,
-} from './api.js?v=20260813-git-monitor-1';
+} from './api.js?v=20260821-api-single-1';
 import { getElements } from './dom.js?v=20260807-runtime-clear-1';
 import { createMotorEventLogController } from './event_log.js?v=20260727-popup-common-3';
 import { createMidiMonitorController } from './midi_monitor.js?v=20260806-midi-pickup-reconnect-1';

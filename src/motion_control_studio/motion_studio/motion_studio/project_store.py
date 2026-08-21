@@ -22,10 +22,10 @@ from .constants import DEFAULT_PERIOD_SEC
 from .motion_model import (
     MOTION_ID_PATTERN,
     finite_float as _finite_float,
-    nonnegative_int as _nonnegative_int,
     normalize_layer,
     safe_name as _safe_name,
-    unique_motion_ids,
+    # 재수출 · 외부에서 project_store 경유로 참조한다
+    unique_motion_ids,  # noqa: F401
 )
 
 

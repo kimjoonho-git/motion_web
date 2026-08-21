@@ -1,19 +1,17 @@
-import asyncio
-import os
-import json
 import logging
-from typing import Any, Dict
 from fastapi import FastAPI, HTTPException, Request
 
+from motion_common.paths import config_file, motion_projects_dir
 from motion_schedule.schedule_store import ScheduleStore
 from motion_schedule.schedule_models import ScheduleItem
 
 logger = logging.getLogger("bridge.routes.schedule")
 
+PACKAGE_HINT = "motion_web_bridge"
+
 
 def register_schedule_routes(app: FastAPI, bridge, project_call) -> None:
-    workspace_dir = os.environ.get("MOTION_WORKSPACE", "/home/joonho_test/ros2_ws")
-    projects_dir = os.path.join(workspace_dir, "motion_projects")
+    projects_dir = str(motion_projects_dir(PACKAGE_HINT))
 
     store = ScheduleStore(projects_dir=projects_dir)
 
@@ -23,8 +21,8 @@ def register_schedule_routes(app: FastAPI, bridge, project_call) -> None:
             try:
                 curr_proj = bridge.project_repository.selected_project_id()
             except Exception:
-                pass
-        
+                logger.debug("selected_project_id() 조회 실패 · 대체 경로로 진행", exc_info=True)
+
         if not curr_proj:
             curr_proj = getattr(bridge, "current_project_id", None)
 
@@ -83,16 +81,20 @@ def register_schedule_routes(app: FastAPI, bridge, project_call) -> None:
     @app.get('/api/schedule/status')
     async def get_schedule_status():
         _sync_store_project()
-        coordination_file = os.path.join(workspace_dir, "config/coordination_settings.yaml")
+        coordination_file = config_file("coordination_settings.yaml", PACKAGE_HINT)
         is_master = True
-        if os.path.exists(coordination_file):
+        if coordination_file.exists():
             try:
-                with open(coordination_file, "r", encoding="utf-8") as f:
-                    content = f.read()
-                    if "role: slave" in content or "role: 'slave'" in content:
-                        is_master = False
-            except Exception:
-                pass
+                content = coordination_file.read_text(encoding="utf-8")
+            except OSError:
+                logger.warning(
+                    "협조 설정 파일 읽기 실패 · master로 간주 · %s",
+                    coordination_file,
+                    exc_info=True,
+                )
+            else:
+                if "role: slave" in content or "role: 'slave'" in content:
+                    is_master = False
 
         return {
             "status": "ok",

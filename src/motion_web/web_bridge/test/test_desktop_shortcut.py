@@ -1,5 +1,4 @@
 import stat
-from pathlib import Path
 from types import SimpleNamespace
 
 from motion_web_bridge.bridge_node import MotionWebBridge

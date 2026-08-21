@@ -1,15 +1,11 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>motion_schedule</name>
+  <name>motion_common</name>
   <version>0.1.0</version>
-  <description>ROS 2 Schedule Motion Control Node for Master PC</description>
-  <maintainer email="joonho@todo.todo">joonho_test</maintainer>
+  <description>공용 커널 · 경로 해석 · 모션 표 파서 · rclpy 비의존 순수 모듈</description>
+  <maintainer email="joonho_test@example.com">joonho_test</maintainer>
   <license>Apache-2.0</license>
-
-  <depend>motion_common</depend>
-  <depend>rclpy</depend>
-  <depend>std_msgs</depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

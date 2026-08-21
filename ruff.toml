@@ -1,0 +1,39 @@
+# 워크스페이스 공통 lint 설정 · 로드맵 0단계(기준선 확보)
+#
+# 설치 · pipx install ruff   또는   sudo apt install python3-pip && pip install ruff
+# 실행 · ruff check .        수정 · ruff check --fix .
+#
+# 규칙은 좁게 시작한다. 넓은 스타일 규칙(E501 줄길이, W 공백 등)은 기존 39,000줄에
+# 대량 경고를 만들어 게이트로 쓸 수 없게 되므로 제외한다. 지금 선택한 규칙은
+# "동작을 바꾸는 결함"과 "예외를 삼키는 코드"에 한정한다.
+
+line-length = 100
+target-version = "py310"
+
+extend-exclude = [
+    "build",
+    "install",
+    "log",
+    "backups",
+    ".pytest_cache",
+    # 보호 대상 · 별도 저장소 · 범위 협의 후에만 손댄다
+    "src/motion_system",
+]
+
+[lint]
+select = [
+    "F",       # pyflakes · 미사용 import, 미정의 이름, 중복 정의
+    "E4",      # import 배치
+    "E7",      # 비교·문장 오류 (E722 bare except 포함)
+    "E9",      # 구문·런타임 오류
+    "BLE001",  # 광범위 except (except Exception)
+    "S110",    # try-except-pass · 예외 무음 삼킴
+    "S112",    # try-except-continue · 예외 무음 삼킴
+]
+
+[lint.per-file-ignores]
+# 패키지 재수출 목적의 import는 미사용으로 보지 않는다
+"**/__init__.py" = ["F401"]
+# 테스트의 픽스처 주입 패턴과 광범위 except는 허용
+"**/test/**" = ["F811", "BLE001"]
+"**/test_*.py" = ["F811", "BLE001"]
