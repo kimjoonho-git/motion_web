@@ -8,7 +8,10 @@ from std_msgs.msg import String
 from datetime import datetime
 from typing import Dict, Any
 
-from motion_common.paths import config_file, motion_projects_dir, workspace_root
+from pathlib import Path
+
+from motion_common.coordination import coordination_settings_path, resolve_master_role
+from motion_common.paths import motion_projects_dir, workspace_root
 
 try:
     from motion_schedule.schedule_models import ScheduleItem
@@ -31,9 +34,11 @@ class MotionScheduleNode(Node):
 
         self.declare_parameter(
             'coordination_file',
-            str(config_file('coordination_settings.yaml', PACKAGE_HINT)),
+            str(coordination_settings_path(PACKAGE_HINT)),
         )
         self.coordination_file = self.get_parameter('coordination_file').value
+        self._master_role_cache = None
+        self._master_role_stamp = None
 
         self.store = ScheduleStore(projects_dir=self.projects_dir)
         self.engine = ScheduleEngine(grace_period_sec=30)
@@ -58,20 +63,29 @@ class MotionScheduleNode(Node):
         self.get_logger().info("motion_schedule_node started (Master Only Coordinated Motion Scheduler)")
 
     def _is_master_pc(self) -> bool:
-        """Check if current PC role is master."""
-        if not os.path.exists(self.coordination_file):
-            return True
+        """Check if current PC role is master.
 
+        1초 주기 타이머에서 반복 호출되므로 설정 파일 mtime·크기가 그대로면
+        직전 판정을 재사용한다. 판정 결과가 바뀔 때만 로그를 남긴다.
+        """
+        path = Path(self.coordination_file)
         try:
-            with open(self.coordination_file, 'r', encoding='utf-8') as f:
-                content = f.read()
-                if "role: master" in content or "role: 'master'" in content or 'role: "master"' in content:
-                    return True
-                if "role: slave" in content or "role: 'slave'" in content or 'role: "slave"' in content:
-                    return False
-        except Exception as e:
-            self.get_logger().warning(f"Failed to read coordination file {self.coordination_file}: {e}")
-        return True
+            stat = path.stat()
+            stamp = (stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            stamp = None
+
+        if self._master_role_cache is not None and stamp == self._master_role_stamp:
+            return self._master_role_cache.is_master
+
+        role = resolve_master_role(path)
+        previous = self._master_role_cache
+        self._master_role_cache = role
+        self._master_role_stamp = stamp
+
+        if previous is None or previous.is_master != role.is_master:
+            self.get_logger().info(f"마스터 판정 · {role.is_master} · {role.reason}")
+        return role.is_master
 
     def _load_active_project_from_file(self):
         project_id = None
@@ -83,8 +97,8 @@ class MotionScheduleNode(Node):
                 with open(selected_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                     project_id = data.get('selected_project_id') or data.get('project_id')
-            except Exception as e:
-                self.get_logger().warning(f"Failed to load .selected_project.json: {e}")
+            except (OSError, ValueError) as exc:
+                self.get_logger().warning(f"Failed to load .selected_project.json: {exc}")
 
         # 2. Legacy fallback
         if not project_id:
@@ -126,8 +140,8 @@ class MotionScheduleNode(Node):
                 result = json.loads(resp.read().decode('utf-8'))
                 self.get_logger().info(f"HTTP Request [{endpoint}] success: {result}")
                 return True
-        except Exception as e:
-            self.get_logger().error(f"HTTP Request [{endpoint}] failed: {e}")
+        except (OSError, ValueError) as exc:
+            self.get_logger().error(f"HTTP Request [{endpoint}] failed: {exc}")
             return False
 
     def _on_timer_tick(self):
@@ -180,8 +194,8 @@ class MotionScheduleNode(Node):
                     auto_config = json.load(f)
                     req_repeat_mode = str(auto_config.get("repeat_mode", "direct"))
                     req_dwell_sec = float(auto_config.get("dwell_sec", 0.0))
-        except Exception as e:
-            self.get_logger().warning(f"Failed to read motion_automation.json: {e}")
+        except (OSError, ValueError) as exc:
+            self.get_logger().warning(f"Failed to read motion_automation.json: {exc}")
             
         payload = {
             "command": "start_group",

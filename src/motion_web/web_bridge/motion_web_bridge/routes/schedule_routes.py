@@ -1,7 +1,8 @@
 import logging
 from fastapi import FastAPI, HTTPException, Request
 
-from motion_common.paths import config_file, motion_projects_dir
+from motion_common.coordination import resolve_master_role
+from motion_common.paths import motion_projects_dir
 from motion_schedule.schedule_store import ScheduleStore
 from motion_schedule.schedule_models import ScheduleItem
 
@@ -81,24 +82,13 @@ def register_schedule_routes(app: FastAPI, bridge, project_call) -> None:
     @app.get('/api/schedule/status')
     async def get_schedule_status():
         _sync_store_project()
-        coordination_file = config_file("coordination_settings.yaml", PACKAGE_HINT)
-        is_master = True
-        if coordination_file.exists():
-            try:
-                content = coordination_file.read_text(encoding="utf-8")
-            except OSError:
-                logger.warning(
-                    "협조 설정 파일 읽기 실패 · master로 간주 · %s",
-                    coordination_file,
-                    exc_info=True,
-                )
-            else:
-                if "role: slave" in content or "role: 'slave'" in content:
-                    is_master = False
+        role = resolve_master_role(package_hint=PACKAGE_HINT)
+        if not role.is_master:
+            logger.debug("마스터 아님 · %s", role.reason)
 
         return {
             "status": "ok",
-            "is_master": is_master,
+            "is_master": role.is_master,
             "active_project_id": store.current_project_id,
             "schedule_count": len(store.list_schedules())
         }

@@ -76,6 +76,10 @@
 - `api.js` 3종 토큰 동시 사용 · 모듈 3중 인스턴스화 · 세대 상태를 `window.__motionProjectGeneration` 전역으로 회피
 - 단일 대형 파일 · `styles.css` 7,415 · `motor_config.js` 4,032 · `motion_data.js` 3,036 · `index.html` 1,993
 - 개발 잔여물 정적 배포 · `web_ui/static/js/refactor.py` · `/static/js/refactor.py` 노출
+- 빌드 산출물 미사용 · `system_routes.py:13-17`이 소스 트리(`src/motion_web/web_ui/static`)가 있으면
+  설치본 대신 소스를 서빙 · `update_cache.py`가 만든 해시 토큰은 개발 환경에서 쓰이지 않음
+  · `build_and_restart.sh`가 매번 `motion_web_ui` 빌드 캐시를 지우고 다시 만들지만 그 산출물은 서빙되지 않음
+  · 7단계(프런트엔드 빌드 도입) 시 서빙 경로 규약도 함께 정해야 함
 
 ### 3-7. 하드웨어 프로토콜 코드가 노드 내부
 
@@ -139,7 +143,8 @@ motion_system(C++)  모터 단일 통로                 유지 · 스캐너만 
 ## 6. 즉시 처리 권고 · 저위험·고효과
 
 - 반영일 · 2026-08-21 · 5개 항목 전부 반영
-- 검증 · 코드 검증 완료 · `colcon build` 통과 · pytest 726건 통과(기존 실패 1건 유지) · 실물 미검증
+- 검증 · `colcon build` 통과 · pytest 736건 통과(기존 실패 1건 유지) · `ruff check` 기준선 확정
+- 실물 검증 · 연동 스케줄 1사이클 통과(§6-4) · 모션 재생 미검증
 
 | # | 항목 | 상태 | 반영 내용 |
 |---|---|---|---|
@@ -154,8 +159,9 @@ motion_system(C++)  모터 단일 통로                 유지 · 스캐너만 
 - `src/motion_common` · ament_python · `rclpy` 비의존 순수 모듈
 - `paths.py` · `MOTION_WORKSPACE` → 설치 트리 역추적 → 소스 트리 역추적 → cwd
 - `motion_table.py` · 컬럼 해석 · 행 확장 · 행 추출 · 레코드 파싱
+- `coordination.py` · 그룹 연동 설정 조회 · 마스터 역할 판정(§6-4)
 - 의존 추가 · `motion_web_bridge` · `motion_runtime` · `motion_schedule`
-- 테스트 32건 신규
+- 테스트 42건 신규 · `ruff check` 무결점
 
 ### 6-2. 파서 단일화 · 동치 검증 결과
 
@@ -215,7 +221,46 @@ motion_system(C++)  모터 단일 통로                 유지 · 스캐너만 
 
 잔여 정리 우선순위 · `S110` 7건 → `F841` 13건 → `BLE001` 46건(대규모·별도 작업)
 
-### 6-4. 진단 항목 대조 · 코드 변경이 문서 어디에 걸리는가
+### 6-4. 연동 스케줄 실물 테스트 · 발견 결함 수정
+
+테스트 · 2026-08-21 · 시작 `16:40:20` → 정지 `16:45:20` 1사이클 · 참가 PC 3대
+
+| 항목 | 결과 |
+|---|---|
+| `paths.py` 경로 해석 | 정상 · 프로젝트 특정 · 스토어 적재 |
+| 시작 트리거 | 정상 · 지연 0.5초 이내 |
+| 정지 트리거 | 정상 · `dds_stop_published: True` |
+| 예외 · Traceback | 0건 |
+
+발견 결함 · 마스터 판정 무력화 · **수정 완료**
+
+- 증상 · 스케줄 노드·웹 API가 존재하지 않는 `config/coordination_settings.yaml`을 읽고
+  `role: slave` 문자열을 찾음 · 정본은 `config/motion_coordination.yaml`의 `is_master` 불리언
+- 결과 · 파일 부재로 항상 `return True` · **모든 PC가 마스터로 판정** · 슬레이브에서도 스케줄 중복 발화
+- 성격 · 선재 결함 · 즉시 처리 1번 항목은 경로 조립만 바꿨고 파일명·판정 로직은 그대로였음
+- 수정 · `motion_common/coordination.py` 신설 · 두 호출부 단일화
+
+판정 규칙:
+
+| 설정 상태 | 판정 | 근거 |
+|---|---|---|
+| 파일 없음 | 마스터 | 연동 미구성 · 단독 동작 · 기존 동작 보존 |
+| `enabled: false` | 마스터 | 그룹 미참여 · 단독 동작 |
+| `enabled: true` + `is_master: true` | 마스터 | 정본 값 |
+| `enabled: true` + `is_master: false` | **아님** | 슬레이브 · 발화 금지 |
+| 파싱 실패 | **아님** | 중복 발화가 스케줄 정지보다 위험 |
+
+`is_master` 키 누락 시 기본값은 `False` · 정본 로더 `group_configuration.py:67`과 동일.
+스케줄 노드는 1초 주기 호출이므로 설정 파일 mtime·크기 기준 캐시 · 판정 변화 시에만 로그.
+
+기각한 항목 · `repeat_mode` 불일치는 결함 아님
+
+- 최초 관찰 · 스케줄 저장값 `continuous` ↔ 전송값 `reinitialize`
+- 실제 · 스케줄의 `motion_config`는 UI가 채우지 않는 데이터클래스 기본값 ·
+  실 설정은 웹 UI가 기록하는 `runtime/motion_automation.json`(`repeat_mode: reinitialize`)
+- 결론 · 노드가 정본을 읽는 것이 맞음 · `MotionConfig`는 사용되지 않는 잔존 구조체 · 정리 대상이나 결함 아님
+
+### 6-5. 진단 항목 대조 · 코드 변경이 문서 어디에 걸리는가
 
 | 코드 변경 | 진단 위치 |
 |---|---|
@@ -235,7 +280,7 @@ motion_system(C++)  모터 단일 통로                 유지 · 스캐너만 
 | §4 `motion_common` 6모듈 | 2/6 · `motion_table.py` · `paths.py` 생성 · `rpc.py` · `topics.py` · `values.py` · `store.py` 미생성 |
 | §7 규칙 4 · 경계는 `motion_common` | 경계 패키지 실체 확보 · 규칙 적용은 신규 코드부터 |
 
-### 6-5. 같은 절 안에서 손대지 않은 범위
+### 6-6. 같은 절 안에서 손대지 않은 범위
 
 즉시 처리 5개 항목은 각 절의 일부만 건드린다. 아래는 진단은 그대로 유효한 잔여분이다.
 

@@ -40,8 +40,8 @@ class ScheduleStore:
                         item = ScheduleItem.from_dict(item_data)
                         self._schedules[item.schedule_id] = item
             logger.info(f"Loaded {len(self._schedules)} schedules for project {project_id}.")
-        except Exception as e:
-            logger.error(f"Failed to load schedule_store.json for project {project_id}: {e}")
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            logger.error(f"Failed to load schedule_store.json for project {project_id}: {exc}")
 
     def check_and_reload(self) -> bool:
         if not self.current_project_id:
@@ -55,8 +55,8 @@ class ScheduleStore:
                 logger.info(f"Detected schedule_store.json change (mtime: {current_mtime}). Reloading...")
                 self.load_project(self.current_project_id)
                 return True
-        except Exception as e:
-            logger.error(f"Error checking schedule mtime: {e}")
+        except OSError as exc:
+            logger.error(f"Error checking schedule mtime: {exc}")
         return False
 
     def save(self) -> bool:
@@ -74,8 +74,8 @@ class ScheduleStore:
             os.replace(temp_path, file_path)
             logger.info(f"Saved {len(items_data)} schedules for project {self.current_project_id}.")
             return True
-        except Exception as e:
-            logger.error(f"Failed to save schedule store: {e}")
+        except (OSError, ValueError, TypeError) as exc:
+            logger.error(f"Failed to save schedule store: {exc}")
             if os.path.exists(temp_path):
                 try:
                     os.remove(temp_path)
