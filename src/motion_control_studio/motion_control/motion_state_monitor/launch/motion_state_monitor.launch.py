@@ -5,19 +5,20 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from motion_common import topics
 
 
 def generate_launch_description():
     workspace = Path(os.environ.get('MOTION_WORKSPACE', Path.cwd())).expanduser()
     return LaunchDescription([
-        DeclareLaunchArgument('input_topic', default_value='/motion_control/motor_status'),
+        DeclareLaunchArgument('input_topic', default_value=topics.MOTOR_STATUS),
         DeclareLaunchArgument('input_type', default_value='motor_status'),
         DeclareLaunchArgument('ethercat_status_topic', default_value='/ethercat_status'),
         DeclareLaunchArgument(
             'motor_config_file',
             default_value=str(workspace / 'config/bootstrap_motor_config.yaml'),
         ),
-        DeclareLaunchArgument('output_topic', default_value='/motion_control/motion_state'),
+        DeclareLaunchArgument('output_topic', default_value=topics.MOTION_STATE),
         DeclareLaunchArgument('publish_hz', default_value='10.0'),
         DeclareLaunchArgument('max_motors', default_value='50'),
         Node(

@@ -5,6 +5,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from motion_common import topics
 
 
 def generate_launch_description():
@@ -25,11 +26,11 @@ def generate_launch_description():
             name='midi_input_node',
             output='screen',
             parameters=[{
-                'midi_topic': '/xtouch/midi',
-                'feedback_topic': '/xtouch/feedback',
-                'input_state_topic': '/xtouch/input_state',
-                'connection_command_topic': '/xtouch/connection/command',
-                'connection_state_topic': '/xtouch/connection/state',
+                'midi_topic': topics.XTOUCH_MIDI,
+                'feedback_topic': topics.XTOUCH_FEEDBACK,
+                'input_state_topic': topics.XTOUCH_INPUT_STATE,
+                'connection_command_topic': topics.XTOUCH_CONNECTION_COMMAND,
+                'connection_state_topic': topics.XTOUCH_CONNECTION_STATE,
                 'publish_period_ms': 5,
                 # Keep manual-control state latched through brief pauses and
                 # noisy capacitive touch-OFF events.
@@ -49,20 +50,20 @@ def generate_launch_description():
             name='midi_control_node',
             output='screen',
             parameters=[{
-                'input_topic': '/xtouch/midi',
-                'state_topic': '/motion_web/midi_monitor/state',
-                'request_topic': '/motion_web/midi_monitor/request',
-                'response_topic': '/motion_web/midi_monitor/response',
-                'feedback_topic': '/xtouch/feedback',
-                'input_state_topic': '/xtouch/input_state',
-                'connection_command_topic': '/xtouch/connection/command',
-                'connection_state_topic': '/xtouch/connection/state',
-                'motion_state_topic': '/motion_control/motion_state',
-                'motion_run_status_topic': '/motion_control/motion_run_status',
-                'motion_studio_status_topic': '/motion_studio/status',
-                'motion_mapping_response_topic': '/motion_control/motion_mapping_response',
-                'motor_request_topic': '/motion_control/midi_position_request',
-                'motor_result_topic': '/motion_control/midi_position_result',
+                'input_topic': topics.XTOUCH_MIDI,
+                'state_topic': topics.MIDI_MONITOR_STATE,
+                'request_topic': topics.MIDI_MONITOR_REQUEST,
+                'response_topic': topics.MIDI_MONITOR_RESPONSE,
+                'feedback_topic': topics.XTOUCH_FEEDBACK,
+                'input_state_topic': topics.XTOUCH_INPUT_STATE,
+                'connection_command_topic': topics.XTOUCH_CONNECTION_COMMAND,
+                'connection_state_topic': topics.XTOUCH_CONNECTION_STATE,
+                'motion_state_topic': topics.MOTION_STATE,
+                'motion_run_status_topic': topics.MOTION_RUN_STATUS,
+                'motion_studio_status_topic': topics.STUDIO_STATUS,
+                'motion_mapping_response_topic': topics.MOTION_MAPPING_RESPONSE,
+                'motor_request_topic': topics.MIDI_POSITION_REQUEST,
+                'motor_result_topic': topics.MIDI_POSITION_RESULT,
                 'motion_projects_dir': LaunchConfiguration('motion_projects_dir'),
                 'publish_hz': 50.0,
                 'stale_timeout_sec': 0.5,

@@ -19,7 +19,7 @@ from urllib.parse import quote
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from fastapi import FastAPI, HTTPException, Request
-from motion_common import motion_table
+from motion_common import motion_table, values, topics
 from fastapi.responses import JSONResponse
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
@@ -78,11 +78,11 @@ class MotionWebBridge(Node):
         self.motion_run = MotionRunService(self)
         self.motion_state_topic = self.declare_parameter(
             'motion_state_topic',
-            '/motion_control/motion_state',
+            topics.MOTION_STATE,
         ).value
         self.motion_value_topic = self.declare_parameter(
             'motion_value_topic',
-            '/motion_control/motion_value_state',
+            topics.MOTION_VALUE_STATE,
         ).value
         self.monitoring_service = self.declare_parameter(
             'monitoring_service',
@@ -99,77 +99,77 @@ class MotionWebBridge(Node):
         ).value
         self.scan_progress_topic = self.declare_parameter(
             'scan_progress_topic',
-            '/motion_control/motor_scan_progress',
+            topics.MOTOR_SCAN_PROGRESS,
         ).value
         self.jog_request_topic = self.declare_parameter(
             'jog_request_topic',
-            '/motion_control/manual_jog_request',
+            topics.MANUAL_JOG_REQUEST,
         ).value
         self.jog_result_topic = self.declare_parameter(
             'jog_result_topic',
-            '/motion_control/manual_jog_result',
+            topics.MANUAL_JOG_RESULT,
         ).value
         self.safety_request_topic = self.declare_parameter(
             'safety_request_topic',
-            '/motion_control/safety_request',
+            topics.SAFETY_REQUEST,
         ).value
         self.action_request_topic = self.declare_parameter(
             'action_request_topic',
-            '/motion_control/manual_action_request',
+            topics.MANUAL_ACTION_REQUEST,
         ).value
         self.action_result_topic = self.declare_parameter(
             'action_result_topic',
-            '/motion_control/manual_action_result',
+            topics.MANUAL_ACTION_RESULT,
         ).value
         self.motion_mapping_request_topic = self.declare_parameter(
             'motion_mapping_request_topic',
-            '/motion_control/motion_mapping_request',
+            topics.MOTION_MAPPING_REQUEST,
         ).value
         self.motion_mapping_response_topic = self.declare_parameter(
             'motion_mapping_response_topic',
-            '/motion_control/motion_mapping_response',
+            topics.MOTION_MAPPING_RESPONSE,
         ).value
         self.motion_run_request_topic = self.declare_parameter(
             'motion_run_request_topic',
-            '/motion_control/motion_run_request',
+            topics.MOTION_RUN_REQUEST,
         ).value
         self.motion_run_response_topic = self.declare_parameter(
             'motion_run_response_topic',
-            '/motion_control/motion_run_response',
+            topics.MOTION_RUN_RESPONSE,
         ).value
         self.motion_run_status_topic = self.declare_parameter(
             'motion_run_status_topic',
-            '/motion_control/motion_run_status',
+            topics.MOTION_RUN_STATUS,
         ).value
         self.midi_monitor_state_topic = self.declare_parameter(
             'midi_monitor_state_topic',
-            '/motion_web/midi_monitor/state',
+            topics.MIDI_MONITOR_STATE,
         ).value
         self.midi_monitor_request_topic = self.declare_parameter(
             'midi_monitor_request_topic',
-            '/motion_web/midi_monitor/request',
+            topics.MIDI_MONITOR_REQUEST,
         ).value
         self.midi_monitor_response_topic = self.declare_parameter(
             'midi_monitor_response_topic',
-            '/motion_web/midi_monitor/response',
+            topics.MIDI_MONITOR_RESPONSE,
         ).value
         self.motion_studio_request_topic = self.declare_parameter(
-            'motion_studio_request_topic', '/motion_studio/request'
+            'motion_studio_request_topic', topics.STUDIO_REQUEST
         ).value
         self.motion_studio_response_topic = self.declare_parameter(
-            'motion_studio_response_topic', '/motion_studio/response'
+            'motion_studio_response_topic', topics.STUDIO_RESPONSE
         ).value
         self.motion_studio_status_topic = self.declare_parameter(
-            'motion_studio_status_topic', '/motion_studio/status'
+            'motion_studio_status_topic', topics.STUDIO_STATUS
         ).value
         self.motion_studio_editor_request_topic = self.declare_parameter(
-            'motion_studio_editor_request_topic', '/motion_studio/editor/request'
+            'motion_studio_editor_request_topic', topics.STUDIO_EDITOR_REQUEST
         ).value
         self.motion_studio_editor_response_topic = self.declare_parameter(
-            'motion_studio_editor_response_topic', '/motion_studio/editor/response'
+            'motion_studio_editor_response_topic', topics.STUDIO_EDITOR_RESPONSE
         ).value
         self.safety_status_topic = self.declare_parameter(
-            'safety_status_topic', '/motion_control/safety_status'
+            'safety_status_topic', topics.SAFETY_STATUS
         ).value
         self.max_jog_delta_deg = float(
             self.declare_parameter('max_jog_delta_deg', 360.0).value
@@ -7365,22 +7365,11 @@ class MotionWebBridge(Node):
 
     @staticmethod
     def _optional_int(value: Any, default: Optional[int]) -> Optional[int]:
-        if value is None or value == '':
-            return default
-        try:
-            return int(str(value), 0)
-        except (TypeError, ValueError):
-            return default
+        return values.optional_int(value, default)
 
     @staticmethod
     def _optional_float(value: Any, default: Optional[float]) -> Optional[float]:
-        if value is None or value == '':
-            return default
-        try:
-            number = float(value)
-        except (TypeError, ValueError):
-            return default
-        return number if math.isfinite(number) else default
+        return values.optional_float(value, default)
 
     def _motion_state_motor(self, axis: int) -> Optional[Dict[str, Any]]:
         for motor in self._motion_state_motors():

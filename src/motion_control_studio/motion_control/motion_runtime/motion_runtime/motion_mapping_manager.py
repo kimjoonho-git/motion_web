@@ -13,6 +13,7 @@ import yaml
 from rclpy.node import Node
 from std_msgs.msg import String
 
+from motion_common import values, topics
 from motion_runtime.midi_bank_store import (
     atomic_write_with_backup,
     load_midi_banks,
@@ -44,13 +45,13 @@ class MotionMappingManager(Node):
         self.request_topic = str(
             self.declare_parameter(
                 'request_topic',
-                '/motion_control/motion_mapping_request',
+                topics.MOTION_MAPPING_REQUEST,
             ).value
         )
         self.response_topic = str(
             self.declare_parameter(
                 'response_topic',
-                '/motion_control/motion_mapping_response',
+                topics.MOTION_MAPPING_RESPONSE,
             ).value
         )
 
@@ -935,32 +936,15 @@ class MotionMappingManager(Node):
 
     @staticmethod
     def _optional_int(value: Any, default: Optional[int]) -> Optional[int]:
-        if value is None or value == '':
-            return default
-        try:
-            return int(str(value), 0)
-        except (TypeError, ValueError):
-            return default
+        return values.optional_int(value, default)
 
     @staticmethod
     def _optional_float(value: Any, default: Optional[float]) -> Optional[float]:
-        if value is None or value == '':
-            return default
-        try:
-            number = float(value)
-        except (TypeError, ValueError):
-            return default
-        return number if math.isfinite(number) else default
+        return values.optional_float(value, default)
 
     @staticmethod
     def _finite_float(value: Any) -> Optional[float]:
-        if value is None or value == '':
-            return None
-        try:
-            number = float(value)
-        except (TypeError, ValueError):
-            return None
-        return number if math.isfinite(number) else None
+        return values.finite_float(value)
 
 
 def main(args=None) -> None:

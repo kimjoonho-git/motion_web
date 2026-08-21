@@ -17,9 +17,9 @@
 | 최장 파일 | `bridge_node.py` 7,520 · `motion_run_manager.py` 3,692 · `midi_control_node.py` 3,276 · `monitor_node.py` 2,752 · `supervisor_node.py` 2,486 · `coordination_node.py` 2,370 · `project_repository.py` 2,098 |
 | 최장 함수 | `_midi_callback` 475줄 · `_build_plan` 421 · `_snapshot` 400 · `MotionWebBridge.__init__` 380 · `_scan_ethercat_slaves` 360 |
 | 사설 RPC | `std_msgs/String` + JSON pub/sub 22 · `json.dumps` 137회 · ROS srv 4개 · action 0개 |
-| 영속 계층 | 파일 기록 모듈 8개 · atomic write 구현 5종 |
+| 영속 계층 | 파일 기록 모듈 8개 · atomic write `motion_common/store.py` 단일화(§6-5) |
 | 동시성 | `bridge_node` 락 30개 |
-| 도구 기반 | lint · `ruff.toml` 추가(§6-3 · 실행 미검증) · type · CI 설정 없음 |
+| 도구 기반 | lint · ruff 도입 완료(§6-3 · 잔여 56건) · type · CI 설정 없음 |
 
 ## 2. 유지 대상 · 구조 양호
 
@@ -107,7 +107,7 @@ motion_common       공용 커널 (신규 패키지)         신설
   ├ motion_table.py 모션 표 파서 단일 구현          2중 중복 흡수
   ├ topics.py       토픽·파라미터 단일 정의         코드·launch 공유
   ├ paths.py        workspace/project 경로          하드코딩·중복 제거
-  ├ values.py       수치 변환                      13곳 흡수
+  ├ values.py       수치 변환                      11곳 흡수 · 3곳 의도적 유지
   └ store.py        atomic write + 파일락           5종 통합
 motion_* 노드        전송·수명주기만                도메인 클래스로 위임
 motion_system(C++)  모터 단일 통로                 유지 · 스캐너만 분리 협의
@@ -123,12 +123,12 @@ motion_system(C++)  모터 단일 통로                 유지 · 스캐너만 
 
 | 단계 | 작업 | 위험 | 검증 |
 |---|---|---|---|
-| 0 | ruff/flake8 + pytest 워크스페이스 설정 · 함수길이 지표 기록 | 없음 | 기준선 확보 |
-| 1 | `motion_common` 신설 · 순수 함수 이관(파서·값·경로) | 최저 | 기존 68테스트 그대로 통과 |
+| 0 | ruff/flake8 + pytest 워크스페이스 설정 · 함수길이 지표 기록 | 없음 | **부분 완료** · ruff 기준선 56건 · pytest 설정·지표 미착수 |
+| 1 | `motion_common` 신설 · 순수 함수 이관(파서·값·경로) | 최저 | **완료** · `rpc.py` 제외 5모듈 · 859테스트 통과 |
 | 2 | `RequestChannel` 단일화 · 5곳 교체 · 토픽명·페이로드 형식 유지 | 낮음 | 무중단 · 노드별 왕복 테스트 |
-| 3 | 토픽 상수 단일화 · `motor_command_topic` 명칭 정정 | 낮음 | launch 기동 확인 |
+| 3 | 토픽 상수 단일화 · `motor_command_topic` 명칭 정정 | 낮음 | **완료** · `topics.py` 27종 · 리터럴 잔여 0 · launch 7개 로드 확인 |
 | 4 | `bridge_node` 7,692줄 분해 · 서비스 6개(각 300~600줄) | 중간 | 엔드포인트 107개 회귀 |
-| 5 | 영속 계층 통합 · 단일 저장 API + 파일락 · 다중 writer 제거 | 중간 | 2개 프로젝트 데이터 격리 검증 |
+| 5 | 영속 계층 통합 · 단일 저장 API + 파일락 · 다중 writer 제거 | 중간 | **부분 완료** · `store.py` 5종 통합 · 2개 프로젝트 격리 미검증 |
 | 6 | 장기작업 Action 전환 · 스캔·초기화·모션 실행 | 중간 | 진행률·취소 실물 검증 |
 | 7 | 프런트엔드 빌드 도입(해시 파일명) · CSS·HTML 분할 | 중간 | 브라우저 캐시 확인 |
 | 8 | 하드웨어 스캐너 분리 · `motion_system` 범위 협의 후 | 높음 | 모터 스캔 계약 + 실물 검증 |
@@ -143,7 +143,7 @@ motion_system(C++)  모터 단일 통로                 유지 · 스캐너만 
 ## 6. 즉시 처리 권고 · 저위험·고효과
 
 - 반영일 · 2026-08-21 · 5개 항목 전부 반영
-- 검증 · `colcon build` 통과 · pytest 736건 통과(기존 실패 1건 유지) · `ruff check` 기준선 확정
+- 검증 · 전체 31패키지 `colcon build` 통과 · pytest 859건 통과(선재 실패 11건 유지) · `ruff check` 기준선 확정
 - 실물 검증 · 연동 스케줄 1사이클 통과(§6-4) · 모션 재생 미검증
 
 | # | 항목 | 상태 | 반영 내용 |
@@ -156,12 +156,21 @@ motion_system(C++)  모터 단일 통로                 유지 · 스캐너만 
 
 ### 6-1. `motion_common` 신설 · 로드맵 1단계 착수
 
-- `src/motion_common` · ament_python · `rclpy` 비의존 순수 모듈
-- `paths.py` · `MOTION_WORKSPACE` → 설치 트리 역추적 → 소스 트리 역추적 → cwd
-- `motion_table.py` · 컬럼 해석 · 행 확장 · 행 추출 · 레코드 파싱
-- `coordination.py` · 그룹 연동 설정 조회 · 마스터 역할 판정(§6-4)
-- 의존 추가 · `motion_web_bridge` · `motion_runtime` · `motion_schedule`
-- 테스트 42건 신규 · `ruff check` 무결점
+`src/motion_common` · ament_python · `rclpy` 비의존 순수 모듈 · 테스트 80건 · `ruff check` 무결점
+
+| 모듈 | 책임 | 흡수 |
+|---|---|---|
+| `paths.py` | workspace/project 경로 | 하드코딩 2건 · 환경변수 → 설치 트리 → 소스 트리 → cwd |
+| `motion_table.py` | 모션 표 파서 | 2중 구현 |
+| `values.py` | 수치 변환 | 11곳 위임 · 의미가 다른 3곳은 유지(아래) |
+| `store.py` | atomic write + 파일락 | 5종 통합 |
+| `topics.py` | 토픽 단일 정의 | 노드·launch 리터럴 전량 · 잔여 0건 |
+| `coordination.py` | 마스터 역할 판정 | 로드맵 외 · 실물 테스트 중 발견(§6-4) |
+
+`rpc.py`(RequestChannel)는 미착수 · §5 2단계.
+
+의존 추가 · `motion_web_bridge` · `motion_runtime` · `motion_schedule` · `motion_supervisor`
+· `midi_control` · `motion_studio` · `motion_coordination`
 
 ### 6-2. 파서 단일화 · 동치 검증 결과
 
@@ -260,7 +269,41 @@ motion_system(C++)  모터 단일 통로                 유지 · 스캐너만 
   실 설정은 웹 UI가 기록하는 `runtime/motion_automation.json`(`repeat_mode: reinitialize`)
 - 결론 · 노드가 정본을 읽는 것이 맞음 · `MotionConfig`는 사용되지 않는 잔존 구조체 · 정리 대상이나 결함 아님
 
-### 6-5. 진단 항목 대조 · 코드 변경이 문서 어디에 걸리는가
+### 6-5. 공용 커널 3종 추가 이관 · `values` · `store` · `topics`
+
+검증 · 전체 31패키지 `colcon build` 통과 · pytest 859건 통과 · launch 7개 로드 확인
+
+**`values.py`** · 13개 정의 중 11곳을 위임으로 교체. 의미가 다른 3곳은 **의도적으로 남겼다**.
+
+| 남긴 구현 | 차이 | 흡수하지 않은 이유 |
+|---|---|---|
+| `supervisor_node._optional_int` | `int(value)` · 진법 접두사 미해석 · 실수 절사 | `int(str(v), 0)`으로 바꾸면 `3.7`이 실패로 바뀐다 |
+| `monitor_node._optional_float` | 유한성 검사 없음 · `inf` 통과 | 하드웨어 텔레메트리 경로 · 실물 검증 없이 바꿀 수 없다 |
+| `bank_manager._finite_float` | 실패 시 `None`이 아니라 `ValueError` | 계약 자체가 다르다 · 호출부가 예외를 기대한다 |
+
+**`store.py`** · atomic write 5종 통합. 실제로 갈라져 있던 지점:
+
+| 항목 | 통합 전 | 통합 후 |
+|---|---|---|
+| 임시파일 이름 | 고정 `<name>.tmp` 3종 ↔ `mkstemp` 2종 | `mkstemp` · 두 프로세스가 서로의 임시파일을 덮어쓰지 않음 |
+| `fsync` | 1종만 수행 | 전부 수행 · 전원 차단 시 빈 파일 방지 |
+| 실패 시 정리 | 일부만 | 전부 |
+| 파일락 | 없음(`project_repository`만 별도 규약) | `<이름>.lock` · `flock` · 기존 규약과 동일 명명 |
+
+이관 대상 · `schedule_store` · `project_store`(2종) · `midi_bank_store` · `group_configuration`
+· `project_repository`의 `.motor_runtime.lock` 규약은 범위(파일 아닌 작업 단위)가 달라 유지
+
+주의 · `ScheduleStore`는 현재 웹 브리지만 기록하고 노드는 읽기 전용이라 실제 경합은
+관찰되지 않았다. 락은 향후 다중 writer 대비 · 고정 임시파일명 제거가 즉시 효과.
+
+**`topics.py`** · 토픽 27종 단일 정의. 노드 파라미터 기본값과 launch 리터럴을 전량 교체해
+`topics.py` 밖 토픽 문자열 **0건**. 회귀 방지 테스트가 소스 전체를 훑어 잔존을 잡는다.
+
+파라미터 **이름**은 통합 대상이 아니다 · 노드마다 역할이 다르므로 각자 정하되 기본값만
+`topics.py`에서 가져온다. §3-5가 지적한 `motor_command_topic` 오배선은 이름 축과 토픽 축을
+혼동한 사례였다.
+
+### 6-8. 진단 항목 대조 · 코드 변경이 문서 어디에 걸리는가
 
 | 코드 변경 | 진단 위치 |
 |---|---|
@@ -280,7 +323,7 @@ motion_system(C++)  모터 단일 통로                 유지 · 스캐너만 
 | §4 `motion_common` 6모듈 | 2/6 · `motion_table.py` · `paths.py` 생성 · `rpc.py` · `topics.py` · `values.py` · `store.py` 미생성 |
 | §7 규칙 4 · 경계는 `motion_common` | 경계 패키지 실체 확보 · 규칙 적용은 신규 코드부터 |
 
-### 6-6. 같은 절 안에서 손대지 않은 범위
+### 6-9. 같은 절 안에서 손대지 않은 범위
 
 즉시 처리 5개 항목은 각 절의 일부만 건드린다. 아래는 진단은 그대로 유효한 잔여분이다.
 

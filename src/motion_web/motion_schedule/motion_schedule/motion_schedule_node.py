@@ -12,6 +12,7 @@ from pathlib import Path
 
 from motion_common.coordination import coordination_settings_path, resolve_master_role
 from motion_common.paths import motion_projects_dir, workspace_root
+from motion_common import topics
 
 try:
     from motion_schedule.schedule_models import ScheduleItem
@@ -44,12 +45,12 @@ class MotionScheduleNode(Node):
         self.engine = ScheduleEngine(grace_period_sec=30)
 
         # Status publisher
-        self.status_pub = self.create_publisher(String, '/motion_schedule/status', 10)
+        self.status_pub = self.create_publisher(String, topics.SCHEDULE_STATUS, 10)
 
         # Subscribers
         self.active_project_sub = self.create_subscription(
             String,
-            '/motion_control/active_project',
+            topics.ACTIVE_PROJECT,
             self._on_active_project_changed,
             10
         )

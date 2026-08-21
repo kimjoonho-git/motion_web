@@ -33,6 +33,7 @@ from .project_store import ProjectStore
 from .recording_session import StudioRecordingSession
 from .ros_gateway import StudioRosGateway
 from .workspace_session import StudioWorkspaceSession
+from motion_common import topics
 
 
 DEFAULT_MOTION_PROJECTS_DIR = str(
@@ -50,31 +51,31 @@ class MotionStudioNode(Node):
             'motion_projects_dir', DEFAULT_MOTION_PROJECTS_DIR
         ).value)).expanduser().resolve()
         self.request_topic = str(self.declare_parameter(
-            'request_topic', '/motion_studio/request'
+            'request_topic', topics.STUDIO_REQUEST
         ).value)
         self.response_topic = str(self.declare_parameter(
-            'response_topic', '/motion_studio/response'
+            'response_topic', topics.STUDIO_RESPONSE
         ).value)
         self.status_topic = str(self.declare_parameter(
-            'status_topic', '/motion_studio/status'
+            'status_topic', topics.STUDIO_STATUS
         ).value)
         self.midi_state_topic = str(self.declare_parameter(
-            'midi_state_topic', '/motion_web/midi_monitor/state'
+            'midi_state_topic', topics.MIDI_MONITOR_STATE
         ).value)
         self.motion_run_request_topic = str(self.declare_parameter(
-            'motion_run_request_topic', '/motion_control/motion_run_request'
+            'motion_run_request_topic', topics.MOTION_RUN_REQUEST
         ).value)
         self.motion_run_response_topic = str(self.declare_parameter(
-            'motion_run_response_topic', '/motion_control/motion_run_response'
+            'motion_run_response_topic', topics.MOTION_RUN_RESPONSE
         ).value)
         self.motion_run_status_topic = str(self.declare_parameter(
-            'motion_run_status_topic', '/motion_control/motion_run_status'
+            'motion_run_status_topic', topics.MOTION_RUN_STATUS
         ).value)
         self.midi_request_topic = str(self.declare_parameter(
-            'midi_request_topic', '/motion_web/midi_monitor/request'
+            'midi_request_topic', topics.MIDI_MONITOR_REQUEST
         ).value)
         self.midi_response_topic = str(self.declare_parameter(
-            'midi_response_topic', '/motion_web/midi_monitor/response'
+            'midi_response_topic', topics.MIDI_MONITOR_RESPONSE
         ).value)
 
         self._store = ProjectStore()

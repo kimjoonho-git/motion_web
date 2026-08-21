@@ -1,7 +1,9 @@
 import os
-import json
 import logging
 from typing import List, Optional, Dict
+
+from motion_common import store as common_store
+
 from .schedule_models import ScheduleItem
 
 logger = logging.getLogger("motion_schedule.store")
@@ -33,12 +35,13 @@ class ScheduleStore:
 
         try:
             self._last_mtime = os.path.getmtime(file_path)
-            with open(file_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if isinstance(data, list):
-                    for item_data in data:
-                        item = ScheduleItem.from_dict(item_data)
-                        self._schedules[item.schedule_id] = item
+            # 기록 측이 배타 락을 잡으므로 읽기는 공유 락으로 충분하다
+            with common_store.file_lock(file_path, exclusive=False):
+                data = common_store.read_json(file_path, default=[])
+            if isinstance(data, list):
+                for item_data in data:
+                    item = ScheduleItem.from_dict(item_data)
+                    self._schedules[item.schedule_id] = item
             logger.info(f"Loaded {len(self._schedules)} schedules for project {project_id}.")
         except (OSError, ValueError, TypeError, KeyError) as exc:
             logger.error(f"Failed to load schedule_store.json for project {project_id}: {exc}")
@@ -65,22 +68,15 @@ class ScheduleStore:
             return False
 
         file_path = self._get_store_path(self.current_project_id)
-        temp_path = f"{file_path}.tmp"
 
         try:
             items_data = [item.to_dict() for item in self._schedules.values()]
-            with open(temp_path, "w", encoding="utf-8") as f:
-                json.dump(items_data, f, ensure_ascii=False, indent=2)
-            os.replace(temp_path, file_path)
+            with common_store.locked_update(file_path):
+                common_store.atomic_write_json(file_path, items_data)
             logger.info(f"Saved {len(items_data)} schedules for project {self.current_project_id}.")
             return True
         except (OSError, ValueError, TypeError) as exc:
             logger.error(f"Failed to save schedule store: {exc}")
-            if os.path.exists(temp_path):
-                try:
-                    os.remove(temp_path)
-                except OSError:
-                    pass
             return False
 
     def list_schedules(self) -> List[ScheduleItem]:

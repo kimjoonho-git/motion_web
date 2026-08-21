@@ -5,7 +5,6 @@ restart.  The web bridge supplies runtime readiness rules, but it does not
 schedule the restart or decide when that restart operation is complete.
 """
 
-import math
 import subprocess
 import threading
 import time
@@ -13,6 +12,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Optional
 
 from .motor_restart_diagnostics import motor_restart_service_failure
+from motion_common import values
 
 
 ReadinessCheck = Callable[
@@ -314,8 +314,4 @@ class MotorRestartCoordinator:
 
     @staticmethod
     def _finite_float(value: Any) -> Optional[float]:
-        try:
-            number = float(value)
-        except (TypeError, ValueError):
-            return None
-        return number if math.isfinite(number) else None
+        return values.finite_float(value)

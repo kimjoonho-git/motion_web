@@ -18,6 +18,7 @@ from std_msgs.msg import Int8MultiArray, String
 
 from motion_supervisor.command_arbiter import CommandArbiter, CommandOwner
 from motion_supervisor.servo_alarm_guard import ServoAlarmGuard
+from motion_common import values, topics
 
 
 ID_CONTROLWORD = 0
@@ -92,47 +93,47 @@ class MotionSupervisor(Node):
 
         self.motion_state_topic = self.declare_parameter(
             'motion_state_topic',
-            '/motion_control/motion_state',
+            topics.MOTION_STATE,
         ).value
         self.jog_request_topic = self.declare_parameter(
             'jog_request_topic',
-            '/motion_control/manual_jog_request',
+            topics.MANUAL_JOG_REQUEST,
         ).value
         self.jog_result_topic = self.declare_parameter(
             'jog_result_topic',
-            '/motion_control/manual_jog_result',
+            topics.MANUAL_JOG_RESULT,
         ).value
         self.safety_request_topic = self.declare_parameter(
             'safety_request_topic',
-            '/motion_control/safety_request',
+            topics.SAFETY_REQUEST,
         ).value
         self.action_request_topic = self.declare_parameter(
             'action_request_topic',
-            '/motion_control/manual_action_request',
+            topics.MANUAL_ACTION_REQUEST,
         ).value
         self.action_result_topic = self.declare_parameter(
             'action_result_topic',
-            '/motion_control/manual_action_result',
+            topics.MANUAL_ACTION_RESULT,
         ).value
         self.motor_command_topic = self.declare_parameter(
             'motor_command_topic',
-            '/motion_control/motor_command',
+            topics.MOTOR_COMMAND,
         ).value
         self.motion_run_command_topic = self.declare_parameter(
             'motion_run_command_topic',
-            '/motion_control/motion_run_command',
+            topics.MOTION_RUN_COMMAND,
         ).value
         self.midi_position_request_topic = self.declare_parameter(
             'midi_position_request_topic',
-            '/motion_control/midi_position_request',
+            topics.MIDI_POSITION_REQUEST,
         ).value
         self.midi_position_result_topic = self.declare_parameter(
             'midi_position_result_topic',
-            '/motion_control/midi_position_result',
+            topics.MIDI_POSITION_RESULT,
         ).value
         self.safety_status_topic = self.declare_parameter(
             'safety_status_topic',
-            '/motion_control/safety_status',
+            topics.SAFETY_STATUS,
         ).value
         self.state_timeout_sec = float(
             self.declare_parameter('state_timeout_sec', 0.5).value
@@ -2461,13 +2462,7 @@ class MotionSupervisor(Node):
 
     @staticmethod
     def _optional_float(value: Any) -> Optional[float]:
-        try:
-            if value is None or value == '':
-                return None
-            number = float(value)
-        except (TypeError, ValueError):
-            return None
-        return number if math.isfinite(number) else None
+        return values.finite_float(value)
 
 
 def main(args=None) -> None:

@@ -14,6 +14,8 @@ import json
 import math
 from typing import Any, Dict, List, Optional, Tuple
 
+from . import values
+
 REQUIRED_COLUMNS: Tuple[str, ...] = ('frame', 'time', 'motion_id', 'value')
 
 DATA_KEYS: Tuple[str, ...] = (
@@ -35,15 +37,8 @@ MISSING_HEADER_MESSAGE = 'required header not found: frame, time(sec), motion Id
 # 값 변환
 # --------------------------------------------------------------------------- #
 
-def finite_float(value: Any) -> Optional[float]:
-    """유한 실수로 변환한다. 불가하면 None."""
-    if value is None or value == '':
-        return None
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) else None
+# 값 변환은 values.py가 단일 구현 · 기존 호출부 호환을 위해 이름을 유지한다
+finite_float = values.finite_float
 
 
 def motion_id_text(value: Any) -> str:

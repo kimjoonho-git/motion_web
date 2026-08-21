@@ -17,6 +17,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 from std_srvs.srv import SetBool, Trigger
+from motion_common import topics
 
 
 MOTOR_TYPE_LABELS = {
@@ -58,7 +59,7 @@ class MotionStateMonitor(Node):
 
         self.input_topic = self.declare_parameter(
             'input_topic',
-            '/motion_control/motor_status',
+            topics.MOTOR_STATUS,
         ).value
         self.input_type = self.declare_parameter('input_type', 'motor_status').value
         self.ethercat_status_topic = self.declare_parameter(
@@ -72,11 +73,11 @@ class MotionStateMonitor(Node):
         )
         self.output_topic = self.declare_parameter(
             'output_topic',
-            '/motion_control/motion_state',
+            topics.MOTION_STATE,
         ).value
         self.scan_progress_topic = self.declare_parameter(
             'scan_progress_topic',
-            '/motion_control/motor_scan_progress',
+            topics.MOTOR_SCAN_PROGRESS,
         ).value
         self.publish_hz = float(self.declare_parameter('publish_hz', 10.0).value)
         self.feedback_process_hz = float(

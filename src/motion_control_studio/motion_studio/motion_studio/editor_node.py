@@ -19,16 +19,17 @@ from .layer_validation import point_curve_frame_mismatches, validate_ranges
 from .mapping_model import manual_initial_values, motion_ranges
 from .motion_model import layer_motion_ids
 from .timeline import layer_conflicts, layer_transition_warnings
+from motion_common import topics
 
 
 class MotionStudioEditorNode(Node):
     def __init__(self) -> None:
         super().__init__('motion_studio_editor_node')
         self.request_topic = str(self.declare_parameter(
-            'request_topic', '/motion_studio/editor/request'
+            'request_topic', topics.STUDIO_EDITOR_REQUEST
         ).value)
         self.response_topic = str(self.declare_parameter(
-            'response_topic', '/motion_studio/editor/response'
+            'response_topic', topics.STUDIO_EDITOR_RESPONSE
         ).value)
         self._response_pub = self.create_publisher(String, self.response_topic, 10)
         self.create_subscription(String, self.request_topic, self._request_callback, 10)

@@ -5,12 +5,13 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from motion_common import topics
 
 
 def generate_launch_description():
     workspace = Path(os.environ.get('MOTION_WORKSPACE', Path.cwd())).expanduser()
     return LaunchDescription([
-        DeclareLaunchArgument('motion_state_topic', default_value='/motion_control/motion_state'),
+        DeclareLaunchArgument('motion_state_topic', default_value=topics.MOTION_STATE),
         DeclareLaunchArgument('monitoring_service', default_value='/set_monitoring'),
         DeclareLaunchArgument('scan_service', default_value='/scan_motors'),
         DeclareLaunchArgument('scan_ac_servo_service', default_value='/scan_ac_servo_motors'),
@@ -28,19 +29,19 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'motion_studio_request_topic',
-            default_value='/motion_studio/request',
+            default_value=topics.STUDIO_REQUEST,
         ),
         DeclareLaunchArgument(
             'motion_studio_response_topic',
-            default_value='/motion_studio/response',
+            default_value=topics.STUDIO_RESPONSE,
         ),
         DeclareLaunchArgument(
             'motion_studio_editor_request_topic',
-            default_value='/motion_studio/editor/request',
+            default_value=topics.STUDIO_EDITOR_REQUEST,
         ),
         DeclareLaunchArgument(
             'motion_studio_editor_response_topic',
-            default_value='/motion_studio/editor/response',
+            default_value=topics.STUDIO_EDITOR_RESPONSE,
         ),
         Node(
             package='motion_web_bridge',

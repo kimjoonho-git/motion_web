@@ -5,6 +5,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from motion_common import topics
 
 
 DEFAULT_CONFIG = str(
@@ -21,24 +22,24 @@ def generate_launch_description():
             default_value=DEFAULT_CONFIG,
             description='Absolute path to active motor YAML.',
         ),
-        DeclareLaunchArgument('motion_state_topic', default_value='/motion_control/motion_state'),
-        DeclareLaunchArgument('jog_request_topic', default_value='/motion_control/manual_jog_request'),
-        DeclareLaunchArgument('jog_result_topic', default_value='/motion_control/manual_jog_result'),
-        DeclareLaunchArgument('safety_request_topic', default_value='/motion_control/safety_request'),
-        DeclareLaunchArgument('action_request_topic', default_value='/motion_control/manual_action_request'),
-        DeclareLaunchArgument('action_result_topic', default_value='/motion_control/manual_action_result'),
+        DeclareLaunchArgument('motion_state_topic', default_value=topics.MOTION_STATE),
+        DeclareLaunchArgument('jog_request_topic', default_value=topics.MANUAL_JOG_REQUEST),
+        DeclareLaunchArgument('jog_result_topic', default_value=topics.MANUAL_JOG_RESULT),
+        DeclareLaunchArgument('safety_request_topic', default_value=topics.SAFETY_REQUEST),
+        DeclareLaunchArgument('action_request_topic', default_value=topics.MANUAL_ACTION_REQUEST),
+        DeclareLaunchArgument('action_result_topic', default_value=topics.MANUAL_ACTION_RESULT),
         DeclareLaunchArgument(
             'motion_run_command_topic',
-            default_value='/motion_control/motion_run_command',
+            default_value=topics.MOTION_RUN_COMMAND,
         ),
-        DeclareLaunchArgument('motor_command_topic', default_value='/motion_control/motor_command'),
+        DeclareLaunchArgument('motor_command_topic', default_value=topics.MOTOR_COMMAND),
         DeclareLaunchArgument(
             'midi_position_request_topic',
-            default_value='/motion_control/midi_position_request',
+            default_value=topics.MIDI_POSITION_REQUEST,
         ),
         DeclareLaunchArgument(
             'midi_position_result_topic',
-            default_value='/motion_control/midi_position_result',
+            default_value=topics.MIDI_POSITION_RESULT,
         ),
         Node(
             package='motion_supervisor',

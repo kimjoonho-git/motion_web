@@ -6,6 +6,7 @@
   <maintainer email="joonho_test@example.com">joonho_test</maintainer>
   <license>Apache-2.0</license>
   <buildtool_depend>ament_python</buildtool_depend>
+  <depend>motion_common</depend>
   <depend>rclpy</depend>
   <depend>std_msgs</depend>
   <exec_depend>python3-yaml</exec_depend>

@@ -8,6 +8,7 @@ from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from motion_common import topics
 
 
 WORKSPACE = Path(os.environ.get('MOTION_WORKSPACE', Path.cwd())).expanduser()
@@ -25,29 +26,29 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument('host', default_value='0.0.0.0'),
         DeclareLaunchArgument('port', default_value='8000'),
-        DeclareLaunchArgument('motion_state_topic', default_value='/motion_control/motion_state'),
+        DeclareLaunchArgument('motion_state_topic', default_value=topics.MOTION_STATE),
         DeclareLaunchArgument(
             'safety_request_topic',
-            default_value='/motion_control/safety_request',
+            default_value=topics.SAFETY_REQUEST,
         ),
         DeclareLaunchArgument('publish_hz', default_value='10.0'),
         DeclareLaunchArgument('max_jog_delta_deg', default_value='360.0'),
         DeclareLaunchArgument('start_midi_control', default_value='true'),
         DeclareLaunchArgument(
             'motion_studio_request_topic',
-            default_value='/motion_studio/request',
+            default_value=topics.STUDIO_REQUEST,
         ),
         DeclareLaunchArgument(
             'motion_studio_response_topic',
-            default_value='/motion_studio/response',
+            default_value=topics.STUDIO_RESPONSE,
         ),
         DeclareLaunchArgument(
             'motion_studio_editor_request_topic',
-            default_value='/motion_studio/editor/request',
+            default_value=topics.STUDIO_EDITOR_REQUEST,
         ),
         DeclareLaunchArgument(
             'motion_studio_editor_response_topic',
-            default_value='/motion_studio/editor/response',
+            default_value=topics.STUDIO_EDITOR_RESPONSE,
         ),
         Node(
             package='motion_runtime',
@@ -100,19 +101,19 @@ def generate_launch_description():
             output='screen',
             condition=IfCondition(LaunchConfiguration('start_midi_control')),
             parameters=[{
-                'input_topic': '/xtouch/midi',
-                'state_topic': '/motion_web/midi_monitor/state',
-                'request_topic': '/motion_web/midi_monitor/request',
-                'response_topic': '/motion_web/midi_monitor/response',
-                'feedback_topic': '/xtouch/feedback',
-                'input_state_topic': '/xtouch/input_state',
-                'connection_command_topic': '/xtouch/connection/command',
-                'connection_state_topic': '/xtouch/connection/state',
+                'input_topic': topics.XTOUCH_MIDI,
+                'state_topic': topics.MIDI_MONITOR_STATE,
+                'request_topic': topics.MIDI_MONITOR_REQUEST,
+                'response_topic': topics.MIDI_MONITOR_RESPONSE,
+                'feedback_topic': topics.XTOUCH_FEEDBACK,
+                'input_state_topic': topics.XTOUCH_INPUT_STATE,
+                'connection_command_topic': topics.XTOUCH_CONNECTION_COMMAND,
+                'connection_state_topic': topics.XTOUCH_CONNECTION_STATE,
                 'motion_state_topic': LaunchConfiguration('motion_state_topic'),
-                'motion_run_status_topic': '/motion_control/motion_run_status',
-                'motion_mapping_response_topic': '/motion_control/motion_mapping_response',
-                'motor_request_topic': '/motion_control/midi_position_request',
-                'motor_result_topic': '/motion_control/midi_position_result',
+                'motion_run_status_topic': topics.MOTION_RUN_STATUS,
+                'motion_mapping_response_topic': topics.MOTION_MAPPING_RESPONSE,
+                'motor_request_topic': topics.MIDI_POSITION_REQUEST,
+                'motor_result_topic': topics.MIDI_POSITION_RESULT,
                 'motion_projects_dir': LaunchConfiguration('motion_projects_dir'),
                 'publish_hz': 50.0,
                 'stale_timeout_sec': 0.5,

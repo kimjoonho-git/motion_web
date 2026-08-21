@@ -18,6 +18,8 @@ from typing import Any, Dict, Iterable, List, Optional
 
 import yaml
 
+from motion_common import store as common_store
+
 from .constants import DEFAULT_PERIOD_SEC
 from .motion_model import (
     MOTION_ID_PATTERN,
@@ -576,9 +578,7 @@ class ProjectStore:
 
     @staticmethod
     def _atomic_write(path: Path, content: str) -> None:
-        temporary = path.with_suffix(path.suffix + '.tmp')
-        temporary.write_text(content, encoding='utf-8')
-        temporary.replace(path)
+        common_store.atomic_write_text(path, content)
 
     @staticmethod
     def _atomic_write_limited(
@@ -587,15 +587,9 @@ class ProjectStore:
         limit_bytes: int,
         error_message: str,
     ) -> None:
-        temporary = path.with_suffix(path.suffix + '.tmp')
-        try:
-            temporary.write_text(content, encoding='utf-8')
-            if temporary.stat().st_size > limit_bytes:
-                raise ValueError(error_message)
-            temporary.replace(path)
-        finally:
-            if temporary.exists():
-                temporary.unlink()
+        common_store.atomic_write_text(
+            path, content, max_bytes=limit_bytes, max_bytes_message=error_message
+        )
 
 
 def project_duration(project: Dict[str, Any]) -> float:

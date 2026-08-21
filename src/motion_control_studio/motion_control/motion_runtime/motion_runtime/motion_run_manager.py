@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Mapping, Optional
 
 import rclpy
 import yaml
-from motion_common import motion_table
+from motion_common import motion_table, values, topics
 from motion_control_msgs.msg import MotorStatus
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
@@ -60,7 +60,7 @@ class MotionRunManager(Node):
         super().__init__('motion_run_manager')
 
         self.motion_state_topic = str(
-            self.declare_parameter('motion_state_topic', '/motion_control/motion_state').value
+            self.declare_parameter('motion_state_topic', topics.MOTION_STATE).value
         )
         # 이 노드의 출력은 최종 하드웨어 명령이 아니라 supervisor로 보내는 합산 요청이다.
         # motion_supervisor의 동명 파라미터(motor_command_topic)는 최종 출력 토픽이므로
@@ -68,49 +68,49 @@ class MotionRunManager(Node):
         self.motion_run_command_topic = str(
             self.declare_parameter(
                 'motion_run_command_topic',
-                '/motion_control/motion_run_command',
+                topics.MOTION_RUN_COMMAND,
             ).value
         )
         self.request_topic = str(
             self.declare_parameter(
                 'request_topic',
-                '/motion_control/motion_run_request',
+                topics.MOTION_RUN_REQUEST,
             ).value
         )
         self.response_topic = str(
             self.declare_parameter(
                 'response_topic',
-                '/motion_control/motion_run_response',
+                topics.MOTION_RUN_RESPONSE,
             ).value
         )
         self.status_topic = str(
             self.declare_parameter(
                 'status_topic',
-                '/motion_control/motion_run_status',
+                topics.MOTION_RUN_STATUS,
             ).value
         )
         self.motion_value_topic = str(
             self.declare_parameter(
                 'motion_value_topic',
-                '/motion_control/motion_value_state',
+                topics.MOTION_VALUE_STATE,
             ).value
         )
         self.safety_status_topic = str(
             self.declare_parameter(
                 'safety_status_topic',
-                '/motion_control/safety_status',
+                topics.SAFETY_STATUS,
             ).value
         )
         self.action_request_topic = str(
             self.declare_parameter(
                 'action_request_topic',
-                '/motion_control/manual_action_request',
+                topics.MANUAL_ACTION_REQUEST,
             ).value
         )
         self.action_result_topic = str(
             self.declare_parameter(
                 'action_result_topic',
-                '/motion_control/manual_action_result',
+                topics.MANUAL_ACTION_RESULT,
             ).value
         )
         self.motion_projects_dir = Path(
@@ -3665,16 +3665,11 @@ class MotionRunManager(Node):
 
     @staticmethod
     def _optional_int(value: Any) -> Optional[int]:
-        if value is None or value == '':
-            return None
-        try:
-            return int(str(value), 0)
-        except (TypeError, ValueError):
-            return None
+        return values.optional_int(value)
 
     @staticmethod
     def _finite_float(value: Any) -> Optional[float]:
-        return motion_table.finite_float(value)
+        return values.finite_float(value)
 
 
 def main(args=None) -> None:

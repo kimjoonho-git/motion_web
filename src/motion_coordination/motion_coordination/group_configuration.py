@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-import os
 import re
 import socket
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
 import yaml
+from motion_common import store as common_store
 
 
 _IDENTIFIER = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$')
@@ -152,20 +151,7 @@ def save_group_config(path: Path, config: GroupConfig) -> None:
             config.trigger_report_timeout_sec
         ),
     }
-    temporary_path = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode='w', encoding='utf-8', dir=path.parent,
-            prefix=f'.{path.name}.', suffix='.tmp', delete=False,
-        ) as temporary:
-            yaml.safe_dump(payload, temporary, allow_unicode=True, sort_keys=False)
-            temporary_path = Path(temporary.name)
-        os.replace(temporary_path, path)
-        temporary_path = None
-        path.chmod(0o600)
-    finally:
-        if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
+    common_store.atomic_write_yaml(path, payload, mode=0o600)
 
 
 def migrate_legacy_group_config(path: Path) -> tuple[GroupConfig, bool]:

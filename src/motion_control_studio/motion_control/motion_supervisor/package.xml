@@ -8,6 +8,7 @@
 
   <buildtool_depend>ament_python</buildtool_depend>
 
+  <depend>motion_common</depend>
   <depend>rclpy</depend>
   <depend>motion_control_msgs</depend>
   <depend>std_msgs</depend>

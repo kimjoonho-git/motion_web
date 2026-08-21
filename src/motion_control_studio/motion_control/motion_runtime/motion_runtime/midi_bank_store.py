@@ -1,7 +1,7 @@
 """Read and atomically update the MIDI-bank section owned by a mapping YAML."""
 
-import os
-import tempfile
+from motion_common import store as common_store
+
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -84,23 +84,7 @@ def atomic_write_with_backup(
             backup = backup_root / f'{timestamp}-{counter}-{path.name}'
             counter += 1
         backup.write_text(existing, encoding='utf-8')
-    fd, temporary_name = tempfile.mkstemp(
-        prefix=f'.{path.name}.',
-        suffix='.tmp',
-        dir=str(path.parent),
-    )
-    try:
-        with os.fdopen(fd, 'w', encoding='utf-8') as temporary:
-            temporary.write(updated)
-            temporary.flush()
-            os.fsync(temporary.fileno())
-        os.replace(temporary_name, path)
-    except Exception:
-        try:
-            os.unlink(temporary_name)
-        except FileNotFoundError:
-            pass
-        raise
+    common_store.atomic_write_text(path, updated)
     return backup
 
 

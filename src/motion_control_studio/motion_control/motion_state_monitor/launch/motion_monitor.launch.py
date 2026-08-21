@@ -7,6 +7,7 @@ from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from motion_common import topics
 
 
 WORKSPACE = Path(os.environ.get('MOTION_WORKSPACE', Path.cwd())).expanduser()
@@ -20,16 +21,16 @@ def generate_launch_description():
             default_value=DEFAULT_CONFIG,
             description='Absolute path to active motor YAML.',
         ),
-        DeclareLaunchArgument('motion_state_topic', default_value='/motion_control/motion_state'),
+        DeclareLaunchArgument('motion_state_topic', default_value=topics.MOTION_STATE),
         DeclareLaunchArgument(
             'project_generation',
             default_value=os.environ.get('PROJECT_GENERATION', '0'),
             description='Persisted generation of the selected project runtime.',
         ),
-        DeclareLaunchArgument('motor_status_topic', default_value='/motion_control/motor_status'),
+        DeclareLaunchArgument('motor_status_topic', default_value=topics.MOTOR_STATUS),
         DeclareLaunchArgument(
             'safety_request_topic',
-            default_value='/motion_control/safety_request',
+            default_value=topics.SAFETY_REQUEST,
         ),
         DeclareLaunchArgument('ethercat_status_topic', default_value='/ethercat_status'),
         DeclareLaunchArgument('publish_hz', default_value='10.0'),
@@ -91,15 +92,15 @@ def generate_launch_description():
             condition=IfCondition(LaunchConfiguration('start_motion_supervisor')),
             parameters=[{
                 'motion_state_topic': LaunchConfiguration('motion_state_topic'),
-                'jog_request_topic': '/motion_control/manual_jog_request',
-                'jog_result_topic': '/motion_control/manual_jog_result',
+                'jog_request_topic': topics.MANUAL_JOG_REQUEST,
+                'jog_result_topic': topics.MANUAL_JOG_RESULT,
                 'safety_request_topic': LaunchConfiguration('safety_request_topic'),
-                'action_request_topic': '/motion_control/manual_action_request',
-                'action_result_topic': '/motion_control/manual_action_result',
-                'motion_run_command_topic': '/motion_control/motion_run_command',
-                'motor_command_topic': '/motion_control/motor_command',
-                'midi_position_request_topic': '/motion_control/midi_position_request',
-                'midi_position_result_topic': '/motion_control/midi_position_result',
+                'action_request_topic': topics.MANUAL_ACTION_REQUEST,
+                'action_result_topic': topics.MANUAL_ACTION_RESULT,
+                'motion_run_command_topic': topics.MOTION_RUN_COMMAND,
+                'motor_command_topic': topics.MOTOR_COMMAND,
+                'midi_position_request_topic': topics.MIDI_POSITION_REQUEST,
+                'midi_position_result_topic': topics.MIDI_POSITION_RESULT,
                 'max_jog_delta_deg': LaunchConfiguration('max_jog_delta_deg'),
                 'config_file': LaunchConfiguration('config_file'),
             }],

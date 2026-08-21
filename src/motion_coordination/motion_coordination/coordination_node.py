@@ -42,6 +42,7 @@ from .group_peer_display import enrich_peer_row
 from .local_api import LocalCoordinationApi
 from .local_runtime_monitor import LocalRuntimeMonitor
 from .safety_stop import SafetyStopController, SafetyStopOutcome
+from motion_common import topics
 from .trigger_sync import (
     TriggerSyncEstimator,
     coordinator_to_local_ns,
@@ -156,40 +157,40 @@ class MotionCoordinationNode(Node):
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
         )
         self._heartbeat_pub = self.create_publisher(
-            GroupHeartbeat, '/motion_group/heartbeat', heartbeat_qos
+            GroupHeartbeat, topics.GROUP_HEARTBEAT, heartbeat_qos
         )
         self._system_info_pub = self.create_publisher(
-            GroupSystemInfo, '/motion_group/system_info', system_info_qos
+            GroupSystemInfo, topics.GROUP_SYSTEM_INFO, system_info_qos
         )
         self._command_pub = self.create_publisher(
-            GroupCommand, '/motion_group/command', reliable
+            GroupCommand, topics.GROUP_COMMAND, reliable
         )
         self._event_pub = self.create_publisher(
-            GroupEvent, '/motion_group/event', reliable
+            GroupEvent, topics.GROUP_EVENT, reliable
         )
         self._alarm_pub = self.create_publisher(
-            GroupAlarm, '/motion_group/alarm', alarm_qos
+            GroupAlarm, topics.GROUP_ALARM, alarm_qos
         )
         self._time_sync_pub = self.create_publisher(
-            GroupTimeSync, '/motion_group/time_sync', reliable
+            GroupTimeSync, topics.GROUP_TIME_SYNC, reliable
         )
         self._heartbeat_sub = self.create_subscription(
-            GroupHeartbeat, '/motion_group/heartbeat', self._heartbeat_callback, heartbeat_qos
+            GroupHeartbeat, topics.GROUP_HEARTBEAT, self._heartbeat_callback, heartbeat_qos
         )
         self._system_info_sub = self.create_subscription(
-            GroupSystemInfo, '/motion_group/system_info', self._system_info_callback, system_info_qos
+            GroupSystemInfo, topics.GROUP_SYSTEM_INFO, self._system_info_callback, system_info_qos
         )
         self._command_sub = self.create_subscription(
-            GroupCommand, '/motion_group/command', self._command_callback, reliable
+            GroupCommand, topics.GROUP_COMMAND, self._command_callback, reliable
         )
         self._event_sub = self.create_subscription(
-            GroupEvent, '/motion_group/event', self._event_callback, reliable
+            GroupEvent, topics.GROUP_EVENT, self._event_callback, reliable
         )
         self._alarm_sub = self.create_subscription(
-            GroupAlarm, '/motion_group/alarm', self._alarm_callback, alarm_qos
+            GroupAlarm, topics.GROUP_ALARM, self._alarm_callback, alarm_qos
         )
         self._time_sync_sub = self.create_subscription(
-            GroupTimeSync, '/motion_group/time_sync',
+            GroupTimeSync, topics.GROUP_TIME_SYNC,
             self._time_sync_callback, reliable,
         )
 

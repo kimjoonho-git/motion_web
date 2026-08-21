@@ -24,6 +24,7 @@ from midi_control.bank_manager import (
 )
 from midi_control.config_store import load_midi_banks
 from midi_control.motion_axis_registry import MotionAxisRegistry
+from motion_common import values, topics
 
 
 FILTER_ORDER = 2
@@ -106,11 +107,7 @@ def second_order_low_pass(
 
 
 def _finite_float(value: Any) -> float | None:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) else None
+    return values.finite_float(value)
 
 
 def motion_value_from_output(
@@ -317,64 +314,64 @@ class MidiControlNode(Node):
 
     def __init__(self) -> None:
         super().__init__('midi_control_node')
-        self.input_topic = str(self.declare_parameter('input_topic', '/xtouch/midi').value)
+        self.input_topic = str(self.declare_parameter('input_topic', topics.XTOUCH_MIDI).value)
         self.state_topic = str(
-            self.declare_parameter('state_topic', '/motion_web/midi_monitor/state').value
+            self.declare_parameter('state_topic', topics.MIDI_MONITOR_STATE).value
         )
         self.request_topic = str(
-            self.declare_parameter('request_topic', '/motion_web/midi_monitor/request').value
+            self.declare_parameter('request_topic', topics.MIDI_MONITOR_REQUEST).value
         )
         self.response_topic = str(
-            self.declare_parameter('response_topic', '/motion_web/midi_monitor/response').value
+            self.declare_parameter('response_topic', topics.MIDI_MONITOR_RESPONSE).value
         )
         self.feedback_topic = str(
-            self.declare_parameter('feedback_topic', '/xtouch/feedback').value
+            self.declare_parameter('feedback_topic', topics.XTOUCH_FEEDBACK).value
         )
         self.input_state_topic = str(
-            self.declare_parameter('input_state_topic', '/xtouch/input_state').value
+            self.declare_parameter('input_state_topic', topics.XTOUCH_INPUT_STATE).value
         )
         self.connection_command_topic = str(
             self.declare_parameter(
-                'connection_command_topic', '/xtouch/connection/command'
+                'connection_command_topic', topics.XTOUCH_CONNECTION_COMMAND
             ).value
         )
         self.connection_state_topic = str(
             self.declare_parameter(
-                'connection_state_topic', '/xtouch/connection/state'
+                'connection_state_topic', topics.XTOUCH_CONNECTION_STATE
             ).value
         )
         self.motion_state_topic = str(
-            self.declare_parameter('motion_state_topic', '/motion_control/motion_state').value
+            self.declare_parameter('motion_state_topic', topics.MOTION_STATE).value
         )
         self.motion_run_status_topic = str(
             self.declare_parameter(
-                'motion_run_status_topic', '/motion_control/motion_run_status'
+                'motion_run_status_topic', topics.MOTION_RUN_STATUS
             ).value
         )
         self.motion_studio_status_topic = str(
             self.declare_parameter(
-                'motion_studio_status_topic', '/motion_studio/status'
+                'motion_studio_status_topic', topics.STUDIO_STATUS
             ).value
         )
         self.motion_mapping_response_topic = str(
             self.declare_parameter(
                 'motion_mapping_response_topic',
-                '/motion_control/motion_mapping_response',
+                topics.MOTION_MAPPING_RESPONSE,
             ).value
         )
         self.motor_request_topic = str(
             self.declare_parameter(
-                'motor_request_topic', '/motion_control/midi_position_request'
+                'motor_request_topic', topics.MIDI_POSITION_REQUEST
             ).value
         )
         self.motor_result_topic = str(
             self.declare_parameter(
-                'motor_result_topic', '/motion_control/midi_position_result'
+                'motor_result_topic', topics.MIDI_POSITION_RESULT
             ).value
         )
         self.motion_value_topic = str(
             self.declare_parameter(
-                'motion_value_topic', '/motion_control/motion_value_state'
+                'motion_value_topic', topics.MOTION_VALUE_STATE
             ).value
         )
         self._motion_projects_dir = Path(
