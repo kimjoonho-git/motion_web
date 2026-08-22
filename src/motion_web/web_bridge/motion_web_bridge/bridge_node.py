@@ -1,4 +1,5 @@
 import copy
+from functools import partial
 import hashlib
 import json
 import math
@@ -18,7 +19,7 @@ import uvicorn
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from fastapi import FastAPI, HTTPException, Request
-from motion_common import generation, motion_table, rpc, topics, values
+from motion_common import generation, rpc, topics, values
 from fastapi.responses import JSONResponse
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
@@ -198,7 +199,10 @@ class MotionWebBridge(Node):
         self.project_repository = ProjectRepository(self.motion_projects_dir)
         self.motor_restart_coordinator = MotorRestartCoordinator(
             self.project_repository,
-            self._motor_operation_runtime_readiness,
+            partial(
+                motor_config_rules.motor_operation_runtime_readiness,
+                self.project_repository,
+            ),
         )
         self._bind_selected_project_sources()
         default_event_log_dir = self.workspace_root / 'log' / 'motor_events'
@@ -1034,7 +1038,7 @@ class MotionWebBridge(Node):
             if str(operation.get('phase') or '') != 'timeout':
                 return operation
             if operation_type == 'motor_apply':
-                return self._rollback_failed_motor_apply(
+                return motor_config_rules.rollback_failed_motor_apply(self.project_repository, 
                     operation,
                     status='timeout',
                     error=str(
@@ -1090,7 +1094,7 @@ class MotionWebBridge(Node):
                 runtime_status,
                 state_payload,
             )
-        last_motor_status_at = self._optional_float(
+        last_motor_status_at = values.optional_float(
             state_payload.get('last_motor_status_at'), None
         )
         fresh_feedback = bool(
@@ -1099,7 +1103,7 @@ class MotionWebBridge(Node):
         )
         runtime_ready = runtime_status.get('phase') == 'ready'
         readiness = (
-            self._motor_operation_runtime_readiness(
+            motor_config_rules.motor_operation_runtime_readiness(self.project_repository, 
                 operation,
                 state_payload,
                 runtime_status,
@@ -1110,7 +1114,7 @@ class MotionWebBridge(Node):
         if readiness.get('failed') is True:
             error = str(readiness.get('error') or 'Motor Manager 실행 검증 실패')
             if operation_type == 'motor_apply':
-                return self._rollback_failed_motor_apply(
+                return motor_config_rules.rollback_failed_motor_apply(self.project_repository, 
                     operation,
                     status='failure',
                     error=error,
@@ -1142,7 +1146,7 @@ class MotionWebBridge(Node):
                     'runtime_config_mismatch',
                 }
             ):
-                return self._rollback_failed_motor_apply(
+                return motor_config_rules.rollback_failed_motor_apply(self.project_repository, 
                     operation,
                     status='failure',
                     error=str(
@@ -1157,146 +1161,15 @@ class MotionWebBridge(Node):
         if coordinator is None:
             coordinator = MotorRestartCoordinator(
                 self.project_repository,
-                self._motor_operation_runtime_readiness,
+                partial(
+                motor_config_rules.motor_operation_runtime_readiness,
+                self.project_repository,
+            ),
             )
             self.motor_restart_coordinator = coordinator
         return coordinator
 
-    def _motor_operation_runtime_readiness(
-        self,
-        operation: Dict[str, Any],
-        motion_state: Dict[str, Any],
-        runtime_status: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        details = operation.get('details')
-        details = dict(details) if isinstance(details, dict) else {}
-        expected_file = str(details.get('runtime_file') or '').strip()
-        if not expected_file:
-            return {
-                'ready': False,
-                'failed': True,
-                'error': '검증할 Motor Manager 실행 설정 경로가 없습니다',
-            }
-        verified_file = str(
-            details.get('verified_motor_config_file') or ''
-        ).strip()
-        actual_file = verified_file
-        if not actual_file:
-            actual_file = str(
-                runtime_status.get('runtime_config_file') or ''
-            ).strip()
-            if not actual_file:
-                return {'ready': False, 'failed': False, 'error': ''}
-            try:
-                matches = (
-                    runtime_status.get('runtime_target_matches_process') is True
-                    and
-                    Path(actual_file).expanduser().resolve()
-                    == Path(expected_file).expanduser().resolve()
-                )
-            except (OSError, ValueError):
-                matches = False
-            if not matches:
-                return {
-                    'ready': False,
-                    'failed': True,
-                    'error': (
-                        'Motor Manager 실행 설정 불일치 · '
-                        f'기대 {expected_file} · 실제 {actual_file}'
-                    ),
-                }
-            try:
-                self.project_repository.update_motor_operation(
-                    str(operation.get('operation_id') or ''),
-                    str(operation.get('phase') or 'verifying'),
-                    details={'verified_motor_config_file': actual_file},
-                )
-            except ValueError:
-                pass
 
-        expected_axes = details.get('expected_axes')
-        if not isinstance(expected_axes, list):
-            expected_axes = []
-        try:
-            expected = sorted(set(int(axis) for axis in expected_axes))
-        except (TypeError, ValueError):
-            expected = []
-        if not expected:
-            return {
-                'ready': False,
-                'failed': True,
-                'error': '검증할 설정 대상 모터축이 없습니다',
-            }
-        motors = motion_state.get('motors')
-        motors = motors if isinstance(motors, list) else []
-        by_axis = {}
-        for motor in motors:
-            if not isinstance(motor, dict):
-                continue
-            try:
-                by_axis[int(motor.get('controller_index'))] = motor
-            except (TypeError, ValueError):
-                continue
-        pending = []
-        for axis in expected:
-            motor = by_axis.get(axis)
-            if (
-                motor is None
-                or motor.get('connection_connected') is not True
-                or str(motor.get('connection_state') or '') != 'online'
-                or motor.get('fault') is True
-            ):
-                pending.append(axis)
-        return {
-            'ready': not pending,
-            'failed': False,
-            'error': '',
-            'expected_axes': expected,
-            'pending_axes': pending,
-            'actual_config_file': actual_file,
-        }
-
-    def _rollback_failed_motor_apply(
-        self,
-        operation: Dict[str, Any],
-        *,
-        status: str,
-        error: str,
-    ) -> Dict[str, Any]:
-        operation_id = str(operation.get('operation_id') or '')
-        details = operation.get('details')
-        details = dict(details) if isinstance(details, dict) else {}
-        previous_runtime = details.get('previous_runtime')
-        previous_runtime = (
-            dict(previous_runtime)
-            if isinstance(previous_runtime, dict) else {}
-        )
-        completed = self.project_repository.finish_motor_operation(
-            operation_id,
-            status,
-            phase='rollback_requested',
-            error=error,
-        )
-        self.project_repository.restore_motor_runtime_target(previous_runtime)
-        if (
-            os.environ.get('MOTION_CONTROL_SERVICE_UNIT')
-            == 'motion-control.service'
-            and os.environ.get('MOTION_MOTOR_SERVICE_UNIT')
-            == 'motion-motor.service'
-        ):
-            try:
-                motor_config_rules.schedule_managed_service_restart(
-                    'motion-motor.service',
-                    'motion-control.service',
-                )
-            except (OSError, ValueError) as exc:
-                completed = self.project_repository.finish_motor_operation(
-                    operation_id,
-                    status,
-                    phase='rollback_schedule_failed',
-                    error=f'{error} · 이전 실행 설정 재시작 요청 실패: {exc}',
-                )
-        return completed
 
     def _schedule_interrupted_scan_recovery(
         self,
@@ -1914,8 +1787,8 @@ class MotionWebBridge(Node):
             self.workspace_root / 'config' / 'bootstrap_motor_config.yaml'
         )
         state_payload = motion_state if isinstance(motion_state, dict) else {}
-        generated_at = self._optional_float(state_payload.get('generated_at'), None)
-        last_motor_status_at = self._optional_float(
+        generated_at = values.optional_float(state_payload.get('generated_at'), None)
+        last_motor_status_at = values.optional_float(
             state_payload.get('last_motor_status_at'), None
         )
         motor_feedback_age_sec = None
@@ -1973,11 +1846,11 @@ class MotionWebBridge(Node):
             for motor in motors:
                 if not isinstance(motor, dict):
                     continue
-                axis = self._optional_int(motor.get('controller_index'), None)
+                axis = values.optional_int(motor.get('controller_index'), None)
                 if axis is None:
                     continue
-                errorcode = self._optional_int(motor.get('errorcode'), 0) or 0
-                statusword = self._optional_int(motor.get('statusword'), 0) or 0
+                errorcode = values.optional_int(motor.get('errorcode'), 0) or 0
+                statusword = values.optional_int(motor.get('statusword'), 0) or 0
                 fault = bool(motor.get('fault')) or errorcode != 0 or bool(statusword & 0x0008)
                 if not fault:
                     continue
@@ -3158,32 +3031,32 @@ class MotionWebBridge(Node):
                 if isinstance(motor.get('identity'), dict)
                 else {}
             )
-            master_index = self._optional_int(
+            master_index = values.optional_int(
                 config.get('ethercat_master_index'),
-                self._optional_int(identity.get('ethercat_master_index'), 0),
+                values.optional_int(identity.get('ethercat_master_index'), 0),
             )
-            position = self._optional_int(config.get('position'), None)
+            position = values.optional_int(config.get('position'), None)
             if master_index is None or master_index < 0 or position is None:
                 continue
             expected_by_master.setdefault(master_index, []).append({
-                'controller_index': self._optional_int(
+                'controller_index': values.optional_int(
                     config.get('controller_index'),
-                    self._optional_int(motor.get('axis'), None),
+                    values.optional_int(motor.get('axis'), None),
                 ),
                 'position': position,
-                'alias': self._optional_int(
+                'alias': values.optional_int(
                     identity.get('ethercat_alias'),
-                    self._optional_int(config.get('alias'), 0),
+                    values.optional_int(config.get('alias'), 0),
                 ),
-                'vendor_id': self._optional_int(
+                'vendor_id': values.optional_int(
                     identity.get('vendor_id'),
-                    self._optional_int(config.get('vendor_id'), None),
+                    values.optional_int(config.get('vendor_id'), None),
                 ),
-                'product_code': self._optional_int(
+                'product_code': values.optional_int(
                     identity.get('product_code'),
-                    self._optional_int(config.get('product_id'), None),
+                    values.optional_int(config.get('product_id'), None),
                 ),
-                'serial_number': self._optional_int(
+                'serial_number': values.optional_int(
                     identity.get('serial_number'), None
                 ),
             })
@@ -3201,7 +3074,7 @@ class MotionWebBridge(Node):
         for slave in ethercat.get('slaves') or []:
             if not isinstance(slave, dict):
                 continue
-            master_index = self._optional_int(slave.get('master_index'), 0)
+            master_index = values.optional_int(slave.get('master_index'), 0)
             if master_index is None:
                 continue
             observed_by_master.setdefault(master_index, []).append(slave)
@@ -3215,9 +3088,9 @@ class MotionWebBridge(Node):
             if len(observed) != len(expected):
                 errors.append(f'축 수 {len(observed)}/{len(expected)}')
             observed_by_position = {
-                self._optional_int(item.get('slave_position'), None): item
+                values.optional_int(item.get('slave_position'), None): item
                 for item in observed
-                if self._optional_int(item.get('slave_position'), None) is not None
+                if values.optional_int(item.get('slave_position'), None) is not None
             }
             for target in expected:
                 position = target['position']
@@ -3231,7 +3104,7 @@ class MotionWebBridge(Node):
                     )
                 for field in ('vendor_id', 'product_code', 'serial_number'):
                     expected_value = target.get(field)
-                    actual_value = self._optional_int(actual.get(field), None)
+                    actual_value = values.optional_int(actual.get(field), None)
                     if (
                         expected_value is not None
                         and expected_value > 0
@@ -3241,7 +3114,7 @@ class MotionWebBridge(Node):
                             f'Slave {position} {field} 불일치'
                         )
                 expected_alias = target.get('alias')
-                actual_alias = self._optional_int(
+                actual_alias = values.optional_int(
                     actual.get('ethercat_alias'), 0
                 )
                 if (
@@ -3261,7 +3134,7 @@ class MotionWebBridge(Node):
             })
 
         registered_indices = {
-            self._optional_int(row.get('master_index'), 0)
+            values.optional_int(row.get('master_index'), 0)
             for row in ethercat.get('masters') or []
             if isinstance(row, dict)
         }
@@ -3804,10 +3677,10 @@ class MotionWebBridge(Node):
                     self.open_motion_project_file_for_editing(
                         project_id, category, replacement
                     )
-                    self._write_motor_config_selection(self.motor_config_file)
+                    motor_config_rules.write_motor_config_selection(self.project_repository, self.motor_config_file)
                 else:
                     self.motor_config_file = Path()
-                    self._clear_motor_config_selection()
+                    motor_config_rules.clear_motor_config_selection(self.project_repository)
         return result
 
     def delete_motor_config(self) -> Dict[str, Any]:
@@ -3821,7 +3694,7 @@ class MotionWebBridge(Node):
                 'registry': motor_config_rules.empty_motor_registry(),
             }
         try:
-            current_path = self._selected_motor_config_path()
+            current_path = motor_config_rules.selected_motor_config_path(self.project_repository)
             deleted = self.delete_motion_project_file(
                 project_id, 'motor_axes', current_path.name
             )
@@ -3976,7 +3849,7 @@ class MotionWebBridge(Node):
 
     def load_motor_config(self) -> Dict[str, Any]:
         try:
-            self.motor_config_file = self._selected_motor_config_path()
+            self.motor_config_file = motor_config_rules.selected_motor_config_path(self.project_repository)
         except ValueError as exc:
             if '모터축 설정 파일이 없습니다' in str(exc):
                 return {
@@ -4584,7 +4457,7 @@ class MotionWebBridge(Node):
                 except Exception:
                     pass
             cleared = self.project_repository.clear_motor_runtime_target()
-            self._clear_motor_config_selection()
+            motor_config_rules.clear_motor_config_selection(self.project_repository)
             self._clear_stopping_project_release_state()
             # Drop launch-time ownership so delete / runtime_project_id update
             # without waiting for a Bridge restart.
@@ -5300,16 +5173,13 @@ class MotionWebBridge(Node):
 
 
 
-    @staticmethod
-    def _header_has_required_columns(headers: List[str]) -> bool:
-        return motion_table.header_has_required(headers)
 
 
 
 
     def request_ac_servo_jog(self, axis: Any, relative_deg: Any) -> Dict[str, Any]:
-        axis_value = self._optional_int(axis, None)
-        relative_value = self._optional_float(relative_deg, None)
+        axis_value = values.optional_int(axis, None)
+        relative_value = values.optional_float(relative_deg, None)
         if axis_value is None:
             return {
                 'success': False,
@@ -5391,8 +5261,8 @@ class MotionWebBridge(Node):
         }
 
     def request_dynamixel_jog(self, axis: Any, relative_deg: Any) -> Dict[str, Any]:
-        axis_value = self._optional_int(axis, None)
-        relative_value = self._optional_float(relative_deg, None)
+        axis_value = values.optional_int(axis, None)
+        relative_value = values.optional_float(relative_deg, None)
         if axis_value is None:
             return {
                 'success': False,
@@ -5474,9 +5344,9 @@ class MotionWebBridge(Node):
         duration_sec: Any = None,
         range_recovery: Any = False,
     ) -> Dict[str, Any]:
-        axis_value = self._optional_int(axis, None)
-        target_value = self._optional_float(target_deg, None)
-        duration_value = self._optional_float(duration_sec, None)
+        axis_value = values.optional_int(axis, None)
+        target_value = values.optional_float(target_deg, None)
+        duration_value = values.optional_float(duration_sec, None)
         if axis_value is None:
             return {
                 'success': False,
@@ -5570,9 +5440,9 @@ class MotionWebBridge(Node):
         duration_sec: Any = None,
         range_recovery: Any = False,
     ) -> Dict[str, Any]:
-        axis_value = self._optional_int(axis, None)
-        target_value = self._optional_float(target_deg, None)
-        duration_value = self._optional_float(duration_sec, None)
+        axis_value = values.optional_int(axis, None)
+        target_value = values.optional_float(target_deg, None)
+        duration_value = values.optional_float(duration_sec, None)
         if axis_value is None:
             return {
                 'success': False,
@@ -5676,7 +5546,7 @@ class MotionWebBridge(Node):
 
         if scope_value == 'all':
             axes = [
-                self._optional_int(motor.get('controller_index'), None)
+                values.optional_int(motor.get('controller_index'), None)
                 for motor in self._motion_state_motors()
                 if motor_config_rules.is_ac_servo_motor(motor)
                 and str(motor.get('state') or '') == 'detected'
@@ -5690,7 +5560,7 @@ class MotionWebBridge(Node):
                 }
             axis_value = None
         else:
-            axis_value = self._optional_int(axis, None)
+            axis_value = values.optional_int(axis, None)
             if axis_value is None:
                 return {
                     'success': False,
@@ -5787,7 +5657,7 @@ class MotionWebBridge(Node):
 
     def _read_current_motor_config(self) -> Dict[str, Any]:
         try:
-            self.motor_config_file = self._selected_motor_config_path()
+            self.motor_config_file = motor_config_rules.selected_motor_config_path(self.project_repository)
         except ValueError:
             return self._default_motor_config()
         if not self.motor_config_file.is_file():
@@ -5824,35 +5694,8 @@ class MotionWebBridge(Node):
             raise ValueError('motor config file must stay under config directory') from exc
         return target
 
-    def _selected_motor_config_path(self) -> Path:
-        project_id = self.project_repository.selected_project_id()
-        if not project_id:
-            raise ValueError('통합 프로젝트를 먼저 선택하세요')
-        detail = self.project_repository.get_project(project_id)
-        active = detail.get('project', {}).get('active_files') or {}
-        file_name = str(active.get('motor_axes') or '').strip()
-        if not file_name:
-            raise ValueError('현재 프로젝트에 모터축 설정 파일이 없습니다')
-        return self.project_repository.export_path(
-            project_id, 'motor_axes', file_name
-        )
 
-    def _write_motor_config_selection(self, path: Path) -> None:
-        project_id = self.project_repository.selected_project_id()
-        if not project_id:
-            raise ValueError('통합 프로젝트를 먼저 선택하세요')
-        project = self.project_repository.get_project(project_id)['project']
-        selection_file = Path(project['path']) / 'runtime' / 'selected_motor_config_path.txt'
-        selection_file.parent.mkdir(parents=True, exist_ok=True)
-        selection_file.write_text(str(path) + '\n', encoding='utf-8')
 
-    def _clear_motor_config_selection(self) -> None:
-        project_id = self.project_repository.selected_project_id()
-        if not project_id:
-            return
-        project = self.project_repository.get_project(project_id)['project']
-        selection_file = Path(project['path']) / 'runtime' / 'selected_motor_config_path.txt'
-        selection_file.unlink(missing_ok=True)
 
     def _write_motor_config(self, content: str, target_file: Optional[Path] = None) -> None:
         target = target_file or self.motor_config_file
@@ -5869,7 +5712,7 @@ class MotionWebBridge(Node):
             backup.write_text(target.read_text(encoding='utf-8'), encoding='utf-8')
         target.write_text(content.rstrip() + '\n', encoding='utf-8')
         self.motor_config_file = target
-        self._write_motor_config_selection(target)
+        motor_config_rules.write_motor_config_selection(self.project_repository, target)
 
     def _default_motor_config(self) -> Dict[str, Any]:
         return {
@@ -5945,27 +5788,27 @@ class MotionWebBridge(Node):
             if motor.get('transport') != 'ethercat':
                 continue
             motor_config = motor.get('config') if isinstance(motor.get('config'), dict) else {}
-            axis = self._optional_int(motor_config.get('controller_index'), motor.get('axis'))
+            axis = values.optional_int(motor_config.get('controller_index'), motor.get('axis'))
             if axis is None:
                 continue
             name = str(motor.get('name') or f'Axis {axis}').strip() or f'Axis {axis}'
             identity = motor.get('identity') if isinstance(motor.get('identity'), dict) else {}
             profile = motor.get('profile') if isinstance(motor.get('profile'), dict) else {}
-            ethercat_master_index = self._optional_int(
+            ethercat_master_index = values.optional_int(
                 motor_config.get('ethercat_master_index'),
-                self._optional_int(identity.get('ethercat_master_index'), 0),
+                values.optional_int(identity.get('ethercat_master_index'), 0),
             )
             if ethercat_master_index is None or ethercat_master_index < 0:
                 raise ValueError(
                     f'Axis {axis}의 EtherCAT Master 번호가 올바르지 않습니다'
                 )
-            eeprom_alias = self._optional_int(
+            eeprom_alias = values.optional_int(
                 identity.get('ethercat_alias'),
-                self._optional_int(motor_config.get('alias'), 0),
+                values.optional_int(motor_config.get('alias'), 0),
             )
-            slave_position = self._optional_int(
+            slave_position = values.optional_int(
                 identity.get('slave_position'),
-                self._optional_int(motor_config.get('position'), 0),
+                values.optional_int(motor_config.get('position'), 0),
             )
             driver_id = self._driver_id_for_registry_motor(motor, drivers)
             ethercat_slaves_by_master.setdefault(
@@ -5980,38 +5823,38 @@ class MotionWebBridge(Node):
                     # EtherCAT Slave Position. Keep it identical to the
                     # user-visible identity instead of retaining stale data.
                     'position': slave_position,
-                    'vendor_id': self._optional_int(
+                    'vendor_id': values.optional_int(
                         identity.get('vendor_id'),
-                        self._optional_int(motor_config.get('vendor_id'), None),
+                        values.optional_int(motor_config.get('vendor_id'), None),
                     ),
-                    'product_id': self._optional_int(
+                    'product_id': values.optional_int(
                         identity.get('product_code'),
-                        self._optional_int(motor_config.get('product_id'), None),
+                        values.optional_int(motor_config.get('product_id'), None),
                     ),
-                    'profile_mode': self._optional_int(motor_config.get('profile_mode'), 0),
+                    'profile_mode': values.optional_int(motor_config.get('profile_mode'), 0),
                 }
             )
             web_axis_identities.append({
                 'controller_index': axis,
                 'ethercat_master_index': ethercat_master_index,
                 'eeprom_alias': eeprom_alias,
-                'rotary_alias': self._optional_int(identity.get('rotary_alias'), None),
+                'rotary_alias': values.optional_int(identity.get('rotary_alias'), None),
                 'slave_position': slave_position,
-                'vendor_id': self._optional_int(
+                'vendor_id': values.optional_int(
                     identity.get('vendor_id'),
-                    self._optional_int(motor_config.get('vendor_id'), None),
+                    values.optional_int(motor_config.get('vendor_id'), None),
                 ),
-                'product_id': self._optional_int(
+                'product_id': values.optional_int(
                     identity.get('product_code'),
-                    self._optional_int(motor_config.get('product_id'), None),
+                    values.optional_int(motor_config.get('product_id'), None),
                 ),
-                'revision_number': self._optional_int(
+                'revision_number': values.optional_int(
                     identity.get('revision_number'),
-                    self._optional_int(motor_config.get('revision_number'), None),
+                    values.optional_int(motor_config.get('revision_number'), None),
                 ),
-                'serial_number': self._optional_int(
+                'serial_number': values.optional_int(
                     identity.get('serial_number'),
-                    self._optional_int(motor_config.get('serial_number'), None),
+                    values.optional_int(motor_config.get('serial_number'), None),
                 ),
                 'identity_source': str(identity.get('identity_source') or ''),
                 'sii_order_number': str(identity.get('sii_order_number') or ''),
@@ -6025,15 +5868,15 @@ class MotionWebBridge(Node):
             })
 
         existing_ethercat_masters = {
-            self._optional_int(master.get('ethercat_master_index'), 0): master
+            values.optional_int(master.get('ethercat_master_index'), 0): master
             for master in masters
             if isinstance(master, dict) and master.get('type') == 'ethercat'
         }
         used_master_ids = {
-            self._optional_int(master.get('id'), None)
+            values.optional_int(master.get('id'), None)
             for master in masters
             if isinstance(master, dict)
-            and self._optional_int(master.get('id'), None) is not None
+            and values.optional_int(master.get('id'), None) is not None
         }
         next_master_id = max(used_master_ids | {-1}) + 1
         ethercat_masters = []
@@ -6041,7 +5884,7 @@ class MotionWebBridge(Node):
             ethercat_master = dict(
                 existing_ethercat_masters.get(master_index) or {}
             )
-            master_id = self._optional_int(ethercat_master.get('id'), None)
+            master_id = values.optional_int(ethercat_master.get('id'), None)
             if master_id is None:
                 while next_master_id in used_master_ids:
                     next_master_id += 1
@@ -6117,7 +5960,7 @@ class MotionWebBridge(Node):
     ) -> List[Dict[str, Any]]:
         serial_masters_by_key: Dict[tuple, Dict[str, Any]] = {}
         used_master_ids = {
-            self._optional_int(master.get('id'), -1)
+            values.optional_int(master.get('id'), -1)
             for master in current_masters
             if isinstance(master, dict)
         }
@@ -6135,7 +5978,7 @@ class MotionWebBridge(Node):
                     for master in current_masters
                     if master.get('type') == 'serial'
                     and str(master.get('serial_port') or '') == port
-                    and self._optional_int(master.get('serial_baudrate'), None) == baudrate
+                    and values.optional_int(master.get('serial_baudrate'), None) == baudrate
                 ),
                 None,
             )
@@ -6167,15 +6010,15 @@ class MotionWebBridge(Node):
                 continue
             motor_config = motor.get('config') if isinstance(motor.get('config'), dict) else {}
             identity = motor.get('identity') if isinstance(motor.get('identity'), dict) else {}
-            axis = self._optional_int(motor_config.get('controller_index'), motor.get('axis'))
-            bus_id = self._optional_int(
+            axis = values.optional_int(motor_config.get('controller_index'), motor.get('axis'))
+            bus_id = values.optional_int(
                 motor_config.get('bus_id'),
-                self._optional_int(identity.get('bus_id'), identity.get('node_id')),
+                values.optional_int(identity.get('bus_id'), identity.get('node_id')),
             )
             port = str(motor_config.get('serial_port') or identity.get('serial_port') or '').strip()
-            baudrate = self._optional_int(
+            baudrate = values.optional_int(
                 motor_config.get('serial_baudrate'),
-                self._optional_int(identity.get('serial_baudrate'), None),
+                values.optional_int(identity.get('serial_baudrate'), None),
             )
             if str(motor.get('driver_family') or motor.get('motor_type') or '') == 'dynamixel':
                 baudrate = DYNAMIXEL_BAUDRATE
@@ -6191,7 +6034,7 @@ class MotionWebBridge(Node):
                     'name': name,
                     'driver_id': driver_id,
                     'bus_id': bus_id,
-                    'profile_mode': self._optional_int(motor_config.get('profile_mode'), 0),
+                    'profile_mode': values.optional_int(motor_config.get('profile_mode'), 0),
                 }
             )
 
@@ -6224,10 +6067,10 @@ class MotionWebBridge(Node):
         identity.pop('nameplate_confirmed', None)
         driver_type = str(motor.get('driver_family') or motor.get('motor_type') or 'unknown')
         driver_model = str(profile.get('driver_model') or '').strip()
-        requested_id = self._optional_int(motor_config.get('driver_id'), None)
+        requested_id = values.optional_int(motor_config.get('driver_id'), None)
 
         drivers_by_id = {
-            self._optional_int(driver.get('id'), None): driver
+            values.optional_int(driver.get('id'), None): driver
             for driver in drivers
             if isinstance(driver, dict)
         }
@@ -6246,7 +6089,7 @@ class MotionWebBridge(Node):
                 continue
             if driver_model and str(driver.get('driver_model') or '') != driver_model:
                 continue
-            driver_id = self._optional_int(driver.get('id'), None)
+            driver_id = values.optional_int(driver.get('id'), None)
             if driver_id is not None:
                 return driver_id
 
@@ -6281,7 +6124,7 @@ class MotionWebBridge(Node):
             }
 
         used_driver_ids = {
-            self._optional_int(driver.get('id'), -1)
+            values.optional_int(driver.get('id'), -1)
             for driver in drivers
             if isinstance(driver, dict)
         }
@@ -6342,17 +6185,11 @@ class MotionWebBridge(Node):
 
 
 
-    @staticmethod
-    def _optional_int(value: Any, default: Optional[int]) -> Optional[int]:
-        return values.optional_int(value, default)
 
-    @staticmethod
-    def _optional_float(value: Any, default: Optional[float]) -> Optional[float]:
-        return values.optional_float(value, default)
 
     def _motion_state_motor(self, axis: int) -> Optional[Dict[str, Any]]:
         for motor in self._motion_state_motors():
-            if self._optional_int(motor.get('controller_index'), None) == axis:
+            if values.optional_int(motor.get('controller_index'), None) == axis:
                 return motor
         return None
 

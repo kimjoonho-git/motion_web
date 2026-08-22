@@ -749,7 +749,9 @@ def test_delete_motor_config_only_moves_selected_project_file_to_its_trash(tmp_p
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge.project_repository = repository
     bridge.motor_config_file = selected_path
-    bridge._write_motor_config_selection(selected_path)
+    motor_config_rules.write_motor_config_selection(
+        bridge.project_repository, selected_path
+    )
 
     result = bridge.delete_motor_config()
 
@@ -2602,7 +2604,9 @@ def test_clear_motor_runtime_application_stops_and_allows_delete(
     )
     bridge.motion_run_stop = lambda: None
     bridge.publish_safety_stop = lambda *_args, **_kwargs: None
-    bridge._clear_motor_config_selection = lambda: None
+    monkeypatch.setattr(
+        motor_config_rules, 'clear_motor_config_selection', lambda _repository: None
+    )
     bridge._motor_lifecycle_lock = threading.Lock()
     bridge._execution_context_apply_lock = threading.Lock()
     bridge._project_generation = 1

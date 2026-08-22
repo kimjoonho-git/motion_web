@@ -10,9 +10,11 @@
 from __future__ import annotations
 
 import copy
+import os
 import re
 import subprocess
 import time
+from pathlib import Path
 from urllib.parse import quote
 from typing import Any, Dict, List, Optional
 
@@ -675,3 +677,181 @@ def schedule_managed_service_restart(*managed_services: str) -> None:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
+
+
+# --------------------------------------------------------------------------- #
+# 프로젝트 저장소를 인자로 받는 규칙
+#
+# 노드의 상태는 아니지만 저장소는 필요한 함수들이다. `self.project_repository`
+# 대신 첫 인자로 받아, 이 모듈이 노드를 모르는 성질을 유지한다.
+# --------------------------------------------------------------------------- #
+
+def selected_motor_config_path(repository) -> Path:
+    project_id = repository.selected_project_id()
+    if not project_id:
+        raise ValueError('통합 프로젝트를 먼저 선택하세요')
+    detail = repository.get_project(project_id)
+    active = detail.get('project', {}).get('active_files') or {}
+    file_name = str(active.get('motor_axes') or '').strip()
+    if not file_name:
+        raise ValueError('현재 프로젝트에 모터축 설정 파일이 없습니다')
+    return repository.export_path(
+        project_id, 'motor_axes', file_name
+    )
+
+
+def write_motor_config_selection(repository, path: Path) -> None:
+    project_id = repository.selected_project_id()
+    if not project_id:
+        raise ValueError('통합 프로젝트를 먼저 선택하세요')
+    project = repository.get_project(project_id)['project']
+    selection_file = Path(project['path']) / 'runtime' / 'selected_motor_config_path.txt'
+    selection_file.parent.mkdir(parents=True, exist_ok=True)
+    selection_file.write_text(str(path) + '\n', encoding='utf-8')
+
+
+def clear_motor_config_selection(repository) -> None:
+    project_id = repository.selected_project_id()
+    if not project_id:
+        return
+    project = repository.get_project(project_id)['project']
+    selection_file = Path(project['path']) / 'runtime' / 'selected_motor_config_path.txt'
+    selection_file.unlink(missing_ok=True)
+
+
+def motor_operation_runtime_readiness(
+    repository,
+    operation: Dict[str, Any],
+    motion_state: Dict[str, Any],
+    runtime_status: Dict[str, Any],
+) -> Dict[str, Any]:
+    details = operation.get('details')
+    details = dict(details) if isinstance(details, dict) else {}
+    expected_file = str(details.get('runtime_file') or '').strip()
+    if not expected_file:
+        return {
+            'ready': False,
+            'failed': True,
+            'error': '검증할 Motor Manager 실행 설정 경로가 없습니다',
+        }
+    verified_file = str(
+        details.get('verified_motor_config_file') or ''
+    ).strip()
+    actual_file = verified_file
+    if not actual_file:
+        actual_file = str(
+            runtime_status.get('runtime_config_file') or ''
+        ).strip()
+        if not actual_file:
+            return {'ready': False, 'failed': False, 'error': ''}
+        try:
+            matches = (
+                runtime_status.get('runtime_target_matches_process') is True
+                and
+                Path(actual_file).expanduser().resolve()
+                == Path(expected_file).expanduser().resolve()
+            )
+        except (OSError, ValueError):
+            matches = False
+        if not matches:
+            return {
+                'ready': False,
+                'failed': True,
+                'error': (
+                    'Motor Manager 실행 설정 불일치 · '
+                    f'기대 {expected_file} · 실제 {actual_file}'
+                ),
+            }
+        try:
+            repository.update_motor_operation(
+                str(operation.get('operation_id') or ''),
+                str(operation.get('phase') or 'verifying'),
+                details={'verified_motor_config_file': actual_file},
+            )
+        except ValueError:
+            pass
+
+    expected_axes = details.get('expected_axes')
+    if not isinstance(expected_axes, list):
+        expected_axes = []
+    try:
+        expected = sorted(set(int(axis) for axis in expected_axes))
+    except (TypeError, ValueError):
+        expected = []
+    if not expected:
+        return {
+            'ready': False,
+            'failed': True,
+            'error': '검증할 설정 대상 모터축이 없습니다',
+        }
+    motors = motion_state.get('motors')
+    motors = motors if isinstance(motors, list) else []
+    by_axis = {}
+    for motor in motors:
+        if not isinstance(motor, dict):
+            continue
+        try:
+            by_axis[int(motor.get('controller_index'))] = motor
+        except (TypeError, ValueError):
+            continue
+    pending = []
+    for axis in expected:
+        motor = by_axis.get(axis)
+        if (
+            motor is None
+            or motor.get('connection_connected') is not True
+            or str(motor.get('connection_state') or '') != 'online'
+            or motor.get('fault') is True
+        ):
+            pending.append(axis)
+    return {
+        'ready': not pending,
+        'failed': False,
+        'error': '',
+        'expected_axes': expected,
+        'pending_axes': pending,
+        'actual_config_file': actual_file,
+    }
+
+
+def rollback_failed_motor_apply(
+    repository,
+    operation: Dict[str, Any],
+    *,
+    status: str,
+    error: str,
+) -> Dict[str, Any]:
+    operation_id = str(operation.get('operation_id') or '')
+    details = operation.get('details')
+    details = dict(details) if isinstance(details, dict) else {}
+    previous_runtime = details.get('previous_runtime')
+    previous_runtime = (
+        dict(previous_runtime)
+        if isinstance(previous_runtime, dict) else {}
+    )
+    completed = repository.finish_motor_operation(
+        operation_id,
+        status,
+        phase='rollback_requested',
+        error=error,
+    )
+    repository.restore_motor_runtime_target(previous_runtime)
+    if (
+        os.environ.get('MOTION_CONTROL_SERVICE_UNIT')
+        == 'motion-control.service'
+        and os.environ.get('MOTION_MOTOR_SERVICE_UNIT')
+        == 'motion-motor.service'
+    ):
+        try:
+            schedule_managed_service_restart(
+                'motion-motor.service',
+                'motion-control.service',
+            )
+        except (OSError, ValueError) as exc:
+            completed = repository.finish_motor_operation(
+                operation_id,
+                status,
+                phase='rollback_schedule_failed',
+                error=f'{error} · 이전 실행 설정 재시작 요청 실패: {exc}',
+            )
+    return completed
