@@ -282,6 +282,83 @@ class MotionRunManager(Node):
                 if now - last_stamp > 60.0:
                     self._action_results.pop(key, None)
 
+    #: 실행 컨텍스트가 서 있어야 처리하는 명령
+    COMMANDS_REQUIRING_CONTEXT = frozenset({
+        'automation_configure',
+        'automation_start',
+        'automation_reserve',
+        'check',
+        'initialize',
+        'start',
+        'group_prepare',
+        'group_start_at',
+        'group_initialize_at',
+    })
+
+    def _command_router(self) -> command_router.CommandRouter:
+        """처리기 표 · 처음 쓸 때 만든다.
+
+        노드를 띄우지 않고 (`__new__`) 콜백만 검증하는 테스트에서도 동작하도록
+        `__init__`에 의존하지 않는다.
+        """
+        router = getattr(self, '_router', None)
+        if router is None:
+            router = self._build_router()
+            self._router = router
+        return router
+
+    def _build_router(self) -> command_router.CommandRouter:
+        """명령 → 처리기 표 · 처리기는 payload를 받아 응답 dict를 돌려준다."""
+        router = command_router.CommandRouter(context_commands=self.CONTEXT_COMMANDS)
+        router.register('apply_context', self._apply_execution_context)
+        router.register('confirm_context', self._confirm_execution_context)
+        router.register('invalidate_context', self._invalidate_execution_context)
+        router.register('status', lambda payload: {
+            'success': True, 'message': 'motion run status', 'status': self.status(),
+        })
+        router.register('automation_configure', self._configure_automation)
+        router.register('automation_start', self._start_automation)
+        router.register('automation_reserve', self._reserve_automation)
+        router.register('automation_disable', self._disable_automation)
+        router.register('check', self._handle_check)
+        router.register('initialize', lambda payload: self._start_thread('initialize', payload))
+        router.register('start', lambda payload: self._start_thread('run', payload))
+        router.register('group_prepare', self._start_group_session)
+        router.register('group_start_at', self._schedule_group_cycle)
+        router.register('group_initialize_at', self._schedule_group_initialization)
+        router.register('group_cancel', self._cancel_group_session)
+        router.register('stop', lambda payload: self._handle_stop())
+        router.register('stop_after_cycle', lambda payload: self._handle_stop_after_cycle())
+        return router
+
+    def _invalidate_execution_context(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """실행 컨텍스트와 자동화 상태를 버린다 · 동작 중에는 거부한다."""
+        with self._run_lock:
+            if self._run_thread is not None and self._run_thread.is_alive():
+                raise ValueError('모션 동작 중에는 프로젝트 메모리를 폐기할 수 없습니다')
+            self._execution_context = {}
+            self._execution_context_ready = False
+            self.motion_files_dir = self.motion_projects_dir
+            self.mappings_dir = self.motion_projects_dir
+            self._status = self._empty_status()
+            self._automation_project_id = ''
+            self._automation_state = default_automation_state()
+            self._automation_runtime = {
+                'state': 'off',
+                'message': '',
+                'resume_pending': False,
+                'stop_after_cycle': False,
+            }
+            self._automation_resume_pending = False
+            self._automation_resume_started_at = None
+        return {
+            'success': True,
+            'message': '모션 실행 프로젝트 메모리 폐기',
+            'project_id': '',
+            'context_id': '',
+            'status': self.status(),
+        }
+
     def _request_callback(self, msg: String) -> None:
         request = command_router.parse_request(msg.data)
         if request is None:
@@ -292,85 +369,23 @@ class MotionRunManager(Node):
         payload = request.payload
 
         try:
-            request_generation = self._validate_request_generation(
-                command, request.generation, payload
-            )
-            if command == 'apply_context':
-                response = self._apply_execution_context(payload)
-            elif command == 'confirm_context':
-                response = self._confirm_execution_context(payload)
-            elif command == 'invalidate_context':
-                with self._run_lock:
-                    if self._run_thread is not None and self._run_thread.is_alive():
-                        raise ValueError(
-                            '모션 동작 중에는 프로젝트 메모리를 폐기할 수 없습니다'
-                        )
-                    self._execution_context = {}
-                    self._execution_context_ready = False
-                    self.motion_files_dir = self.motion_projects_dir
-                    self.mappings_dir = self.motion_projects_dir
-                    self._status = self._empty_status()
-                    self._automation_project_id = ''
-                    self._automation_state = default_automation_state()
-                    self._automation_runtime = {
-                        'state': 'off',
-                        'message': '',
-                        'resume_pending': False,
-                        'stop_after_cycle': False,
-                    }
-                    self._automation_resume_pending = False
-                    self._automation_resume_started_at = None
-                response = {
-                    'success': True,
-                    'message': '모션 실행 프로젝트 메모리 폐기',
-                    'project_id': '',
-                    'context_id': '',
-                    'status': self.status(),
-                }
-            elif command == 'status':
-                response = {'success': True, 'message': 'motion run status', 'status': self.status()}
-            elif command == 'automation_configure':
-                self._require_execution_context(payload)
-                response = self._configure_automation(payload)
-            elif command == 'automation_start':
-                self._require_execution_context(payload)
-                response = self._start_automation(payload)
-            elif command == 'automation_reserve':
-                self._require_execution_context(payload)
-                response = self._reserve_automation(payload)
-            elif command == 'automation_disable':
-                response = self._disable_automation(payload)
-            elif command == 'check':
-                self._require_execution_context(payload)
-                response = self._handle_check(payload)
-            elif command == 'initialize':
-                self._require_execution_context(payload)
-                response = self._start_thread('initialize', payload)
-            elif command == 'start':
-                self._require_execution_context(payload)
-                response = self._start_thread('run', payload)
-            elif command == 'group_prepare':
-                self._require_execution_context(payload)
-                response = self._start_group_session(payload)
-            elif command == 'group_start_at':
-                self._require_execution_context(payload)
-                response = self._schedule_group_cycle(payload)
-            elif command == 'group_initialize_at':
-                self._require_execution_context(payload)
-                response = self._schedule_group_initialization(payload)
-            elif command == 'group_cancel':
-                response = self._cancel_group_session(payload)
-            elif command == 'stop':
-                response = self._handle_stop()
-            elif command == 'stop_after_cycle':
-                response = self._handle_stop_after_cycle()
+            self._validate_request_generation(command, request.generation, payload)
+            handler = self._command_router().resolve(command)
+            if handler is None:
+                response = command_router.error_response(
+                    f'unknown motion run command: {command}'
+                )
             else:
-                response = {'success': False, 'message': f'unknown motion run command: {command}'}
+                if command in self.COMMANDS_REQUIRING_CONTEXT:
+                    self._require_execution_context(payload)
+                response = handler(payload)
         except Exception as exc:  # Defensive boundary for the web bridge.
             self.get_logger().error(
                 f'motion run command failed: {command}\n{traceback.format_exc()}'
             )
-            response = {'success': False, 'message': f'motion run command failed: {exc}'}
+            response = command_router.error_response(
+                f'motion run command failed: {exc}'
+            )
 
         self._publish_response(command_router.finalize(response, request))
         self._publish_status()

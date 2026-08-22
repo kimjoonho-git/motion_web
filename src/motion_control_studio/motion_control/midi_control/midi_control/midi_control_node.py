@@ -2958,276 +2958,360 @@ class MidiControlNode(Node):
                 self._motor_command_state[channel] = 'inactive'
                 self._motor_command_message[channel] = 'SELECT를 눌러 녹화할 축을 선택하세요'
 
+    def _command_router(self) -> command_router.CommandRouter:
+        """처리기 표 · 처음 쓸 때 만든다.
+
+        노드를 띄우지 않고 (`__new__`) 콜백만 검증하는 테스트에서도 동작하도록
+        `__init__`에 의존하지 않는다.
+        """
+        router = getattr(self, '_router', None)
+        if router is None:
+            router = self._build_router()
+            self._router = router
+        return router
+
+    def _build_router(self) -> command_router.CommandRouter:
+        """명령 → 처리기 표 · 처리기는 payload를 받아 응답 dict를 돌려준다."""
+        router = command_router.CommandRouter(context_commands=self.CONTEXT_COMMANDS)
+        router.register('select_project', self._cmd_select_project)
+        router.register('confirm_context', self._cmd_confirm_context)
+        router.register('invalidate_context', self._cmd_invalidate_context)
+        router.register('save_mapping', self._cmd_save_mapping)
+        router.register('update_bank', self._cmd_save_mapping)
+        router.register('create_bank', self._cmd_create_bank)
+        router.register('select_bank', self._cmd_select_bank)
+        router.register('delete_bank', self._cmd_delete_bank)
+        router.register('save_banks_to_file', self._cmd_save_banks_to_file)
+        router.register('apply_banks', self._cmd_apply_banks)
+        router.register('load_banks_from_file', self._cmd_apply_banks)
+        router.register('reset_runtime_values', self._cmd_reset_runtime_values)
+        router.register('resync_selected_faders', self._cmd_resync_selected_faders)
+        router.register('studio_recording_prepare', self._cmd_studio_recording_prepare)
+        router.register('studio_recording_zero_status', self._cmd_studio_recording_zero_status)
+        router.register('studio_recording_ready', self._cmd_studio_recording_ready)
+        router.register('connect_device', lambda payload, _c='connect_device': self._cmd_connect_device(payload, _c))
+        router.register('disconnect_device', lambda payload, _c='disconnect_device': self._cmd_connect_device(payload, _c))
+        router.register('status', self._cmd_status)
+        return router
+
+    def _cmd_select_project(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """선택 프로젝트의 매핑·뱅크 컨텍스트로 전환한다."""
+        previous_project_id = self._project_id
+        self._select_project_mapping_dir(payload)
+        preferred = str(payload.get('mapping_file_id') or '').strip()
+        registry = MotionAxisRegistry(self._mappings_dir)
+        # A newly selected project must never resolve its axes against
+        # feedback cached from the previously running project.
+        registry.refresh(preferred, {})
+        mapping_file = self._mapping_file_path_or_none(registry.file_id)
+        stored_banks = load_midi_banks(mapping_file) if mapping_file else None
+        context_id = str(payload.get('context_id') or '').strip()
+        expected_mapping_sha = str(payload.get('mapping_sha256') or '').strip()
+        actual_mapping_sha = (
+            hashlib.sha256(mapping_file.read_bytes()).hexdigest()
+            if mapping_file is not None else ''
+        )
+        if expected_mapping_sha and actual_mapping_sha != expected_mapping_sha:
+            raise ValueError('모션축 설정 파일 버전이 실행 컨텍스트와 다릅니다')
+        incoming_banks = MidiBankManager()
+        if stored_banks is not None:
+            incoming_banks.replace_state(stored_banks)
+        with self._lock:
+            same_context = (
+                previous_project_id == self._project_id
+                and self._selected_mapping_file_id == registry.file_id
+                and self._banks.export_state() == incoming_banks.export_state()
+                and self._execution_context.get('context_id') == context_id
+            )
+            self._axis_registry = registry
+            self._selected_mapping_file_id = registry.file_id
+            self._preferred_mapping_file_id = registry.file_id
+            self._bank_config_file = mapping_file
+            if not same_context:
+                self._banks = incoming_banks
+                self._current_motion_values = {}
+                self._reset_bank_change_state_locked()
+                self._motion_run_state = 'idle'
+                self._motion_run_request_source = ''
+                self._motion_studio_state = 'idle'
+                self._playback_phase = 'idle'
+                self._execution_context_ready = False
+            self._execution_context = {
+                'context_id': context_id,
+                'project_id': self._project_id,
+                'project_generation': int(payload.get('project_generation') or 0),
+                'mapping_file_id': registry.file_id,
+                'mapping_sha256': actual_mapping_sha,
+            }
+            self._bank_file_loaded = stored_banks is not None
+            self._bank_file_dirty = False
+        response = self._snapshot()
+        # The project coordinator validates every node with the same
+        # top-level acknowledgement contract.  `_snapshot()` keeps
+        # these values nested for the UI, so expose them here as well.
+        response.update({
+            'context_id': context_id,
+            'project_id': self._project_id,
+            'mapping_file_id': registry.file_id,
+            'mapping_sha256': actual_mapping_sha,
+        })
+        response['context_changed'] = not same_context
+        response['message'] = (
+            '현재 프로젝트 MIDI·모션축 컨텍스트로 전환했습니다'
+            if not same_context else
+            '현재 프로젝트 MIDI·모션축 컨텍스트가 이미 적용되어 있습니다'
+        )
+        return response
+
+    def _cmd_confirm_context(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """적용된 실행 컨텍스트를 확인하고 MIDI 제어를 허용한다."""
+        context_id = str(payload.get('context_id') or '').strip()
+        with self._lock:
+            if (
+                not context_id
+                or context_id != self._execution_context.get('context_id')
+            ):
+                raise ValueError('확인하려는 실행 컨텍스트가 적용된 설정과 다릅니다')
+            self._execution_context_ready = True
+        response = self._snapshot()
+        response.update({
+            'context_id': context_id,
+            'project_id': self._project_id,
+            'mapping_file_id': self._execution_context.get('mapping_file_id', ''),
+            'mapping_sha256': self._execution_context.get('mapping_sha256', ''),
+        })
+        response['message'] = '현재 프로젝트 MIDI 제어 허용'
+        return response
+
+    def _cmd_invalidate_context(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """프로젝트 매핑·뱅크 메모리를 버린다."""
+        with self._lock:
+            self._project_id = ''
+            self._mappings_dir = self._motion_projects_dir
+            self._axis_registry = MotionAxisRegistry(self._motion_projects_dir)
+            self._selected_mapping_file_id = ''
+            self._preferred_mapping_file_id = ''
+            self._run_mapping_file_id = ''
+            self._latest_motion_state = {}
+            self._bank_config_file = None
+            self._banks = MidiBankManager()
+            self._execution_context = {}
+            self._execution_context_ready = False
+            self._bank_file_loaded = False
+            self._bank_file_dirty = False
+            self._current_motion_values = {}
+            self._reset_bank_change_state_locked()
+        response = self._snapshot()
+        response.update({
+            'project_id': '',
+            'context_id': '',
+            'message': 'MIDI 프로젝트 매핑·뱅크 메모리 폐기',
+        })
+        return response
+
+    def _cmd_save_mapping(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """뱅크 설정을 메모리에 임시 적용한다 · 파일은 건드리지 않는다."""
+        bank_id = payload.get('bank_id') or self._banks.snapshot()['active_bank_id']
+        with self._lock:
+            previous_bank_state = self._banks.snapshot()
+            self._banks.update_bank(
+                bank_id,
+                name=payload.get('name'),
+                mappings=payload.get('mappings'),
+            )
+            reset_select = self._finish_bank_settings_change_locked(previous_bank_state)
+            self._bank_file_dirty = True
+        response = self._snapshot()
+        response['select_reset'] = reset_select
+        response['message'] = (
+            'MIDI 뱅크 설정 임시 적용 · SELECT 전체 해제 · 페이더 0 이동'
+            if reset_select else
+            'MIDI 필터 설정 임시 적용 · SELECT 상태 유지'
+        )
+        return response
+
+    def _cmd_create_bank(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """활성 뱅크를 복제해 새 뱅크를 만든다."""
+        with self._lock:
+            bank = self._banks.create_bank(payload.get('name'), copy_from_active=True)
+            self._banks.select_bank(bank['bank_id'])
+            self._reset_bank_change_state_locked()
+            self._bank_file_dirty = True
+        response = self._snapshot()
+        response['message'] = (
+            'MIDI 뱅크 추가 완료 (메모리 전용) · SELECT 전체 해제 · 페이더 0 이동'
+        )
+        return response
+
+    def _cmd_select_bank(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """활성 뱅크를 바꾼다."""
+        with self._lock:
+            self._banks.select_bank(payload.get('bank_id'))
+            self._reset_bank_change_state_locked()
+            self._bank_file_dirty = True
+        response = self._snapshot()
+        response['message'] = 'MIDI 뱅크 전환 완료 · SELECT 전체 해제 · 페이더 0 이동'
+        return response
+
+    def _cmd_delete_bank(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """뱅크를 지운다."""
+        with self._lock:
+            self._banks.delete_bank(payload.get('bank_id'))
+            self._reset_bank_change_state_locked()
+            self._bank_file_dirty = True
+        response = self._snapshot()
+        response['message'] = 'MIDI 뱅크 삭제 완료 · SELECT 전체 해제 · 페이더 0 이동'
+        return response
+
+    def _cmd_save_banks_to_file(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """파일 저장은 이 노드의 권한이 아니다 · 거부를 응답한다."""
+        response = {
+            'success': False,
+            'message': '파일 저장은 motion_mapping_manager만 수행할 수 있습니다',
+        }
+        return response
+
+    def _cmd_apply_banks(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """파일 또는 페이로드의 뱅크 상태를 적용한다."""
+        self._select_project_mapping_dir(payload)
+        mapping_file = self._requested_mapping_file(payload)
+        stored_banks = payload.get('midi_banks')
+        if stored_banks is None:
+            stored_banks = load_midi_banks(mapping_file)
+        if stored_banks is None:
+            raise ValueError('모션축 설정 파일에 저장된 midi_banks가 없습니다')
+        with self._lock:
+            previous_bank_state = self._banks.snapshot()
+            self._axis_registry = MotionAxisRegistry(self._mappings_dir)
+            self._axis_registry.refresh(
+                mapping_file.name, self._latest_motion_state
+            )
+            self._selected_mapping_file_id = mapping_file.name
+            self._preferred_mapping_file_id = mapping_file.name
+            self._banks.replace_state(stored_banks)
+            self._bank_config_file = mapping_file
+            reset_select = self._finish_bank_settings_change_locked(previous_bank_state)
+            self._bank_file_loaded = True
+            self._bank_file_dirty = False
+        response = self._snapshot()
+        response['select_reset'] = reset_select
+        response['message'] = (
+            '파일의 MIDI 뱅크 적용 완료 · SELECT 전체 해제 · 페이더 0 이동'
+            if reset_select else
+            '파일의 MIDI 필터 설정 적용 완료 · SELECT 상태 유지'
+        )
+        return response
+
+    def _cmd_reset_runtime_values(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """실시간 값만 초기화한다 · 저장 파일은 그대로다."""
+        with self._lock:
+            self._reset_live_values_locked()
+        response = self._snapshot()
+        response['message'] = 'MIDI 실시간 값 초기화 완료 · 저장 파일은 변경하지 않았습니다'
+        return response
+
+    def _cmd_resync_selected_faders(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """SELECT된 페이더를 물리 위치와 다시 맞춘다."""
+        with self._lock:
+            sync_result = self._resync_controlled_faders_locked()
+        response = self._snapshot()
+        response.update(sync_result)
+        response['success'] = not sync_result['errors']
+        response['message'] = (
+            f'SELECT 페이더 {len(sync_result["synced"])}개 재동기화 시작'
+            if not sync_result['errors']
+            else '일부 SELECT 페이더 재동기화 실패'
+        )
+        return response
+
+    def _cmd_studio_recording_prepare(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """녹화 전 모든 페이더를 물리 0으로 보낸다."""
+        with self._lock:
+            prepare_result = self._prepare_studio_recording_locked()
+        response = self._snapshot()
+        response.update(prepare_result)
+        response['success'] = not prepare_result['errors']
+        response['message'] = (
+            (
+                '모든 SELECT 해제 · SELECT 잠금 · 모든 페이더 물리 0 이동 시작'
+                + (
+                    f' · 범위 불일치 연동 채널 '
+                    f'{len(prepare_result["unavailable_channels"])}개 선택 불가'
+                    if prepare_result['unavailable_channels'] else ''
+                )
+            )
+            if not prepare_result['errors']
+            else prepare_result['errors'][0]
+        )
+        return response
+
+    def _cmd_studio_recording_zero_status(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """페이더 0 복귀 상태를 조회한다."""
+        with self._lock:
+            zero_status = self._studio_recording_zero_status_locked()
+        response = self._snapshot()
+        response.update(zero_status)
+        response['success'] = True
+        if not zero_status['device_connected']:
+            response['message'] = 'MIDI 장치가 연결되지 않았습니다'
+        elif zero_status['ready']:
+            response['message'] = '모든 MIDI 페이더의 물리 0 복귀 확인 완료'
+        else:
+            channels = ', '.join(
+                f'{item["channel"]}(raw {item["raw"]})'
+                for item in zero_status['pending_channels']
+            )
+            response['message'] = f'MIDI 페이더 0 복귀 대기: 채널 {channels}'
+        return response
+
+    def _cmd_studio_recording_ready(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """SELECT 잠금을 풀어 녹화 축 선택을 허용한다."""
+        with self._lock:
+            self._finish_studio_recording_initialization_locked()
+        response = self._snapshot()
+        response['message'] = 'MIDI SELECT 잠금 해제 · 녹화할 축을 선택하세요'
+        return response
+
+    def _cmd_connect_device(self, payload: Dict[str, Any], command: str) -> Dict[str, Any]:
+        """MIDI 장치 연결·해제를 요청한다."""
+        with self._lock:
+            self._reset_runtime_controls_locked()
+            self._pending_fader_positions = [None] * MIDI_CHANNEL_COUNT
+            self._pending_fader_input_generations = list(
+                self._fader_input_generation
+            )
+        connection_command = String()
+        connection_command.data = (
+            'connect' if command == 'connect_device' else 'disconnect'
+        )
+        self._connection_command_publisher.publish(connection_command)
+        response = self._snapshot()
+        response['message'] = (
+            'MIDI 연결 요청을 전송했습니다'
+            if command == 'connect_device'
+            else 'MIDI 연결 해제 요청을 전송했습니다'
+        )
+        return response
+
+    def _cmd_status(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """현재 상태를 돌려준다."""
+        response = self._snapshot()
+        return response
     def _request_callback(self, msg: String) -> None:
         request = command_router.parse_request(msg.data, default_command='status')
         if request is None:
             return
         command = request.command
-        payload = request.payload
         response: Dict[str, Any]
         try:
-            self._validate_request_generation(command, request.generation, payload)
-            if command == 'select_project':
-                previous_project_id = self._project_id
-                self._select_project_mapping_dir(payload)
-                preferred = str(payload.get('mapping_file_id') or '').strip()
-                registry = MotionAxisRegistry(self._mappings_dir)
-                # A newly selected project must never resolve its axes against
-                # feedback cached from the previously running project.
-                registry.refresh(preferred, {})
-                mapping_file = self._mapping_file_path_or_none(registry.file_id)
-                stored_banks = load_midi_banks(mapping_file) if mapping_file else None
-                context_id = str(payload.get('context_id') or '').strip()
-                expected_mapping_sha = str(payload.get('mapping_sha256') or '').strip()
-                actual_mapping_sha = (
-                    hashlib.sha256(mapping_file.read_bytes()).hexdigest()
-                    if mapping_file is not None else ''
+            self._validate_request_generation(command, request.generation, request.payload)
+            handler = self._command_router().resolve(command)
+            if handler is None:
+                response = command_router.error_response(
+                    f'unsupported command: {command}'
                 )
-                if expected_mapping_sha and actual_mapping_sha != expected_mapping_sha:
-                    raise ValueError('모션축 설정 파일 버전이 실행 컨텍스트와 다릅니다')
-                incoming_banks = MidiBankManager()
-                if stored_banks is not None:
-                    incoming_banks.replace_state(stored_banks)
-                with self._lock:
-                    same_context = (
-                        previous_project_id == self._project_id
-                        and self._selected_mapping_file_id == registry.file_id
-                        and self._banks.export_state() == incoming_banks.export_state()
-                        and self._execution_context.get('context_id') == context_id
-                    )
-                    self._axis_registry = registry
-                    self._selected_mapping_file_id = registry.file_id
-                    self._preferred_mapping_file_id = registry.file_id
-                    self._bank_config_file = mapping_file
-                    if not same_context:
-                        self._banks = incoming_banks
-                        self._current_motion_values = {}
-                        self._reset_bank_change_state_locked()
-                        self._motion_run_state = 'idle'
-                        self._motion_run_request_source = ''
-                        self._motion_studio_state = 'idle'
-                        self._playback_phase = 'idle'
-                        self._execution_context_ready = False
-                    self._execution_context = {
-                        'context_id': context_id,
-                        'project_id': self._project_id,
-                        'project_generation': int(payload.get('project_generation') or 0),
-                        'mapping_file_id': registry.file_id,
-                        'mapping_sha256': actual_mapping_sha,
-                    }
-                    self._bank_file_loaded = stored_banks is not None
-                    self._bank_file_dirty = False
-                response = self._snapshot()
-                # The project coordinator validates every node with the same
-                # top-level acknowledgement contract.  `_snapshot()` keeps
-                # these values nested for the UI, so expose them here as well.
-                response.update({
-                    'context_id': context_id,
-                    'project_id': self._project_id,
-                    'mapping_file_id': registry.file_id,
-                    'mapping_sha256': actual_mapping_sha,
-                })
-                response['context_changed'] = not same_context
-                response['message'] = (
-                    '현재 프로젝트 MIDI·모션축 컨텍스트로 전환했습니다'
-                    if not same_context else
-                    '현재 프로젝트 MIDI·모션축 컨텍스트가 이미 적용되어 있습니다'
-                )
-            elif command == 'confirm_context':
-                context_id = str(payload.get('context_id') or '').strip()
-                with self._lock:
-                    if (
-                        not context_id
-                        or context_id != self._execution_context.get('context_id')
-                    ):
-                        raise ValueError('확인하려는 실행 컨텍스트가 적용된 설정과 다릅니다')
-                    self._execution_context_ready = True
-                response = self._snapshot()
-                response.update({
-                    'context_id': context_id,
-                    'project_id': self._project_id,
-                    'mapping_file_id': self._execution_context.get('mapping_file_id', ''),
-                    'mapping_sha256': self._execution_context.get('mapping_sha256', ''),
-                })
-                response['message'] = '현재 프로젝트 MIDI 제어 허용'
-            elif command == 'invalidate_context':
-                with self._lock:
-                    self._project_id = ''
-                    self._mappings_dir = self._motion_projects_dir
-                    self._axis_registry = MotionAxisRegistry(self._motion_projects_dir)
-                    self._selected_mapping_file_id = ''
-                    self._preferred_mapping_file_id = ''
-                    self._run_mapping_file_id = ''
-                    self._latest_motion_state = {}
-                    self._bank_config_file = None
-                    self._banks = MidiBankManager()
-                    self._execution_context = {}
-                    self._execution_context_ready = False
-                    self._bank_file_loaded = False
-                    self._bank_file_dirty = False
-                    self._current_motion_values = {}
-                    self._reset_bank_change_state_locked()
-                response = self._snapshot()
-                response.update({
-                    'project_id': '',
-                    'context_id': '',
-                    'message': 'MIDI 프로젝트 매핑·뱅크 메모리 폐기',
-                })
-            elif command in {'save_mapping', 'update_bank'}:
-                bank_id = payload.get('bank_id') or self._banks.snapshot()['active_bank_id']
-                with self._lock:
-                    previous_bank_state = self._banks.snapshot()
-                    self._banks.update_bank(
-                        bank_id,
-                        name=payload.get('name'),
-                        mappings=payload.get('mappings'),
-                    )
-                    reset_select = self._finish_bank_settings_change_locked(previous_bank_state)
-                    self._bank_file_dirty = True
-                response = self._snapshot()
-                response['select_reset'] = reset_select
-                response['message'] = (
-                    'MIDI 뱅크 설정 임시 적용 · SELECT 전체 해제 · 페이더 0 이동'
-                    if reset_select else
-                    'MIDI 필터 설정 임시 적용 · SELECT 상태 유지'
-                )
-            elif command == 'create_bank':
-                with self._lock:
-                    bank = self._banks.create_bank(payload.get('name'), copy_from_active=True)
-                    self._banks.select_bank(bank['bank_id'])
-                    self._reset_bank_change_state_locked()
-                    self._bank_file_dirty = True
-                response = self._snapshot()
-                response['message'] = (
-                    'MIDI 뱅크 추가 완료 (메모리 전용) · SELECT 전체 해제 · 페이더 0 이동'
-                )
-            elif command == 'select_bank':
-                with self._lock:
-                    self._banks.select_bank(payload.get('bank_id'))
-                    self._reset_bank_change_state_locked()
-                    self._bank_file_dirty = True
-                response = self._snapshot()
-                response['message'] = 'MIDI 뱅크 전환 완료 · SELECT 전체 해제 · 페이더 0 이동'
-            elif command == 'delete_bank':
-                with self._lock:
-                    self._banks.delete_bank(payload.get('bank_id'))
-                    self._reset_bank_change_state_locked()
-                    self._bank_file_dirty = True
-                response = self._snapshot()
-                response['message'] = 'MIDI 뱅크 삭제 완료 · SELECT 전체 해제 · 페이더 0 이동'
-            elif command == 'save_banks_to_file':
-                response = {
-                    'success': False,
-                    'message': '파일 저장은 motion_mapping_manager만 수행할 수 있습니다',
-                }
-            elif command in {'apply_banks', 'load_banks_from_file'}:
-                self._select_project_mapping_dir(payload)
-                mapping_file = self._requested_mapping_file(payload)
-                stored_banks = payload.get('midi_banks')
-                if stored_banks is None:
-                    stored_banks = load_midi_banks(mapping_file)
-                if stored_banks is None:
-                    raise ValueError('모션축 설정 파일에 저장된 midi_banks가 없습니다')
-                with self._lock:
-                    previous_bank_state = self._banks.snapshot()
-                    self._axis_registry = MotionAxisRegistry(self._mappings_dir)
-                    self._axis_registry.refresh(
-                        mapping_file.name, self._latest_motion_state
-                    )
-                    self._selected_mapping_file_id = mapping_file.name
-                    self._preferred_mapping_file_id = mapping_file.name
-                    self._banks.replace_state(stored_banks)
-                    self._bank_config_file = mapping_file
-                    reset_select = self._finish_bank_settings_change_locked(previous_bank_state)
-                    self._bank_file_loaded = True
-                    self._bank_file_dirty = False
-                response = self._snapshot()
-                response['select_reset'] = reset_select
-                response['message'] = (
-                    '파일의 MIDI 뱅크 적용 완료 · SELECT 전체 해제 · 페이더 0 이동'
-                    if reset_select else
-                    '파일의 MIDI 필터 설정 적용 완료 · SELECT 상태 유지'
-                )
-            elif command == 'reset_runtime_values':
-                with self._lock:
-                    self._reset_live_values_locked()
-                response = self._snapshot()
-                response['message'] = 'MIDI 실시간 값 초기화 완료 · 저장 파일은 변경하지 않았습니다'
-            elif command == 'resync_selected_faders':
-                with self._lock:
-                    sync_result = self._resync_controlled_faders_locked()
-                response = self._snapshot()
-                response.update(sync_result)
-                response['success'] = not sync_result['errors']
-                response['message'] = (
-                    f'SELECT 페이더 {len(sync_result["synced"])}개 재동기화 시작'
-                    if not sync_result['errors']
-                    else '일부 SELECT 페이더 재동기화 실패'
-                )
-            elif command == 'studio_recording_prepare':
-                with self._lock:
-                    prepare_result = self._prepare_studio_recording_locked()
-                response = self._snapshot()
-                response.update(prepare_result)
-                response['success'] = not prepare_result['errors']
-                response['message'] = (
-                    (
-                        '모든 SELECT 해제 · SELECT 잠금 · 모든 페이더 물리 0 이동 시작'
-                        + (
-                            f' · 범위 불일치 연동 채널 '
-                            f'{len(prepare_result["unavailable_channels"])}개 선택 불가'
-                            if prepare_result['unavailable_channels'] else ''
-                        )
-                    )
-                    if not prepare_result['errors']
-                    else prepare_result['errors'][0]
-                )
-            elif command == 'studio_recording_zero_status':
-                with self._lock:
-                    zero_status = self._studio_recording_zero_status_locked()
-                response = self._snapshot()
-                response.update(zero_status)
-                response['success'] = True
-                if not zero_status['device_connected']:
-                    response['message'] = 'MIDI 장치가 연결되지 않았습니다'
-                elif zero_status['ready']:
-                    response['message'] = '모든 MIDI 페이더의 물리 0 복귀 확인 완료'
-                else:
-                    channels = ', '.join(
-                        f'{item["channel"]}(raw {item["raw"]})'
-                        for item in zero_status['pending_channels']
-                    )
-                    response['message'] = f'MIDI 페이더 0 복귀 대기: 채널 {channels}'
-            elif command == 'studio_recording_ready':
-                with self._lock:
-                    self._finish_studio_recording_initialization_locked()
-                response = self._snapshot()
-                response['message'] = 'MIDI SELECT 잠금 해제 · 녹화할 축을 선택하세요'
-            elif command in {'connect_device', 'disconnect_device'}:
-                with self._lock:
-                    self._reset_runtime_controls_locked()
-                    self._pending_fader_positions = [None] * MIDI_CHANNEL_COUNT
-                    self._pending_fader_input_generations = list(
-                        self._fader_input_generation
-                    )
-                connection_command = String()
-                connection_command.data = (
-                    'connect' if command == 'connect_device' else 'disconnect'
-                )
-                self._connection_command_publisher.publish(connection_command)
-                response = self._snapshot()
-                response['message'] = (
-                    'MIDI 연결 요청을 전송했습니다'
-                    if command == 'connect_device'
-                    else 'MIDI 연결 해제 요청을 전송했습니다'
-                )
-            elif command == 'status':
-                response = self._snapshot()
             else:
-                response = {
-                    'success': False,
-                    'message': f'unsupported command: {command}',
-                }
+                response = handler(request.payload)
         except ValueError as exc:
             response = command_router.error_response(exc)
         self._publish_json(

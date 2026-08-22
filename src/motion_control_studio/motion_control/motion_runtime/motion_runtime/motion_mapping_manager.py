@@ -55,7 +55,6 @@ class MotionMappingManager(Node):
             ).value
         )
 
-        self._router = self._build_router()
         self._response_publisher = self.create_publisher(String, self.response_topic, 10)
         self._request_subscription = self.create_subscription(
             String,
@@ -71,6 +70,18 @@ class MotionMappingManager(Node):
 
     #: 프로젝트를 고르지 않고 처리하는 명령 · 컨텍스트를 버리는 중이라 고를 대상이 없다
     COMMANDS_WITHOUT_PROJECT = frozenset({'invalidate_context'})
+
+    def _command_router(self) -> command_router.CommandRouter:
+        """처리기 표 · 처음 쓸 때 만든다.
+
+        노드를 띄우지 않고 (`__new__`) 콜백만 검증하는 테스트에서도 동작하도록
+        `__init__`에 의존하지 않는다.
+        """
+        router = getattr(self, '_router', None)
+        if router is None:
+            router = self._build_router()
+            self._router = router
+        return router
 
     def _build_router(self) -> command_router.CommandRouter:
         """명령 → 처리기 표 · 처리기는 payload를 받아 응답 dict를 돌려준다."""
@@ -114,7 +125,7 @@ class MotionMappingManager(Node):
             self._validate_request_generation(command, request.generation, payload)
             if command not in self.COMMANDS_WITHOUT_PROJECT:
                 self._select_project(payload)
-            handler = self._router.resolve(command)
+            handler = self._command_router().resolve(command)
             if handler is None:
                 response = command_router.error_response(
                     f'unknown mapping command: {command}'
