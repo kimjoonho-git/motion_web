@@ -119,6 +119,20 @@ def test_read_json_distinguishes_null_from_missing(tmp_path):
 # 파일락
 # --------------------------------------------------------------------------- #
 
+def test_lock_falls_back_to_no_locking_without_fcntl(tmp_path, monkeypatch):
+    """Windows에는 fcntl이 없다 · 잠금 없이 진행하되 기록은 원자적이어야 한다.
+
+    실제 운용은 Linux이고 Windows는 코드 편집·단위 테스트 용도다.
+    """
+    monkeypatch.setattr(store, 'fcntl', None)
+    target = tmp_path / 'f.json'
+    with store.locked_update(target):
+        store.atomic_write_json(target, [1, 2])
+    assert store.read_json(target) == [1, 2]
+    # 락 파일을 만들지 않는다
+    assert not store.lock_path_for(target).exists()
+
+
 def test_lock_path_follows_existing_convention(tmp_path):
     assert store.lock_path_for(tmp_path / 'schedule_store.json').name == (
         'schedule_store.json.lock'

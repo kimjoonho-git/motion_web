@@ -15,7 +15,6 @@
 
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import tempfile
@@ -35,6 +34,14 @@ __all__ = [
     'read_text',
     'update_json',
 ]
+
+#: 프로세스 간 락은 POSIX 전용이다. Windows에서는 잠금 없이 진행하며,
+#: 기록 자체는 원자적이므로 읽는 쪽이 깨진 내용을 보는 일은 없다.
+#: 실제 운용은 Linux이고 Windows는 코드 편집·단위 테스트 용도다.
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None
 
 LOCK_SUFFIX = '.lock'
 
@@ -160,6 +167,10 @@ def file_lock(path: PathLike, *, exclusive: bool = True) -> Iterator[None]:
     락 파일을 만들지 못하는 환경(읽기 전용 디렉터리 등)에서는 잠금 없이 진행한다 ·
     기록 자체는 원자적이므로 읽는 쪽이 깨진 내용을 보는 일은 없다.
     """
+    if fcntl is None:
+        yield
+        return
+
     lock_file = lock_path_for(path)
     try:
         lock_file.parent.mkdir(parents=True, exist_ok=True)
