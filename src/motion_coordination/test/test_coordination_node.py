@@ -50,12 +50,18 @@ def _node():
         prepare_timeout_sec=6.0,
         trigger_report_timeout_sec=1.0,
         configured=True,
+        is_master=True,
+        auto_play=False,
+        required_peers=(),
     )
     node._seen_commands = {}
     node._cancelled_execution_ids = set()
     node._sequence = 0
     node._joined = False
     node._boot_id = 'boot-a'
+    node._git_branch = 'main'
+    node._git_hash = ''
+    node._git_message = ''
     import threading
     node._lock = threading.RLock()
     node._execution = GroupExecution()
@@ -473,8 +479,15 @@ def test_alarm_on_execution_member_blocks_next_cycle():
     node._execution.participants = ('pc-a', 'pc-b')
     node._registry = MemberRegistry(warning_timeout_sec=1.5, timeout_sec=3.0)
     node._registry.update(Member(
-        'pc-b', 'boot-b', True, 'ready', 'idle', 0.0, 2,
-        time.monotonic(),
+        pc_id='pc-b',
+        boot_id='boot-b',
+        joined=True,
+        is_master=False,
+        state='ready',
+        trigger_sync_state='idle',
+        trigger_sync_uncertainty_ms=0.0,
+        alarm_grade=2,
+        received_monotonic=time.monotonic(),
     ))
     assert node._execution_unhealthy_members() == ['pc-b']
 
@@ -523,8 +536,15 @@ def test_peer_timeout_stops_local_then_broadcasts_before_clearing_roster():
     node = _node()
     node._registry = MemberRegistry(warning_timeout_sec=0.1, timeout_sec=0.2)
     node._registry.update(Member(
-        'pc-b', 'boot-b', True, 'running', 'ready', 1.0, 0,
-        time.monotonic() - 1.0,
+        pc_id='pc-b',
+        boot_id='boot-b',
+        joined=True,
+        is_master=False,
+        state='running',
+        trigger_sync_state='ready',
+        trigger_sync_uncertainty_ms=1.0,
+        alarm_grade=0,
+        received_monotonic=time.monotonic() - 1.0,
     ))
     node._execution = GroupExecution()
     node._execution.begin('pc-a', ('pc-a', 'pc-b'))
@@ -617,8 +637,16 @@ def test_warning_joined_member_is_visible_and_blocks_partial_group_start():
     node._execution = GroupExecution()
     node._registry = MemberRegistry(warning_timeout_sec=0.1, timeout_sec=3.0)
     node._registry.update(Member(
-        'pc-b', 'boot-b', True, 'ready', 'idle', 0.0, 0,
-        time.monotonic() - 0.2, 1, 'PC B',
+        pc_id='pc-b',
+        boot_id='boot-b',
+        joined=True,
+        is_master=False,
+        state='ready',
+        trigger_sync_state='idle',
+        trigger_sync_uncertainty_ms=0.0,
+        alarm_grade=0,
+        received_monotonic=time.monotonic() - 0.2,
+        sequence=1,
     ))
 
     snapshot = node.snapshot()
@@ -693,8 +721,16 @@ def test_winning_simultaneous_claim_cancels_and_resets_losing_coordinator():
         'pc-b', ('pc-a', 'pc-b')
     )
     node._registry.update(Member(
-        'pc-b', 'boot-b', True, 'ready', 'idle', 0.0, 0,
-        time.monotonic(), 1,
+        pc_id='pc-b',
+        boot_id='boot-b',
+        joined=True,
+        is_master=False,
+        state='ready',
+        trigger_sync_state='idle',
+        trigger_sync_uncertainty_ms=0.0,
+        alarm_grade=0,
+        received_monotonic=time.monotonic(),
+        sequence=1,
     ))
     node._execution.pending_command = 'prepare'
     node._execution.pending_command_id = 'old-command'
@@ -738,12 +774,28 @@ def test_execution_claim_defaults_missing_target_cycle_count():
 def test_execution_claim_rejects_different_local_joined_roster():
     node = _node()
     node._registry.update(Member(
-        'pc-b', 'boot-b', True, 'ready', 'idle', 0.0, 0,
-        time.monotonic(), 1,
+        pc_id='pc-b',
+        boot_id='boot-b',
+        joined=True,
+        is_master=False,
+        state='ready',
+        trigger_sync_state='idle',
+        trigger_sync_uncertainty_ms=0.0,
+        alarm_grade=0,
+        received_monotonic=time.monotonic(),
+        sequence=1,
     ))
     node._registry.update(Member(
-        'pc-c', 'boot-c', True, 'ready', 'idle', 0.0, 0,
-        time.monotonic(), 1,
+        pc_id='pc-c',
+        boot_id='boot-c',
+        joined=True,
+        is_master=False,
+        state='ready',
+        trigger_sync_state='idle',
+        trigger_sync_uncertainty_ms=0.0,
+        alarm_grade=0,
+        received_monotonic=time.monotonic(),
+        sequence=1,
     ))
     command = GroupCommand(
         group_id='stage-a', execution_id='exec-a', coordinator_id='pc-a',
@@ -812,8 +864,16 @@ def test_remote_alarm_only_updates_status_without_motion_control():
 def test_alarm_callback_ignores_duplicate_older_and_previous_boot_messages():
     node = _node()
     node._registry.update(Member(
-        'pc-b', 'boot-b', True, 'ready', 'idle', 0.0, 0,
-        time.monotonic(), 1,
+        pc_id='pc-b',
+        boot_id='boot-b',
+        joined=True,
+        is_master=False,
+        state='ready',
+        trigger_sync_state='idle',
+        trigger_sync_uncertainty_ms=0.0,
+        alarm_grade=0,
+        received_monotonic=time.monotonic(),
+        sequence=1,
     ))
     active = GroupAlarm(
         group_id='stage-a', pc_id='pc-b', boot_id='boot-b',

@@ -59,9 +59,26 @@ def test_initialize_trigger_spread_uses_software_trigger_timestamps():
     assert execution.initialize_within_tolerance() is False
 
 
+def _member(**overrides) -> Member:
+    """필드가 추가돼도 깨지지 않도록 키워드로만 만든다."""
+    values = dict(
+        pc_id='a',
+        boot_id='boot',
+        joined=True,
+        is_master=False,
+        state='ready',
+        trigger_sync_state='ready',
+        trigger_sync_uncertainty_ms=1.0,
+        alarm_grade=0,
+        received_monotonic=10.0,
+    )
+    values.update(overrides)
+    return Member(**values)
+
+
 def test_member_registry_warns_then_expires():
     registry = MemberRegistry(warning_timeout_sec=1.5, timeout_sec=3.0)
-    registry.update(Member('a', 'boot', True, 'ready', 'ready', 1.0, 0, 10.0))
+    registry.update(_member(received_monotonic=10.0))
     assert registry.status('a', now=11.0) == 'online'
     assert registry.status('a', now=12.0) == 'warning'
     assert registry.status('a', now=13.0) == 'offline'
@@ -69,10 +86,10 @@ def test_member_registry_warns_then_expires():
 
 def test_member_registry_ignores_duplicate_or_older_heartbeat_sequence():
     registry = MemberRegistry()
-    registry.update(Member('a', 'boot', True, 'ready', 'ready', 1.0, 0, 10.0, 5))
-    registry.update(Member('a', 'boot', True, 'error', 'ready', 1.0, 2, 11.0, 4))
+    registry.update(_member(state='ready', received_monotonic=10.0, sequence=5))
+    registry.update(_member(state='error', alarm_grade=2, received_monotonic=11.0, sequence=4))
     assert registry.member('a').state == 'ready'
-    registry.update(Member('a', 'boot', True, 'running', 'ready', 1.0, 0, 12.0, 6))
+    registry.update(_member(state='running', received_monotonic=12.0, sequence=6))
     assert registry.member('a').state == 'running'
 
 

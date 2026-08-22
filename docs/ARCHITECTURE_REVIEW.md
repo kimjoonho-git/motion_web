@@ -11,9 +11,9 @@
 | 항목 | 수치 |
 |---|---|
 | Python 소스(테스트 제외) | 약 39,600줄 · 자체 패키지 9개 |
-| 테스트 | 68파일 · 20,171줄 |
+| 테스트 | 922건 통과 · 실패 0 (2026-08-22) |
 | 프런트엔드 | 32,595줄 (CSS 7,415 · JS 약 24,000 · `index.html` 1,993) |
-| 100줄 초과 함수 | 56개 (50줄 초과 160개 / 총 1,478개) |
+| 100줄 초과 함수 | 56개 (60줄 초과 126개 / 총 1,463개) · `scripts/code_metrics.py` |
 | 최장 파일 | `bridge_node.py` 7,520 · `motion_run_manager.py` 3,692 · `midi_control_node.py` 3,276 · `monitor_node.py` 2,752 · `supervisor_node.py` 2,486 · `coordination_node.py` 2,370 · `project_repository.py` 2,098 |
 | 최장 함수 | `_midi_callback` 475줄 · `_build_plan` 421 · `_snapshot` 400 · `MotionWebBridge.__init__` 380 · `_scan_ethercat_slaves` 360 |
 | 사설 RPC | `std_msgs/String` + JSON pub/sub 22 · `json.dumps` 137회 · ROS srv 4개 · action 0개 |
@@ -123,7 +123,7 @@ motion_system(C++)  모터 단일 통로                 유지 · 스캐너만 
 
 | 단계 | 작업 | 위험 | 검증 |
 |---|---|---|---|
-| 0 | ruff/flake8 + pytest 워크스페이스 설정 · 함수길이 지표 기록 | 없음 | **부분 완료** · ruff 기준선 56건 · pytest 설정·지표 미착수 |
+| 0 | ruff/flake8 + pytest 워크스페이스 설정 · 함수길이 지표 기록 | 없음 | **완료** · ruff 56건 · `pytest.ini` · `scripts/code_metrics.py` · 선재 실패 0 |
 | 1 | `motion_common` 신설 · 순수 함수 이관(파서·값·경로) | 최저 | **완료** · 목표 6모듈 전부 · 911테스트 통과 |
 | 2 | `RequestChannel` 단일화 · 5곳 교체 · 토픽명·페이로드 형식 유지 | 낮음 | **완료** · `rpc.ResultStore` 4곳 · 전송 계약 불변 · 실물 미검증 |
 | 3 | 토픽 상수 단일화 · `motor_command_topic` 명칭 정정 | 낮음 | **완료** · `topics.py` 27종 · 리터럴 잔여 0 · launch 7개 로드 확인 |
