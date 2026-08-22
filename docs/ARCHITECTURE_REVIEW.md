@@ -14,7 +14,7 @@
 | 테스트 | 922건 통과 · 실패 0 (2026-08-22) |
 | 프런트엔드 | 32,595줄 (CSS 7,415 · JS 약 24,000 · `index.html` 1,993) |
 | 100줄 초과 함수 | 56개 (60줄 초과 126개 / 총 1,463개) · `scripts/code_metrics.py` |
-| 최장 파일 | `bridge_node.py` 7,520 · `motion_run_manager.py` 3,692 · `midi_control_node.py` 3,276 · `monitor_node.py` 2,752 · `supervisor_node.py` 2,486 · `coordination_node.py` 2,370 · `project_repository.py` 2,098 |
+| 최장 파일 | `bridge_node.py` 6,300 · `motion_run_manager.py` 3,692 · `midi_control_node.py` 3,276 · `monitor_node.py` 2,752 · `supervisor_node.py` 2,486 · `coordination_node.py` 2,370 · `project_repository.py` 2,098 |
 | 최장 함수 | `_midi_callback` 475줄 · `_build_plan` 421 · `_snapshot` 400 · `MotionWebBridge.__init__` 380 · `_scan_ethercat_slaves` 360 |
 | 사설 RPC | `std_msgs/String` + JSON pub/sub 22 · `json.dumps` 137회 · ROS srv 4개 · action 0개 |
 | 영속 계층 | 파일 기록 모듈 8개 · atomic write `motion_common/store.py` 단일화(§6-5) |
@@ -127,7 +127,7 @@ motion_system(C++)  모터 단일 통로                 유지 · 스캐너만 
 | 1 | `motion_common` 신설 · 순수 함수 이관(파서·값·경로) | 최저 | **완료** · 목표 6모듈 전부 · 911테스트 통과 |
 | 2 | `RequestChannel` 단일화 · 5곳 교체 · 토픽명·페이로드 형식 유지 | 낮음 | **완료** · `rpc.ResultStore` 4곳 · 전송 계약 불변 · 실물 미검증 |
 | 3 | 토픽 상수 단일화 · `motor_command_topic` 명칭 정정 | 낮음 | **완료** · `topics.py` 27종 · 리터럴 잔여 0 · launch 7개 로드 확인 |
-| 4 | `bridge_node` 7,692줄 분해 · 서비스 6개(각 300~600줄) | 중간 | 엔드포인트 107개 회귀 |
+| 4 | `bridge_node` 분해 · 서비스 6개 | 중간 | **진행 중** · 순수 함수 -1,107줄(§6-9) · 상태 동반 이동 미착수 |
 | 5 | 영속 계층 통합 · 단일 저장 API + 파일락 · 다중 writer 제거 | 중간 | **부분 완료** · `store.py` 5종 통합 · 2개 프로젝트 격리 미검증 |
 | 6 | 장기작업 Action 전환 · 스캔·초기화·모션 실행 | 중간 | 진행률·취소 실물 검증 |
 | 7 | 프런트엔드 빌드 도입(해시 파일명) · CSS·HTML 분할 | 중간 | 브라우저 캐시 확인 |
@@ -364,7 +364,7 @@ motion_system(C++)  모터 단일 통로                 유지 · 스캐너만 
 | §4 `motion_common` 6모듈 | 2/6 · `motion_table.py` · `paths.py` 생성 · `rpc.py` · `topics.py` · `values.py` · `store.py` 미생성 |
 | §7 규칙 4 · 경계는 `motion_common` | 경계 패키지 실체 확보 · 규칙 적용은 신규 코드부터 |
 
-### 6-9. `bridge_node` 분해 준비 · 상태·락 의존 지도
+### 6-8. `bridge_node` 분해 준비 · 상태·락 의존 지도
 
 측정 · 2026-08-22 · AST 기반 · 호출을 타고 간 전이 의존 포함
 
@@ -392,6 +392,39 @@ motion_system(C++)  모터 단일 통로                 유지 · 스캐너만 
 
 분해 순서 · 상태 무의존 → 상태만 → 락 관여. 문서 §5 4단계의 서비스 6분할은
 도메인 기준이었으나, 측정 결과 **위험도 기준으로 나누는 편이 안전하다.**
+
+### 6-9. `bridge_node` 순수 함수 추출 · 3차까지
+
+`MotionWebBridge` 7,407 → 6,300줄 (-1,107 · 15%) · 실물 검증 통과 (2026-08-22)
+
+| 차수 | 대상 | 감소 |
+|---|---|---|
+| 1 | `motor_config_rules` · 모터 설정·스캔 판정 13함수 | -643 |
+| 2 | `motion_file_analysis` · 모션 파일 해석 8함수 · 죽은 껍데기 10개 | -301 |
+| 3 | 값 변환 껍데기 3개 · 저장소 인자화 5함수 | -163 |
+
+위임 껍데기를 남기지 않고 호출 지점을 전부 갱신했다. 순수 모듈은 노드를 모르므로
+의존 방향이 한쪽이며, `test_pure_modules.py`가 이 성질을 지킨다 · `self` 접근 ·
+동적 `getattr(self, ...)` · `bridge_node` import를 모두 막는다.
+
+저장소가 필요한 함수는 `self.project_repository` 대신 첫 인자로 받는다. 콜러블로
+넘기던 두 곳은 `functools.partial`로 저장소를 묶었다.
+
+부수로 정리한 것:
+
+- 파서 통합 때 남긴 죽은 껍데기 7개 · 호출 지점 0곳이었다
+- `_optional_int`(65곳) `_optional_float`(9곳) 위임 제거 · 호출부가 `motion_common.values`를 직접 부른다
+- 제어 주기 20ms 4중 정의 → `motion_common/timing.py`
+
+분석 정정 · 동적 `getattr`까지 반영하니 순수 메서드가 65 → 41개였다. AST가
+문자열 기반 접근을 못 본 탓이며, 추출 도중 `getattr(self, '_motion_state')`를
+쓰는 메서드가 순수로 잘못 분류된 것을 발견해 제외했다.
+
+순수 함수 추출은 여기까지가 실질적 한계다. 남은 순수 메서드 약 130줄은 3~5줄짜리
+저장소 위임이라 모듈로 빼면 오히려 껍데기가 는다.
+
+다음 · 상태 동반 이동 89메서드 1,826줄 · 상태를 서비스 객체로 옮기고 노드가
+그 객체를 갖는 구조로 바꿔야 하므로 지금까지와 성격이 다르다.
 
 ### 6-10. 같은 절 안에서 손대지 않은 범위
 

@@ -1,0 +1,163 @@
+{
+  "total_files": 108,
+  "total_lines": 38630,
+  "total_functions": 1488,
+  "files_over_limit": 7,
+  "functions_over_limit": 124,
+  "functions_over_100": 54,
+  "node_classes_over_limit": 8,
+  "worst_files": [
+    {
+      "path": "src/motion_web/web_bridge/motion_web_bridge/bridge_node.py",
+      "lines": 6300
+    },
+    {
+      "path": "src/motion_control_studio/motion_control/motion_runtime/motion_runtime/motion_run_manager.py",
+      "lines": 3693
+    },
+    {
+      "path": "src/motion_control_studio/motion_control/midi_control/midi_control/midi_control_node.py",
+      "lines": 3354
+    },
+    {
+      "path": "src/motion_control_studio/motion_control/motion_state_monitor/motion_state_monitor/monitor_node.py",
+      "lines": 2753
+    },
+    {
+      "path": "src/motion_control_studio/motion_control/motion_supervisor/motion_supervisor/supervisor_node.py",
+      "lines": 2481
+    },
+    {
+      "path": "src/motion_coordination/motion_coordination/coordination_node.py",
+      "lines": 2371
+    },
+    {
+      "path": "src/motion_web/web_bridge/motion_web_bridge/project_repository.py",
+      "lines": 2098
+    }
+  ],
+  "worst_functions": [
+    {
+      "path": "src/motion_control_studio/motion_control/midi_control/midi_control/midi_control_node.py",
+      "name": "_midi_callback",
+      "line": 831,
+      "lines": 478
+    },
+    {
+      "path": "src/motion_control_studio/motion_control/motion_runtime/motion_runtime/motion_run_manager.py",
+      "name": "_build_plan",
+      "line": 2388,
+      "lines": 421
+    },
+    {
+      "path": "src/motion_control_studio/motion_control/midi_control/midi_control/midi_control_node.py",
+      "name": "_snapshot",
+      "line": 2202,
+      "lines": 400
+    },
+    {
+      "path": "src/motion_web/web_bridge/motion_web_bridge/bridge_node.py",
+      "name": "__init__",
+      "line": 74,
+      "lines": 380
+    },
+    {
+      "path": "src/motion_control_studio/motion_control/motion_state_monitor/motion_state_monitor/monitor_node.py",
+      "name": "_scan_ethercat_slaves",
+      "line": 1525,
+      "lines": 360
+    },
+    {
+      "path": "src/motion_control_studio/motion_control/midi_control/midi_control/midi_control_node.py",
+      "name": "__init__",
+      "line": 316,
+      "lines": 297
+    },
+    {
+      "path": "src/motion_control_studio/motion_studio/motion_studio/layer_editor.py",
+      "name": "edit_layer",
+      "line": 230,
+      "lines": 265
+    },
+    {
+      "path": "src/motion_web/web_bridge/motion_web_bridge/project_repository.py",
+      "name": "_validate_runtime_motor_profiles",
+      "line": 1261,
+      "lines": 227
+    },
+    {
+      "path": "src/motion_control_studio/motion_control/motion_runtime/motion_runtime/motion_run_manager.py",
+      "name": "_run_motion",
+      "line": 1797,
+      "lines": 222
+    },
+    {
+      "path": "src/motion_control_studio/motion_control/motion_runtime/motion_runtime/motion_run_manager.py",
+      "name": "_prepare_and_run_group",
+      "line": 981,
+      "lines": 192
+    }
+  ],
+  "node_classes": [
+    {
+      "path": "src/motion_web/web_bridge/motion_web_bridge/bridge_node.py",
+      "name": "MotionWebBridge",
+      "lines": 6132,
+      "methods": 200
+    },
+    {
+      "path": "src/motion_control_studio/motion_control/motion_runtime/motion_runtime/motion_run_manager.py",
+      "name": "MotionRunManager",
+      "lines": 3627,
+      "methods": 120
+    },
+    {
+      "path": "src/motion_control_studio/motion_control/midi_control/midi_control/midi_control_node.py",
+      "name": "MidiControlNode",
+      "lines": 3025,
+      "methods": 88
+    },
+    {
+      "path": "src/motion_control_studio/motion_control/motion_state_monitor/motion_state_monitor/monitor_node.py",
+      "name": "MotionStateMonitor",
+      "lines": 2683,
+      "methods": 75
+    },
+    {
+      "path": "src/motion_control_studio/motion_control/motion_supervisor/motion_supervisor/supervisor_node.py",
+      "name": "MotionSupervisor",
+      "lines": 2378,
+      "methods": 72
+    },
+    {
+      "path": "src/motion_coordination/motion_coordination/coordination_node.py",
+      "name": "MotionCoordinationNode",
+      "lines": 2270,
+      "methods": 70
+    },
+    {
+      "path": "src/motion_control_studio/motion_control/motion_runtime/motion_runtime/motion_mapping_manager.py",
+      "name": "MotionMappingManager",
+      "lines": 920,
+      "methods": 36
+    },
+    {
+      "path": "src/motion_control_studio/motion_studio/motion_studio/studio_node.py",
+      "name": "MotionStudioNode",
+      "lines": 578,
+      "methods": 61
+    },
+    {
+      "path": "src/motion_web/motion_schedule/motion_schedule/motion_schedule_node.py",
+      "name": "MotionScheduleNode",
+      "lines": 201,
+      "methods": 9
+    },
+    {
+      "path": "src/motion_control_studio/motion_studio/motion_studio/editor_node.py",
+      "name": "MotionStudioEditorNode",
+      "lines": 125,
+      "methods": 3
+    }
+  ]
+}
