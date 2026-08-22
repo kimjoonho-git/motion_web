@@ -1,4 +1,5 @@
 from motion_web_bridge.bridge_node import MotionWebBridge
+from motion_web_bridge import motor_config_rules
 
 
 def test_shared_driver_profiles_are_cloned_per_ac_and_dynamixel_axis():
@@ -27,7 +28,7 @@ def test_shared_driver_profiles_are_cloned_per_ac_and_dynamixel_axis():
         ],
     }
 
-    expanded = MotionWebBridge._expand_shared_driver_profiles(config)
+    expanded = motor_config_rules.expand_shared_driver_profiles(config)
     slaves = [slave for master in expanded['masters'] for slave in master['slaves']]
     driver_ids = [slave['driver_id'] for slave in slaves]
 
@@ -61,7 +62,7 @@ def test_already_unique_driver_profiles_are_not_duplicated():
         ],
     }
 
-    expanded = MotionWebBridge._expand_shared_driver_profiles(config)
+    expanded = motor_config_rules.expand_shared_driver_profiles(config)
 
     assert expanded == config
 
@@ -226,7 +227,7 @@ def test_ac_identity_metadata_round_trips_in_project_config(tmp_path):
     config = bridge._motor_config_from_registry(
         {'motors': [motor]}, bridge._default_motor_config()
     )
-    restored = bridge._registry_from_motor_config(config)['motors'][0]
+    restored = motor_config_rules.registry_from_motor_config(config)['motors'][0]
 
     assert config['masters'][0]['slaves'][0]['alias'] == 403
     assert config['masters'][0]['slaves'][0]['position'] == 1
@@ -292,7 +293,7 @@ def test_two_ethercat_masters_round_trip_without_merging_slave_positions(tmp_pat
     config = bridge._motor_config_from_registry(
         {'motors': motors}, bridge._default_motor_config()
     )
-    restored = bridge._registry_from_motor_config(config)['motors']
+    restored = motor_config_rules.registry_from_motor_config(config)['motors']
 
     assert [
         (master['ethercat_master_index'], master['number_of_slaves'])
@@ -326,7 +327,7 @@ def test_zero_alias_ac_axes_round_trip_with_unique_slave_ids(tmp_path):
     config = bridge._motor_config_from_registry(
         {'motors': motors}, bridge._default_motor_config()
     )
-    restored = bridge._registry_from_motor_config(config)['motors']
+    restored = motor_config_rules.registry_from_motor_config(config)['motors']
 
     assert [slave['alias'] for slave in config['masters'][0]['slaves']] == [0] * 5
     assert [slave['position'] for slave in config['masters'][0]['slaves']] == list(range(5))

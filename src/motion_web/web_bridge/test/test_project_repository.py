@@ -22,6 +22,7 @@ from motion_web_bridge.bridge_node import (
     MotionWebBridge,
     _project_tree_category_signature,
 )
+from motion_web_bridge import motor_config_rules
 from motion_web_bridge.service_entrypoint import (
     resolve_applied_motor_config,
     resolve_project_generation,
@@ -342,7 +343,7 @@ def test_unconfirmed_ac_servo_can_be_saved_but_not_applied(tmp_path):
     )
 
     result = bridge.save_motor_config({
-        'registry': bridge._registry_from_motor_config(config),
+        'registry': motor_config_rules.registry_from_motor_config(config),
         'file_name': 'motor_axes.yaml',
         'base_revision': '',
     })
@@ -385,7 +386,7 @@ def test_first_motor_config_save_returns_persisted_axes_before_apply(tmp_path):
         '  profile_velocity: 18000\n  profile_acceleration: 180000\n'
         '  profile_deceleration: 180000\n'
     )
-    registry = bridge._registry_from_motor_config(config)
+    registry = motor_config_rules.registry_from_motor_config(config)
 
     result = bridge.save_motor_config({
         'registry': registry,
@@ -405,7 +406,7 @@ def test_first_motor_config_save_returns_persisted_axes_before_apply(tmp_path):
     assert int(result['registry']['motors'][0]['identity']['ethercat_alias']) == 101
     assert result['content']
 
-    renamed = bridge._registry_from_motor_config(config)
+    renamed = motor_config_rules.registry_from_motor_config(config)
     renamed['motors'][0]['name'] = '왼쪽 서보'
     renamed['motors'][0]['identity']['ethercat_alias'] = 101
     second = bridge.save_motor_config({
@@ -1377,8 +1378,9 @@ def test_timed_out_motor_apply_restores_previous_target_and_requests_restart(
     bridge.project_repository = repository
     bridge._bridge_started_at = operation['started_at'] + 1.0
     scheduled = []
-    bridge._schedule_managed_service_restart = (
-        lambda *services: scheduled.append(services)
+    monkeypatch.setattr(
+        motor_config_rules, 'schedule_managed_service_restart',
+        lambda *services: scheduled.append(services),
     )
     monkeypatch.setenv('MOTION_CONTROL_SERVICE_UNIT', 'motion-control.service')
     monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
@@ -2591,7 +2593,10 @@ def test_clear_motor_runtime_application_stops_and_allows_delete(
     bridge._ethercat_scan_safety_blocker = lambda **_kwargs: ''
     bridge._managed_user_service_active = lambda _unit: True
     bridge._run_managed_user_service = lambda *_args, **_kwargs: None
-    bridge._wait_for_ethercat_release = lambda *_args, **_kwargs: None
+    monkeypatch.setattr(
+        motor_config_rules, 'wait_for_ethercat_release',
+        lambda *_args, **_kwargs: None,
+    )
     bridge.motion_run_stop = lambda: None
     bridge.publish_safety_stop = lambda *_args, **_kwargs: None
     bridge._clear_motor_config_selection = lambda: None

@@ -9,6 +9,7 @@ from std_msgs.msg import String
 
 from motion_web_bridge.bridge_node import MotionWebBridge, create_app
 from motion_common import rpc
+from motion_web_bridge import motor_config_rules
 
 
 def operation_repository(selected_project_id):
@@ -770,7 +771,7 @@ def test_physical_scan_is_allowed_without_a_selected_project():
 
 
 def test_scan_result_message_keeps_evidence_out_of_operation_text():
-    message = MotionWebBridge._scan_result_message(
+    message = motor_config_rules.scan_result_message(
         True,
         {
             'scan_id': 'physical-5',
@@ -789,7 +790,7 @@ def test_scan_result_message_keeps_evidence_out_of_operation_text():
 
 
 def test_scan_result_message_preserves_partial_outcome():
-    message = MotionWebBridge._scan_result_message(
+    message = motor_config_rules.scan_result_message(
         False,
         {
             'scan_id': 'mixed-1',
@@ -883,12 +884,12 @@ def test_scan_result_marks_unused_disconnected_master_as_project_compatible_part
     assert comparison['compatible'] is True
     assert comparison['required_master_indices'] == [0]
     assert comparison['unused_registered_master_indices'] == [1]
-    assert MotionWebBridge._scan_operation_outcome(
+    assert motor_config_rules.scan_operation_outcome(
         scan,
         operation_type='ac_servo_scan',
         fallback_success=False,
     ) == 'partial'
-    message = MotionWebBridge._scan_result_message(False, scan, 'raw failure')
+    message = motor_config_rules.scan_result_message(False, scan, 'raw failure')
     assert message.startswith('모터 검색 부분 완료')
     assert '프로젝트 EtherCAT 구성 확인 완료' in message
     assert '미사용 Master 1 미연결 허용' in message
@@ -928,12 +929,12 @@ def test_scan_result_marks_detected_ac_servo_as_partial_without_project_config()
         }],
     }
 
-    assert MotionWebBridge._scan_operation_outcome(
+    assert motor_config_rules.scan_operation_outcome(
         scan,
         operation_type='ac_servo_scan',
         fallback_success=False,
     ) == 'partial'
-    message = MotionWebBridge._scan_result_message(False, scan, 'raw failure')
+    message = motor_config_rules.scan_result_message(False, scan, 'raw failure')
     assert message.startswith('모터 검색 부분 완료')
     assert 'AC Servo 1축' in message
     assert 'Master 0 1축 / Master 1 0축' in message
@@ -962,12 +963,12 @@ def test_scan_result_handles_multiple_ac_servo_masters_as_success():
         'dynamixel_scan': {'skipped': True},
     }
 
-    assert MotionWebBridge._scan_operation_outcome(
+    assert motor_config_rules.scan_operation_outcome(
         scan,
         operation_type='ac_servo_scan',
         fallback_success=False,
     ) == 'success'
-    message = MotionWebBridge._scan_result_message(True, scan, 'raw success')
+    message = motor_config_rules.scan_result_message(True, scan, 'raw success')
     assert message.startswith('모터 검색 완료')
     assert 'AC Servo 5축' in message
     assert 'Master 0 2축 / Master 1 3축' in message
@@ -996,12 +997,12 @@ def test_full_scan_marks_mixed_ac_success_and_dynamixel_missing_as_partial():
         }],
     }
 
-    assert MotionWebBridge._scan_operation_outcome(
+    assert motor_config_rules.scan_operation_outcome(
         scan,
         operation_type='full_scan',
         fallback_success=False,
     ) == 'partial'
-    message = MotionWebBridge._scan_result_message(False, scan, 'raw failure')
+    message = motor_config_rules.scan_result_message(False, scan, 'raw failure')
     assert message.startswith('모터 검색 부분 완료')
     assert 'AC Servo 4축' in message
     assert 'Dynamixel 0축' in message
@@ -1020,12 +1021,12 @@ def test_dynamixel_scan_with_detected_devices_is_not_reported_as_failure():
         'ethercat_scan': {'skipped': True},
     }
 
-    assert MotionWebBridge._scan_operation_outcome(
+    assert motor_config_rules.scan_operation_outcome(
         scan,
         operation_type='dynamixel_scan',
         fallback_success=False,
     ) == 'partial'
-    message = MotionWebBridge._scan_result_message(False, scan, 'raw failure')
+    message = motor_config_rules.scan_result_message(False, scan, 'raw failure')
     assert message.startswith('모터 검색 부분 완료')
     assert 'Dynamixel 2축' in message
 
@@ -1043,12 +1044,12 @@ def test_scan_result_keeps_failure_when_no_requested_device_is_detected():
         'dynamixel_scan': {'skipped': True},
     }
 
-    assert MotionWebBridge._scan_operation_outcome(
+    assert motor_config_rules.scan_operation_outcome(
         scan,
         operation_type='ac_servo_scan',
         fallback_success=False,
     ) == 'failure'
-    message = MotionWebBridge._scan_result_message(False, scan, 'raw failure')
+    message = motor_config_rules.scan_result_message(False, scan, 'raw failure')
     assert message.startswith('모터 검색 실패')
 
 
@@ -1093,7 +1094,7 @@ def test_scan_result_keeps_failure_when_required_project_master_is_missing():
     bridge._annotate_ethercat_project_compatibility(scan)
 
     assert scan['project_comparison']['ethercat_project']['compatible'] is False
-    assert MotionWebBridge._scan_operation_outcome(
+    assert motor_config_rules.scan_operation_outcome(
         scan,
         operation_type='ac_servo_scan',
         fallback_success=False,
@@ -1199,8 +1200,9 @@ def test_ac_servo_scan_temporarily_releases_and_restores_motor_service(monkeypat
     bridge._run_managed_user_service = (
         lambda action, service: calls.append((action, service))
     )
-    bridge._wait_for_ethercat_release = lambda timeout_sec: calls.append(
-        ('released', timeout_sec)
+    monkeypatch.setattr(
+        motor_config_rules, 'wait_for_ethercat_release',
+        lambda timeout_sec: calls.append(('released', timeout_sec)),
     )
     bridge._call_scan_service_locked = lambda *_args: {
         'success': True,
@@ -1261,7 +1263,9 @@ def test_ac_servo_scan_fails_when_motor_runtime_does_not_recover(monkeypatch):
     bridge._current_project_generation = lambda: 3
     bridge._managed_user_service_active = lambda _service: True
     bridge._run_managed_user_service = lambda _action, _service: None
-    bridge._wait_for_ethercat_release = lambda timeout_sec: None
+    monkeypatch.setattr(
+        motor_config_rules, 'wait_for_ethercat_release', lambda timeout_sec: None
+    )
     bridge._expected_runtime_ethercat_axes = lambda: [0, 1]
     bridge._call_scan_service_locked = lambda *_args: {
         'success': True,
@@ -1380,7 +1384,9 @@ def test_ac_servo_scan_restores_service_even_when_status_update_fails(monkeypatc
     bridge._run_managed_user_service = (
         lambda action, service: calls.append((action, service))
     )
-    bridge._wait_for_ethercat_release = lambda timeout_sec: None
+    monkeypatch.setattr(
+        motor_config_rules, 'wait_for_ethercat_release', lambda timeout_sec: None
+    )
     bridge._call_scan_service_locked = lambda *_args: {
         'success': True,
         'message': 'scan complete',
@@ -1468,7 +1474,7 @@ def test_ethercat_release_waits_until_slaves_leave_operational_state(monkeypatch
     monkeypatch.setattr('motion_web_bridge.bridge_node.subprocess.run', run)
     monkeypatch.setattr('motion_web_bridge.bridge_node.time.sleep', lambda _sec: None)
 
-    MotionWebBridge._wait_for_ethercat_release(1.0)
+    motor_config_rules.wait_for_ethercat_release(1.0)
 
     assert calls.count(['ethercat', 'slaves']) == 2
 
@@ -1628,8 +1634,9 @@ def test_ac_servo_scan_retires_previous_project_runtime_without_feedback(
     bridge._run_managed_user_service = (
         lambda action, service: calls.append((action, service))
     )
-    bridge._wait_for_ethercat_release = lambda timeout_sec: calls.append(
-        ('released', timeout_sec)
+    monkeypatch.setattr(
+        motor_config_rules, 'wait_for_ethercat_release',
+        lambda timeout_sec: calls.append(('released', timeout_sec)),
     )
     bridge._call_scan_service_locked = lambda *_args: {
         'success': True,
