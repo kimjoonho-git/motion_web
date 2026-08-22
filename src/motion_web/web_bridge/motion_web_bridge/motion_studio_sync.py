@@ -33,12 +33,11 @@ class MotionStudioSync:
 
     def clear_project_memory(self) -> None:
         bridge = self.bridge
+        bridge._motion_studio_store.clear()
+        bridge._motion_studio_editor_store.clear()
         with bridge._motion_studio_lock:
-            bridge._motion_studio_results.clear()
             bridge._motion_studio_status = {}
             bridge._motion_studio_workspace_signatures = {}
-        with bridge._motion_studio_editor_lock:
-            bridge._motion_studio_editor_results.clear()
 
     def sync_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
         bridge = self.bridge

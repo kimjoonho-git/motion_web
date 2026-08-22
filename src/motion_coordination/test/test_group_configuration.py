@@ -1,6 +1,6 @@
 import yaml
 
-from motion_coordination.group_configuration import (
+from motion_common.group_config import (
     GroupConfig,
     load_group_config,
     migrate_legacy_group_config,

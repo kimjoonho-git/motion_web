@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import threading
-import time
 from typing import Any, Dict, Optional
 
 from std_msgs.msg import String
@@ -43,8 +42,7 @@ class MotionStudioRosBridge:
             return
         request_id = str(payload.get('request_id') or '')
         if request_id and bridge._response_matches_current_generation(payload):
-            with bridge._motion_studio_lock:
-                bridge._motion_studio_results[request_id] = payload
+            bridge._motion_studio_store.store(request_id, payload)
 
     def editor_response_callback(self, msg: String) -> None:
         bridge = self.bridge
@@ -59,36 +57,17 @@ class MotionStudioRosBridge:
             return
         request_id = str(payload.get('request_id') or '')
         if request_id and bridge._response_matches_current_generation(payload):
-            with bridge._motion_studio_editor_lock:
-                bridge._motion_studio_editor_results[request_id] = payload
+            bridge._motion_studio_editor_store.store(request_id, payload)
 
     def wait_for_result(
         self, request_id: str, timeout_sec: float = 3.0
     ) -> Optional[Dict[str, Any]]:
-        bridge = self.bridge
-        deadline = time.time() + timeout_sec
-        while time.time() < deadline:
-            with bridge._motion_studio_lock:
-                result = bridge._motion_studio_results.pop(request_id, None)
-            if result is not None:
-                return result
-            time.sleep(0.01)
-        with bridge._motion_studio_lock:
-            return bridge._motion_studio_results.pop(request_id, None)
+        return self.bridge._motion_studio_store.wait(request_id, timeout_sec)
 
     def wait_for_editor_result(
         self, request_id: str, timeout_sec: float = 4.0
     ) -> Optional[Dict[str, Any]]:
-        bridge = self.bridge
-        deadline = time.time() + timeout_sec
-        while time.time() < deadline:
-            with bridge._motion_studio_editor_lock:
-                result = bridge._motion_studio_editor_results.pop(request_id, None)
-            if result is not None:
-                return result
-            time.sleep(0.01)
-        with bridge._motion_studio_editor_lock:
-            return bridge._motion_studio_editor_results.pop(request_id, None)
+        return self.bridge._motion_studio_editor_store.wait(request_id, timeout_sec)
 
     def request(
         self,

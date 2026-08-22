@@ -33,7 +33,7 @@ from .project_store import ProjectStore
 from .recording_session import StudioRecordingSession
 from .ros_gateway import StudioRosGateway
 from .workspace_session import StudioWorkspaceSession
-from motion_common import topics
+from motion_common import generation, rpc, topics
 
 
 DEFAULT_MOTION_PROJECTS_DIR = str(
@@ -90,8 +90,8 @@ class MotionStudioNode(Node):
         self._workspace_catalog_cache: Optional[Dict[str, Any]] = None
         self._midi_state: Dict[str, Any] = {}
         self._motion_run_status: Dict[str, Any] = {}
-        self._run_results: Dict[str, Dict[str, Any]] = {}
-        self._midi_results: Dict[str, Dict[str, Any]] = {}
+        self._run_results = rpc.ResultStore()
+        self._midi_results = rpc.ResultStore()
         self._record_started = 0.0
         self._record_frames: List[Dict[str, Any]] = []
         self._record_eligible_motion_ids: set[str] = set()
@@ -288,25 +288,22 @@ class MotionStudioNode(Node):
         self._publish_json(self._response_pub, result)
         self._publish_status()
 
+    #: 실행 컨텍스트를 새로 세우는 명령 · 이때만 세대가 오를 수 있다
+    CONTEXT_COMMANDS = frozenset({'apply_context', 'invalidate_context'})
+
     def _validate_request_generation(
         self, command: str, request_generation: Any, payload: Dict[str, Any]
     ) -> int:
-        try:
-            generation = int(request_generation)
-            payload_generation = int(payload.get('project_generation'))
-        except (TypeError, ValueError) as exc:
-            raise ValueError('프로젝트 세대 번호가 필요합니다') from exc
-        if generation < 1 or payload_generation != generation:
-            raise ValueError('요청의 프로젝트 세대 번호가 일치하지 않습니다')
-        current = int(getattr(self, '_project_generation', 0) or 0)
-        if command in {'apply_context', 'invalidate_context'}:
-            if generation < current:
-                raise ValueError('이전 프로젝트 세대의 요청을 폐기했습니다')
-            self._project_generation = generation
-            return generation
-        if generation != current:
-            raise ValueError('현재 프로젝트 세대와 다른 요청을 폐기했습니다')
-        return generation
+        advancing = command in self.CONTEXT_COMMANDS
+        value = generation.validate_request_generation(
+            request_generation,
+            payload,
+            current_generation=getattr(self, '_project_generation', 0),
+            advances_context=advancing,
+        )
+        if advancing:
+            self._project_generation = value
+        return value
 
     def _handle(self, command: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         self._select_workspace(payload)

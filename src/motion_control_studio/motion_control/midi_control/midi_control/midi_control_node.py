@@ -24,7 +24,7 @@ from midi_control.bank_manager import (
 )
 from midi_control.config_store import load_midi_banks
 from midi_control.motion_axis_registry import MotionAxisRegistry
-from motion_common import values, topics
+from motion_common import generation as generation_mod, topics, values
 
 
 FILTER_ORDER = 2
@@ -812,7 +812,9 @@ class MidiControlNode(Node):
             getattr(self, '_execution_context', {}).get('project_generation') or 0
         )
         self._publish_json(publisher, {
-            'request_id': f'midi-hold-g{generation}-{channel}-{self._request_sequence}',
+            'request_id': generation_mod.new_request_id(
+                'midi-hold', generation, f'{channel}-{self._request_sequence}'
+            ),
             'project_generation': generation,
             'channel': channel,
             'hold_axes': sorted(set(int(axis) for axis in axes)),
@@ -1273,7 +1275,10 @@ class MidiControlNode(Node):
                             )
                             self._pending_motor_requests[(channel, axis)] = {
                                 'request_id': (
-                                    f'midi-g{generation}-{channel}-{self._request_sequence}'
+                                    generation_mod.new_request_id(
+                                        'midi', generation,
+                                        f'{channel}-{self._request_sequence}',
+                                    )
                                 ),
                                 'project_generation': generation,
                                 'channel': channel,
@@ -1315,7 +1320,9 @@ class MidiControlNode(Node):
         generation = int(
             getattr(self, '_execution_context', {}).get('project_generation') or 0
         )
-        request_id = f'midi-batch-g{generation}-{self._request_sequence}'
+        request_id = generation_mod.new_request_id(
+            'midi-batch', generation, self._request_sequence
+        )
         counts: Dict[int, int] = {}
         for target in targets:
             channel = int(target['channel'])
@@ -3235,25 +3242,22 @@ class MidiControlNode(Node):
         response['project_generation'] = project_generation
         self._publish_json(self._response_publisher, response)
 
+    #: 실행 컨텍스트를 새로 세우는 명령 · 이때만 세대가 오를 수 있다
+    CONTEXT_COMMANDS = frozenset({'select_project', 'invalidate_context'})
+
     def _validate_request_generation(
         self, command: str, request_generation: Any, payload: Dict[str, Any]
     ) -> int:
-        try:
-            generation = int(request_generation)
-            payload_generation = int(payload.get('project_generation'))
-        except (TypeError, ValueError) as exc:
-            raise ValueError('프로젝트 세대 번호가 필요합니다') from exc
-        if generation < 1 or payload_generation != generation:
-            raise ValueError('요청의 프로젝트 세대 번호가 일치하지 않습니다')
-        current = int(getattr(self, '_project_generation', 0) or 0)
-        if command in {'select_project', 'invalidate_context'}:
-            if generation < current:
-                raise ValueError('이전 프로젝트 세대의 요청을 폐기했습니다')
-            self._project_generation = generation
-            return generation
-        if generation != current:
-            raise ValueError('현재 프로젝트 세대와 다른 요청을 폐기했습니다')
-        return generation
+        advancing = command in self.CONTEXT_COMMANDS
+        value = generation_mod.validate_request_generation(
+            request_generation,
+            payload,
+            current_generation=getattr(self, '_project_generation', 0),
+            advances_context=advancing,
+        )
+        if advancing:
+            self._project_generation = value
+        return value
 
 
 def main(args: List[str] | None = None) -> None:

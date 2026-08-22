@@ -1,13 +1,14 @@
 import threading
 
 from motion_studio.ros_gateway import StudioRosGateway
+from motion_common import rpc
 
 
 class GatewayHost:
     def __init__(self):
         self._lock = threading.RLock()
-        self._run_results = {}
-        self._midi_results = {}
+        self._run_results = rpc.ResultStore()
+        self._midi_results = rpc.ResultStore()
         self._workspace_project_id = 'workspace-a'
         self._request_pub = object()
         self._midi_request_pub = object()
@@ -40,14 +41,14 @@ def test_gateway_caches_only_current_generation_responses():
         'success': True,
     })
 
-    assert set(host._run_results) == {'current'}
+    assert host._run_results.keys() == {'current'}
 
 
 def test_gateway_preserves_run_request_payload_contract(monkeypatch):
     host = GatewayHost()
     gateway = StudioRosGateway(host)
-    monkeypatch.setattr('motion_studio.ros_gateway.time.time_ns', lambda: 123)
-    host._run_results['studio-run-g7-123'] = {'success': True}
+    monkeypatch.setattr('motion_common.generation.time.time_ns', lambda: 123)
+    host._run_results.store('studio-run-g7-123', {'success': True})
 
     result = gateway.request_run('stop', {'reason': 'user'}, 0.01)
 
@@ -72,8 +73,8 @@ def test_operation_request_carries_operation_generation(monkeypatch):
         {'is_active': staticmethod(lambda *_args: True)},
     )()
     gateway = StudioRosGateway(host)
-    monkeypatch.setattr('motion_studio.ros_gateway.time.time_ns', lambda: 321)
-    host._run_results['studio-run-g7-321'] = {'success': True}
+    monkeypatch.setattr('motion_common.generation.time.time_ns', lambda: 321)
+    host._run_results.store('studio-run-g7-321', {'success': True})
 
     result = gateway.request_run_for_operation(
         'start',
@@ -90,8 +91,8 @@ def test_operation_request_carries_operation_generation(monkeypatch):
 def test_gateway_adds_project_identity_to_midi_requests(monkeypatch):
     host = GatewayHost()
     gateway = StudioRosGateway(host)
-    monkeypatch.setattr('motion_studio.ros_gateway.time.time_ns', lambda: 456)
-    host._midi_results['studio-midi-g7-456'] = {'success': True}
+    monkeypatch.setattr('motion_common.generation.time.time_ns', lambda: 456)
+    host._midi_results.store('studio-midi-g7-456', {'success': True})
 
     result = gateway.request_midi('studio_recording_ready', {}, 0.01)
 

@@ -13,7 +13,7 @@ from typing import Any, Callable, Dict, Mapping
 
 import yaml
 
-from motion_coordination.group_configuration import (
+from motion_common.group_config import (
     load_group_config,
     migrate_legacy_group_config,
     save_group_config,

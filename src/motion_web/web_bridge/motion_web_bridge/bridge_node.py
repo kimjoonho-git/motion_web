@@ -19,7 +19,7 @@ from urllib.parse import quote
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from fastapi import FastAPI, HTTPException, Request
-from motion_common import motion_table, values, topics
+from motion_common import generation, motion_table, rpc, topics, values
 from fastapi.responses import JSONResponse
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
@@ -237,29 +237,26 @@ class MotionWebBridge(Node):
             'sources': {},
             'stamps': {},
         }
-        self._jog_result_lock = threading.Lock()
-        self._jog_results: Dict[str, Dict[str, Any]] = {}
-        self._action_result_lock = threading.Lock()
-        self._action_results: Dict[str, Dict[str, Any]] = {}
-        self._motion_mapping_lock = threading.Lock()
-        self._motion_mapping_results: Dict[str, Dict[str, Any]] = {}
+        # 요청·응답 저장소 · motion_common.rpc.ResultStore 단일 구현
+        self._jog_store = rpc.ResultStore()
+        self._action_store = rpc.ResultStore()
+        self._motion_mapping_store = rpc.ResultStore()
+        self._motion_run_store = rpc.ResultStore()
         self._motion_run_lock = threading.Lock()
-        self._motion_run_results: Dict[str, Dict[str, Any]] = {}
         self._motion_run_status: Dict[str, Any] = {}
         self._coordination_poll_lock = threading.Lock()
         self._coordination_poll_received_monotonic = 0.0
         self._coordination_watchdog_stop_execution_id = ''
         self._midi_monitor_lock = threading.Lock()
         self._midi_monitor_status: Dict[str, Any] = {}
-        self._midi_monitor_results: Dict[str, Dict[str, Any]] = {}
+        self._midi_monitor_store = rpc.ResultStore()
         self._motion_studio_lock = threading.Lock()
         self._motion_studio_status: Dict[str, Any] = {}
-        self._motion_studio_results: Dict[str, Dict[str, Any]] = {}
+        self._motion_studio_store = rpc.ResultStore()
         self._motion_studio_workspace_signatures: Dict[str, Dict[str, str]] = {}
         self._motion_studio_command_order_lock = threading.Lock()
         self._motion_studio_start_generation = 0
-        self._motion_studio_editor_lock = threading.Lock()
-        self._motion_studio_editor_results: Dict[str, Dict[str, Any]] = {}
+        self._motion_studio_editor_store = rpc.ResultStore()
         self._motion_studio_ros_bridge = MotionStudioRosBridge(self)
         self._motion_studio_sync_service = MotionStudioSync(self)
         self._safety_status_lock = threading.Lock()
@@ -581,15 +578,7 @@ class MotionWebBridge(Node):
         if not request_id or not self._request_matches_current_generation(request_id):
             return
 
-        with self._jog_result_lock:
-            self._jog_results[request_id] = payload
-            cutoff = time.time() - 10.0
-            stale_keys = [
-                key for key, value in self._jog_results.items()
-                if float(value.get('stamp') or 0.0) < cutoff
-            ]
-            for key in stale_keys:
-                self._jog_results.pop(key, None)
+        self._jog_store.store(request_id, payload)
 
     def _action_result_callback(self, msg: String) -> None:
         try:
@@ -604,15 +593,7 @@ class MotionWebBridge(Node):
         if not request_id or not self._request_matches_current_generation(request_id):
             return
 
-        with self._action_result_lock:
-            self._action_results[request_id] = payload
-            cutoff = time.time() - 10.0
-            stale_keys = [
-                key for key, value in self._action_results.items()
-                if float(value.get('stamp') or 0.0) < cutoff
-            ]
-            for key in stale_keys:
-                self._action_results.pop(key, None)
+        self._action_store.store(request_id, payload)
 
     def _motion_mapping_response_callback(self, msg: String) -> None:
         try:
@@ -627,16 +608,7 @@ class MotionWebBridge(Node):
         if not request_id or not self._response_matches_current_generation(payload):
             return
 
-        payload['_received_at'] = time.time()
-        with self._motion_mapping_lock:
-            self._motion_mapping_results[request_id] = payload
-            cutoff = time.time() - 20.0
-            stale_keys = [
-                key for key, value in self._motion_mapping_results.items()
-                if float(value.get('_received_at') or 0.0) < cutoff
-            ]
-            for key in stale_keys:
-                self._motion_mapping_results.pop(key, None)
+        self._motion_mapping_store.store(request_id, payload)
 
     def _motion_run_response_callback(self, msg: String) -> None:
         try:
@@ -651,19 +623,11 @@ class MotionWebBridge(Node):
         if not request_id or not self._response_matches_current_generation(payload):
             return
 
-        payload['_received_at'] = time.time()
+        self._motion_run_store.store(request_id, payload)
+        status = payload.get('status')
         with self._motion_run_lock:
-            self._motion_run_results[request_id] = payload
-            status = payload.get('status')
             if isinstance(status, dict) and self._payload_matches_selected_project(status):
                 self._motion_run_status = status
-            cutoff = time.time() - 20.0
-            stale_keys = [
-                key for key, value in self._motion_run_results.items()
-                if float(value.get('_received_at') or 0.0) < cutoff
-            ]
-            for key in stale_keys:
-                self._motion_run_results.pop(key, None)
         if isinstance(status, dict) and self._payload_matches_selected_project(status):
             self._record_motion_run_transition(status)
 
@@ -706,22 +670,14 @@ class MotionWebBridge(Node):
         request_id = str(payload.get('request_id') or '')
         if not request_id or not self._response_matches_current_generation(payload):
             return
-        payload['_bridge_received_at'] = time.time()
+        self._midi_monitor_store.store(request_id, payload)
         with self._midi_monitor_lock:
-            self._midi_monitor_results[request_id] = payload
             if (
                 payload.get('success')
                 and isinstance(payload.get('channels'), list)
                 and self._payload_matches_selected_project(payload)
             ):
                 self._midi_monitor_status = dict(payload)
-            cutoff = time.time() - 20.0
-            stale_keys = [
-                key for key, value in self._midi_monitor_results.items()
-                if float(value.get('_bridge_received_at') or 0.0) < cutoff
-            ]
-            for key in stale_keys:
-                self._midi_monitor_results.pop(key, None)
 
     def _motion_studio_status_callback(self, msg: String) -> None:
         self._motion_studio_transport().status_callback(msg)
@@ -747,79 +703,35 @@ class MotionWebBridge(Node):
         request_id: str,
         timeout_sec: float = 1.0,
     ) -> Optional[Dict[str, Any]]:
-        deadline = time.time() + timeout_sec
-        while time.time() < deadline:
-            with self._jog_result_lock:
-                result = self._jog_results.pop(request_id, None)
-            if result is not None:
-                return result
-            time.sleep(0.01)
-
-        with self._jog_result_lock:
-            return self._jog_results.pop(request_id, None)
+        return self._jog_store.wait(request_id, timeout_sec)
 
     def _wait_for_action_result(
         self,
         request_id: str,
         timeout_sec: float = 1.0,
     ) -> Optional[Dict[str, Any]]:
-        deadline = time.time() + timeout_sec
-        while time.time() < deadline:
-            with self._action_result_lock:
-                result = self._action_results.pop(request_id, None)
-            if result is not None:
-                return result
-            time.sleep(0.01)
-
-        with self._action_result_lock:
-            return self._action_results.pop(request_id, None)
+        return self._action_store.wait(request_id, timeout_sec)
 
     def _wait_for_motion_mapping_result(
         self,
         request_id: str,
         timeout_sec: float = 2.0,
     ) -> Optional[Dict[str, Any]]:
-        deadline = time.time() + timeout_sec
-        while time.time() < deadline:
-            with self._motion_mapping_lock:
-                result = self._motion_mapping_results.pop(request_id, None)
-            if result is not None:
-                return result
-            time.sleep(0.01)
-
-        with self._motion_mapping_lock:
-            return self._motion_mapping_results.pop(request_id, None)
+        return self._motion_mapping_store.wait(request_id, timeout_sec)
 
     def _wait_for_motion_run_result(
         self,
         request_id: str,
         timeout_sec: float = 2.0,
     ) -> Optional[Dict[str, Any]]:
-        deadline = time.time() + timeout_sec
-        while time.time() < deadline:
-            with self._motion_run_lock:
-                result = self._motion_run_results.pop(request_id, None)
-            if result is not None:
-                return result
-            time.sleep(0.01)
-
-        with self._motion_run_lock:
-            return self._motion_run_results.pop(request_id, None)
+        return self._motion_run_store.wait(request_id, timeout_sec)
 
     def _wait_for_midi_monitor_result(
         self,
         request_id: str,
         timeout_sec: float = 2.0,
     ) -> Optional[Dict[str, Any]]:
-        deadline = time.time() + timeout_sec
-        while time.time() < deadline:
-            with self._midi_monitor_lock:
-                result = self._midi_monitor_results.pop(request_id, None)
-            if result is not None:
-                return result
-            time.sleep(0.01)
-        with self._midi_monitor_lock:
-            return self._midi_monitor_results.pop(request_id, None)
+        return self._midi_monitor_store.wait(request_id, timeout_sec)
 
     def _wait_for_motion_studio_result(
         self,
@@ -3708,23 +3620,15 @@ class MotionWebBridge(Node):
             return int(self._project_generation)
 
     def _new_project_request_id(self, prefix: str) -> str:
-        return f'{prefix}-g{self._current_project_generation()}-{time.time_ns()}'
+        return generation.new_request_id(prefix, self._current_project_generation())
 
     def _request_matches_current_generation(self, request_id: Any) -> bool:
-        marker = f'-g{self._current_project_generation()}-'
-        return marker in str(request_id or '')
+        return generation.request_id_matches(
+            request_id, self._current_project_generation()
+        )
 
     def _response_matches_current_generation(self, payload: Any) -> bool:
-        if not isinstance(payload, dict):
-            return False
-        try:
-            generation = int(payload.get('project_generation'))
-        except (TypeError, ValueError):
-            return False
-        return (
-            generation == self._current_project_generation()
-            and self._request_matches_current_generation(payload.get('request_id'))
-        )
+        return generation.response_matches(payload, self._current_project_generation())
 
     def _payload_matches_selected_project(
         self, payload: Any, *, require_generation: bool = True
@@ -3764,18 +3668,15 @@ class MotionWebBridge(Node):
         with self._event_log_lock:
             self._active_motor_errors = {}
             self._last_motion_run_state = None
-        with self._jog_result_lock:
-            self._jog_results.clear()
-        with self._action_result_lock:
-            self._action_results.clear()
-        with self._motion_mapping_lock:
-            self._motion_mapping_results.clear()
+        self._jog_store.clear()
+        self._action_store.clear()
+        self._motion_mapping_store.clear()
+        self._motion_run_store.clear()
+        self._midi_monitor_store.clear()
         with self._motion_run_lock:
-            self._motion_run_results.clear()
             self._motion_run_status = {}
             self._automation_triggered_context_id = None
         with self._midi_monitor_lock:
-            self._midi_monitor_results.clear()
             self._midi_monitor_status = {}
         self._motion_studio_sync().clear_project_memory()
         empty_scan_progress = {

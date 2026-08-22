@@ -3,8 +3,8 @@ from fastapi import FastAPI, HTTPException, Request
 
 from motion_common.coordination import resolve_master_role
 from motion_common.paths import motion_projects_dir
-from motion_schedule.schedule_store import ScheduleStore
-from motion_schedule.schedule_models import ScheduleItem
+from motion_common.schedule_models import ScheduleItem
+from motion_common.schedule_store import ScheduleStore
 
 logger = logging.getLogger("bridge.routes.schedule")
 

@@ -14,13 +14,12 @@ from motion_common.coordination import coordination_settings_path, resolve_maste
 from motion_common.paths import motion_projects_dir, workspace_root
 from motion_common import topics
 
+from motion_common.schedule_models import ScheduleItem
+from motion_common.schedule_store import ScheduleStore
+
 try:
-    from motion_schedule.schedule_models import ScheduleItem
-    from motion_schedule.schedule_store import ScheduleStore
     from motion_schedule.schedule_engine import ScheduleEngine
 except ImportError:
-    from .schedule_models import ScheduleItem
-    from .schedule_store import ScheduleStore
     from .schedule_engine import ScheduleEngine
 
 PACKAGE_HINT = 'motion_schedule'

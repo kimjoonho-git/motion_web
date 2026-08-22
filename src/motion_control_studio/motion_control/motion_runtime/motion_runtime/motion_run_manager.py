@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Mapping, Optional
 
 import rclpy
 import yaml
-from motion_common import motion_table, values, topics
+from motion_common import generation as generation_mod, motion_table, topics, values
 from motion_control_msgs.msg import MotorStatus
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
@@ -384,25 +384,22 @@ class MotionRunManager(Node):
         self._publish_response(response)
         self._publish_status()
 
+    #: 실행 컨텍스트를 새로 세우는 명령 · 이때만 세대가 오를 수 있다
+    CONTEXT_COMMANDS = frozenset({'apply_context', 'invalidate_context'})
+
     def _validate_request_generation(
         self, command: str, request_generation: Any, payload: Dict[str, Any]
     ) -> int:
-        try:
-            generation = int(request_generation)
-            payload_generation = int(payload.get('project_generation'))
-        except (TypeError, ValueError) as exc:
-            raise ValueError('프로젝트 세대 번호가 필요합니다') from exc
-        if generation < 1 or payload_generation != generation:
-            raise ValueError('요청의 프로젝트 세대 번호가 일치하지 않습니다')
-        current = int(getattr(self, '_project_generation', 0) or 0)
-        if command in {'apply_context', 'invalidate_context'}:
-            if generation < current:
-                raise ValueError('이전 프로젝트 세대의 요청을 폐기했습니다')
-            self._project_generation = generation
-            return generation
-        if generation != current:
-            raise ValueError('현재 프로젝트 세대와 다른 요청을 폐기했습니다')
-        return generation
+        advancing = command in self.CONTEXT_COMMANDS
+        value = generation_mod.validate_request_generation(
+            request_generation,
+            payload,
+            current_generation=getattr(self, '_project_generation', 0),
+            advances_context=advancing,
+        )
+        if advancing:
+            self._project_generation = value
+        return value
 
     def _apply_execution_context(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         project_id, _, mappings_dir = self._project_asset_dirs(payload)
@@ -2279,7 +2276,9 @@ class MotionRunManager(Node):
             raise RuntimeError(f'Axis {motor_axis} unsupported motor type for initialization: {motor_type}')
 
         generation = int(self._execution_context.get('project_generation') or 0)
-        request_id = f'motion-init-g{generation}-{motor_axis}-{time.time_ns()}'
+        request_id = generation_mod.new_request_id(
+            'motion-init', generation, f'{motor_axis}-{time.time_ns()}'
+        )
         payload = {
             'request_id': request_id,
             'project_generation': generation,

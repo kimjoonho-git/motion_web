@@ -124,8 +124,8 @@ motion_system(C++)  모터 단일 통로                 유지 · 스캐너만 
 | 단계 | 작업 | 위험 | 검증 |
 |---|---|---|---|
 | 0 | ruff/flake8 + pytest 워크스페이스 설정 · 함수길이 지표 기록 | 없음 | **부분 완료** · ruff 기준선 56건 · pytest 설정·지표 미착수 |
-| 1 | `motion_common` 신설 · 순수 함수 이관(파서·값·경로) | 최저 | **완료** · `rpc.py` 제외 5모듈 · 859테스트 통과 |
-| 2 | `RequestChannel` 단일화 · 5곳 교체 · 토픽명·페이로드 형식 유지 | 낮음 | 무중단 · 노드별 왕복 테스트 |
+| 1 | `motion_common` 신설 · 순수 함수 이관(파서·값·경로) | 최저 | **완료** · 목표 6모듈 전부 · 911테스트 통과 |
+| 2 | `RequestChannel` 단일화 · 5곳 교체 · 토픽명·페이로드 형식 유지 | 낮음 | **완료** · `rpc.ResultStore` 4곳 · 전송 계약 불변 · 실물 미검증 |
 | 3 | 토픽 상수 단일화 · `motor_command_topic` 명칭 정정 | 낮음 | **완료** · `topics.py` 27종 · 리터럴 잔여 0 · launch 7개 로드 확인 |
 | 4 | `bridge_node` 7,692줄 분해 · 서비스 6개(각 300~600줄) | 중간 | 엔드포인트 107개 회귀 |
 | 5 | 영속 계층 통합 · 단일 저장 API + 파일락 · 다중 writer 제거 | 중간 | **부분 완료** · `store.py` 5종 통합 · 2개 프로젝트 격리 미검증 |
@@ -143,7 +143,7 @@ motion_system(C++)  모터 단일 통로                 유지 · 스캐너만 
 ## 6. 즉시 처리 권고 · 저위험·고효과
 
 - 반영일 · 2026-08-21 · 5개 항목 전부 반영
-- 검증 · 전체 31패키지 `colcon build` 통과 · pytest 859건 통과(선재 실패 11건 유지) · `ruff check` 기준선 확정
+- 검증 · 전체 31패키지 `colcon build` 통과 · pytest 911건 통과(선재 실패 11건 유지) · `ruff check` 기준선 확정
 - 실물 검증 · 연동 스케줄 1사이클 통과(§6-4) · 모션 재생 미검증
 
 | # | 항목 | 상태 | 반영 내용 |
@@ -156,7 +156,7 @@ motion_system(C++)  모터 단일 통로                 유지 · 스캐너만 
 
 ### 6-1. `motion_common` 신설 · 로드맵 1단계 착수
 
-`src/motion_common` · ament_python · `rclpy` 비의존 순수 모듈 · 테스트 80건 · `ruff check` 무결점
+`src/motion_common` · ament_python · `rclpy` 비의존 순수 모듈 · 테스트 132건 · `ruff check` 무결점
 
 | 모듈 | 책임 | 흡수 |
 |---|---|---|
@@ -166,8 +166,12 @@ motion_system(C++)  모터 단일 통로                 유지 · 스캐너만 
 | `store.py` | atomic write + 파일락 | 5종 통합 |
 | `topics.py` | 토픽 단일 정의 | 노드·launch 리터럴 전량 · 잔여 0건 |
 | `coordination.py` | 마스터 역할 판정 | 로드맵 외 · 실물 테스트 중 발견(§6-4) |
+| `rpc.py` | 요청·응답 채널 | 폴링 대기·만료 정리 4곳 |
+| `generation.py` | 프로젝트 세대 검증 | 검증 4곳 + 식별자 형식 8곳 |
+| `group_config.py` | 그룹 연동 설정 | `motion_coordination`에서 이전 |
+| `schedule_models.py` `schedule_store.py` | 스케줄 모델·저장 | `motion_schedule`에서 이전 |
 
-`rpc.py`(RequestChannel)는 미착수 · §5 2단계.
+§4 목표 6모듈 전부 + 경계 공유용 4모듈.
 
 의존 추가 · `motion_web_bridge` · `motion_runtime` · `motion_schedule` · `motion_supervisor`
 · `midi_control` · `motion_studio` · `motion_coordination`
@@ -303,7 +307,44 @@ motion_system(C++)  모터 단일 통로                 유지 · 스캐너만 
 `topics.py`에서 가져온다. §3-5가 지적한 `motor_command_topic` 오배선은 이름 축과 토픽 축을
 혼동한 사례였다.
 
-### 6-8. 진단 항목 대조 · 코드 변경이 문서 어디에 걸리는가
+### 6-6. 경계·RPC·세대 검증 이관
+
+검증 · 31패키지 `colcon build` 통과 · pytest 911건 통과 · `motion_common` ruff 무결점
+
+**패키지 경계 3건 해소** · §3-8 · §7 규칙 4
+
+`motion_common`을 경계로 삼아 순수 모듈을 옮겼다. 이제 자체 패키지 간 Python 직접 import는 **0건**이며, AST로 소스 전체를 훑는 회귀 테스트가 재발을 막는다.
+
+| 이전 | 이후 |
+|---|---|
+| `web_bridge` → `motion_coordination.group_configuration` | `motion_common.group_config` |
+| `web_bridge` → `motion_schedule.schedule_store` · `schedule_models` | `motion_common.schedule_*` |
+
+**`rpc.py` · 요청·응답 채널** · §3-2 · §5 2단계
+
+폴링 대기와 만료 정리를 `ResultStore` 하나로 흡수했다. 흩어져 있던 동안 어긋나 있던 것:
+
+| 항목 | 이전 | 이후 |
+|---|---|---|
+| 만료 주기 | 10초 · 20초 혼재 | 20초 |
+| 만료 기준 시각 | 발신자 `stamp` ↔ 수신 시각 혼재 | **수신 시각** · 발신자 시계에 의존하지 않음 |
+| 폴링 간격 | 10ms · 20ms | 10ms |
+| 시계 | `time.time()`(벽시계) ↔ `time.monotonic()` | **단조 시계** · NTP 보정에 흔들리지 않음 |
+
+벽시계 사용이 실질적 결함이었다. NTP가 시각을 뒤로 돌리면 대기가 즉시 끝나거나
+과도하게 길어진다. 전송 계약(토픽·페이로드)은 바꾸지 않았다 · Service/Action 전환은 6단계.
+
+**`generation.py` · 프로젝트 세대 검증** · §3-3
+
+동일 구현 4곳을 흡수했다. 차이는 "세대를 올릴 수 있는 명령 집합" 하나뿐이었다
+(`midi_control`만 `apply_context` 대신 `select_project`). 호출부가 자기 집합을 넘긴다.
+
+요청 식별자 형식 `{접두사}-g{세대}-{꼬리}`도 8곳에서 각자 조립하던 것을 흡수했다.
+형식이 한 곳만 어긋나면 응답이 조용히 버려지는 구조였다.
+
+검증 함수는 상태를 바꾸지 않는다 · 세대 반영은 호출부가 결정한다.
+
+### 6-7. 진단 항목 대조 · 코드 변경이 문서 어디에 걸리는가
 
 | 코드 변경 | 진단 위치 |
 |---|---|
@@ -323,17 +364,16 @@ motion_system(C++)  모터 단일 통로                 유지 · 스캐너만 
 | §4 `motion_common` 6모듈 | 2/6 · `motion_table.py` · `paths.py` 생성 · `rpc.py` · `topics.py` · `values.py` · `store.py` 미생성 |
 | §7 규칙 4 · 경계는 `motion_common` | 경계 패키지 실체 확보 · 규칙 적용은 신규 코드부터 |
 
-### 6-9. 같은 절 안에서 손대지 않은 범위
+### 6-8. 같은 절 안에서 손대지 않은 범위
 
 즉시 처리 5개 항목은 각 절의 일부만 건드린다. 아래는 진단은 그대로 유효한 잔여분이다.
 
-- §3-3 값 변환 중복 · `motion_run_manager._finite_float`만 위임 전환 · `_optional_int`
-  `_optional_float` `_finite_float` 정의 12곳 잔존 · `values.py` 이관 필요
-- §3-5 토픽 3중 정의 · `topics.py` 단일화 미착수 · 이번엔 명칭만 정정
-- §3-5 launch 표기 불일치 · `project_services.launch.py`의 `midi_control` 리터럴 하드코딩 잔존
-- §3-6 단일 대형 파일 · `styles.css` `motor_config.js` `motion_data.js` `index.html` 그대로
-- §3-6 `window.__motionProjectGeneration` 전역 회피 그대로
-- §3-1 신 노드 · §3-2 RPC 5중 중복 · §3-4 영속 계층 분산 · §3-7 하드웨어 프로토콜 혼재 · 전부 미착수
+- §3-1 신 노드 + 위임 껍데기 · **전부 미착수** · 최우선 지목 항목
+- §3-4 영속 계층 · `store.py`는 만들었으나 직접 기록 모듈 6개 잔존 · mtime 폴링 우회 그대로
+- §3-6 프런트엔드 빌드 부재 · 대형 파일 · `window.__motionProjectGeneration` 전역 회피 그대로
+- §3-7 하드웨어 프로토콜 혼재 · 미착수 · `motion_system` 범위 협의 필요
+- §7 규모 지표 · 파일 1,000줄 초과 **7개**(최대 7,506) · 함수 60줄 초과 **124개**
+- ruff 잔여 56건 · `BLE001` 37 · `F841` 12 · `S110` 7
 
 정정 · §3-6 "모듈 3중 인스턴스화"는 배포본에서 성립하지 않는다. `web_ui/CMakeLists.txt`가
 빌드 시 `scripts/update_cache.py`로 모든 `?v=` 토큰을 빌드 타임스탬프 1종으로 덮어쓴다.

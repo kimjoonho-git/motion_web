@@ -9,6 +9,7 @@ from motion_web_bridge.bridge_node import MotionWebBridge
 from motion_web_bridge.motion_studio_bridge import MotionStudioRosBridge
 from motion_web_bridge.motion_studio_routes import register_motion_studio_routes
 from motion_web_bridge.motion_studio_sync import MotionStudioSync
+from motion_common import rpc
 
 
 def test_motion_studio_routes_are_registered_from_the_route_module():
@@ -51,7 +52,7 @@ def test_motion_studio_routes_are_registered_from_the_route_module():
 def test_ros_bridge_rejects_a_response_from_an_old_project_generation():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge._motion_studio_lock = threading.Lock()
-    bridge._motion_studio_results = {}
+    bridge._motion_studio_store = rpc.ResultStore()
     bridge._response_matches_current_generation = lambda payload: (
         payload.get('project_generation') == 2
     )
@@ -64,8 +65,9 @@ def test_ros_bridge_rejects_a_response_from_an_old_project_generation():
         'request_id': 'current', 'project_generation': 2,
     })))
 
-    assert bridge._motion_studio_results == {
-        'current': {'request_id': 'current', 'project_generation': 2},
+    assert bridge._motion_studio_store.keys() == {'current'}
+    assert bridge._motion_studio_store.take('current') == {
+        'request_id': 'current', 'project_generation': 2,
     }
 
 
@@ -73,18 +75,20 @@ def test_sync_service_clears_only_motion_studio_project_memory():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge._motion_studio_lock = threading.Lock()
     bridge._motion_studio_editor_lock = threading.Lock()
-    bridge._motion_studio_results = {'request': {'project_id': 'old'}}
+    bridge._motion_studio_store = rpc.ResultStore()
+    bridge._motion_studio_store.store('request', {'project_id': 'old'})
     bridge._motion_studio_status = {'project_id': 'old'}
     bridge._motion_studio_workspace_signatures = {'old': {'layers': 'signature'}}
-    bridge._motion_studio_editor_results = {'editor': {'project_id': 'old'}}
+    bridge._motion_studio_editor_store = rpc.ResultStore()
+    bridge._motion_studio_editor_store.store('editor', {'project_id': 'old'})
     bridge._motion_run_status = {'project_id': 'keep'}
 
     MotionStudioSync(bridge).clear_project_memory()
 
-    assert bridge._motion_studio_results == {}
+    assert bridge._motion_studio_store.pending_count() == 0
     assert bridge._motion_studio_status == {}
     assert bridge._motion_studio_workspace_signatures == {}
-    assert bridge._motion_studio_editor_results == {}
+    assert bridge._motion_studio_editor_store.pending_count() == 0
     assert bridge._motion_run_status == {'project_id': 'keep'}
 
 

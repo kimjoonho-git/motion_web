@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from motion_coordination.group_configuration import GroupConfig, save_group_config
+from motion_common.group_config import GroupConfig, save_group_config
 
 
 pytestmark = pytest.mark.skipif(

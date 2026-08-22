@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import time
 from typing import Any, Dict
+from motion_common import generation as gen, rpc
 
 
 class StudioRosGateway:
@@ -19,7 +19,7 @@ class StudioRosGateway:
         self._accept_response(payload, self.studio._midi_results)
 
     def _accept_response(
-        self, payload: Any, result_store: Dict[str, Dict[str, Any]]
+        self, payload: Any, result_store: rpc.ResultStore
     ) -> None:
         studio = self.studio
         request_id = (
@@ -28,15 +28,14 @@ class StudioRosGateway:
             else ''
         )
         if request_id and studio._response_generation_matches(payload):
-            with studio._lock:
-                result_store[request_id] = payload
+            result_store.store(request_id, payload)
 
     def request_run(
         self, command: str, payload: Dict[str, Any], timeout: float
     ) -> Dict[str, Any]:
         studio = self.studio
         generation = studio._context_generation()
-        request_id = f'studio-run-g{generation}-{time.time_ns()}'
+        request_id = gen.new_request_id('studio-run', generation)
         studio._publish_json(studio._request_pub, {
             'request_id': request_id,
             'project_generation': generation,
@@ -56,7 +55,7 @@ class StudioRosGateway:
         """Publish atomically only while the originating operation is active."""
         studio = self.studio
         generation = studio._context_generation()
-        request_id = f'studio-run-g{generation}-{time.time_ns()}'
+        request_id = gen.new_request_id('studio-run', generation)
         with studio._lock:
             if not studio._operation_machine().is_active(
                 operation_generation,
@@ -97,7 +96,7 @@ class StudioRosGateway:
     ) -> Dict[str, Any]:
         studio = self.studio
         generation = studio._context_generation()
-        request_id = f'studio-midi-g{generation}-{time.time_ns()}'
+        request_id = gen.new_request_id('studio-midi', generation)
         request_payload = dict(payload)
         request_payload['project_id'] = studio._workspace_project_id
         request_payload['project_generation'] = generation
@@ -117,17 +116,10 @@ class StudioRosGateway:
             'message': 'midi_control_node 응답 시간 초과',
         }
 
+    @staticmethod
     def _wait_for_result(
-        self,
-        result_store: Dict[str, Dict[str, Any]],
+        result_store: rpc.ResultStore,
         request_id: str,
         timeout: float,
     ) -> Dict[str, Any] | None:
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            with self.studio._lock:
-                result = result_store.pop(request_id, None)
-            if result is not None:
-                return result
-            time.sleep(0.02)
-        return None
+        return result_store.wait(request_id, timeout)

@@ -2,7 +2,7 @@ import os
 import logging
 from typing import List, Optional, Dict
 
-from motion_common import store as common_store
+from . import store as common_store
 
 from .schedule_models import ScheduleItem
 

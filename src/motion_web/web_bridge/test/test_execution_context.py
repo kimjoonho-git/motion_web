@@ -8,6 +8,7 @@ import pytest
 from std_msgs.msg import String
 
 from motion_web_bridge.bridge_node import MotionWebBridge, create_app
+from motion_common import rpc
 
 
 def operation_repository(selected_project_id):
@@ -92,16 +93,16 @@ def make_bridge():
     bridge._motion_state_received_at = 1.0
     bridge._active_motor_errors = {}
     bridge._last_motion_run_state = None
-    bridge._jog_results = {}
-    bridge._action_results = {}
-    bridge._motion_mapping_results = {}
-    bridge._motion_run_results = {}
+    bridge._jog_store = rpc.ResultStore()
+    bridge._action_store = rpc.ResultStore()
+    bridge._motion_mapping_store = rpc.ResultStore()
+    bridge._motion_run_store = rpc.ResultStore()
     bridge._motion_run_status = {}
-    bridge._midi_monitor_results = {}
+    bridge._midi_monitor_store = rpc.ResultStore()
     bridge._midi_monitor_status = {}
-    bridge._motion_studio_results = {}
+    bridge._motion_studio_store = rpc.ResultStore()
     bridge._motion_studio_status = {}
-    bridge._motion_studio_editor_results = {}
+    bridge._motion_studio_editor_store = rpc.ResultStore()
     bridge._safety_request_publisher = type('Publisher', (), {
         'publish': lambda _self, _message: None,
     })()
@@ -625,16 +626,23 @@ def test_project_change_deletes_previous_project_values_from_bridge_memory():
     bridge._motion_state_received_at = 1.0
     bridge._active_motor_errors = {'0': 'old-error'}
     bridge._last_motion_run_state = 'running'
-    bridge._jog_results = {'old': {'success': True}}
-    bridge._action_results = {'old': {'success': True}}
-    bridge._motion_mapping_results = {'old': {'project_id': 'old-project'}}
-    bridge._motion_run_results = {'old': {'project_id': 'old-project'}}
+    bridge._jog_store = rpc.ResultStore()
+    bridge._jog_store.store('old', {'success': True})
+    bridge._action_store = rpc.ResultStore()
+    bridge._action_store.store('old', {'success': True})
+    bridge._motion_mapping_store = rpc.ResultStore()
+    bridge._motion_mapping_store.store('old', {'project_id': 'old-project'})
+    bridge._motion_run_store = rpc.ResultStore()
+    bridge._motion_run_store.store('old', {'project_id': 'old-project'})
     bridge._motion_run_status = {'project_id': 'old-project', 'axes': [1]}
-    bridge._midi_monitor_results = {'old': {'project_id': 'old-project'}}
+    bridge._midi_monitor_store = rpc.ResultStore()
+    bridge._midi_monitor_store.store('old', {'project_id': 'old-project'})
     bridge._midi_monitor_status = {'project_id': 'old-project', 'banks': [1]}
-    bridge._motion_studio_results = {'old': {'project_id': 'old-project'}}
+    bridge._motion_studio_store = rpc.ResultStore()
+    bridge._motion_studio_store.store('old', {'project_id': 'old-project'})
     bridge._motion_studio_status = {'project_id': 'old-project', 'project': {}}
-    bridge._motion_studio_editor_results = {'old': {'project_id': 'old-project'}}
+    bridge._motion_studio_editor_store = rpc.ResultStore()
+    bridge._motion_studio_editor_store.store('old', {'project_id': 'old-project'})
 
     bridge._clear_project_scoped_memory()
 
@@ -642,16 +650,16 @@ def test_project_change_deletes_previous_project_values_from_bridge_memory():
     assert bridge._motion_state_received_at is None
     assert bridge._active_motor_errors == {}
     assert bridge._last_motion_run_state is None
-    assert bridge._jog_results == {}
-    assert bridge._action_results == {}
-    assert bridge._motion_mapping_results == {}
-    assert bridge._motion_run_results == {}
+    assert bridge._jog_store.pending_count() == 0
+    assert bridge._action_store.pending_count() == 0
+    assert bridge._motion_mapping_store.pending_count() == 0
+    assert bridge._motion_run_store.pending_count() == 0
     assert bridge._motion_run_status == {}
-    assert bridge._midi_monitor_results == {}
+    assert bridge._midi_monitor_store.pending_count() == 0
     assert bridge._midi_monitor_status == {}
-    assert bridge._motion_studio_results == {}
+    assert bridge._motion_studio_store.pending_count() == 0
     assert bridge._motion_studio_status == {}
-    assert bridge._motion_studio_editor_results == {}
+    assert bridge._motion_studio_editor_store.pending_count() == 0
 
 
 def test_previous_runtime_motor_state_is_not_cached_after_project_change():
@@ -1822,7 +1830,7 @@ def test_late_ros_response_from_previous_generation_is_never_cached():
         'project_generation': 1,
         'success': True,
     })))
-    assert 'mapping-g1-100' in bridge._motion_mapping_results
+    assert 'mapping-g1-100' in bridge._motion_mapping_store
 
     bridge._project_generation = 2
     bridge._motion_mapping_response_callback(String(data=json.dumps({
@@ -1831,7 +1839,7 @@ def test_late_ros_response_from_previous_generation_is_never_cached():
         'success': True,
     })))
 
-    assert 'mapping-g1-200' not in bridge._motion_mapping_results
+    assert 'mapping-g1-200' not in bridge._motion_mapping_store
 
 
 def test_coordinator_rejects_successful_confirmation_for_wrong_context():

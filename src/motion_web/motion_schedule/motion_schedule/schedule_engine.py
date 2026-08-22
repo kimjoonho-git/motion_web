@@ -2,7 +2,7 @@ import time
 import logging
 from datetime import datetime
 from typing import List, Optional, Tuple, Set
-from .schedule_models import ScheduleItem
+from motion_common.schedule_models import ScheduleItem
 
 logger = logging.getLogger("motion_schedule.engine")
 

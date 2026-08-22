@@ -32,7 +32,7 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from .alarm_registry import AlarmRegistry
 from .command_dispatcher import CommandDispatcher
-from .group_configuration import (
+from motion_common.group_config import (
     GroupConfig,
     load_group_config,
     migrate_legacy_group_config,
