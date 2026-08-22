@@ -1,3 +1,4 @@
+from motion_web_bridge import motion_file_analysis
 import pytest
 
 from motion_web_bridge.bridge_node import MotionWebBridge, create_app
@@ -47,8 +48,8 @@ def test_motion_file_detail_contains_complete_original_content(tmp_path):
         'include_records': include_records,
     }
 
-    detail = bridge._motion_file_entry(path, include_detail=True)
-    summary = bridge._motion_file_entry(path, include_detail=False)
+    detail = motion_file_analysis.motion_file_entry(path, include_detail=True)
+    summary = motion_file_analysis.motion_file_entry(path, include_detail=False)
 
     assert detail['content'] == content
     assert detail['content'].endswith('last-frame')

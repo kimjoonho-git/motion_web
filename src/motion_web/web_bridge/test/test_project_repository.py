@@ -1,3 +1,4 @@
+from motion_web_bridge import motion_file_analysis
 import json
 import hashlib
 import os
@@ -2338,7 +2339,9 @@ def test_user_can_restart_only_motor_control_service_from_web(monkeypatch):
             raise AssertionError('successful scheduling must remain pending verification')
 
     bridge.project_repository = Repository()
-    bridge._configured_axes_from_runtime_file = lambda _runtime: [0]
+    monkeypatch.setattr(
+        motion_file_analysis, 'configured_axes_from_runtime_file', lambda _runtime: [0],
+    )
     calls = []
 
     class Coordinator:

@@ -1,4 +1,4 @@
-"""`motor_config_rules`가 상태에 닿지 않는다는 성질을 지킨다.
+"""순수 모듈이 상태에 닿지 않는다는 성질을 지킨다.
 
 이 모듈은 `MotionWebBridge`에서 떼어낸 순수 함수 모음이다. 누군가 나중에
 `self` 접근이나 노드 import를 끼워 넣으면 다시 노드에 묶이고, 노드를 띄우지
@@ -13,10 +13,10 @@ from pathlib import Path
 
 import pytest
 
-from motion_web_bridge import motor_config_rules
+from motion_web_bridge import motion_file_analysis, motor_config_rules
 
 #: 검사 대상 순수 모듈 · 분해가 진행되면 여기에 추가한다
-PURE_MODULES = [motor_config_rules]
+PURE_MODULES = [motor_config_rules, motion_file_analysis]
 
 #: 순수 모듈이 기대어도 되는 것 · 공용 커널과 표준 라이브러리만
 ALLOWED_PROJECT_IMPORTS = {'motion_common'}

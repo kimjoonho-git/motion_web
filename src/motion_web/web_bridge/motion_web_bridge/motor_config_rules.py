@@ -3,7 +3,7 @@
 `MotionWebBridge`에서 떼어낸 순수 함수 모음이다. 노드의 상태도 락도 건드리지
 않고 인자로 받은 값만 보고 판단하므로, 노드를 띄우지 않고 단위 테스트할 수 있다.
 
-`test_motor_config_rules_are_pure.py`가 이 성질을 지킨다 · `self` 접근이나
+`test_pure_modules.py`가 이 성질을 지킨다 · `self` 접근이나
 `bridge_node` import가 끼어들면 실패한다.
 """
 

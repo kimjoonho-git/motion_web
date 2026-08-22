@@ -25,12 +25,13 @@ from midi_control.bank_manager import (
 from midi_control.config_store import load_midi_banks
 from midi_control.motion_axis_registry import MotionAxisRegistry
 from motion_common import command_router, generation as generation_mod, topics, values
+from motion_common.timing import CONTROL_PERIOD_SEC
 
 
 FILTER_ORDER = 2
 FILTER_MAX_TIME_CONSTANT_SEC = 0.5
 FILTER_MAX_STEP_SEC = 0.05
-MIDI_COMMAND_PERIOD_SEC = 0.02
+MIDI_COMMAND_PERIOD_SEC = CONTROL_PERIOD_SEC
 MIDI_COMMAND_DEADBAND_DEG = 0.01
 FADER_SYNC_MIN_DURATION_SEC = 0.10
 FADER_PARK_RETRY_SEC = 0.15

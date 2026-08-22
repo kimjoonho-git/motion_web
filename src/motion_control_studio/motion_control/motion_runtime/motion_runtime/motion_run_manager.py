@@ -27,6 +27,7 @@ from .motion_automation_store import (
     normalize_automation_state,
 )
 from .motion_group_display import apply_group_display
+from motion_common.timing import CONTROL_PERIOD_SEC
 
 
 ID_CONTROLWORD = 0
@@ -38,7 +39,7 @@ DEFAULT_MOTION_PROJECTS_DIR = (
     Path(os.environ.get('MOTION_WORKSPACE', Path.cwd())).expanduser()
     / 'motion_projects'
 )
-DEFAULT_PERIOD_SEC = 0.02
+DEFAULT_PERIOD_SEC = CONTROL_PERIOD_SEC
 STATE_TIMEOUT_SEC = 1.0
 SAFETY_STATUS_TIMEOUT_SEC = 2.0
 AC_TARGET_TOLERANCE_DEG = 0.1

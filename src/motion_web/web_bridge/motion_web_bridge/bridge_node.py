@@ -30,13 +30,12 @@ from .coordination_bridge import (
     CoordinationWebBridge, local_motion_control, local_motion_readiness,
 )
 from .motor_restart_coordinator import MotorRestartCoordinator
-from . import motor_config_rules
+from . import motion_file_analysis, motor_config_rules
 from .motor_restart_diagnostics import diagnose_motor_restart_failure
 from .motion_studio_bridge import MotionStudioRosBridge
 from .motion_studio_routes import register_motion_studio_routes
 from .bridge_helpers import (
     DYNAMIXEL_BAUDRATE,
-    MOTION_DATA_PERIOD_SEC,
     add_monitoring_motion_values,
     motor_activity_snapshot,
     _monitoring_finite_float,
@@ -2901,7 +2900,7 @@ class MotionWebBridge(Node):
             else None
         )
         if runtime is not None:
-            return self._configured_axes_from_runtime_file(
+            return motion_file_analysis.configured_axes_from_runtime_file(
                 runtime,
                 transport='ethercat',
             )
@@ -2940,7 +2939,7 @@ class MotionWebBridge(Node):
             else None
         )
         if runtime is not None:
-            return self._configured_axes_from_runtime_file(runtime)
+            return motion_file_analysis.configured_axes_from_runtime_file(runtime)
 
         with self._lock:
             motion_state = copy.deepcopy(self._motion_state)
@@ -2963,30 +2962,6 @@ class MotionWebBridge(Node):
                 continue
         return sorted(set(axes))
 
-    @staticmethod
-    def _configured_axes_from_runtime_file(
-        runtime: Path | str,
-        *,
-        transport: str = '',
-    ) -> List[int]:
-        try:
-            payload = yaml.safe_load(
-                Path(runtime).read_text(encoding='utf-8')
-            ) or {}
-            axes = [
-                int(slave['controller_index'])
-                for master in payload.get('masters') or []
-                if isinstance(master, dict)
-                and (
-                    not transport
-                    or str(master.get('type') or '').lower() == transport.lower()
-                )
-                for slave in master.get('slaves') or []
-                if isinstance(slave, dict) and 'controller_index' in slave
-            ]
-            return sorted(set(axes))
-        except (OSError, TypeError, ValueError, yaml.YAMLError):
-            return []
 
     def _wait_for_motor_runtime_recovery(
         self,
@@ -4169,7 +4144,7 @@ class MotionWebBridge(Node):
             runtime_file = self.project_repository.mark_runtime_motor_config_applied(
                 project_id
             )
-            expected_axes = self._configured_axes_from_runtime_file(
+            expected_axes = motion_file_analysis.configured_axes_from_runtime_file(
                 runtime_file
             )
             if not expected_axes:
@@ -4457,7 +4432,7 @@ class MotionWebBridge(Node):
                 ),
                 **self.snapshot(),
             }
-        expected_axes = self._configured_axes_from_runtime_file(runtime_config)
+        expected_axes = motion_file_analysis.configured_axes_from_runtime_file(runtime_config)
         if not expected_axes:
             self._clear_stopping_project_release_state()
             return {
@@ -4672,7 +4647,7 @@ class MotionWebBridge(Node):
         if result.get('success') is False:
             return result
 
-        loaded_file_id = self._motion_mapping_file_id(result) or str(file_id or '').strip()
+        loaded_file_id = motion_file_analysis.motion_mapping_file_id(result) or str(file_id or '').strip()
         if loaded_file_id:
             midi_result = self._load_and_apply_midi_banks(loaded_file_id)
             result['midi_banks'] = midi_result
@@ -4688,7 +4663,7 @@ class MotionWebBridge(Node):
         if result.get('success') is False:
             return result
 
-        saved_file_id = self._motion_mapping_file_id(result)
+        saved_file_id = motion_file_analysis.motion_mapping_file_id(result)
         if saved_file_id and getattr(self, 'project_repository', None) is not None:
             project_id = self.project_repository.selected_project_id()
             result = self._sync_project_file(
@@ -4746,12 +4721,6 @@ class MotionWebBridge(Node):
         )
         return applied
 
-    @staticmethod
-    def _motion_mapping_file_id(result: Dict[str, Any]) -> str:
-        file_info = result.get('file')
-        if not isinstance(file_info, dict):
-            return ''
-        return str(file_info.get('id') or file_info.get('filename') or '').strip()
 
     def validate_motion_mapping(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self._request_motion_mapping('validate', payload)
@@ -4993,7 +4962,7 @@ class MotionWebBridge(Node):
         status = self.midi_monitor_status()
         if status.get('success') is False:
             return status
-        file_id = self._midi_mapping_file_id(status)
+        file_id = motion_file_analysis.midi_mapping_file_id(status)
         if not file_id:
             return {'success': False, 'message': '선택된 모션축 설정 파일이 없습니다'}
         return self._load_and_apply_midi_banks(file_id)
@@ -5007,18 +4976,11 @@ class MotionWebBridge(Node):
     def disconnect_midi_device(self) -> Dict[str, Any]:
         return self._request_midi_monitor('disconnect_device', {}, timeout_sec=2.0)
 
-    @staticmethod
-    def _midi_mapping_file_id(result: Dict[str, Any]) -> str:
-        file_id = str(result.get('motion_mapping_file_id') or '').strip()
-        if file_id:
-            return Path(file_id).name
-        file_path = str(result.get('bank_config_file') or '').strip()
-        return Path(file_path).name if file_path else ''
 
     def _persist_midi_bank_result(self, updated: Dict[str, Any]) -> Dict[str, Any]:
         if updated.get('success') is False:
             return updated
-        file_id = self._midi_mapping_file_id(updated)
+        file_id = motion_file_analysis.midi_mapping_file_id(updated)
         state = updated.get('bank_state')
         if not file_id:
             return {'success': False, 'message': '선택된 모션축 설정 파일이 없습니다'}
@@ -5220,7 +5182,7 @@ class MotionWebBridge(Node):
             key=lambda item: item.stat().st_mtime if item.exists() else 0.0,
             reverse=True,
         ):
-            files.append(self._motion_file_entry(path, include_detail=False))
+            files.append(motion_file_analysis.motion_file_entry(path, include_detail=False))
         return {
             'success': True,
             'message': (
@@ -5235,7 +5197,7 @@ class MotionWebBridge(Node):
 
     def load_motion_file(self, file_id: Any) -> Dict[str, Any]:
         try:
-            path = self._motion_file_path(file_id, self._selected_motion_files_dir())
+            path = motion_file_analysis.motion_file_path(file_id, self._selected_motion_files_dir())
         except ValueError as exc:
             return {
                 **self.list_motion_files(),
@@ -5246,7 +5208,7 @@ class MotionWebBridge(Node):
             **self.list_motion_files(),
             'success': True,
             'message': 'motion file loaded',
-            'file': self._motion_file_entry(path, include_detail=True),
+            'file': motion_file_analysis.motion_file_entry(path, include_detail=True),
         }
 
     def _motion_file_registration_refs(
@@ -5286,7 +5248,7 @@ class MotionWebBridge(Node):
             if not project_id:
                 raise ValueError('통합 프로젝트를 먼저 선택하세요')
             self._ensure_project_mutation_allowed(project_id)
-            target = self._motion_file_path(
+            target = motion_file_analysis.motion_file_path(
                 file_id, self.motion_projects_dir / project_id / 'motions'
             )
             registration_refs = self._motion_file_registration_refs(
@@ -5320,32 +5282,6 @@ class MotionWebBridge(Node):
             'project': result.get('project'),
         }
 
-    def _motion_file_entry(self, path: Path, *, include_detail: bool) -> Dict[str, Any]:
-        stat = path.stat()
-        entry: Dict[str, Any] = {
-            'id': path.name,
-            'filename': path.name,
-            'path': str(path),
-            'size_bytes': stat.st_size,
-            'updated_at': stat.st_mtime,
-        }
-        try:
-            content = path.read_text(encoding='utf-8')
-            analysis = self._analyze_motion_json(content, include_records=include_detail)
-        except OSError as exc:
-            analysis = {
-                'json_valid': False,
-                'valid': False,
-                'message': f'failed to read file: {exc}',
-                'errors': [str(exc)],
-                'warnings': [],
-            }
-            content = ''
-        entry['analysis'] = analysis
-        if include_detail:
-            entry['content'] = content
-            entry['content_preview'] = content[:12000]
-        return entry
 
     def _selected_motion_files_dir(self) -> Path:
         project_id = self.project_repository.selected_project_id()
@@ -5353,260 +5289,23 @@ class MotionWebBridge(Node):
             raise ValueError('통합 프로젝트를 먼저 선택하세요')
         return self.motion_projects_dir / project_id / 'motions'
 
-    def _motion_file_path(self, file_id: Any, directory: Path) -> Path:
-        name = str(file_id or '').strip()
-        if not name:
-            raise ValueError('file_id is required')
-        if name != Path(name).name or '/' in name or '\\' in name:
-            raise ValueError('invalid motion file id')
-        path = directory / name
-        if not path.is_file():
-            raise ValueError(f'motion file not found: {name}')
-        return path
 
-    def _analyze_motion_json(self, content: str, *, include_records: bool) -> Dict[str, Any]:
-        result: Dict[str, Any] = {
-            'json_valid': False,
-            'format_valid': False,
-            'valid': False,
-            'message': 'not analyzed',
-            'headers': [],
-            'total_records': 0,
-            'valid_records': 0,
-            'motion_id_count': 0,
-            'motion_ids': [],
-            'time': {},
-            'frame': {},
-            'interpolation': {
-                'period_sec': MOTION_DATA_PERIOD_SEC,
-                'required': False,
-            },
-            'errors': [],
-            'warnings': [],
-        }
-        try:
-            payload = json.loads(content)
-        except json.JSONDecodeError as exc:
-            rows, headers, source, text_error = self._extract_motion_rows_from_text(content)
-            if not rows:
-                result['message'] = f'invalid JSON: {exc}'
-                result['errors'].append(str(exc))
-                if text_error:
-                    result['errors'].append(text_error)
-                return result
-            result['message'] = 'motion data parsed from header/list rows'
-            result['warnings'].append('strict JSON 형식은 아니지만 헤더+대괄호 행 형식으로 해석했습니다')
-        else:
-            result['json_valid'] = True
-            rows, headers, source = self._extract_motion_rows(payload)
-        result['format_valid'] = True
-        result['headers'] = headers
-        result['source'] = source
-        result['total_records'] = len(rows)
-        if not rows:
-            result['message'] = 'motion data rows not found'
-            result['errors'].append('motion data rows not found')
-            return result
 
-        parsed_records = []
-        errors = result['errors']
-        for index, row in enumerate(rows):
-            parsed, error = self._parse_motion_row(row, headers)
-            if error:
-                if len(errors) < 50:
-                    errors.append(f'row {index + 1}: {error}')
-                continue
-            parsed['row_index'] = index
-            parsed_records.append(parsed)
 
-        result['valid_records'] = len(parsed_records)
-        if not parsed_records:
-            result['message'] = 'valid motion records not found'
-            if not errors:
-                errors.append('valid motion records not found')
-            return result
 
-        times_in_input = [record['time_sec'] for record in parsed_records]
-        for previous, current in zip(times_in_input, times_in_input[1:]):
-            if current + 1e-9 < previous:
-                result['warnings'].append('time values are not monotonic in file order')
-                break
 
-        duplicate_pairs = set()
-        duplicated_count = 0
-        for record in parsed_records:
-            key = (round(record['time_sec'], 9), record['motion_id'])
-            if key in duplicate_pairs:
-                duplicated_count += 1
-            duplicate_pairs.add(key)
-        if duplicated_count:
-            result['warnings'].append(f'duplicate time/motion_id records: {duplicated_count}')
 
-        sorted_records = sorted(
-            parsed_records,
-            key=lambda item: (item['time_sec'], str(item['motion_id']), item['row_index']),
-        )
-        time_values = [record['time_sec'] for record in sorted_records]
-        frame_values = [record['frame'] for record in sorted_records]
-        min_time = min(time_values)
-        max_time = max(time_values)
-        result['time'] = {
-            'start_sec': min_time,
-            'end_sec': max_time,
-            'duration_sec': max_time - min_time,
-            'unique_count': len(set(round(value, 9) for value in time_values)),
-        }
-        result['frame'] = {
-            'min': min(frame_values),
-            'max': max(frame_values),
-            'unique_count': len(set(frame_values)),
-        }
 
-        groups: Dict[str, List[Dict[str, Any]]] = {}
-        for record in sorted_records:
-            groups.setdefault(str(record['motion_id']), []).append(record)
 
-        motion_ids = []
-        interpolation_required = False
-        for motion_id in sorted(groups, key=self._motion_id_sort_key):
-            records = groups[motion_id]
-            values = [record['value'] for record in records]
-            group_times = [record['time_sec'] for record in records]
-            diffs = [
-                group_times[index] - group_times[index - 1]
-                for index in range(1, len(group_times))
-            ]
-            off_period = [
-                diff for diff in diffs
-                if abs(diff - MOTION_DATA_PERIOD_SEC) > 0.001
-            ]
-            if off_period:
-                interpolation_required = True
-            motion_ids.append({
-                'motion_id': motion_id,
-                'count': len(records),
-                'first_value': records[0]['value'],
-                'last_value': records[-1]['value'],
-                'min_value': min(values),
-                'max_value': max(values),
-                'first_time_sec': min(group_times),
-                'last_time_sec': max(group_times),
-                'period_sec_min': min(diffs) if diffs else None,
-                'period_sec_max': max(diffs) if diffs else None,
-                'requires_interpolation': bool(off_period),
-            })
 
-        unique_times = sorted(set(round(value, 9) for value in time_values))
-        if unique_times:
-            for value in unique_times:
-                offset = (value - min_time) / MOTION_DATA_PERIOD_SEC
-                if abs(offset - round(offset)) > 0.001:
-                    interpolation_required = True
-                    break
 
-        sample_count = 1
-        duration = max_time - min_time
-        if duration > 0.0:
-            sample_count = int(math.floor(duration / MOTION_DATA_PERIOD_SEC)) + 1
-            last_sample_time = min_time + ((sample_count - 1) * MOTION_DATA_PERIOD_SEC)
-            if max_time - last_sample_time > 0.001:
-                sample_count += 1
-
-        result['motion_ids'] = motion_ids
-        result['motion_id_count'] = len(motion_ids)
-        result['interpolation'] = {
-            'period_sec': MOTION_DATA_PERIOD_SEC,
-            'required': interpolation_required,
-            'sample_count': sample_count,
-            'estimated_record_count': sample_count * len(motion_ids),
-            'method': 'linear',
-        }
-        if include_records:
-            result['preview_records'] = sorted_records[:80]
-            result['graph_series'] = self._motion_graph_series(groups)
-
-        result['valid'] = len(errors) == 0
-        result['message'] = 'motion data valid' if result['valid'] else 'motion data has errors'
-        return result
-
-    @staticmethod
-    def _extract_motion_rows(payload: Any) -> tuple[List[Any], List[str], str]:
-        return motion_table.extract_rows(payload)
-
-    @staticmethod
-    def _extract_motion_rows_from_text(
-        content: str,
-    ) -> tuple[List[Any], List[str], str, str]:
-        return motion_table.extract_rows_from_text(content)
-
-    @staticmethod
-    def _parse_motion_header_line(line: str) -> List[str]:
-        return motion_table.parse_header_line(line)
-
-    @staticmethod
-    def _parse_motion_text_row(line: str) -> Optional[List[Any]]:
-        return motion_table.parse_text_row(line)
-
-    @staticmethod
-    def _expand_motion_pair_rows(rows: List[Any], headers: List[str]) -> List[Any]:
-        return motion_table.expand_pair_rows(rows, headers)
-
-    @staticmethod
-    def _parse_motion_row(
-        row: Any,
-        headers: List[str],
-    ) -> tuple[Optional[Dict[str, Any]], str]:
-        return motion_table.parse_row(row, headers)
-
-    @staticmethod
-    def _motion_column_value(row: Dict[str, Any], target: str) -> Any:
-        return motion_table.column_value(row, target)
-
-    @staticmethod
-    def _motion_column_key(label: str) -> str:
-        return motion_table.column_key(label)
-
-    @staticmethod
-    def _motion_header_map(headers: List[str]) -> Dict[str, int]:
-        return motion_table.header_map(headers)
 
     @staticmethod
     def _header_has_required_columns(headers: List[str]) -> bool:
         return motion_table.header_has_required(headers)
 
-    @staticmethod
-    def _motion_id_text(value: Any) -> str:
-        return motion_table.motion_id_text(value)
 
-    @staticmethod
-    def _motion_id_sort_key(value: str) -> tuple[int, Any]:
-        try:
-            return (0, int(value))
-        except ValueError:
-            return (1, value)
 
-    def _motion_graph_series(
-        self,
-        groups: Dict[str, List[Dict[str, Any]]],
-        max_series: int = 12,
-        max_points: int = 300,
-    ) -> List[Dict[str, Any]]:
-        series = []
-        for motion_id in sorted(groups, key=self._motion_id_sort_key)[:max_series]:
-            records = groups[motion_id]
-            stride = max(1, int(math.ceil(len(records) / max_points)))
-            points = [
-                {
-                    'time_sec': record['time_sec'],
-                    'value': record['value'],
-                }
-                for record in records[::stride]
-            ]
-            series.append({
-                'motion_id': motion_id,
-                'points': points,
-            })
-        return series
 
     def request_ac_servo_jog(self, axis: Any, relative_deg: Any) -> Dict[str, Any]:
         axis_value = self._optional_int(axis, None)

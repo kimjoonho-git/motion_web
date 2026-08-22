@@ -145,3 +145,19 @@ def test_matches_absorbed_optional_int_implementations():
 def test_motion_table_reuses_the_same_implementation():
     from motion_common import motion_table
     assert motion_table.finite_float is values.finite_float
+
+
+# --------------------------------------------------------------------------- #
+# 제어 주기
+# --------------------------------------------------------------------------- #
+
+def test_control_period_is_the_single_source():
+    """네 곳에 흩어져 있던 20ms가 한 값을 가리켜야 한다."""
+    from motion_common.timing import CONTROL_PERIOD_SEC, period_matches
+
+    assert CONTROL_PERIOD_SEC == 0.02
+    assert period_matches(0.02)
+    assert period_matches(0.0201)          # 부동소수 오차 흡수
+    assert not period_matches(0.04)
+    assert not period_matches('x')
+    assert not period_matches(None)

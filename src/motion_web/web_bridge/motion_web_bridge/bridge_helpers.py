@@ -5,9 +5,11 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
 from ament_index_python.packages import get_package_share_directory
+from motion_common.timing import CONTROL_PERIOD_SEC
 
 DYNAMIXEL_BAUDRATE = 1000000
-MOTION_DATA_PERIOD_SEC = 0.02
+#: 공용 커널이 단일 정의 · 기존 이름은 호환을 위해 남긴다
+MOTION_DATA_PERIOD_SEC = CONTROL_PERIOD_SEC
 
 
 def motor_activity_snapshot(
