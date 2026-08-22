@@ -33,7 +33,7 @@ from .project_store import ProjectStore
 from .recording_session import StudioRecordingSession
 from .ros_gateway import StudioRosGateway
 from .workspace_session import StudioWorkspaceSession
-from motion_common import generation, rpc, topics
+from motion_common import command_router, generation, rpc, topics
 
 
 DEFAULT_MOTION_PROJECTS_DIR = str(
@@ -267,25 +267,20 @@ class MotionStudioNode(Node):
                     )
 
     def _request_callback(self, msg: String) -> None:
-        try:
-            request = json.loads(msg.data)
-        except json.JSONDecodeError:
+        request = command_router.parse_request(msg.data, default_command='status')
+        if request is None:
             return
-        if not isinstance(request, dict):
-            return
-        request_id = str(request.get('request_id') or '')
-        project_generation = request.get('project_generation')
-        command = str(request.get('command') or 'status').strip()
-        payload = request.get('payload') if isinstance(request.get('payload'), dict) else {}
         try:
-            self._validate_request_generation(command, project_generation, payload)
-            result = self._handle(command, payload)
+            self._validate_request_generation(
+                request.command, request.generation, request.payload
+            )
+            result = self._handle(request.command, request.payload)
         except Exception as exc:
-            self.get_logger().error(f'studio command failed: {command}\n{traceback.format_exc()}')
-            result = {'success': False, 'message': str(exc)}
-        result['request_id'] = request_id
-        result['project_generation'] = project_generation
-        self._publish_json(self._response_pub, result)
+            self.get_logger().error(
+                f'studio command failed: {request.command}\n{traceback.format_exc()}'
+            )
+            result = command_router.error_response(exc)
+        self._publish_json(self._response_pub, command_router.finalize(result, request))
         self._publish_status()
 
     #: 실행 컨텍스트를 새로 세우는 명령 · 이때만 세대가 오를 수 있다

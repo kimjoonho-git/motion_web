@@ -24,7 +24,7 @@ from midi_control.bank_manager import (
 )
 from midi_control.config_store import load_midi_banks
 from midi_control.motion_axis_registry import MotionAxisRegistry
-from motion_common import generation as generation_mod, topics, values
+from motion_common import command_router, generation as generation_mod, topics, values
 
 
 FILTER_ORDER = 2
@@ -2959,19 +2959,14 @@ class MidiControlNode(Node):
                 self._motor_command_message[channel] = 'SELECT를 눌러 녹화할 축을 선택하세요'
 
     def _request_callback(self, msg: String) -> None:
-        try:
-            request = json.loads(msg.data)
-        except json.JSONDecodeError:
+        request = command_router.parse_request(msg.data, default_command='status')
+        if request is None:
             return
-        if not isinstance(request, dict):
-            return
-        request_id = str(request.get('request_id') or '')
-        project_generation = request.get('project_generation')
-        command = str(request.get('command') or 'status')
-        payload = request.get('payload') if isinstance(request.get('payload'), dict) else {}
+        command = request.command
+        payload = request.payload
         response: Dict[str, Any]
         try:
-            self._validate_request_generation(command, project_generation, payload)
+            self._validate_request_generation(command, request.generation, payload)
             if command == 'select_project':
                 previous_project_id = self._project_id
                 self._select_project_mapping_dir(payload)
@@ -3234,13 +3229,10 @@ class MidiControlNode(Node):
                     'message': f'unsupported command: {command}',
                 }
         except ValueError as exc:
-            response = {
-                'success': False,
-                'message': str(exc),
-            }
-        response['request_id'] = request_id
-        response['project_generation'] = project_generation
-        self._publish_json(self._response_publisher, response)
+            response = command_router.error_response(exc)
+        self._publish_json(
+            self._response_publisher, command_router.finalize(response, request)
+        )
 
     #: 실행 컨텍스트를 새로 세우는 명령 · 이때만 세대가 오를 수 있다
     CONTEXT_COMMANDS = frozenset({'select_project', 'invalidate_context'})

@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Mapping, Optional
 
 import rclpy
 import yaml
-from motion_common import generation as generation_mod, motion_table, topics, values
+from motion_common import command_router, generation as generation_mod, motion_table, topics, values
 from motion_control_msgs.msg import MotorStatus
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
@@ -283,24 +283,17 @@ class MotionRunManager(Node):
                     self._action_results.pop(key, None)
 
     def _request_callback(self, msg: String) -> None:
-        try:
-            request = json.loads(msg.data)
-        except json.JSONDecodeError as exc:
-            self.get_logger().warn(f'invalid motion run request JSON: {exc}')
-            return
-        if not isinstance(request, dict):
+        request = command_router.parse_request(msg.data)
+        if request is None:
+            self.get_logger().warn('invalid motion run request JSON')
             return
 
-        request_id = str(request.get('request_id') or '')
-        project_generation = request.get('project_generation')
-        command = str(request.get('command') or '').strip()
-        payload = request.get('payload')
-        if not isinstance(payload, dict):
-            payload = {}
+        command = request.command
+        payload = request.payload
 
         try:
             request_generation = self._validate_request_generation(
-                command, project_generation, payload
+                command, request.generation, payload
             )
             if command == 'apply_context':
                 response = self._apply_execution_context(payload)
@@ -379,9 +372,7 @@ class MotionRunManager(Node):
             )
             response = {'success': False, 'message': f'motion run command failed: {exc}'}
 
-        response['request_id'] = request_id
-        response['project_generation'] = project_generation
-        self._publish_response(response)
+        self._publish_response(command_router.finalize(response, request))
         self._publish_status()
 
     #: 실행 컨텍스트를 새로 세우는 명령 · 이때만 세대가 오를 수 있다

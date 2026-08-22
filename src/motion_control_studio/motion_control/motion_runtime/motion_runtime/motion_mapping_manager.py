@@ -13,7 +13,7 @@ import yaml
 from rclpy.node import Node
 from std_msgs.msg import String
 
-from motion_common import generation, topics, values
+from motion_common import command_router, generation, topics, values
 from motion_runtime.midi_bank_store import (
     atomic_write_with_backup,
     load_midi_banks,
@@ -69,25 +69,17 @@ class MotionMappingManager(Node):
         )
 
     def _request_callback(self, msg: String) -> None:
-        try:
-            request = json.loads(msg.data)
-        except json.JSONDecodeError as exc:
-            self.get_logger().warn(f'invalid mapping request JSON: {exc}')
-            return
-
-        if not isinstance(request, dict):
+        request = command_router.parse_request(msg.data)
+        if request is None:
+            self.get_logger().warn('invalid mapping request JSON')
             self._publish_response('', False, 'mapping request must be an object')
             return
 
-        request_id = str(request.get('request_id') or '')
-        project_generation = request.get('project_generation')
-        command = str(request.get('command') or '').strip()
-        payload = request.get('payload')
-        if not isinstance(payload, dict):
-            payload = {}
+        command = request.command
+        payload = request.payload
 
         try:
-            self._validate_request_generation(command, project_generation, payload)
+            self._validate_request_generation(command, request.generation, payload)
             if command == 'invalidate_context':
                 self.mappings_dir = self.motion_projects_dir
                 self.motion_files_dir = self.motion_projects_dir
@@ -130,14 +122,11 @@ class MotionMappingManager(Node):
             self.get_logger().error(
                 f'motion mapping command failed: {command}: {exc}'
             )
-            response = {
-                'success': False,
-                'message': f'motion mapping command failed: {exc}',
-            }
+            response = command_router.error_response(
+                f'motion mapping command failed: {exc}'
+            )
 
-        response['request_id'] = request_id
-        response['project_generation'] = project_generation
-        self._publish(response)
+        self._publish(command_router.finalize(response, request))
 
     #: 실행 컨텍스트를 새로 세우는 명령 · 이때만 세대가 오를 수 있다
     CONTEXT_COMMANDS = frozenset({'apply_context', 'invalidate_context'})
