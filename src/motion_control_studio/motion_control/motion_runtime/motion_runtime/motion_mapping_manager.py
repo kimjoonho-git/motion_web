@@ -55,6 +55,7 @@ class MotionMappingManager(Node):
             ).value
         )
 
+        self._router = self._build_router()
         self._response_publisher = self.create_publisher(String, self.response_topic, 10)
         self._request_subscription = self.create_subscription(
             String,
@@ -68,6 +69,37 @@ class MotionMappingManager(Node):
             f'response_topic={self.response_topic}, mappings_dir={self.mappings_dir}'
         )
 
+    #: 프로젝트를 고르지 않고 처리하는 명령 · 컨텍스트를 버리는 중이라 고를 대상이 없다
+    COMMANDS_WITHOUT_PROJECT = frozenset({'invalidate_context'})
+
+    def _build_router(self) -> command_router.CommandRouter:
+        """명령 → 처리기 표 · 처리기는 payload를 받아 응답 dict를 돌려준다."""
+        router = command_router.CommandRouter(context_commands=self.CONTEXT_COMMANDS)
+        router.register('apply_context', self._apply_context)
+        router.register('invalidate_context', self._invalidate_context)
+        router.register('list', lambda payload: self._list_mappings())
+        router.register('load', lambda payload: self._load_mapping(payload.get('file_id')))
+        router.register('save', self._save_mapping)
+        router.register('validate', self._validate_mapping_request)
+        router.register('delete', lambda payload: self._delete_mapping(payload.get('file_id')))
+        router.register(
+            'load_midi_banks', lambda payload: self._load_midi_banks(payload.get('file_id'))
+        )
+        router.register('save_midi_banks', self._save_midi_banks)
+        return router
+
+    def _invalidate_context(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """실행 컨텍스트를 버리고 경로를 프로젝트 루트로 되돌린다."""
+        self.mappings_dir = self.motion_projects_dir
+        self.motion_files_dir = self.motion_projects_dir
+        self._execution_context = {}
+        return {
+            'success': True,
+            'message': '모션축 설정 실행 컨텍스 폐기',
+            'project_id': '',
+            'context_id': '',
+        }
+
     def _request_callback(self, msg: String) -> None:
         request = command_router.parse_request(msg.data)
         if request is None:
@@ -80,41 +112,15 @@ class MotionMappingManager(Node):
 
         try:
             self._validate_request_generation(command, request.generation, payload)
-            if command == 'invalidate_context':
-                self.mappings_dir = self.motion_projects_dir
-                self.motion_files_dir = self.motion_projects_dir
-                self._execution_context = {}
-                response = {
-                    'success': True,
-                    'message': '모션축 설정 실행 컨텍스 폐기',
-                    'project_id': '',
-                    'context_id': '',
-                }
-            else:
+            if command not in self.COMMANDS_WITHOUT_PROJECT:
                 self._select_project(payload)
-            if command == 'apply_context':
-                response = self._apply_context(payload)
-            elif command == 'invalidate_context':
-                pass
-            elif command == 'list':
-                response = self._list_mappings()
-            elif command == 'load':
-                response = self._load_mapping(payload.get('file_id'))
-            elif command == 'save':
-                response = self._save_mapping(payload)
-            elif command == 'validate':
-                response = self._validate_mapping_request(payload)
-            elif command == 'delete':
-                response = self._delete_mapping(payload.get('file_id'))
-            elif command == 'load_midi_banks':
-                response = self._load_midi_banks(payload.get('file_id'))
-            elif command == 'save_midi_banks':
-                response = self._save_midi_banks(payload)
+            handler = self._router.resolve(command)
+            if handler is None:
+                response = command_router.error_response(
+                    f'unknown mapping command: {command}'
+                )
             else:
-                response = {
-                    'success': False,
-                    'message': f'unknown mapping command: {command}',
-                }
+                response = handler(payload)
         except Exception as exc:  # Defensive boundary for the web bridge.
             # RcutilsLogger does not implement logging.Logger.exception().
             # Keep the manager alive so one invalid/missing file request does
