@@ -563,7 +563,38 @@ C는 처음에 `motor_config_rules`로 넣었더니 1,345줄이 되어 §7 파�
 `getattr(self, 'workspace_root', Path())`로 되돌렸다. §6-11에서 겪은 것과 같은
 종류다 · **인자화는 호출 시점까지 같아야 동치다.**
 
-검증 · `ruff check src` 55건 유지 · `pytest` 1,005건 통과 · 실패 0
+#### 검증
+
+- 코드 검증 · `ruff check src` 55건 유지 · 신규 0건
+- 실행 검증 · `pytest` 1,005건 통과 · 실패 0
+- 실물 검증 · `colcon build` · `motion-control.service` 재시작 · 실행 컨텍스트 **자동 적용**
+  (§6-14 재발 없음) · `runtime_service_status` 산출 `service_management.runtime`에서
+  `phase: ready` · `runtime_target_matches_process: True` 확인
+- 실물 검증 · **AC Servo 물리 스캔 1회** · `scan_id 1788853757137-1` ·
+  `ethercat_project_compat`가 정확히 이 상황을 위해 만든 판정을 냈다
+
+스캔 시점의 물리 조건이 마침 이 판정의 목적과 일치했다. 프로젝트는 Master 0의
+1축만 쓰는데 Master 1은 랜선이 빠져 미응답이었다. 결과:
+
+```
+compatible: true
+required_master_indices: [0]
+unused_registered_master_indices: [1]
+masters: [{master_index: 0, expected 1, observed 1, compatible: true, errors: []}]
+message: 프로젝트 EtherCAT 구성 확인 완료 · Master 0
+```
+
+**쓰이지 않는 Master의 미응답을 프로젝트 불일치로 판정하지 않는다** — 이 함수의
+docstring이 적어둔 구분이 실물에서 그대로 나왔다. Slave 0은 alias 103 ·
+vendor_id 1647 · product_code 1614282756 · serial 402982152를 직접 읽어 대조했다
+(`direct_read_complete: true`).
+
+전체 스캔 결과 자체는 `부분 완료`다 · Master 1 미응답 · Dynamixel은 포트 부재로
+이번 스캔 대상에서 제외(AC Servo 전용 스캔). 스캔 후 모터 서비스는 자동 복구됐고
+(`motor_service_restored: True`), 재열거 과정에서 축 0의 통신 알람(0xFF50)도 해소됐다.
+
+참고 · 검증 중 관측한 축 0 알람과 Slave 1 이탈은 **작업자가 의도적으로 랜선 하나를
+분리한 결과**로 확인됐다. 결함이 아니다.
 
 ### 6-14. 결함 기록 · `motion_supervisor` 수신 정지
 
