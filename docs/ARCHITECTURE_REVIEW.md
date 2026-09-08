@@ -719,6 +719,55 @@ transport)`. 노드를 거치지 않고 `self.transport.request(...)`를 부른�
   노드 `snapshot`이 `session.snapshot_status()`를 읽는 경로 확인
 - 실물 미검증 · 녹화·재생·레이어 편집 · 화면 조작이 필요하다
 
+### 6-16. 빈 위임 층 제거 · `MotorService` · `MotionRunService`
+
+`MotionWebBridge` 5,345 → 5,327줄 · 메서드 176 → 173 · 파일 2개 삭제(-187줄)
+
+§6-15가 스튜디오에서 한 것과 **방향이 반대다.** 스튜디오의 서비스에는 옮길 로직이
+있었다. 여기 둘에는 **아무것도 없었다.**
+
+| 모듈 | 줄 | 내용 |
+|---|---|---|
+| `motor_service.py` | 110 | 전량 `self.bridge.___` 위임 · §3-1이 지목한 그 파일 |
+| `motion_run_service.py` | 77 | 16개 전량 위임 + `AutomationService` 4개 |
+
+로직이 없는 층은 옮길 것이 없다. 부풀리지 않고 **지웠다.** 라우트가 노드를 직접
+부른다. 로직 자체를 노드에서 꺼내는 일은 락 구간과 함께 설계해야 하며 그대로 남는다.
+
+#### 발견한 결함 · Dynamixel 스캔 제한시간이 절반이었다
+
+복제 층이 값을 갈라놓고 있었다.
+
+```
+bridge_node.scan_dynamixel_motors(timeout_sec=40.0)    ← cc73228이 20 → 40으로 올림
+MotorService.scan_dynamixel_motors(timeout_sec=20.0)   ← 같이 올리지 않음
+```
+
+라우트는 `getattr(bridge, 'motor', bridge)`로 **복제 층을 먼저** 골랐다. 그래서
+`cc73228`이 올린 40초는 한 번도 효력이 없었고 실제로는 20초로 동작했다.
+
+Dynamixel 스캔은 Protocol 2.0 Broadcast Ping과 ID `0~252` 개별 Ping을 모두 수행한다.
+제한시간이 짧으면 응답을 다 받기 전에 끊길 수 있다.
+
+**이 변경으로 40초가 실효를 갖는다.** 동작이 바뀌는 유일한 항목이다 ·
+Dynamixel 장치가 없어 **실물 미검증**이다.
+
+이것이 껍데기 층의 대가다. 한쪽만 고치면 다른 쪽이 조용히 이긴다.
+
+#### 조정(coordination) 위임 3개도 제거
+
+`coordination_control` · `coordination_status` · `update_coordination_settings` ·
+각 3~5줄 · `system_routes`가 `bridge._coordination_web_bridge`를 직접 부른다.
+
+`_coordination_execution_blocker`는 남긴다 · 서비스가 없을 때 빈 문자열을 돌려주는
+방어가 들어 있고 노드 안에서 5곳이 쓴다.
+
+#### 검증
+
+- 코드 검증 · `ruff check src` 55건 유지 · 신규 0건
+- 실행 검증 · `pytest` 1,005건 통과 · 실패 0
+- 실물 검증 · 아래 별도 기록
+
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
 - 파일 1,000줄 이하 · 함수 60줄 이하 · `Node` 서브클래스 500줄 이하

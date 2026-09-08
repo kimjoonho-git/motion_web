@@ -85,7 +85,7 @@ def register_system_routes(app: FastAPI, bridge, project_call) -> None:
 
     @app.get('/api/coordination')
     async def coordination_status():
-        return bridge.coordination_status()
+        return bridge._coordination_web_bridge.snapshot()
 
     @app.put('/api/coordination/settings')
     async def update_coordination_settings(request: Request):
@@ -93,7 +93,7 @@ def register_system_routes(app: FastAPI, bridge, project_call) -> None:
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail='request body must be an object')
         try:
-            return await asyncio.to_thread(bridge.update_coordination_settings, body)
+            return await asyncio.to_thread(bridge._coordination_web_bridge.update_settings, body)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -114,7 +114,7 @@ def register_system_routes(app: FastAPI, bridge, project_call) -> None:
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail='request body must be an object')
         try:
-            return await asyncio.to_thread(bridge.coordination_control, body)
+            return await asyncio.to_thread(bridge._coordination_web_bridge.request_control, body)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

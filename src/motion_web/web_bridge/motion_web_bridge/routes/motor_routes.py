@@ -6,89 +6,74 @@ from fastapi import FastAPI, HTTPException, Request
 def register_motor_routes(app: FastAPI, bridge, project_call) -> None:
     @app.post('/api/motors/scan')
     async def scan_motors():
-        handler = getattr(bridge, 'motor', bridge)
-        return await asyncio.to_thread(handler.scan_motors)
+        return await asyncio.to_thread(bridge.scan_motors)
 
     @app.post('/api/motors/scan/ac-servo')
     async def scan_ac_servo_motors():
-        handler = getattr(bridge, 'motor', bridge)
-        return await asyncio.to_thread(handler.scan_ac_servo_motors)
+        return await asyncio.to_thread(bridge.scan_ac_servo_motors)
 
     @app.post('/api/motors/scan/dynamixel')
     async def scan_dynamixel_motors():
-        handler = getattr(bridge, 'motor', bridge)
-        return await asyncio.to_thread(handler.scan_dynamixel_motors)
+        return await asyncio.to_thread(bridge.scan_dynamixel_motors)
 
     @app.get('/api/motors/scan/progress')
     async def motor_scan_progress():
-        handler = getattr(bridge, 'motor', bridge)
-        return handler.motor_scan_progress()
+        return bridge.motor_scan_progress()
 
     @app.get('/api/motors/ethercat-aliases')
     async def read_ethercat_aliases():
-        handler = getattr(bridge, 'motor', bridge)
-        return await asyncio.to_thread(handler.read_ethercat_aliases)
+        return await asyncio.to_thread(bridge.read_ethercat_aliases)
 
     @app.post('/api/motors/ethercat-alias')
     async def write_ethercat_alias(request: Request):
         body = await request.json()
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail='request body must be an object')
-        handler = getattr(bridge, 'motor', bridge)
-        return await asyncio.to_thread(handler.write_ethercat_alias, body)
+        return await asyncio.to_thread(bridge.write_ethercat_alias, body)
 
     @app.get('/api/motor-config')
     async def motor_config():
-        handler = getattr(bridge, 'motor', bridge)
-        return handler.load_motor_config()
+        return bridge.load_motor_config()
 
     @app.put('/api/motor-config')
     async def save_motor_config(request: Request):
         body = await request.json()
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail='request body must be an object')
-        handler = getattr(bridge, 'motor', bridge)
-        return handler.save_motor_config(body)
+        return bridge.save_motor_config(body)
 
     @app.delete('/api/motor-config')
     async def delete_motor_config():
-        handler = getattr(bridge, 'motor', bridge)
-        return project_call(handler.delete_motor_config)
+        return project_call(bridge.delete_motor_config)
 
     @app.post('/api/motor-config/apply')
     async def apply_motor_config():
-        handler = getattr(bridge, 'motor', bridge)
-        return await asyncio.to_thread(handler.apply_motor_config)
+        return await asyncio.to_thread(bridge.apply_motor_config)
 
     @app.get('/api/motor-events')
     async def motor_events(
         limit: int = 200, category: str = 'all', file_name: str = 'all'
     ):
-        handler = getattr(bridge, 'motor', bridge)
-        return handler.motor_events(limit=limit, category=category, file_name=file_name)
+        return bridge.motor_events(limit=limit, category=category, file_name=file_name)
 
     @app.delete('/api/motor-events')
     async def clear_motor_events():
-        handler = getattr(bridge, 'motor', bridge)
-        return handler.clear_motor_events()
+        return bridge.clear_motor_events()
 
     @app.delete('/api/motor-events/files/{file_name}')
     async def delete_motor_event_file(file_name: str):
-        handler = getattr(bridge, 'motor', bridge)
-        return project_call(handler.delete_motor_event_file, file_name)
+        return project_call(bridge.delete_motor_event_file, file_name)
 
     @app.get('/api/servo-alarm-policy')
     async def servo_alarm_policy():
-        handler = getattr(bridge, 'motor', bridge)
-        return project_call(handler.servo_alarm_policy)
+        return project_call(bridge.servo_alarm_policy)
 
     @app.put('/api/servo-alarm-policy')
     async def save_servo_alarm_policy(request: Request):
         body = await request.json()
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail='request body must be an object')
-        handler = getattr(bridge, 'motor', bridge)
-        return project_call(handler.save_servo_alarm_policy, body)
+        return project_call(bridge.save_servo_alarm_policy, body)
 
     @app.post('/api/motion-test/ac-servo/jog')
     async def ac_servo_jog(request: Request):

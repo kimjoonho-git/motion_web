@@ -46,8 +46,6 @@ from .bridge_helpers import (
     _monitoring_finite_float,
     _workspace_root,
 )
-from .motor_service import MotorService
-from .motion_run_service import MotionRunService
 from .routes import (
     register_project_routes,
     register_motor_routes,
@@ -78,8 +76,6 @@ class MotionWebBridge(Node):
     def __init__(self) -> None:
         super().__init__('motion_web_bridge')
         self.ethercat_alias_manager = EthercatAliasManager()
-        self.motor = MotorService(self)
-        self.motion_run = MotionRunService(self)
         self.motion_state_topic = self.declare_parameter(
             'motion_state_topic',
             topics.MOTION_STATE,
@@ -886,16 +882,6 @@ class MotionWebBridge(Node):
             'motion_state': motion_state,
         }
 
-    def coordination_status(self) -> Dict[str, Any]:
-        """Return global PC coordination state without project data."""
-        return self._coordination_web_bridge.snapshot()
-
-    def update_coordination_settings(
-        self, payload: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Update this PC's global DDS group settings."""
-        return self._coordination_web_bridge.update_settings(payload)
-
     def coordination_local_readiness(self) -> Dict[str, Any]:
         """Check the currently active local execution files and safety state."""
         return local_motion_readiness(self)
@@ -945,10 +931,6 @@ class MotionWebBridge(Node):
             name='coordination-watchdog-stop',
             daemon=True,
         ).start()
-
-    def coordination_control(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Send one manual group operation through the local ROS adapter."""
-        return self._coordination_web_bridge.request_control(payload)
 
     def coordination_local_control(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a validated loopback request through motion_run_manager."""
