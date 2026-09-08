@@ -7,7 +7,16 @@ from motion_web_bridge.bridge_node import (
     MotionWebBridge,
     _project_tree_category_signature,
 )
+from motion_web_bridge.motion_studio_session import MotionStudioSession
+from motion_web_bridge.motion_studio_sync import MotionStudioSync
 from motion_web_bridge.project_repository import ProjectRepository
+
+
+class _StubTransport:
+    """전송 계층 대역 · 동기화 서비스가 노드가 아니라 이것을 부른다(§6-15)."""
+
+    def __init__(self, request):
+        self.request = request
 
 
 MOTION_TEXT = '\n'.join([
@@ -28,9 +37,11 @@ def test_motion_studio_refresh_does_not_reopen_workspace_while_recording(tmp_pat
     )
 
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+
+    bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
-    bridge._motion_studio_lock = threading.Lock()
-    bridge._motion_studio_status = {'state': 'recording'}
+    bridge._motion_studio_session.lock = threading.Lock()
+    bridge._motion_studio_session.status = {'state': 'recording'}
     commands = []
 
     def request(command, payload=None, timeout_sec=4.0):
@@ -43,9 +54,9 @@ def test_motion_studio_refresh_does_not_reopen_workspace_while_recording(tmp_pat
             'status': {'state': 'recording'},
         }
 
-    bridge.request_motion_studio = request
+    bridge._motion_studio_ros_bridge = _StubTransport(request)
 
-    result = bridge.prepare_unified_motion_studio()
+    result = bridge._motion_studio_sync().prepare()
 
     assert result['success'] is True
     assert commands[0][0] == 'list'
@@ -72,10 +83,11 @@ def test_motion_studio_idle_refresh_reuses_matching_workspace(tmp_path):
         if item['name'] == 'mapping.yaml'
     )
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
-    bridge._motion_studio_lock = threading.Lock()
-    bridge._motion_studio_status = {'state': 'idle'}
-    bridge._motion_studio_workspace_signatures = {
+    bridge._motion_studio_session.lock = threading.Lock()
+    bridge._motion_studio_session.status = {'state': 'idle'}
+    bridge._motion_studio_session.workspace_signatures = {
         project_id: {
             'layers': _project_tree_category_signature(detail['tree'], 'layers'),
             'motions': _project_tree_category_signature(detail['tree'], 'motions'),
@@ -100,9 +112,9 @@ def test_motion_studio_idle_refresh_reuses_matching_workspace(tmp_path):
             'composition': {'conflicts': [], 'transition_warnings': []},
         }
 
-    bridge.request_motion_studio = request
+    bridge._motion_studio_ros_bridge = _StubTransport(request)
 
-    result = bridge.prepare_unified_motion_studio()
+    result = bridge._motion_studio_sync().prepare()
 
     assert result['success'] is True
     assert commands == ['list']
@@ -120,9 +132,10 @@ def test_motion_studio_mapping_content_change_reopens_workspace(tmp_path):
         'version: 1\nname: current\nmappings: []\n',
     )
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
-    bridge._motion_studio_lock = threading.Lock()
-    bridge._motion_studio_status = {'state': 'idle'}
+    bridge._motion_studio_session.lock = threading.Lock()
+    bridge._motion_studio_session.status = {'state': 'idle'}
     commands = []
 
     def request(command, payload=None, timeout_sec=4.0):
@@ -152,9 +165,9 @@ def test_motion_studio_mapping_content_change_reopens_workspace(tmp_path):
             'status': {'state': 'idle'},
         }
 
-    bridge.request_motion_studio = request
+    bridge._motion_studio_ros_bridge = _StubTransport(request)
 
-    bridge.prepare_unified_motion_studio()
+    bridge._motion_studio_sync().prepare()
 
     assert commands == ['list', 'open_workspace']
 
@@ -186,10 +199,11 @@ def test_motion_studio_project_file_change_reopens_workspace(
         if item['name'] == 'mapping.yaml'
     )
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
-    bridge._motion_studio_lock = threading.Lock()
-    bridge._motion_studio_status = {'state': 'idle'}
-    bridge._motion_studio_workspace_signatures = {
+    bridge._motion_studio_session.lock = threading.Lock()
+    bridge._motion_studio_session.status = {'state': 'idle'}
+    bridge._motion_studio_session.workspace_signatures = {
         project_id: {
             'layers': _project_tree_category_signature(before['tree'], 'layers'),
             'motions': _project_tree_category_signature(before['tree'], 'motions'),
@@ -237,9 +251,9 @@ def test_motion_studio_project_file_change_reopens_workspace(
             'status': {'state': 'idle'},
         }
 
-    bridge.request_motion_studio = request
+    bridge._motion_studio_ros_bridge = _StubTransport(request)
 
-    bridge.prepare_unified_motion_studio()
+    bridge._motion_studio_sync().prepare()
 
     assert commands == ['list', 'open_workspace']
 
@@ -250,9 +264,10 @@ def test_studio_sync_discards_result_after_project_switch(tmp_path):
     second_id = repository.create_project('second')['project']['project_id']
     repository.select_project(second_id)
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
 
-    result = bridge.sync_motion_studio_result({
+    result = bridge._motion_studio_sync().sync_result({
         'success': True,
         'project': {
             'project_id': 'studio-first',
@@ -277,11 +292,12 @@ def test_studio_sync_returns_changed_layer_patch_instead_of_full_project(tmp_pat
     repository = ProjectRepository(tmp_path / 'projects')
     project_id = repository.create_project('compact response')['project']['project_id']
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
     unchanged = {'layer_id': 'unchanged', 'frames': []}
     changed = {'layer_id': 'changed', 'name': 'after', 'frames': []}
 
-    result = bridge.sync_motion_studio_result({
+    result = bridge._motion_studio_sync().sync_result({
         'success': True,
         'project': {
             'project_id': 'studio-project',
@@ -327,9 +343,10 @@ def test_motion_studio_project_switch_loads_only_selected_project_layers(tmp_pat
     })
     repository.select_project(second_id)
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
-    bridge._motion_studio_lock = threading.Lock()
-    bridge._motion_studio_status = {'state': 'idle'}
+    bridge._motion_studio_session.lock = threading.Lock()
+    bridge._motion_studio_session.status = {'state': 'idle'}
     requests = []
 
     def request(command, payload=None, timeout_sec=4.0):
@@ -356,9 +373,9 @@ def test_motion_studio_project_switch_loads_only_selected_project_layers(tmp_pat
             'status': {'state': 'idle'},
         }
 
-    bridge.request_motion_studio = request
+    bridge._motion_studio_ros_bridge = _StubTransport(request)
 
-    result = bridge.prepare_unified_motion_studio()
+    result = bridge._motion_studio_sync().prepare()
 
     assert [item[0] for item in requests] == ['list', 'open_workspace']
     opened_layers = requests[1][1]['layers']
@@ -368,8 +385,9 @@ def test_motion_studio_project_switch_loads_only_selected_project_layers(tmp_pat
 
 def test_motion_studio_stop_cancels_start_still_in_preparation():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
-    bridge._motion_studio_command_order_lock = threading.Lock()
-    bridge._motion_studio_start_generation = 0
+    bridge._motion_studio_session = MotionStudioSession()
+    bridge._motion_studio_session.order_lock = threading.Lock()
+    bridge._motion_studio_session.start_generation = 0
     bridge._motor_runtime_control_blocker = lambda: ''
     published = []
 
@@ -386,17 +404,22 @@ def test_motion_studio_stop_cancels_start_still_in_preparation():
         (),
         {'selected_project_id': lambda self: 'workspace-a'},
     )()
-    bridge._wait_for_motion_studio_result = lambda request_id, timeout_sec: {
-        'success': True,
-    }
+    # 응답은 세션 저장소로 들어온다 · 노드 껍데기를 거치지 않는다(§6-15)
+    bridge._motion_studio_session.store.store('studio-request', {'success': True})
 
     def prepare_then_stop():
         bridge.cancel_pending_motion_studio_start()
         return {'success': True}
 
-    bridge.prepare_unified_motion_studio = prepare_then_stop
+    sync = MotionStudioSync(
+        bridge,
+        bridge._motion_studio_session,
+        bridge._motion_studio_transport(),
+    )
+    sync.prepare = prepare_then_stop
+    bridge._motion_studio_sync_service = sync
 
-    result = bridge.request_prepared_motion_studio('play', {})
+    result = bridge._motion_studio_sync().request_prepared('play', {})
 
     assert result['success'] is False
     assert result['start_cancelled'] is True
@@ -405,8 +428,9 @@ def test_motion_studio_stop_cancels_start_still_in_preparation():
 
 def test_motion_studio_start_publishes_before_a_later_stop_generation():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
-    bridge._motion_studio_command_order_lock = threading.Lock()
-    bridge._motion_studio_start_generation = 3
+    bridge._motion_studio_session = MotionStudioSession()
+    bridge._motion_studio_session.order_lock = threading.Lock()
+    bridge._motion_studio_session.start_generation = 3
     published = []
 
     class Publisher:
@@ -422,11 +446,10 @@ def test_motion_studio_start_publishes_before_a_later_stop_generation():
         (),
         {'selected_project_id': lambda self: 'workspace-a'},
     )()
-    bridge._wait_for_motion_studio_result = lambda request_id, timeout_sec: {
-        'success': True,
-    }
+    # 응답은 세션 저장소로 들어온다 · 노드 껍데기를 거치지 않는다(§6-15)
+    bridge._motion_studio_session.store.store('studio-request', {'success': True})
 
-    result = bridge.request_motion_studio(
+    result = bridge._motion_studio_transport().request(
         'play',
         {},
         start_generation=3,

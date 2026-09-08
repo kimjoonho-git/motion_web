@@ -9,6 +9,8 @@ import pytest
 from std_msgs.msg import String
 
 from motion_web_bridge.bridge_node import MotionWebBridge, create_app
+from motion_web_bridge.motion_studio_session import MotionStudioSession
+from motion_web_bridge.motion_studio_sync import MotionStudioSync
 from motion_common import rpc
 from motion_web_bridge import ethercat_project_compat, motor_config_rules
 
@@ -22,6 +24,27 @@ def _restore_patched_module_functions():
     """
     yield
     mock.patch.stopall()
+
+
+class _StubTransport:
+    """전송 계층 대역 · 노드 껍데기가 사라져 이 자리를 대신한다(§6-15)."""
+
+    def __init__(self, request):
+        self.request = request
+
+
+def _install_studio_sync(bridge, *, prepare, request):
+    """준비·전송 이음매를 동기화 서비스에 꽂는다.
+
+    노드 껍데기를 되부르던 순환을 끊으면서(§6-15) 이음매도 서비스로 옮겼다.
+    """
+
+    sync = MotionStudioSync(
+        bridge, bridge._motion_studio_session, _StubTransport(request)
+    )
+    sync.prepare = prepare
+    bridge._motion_studio_sync_service = sync
+    return sync
 
 
 def _patch_runtime_service_status(value):
@@ -92,6 +115,7 @@ class ContextRepository:
 
 def make_bridge():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = ContextRepository()
     bridge._execution_context_lock = threading.RLock()
     bridge._execution_context_apply_lock = threading.Lock()
@@ -107,7 +131,7 @@ def make_bridge():
     bridge._motion_mapping_lock = threading.Lock()
     bridge._motion_run_lock = threading.Lock()
     bridge._midi_monitor_lock = threading.Lock()
-    bridge._motion_studio_lock = threading.Lock()
+    bridge._motion_studio_session.lock = threading.Lock()
     bridge._motion_studio_editor_lock = threading.Lock()
     bridge._motion_state = {'generated_at': 1.0, 'last_motor_status_at': 1.0, 'motors': []}
     bridge._motion_state_received_at = 1.0
@@ -120,9 +144,9 @@ def make_bridge():
     bridge._motion_run_status = {}
     bridge._midi_monitor_store = rpc.ResultStore()
     bridge._midi_monitor_status = {}
-    bridge._motion_studio_store = rpc.ResultStore()
-    bridge._motion_studio_status = {}
-    bridge._motion_studio_editor_store = rpc.ResultStore()
+    bridge._motion_studio_session.store = rpc.ResultStore()
+    bridge._motion_studio_session.status = {}
+    bridge._motion_studio_session.editor_store = rpc.ResultStore()
     bridge._safety_request_publisher = type('Publisher', (), {
         'publish': lambda _self, _message: None,
     })()
@@ -146,7 +170,7 @@ def make_bridge():
     bridge._request_motion_mapping = response
     bridge._request_midi_monitor = response
     bridge._request_motion_run = response
-    bridge.request_motion_studio = response
+    bridge._motion_studio_ros_bridge = _StubTransport(response)
     return bridge
 
 
@@ -371,6 +395,7 @@ def test_frequent_status_read_does_not_rehash_project_files():
 
 def test_snapshot_reads_motor_operation_without_reconciling_it(tmp_path):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge._lock = threading.Lock()
     bridge._motion_state = None
     bridge._motion_state_received_at = None
@@ -380,8 +405,8 @@ def test_snapshot_reads_motor_operation_without_reconciling_it(tmp_path):
     bridge._motion_run_status = {}
     bridge._midi_monitor_lock = threading.Lock()
     bridge._midi_monitor_status = {}
-    bridge._motion_studio_lock = threading.Lock()
-    bridge._motion_studio_status = {}
+    bridge._motion_studio_session.lock = threading.Lock()
+    bridge._motion_studio_session.status = {}
     bridge._safety_status_lock = threading.Lock()
     bridge._safety_status = {}
     bridge._bridge_instance_id = 'bridge-1'
@@ -421,6 +446,7 @@ def test_snapshot_reads_motor_operation_without_reconciling_it(tmp_path):
 
 def test_motor_operation_coordinator_is_the_reconcile_writer():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge._motor_operation_reconcile_lock = threading.Lock()
     bridge._lock = threading.Lock()
     bridge._motion_state = {'motors': []}
@@ -549,7 +575,7 @@ def test_coordinator_accepts_midi_snapshot_with_nested_context_acknowledgement()
 
 def test_coordinator_accepts_studio_status_with_nested_context_acknowledgement():
     bridge = make_bridge()
-    default_response = bridge.request_motion_studio
+    default_response = bridge._motion_studio_ros_bridge.request
 
     def studio_response(command, payload, **kwargs):
         response = default_response(command, payload, **kwargs)
@@ -566,7 +592,7 @@ def test_coordinator_accepts_studio_status_with_nested_context_acknowledgement()
             }
         return response
 
-    bridge.request_motion_studio = studio_response
+    bridge._motion_studio_ros_bridge = _StubTransport(studio_response)
 
     result = bridge._reconcile_execution_context()
 
@@ -632,6 +658,7 @@ def test_coordinator_waits_for_current_project_motor_runtime():
 
 def test_project_change_deletes_previous_project_values_from_bridge_memory():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge._lock = threading.Lock()
     bridge._event_log_lock = threading.RLock()
     bridge._jog_result_lock = threading.Lock()
@@ -639,7 +666,7 @@ def test_project_change_deletes_previous_project_values_from_bridge_memory():
     bridge._motion_mapping_lock = threading.Lock()
     bridge._motion_run_lock = threading.Lock()
     bridge._midi_monitor_lock = threading.Lock()
-    bridge._motion_studio_lock = threading.Lock()
+    bridge._motion_studio_session.lock = threading.Lock()
     bridge._motion_studio_editor_lock = threading.Lock()
     bridge._motion_state = {'motors': [{'alias': 403}]}
     bridge._motion_state_received_at = 1.0
@@ -657,11 +684,11 @@ def test_project_change_deletes_previous_project_values_from_bridge_memory():
     bridge._midi_monitor_store = rpc.ResultStore()
     bridge._midi_monitor_store.store('old', {'project_id': 'old-project'})
     bridge._midi_monitor_status = {'project_id': 'old-project', 'banks': [1]}
-    bridge._motion_studio_store = rpc.ResultStore()
-    bridge._motion_studio_store.store('old', {'project_id': 'old-project'})
-    bridge._motion_studio_status = {'project_id': 'old-project', 'project': {}}
-    bridge._motion_studio_editor_store = rpc.ResultStore()
-    bridge._motion_studio_editor_store.store('old', {'project_id': 'old-project'})
+    bridge._motion_studio_session.store = rpc.ResultStore()
+    bridge._motion_studio_session.store.store('old', {'project_id': 'old-project'})
+    bridge._motion_studio_session.status = {'project_id': 'old-project', 'project': {}}
+    bridge._motion_studio_session.editor_store = rpc.ResultStore()
+    bridge._motion_studio_session.editor_store.store('old', {'project_id': 'old-project'})
 
     bridge._clear_project_scoped_memory()
 
@@ -676,13 +703,14 @@ def test_project_change_deletes_previous_project_values_from_bridge_memory():
     assert bridge._motion_run_status == {}
     assert bridge._midi_monitor_store.pending_count() == 0
     assert bridge._midi_monitor_status == {}
-    assert bridge._motion_studio_store.pending_count() == 0
-    assert bridge._motion_studio_status == {}
-    assert bridge._motion_studio_editor_store.pending_count() == 0
+    assert bridge._motion_studio_session.store.pending_count() == 0
+    assert bridge._motion_studio_session.status == {}
+    assert bridge._motion_studio_session.editor_store.pending_count() == 0
 
 
 def test_previous_runtime_motor_state_is_not_cached_after_project_change():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge._lock = threading.Lock()
     bridge._motion_state = None
     bridge._motion_state_received_at = None
@@ -703,6 +731,7 @@ def test_previous_runtime_motor_state_is_not_cached_after_project_change():
 
 def test_scan_result_is_discarded_if_project_changes_while_scanning():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     selected = {'project_id': 'project-a'}
     bridge.project_repository = operation_repository(lambda: selected['project_id'])
     bridge.snapshot = lambda: {}
@@ -733,6 +762,7 @@ def test_scan_result_is_discarded_if_project_changes_while_scanning():
 
 def test_scan_request_is_rejected_while_another_motor_type_scan_is_running():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge._motor_scan_request_lock = threading.Lock()
     bridge._motor_scan_request_lock.acquire()
     bridge._project_generation_lock = threading.Lock()
@@ -755,6 +785,7 @@ def test_scan_request_is_rejected_while_another_motor_type_scan_is_running():
 
 def test_physical_scan_is_allowed_without_a_selected_project():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge._motor_scan_request_lock = threading.Lock()
     bridge._project_generation_lock = threading.Lock()
     bridge._project_generation = 0
@@ -836,6 +867,7 @@ def test_scan_result_message_preserves_partial_outcome():
 
 def test_scan_result_marks_unused_disconnected_master_as_project_compatible_partial():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge.load_motor_config = lambda: {
         'success': True,
         'registry': {
@@ -1075,6 +1107,7 @@ def test_scan_result_keeps_failure_when_no_requested_device_is_detected():
 
 def test_scan_result_keeps_failure_when_required_project_master_is_missing():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge.load_motor_config = lambda: {
         'success': True,
         'registry': {
@@ -1125,6 +1158,7 @@ def test_scan_result_keeps_failure_when_required_project_master_is_missing():
 
 def test_scan_entrypoints_use_distinct_operation_types():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge._scan_client = object()
     bridge._scan_ac_servo_client = object()
     bridge._scan_dynamixel_client = object()
@@ -1160,6 +1194,7 @@ def test_scan_entrypoints_use_distinct_operation_types():
 
 def test_full_scan_returns_terminal_partial_operation():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge._motor_lifecycle_lock = threading.Lock()
     bridge._motor_scan_request_lock = threading.Lock()
     bridge._project_generation_lock = threading.Lock()
@@ -1196,6 +1231,7 @@ def test_full_scan_returns_terminal_partial_operation():
 
 def test_ac_servo_scan_temporarily_releases_and_restores_motor_service(monkeypatch):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge._lock = threading.Lock()
     bridge._motion_state = {
         'motors': [{
@@ -1211,8 +1247,8 @@ def test_ac_servo_scan_temporarily_releases_and_restores_motor_service(monkeypat
     bridge._motion_state_received_at = time.time()
     bridge._motion_run_lock = threading.Lock()
     bridge._motion_run_status = {}
-    bridge._motion_studio_lock = threading.Lock()
-    bridge._motion_studio_status = {}
+    bridge._motion_studio_session.lock = threading.Lock()
+    bridge._motion_studio_session.status = {}
     bridge.project_repository = operation_repository(lambda: 'project-a')
     bridge.snapshot = lambda: {}
     bridge._current_project_generation = lambda: 3
@@ -1256,6 +1292,7 @@ def test_ac_servo_scan_temporarily_releases_and_restores_motor_service(monkeypat
 
 def test_ac_servo_scan_fails_when_motor_runtime_does_not_recover(monkeypatch):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge._lock = threading.Lock()
     bridge._motion_state = {
         'motors': [
@@ -1274,8 +1311,8 @@ def test_ac_servo_scan_fails_when_motor_runtime_does_not_recover(monkeypatch):
     bridge._motion_state_received_at = time.time()
     bridge._motion_run_lock = threading.Lock()
     bridge._motion_run_status = {}
-    bridge._motion_studio_lock = threading.Lock()
-    bridge._motion_studio_status = {}
+    bridge._motion_studio_session.lock = threading.Lock()
+    bridge._motion_studio_session.status = {}
     bridge.project_repository = operation_repository(lambda: 'project-a')
     operation = bridge.project_repository.begin_motor_operation(
         'ac_servo_scan',
@@ -1317,6 +1354,7 @@ def test_ac_servo_scan_fails_when_motor_runtime_does_not_recover(monkeypatch):
 
 def test_ac_servo_scan_restores_service_even_when_stop_command_times_out(monkeypatch):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge._lock = threading.Lock()
     bridge._motion_state = {
         'motors': [{
@@ -1332,8 +1370,8 @@ def test_ac_servo_scan_restores_service_even_when_stop_command_times_out(monkeyp
     bridge._motion_state_received_at = time.time()
     bridge._motion_run_lock = threading.Lock()
     bridge._motion_run_status = {}
-    bridge._motion_studio_lock = threading.Lock()
-    bridge._motion_studio_status = {}
+    bridge._motion_studio_session.lock = threading.Lock()
+    bridge._motion_studio_session.status = {}
     bridge.project_repository = operation_repository(lambda: 'project-a')
     bridge.snapshot = lambda: {}
     bridge._current_project_generation = lambda: 3
@@ -1370,6 +1408,7 @@ def test_ac_servo_scan_restores_service_even_when_stop_command_times_out(monkeyp
 
 def test_ac_servo_scan_restores_service_even_when_status_update_fails(monkeypatch):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge._lock = threading.Lock()
     bridge._motion_state = {
         'motors': [{
@@ -1385,8 +1424,8 @@ def test_ac_servo_scan_restores_service_even_when_status_update_fails(monkeypatc
     bridge._motion_state_received_at = time.time()
     bridge._motion_run_lock = threading.Lock()
     bridge._motion_run_status = {}
-    bridge._motion_studio_lock = threading.Lock()
-    bridge._motion_studio_status = {}
+    bridge._motion_studio_session.lock = threading.Lock()
+    bridge._motion_studio_session.status = {}
     repository = operation_repository(lambda: 'project-a')
     operation = repository.begin_motor_operation('ac_servo_scan', 'preparing')
     original_update = repository.update_motor_operation
@@ -1439,6 +1478,7 @@ def test_ac_servo_scan_restores_service_even_when_status_update_fails(monkeypatc
 
 def test_motor_runtime_recovery_requires_all_configured_transports():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge._lock = threading.Lock()
     bridge._motion_state = {
         'motors': [
@@ -1503,6 +1543,7 @@ def test_ethercat_release_waits_until_slaves_leave_operational_state(monkeypatch
 
 def test_motor_runtime_recovery_requires_fresh_online_feedback():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge._lock = threading.Lock()
     bridge._motion_state_received_at = time.time() + 1.0
     bridge._motion_state = {
@@ -1522,6 +1563,7 @@ def test_motor_runtime_recovery_requires_fresh_online_feedback():
 
 def test_motor_runtime_recovery_rejects_an_empty_expected_axis_set():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge._lock = threading.Lock()
     bridge._motion_state_received_at = time.time() + 1.0
     bridge._motion_state = {'motors': []}
@@ -1534,6 +1576,7 @@ def test_motor_runtime_recovery_rejects_an_empty_expected_axis_set():
 
 def test_execution_context_blocks_control_when_one_axis_is_offline():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge._execution_context_lock = threading.Lock()
     bridge._execution_context_status = {'ready': True, 'context_id': 'ctx'}
     bridge._lock = threading.Lock()
@@ -1567,6 +1610,7 @@ def test_execution_context_blocks_control_when_one_axis_is_offline():
 
 def test_ac_servo_scan_is_blocked_while_runtime_velocity_is_nonzero(monkeypatch):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge._lock = threading.Lock()
     bridge._motion_state = {
         'motors': [{
@@ -1582,8 +1626,8 @@ def test_ac_servo_scan_is_blocked_while_runtime_velocity_is_nonzero(monkeypatch)
     bridge._motion_state_received_at = time.time()
     bridge._motion_run_lock = threading.Lock()
     bridge._motion_run_status = {}
-    bridge._motion_studio_lock = threading.Lock()
-    bridge._motion_studio_status = {}
+    bridge._motion_studio_session.lock = threading.Lock()
+    bridge._motion_studio_session.status = {}
     bridge.project_repository = operation_repository(lambda: 'project-a')
     bridge.snapshot = lambda: {}
     bridge._current_project_generation = lambda: 3
@@ -1607,13 +1651,14 @@ def test_ac_servo_scan_is_blocked_when_running_motor_state_is_not_fresh(
     monkeypatch, received_at
 ):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge._lock = threading.Lock()
     bridge._motion_state = None if received_at is None else {'motors': []}
     bridge._motion_state_received_at = received_at
     bridge._motion_run_lock = threading.Lock()
     bridge._motion_run_status = {}
-    bridge._motion_studio_lock = threading.Lock()
-    bridge._motion_studio_status = {}
+    bridge._motion_studio_session.lock = threading.Lock()
+    bridge._motion_studio_session.status = {}
     bridge.project_repository = operation_repository(lambda: 'project-a')
     bridge.snapshot = lambda: {}
     bridge._current_project_generation = lambda: 3
@@ -1636,13 +1681,14 @@ def test_ac_servo_scan_retires_previous_project_runtime_without_feedback(
     monkeypatch,
 ):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge._lock = threading.Lock()
     bridge._motion_state = None
     bridge._motion_state_received_at = None
     bridge._motion_run_lock = threading.Lock()
     bridge._motion_run_status = {}
-    bridge._motion_studio_lock = threading.Lock()
-    bridge._motion_studio_status = {}
+    bridge._motion_studio_session.lock = threading.Lock()
+    bridge._motion_studio_session.status = {}
     repository = operation_repository(lambda: 'project-b')
     repository.motor_runtime_state = lambda: {
         'valid': True,
@@ -1694,6 +1740,7 @@ def test_ac_servo_scan_still_blocks_observed_motion_during_project_handoff(
     monkeypatch,
 ):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge._lock = threading.Lock()
     bridge._motion_state = {
         'motors': [{
@@ -1709,8 +1756,8 @@ def test_ac_servo_scan_still_blocks_observed_motion_during_project_handoff(
     bridge._motion_state_received_at = time.time()
     bridge._motion_run_lock = threading.Lock()
     bridge._motion_run_status = {}
-    bridge._motion_studio_lock = threading.Lock()
-    bridge._motion_studio_status = {}
+    bridge._motion_studio_session.lock = threading.Lock()
+    bridge._motion_studio_session.status = {}
     repository = operation_repository(lambda: 'project-b')
     repository.motor_runtime_state = lambda: {
         'valid': True,
@@ -1736,6 +1783,7 @@ def test_ac_servo_scan_still_blocks_observed_motion_during_project_handoff(
 
 def test_ac_servo_scan_ignores_stopped_servo_velocity_quantization_noise():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge._lock = threading.Lock()
     bridge._motion_state = {
         'motors': [{
@@ -1751,8 +1799,8 @@ def test_ac_servo_scan_ignores_stopped_servo_velocity_quantization_noise():
     bridge._motion_state_received_at = time.time()
     bridge._motion_run_lock = threading.Lock()
     bridge._motion_run_status = {}
-    bridge._motion_studio_lock = threading.Lock()
-    bridge._motion_studio_status = {}
+    bridge._motion_studio_session.lock = threading.Lock()
+    bridge._motion_studio_session.status = {}
     bridge.project_repository = type('Repository', (), {
         'selected_project_id': lambda _self: 'project-a',
     })()
@@ -1764,6 +1812,7 @@ def test_ac_servo_scan_ignores_stopped_servo_velocity_quantization_noise():
 
 def test_ac_servo_scan_blocks_clear_motion_even_when_target_is_reached():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge._lock = threading.Lock()
     bridge._motion_state = {
         'motors': [{
@@ -1779,8 +1828,8 @@ def test_ac_servo_scan_blocks_clear_motion_even_when_target_is_reached():
     bridge._motion_state_received_at = time.time()
     bridge._motion_run_lock = threading.Lock()
     bridge._motion_run_status = {}
-    bridge._motion_studio_lock = threading.Lock()
-    bridge._motion_studio_status = {}
+    bridge._motion_studio_session.lock = threading.Lock()
+    bridge._motion_studio_session.status = {}
     bridge.project_repository = type('Repository', (), {
         'selected_project_id': lambda _self: 'project-a',
     })()
@@ -1795,6 +1844,7 @@ def test_ac_servo_scan_blocks_clear_motion_even_when_target_is_reached():
 
 def test_ac_servo_scan_ignores_stale_velocity_when_axis_is_bus_down():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge._lock = threading.Lock()
     bridge._motion_state = {
         'motors': [{
@@ -1810,8 +1860,8 @@ def test_ac_servo_scan_ignores_stale_velocity_when_axis_is_bus_down():
     bridge._motion_state_received_at = time.time()
     bridge._motion_run_lock = threading.Lock()
     bridge._motion_run_status = {}
-    bridge._motion_studio_lock = threading.Lock()
-    bridge._motion_studio_status = {}
+    bridge._motion_studio_session.lock = threading.Lock()
+    bridge._motion_studio_session.status = {}
     bridge.project_repository = type('Repository', (), {
         'selected_project_id': lambda _self: 'project-a',
     })()
@@ -1821,6 +1871,7 @@ def test_ac_servo_scan_ignores_stale_velocity_when_axis_is_bus_down():
 
 def test_scan_result_is_discarded_after_a_to_b_to_a_project_switch():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge._project_generation_lock = threading.Lock()
     bridge._project_generation = 7
     bridge.project_repository = operation_repository(lambda: 'project-a')
@@ -1873,7 +1924,7 @@ def test_late_ros_response_from_previous_generation_is_never_cached():
 
 def test_coordinator_rejects_successful_confirmation_for_wrong_context():
     bridge = make_bridge()
-    default_response = bridge.request_motion_studio
+    default_response = bridge._motion_studio_ros_bridge.request
 
     def studio_response(command, payload, **kwargs):
         response = default_response(command, payload, **kwargs)
@@ -1881,7 +1932,7 @@ def test_coordinator_rejects_successful_confirmation_for_wrong_context():
             response['context_id'] = 'different-context'
         return response
 
-    bridge.request_motion_studio = studio_response
+    bridge._motion_studio_ros_bridge = _StubTransport(studio_response)
 
     result = bridge._reconcile_execution_context()
 
@@ -1955,6 +2006,7 @@ def test_ready_context_is_not_reapplied_during_an_active_operation():
 
 def test_record_prepares_unified_project_before_requesting_operation():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge._lock = threading.Lock()
     bridge._motion_state_received_at = time.time()
     bridge._motion_state = {
@@ -1966,16 +2018,15 @@ def test_record_prepares_unified_project_before_requesting_operation():
         }],
     }
     calls = []
-    bridge.prepare_unified_motion_studio = lambda: calls.append('prepare') or {
-        'success': True,
-    }
-    bridge.request_motion_studio = (
-        lambda command, payload, **_kwargs: calls.append((command, payload)) or {
-            'success': True,
-        }
+    _install_studio_sync(
+        bridge,
+        prepare=lambda: calls.append('prepare') or {'success': True},
+        request=lambda command, payload, **_kwargs: (
+            calls.append((command, payload)) or {'success': True}
+        ),
     )
 
-    result = bridge.request_prepared_motion_studio('record', {'mode': 'record'})
+    result = bridge._motion_studio_sync().request_prepared('record', {'mode': 'record'})
 
     assert result['success'] is True
     assert calls == ['prepare', ('record', {'mode': 'record'})]
@@ -1983,30 +2034,35 @@ def test_record_prepares_unified_project_before_requesting_operation():
 
 def test_record_does_not_start_when_unified_project_prepare_fails():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
-    bridge.prepare_unified_motion_studio = lambda: {
-        'success': False,
-        'message': 'project prepare failed',
-    }
-    bridge.request_motion_studio = lambda *_args, **_kwargs: (_ for _ in ()).throw(
-        AssertionError('record must not be requested')
+    bridge._motion_studio_session = MotionStudioSession()
+    _install_studio_sync(
+        bridge,
+        prepare=lambda: {'success': False, 'message': 'project prepare failed'},
+        request=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError('record must not be requested')
+        ),
     )
 
-    result = bridge.request_prepared_motion_studio('record', {'mode': 'record'})
+    result = bridge._motion_studio_sync().request_prepared('record', {'mode': 'record'})
 
     assert result == {'success': False, 'message': 'project prepare failed'}
 
 
 def test_motion_studio_is_blocked_while_dds_group_owns_local_execution():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
-    bridge.prepare_unified_motion_studio = lambda: {'success': True}
+    bridge._motion_studio_session = MotionStudioSession()
     bridge._coordination_execution_blocker = (
         lambda: 'DDS 그룹 실행이 로컬 모션 실행을 사용 중입니다'
     )
-    bridge.request_motion_studio = lambda *_args, **_kwargs: (_ for _ in ()).throw(
-        AssertionError('DDS 그룹 실행 중에는 모션 스튜디오를 요청하면 안 됩니다')
+    _install_studio_sync(
+        bridge,
+        prepare=lambda: {'success': True},
+        request=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError('DDS 그룹 실행 중에는 모션 스튜디오를 요청하면 안 됩니다')
+        ),
     )
 
-    result = bridge.request_prepared_motion_studio('play', {})
+    result = bridge._motion_studio_sync().request_prepared('play', {})
 
     assert result == {
         'success': False,

@@ -1,4 +1,8 @@
-"""FastAPI route registration for Motion Studio endpoints."""
+"""FastAPI route registration for Motion Studio endpoints.
+
+노드의 위임 껍데기를 거치지 않고 서비스를 직접 부른다 · §6-15
+`transport()`·`sync()`는 노드가 소유한 서비스를 꺼내는 접근자다.
+"""
 
 from __future__ import annotations
 
@@ -14,10 +18,16 @@ def register_motion_studio_routes(
     project_call: Callable[..., Any],
     safety_first_stop: Callable[..., Any],
 ) -> None:
+    def transport():
+        return bridge._motion_studio_transport()
+
+    def sync():
+        return bridge._motion_studio_sync()
+
     @app.get('/api/motion-studio')
     async def motion_studio():
         return await asyncio.to_thread(
-            project_call, bridge.prepare_unified_motion_studio
+            project_call, sync().prepare
         )
 
     @app.post('/api/motion-studio/projects')
@@ -28,8 +38,8 @@ def register_motion_studio_routes(
                 status_code=400, detail='request body must be an object'
             )
         return await asyncio.to_thread(
-            lambda: bridge.sync_motion_studio_result(
-                bridge.request_motion_studio('create', body)
+            lambda: sync().sync_result(
+                transport().request('create', body)
             )
         )
 
@@ -37,7 +47,7 @@ def register_motion_studio_routes(
     async def motion_studio_load(request: Request):
         body = await request.json()
         return await asyncio.to_thread(
-            bridge.request_motion_studio, 'load', body
+            transport().request, 'load', body
         )
 
     @app.post('/api/motion-studio/import')
@@ -48,15 +58,15 @@ def register_motion_studio_routes(
                 status_code=400, detail='request body must be an object'
             )
         return await asyncio.to_thread(
-            project_call, bridge.import_motion_studio_layer, body
+            project_call, sync().import_layer, body
         )
 
     @app.put('/api/motion-studio/project')
     async def motion_studio_save(request: Request):
         body = await request.json()
         return await asyncio.to_thread(
-            lambda: bridge.sync_motion_studio_result(
-                bridge.request_motion_studio('save', body)
+            lambda: sync().sync_result(
+                transport().request('save', body)
             )
         )
 
@@ -64,8 +74,8 @@ def register_motion_studio_routes(
     async def motion_studio_layer(request: Request):
         body = await request.json()
         return await asyncio.to_thread(
-            lambda: bridge.sync_motion_studio_result(
-                bridge.request_motion_studio('update_layer', body)
+            lambda: sync().sync_result(
+                transport().request('update_layer', body)
             )
         )
 
@@ -73,8 +83,8 @@ def register_motion_studio_routes(
     async def motion_studio_layer_create(request: Request):
         body = await request.json()
         return await asyncio.to_thread(
-            lambda: bridge.sync_motion_studio_result(
-                bridge.request_motion_studio('create_layer', body)
+            lambda: sync().sync_result(
+                transport().request('create_layer', body)
             )
         )
 
@@ -82,8 +92,8 @@ def register_motion_studio_routes(
     async def motion_studio_layer_data(request: Request):
         body = await request.json()
         return await asyncio.to_thread(
-            lambda: bridge.sync_motion_studio_result(
-                bridge.request_motion_studio(
+            lambda: sync().sync_result(
+                transport().request(
                     'replace_layer_data', body, timeout_sec=8.0
                 )
             )
@@ -92,8 +102,8 @@ def register_motion_studio_routes(
     @app.delete('/api/motion-studio/layers/{layer_id}')
     async def motion_studio_layer_delete(layer_id: str):
         return await asyncio.to_thread(
-            lambda: bridge.sync_motion_studio_result(
-                bridge.request_motion_studio(
+            lambda: sync().sync_result(
+                transport().request(
                     'delete_layer', {'layer_id': layer_id}
                 )
             )
@@ -102,8 +112,8 @@ def register_motion_studio_routes(
     @app.post('/api/motion-studio/layers/{layer_id}/duplicate')
     async def motion_studio_layer_duplicate(layer_id: str):
         return await asyncio.to_thread(
-            lambda: bridge.sync_motion_studio_result(
-                bridge.request_motion_studio(
+            lambda: sync().sync_result(
+                transport().request(
                     'duplicate_layer', {'layer_id': layer_id}
                 )
             )
@@ -113,22 +123,22 @@ def register_motion_studio_routes(
     async def motion_studio_editor_transform(request: Request):
         body = await request.json()
         return await asyncio.to_thread(
-            bridge.request_motion_studio_editor, 'edit', body, 12.0
+            transport().request_editor, 'edit', body, 12.0
         )
 
     @app.post('/api/motion-studio/editor/merge-preview')
     async def motion_studio_editor_merge_preview(request: Request):
         body = await request.json()
         return await asyncio.to_thread(
-            bridge.request_motion_studio_editor, 'merge', body, 20.0
+            transport().request_editor, 'merge', body, 20.0
         )
 
     @app.post('/api/motion-studio/layers/merge')
     async def motion_studio_layers_merge(request: Request):
         body = await request.json()
         return await asyncio.to_thread(
-            lambda: bridge.sync_motion_studio_result(
-                bridge.request_motion_studio(
+            lambda: sync().sync_result(
+                transport().request(
                     'commit_merged_layer', body, timeout_sec=12.0
                 )
             )
@@ -138,21 +148,21 @@ def register_motion_studio_routes(
     async def motion_studio_record(request: Request):
         body = await request.json()
         return await asyncio.to_thread(
-            bridge.request_prepared_motion_studio, 'record', body
+            sync().request_prepared, 'record', body
         )
 
     @app.post('/api/motion-studio/play')
     async def motion_studio_play(request: Request):
         body = await request.json()
         return await asyncio.to_thread(
-            bridge.request_prepared_motion_studio, 'play', body
+            sync().request_prepared, 'play', body
         )
 
     @app.post('/api/motion-studio/initialize')
     async def motion_studio_initialize(request: Request):
         body = await request.json()
         return await asyncio.to_thread(
-            bridge.request_prepared_motion_studio, 'initialize', body
+            sync().request_prepared, 'initialize', body
         )
 
     @app.post('/api/motion-studio/stop')
@@ -160,12 +170,12 @@ def register_motion_studio_routes(
         return await asyncio.to_thread(
             safety_first_stop,
             bridge,
-            lambda: bridge.sync_motion_studio_result(
-                bridge.request_motion_studio('stop')
+            lambda: sync().sync_result(
+                transport().request('stop')
             ),
         )
 
     @app.post('/api/motion-studio/export')
     async def motion_studio_export(request: Request):
         body = await request.json()
-        return await asyncio.to_thread(bridge.export_motion_studio, body)
+        return await asyncio.to_thread(sync().export, body)

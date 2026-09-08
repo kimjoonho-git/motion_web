@@ -1,4 +1,9 @@
-"""ROS request/response transport for Motion Studio."""
+"""ROS request/response transport for Motion Studio.
+
+상태는 `MotionStudioSession`이 갖는다. 이 클래스는 전송만 한다 · §6-15
+이전에는 노드의 `_wait_for_motion_studio_result` 껍데기를 되불러 순환이 있었다.
+지금은 세션의 저장소를 직접 기다린다.
+"""
 
 from __future__ import annotations
 
@@ -10,8 +15,9 @@ from std_msgs.msg import String
 
 
 class MotionStudioRosBridge:
-    def __init__(self, bridge: Any) -> None:
+    def __init__(self, bridge: Any, session: Any) -> None:
         self.bridge = bridge
+        self.session = session
 
     def status_callback(self, msg: String) -> None:
         bridge = self.bridge
@@ -26,8 +32,7 @@ class MotionStudioRosBridge:
             isinstance(payload, dict)
             and bridge._payload_matches_selected_project(payload)
         ):
-            with bridge._motion_studio_lock:
-                bridge._motion_studio_status = payload
+            self.session.replace_status(payload)
 
     def response_callback(self, msg: String) -> None:
         bridge = self.bridge
@@ -42,7 +47,7 @@ class MotionStudioRosBridge:
             return
         request_id = str(payload.get('request_id') or '')
         if request_id and bridge._response_matches_current_generation(payload):
-            bridge._motion_studio_store.store(request_id, payload)
+            self.session.store.store(request_id, payload)
 
     def editor_response_callback(self, msg: String) -> None:
         bridge = self.bridge
@@ -57,17 +62,17 @@ class MotionStudioRosBridge:
             return
         request_id = str(payload.get('request_id') or '')
         if request_id and bridge._response_matches_current_generation(payload):
-            bridge._motion_studio_editor_store.store(request_id, payload)
+            self.session.editor_store.store(request_id, payload)
 
     def wait_for_result(
         self, request_id: str, timeout_sec: float = 3.0
     ) -> Optional[Dict[str, Any]]:
-        return self.bridge._motion_studio_store.wait(request_id, timeout_sec)
+        return self.session.store.wait(request_id, timeout_sec)
 
     def wait_for_editor_result(
         self, request_id: str, timeout_sec: float = 4.0
     ) -> Optional[Dict[str, Any]]:
-        return self.bridge._motion_studio_editor_store.wait(request_id, timeout_sec)
+        return self.session.editor_store.wait(request_id, timeout_sec)
 
     def request(
         self,
@@ -96,8 +101,8 @@ class MotionStudioRosBridge:
         if start_generation is None:
             bridge._motion_studio_request_publisher.publish(msg)
         else:
-            with bridge._motion_studio_start_order_lock():
-                if start_generation != bridge._motion_studio_start_generation:
+            with self.session.order_lock:
+                if start_generation != self.session.start_generation:
                     return {
                         'success': False,
                         'start_cancelled': True,
@@ -107,12 +112,9 @@ class MotionStudioRosBridge:
                         ),
                     }
                 bridge._motion_studio_request_publisher.publish(msg)
-        result = bridge._wait_for_motion_studio_result(
-            request_id, timeout_sec=timeout_sec
-        )
+        result = self.wait_for_result(request_id, timeout_sec)
         if result is None:
-            with bridge._motion_studio_lock:
-                cached = dict(bridge._motion_studio_status)
+            cached = self.session.snapshot_status()
             return {
                 'success': False,
                 'message': 'motion_studio_node 응답 시간 초과',
@@ -120,8 +122,7 @@ class MotionStudioRosBridge:
             }
         status = result.get('status') if isinstance(result, dict) else None
         if isinstance(status, dict):
-            with bridge._motion_studio_lock:
-                bridge._motion_studio_status = dict(status)
+            self.session.replace_status(status)
         return result
 
     def request_editor(
@@ -144,26 +145,14 @@ class MotionStudioRosBridge:
             },
         }, ensure_ascii=False)
         bridge._motion_studio_editor_request_publisher.publish(msg)
-        result = bridge._wait_for_motion_studio_editor_result(
-            request_id, timeout_sec
-        )
+        result = self.wait_for_editor_result(request_id, timeout_sec)
         return result or {
             'success': False,
             'message': 'motion_studio_editor_node 응답 시간 초과',
         }
 
     def cancel_pending_start(self) -> int:
-        bridge = self.bridge
-        with self.start_order_lock():
-            bridge._motion_studio_start_generation += 1
-            return bridge._motion_studio_start_generation
+        return self.session.next_start_generation()
 
     def start_order_lock(self) -> threading.Lock:
-        bridge = self.bridge
-        lock = getattr(bridge, '_motion_studio_command_order_lock', None)
-        if lock is None:
-            lock = threading.Lock()
-            bridge._motion_studio_command_order_lock = lock
-        if not hasattr(bridge, '_motion_studio_start_generation'):
-            bridge._motion_studio_start_generation = 0
-        return lock
+        return self.session.order_lock

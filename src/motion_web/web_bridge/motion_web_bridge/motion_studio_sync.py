@@ -28,16 +28,14 @@ def _project_tree_category_signature(tree: Any, category: str) -> str:
 
 
 class MotionStudioSync:
-    def __init__(self, bridge: Any) -> None:
+    def __init__(self, bridge: Any, session: Any, transport: Any) -> None:
         self.bridge = bridge
+        self.session = session
+        #: 전송 계층을 직접 갖는다 · 노드 껍데기를 되부르지 않는다(§6-15)
+        self.transport = transport
 
     def clear_project_memory(self) -> None:
-        bridge = self.bridge
-        bridge._motion_studio_store.clear()
-        bridge._motion_studio_editor_store.clear()
-        with bridge._motion_studio_lock:
-            bridge._motion_studio_status = {}
-            bridge._motion_studio_workspace_signatures = {}
+        self.session.clear_project_memory()
 
     def sync_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
         bridge = self.bridge
@@ -97,11 +95,11 @@ class MotionStudioSync:
             result['project_sync_warning'] = str(exc)
             return result
         signatures = getattr(
-            bridge, '_motion_studio_workspace_signatures', None
+            self.session, 'workspace_signatures', None
         )
         if not isinstance(signatures, dict):
             signatures = {}
-            bridge._motion_studio_workspace_signatures = signatures
+            self.session.workspace_signatures = signatures
         current = dict(signatures.get(selected_project_id) or {})
         current['layers'] = str(sync.get('layer_signature') or '')
         signatures[selected_project_id] = current
@@ -141,7 +139,7 @@ class MotionStudioSync:
 
     def export(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         bridge = self.bridge
-        result = bridge.request_motion_studio('export', payload)
+        result = self.transport.request('export', payload)
         file_id = str(result.get('file_id') or '').strip()
         if result.get('success') is not False and file_id:
             project_id = bridge.project_repository.selected_project_id()
@@ -179,7 +177,7 @@ class MotionStudioSync:
             detail.get('tree'), 'motions'
         )
         workspace_signatures = getattr(
-            bridge, '_motion_studio_workspace_signatures', {}
+            self.session, 'workspace_signatures', {}
         )
         if not isinstance(workspace_signatures, dict):
             workspace_signatures = {}
@@ -211,12 +209,12 @@ class MotionStudioSync:
                     and file_name == mapping_name
                 ):
                     mapping_sha256 = str(file_info.get('sha256') or '')
-        with bridge._motion_studio_lock:
+        with self.session.lock:
             studio_state = str(
-                bridge._motion_studio_status.get('state') or 'idle'
+                self.session.status.get('state') or 'idle'
             )
         studio_busy = studio_state not in {'idle', 'error'}
-        result = bridge.request_motion_studio('list', {}, timeout_sec=8.0)
+        result = self.transport.request('list', {}, timeout_sec=8.0)
         current_project = (
             result.get('project')
             if isinstance(result.get('project'), dict) else {}
@@ -247,7 +245,7 @@ class MotionStudioSync:
                         layer.get('layer_id') or file_info.get('name')
                     )
                     layers_by_id[layer_id] = layer
-            result = bridge.request_motion_studio(
+            result = self.transport.request(
                 'open_workspace',
                 {
                     'workspace_project_id': project_id,
@@ -262,7 +260,7 @@ class MotionStudioSync:
                     'layers': layer_signature,
                     'motions': motion_signature,
                 }
-                bridge._motion_studio_workspace_signatures = workspace_signatures
+                self.session.workspace_signatures = workspace_signatures
         result['unified_project'] = True
         result['workspace_project'] = workspace
         result['mappings'] = [
@@ -281,10 +279,10 @@ class MotionStudioSync:
         bridge = self.bridge
         start_generation = None
         if command in {'record', 'play', 'initialize'}:
-            with bridge._motion_studio_start_order_lock():
-                bridge._motion_studio_start_generation += 1
-                start_generation = bridge._motion_studio_start_generation
-        prepared = bridge.prepare_unified_motion_studio()
+            with self.session.order_lock:
+                self.session.start_generation += 1
+                start_generation = self.session.start_generation
+        prepared = self.prepare()
         if prepared.get('success') is False:
             return prepared
         if command in {'record', 'play', 'initialize'}:
@@ -300,22 +298,21 @@ class MotionStudioSync:
                     'success': False,
                     'message': f'모션 스튜디오 동작 불가: {blocker}',
                 }
-        return bridge.request_motion_studio(
+        return self.transport.request(
             command,
             payload or {},
             start_generation=start_generation,
         )
 
     def import_layer(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        bridge = self.bridge
-        prepared = bridge.prepare_unified_motion_studio()
+        prepared = self.prepare()
         if prepared.get('success') is False:
             return prepared
-        result = bridge.request_motion_studio(
+        result = self.transport.request(
             'import_motion_layer',
             {'motion_file_id': payload.get('motion_file_id')},
             timeout_sec=8.0,
         )
         result['unified_project'] = True
         result['workspace_project'] = prepared.get('workspace_project')
-        return bridge.sync_motion_studio_result(result)
+        return self.sync_result(result)

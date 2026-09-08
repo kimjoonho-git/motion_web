@@ -23,6 +23,7 @@ from motion_web_bridge.bridge_node import (
     MotionWebBridge,
     _project_tree_category_signature,
 )
+from motion_web_bridge.motion_studio_session import MotionStudioSession
 from motion_web_bridge import motor_config_rules
 from motion_web_bridge.service_entrypoint import (
     resolve_applied_motor_config,
@@ -323,6 +324,7 @@ def test_unconfirmed_ac_servo_can_be_saved_but_not_applied(tmp_path):
     repository = ProjectRepository(tmp_path / 'projects')
     project_id = repository.create_project('save before model confirmation')['project']['project_id']
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
     bridge.workspace_root = tmp_path
     bridge.motor_config_file = (
@@ -368,6 +370,8 @@ def test_first_motor_config_save_returns_persisted_axes_before_apply(tmp_path):
     assert repository.get_project(project_id)['project']['active_files']['motor_axes'] == ''
 
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+
+    bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
     bridge.workspace_root = tmp_path
     bridge.motor_config_file = (
@@ -687,6 +691,8 @@ def test_motor_config_load_ignores_stale_path_from_another_project(tmp_path):
     repository.select_project(second_id)
 
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+
+    bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
     bridge.motor_config_file = repository.export_path(
         first_id, 'motor_axes', 'motor_axes.yaml'
@@ -710,6 +716,7 @@ def test_project_without_saved_motor_file_clears_stale_editor_path(tmp_path):
     second_id = repository.create_project('second')['project']['project_id']
     repository.select_project(second_id)
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
     bridge.motor_config_file = stale_path
 
@@ -727,6 +734,7 @@ def test_project_without_saved_motor_file_clears_stale_editor_path(tmp_path):
 def test_no_selected_project_clears_stale_editor_path(tmp_path):
     repository = ProjectRepository(tmp_path / 'projects')
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
     bridge.motor_config_file = tmp_path / 'old-project' / 'motor_axes.yaml'
 
@@ -747,6 +755,8 @@ def test_delete_motor_config_only_moves_selected_project_file_to_its_trash(tmp_p
     other_path = repository.export_path(other_id, 'motor_axes', 'other.yaml')
 
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+
+    bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
     bridge.motor_config_file = selected_path
     motor_config_rules.write_motor_config_selection(
@@ -783,6 +793,7 @@ def test_motor_config_save_rejects_stale_browser_revision(tmp_path):
     )
     repository.save_file(project_id, 'motor_axes', 'motor_axes.yaml', content)
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
     bridge.motor_config_file = repository.export_path(
         project_id, 'motor_axes', 'motor_axes.yaml'
@@ -810,6 +821,7 @@ def test_motor_config_save_rejects_zero_axis_overwrite(tmp_path):
     )
     repository.save_file(project_id, 'motor_axes', 'motor_axes.yaml', content)
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
     bridge.workspace_root = tmp_path
     bridge.motor_config_file = repository.export_path(
@@ -998,6 +1010,8 @@ def test_runtime_owner_remains_visible_when_another_project_is_selected(tmp_path
     repository.select_project(selected_id)
 
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+
+    bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
     bridge.motion_projects_dir = tmp_path / 'projects'
     bridge.applied_motor_config_file = (
@@ -1379,6 +1393,8 @@ def test_timed_out_motor_apply_restores_previous_target_and_requests_restart(
     runtime_file.write_text(json.dumps(runtime_payload), encoding='utf-8')
 
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+
+    bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
     bridge._bridge_started_at = operation['started_at'] + 1.0
     scheduled = []
@@ -1731,6 +1747,7 @@ def test_runtime_status_reports_disabled_motor_manager_without_runtime_config(
     tmp_path, monkeypatch
 ):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge.workspace_root = tmp_path
     monkeypatch.delenv('MOTOR_CONFIG_FILE', raising=False)
 
@@ -1748,6 +1765,7 @@ def test_runtime_status_reports_disabled_motor_manager_without_runtime_config(
 
 def test_runtime_status_reports_ready_motor_feedback(tmp_path, monkeypatch):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge.workspace_root = tmp_path
     runtime = tmp_path / 'runtime.yaml'
     runtime.write_text('masters: []\n', encoding='utf-8')
@@ -1777,6 +1795,7 @@ def test_runtime_status_reports_ready_motor_feedback(tmp_path, monkeypatch):
 
 def test_runtime_status_rejects_process_and_target_config_mismatch(tmp_path):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge.workspace_root = tmp_path
     running = tmp_path / 'project-a' / 'runtime' / 'applied_motor_config.yaml'
     target = tmp_path / 'project-b' / 'runtime' / 'applied_motor_config.yaml'
@@ -1822,6 +1841,7 @@ def test_restarted_bridge_completes_persisted_motor_apply_operation(tmp_path):
         },
     )
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
     bridge._bridge_started_at = operation['started_at'] + 1.0
     result = bridge._reconcile_motor_operation_status(
@@ -1861,6 +1881,7 @@ def test_motor_apply_completes_without_motion_axis_execution_context(tmp_path):
         },
     )
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
     bridge._bridge_started_at = operation['started_at'] + 1.0
 
@@ -1909,6 +1930,7 @@ def test_motor_restart_success_uses_terminal_completed_phase(tmp_path):
         details={'restart_observed_at': operation['started_at'] + 1.0},
     )
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
     bridge._bridge_started_at = operation['started_at'] - 1.0
     result = bridge._reconcile_motor_operation_status(
@@ -1951,6 +1973,7 @@ def test_motor_restart_does_not_complete_before_service_restart_is_observed(
         },
     )
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
     bridge._bridge_started_at = operation['started_at'] - 1.0
 
@@ -1995,6 +2018,7 @@ def test_motor_restart_waits_for_every_configured_axis_to_be_online(tmp_path):
         details={'restart_observed_at': operation['started_at'] + 1.0},
     )
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
     bridge._bridge_started_at = operation['started_at'] - 1.0
     result = bridge._reconcile_motor_operation_status(
@@ -2048,6 +2072,7 @@ def test_motor_restart_fails_when_motor_manager_uses_another_config(tmp_path):
         details={'restart_observed_at': operation['started_at'] + 1.0},
     )
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
     bridge._bridge_started_at = operation['started_at'] - 1.0
     result = bridge._reconcile_motor_operation_status(
@@ -2089,6 +2114,7 @@ def test_restarted_bridge_schedules_interrupted_ac_servo_scan_recovery(tmp_path)
         },
     )
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
     bridge._bridge_started_at = operation['started_at'] + 1.0
     scheduled = []
@@ -2121,6 +2147,7 @@ def test_active_ac_servo_scan_is_not_reconciled_as_motor_restart(tmp_path):
         },
     )
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
     bridge._bridge_started_at = operation['started_at'] - 1.0
     result = bridge._reconcile_motor_operation_status(
@@ -2150,6 +2177,7 @@ def test_interrupted_ac_servo_scan_restores_motor_service_and_records_failure(
         },
     )
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
     actions = []
     bridge._run_managed_user_service = (
@@ -2176,6 +2204,7 @@ def test_runtime_status_reports_ethercat_start_block_instead_of_waiting_forever(
     tmp_path, monkeypatch
 ):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge.workspace_root = tmp_path
     monkeypatch.setenv('MOTOR_CONFIG_FILE', str(tmp_path / 'runtime.yaml'))
     monkeypatch.setenv(
@@ -2217,6 +2246,8 @@ def test_web_apply_requests_managed_service_restart_without_second_launch(
     restart_script.write_text('#!/bin/bash\n', encoding='utf-8')
 
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+
+    bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
     bridge.restart_script = restart_script
     bridge.workspace_root = workspace
@@ -2272,6 +2303,7 @@ def test_web_apply_schedule_failure_restores_previous_runtime(
     restart_script.parent.mkdir(parents=True)
     restart_script.write_text('#!/bin/bash\n', encoding='utf-8')
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
     bridge.restart_script = restart_script
     bridge.workspace_root = workspace
@@ -2293,10 +2325,11 @@ def test_web_apply_schedule_failure_restores_previous_runtime(
 
 def test_user_can_request_managed_program_restart_from_web(monkeypatch):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge._motion_run_lock = threading.Lock()
-    bridge._motion_studio_lock = threading.Lock()
+    bridge._motion_studio_session.lock = threading.Lock()
     bridge._motion_run_status = {'state': 'stopping'}
-    bridge._motion_studio_status = {'state': 'stopping'}
+    bridge._motion_studio_session.status = {'state': 'stopping'}
     bridge.snapshot = lambda: {}
     commands = []
     monkeypatch.setenv('MOTION_CONTROL_SERVICE_UNIT', 'motion-control.service')
@@ -2315,11 +2348,12 @@ def test_user_can_request_managed_program_restart_from_web(monkeypatch):
         'motion-coordination.service',
     ]
     assert bridge._motion_run_status['state'] == 'stopped'
-    assert bridge._motion_studio_status['state'] == 'idle'
+    assert bridge._motion_studio_session.status['state'] == 'idle'
 
 
 def test_program_restart_button_requires_installed_service(monkeypatch):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge.snapshot = lambda: {}
     monkeypatch.delenv('MOTION_CONTROL_SERVICE_UNIT', raising=False)
 
@@ -2331,10 +2365,11 @@ def test_program_restart_button_requires_installed_service(monkeypatch):
 
 def test_user_can_restart_only_motor_control_service_from_web(monkeypatch):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge._motion_run_lock = threading.Lock()
-    bridge._motion_studio_lock = threading.Lock()
+    bridge._motion_studio_session.lock = threading.Lock()
     bridge._motion_run_status = {'state': 'idle'}
-    bridge._motion_studio_status = {'state': 'idle'}
+    bridge._motion_studio_session.status = {'state': 'idle'}
     bridge.snapshot = lambda: {}
     operation = {}
 
@@ -2443,10 +2478,11 @@ def test_motor_restart_worker_records_new_service_generation_before_verifying(
 
 def test_motor_control_restart_rejects_project_without_applied_motor_config(monkeypatch):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge._motion_run_lock = threading.Lock()
-    bridge._motion_studio_lock = threading.Lock()
+    bridge._motion_studio_session.lock = threading.Lock()
     bridge._motion_run_status = {'state': 'stopping'}
-    bridge._motion_studio_status = {'state': 'stopping'}
+    bridge._motion_studio_session.status = {'state': 'stopping'}
     bridge.snapshot = lambda: {}
     bridge.project_repository = type(
         'Repository',
@@ -2466,7 +2502,7 @@ def test_motor_control_restart_rejects_project_without_applied_motor_config(monk
     assert '설정 적용·재시작' in result['message']
     assert commands == []
     assert bridge._motion_run_status['state'] == 'stopped'
-    assert bridge._motion_studio_status['state'] == 'idle'
+    assert bridge._motion_studio_session.status['state'] == 'idle'
 
 
 @pytest.mark.parametrize(
@@ -2475,10 +2511,11 @@ def test_motor_control_restart_rejects_project_without_applied_motor_config(monk
 )
 def test_project_change_is_blocked_during_motion_operations(run_state, studio_state):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge._motion_run_lock = threading.Lock()
-    bridge._motion_studio_lock = threading.Lock()
+    bridge._motion_studio_session.lock = threading.Lock()
     bridge._motion_run_status = {'state': run_state}
-    bridge._motion_studio_status = {'state': studio_state}
+    bridge._motion_studio_session.status = {'state': studio_state}
 
     with pytest.raises(ValueError, match='프로젝트를 변경할 수 없습니다'):
         bridge._ensure_project_change_allowed()
@@ -2486,10 +2523,11 @@ def test_project_change_is_blocked_during_motion_operations(run_state, studio_st
 
 def test_project_change_is_blocked_during_motor_lifecycle_operation():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge._motion_run_lock = threading.Lock()
-    bridge._motion_studio_lock = threading.Lock()
+    bridge._motion_studio_session.lock = threading.Lock()
     bridge._motion_run_status = {'state': 'idle'}
-    bridge._motion_studio_status = {'state': 'idle'}
+    bridge._motion_studio_session.status = {'state': 'idle'}
     bridge._motor_lifecycle_lock = threading.Lock()
     bridge._motor_lifecycle_lock.acquire()
 
@@ -2499,10 +2537,11 @@ def test_project_change_is_blocked_during_motor_lifecycle_operation():
 
 def test_project_change_is_blocked_by_persisted_motor_operation():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge._motion_run_lock = threading.Lock()
-    bridge._motion_studio_lock = threading.Lock()
+    bridge._motion_studio_session.lock = threading.Lock()
     bridge._motion_run_status = {'state': 'idle'}
-    bridge._motion_studio_status = {'state': 'idle'}
+    bridge._motion_studio_session.status = {'state': 'idle'}
     bridge._motor_lifecycle_lock = threading.Lock()
     bridge.project_repository = type('Repository', (), {
         'motor_operation_status': lambda _self: {
@@ -2600,6 +2639,8 @@ def test_clear_motor_runtime_application_stops_and_allows_delete(
     runtime_file = repository.mark_runtime_motor_config_applied(project_id)
 
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+
+    bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
     bridge.workspace_root = workspace
     bridge.motion_projects_dir = workspace / 'motion_projects'
@@ -2612,9 +2653,9 @@ def test_clear_motor_runtime_application_stops_and_allows_delete(
         'selected_project_id': project_id,
     }
     bridge._motion_run_status = {'state': 'stopping'}
-    bridge._motion_studio_status = {'state': 'stopping'}
+    bridge._motion_studio_session.status = {'state': 'stopping'}
     bridge._motion_run_lock = threading.Lock()
-    bridge._motion_studio_lock = threading.Lock()
+    bridge._motion_studio_session.lock = threading.Lock()
     bridge._coordination_execution_blocker = lambda: ''
     bridge._ethercat_scan_safety_blocker = lambda **_kwargs: ''
     bridge._managed_user_service_active = lambda _unit: True
@@ -2645,7 +2686,7 @@ def test_clear_motor_runtime_application_stops_and_allows_delete(
     assert bridge.applied_motor_config_file == Path()
     assert bridge._runtime_project_id() == ''
     assert bridge._motion_run_status['state'] == 'stopped'
-    assert bridge._motion_studio_status['state'] == 'idle'
+    assert bridge._motion_studio_session.status['state'] == 'idle'
     assert repository.motor_runtime_state().get('target_project_id') in ('', None)
     deleted = bridge.delete_motion_project(project_id)
     assert deleted['permanently_deleted'] is True
@@ -2654,16 +2695,17 @@ def test_clear_motor_runtime_application_stops_and_allows_delete(
 def test_project_change_blocker_allows_stopping_only_when_requested(tmp_path):
     repository = ProjectRepository(tmp_path / 'projects')
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
     bridge._motion_run_status = {'state': 'idle'}
-    bridge._motion_studio_status = {'state': 'stopping'}
+    bridge._motion_studio_session.status = {'state': 'stopping'}
     bridge._motion_run_lock = threading.Lock()
-    bridge._motion_studio_lock = threading.Lock()
+    bridge._motion_studio_session.lock = threading.Lock()
 
     assert 'stopping' in bridge._project_change_blocker()
     assert bridge._project_change_blocker(allow_studio_stopping=True) == ''
 
-    bridge._motion_studio_status = {'state': 'playing'}
+    bridge._motion_studio_session.status = {'state': 'playing'}
 
     assert 'playing' in bridge._project_change_blocker(
         allow_studio_stopping=True
@@ -2860,6 +2902,7 @@ def test_web_file_read_rejects_non_selected_project(tmp_path):
     repository.import_text(other_id, 'motions', 'other.json', MOTION_TEXT)
     repository.select_project(selected_id)
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
 
     with pytest.raises(ValueError, match='현재 선택한 프로젝트'):
@@ -2899,6 +2942,7 @@ def test_web_read_only_file_rejects_non_selected_project(tmp_path):
     selected_id = repository.create_project('selected')['project']['project_id']
     repository.select_project(selected_id)
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
 
     with pytest.raises(ValueError, match='현재 선택한 프로젝트'):

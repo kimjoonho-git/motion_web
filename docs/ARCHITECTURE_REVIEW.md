@@ -639,6 +639,78 @@ motion_supervisor 수신 정지
 - 구독별 콜백 그룹 분리 검토 · 하나가 막혀도 나머지가 살아남도록
 - 자동 재적용이 N회 연속 실패하면 로그로 드러내기 · 지금은 조용히 재시도만 한다
 
+### 6-15. 상태 동반 이동 1차 · 모션 스튜디오 · 순환 절단
+
+`MotionWebBridge` 5,418 → 5,345줄 · 메서드 186 → 176 · 상태 필드 125 → 119 · 락 18 → 16
+
+**4단계에서 성격이 바뀌는 지점이다.** 지금까지는 함수를 옮겼고, 여기서는 상태를 옮겼다.
+
+#### 무엇이 문제였나
+
+스튜디오 상태 7개(`_motion_studio_lock` · `_motion_studio_status` · `_motion_studio_store` ·
+`_motion_studio_editor_store` · `_motion_studio_workspace_signatures` ·
+`_motion_studio_command_order_lock` · `_motion_studio_start_generation`)를 세 곳이
+각자 `bridge.___`로 집어 썼다 · 노드 · `MotionStudioRosBridge` · `MotionStudioSync`.
+
+그리고 **순환이 있었다.**
+
+```
+MotionStudioRosBridge.request()
+  → bridge._wait_for_motion_studio_result()      ← 노드 껍데기
+      → bridge._motion_studio_transport().wait   ← 다시 전송 계층
+
+MotionStudioSync.request_prepared()
+  → bridge.prepare_unified_motion_studio()       ← 노드 껍데기
+      → bridge._motion_studio_sync().prepare()   ← 다시 자기 자신
+```
+
+§3-1이 지목한 "추출 모듈은 역참조 껍데기"의 실물이다.
+
+#### 무엇을 했나
+
+`motion_studio_session.py` 신설 · `MotionStudioSession`이 상태 7개를 **혼자 갖는다.**
+노드는 이 객체를 소유하기만 하고, 전송·동기화 서비스가 이 객체를 직접 받는다.
+
+| 층 | 이전 | 이후 |
+|---|---|---|
+| 노드 | 상태 7필드 소유 + 위임 껍데기 10개 | 세션 1개 소유 · 껍데기 0 |
+| `MotionStudioRosBridge` | `bridge.<X>` 21종 | **12종** · 상태 접근 0 |
+| `MotionStudioSync` | `bridge.<X>` 15종 | **5종** · 상태 접근 0 |
+| 라우트 | 노드 껍데기 호출 | 서비스 직접 호출 |
+
+제거한 노드 껍데기 10개 · `_wait_for_motion_studio_result` ·
+`_wait_for_motion_studio_editor_result` · `_motion_studio_start_order_lock` ·
+`request_motion_studio` · `request_motion_studio_editor` ·
+`request_prepared_motion_studio` · `prepare_unified_motion_studio` ·
+`sync_motion_studio_result` · `import_motion_studio_layer` · `export_motion_studio`
+
+남긴 것 · `_motion_studio_transport()` · `_motion_studio_sync()` 두 접근자와
+`cancel_pending_motion_studio_start`. 앞 둘은 게으른 생성자이고, 마지막 하나는
+`safety_routes`와 노드가 `getattr`로 있는지 물어보고 쓰는 안전 정지 경로다.
+
+`MotionStudioSync`는 이제 전송 계층을 인자로 받는다 · `MotionStudioSync(bridge, session,
+transport)`. 노드를 거치지 않고 `self.transport.request(...)`를 부른다.
+
+#### 테스트 이음매도 함께 옮겼다
+
+노드에 꽂아 쓰던 이음매가 89곳 있었다. 상태는 `bridge._motion_studio_session.<X>`로,
+동작은 서비스로 옮겼다.
+
+- `bridge.request_motion_studio = fn` → 전송 계층 대역 객체(`_StubTransport`)를 꽂는다
+- `bridge._wait_for_motion_studio_result = fn` → 세션 저장소에 응답을 미리 넣는다 ·
+  실제 대기 경로를 그대로 탄다
+- `bridge.prepare_unified_motion_studio = fn` → 동기화 서비스의 `prepare`를 대체한다
+
+`test_motion_studio_boundaries.py`의 경계 계약도 뒤집었다. 이전에는 "노드에 위임만
+남아 있을 것"을 검사했으나, 이제 **"노드에 위임이 없을 것"** 과 **"서비스가 노드를
+되부르지 않을 것"** 을 검사한다.
+
+#### 검증
+
+- 코드 검증 · `ruff check src` 55건 유지 · 신규 0건
+- 실행 검증 · `pytest` 1,005건 통과 · 실패 0
+- 실물 검증 · 아래 별도 기록
+
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
 - 파일 1,000줄 이하 · 함수 60줄 이하 · `Node` 서브클래스 500줄 이하

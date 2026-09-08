@@ -31,12 +31,14 @@ from .coordination_bridge import (
 from .motor_restart_coordinator import MotorRestartCoordinator
 from . import (
     ethercat_project_compat,
+    motion_studio_session,
     motion_file_analysis,
     motor_config_build,
     motor_config_rules,
 )
 from .motor_restart_diagnostics import diagnose_motor_restart_failure
 from .motion_studio_bridge import MotionStudioRosBridge
+from .motion_studio_session import MotionStudioSession
 from .motion_studio_routes import register_motion_studio_routes
 from .bridge_helpers import (
     add_monitoring_motion_values,
@@ -255,15 +257,13 @@ class MotionWebBridge(Node):
         self._midi_monitor_lock = threading.Lock()
         self._midi_monitor_status: Dict[str, Any] = {}
         self._midi_monitor_store = rpc.ResultStore()
-        self._motion_studio_lock = threading.Lock()
-        self._motion_studio_status: Dict[str, Any] = {}
-        self._motion_studio_store = rpc.ResultStore()
-        self._motion_studio_workspace_signatures: Dict[str, Dict[str, str]] = {}
-        self._motion_studio_command_order_lock = threading.Lock()
-        self._motion_studio_start_generation = 0
-        self._motion_studio_editor_store = rpc.ResultStore()
-        self._motion_studio_ros_bridge = MotionStudioRosBridge(self)
-        self._motion_studio_sync_service = MotionStudioSync(self)
+        self._motion_studio_session = MotionStudioSession()
+        self._motion_studio_ros_bridge = MotionStudioRosBridge(
+            self, self._motion_studio_session
+        )
+        self._motion_studio_sync_service = MotionStudioSync(
+            self, self._motion_studio_session, self._motion_studio_ros_bridge
+        )
         self._safety_status_lock = threading.Lock()
         self._safety_status: Dict[str, Any] = {}
         self._execution_context_lock = threading.RLock()
@@ -738,22 +738,6 @@ class MotionWebBridge(Node):
     ) -> Optional[Dict[str, Any]]:
         return self._midi_monitor_store.wait(request_id, timeout_sec)
 
-    def _wait_for_motion_studio_result(
-        self,
-        request_id: str,
-        timeout_sec: float = 3.0,
-    ) -> Optional[Dict[str, Any]]:
-        return self._motion_studio_transport().wait_for_result(
-            request_id, timeout_sec
-        )
-
-    def _wait_for_motion_studio_editor_result(
-        self, request_id: str, timeout_sec: float = 4.0
-    ) -> Optional[Dict[str, Any]]:
-        return self._motion_studio_transport().wait_for_editor_result(
-            request_id, timeout_sec
-        )
-
     def _motor_operation_reconcile_callback(self) -> None:
         lock = getattr(self, '_motor_operation_reconcile_lock', None)
         if lock is None:
@@ -794,8 +778,7 @@ class MotionWebBridge(Node):
             motion_run_status = dict(self._motion_run_status) if self._motion_run_status else {}
         with self._midi_monitor_lock:
             midi_monitor = dict(self._midi_monitor_status) if self._midi_monitor_status else {}
-        with self._motion_studio_lock:
-            motion_studio = dict(self._motion_studio_status) if self._motion_studio_status else {}
+        motion_studio = self._motion_studio_session.snapshot_status()
         with self._safety_status_lock:
             safety_status = dict(self._safety_status) if self._safety_status else {}
         midi_received_at = midi_monitor.pop('_bridge_received_at', None)
@@ -1456,7 +1439,7 @@ class MotionWebBridge(Node):
         self._request_motion_mapping('invalidate_context', payload, timeout_sec=0.5)
         self._request_midi_monitor('invalidate_context', payload, timeout_sec=0.5)
         self._request_motion_run('invalidate_context', payload, timeout_sec=0.5)
-        self.request_motion_studio('invalidate_context', payload, timeout_sec=0.5)
+        self._motion_studio_transport().request('invalidate_context', payload, timeout_sec=0.5)
         self._clear_project_scoped_memory()
 
     def _execution_context_ack_matches(
@@ -1605,7 +1588,7 @@ class MotionWebBridge(Node):
                 'motion_run': self._request_motion_run(
                     'apply_context', payload, timeout_sec=2.0
                 ),
-                'motion_studio': self.request_motion_studio(
+                'motion_studio': self._motion_studio_transport().request(
                     'apply_context', payload, timeout_sec=2.0
                 ),
             }
@@ -1673,7 +1656,7 @@ class MotionWebBridge(Node):
                 'motion_run': self._request_motion_run(
                     'confirm_context', payload, timeout_sec=2.0
                 ),
-                'motion_studio': self.request_motion_studio(
+                'motion_studio': self._motion_studio_transport().request(
                     'confirm_context', payload, timeout_sec=2.0
                 ),
             }
@@ -3081,12 +3064,10 @@ class MotionWebBridge(Node):
         else:
             with run_lock:
                 run_status = dict(getattr(self, '_motion_run_status', {}) or {})
-        studio_lock = getattr(self, '_motion_studio_lock', None)
-        if studio_lock is None:
-            studio_status = getattr(self, '_motion_studio_status', {})
-        else:
-            with studio_lock:
-                studio_status = dict(getattr(self, '_motion_studio_status', {}) or {})
+        studio_session = motion_studio_session.session_of(self)
+        studio_status = (
+            studio_session.snapshot_status() if studio_session is not None else {}
+        )
         run_state = str((run_status or {}).get('state') or 'idle')
         studio_state = str((studio_status or {}).get('state') or 'idle')
         blocked_run_states = {
@@ -3142,24 +3123,13 @@ class MotionWebBridge(Node):
                         'state': 'stopped',
                         'message': '실행 적용 해제로 정지 상태를 정리했습니다',
                     }
-        studio_lock = getattr(self, '_motion_studio_lock', None)
-        if studio_lock is None:
-            studio_status = getattr(self, '_motion_studio_status', {}) or {}
-            if str(studio_status.get('state') or '') == 'stopping':
-                self._motion_studio_status = {
-                    **dict(studio_status),
-                    'state': 'idle',
-                    'message': '실행 적용 해제로 정지 상태를 정리했습니다',
-                }
-        else:
-            with studio_lock:
-                studio_status = getattr(self, '_motion_studio_status', {}) or {}
-                if str(studio_status.get('state') or '') == 'stopping':
-                    self._motion_studio_status = {
-                        **dict(studio_status),
-                        'state': 'idle',
-                        'message': '실행 적용 해제로 정지 상태를 정리했습니다',
-                    }
+        studio_session = motion_studio_session.session_of(self)
+        if studio_session is not None:
+            studio_session.settle_state(
+                when='stopping',
+                becomes='idle',
+                message='실행 적용 해제로 정지 상태를 정리했습니다',
+            )
 
     def create_motion_project(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         self._ensure_project_change_allowed()
@@ -4610,64 +4580,21 @@ class MotionWebBridge(Node):
     def _motion_studio_transport(self) -> MotionStudioRosBridge:
         service = getattr(self, '_motion_studio_ros_bridge', None)
         if service is None:
-            service = MotionStudioRosBridge(self)
+            service = MotionStudioRosBridge(self, self._motion_studio_session)
             self._motion_studio_ros_bridge = service
         return service
-
-    def request_motion_studio(
-        self,
-        command: str,
-        payload: Optional[Dict[str, Any]] = None,
-        timeout_sec: float = 4.0,
-        start_generation: Optional[int] = None,
-    ) -> Dict[str, Any]:
-        return self._motion_studio_transport().request(
-            command, payload, timeout_sec, start_generation
-        )
-
-    def request_motion_studio_editor(
-        self,
-        command: str,
-        payload: Optional[Dict[str, Any]] = None,
-        timeout_sec: float = 8.0,
-    ) -> Dict[str, Any]:
-        return self._motion_studio_transport().request_editor(
-            command, payload, timeout_sec
-        )
 
     def _motion_studio_sync(self) -> MotionStudioSync:
         service = getattr(self, '_motion_studio_sync_service', None)
         if service is None:
-            service = MotionStudioSync(self)
+            service = MotionStudioSync(
+                self, self._motion_studio_session, self._motion_studio_transport()
+            )
             self._motion_studio_sync_service = service
         return service
 
-    def sync_motion_studio_result(
-        self, result: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        return self._motion_studio_sync().sync_result(result)
-
-    def export_motion_studio(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return self._motion_studio_sync().export(payload)
-
-    def prepare_unified_motion_studio(self) -> Dict[str, Any]:
-        return self._motion_studio_sync().prepare()
-
-    def request_prepared_motion_studio(
-        self, command: str, payload: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
-        return self._motion_studio_sync().request_prepared(command, payload)
-
     def cancel_pending_motion_studio_start(self) -> int:
         return self._motion_studio_transport().cancel_pending_start()
-
-    def _motion_studio_start_order_lock(self) -> threading.Lock:
-        return self._motion_studio_transport().start_order_lock()
-
-    def import_motion_studio_layer(
-        self, payload: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        return self._motion_studio_sync().import_layer(payload)
 
     def _motion_file_registration_refs(
         self, project_id: str, motion_file_id: str

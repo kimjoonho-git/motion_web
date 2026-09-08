@@ -1,6 +1,7 @@
 import threading
 
 from motion_web_bridge.bridge_node import MotionWebBridge
+from motion_web_bridge.motion_studio_session import MotionStudioSession
 
 
 MIDI_STATE = {
@@ -34,6 +35,7 @@ class SelectedProjectRepository:
 
 def test_midi_status_timeout_never_returns_cached_state_as_live():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge._request_midi_monitor = lambda *_args, **_kwargs: {
         'success': False,
         'message': 'timeout',
@@ -59,6 +61,7 @@ def test_midi_status_timeout_never_returns_cached_state_as_live():
 
 def test_startup_project_context_delegates_to_central_reconciler():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     calls = []
     bridge._reconcile_execution_context = lambda: calls.append(True)
 
@@ -69,6 +72,7 @@ def test_startup_project_context_delegates_to_central_reconciler():
 
 def test_loading_motion_mapping_reads_banks_from_mapping_owner_and_applies_node(monkeypatch):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     mapping_calls = []
     midi_calls = []
 
@@ -108,6 +112,7 @@ def test_saving_motion_mapping_syncs_active_file_then_reconciles_execution_conte
     monkeypatch,
 ):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     mapping_calls = []
     calls = []
 
@@ -174,6 +179,7 @@ def test_saving_motion_mapping_syncs_active_file_then_reconciles_execution_conte
 
 def test_first_mapping_save_succeeds_before_first_midi_bank_save(monkeypatch):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
 
     def mapping_request(command, payload, timeout_sec=2.0):
         if command == 'save':
@@ -195,8 +201,9 @@ def test_first_mapping_save_succeeds_before_first_midi_bank_save(monkeypatch):
 
 def test_updating_bank_saves_through_mapping_owner_then_applies_verified_state(monkeypatch):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     bridge._motion_run_status = {'state': 'running'}
-    bridge._motion_studio_status = {'state': 'recording'}
+    bridge._motion_studio_session.status = {'state': 'recording'}
     mapping_calls = []
     midi_calls = []
 
@@ -241,6 +248,7 @@ def test_bank_lifecycle_actions_are_persisted_immediately(monkeypatch):
     )
     for method_name, args, expected_command in operations:
         bridge = MotionWebBridge.__new__(MotionWebBridge)
+        bridge._motion_studio_session = MotionStudioSession()
         midi_calls = []
         mapping_calls = []
 
@@ -274,6 +282,7 @@ def test_bank_lifecycle_actions_are_persisted_immediately(monkeypatch):
 
 def test_bank_lifecycle_persistence_keeps_mapping_files_isolated(monkeypatch):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
     responses = iter((
         {
             'success': True,
