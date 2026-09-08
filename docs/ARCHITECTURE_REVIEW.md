@@ -709,7 +709,15 @@ transport)`. 노드를 거치지 않고 `self.transport.request(...)`를 부른�
 
 - 코드 검증 · `ruff check src` 55건 유지 · 신규 0건
 - 실행 검증 · `pytest` 1,005건 통과 · 실패 0
-- 실물 검증 · 아래 별도 기록
+- 실물 검증 · `colcon build` · `motion-control.service` 재시작 · 실행 컨텍스트 자동 적용
+  `ready` · 차단 사유 없음
+- 실물 검증 · `GET /api/motion-studio` · `통합 프로젝트 연결 완료` ·
+  레이어 `layer_55c7ff6a` frames 165 · mappings 1 · motion_files 1 ·
+  라우트 → `sync().prepare()` → `transport().request('list')` → 세션 저장소 대기까지
+  새 경로를 전부 탄다
+- 실물 검증 · `/api/status`의 `motion_studio` · `state: idle` ·
+  노드 `snapshot`이 `session.snapshot_status()`를 읽는 경로 확인
+- 실물 미검증 · 녹화·재생·레이어 편집 · 화면 조작이 필요하다
 
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
