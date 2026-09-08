@@ -766,7 +766,23 @@ Dynamixel 장치가 없어 **실물 미검증**이다.
 
 - 코드 검증 · `ruff check src` 55건 유지 · 신규 0건
 - 실행 검증 · `pytest` 1,005건 통과 · 실패 0
-- 실물 검증 · 아래 별도 기록
+- 실물 검증 · `colcon build` · 재시작 · 실행 컨텍스트 `ready` · 차단 없음 ·
+  손댄 라우트 7종 전부 HTTP 200 · `success: true`
+
+```
+/api/motion-files            현재 프로젝트 모션 파일을 불러왔습니다
+/api/motor-config            motor config YAML loaded
+/api/motion-mappings         현재 프로젝트 모션축 설정을 불러왔습니다
+/api/motors/scan/progress    (진행 상태)
+/api/motors/ethercat-aliases EtherCAT EEPROM Alias 1축 읽기 완료
+/api/motion-run/status       motion run status
+/api/motion-studio           통합 프로젝트 연결 완료
+```
+
+- 실물 미검증 · Dynamixel 40초 제한시간 · 장치 부재
+- 실물 미검증 · AC Servo 재스캔 경로 · 같은 라우트 파일의
+  `ethercat-aliases`·`scan/progress`가 통과해 배선은 확인됐으나 스캔 자체는
+  버스를 재열거하므로 별도 지시 없이 다시 돌리지 않았다
 
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
