@@ -2,6 +2,8 @@ import asyncio
 
 from fastapi import FastAPI, HTTPException, Request
 
+from motion_web_bridge import motion_file_analysis
+
 
 def register_motion_run_routes(app: FastAPI, bridge, safety_first_stop) -> None:
     def service():
@@ -9,11 +11,19 @@ def register_motion_run_routes(app: FastAPI, bridge, safety_first_stop) -> None:
 
     @app.get('/api/motion-files')
     async def motion_files():
-        return service().list_files() if hasattr(service(), 'list_files') else bridge.list_motion_files()
+        if hasattr(service(), 'list_files'):
+            return service().list_files()
+        return motion_file_analysis.list_motion_files(
+            bridge.project_repository, bridge.motion_projects_dir
+        )
 
     @app.get('/api/motion-files/{file_id}')
     async def motion_file(file_id: str):
-        return service().load_file(file_id) if hasattr(service(), 'load_file') else bridge.load_motion_file(file_id)
+        if hasattr(service(), 'load_file'):
+            return service().load_file(file_id)
+        return motion_file_analysis.load_motion_file(
+            bridge.project_repository, bridge.motion_projects_dir, file_id
+        )
 
     @app.delete('/api/motion-files/{file_id}')
     async def delete_motion_file(file_id: str):

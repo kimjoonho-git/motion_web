@@ -7,7 +7,6 @@ import os
 import re
 import socket
 import subprocess
-import tempfile
 import threading
 import time
 from datetime import datetime, timedelta
@@ -17,7 +16,6 @@ from typing import Any, Dict, List, Optional
 import rclpy
 import uvicorn
 import yaml
-from ament_index_python.packages import get_package_share_directory
 from fastapi import FastAPI, HTTPException, Request
 from motion_common import generation, rpc, topics, values
 from fastapi.responses import JSONResponse
@@ -31,12 +29,11 @@ from .coordination_bridge import (
     CoordinationWebBridge, local_motion_control, local_motion_readiness,
 )
 from .motor_restart_coordinator import MotorRestartCoordinator
-from . import motion_file_analysis, motor_config_rules
+from . import motion_file_analysis, motor_config_build, motor_config_rules
 from .motor_restart_diagnostics import diagnose_motor_restart_failure
 from .motion_studio_bridge import MotionStudioRosBridge
 from .motion_studio_routes import register_motion_studio_routes
 from .bridge_helpers import (
-    DYNAMIXEL_BAUDRATE,
     add_monitoring_motion_values,
     motor_activity_snapshot,
     _monitoring_finite_float,
@@ -3906,7 +3903,9 @@ class MotionWebBridge(Node):
                 normalized = motor_config_rules.normalize_motor_registry(registry)
                 normalized['updated_at'] = time.time()
                 current = self._read_current_motor_config()
-                config = self._motor_config_from_registry(normalized, current)
+                config = motor_config_build.motor_config_from_registry(
+                    self.workspace_root, normalized, current
+                )
                 content = yaml.safe_dump(config, sort_keys=False, allow_unicode=True)
 
             if not isinstance(config, dict):
@@ -4154,128 +4153,6 @@ class MotionWebBridge(Node):
             ),
             'restart_mode': 'upper_service',
             **self.snapshot(),
-        }
-
-    def create_desktop_shortcut(self) -> Dict[str, Any]:
-        """Install the packaged web launcher on this service user's desktop."""
-        home = Path(str(os.environ.get('HOME') or Path.home())).expanduser().resolve()
-        try:
-            desktop_result = subprocess.run(
-                ['xdg-user-dir', 'DESKTOP'],
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-        except (OSError, subprocess.SubprocessError) as exc:
-            return {
-                'success': False,
-                'message': f'바탕화면 경로를 확인할 수 없습니다: {exc}',
-            }
-        desktop_text = desktop_result.stdout.strip()
-        if desktop_result.returncode != 0 or not desktop_text:
-            return {
-                'success': False,
-                'message': '바탕화면 경로를 확인할 수 없습니다',
-            }
-        desktop = Path(desktop_text).expanduser().resolve()
-        if desktop == home or not desktop.is_dir():
-            return {
-                'success': False,
-                'message': '현재 사용자에게 사용할 수 있는 바탕화면 폴더가 없습니다',
-            }
-
-        source_candidates: List[Path] = []
-        try:
-            source_candidates.append(
-                Path(get_package_share_directory('motion_web_bridge'))
-                / 'deploy'
-                / 'motion-program.desktop'
-            )
-        except Exception:
-            pass
-        source_candidates.append(
-            Path(getattr(self, 'workspace_root', Path.cwd()))
-            / 'src'
-            / 'motion_web'
-            / 'web_bridge'
-            / 'deploy'
-            / 'motion-program.desktop'
-        )
-        source = next((path for path in source_candidates if path.is_file()), None)
-        if source is None:
-            return {
-                'success': False,
-                'message': '설치된 바탕화면 바로가기 원본을 찾을 수 없습니다',
-            }
-
-        destination = desktop / '모션 프로그램 열기.desktop'
-        try:
-            launcher_data = source.read_bytes()
-            if (
-                b'[Desktop Entry]' not in launcher_data
-                or b'Exec=xdg-open http://localhost:8000' not in launcher_data
-            ):
-                raise ValueError('바탕화면 바로가기 원본 형식이 올바르지 않습니다')
-            already_installed = (
-                destination.is_file()
-                and destination.read_bytes() == launcher_data
-                and bool(destination.stat().st_mode & 0o111)
-            )
-            if not already_installed:
-                temporary_path: Optional[Path] = None
-                try:
-                    with tempfile.NamedTemporaryFile(
-                        dir=desktop,
-                        prefix='.motion-program-',
-                        suffix='.desktop',
-                        delete=False,
-                    ) as temporary:
-                        temporary.write(launcher_data)
-                        temporary_path = Path(temporary.name)
-                    temporary_path.chmod(0o755)
-                    os.replace(temporary_path, destination)
-                    temporary_path = None
-                finally:
-                    if temporary_path is not None:
-                        temporary_path.unlink(missing_ok=True)
-            else:
-                destination.chmod(destination.stat().st_mode | 0o111)
-        except (OSError, ValueError) as exc:
-            return {
-                'success': False,
-                'message': f'바탕화면 바로가기를 만들 수 없습니다: {exc}',
-            }
-
-        trusted = False
-        try:
-            trust_result = subprocess.run(
-                ['gio', 'set', str(destination), 'metadata::trusted', 'true'],
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            trusted = trust_result.returncode == 0
-        except (OSError, subprocess.SubprocessError):
-            trusted = False
-        if trusted:
-            message = (
-                '바탕화면 바로가기가 이미 설치되어 있습니다'
-                if already_installed
-                else '바탕화면 바로가기를 만들었습니다'
-            )
-        else:
-            message = (
-                '바탕화면 바로가기를 만들었습니다. '
-                '아이콘을 우클릭해 실행 허용을 선택하세요'
-            )
-        return {
-            'success': True,
-            'status': 'already_installed' if already_installed else 'created',
-            'message': message,
-            'path': str(destination),
-            'trusted': trusted,
         }
 
     def restart_motor_control_system(self) -> Dict[str, Any]:
@@ -5030,60 +4907,6 @@ class MotionWebBridge(Node):
     ) -> Dict[str, Any]:
         return self._motion_studio_sync().import_layer(payload)
 
-    def list_motion_files(self) -> Dict[str, Any]:
-        project_id = self.project_repository.selected_project_id()
-        if not project_id:
-            return {
-                'success': True,
-                'message': '통합 프로젝트를 먼저 선택하세요',
-                'project_dir': '',
-                'files_dir': '',
-                'files': [],
-            }
-        files_dir = self.motion_projects_dir / project_id / 'motions'
-        files_dir.mkdir(parents=True, exist_ok=True)
-        files = []
-        for path in sorted(
-            (
-                item for item in files_dir.iterdir()
-                if (
-                    item.is_file()
-                    and item.suffix.lower() == '.json'
-                    and not item.name.startswith('__studio_')
-                )
-            ),
-            key=lambda item: item.stat().st_mtime if item.exists() else 0.0,
-            reverse=True,
-        ):
-            files.append(motion_file_analysis.motion_file_entry(path, include_detail=False))
-        return {
-            'success': True,
-            'message': (
-                '현재 프로젝트 모션 파일을 불러왔습니다'
-                if self.project_repository.selected_project_id()
-                else '통합 프로젝트를 먼저 선택하세요'
-            ),
-            'project_dir': str(self.motion_projects_dir / project_id),
-            'files_dir': str(files_dir),
-            'files': files,
-        }
-
-    def load_motion_file(self, file_id: Any) -> Dict[str, Any]:
-        try:
-            path = motion_file_analysis.motion_file_path(file_id, self._selected_motion_files_dir())
-        except ValueError as exc:
-            return {
-                **self.list_motion_files(),
-                'success': False,
-                'message': str(exc),
-            }
-        return {
-            **self.list_motion_files(),
-            'success': True,
-            'message': 'motion file loaded',
-            'file': motion_file_analysis.motion_file_entry(path, include_detail=True),
-        }
-
     def _motion_file_registration_refs(
         self, project_id: str, motion_file_id: str
     ) -> List[str]:
@@ -5129,7 +4952,9 @@ class MotionWebBridge(Node):
             )
             if registration_refs:
                 return {
-                    **self.list_motion_files(),
+                    **motion_file_analysis.list_motion_files(
+                        self.project_repository, self.motion_projects_dir
+                    ),
                     'success': False,
                     'deletion_blocked': 'registered_motion_file',
                     'registered_mapping_files': registration_refs,
@@ -5144,26 +4969,20 @@ class MotionWebBridge(Node):
             )
         except (OSError, ValueError) as exc:
             return {
-                **self.list_motion_files(),
+                **motion_file_analysis.list_motion_files(
+                    self.project_repository, self.motion_projects_dir
+                ),
                 'success': False,
                 'message': f'failed to delete motion file: {exc}',
             }
         return {
-            **self.list_motion_files(),
+            **motion_file_analysis.list_motion_files(
+                self.project_repository, self.motion_projects_dir
+            ),
             'success': True,
             'message': 'motion file deleted',
             'project': result.get('project'),
         }
-
-
-    def _selected_motion_files_dir(self) -> Path:
-        project_id = self.project_repository.selected_project_id()
-        if not project_id:
-            raise ValueError('통합 프로젝트를 먼저 선택하세요')
-        return self.motion_projects_dir / project_id / 'motions'
-
-
-
 
 
 
@@ -5659,12 +5478,14 @@ class MotionWebBridge(Node):
         try:
             self.motor_config_file = motor_config_rules.selected_motor_config_path(self.project_repository)
         except ValueError:
-            return self._default_motor_config()
+            return motor_config_build.default_motor_config(self.workspace_root)
         if not self.motor_config_file.is_file():
-            return self._default_motor_config()
+            return motor_config_build.default_motor_config(self.workspace_root)
         content = self.motor_config_file.read_text(encoding='utf-8')
         config = yaml.safe_load(content) or {}
-        return config if isinstance(config, dict) else self._default_motor_config()
+        if isinstance(config, dict):
+            return config
+        return motor_config_build.default_motor_config(self.workspace_root)
 
     def _motor_config_file_from_payload(self, payload: Dict[str, Any]) -> Path:
         project_id = self.project_repository.selected_project_id()
@@ -5714,473 +5535,8 @@ class MotionWebBridge(Node):
         self.motor_config_file = target
         motor_config_rules.write_motor_config_selection(self.project_repository, target)
 
-    def _default_motor_config(self) -> Dict[str, Any]:
-        return {
-            'period': 1000000,
-            'masters': [
-                {
-                    'id': 0,
-                    'type': 'ethercat',
-                    'number_of_slaves': 0,
-                    'ethercat_master_index': 0,
-                    'slaves': [],
-                },
-            ],
-            'drivers': [
-                {
-                    'id': 0,
-                    'driver_model': 'UNVERIFIED_MINAS',
-                    'pulse_per_revolution': 8388608,
-                    'rated_effort': 0.16,
-                    'unit_effort': 0.1,
-                    'rated_current': 1.1,
-                    'rated_power_w': 50,
-                    'rated_speed_rpm': 3000,
-                    'lower': -36000.0,
-                    'upper': 36000.0,
-                    'speed': 2000000.0,
-                    'acceleration': 180000.0,
-                    'deceleration': 180000.0,
-                    'profile_velocity': 18000.0,
-                    'profile_acceleration': 180000.0,
-                    'profile_deceleration': 180000.0,
-                    'profile_position_value': 1,
-                    'profile_velocity_value': 3,
-                    'profile_effort_value': 4,
-                    'type': 'minas',
-                    'param_file': str(
-                        self.workspace_root
-                        / 'src/motion_system/ros2/motion_system_ros2/motion_control_bridge/param'
-                    ),
-                },
-            ],
-        }
 
 
-
-    def _motor_config_from_registry(
-        self,
-        registry: Dict[str, Any],
-        current: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        if not isinstance(current, dict):
-            current = self._default_motor_config()
-        config = dict(current)
-        config['period'] = 1000000
-        drivers = config.get('drivers')
-        if not isinstance(drivers, list) or not drivers:
-            drivers = self._default_motor_config()['drivers']
-        drivers = [dict(driver) if isinstance(driver, dict) else {} for driver in drivers]
-
-        masters = config.get('masters')
-        if not isinstance(masters, list) or not masters:
-            masters = self._default_motor_config()['masters']
-        masters = [dict(master) if isinstance(master, dict) else {} for master in masters]
-
-        ethercat_slaves_by_master: Dict[int, List[Dict[str, Any]]] = {}
-        web_axis_identities = []
-        web_axis_profiles = []
-        for motor in registry.get('motors', []):
-            if not isinstance(motor, dict):
-                continue
-            if motor.get('deleted') or not motor.get('enabled', False):
-                continue
-            if motor.get('transport') != 'ethercat':
-                continue
-            motor_config = motor.get('config') if isinstance(motor.get('config'), dict) else {}
-            axis = values.optional_int(motor_config.get('controller_index'), motor.get('axis'))
-            if axis is None:
-                continue
-            name = str(motor.get('name') or f'Axis {axis}').strip() or f'Axis {axis}'
-            identity = motor.get('identity') if isinstance(motor.get('identity'), dict) else {}
-            profile = motor.get('profile') if isinstance(motor.get('profile'), dict) else {}
-            ethercat_master_index = values.optional_int(
-                motor_config.get('ethercat_master_index'),
-                values.optional_int(identity.get('ethercat_master_index'), 0),
-            )
-            if ethercat_master_index is None or ethercat_master_index < 0:
-                raise ValueError(
-                    f'Axis {axis}의 EtherCAT Master 번호가 올바르지 않습니다'
-                )
-            eeprom_alias = values.optional_int(
-                identity.get('ethercat_alias'),
-                values.optional_int(motor_config.get('alias'), 0),
-            )
-            slave_position = values.optional_int(
-                identity.get('slave_position'),
-                values.optional_int(motor_config.get('position'), 0),
-            )
-            driver_id = self._driver_id_for_registry_motor(motor, drivers)
-            ethercat_slaves_by_master.setdefault(
-                ethercat_master_index, []
-            ).append(
-                {
-                    'controller_index': axis,
-                    'name': name,
-                    'driver_id': driver_id,
-                    'alias': eeprom_alias,
-                    # The motion-system position field is the physical
-                    # EtherCAT Slave Position. Keep it identical to the
-                    # user-visible identity instead of retaining stale data.
-                    'position': slave_position,
-                    'vendor_id': values.optional_int(
-                        identity.get('vendor_id'),
-                        values.optional_int(motor_config.get('vendor_id'), None),
-                    ),
-                    'product_id': values.optional_int(
-                        identity.get('product_code'),
-                        values.optional_int(motor_config.get('product_id'), None),
-                    ),
-                    'profile_mode': values.optional_int(motor_config.get('profile_mode'), 0),
-                }
-            )
-            web_axis_identities.append({
-                'controller_index': axis,
-                'ethercat_master_index': ethercat_master_index,
-                'eeprom_alias': eeprom_alias,
-                'rotary_alias': values.optional_int(identity.get('rotary_alias'), None),
-                'slave_position': slave_position,
-                'vendor_id': values.optional_int(
-                    identity.get('vendor_id'),
-                    values.optional_int(motor_config.get('vendor_id'), None),
-                ),
-                'product_id': values.optional_int(
-                    identity.get('product_code'),
-                    values.optional_int(motor_config.get('product_id'), None),
-                ),
-                'revision_number': values.optional_int(
-                    identity.get('revision_number'),
-                    values.optional_int(motor_config.get('revision_number'), None),
-                ),
-                'serial_number': values.optional_int(
-                    identity.get('serial_number'),
-                    values.optional_int(motor_config.get('serial_number'), None),
-                ),
-                'identity_source': str(identity.get('identity_source') or ''),
-                'sii_order_number': str(identity.get('sii_order_number') or ''),
-                'sii_device_name': str(identity.get('sii_device_name') or ''),
-            })
-            web_axis_profiles.append({
-                'controller_index': axis,
-                'driver_model': str(profile.get('driver_model') or ''),
-                'model_confirmed': profile.get('model_confirmed') is True,
-                'model_source': str(profile.get('model_source') or ''),
-            })
-
-        existing_ethercat_masters = {
-            values.optional_int(master.get('ethercat_master_index'), 0): master
-            for master in masters
-            if isinstance(master, dict) and master.get('type') == 'ethercat'
-        }
-        used_master_ids = {
-            values.optional_int(master.get('id'), None)
-            for master in masters
-            if isinstance(master, dict)
-            and values.optional_int(master.get('id'), None) is not None
-        }
-        next_master_id = max(used_master_ids | {-1}) + 1
-        ethercat_masters = []
-        for master_index in sorted(ethercat_slaves_by_master):
-            ethercat_master = dict(
-                existing_ethercat_masters.get(master_index) or {}
-            )
-            master_id = values.optional_int(ethercat_master.get('id'), None)
-            if master_id is None:
-                while next_master_id in used_master_ids:
-                    next_master_id += 1
-                master_id = next_master_id
-                used_master_ids.add(master_id)
-                next_master_id += 1
-            slaves = ethercat_slaves_by_master[master_index]
-            slaves.sort(key=lambda item: int(item.get('controller_index') or 0))
-            ethercat_master.update({
-                'id': master_id,
-                'type': 'ethercat',
-                'ethercat_master_index': master_index,
-                'slaves': slaves,
-                'number_of_slaves': len(slaves),
-            })
-            ethercat_masters.append(ethercat_master)
-
-        if web_axis_identities:
-            config['web_axis_identities'] = web_axis_identities
-        else:
-            config.pop('web_axis_identities', None)
-        if web_axis_profiles:
-            config['web_axis_profiles'] = web_axis_profiles
-        else:
-            config.pop('web_axis_profiles', None)
-
-        non_bus_masters = [
-            master
-            for master in masters
-            if master.get('type') not in {'ethercat', 'serial'}
-        ]
-        master_context = ethercat_masters + non_bus_masters + [
-            master for master in masters if master.get('type') == 'serial'
-        ]
-        serial_masters = self._serial_masters_from_registry(
-            registry, master_context, drivers
-        )
-        masters = ethercat_masters + non_bus_masters + serial_masters
-
-        config['masters'] = masters
-        config['drivers'] = motor_config_rules.prune_unused_drivers(
-            self._normalize_driver_configs(drivers),
-            masters,
-        )
-        return motor_config_rules.expand_shared_driver_profiles(config)
-
-    def _normalize_driver_configs(self, drivers: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        normalized = []
-        for driver in drivers:
-            if not isinstance(driver, dict):
-                normalized.append(driver)
-                continue
-            item = dict(driver)
-            if str(item.get('type') or '') == 'dynamixel':
-                item['param_file'] = self._dynamixel_param_file_for_model(
-                    str(item.get('driver_model') or '')
-                )
-            normalized.append(item)
-        return normalized
-
-    def _dynamixel_param_file_for_model(self, driver_model: str) -> str:
-        model = driver_model.lower().replace('_', '-')
-        if 'xm540-w150' in model:
-            return str(self.workspace_root / 'config/dynamixel_xm540_w150.yaml')
-        return str(self.workspace_root / 'config/dynamixel_xm540_w270.yaml')
-
-
-    def _serial_masters_from_registry(
-        self,
-        registry: Dict[str, Any],
-        current_masters: List[Dict[str, Any]],
-        drivers: List[Dict[str, Any]],
-    ) -> List[Dict[str, Any]]:
-        serial_masters_by_key: Dict[tuple, Dict[str, Any]] = {}
-        used_master_ids = {
-            values.optional_int(master.get('id'), -1)
-            for master in current_masters
-            if isinstance(master, dict)
-        }
-        next_master_id = max([item for item in used_master_ids if item is not None] + [-1]) + 1
-
-        def master_for(port: str, baudrate: int) -> Dict[str, Any]:
-            nonlocal next_master_id
-            key = (port, baudrate)
-            if key in serial_masters_by_key:
-                return serial_masters_by_key[key]
-
-            existing = next(
-                (
-                    dict(master)
-                    for master in current_masters
-                    if master.get('type') == 'serial'
-                    and str(master.get('serial_port') or '') == port
-                    and values.optional_int(master.get('serial_baudrate'), None) == baudrate
-                ),
-                None,
-            )
-            if existing is None:
-                while next_master_id in used_master_ids:
-                    next_master_id += 1
-                existing = {
-                    'id': next_master_id,
-                    'type': 'serial',
-                    'serial_port': port,
-                    'serial_baudrate': baudrate,
-                }
-                used_master_ids.add(next_master_id)
-                next_master_id += 1
-
-            existing['type'] = 'serial'
-            existing['serial_port'] = port
-            existing['serial_baudrate'] = baudrate
-            existing['slaves'] = []
-            serial_masters_by_key[key] = existing
-            return existing
-
-        for motor in registry.get('motors', []):
-            if not isinstance(motor, dict):
-                continue
-            if motor.get('deleted') or not motor.get('enabled', False):
-                continue
-            if motor.get('transport') != 'serial':
-                continue
-            motor_config = motor.get('config') if isinstance(motor.get('config'), dict) else {}
-            identity = motor.get('identity') if isinstance(motor.get('identity'), dict) else {}
-            axis = values.optional_int(motor_config.get('controller_index'), motor.get('axis'))
-            bus_id = values.optional_int(
-                motor_config.get('bus_id'),
-                values.optional_int(identity.get('bus_id'), identity.get('node_id')),
-            )
-            port = str(motor_config.get('serial_port') or identity.get('serial_port') or '').strip()
-            baudrate = values.optional_int(
-                motor_config.get('serial_baudrate'),
-                values.optional_int(identity.get('serial_baudrate'), None),
-            )
-            if str(motor.get('driver_family') or motor.get('motor_type') or '') == 'dynamixel':
-                baudrate = DYNAMIXEL_BAUDRATE
-            if axis is None or bus_id is None or not port or baudrate is None:
-                continue
-
-            driver_id = self._driver_id_for_registry_motor(motor, drivers)
-            master = master_for(port, baudrate)
-            name = str(motor.get('name') or f'Axis {axis}').strip() or f'Axis {axis}'
-            master['slaves'].append(
-                {
-                    'controller_index': axis,
-                    'name': name,
-                    'driver_id': driver_id,
-                    'bus_id': bus_id,
-                    'profile_mode': values.optional_int(motor_config.get('profile_mode'), 0),
-                }
-            )
-
-        serial_masters = []
-        for master in serial_masters_by_key.values():
-            master['slaves'].sort(key=lambda item: int(item.get('controller_index') or 0))
-            master['number_of_slaves'] = len(master['slaves'])
-            if master['number_of_slaves'] > 0:
-                serial_masters.append(master)
-        serial_masters.sort(key=lambda item: int(item.get('id') or 0))
-        return serial_masters
-
-    def _driver_id_for_registry_motor(
-        self,
-        motor: Dict[str, Any],
-        drivers: List[Dict[str, Any]],
-    ) -> int:
-        motor_config = motor.get('config') if isinstance(motor.get('config'), dict) else {}
-        identity = dict(motor.get('identity')) if isinstance(motor.get('identity'), dict) else {}
-        profile = dict(motor.get('profile')) if isinstance(motor.get('profile'), dict) else {}
-        # Accept older registries, but normalize the model/profile facts out of
-        # the physical discovery identity before any further processing.
-        if not profile.get('driver_model') and identity.get('driver_model'):
-            profile['driver_model'] = identity.get('driver_model')
-        if 'model_confirmed' not in profile and 'nameplate_confirmed' in identity:
-            profile['model_confirmed'] = identity.get('nameplate_confirmed') is True
-        if not profile.get('model_source') and profile.get('model_confirmed') is True:
-            profile['model_source'] = 'user_nameplate'
-        identity.pop('driver_model', None)
-        identity.pop('nameplate_confirmed', None)
-        driver_type = str(motor.get('driver_family') or motor.get('motor_type') or 'unknown')
-        driver_model = str(profile.get('driver_model') or '').strip()
-        requested_id = values.optional_int(motor_config.get('driver_id'), None)
-
-        drivers_by_id = {
-            values.optional_int(driver.get('id'), None): driver
-            for driver in drivers
-            if isinstance(driver, dict)
-        }
-        if requested_id is not None:
-            requested_driver = drivers_by_id.get(requested_id)
-            if requested_driver is not None:
-                same_type = str(requested_driver.get('type') or '') == driver_type
-                same_model = not driver_model or str(requested_driver.get('driver_model') or '') == driver_model
-                if same_type and same_model:
-                    return requested_id
-
-        for driver in drivers:
-            if not isinstance(driver, dict):
-                continue
-            if str(driver.get('type') or '') != driver_type:
-                continue
-            if driver_model and str(driver.get('driver_model') or '') != driver_model:
-                continue
-            driver_id = values.optional_int(driver.get('id'), None)
-            if driver_id is not None:
-                return driver_id
-
-        return self._append_driver_for_registry_motor(driver_type, driver_model, drivers)
-
-    def _append_driver_for_registry_motor(
-        self,
-        driver_type: str,
-        driver_model: str,
-        drivers: List[Dict[str, Any]],
-    ) -> int:
-        if driver_type == 'dynamixel':
-            # Dynamixel values are model-specific.  Do not clone the first
-            # registered Dynamixel profile and merely rename it, because scan
-            # order would then give W150 values to W270 (or vice versa).
-            template = self._default_dynamixel_driver(driver_model)
-        else:
-            template = next(
-                (
-                    dict(driver)
-                    for driver in drivers
-                    if isinstance(driver, dict) and str(driver.get('type') or '') == driver_type
-                ),
-                None,
-            )
-        if template is None and driver_type == 'minas':
-            template = dict(self._default_motor_config()['drivers'][0])
-        elif template is None:
-            template = {
-                'type': driver_type,
-                'driver_model': driver_model or driver_type,
-            }
-
-        used_driver_ids = {
-            values.optional_int(driver.get('id'), -1)
-            for driver in drivers
-            if isinstance(driver, dict)
-        }
-        next_driver_id = max([item for item in used_driver_ids if item is not None] + [-1]) + 1
-        while next_driver_id in used_driver_ids:
-            next_driver_id += 1
-
-        template['id'] = next_driver_id
-        template['type'] = driver_type
-        if driver_model and driver_type != 'dynamixel':
-            template['driver_model'] = driver_model
-        elif not template.get('driver_model'):
-            template['driver_model'] = driver_type
-        if driver_type == 'dynamixel':
-            template['param_file'] = self._dynamixel_param_file_for_model(
-                str(template.get('driver_model') or '')
-            )
-        drivers.append(template)
-        return next_driver_id
-
-    def _default_dynamixel_driver(self, driver_model: str = '') -> Dict[str, Any]:
-        model = str(driver_model or '').strip().upper().replace('_', '-')
-        if 'XM540-W150' in model:
-            canonical_model = 'XM540-W150'
-            rated_speed_rpm = 66
-            velocity = 396.0
-        elif 'XM540-W270' in model:
-            canonical_model = 'XM540-W270-R'
-            rated_speed_rpm = 37
-            velocity = 222.0
-        else:
-            canonical_model = str(driver_model or 'Dynamixel').strip() or 'Dynamixel'
-            rated_speed_rpm = 30
-            velocity = 100.0
-
-        return {
-            'driver_model': canonical_model,
-            'pulse_per_revolution': 4096,
-            'rated_effort': 1.0,
-            'unit_effort': 0.00269,
-            'rated_current': 1.0,
-            'rated_speed_rpm': rated_speed_rpm,
-            'lower': -180.0,
-            'upper': 180.0,
-            'speed': velocity,
-            'acceleration': 703104.5,
-            'deceleration': 703104.5,
-            'profile_velocity': velocity,
-            'profile_acceleration': 703104.5,
-            'profile_deceleration': 703104.5,
-            'profile_position_value': 3,
-            'profile_velocity_value': 1,
-            'profile_effort_value': 0,
-            'type': 'dynamixel',
-            'param_file': self._dynamixel_param_file_for_model(canonical_model),
-        }
 
 
 

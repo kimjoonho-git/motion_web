@@ -1,5 +1,4 @@
-from motion_web_bridge.bridge_node import MotionWebBridge
-from motion_web_bridge import motor_config_rules
+from motion_web_bridge import motor_config_build, motor_config_rules
 
 
 def test_shared_driver_profiles_are_cloned_per_ac_and_dynamixel_axis():
@@ -68,10 +67,7 @@ def test_already_unique_driver_profiles_are_not_duplicated():
 
 
 def test_motor_model_defaults_match_verified_development_config(tmp_path):
-    bridge = MotionWebBridge.__new__(MotionWebBridge)
-    bridge.workspace_root = tmp_path
-
-    ac = bridge._default_motor_config()['drivers'][0]
+    ac = motor_config_build.default_motor_config(tmp_path)['drivers'][0]
     assert ac['lower'] == -36000.0
     assert ac['upper'] == 36000.0
     assert ac['speed'] == 2000000.0
@@ -81,7 +77,7 @@ def test_motor_model_defaults_match_verified_development_config(tmp_path):
     assert ac['profile_acceleration'] == 180000.0
     assert ac['profile_deceleration'] == 180000.0
 
-    w150 = bridge._default_dynamixel_driver('XM540-W150')
+    w150 = motor_config_build.default_dynamixel_driver(tmp_path, 'XM540-W150')
     assert w150['driver_model'] == 'XM540-W150'
     assert w150['rated_speed_rpm'] == 66
     assert w150['speed'] == 396.0
@@ -89,7 +85,7 @@ def test_motor_model_defaults_match_verified_development_config(tmp_path):
     assert w150['profile_acceleration'] == 703104.5
     assert w150['param_file'].endswith('dynamixel_xm540_w150.yaml')
 
-    w270 = bridge._default_dynamixel_driver('XM540-W270')
+    w270 = motor_config_build.default_dynamixel_driver(tmp_path, 'XM540-W270')
     assert w270['driver_model'] == 'XM540-W270-R'
     assert w270['rated_speed_rpm'] == 37
     assert w270['speed'] == 222.0
@@ -99,15 +95,13 @@ def test_motor_model_defaults_match_verified_development_config(tmp_path):
 
 
 def test_dynamixel_defaults_do_not_depend_on_scan_order(tmp_path):
-    bridge = MotionWebBridge.__new__(MotionWebBridge)
-    bridge.workspace_root = tmp_path
     drivers = []
 
-    w150_id = bridge._append_driver_for_registry_motor(
-        'dynamixel', 'XM540-W150', drivers
+    w150_id = motor_config_build.append_driver_for_registry_motor(
+        tmp_path, 'dynamixel', 'XM540-W150', drivers
     )
-    w270_id = bridge._append_driver_for_registry_motor(
-        'dynamixel', 'XM540-W270', drivers
+    w270_id = motor_config_build.append_driver_for_registry_motor(
+        tmp_path, 'dynamixel', 'XM540-W270', drivers
     )
     by_id = {driver['id']: driver for driver in drivers}
 
@@ -170,11 +164,11 @@ def _registry_motor(axis, *, transport, master_index=0):
 
 
 def test_dynamixel_only_config_does_not_keep_empty_ethercat_master(tmp_path):
-    bridge = MotionWebBridge.__new__(MotionWebBridge)
-    bridge.workspace_root = tmp_path
     registry = {'motors': [_registry_motor(axis, transport='serial') for axis in range(30)]}
 
-    config = bridge._motor_config_from_registry(registry, bridge._default_motor_config())
+    config = motor_config_build.motor_config_from_registry(
+        tmp_path, registry, motor_config_build.default_motor_config(tmp_path)
+    )
 
     assert [(master['type'], master['number_of_slaves']) for master in config['masters']] == [
         ('serial', 30),
@@ -183,25 +177,24 @@ def test_dynamixel_only_config_does_not_keep_empty_ethercat_master(tmp_path):
 
 
 def test_ac_and_mixed_configs_keep_ethercat_only_when_needed(tmp_path):
-    bridge = MotionWebBridge.__new__(MotionWebBridge)
-    bridge.workspace_root = tmp_path
-
-    ac_config = bridge._motor_config_from_registry(
+    ac_config = motor_config_build.motor_config_from_registry(
+        tmp_path,
         {'motors': [_registry_motor(axis, transport='ethercat') for axis in range(30)]},
-        bridge._default_motor_config(),
+        motor_config_build.default_motor_config(tmp_path),
     )
     assert [(master['type'], master['number_of_slaves']) for master in ac_config['masters']] == [
         ('ethercat', 30),
     ]
 
-    mixed_config = bridge._motor_config_from_registry(
+    mixed_config = motor_config_build.motor_config_from_registry(
+        tmp_path,
         {
             'motors': [
                 *[_registry_motor(axis, transport='ethercat') for axis in range(15)],
                 *[_registry_motor(axis, transport='serial') for axis in range(15, 30)],
             ],
         },
-        bridge._default_motor_config(),
+        motor_config_build.default_motor_config(tmp_path),
     )
     assert [(master['type'], master['number_of_slaves']) for master in mixed_config['masters']] == [
         ('ethercat', 15),
@@ -210,8 +203,6 @@ def test_ac_and_mixed_configs_keep_ethercat_only_when_needed(tmp_path):
 
 
 def test_ac_identity_metadata_round_trips_in_project_config(tmp_path):
-    bridge = MotionWebBridge.__new__(MotionWebBridge)
-    bridge.workspace_root = tmp_path
     motor = _registry_motor(0, transport='ethercat')
     motor['identity'].update({
         'ethercat_alias': 403,
@@ -224,8 +215,9 @@ def test_ac_identity_metadata_round_trips_in_project_config(tmp_path):
         'sii_device_name': 'SII-DEVICE',
     })
 
-    config = bridge._motor_config_from_registry(
-        {'motors': [motor]}, bridge._default_motor_config()
+    config = motor_config_build.motor_config_from_registry(
+        tmp_path,
+        {'motors': [motor]}, motor_config_build.default_motor_config(tmp_path)
     )
     restored = motor_config_rules.registry_from_motor_config(config)['motors'][0]
 
@@ -267,8 +259,6 @@ def test_ac_identity_metadata_round_trips_in_project_config(tmp_path):
 
 
 def test_two_ethercat_masters_round_trip_without_merging_slave_positions(tmp_path):
-    bridge = MotionWebBridge.__new__(MotionWebBridge)
-    bridge.workspace_root = tmp_path
     motors = []
     for master_index in (0, 1):
         for offset in range(2):
@@ -290,8 +280,9 @@ def test_two_ethercat_masters_round_trip_without_merging_slave_positions(tmp_pat
             })
             motors.append(motor)
 
-    config = bridge._motor_config_from_registry(
-        {'motors': motors}, bridge._default_motor_config()
+    config = motor_config_build.motor_config_from_registry(
+        tmp_path,
+        {'motors': motors}, motor_config_build.default_motor_config(tmp_path)
     )
     restored = motor_config_rules.registry_from_motor_config(config)['motors']
 
@@ -310,8 +301,6 @@ def test_two_ethercat_masters_round_trip_without_merging_slave_positions(tmp_pat
 
 
 def test_zero_alias_ac_axes_round_trip_with_unique_slave_ids(tmp_path):
-    bridge = MotionWebBridge.__new__(MotionWebBridge)
-    bridge.workspace_root = tmp_path
     motors = []
     for axis in range(5):
         motor = _registry_motor(axis, transport='ethercat')
@@ -324,8 +313,9 @@ def test_zero_alias_ac_axes_round_trip_with_unique_slave_ids(tmp_path):
         motor['config']['position'] = axis
         motors.append(motor)
 
-    config = bridge._motor_config_from_registry(
-        {'motors': motors}, bridge._default_motor_config()
+    config = motor_config_build.motor_config_from_registry(
+        tmp_path,
+        {'motors': motors}, motor_config_build.default_motor_config(tmp_path)
     )
     restored = motor_config_rules.registry_from_motor_config(config)['motors']
 

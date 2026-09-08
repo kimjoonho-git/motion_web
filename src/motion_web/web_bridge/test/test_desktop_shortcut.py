@@ -1,7 +1,7 @@
 import stat
 from types import SimpleNamespace
 
-from motion_web_bridge.bridge_node import MotionWebBridge
+from motion_web_bridge import desktop_shortcut
 
 
 LAUNCHER = (
@@ -34,14 +34,11 @@ def test_desktop_shortcut_is_fixed_idempotent_and_executable(tmp_path, monkeypat
 
     monkeypatch.setenv('HOME', str(home))
     monkeypatch.setattr(
-        'motion_web_bridge.bridge_node.get_package_share_directory',
+        'motion_web_bridge.desktop_shortcut.get_package_share_directory',
         lambda package: str(share),
     )
-    monkeypatch.setattr('motion_web_bridge.bridge_node.subprocess.run', run)
-    bridge = MotionWebBridge.__new__(MotionWebBridge)
-    bridge.workspace_root = tmp_path
-
-    created = bridge.create_desktop_shortcut()
+    monkeypatch.setattr('motion_web_bridge.desktop_shortcut.subprocess.run', run)
+    created = desktop_shortcut.create_desktop_shortcut(tmp_path)
     installed = desktop / '모션 프로그램 열기.desktop'
 
     assert created['success'] is True
@@ -56,7 +53,7 @@ def test_desktop_shortcut_is_fixed_idempotent_and_executable(tmp_path, monkeypat
     ]
     assert all(call[1].get('shell') is None for call in calls)
 
-    repeated = bridge.create_desktop_shortcut()
+    repeated = desktop_shortcut.create_desktop_shortcut(tmp_path)
 
     assert repeated['success'] is True
     assert repeated['status'] == 'already_installed'
@@ -68,16 +65,14 @@ def test_desktop_shortcut_rejects_home_as_disabled_desktop(tmp_path, monkeypatch
     home.mkdir()
     monkeypatch.setenv('HOME', str(home))
     monkeypatch.setattr(
-        'motion_web_bridge.bridge_node.subprocess.run',
+        'motion_web_bridge.desktop_shortcut.subprocess.run',
         lambda command, **kwargs: SimpleNamespace(
             returncode=0,
             stdout=f'{home}\n',
             stderr='',
         ),
     )
-    bridge = MotionWebBridge.__new__(MotionWebBridge)
-
-    result = bridge.create_desktop_shortcut()
+    result = desktop_shortcut.create_desktop_shortcut()
 
     assert result['success'] is False
     assert '바탕화면 폴더' in result['message']

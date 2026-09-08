@@ -8,6 +8,8 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.responses import FileResponse
 from ament_index_python.packages import get_package_share_directory
 
+from motion_web_bridge import desktop_shortcut
+
 
 def register_system_routes(app: FastAPI, bridge, project_call) -> None:
     ui_share = Path(get_package_share_directory('motion_web_ui')) / 'static'
@@ -132,7 +134,9 @@ def register_system_routes(app: FastAPI, bridge, project_call) -> None:
 
     @app.post('/api/system/desktop-shortcut')
     async def create_desktop_shortcut():
-        return await asyncio.to_thread(bridge.create_desktop_shortcut)
+        return await asyncio.to_thread(
+            desktop_shortcut.create_desktop_shortcut, bridge.workspace_root
+        )
 
     @app.post('/api/system/motor-control/restart')
     async def restart_motor_control_system():

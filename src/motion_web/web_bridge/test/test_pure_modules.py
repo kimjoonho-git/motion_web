@@ -13,13 +13,28 @@ from pathlib import Path
 
 import pytest
 
-from motion_web_bridge import motion_file_analysis, motor_config_rules
+from motion_web_bridge import (
+    desktop_shortcut,
+    motion_file_analysis,
+    motor_config_build,
+    motor_config_rules,
+)
 
 #: 검사 대상 순수 모듈 · 분해가 진행되면 여기에 추가한다
-PURE_MODULES = [motor_config_rules, motion_file_analysis]
+PURE_MODULES = [
+    motor_config_rules,
+    motor_config_build,
+    motion_file_analysis,
+    desktop_shortcut,
+]
 
-#: 순수 모듈이 기대어도 되는 것 · 공용 커널과 표준 라이브러리만
+#: 순수 모듈이 기대어도 되는 것 · 공용 커널과 표준 라이브러리
 ALLOWED_PROJECT_IMPORTS = {'motion_common'}
+
+#: 순수 모듈끼리는 서로 기대도 된다 · 의존 방향이 노드로 되돌아가지만 않으면
+#: 노드 없이 테스트할 수 있다는 성질은 그대로다. 노드 import 금지
+#: (`test_module_does_not_import_the_node`)가 그 경계를 지킨다.
+ALLOWED_PURE_MODULE_NAMES = {module.__name__.rsplit('.', 1)[-1] for module in PURE_MODULES}
 
 
 def _tree(module):
@@ -86,8 +101,18 @@ def test_module_only_depends_on_the_shared_kernel(module):
             if node.level and node.level > 0:
                 offenders.append(f'상대 import (level={node.level})')
             elif node.module:
-                top = node.module.split('.')[0]
-                if top.startswith('motion_') and top not in ALLOWED_PROJECT_IMPORTS:
+                parts = node.module.split('.')
+                top = parts[0]
+                pure_sibling = (
+                    top == 'motion_web_bridge'
+                    and len(parts) == 2
+                    and parts[1] in ALLOWED_PURE_MODULE_NAMES
+                )
+                if (
+                    top.startswith('motion_')
+                    and top not in ALLOWED_PROJECT_IMPORTS
+                    and not pure_sibling
+                ):
                     offenders.append(node.module)
     assert not offenders, f'허용되지 않은 의존: {offenders}'
 

@@ -811,6 +811,7 @@ def test_motor_config_save_rejects_zero_axis_overwrite(tmp_path):
     repository.save_file(project_id, 'motor_axes', 'motor_axes.yaml', content)
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge.project_repository = repository
+    bridge.workspace_root = tmp_path
     bridge.motor_config_file = repository.export_path(
         project_id, 'motor_axes', 'motor_axes.yaml'
     )

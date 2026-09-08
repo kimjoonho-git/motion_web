@@ -1,5 +1,7 @@
 from typing import Any, Dict
 
+from motion_web_bridge import motion_file_analysis
+
 
 class AutomationService:
     def __init__(self, run_service: 'MotionRunService') -> None:
@@ -47,10 +49,14 @@ class MotionRunService:
 
     # Motion Files & Mappings
     def list_files(self) -> Dict[str, Any]:
-        return self.bridge.list_motion_files()
+        return motion_file_analysis.list_motion_files(
+            self.bridge.project_repository, self.bridge.motion_projects_dir
+        )
 
     def load_file(self, file_id: str) -> Dict[str, Any]:
-        return self.bridge.load_motion_file(file_id)
+        return motion_file_analysis.load_motion_file(
+            self.bridge.project_repository, self.bridge.motion_projects_dir, file_id
+        )
 
     def delete_file(self, file_id: str) -> Dict[str, Any]:
         return self.bridge.delete_motion_file(file_id)

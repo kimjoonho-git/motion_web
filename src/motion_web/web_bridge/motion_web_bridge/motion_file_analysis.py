@@ -296,3 +296,72 @@ def motion_file_entry(path: Path, *, include_detail: bool) -> Dict[str, Any]:
         entry['content'] = content
         entry['content_preview'] = content[:12000]
     return entry
+
+
+def _selected_motion_files_dir(repository: Any, motion_projects_dir: Path) -> Path:
+    project_id = repository.selected_project_id()
+    if not project_id:
+        raise ValueError('통합 프로젝트를 먼저 선택하세요')
+    return motion_projects_dir / project_id / 'motions'
+
+
+def list_motion_files(
+    repository: Any, motion_projects_dir: Path
+) -> Dict[str, Any]:
+    project_id = repository.selected_project_id()
+    if not project_id:
+        return {
+            'success': True,
+            'message': '통합 프로젝트를 먼저 선택하세요',
+            'project_dir': '',
+            'files_dir': '',
+            'files': [],
+        }
+    files_dir = motion_projects_dir / project_id / 'motions'
+    files_dir.mkdir(parents=True, exist_ok=True)
+    files = []
+    for path in sorted(
+        (
+            item for item in files_dir.iterdir()
+            if (
+                item.is_file()
+                and item.suffix.lower() == '.json'
+                and not item.name.startswith('__studio_')
+            )
+        ),
+        key=lambda item: item.stat().st_mtime if item.exists() else 0.0,
+        reverse=True,
+    ):
+        files.append(motion_file_entry(path, include_detail=False))
+    return {
+        'success': True,
+        'message': (
+            '현재 프로젝트 모션 파일을 불러왔습니다'
+            if repository.selected_project_id()
+            else '통합 프로젝트를 먼저 선택하세요'
+        ),
+        'project_dir': str(motion_projects_dir / project_id),
+        'files_dir': str(files_dir),
+        'files': files,
+    }
+
+
+def load_motion_file(
+    repository: Any, motion_projects_dir: Path, file_id: Any
+) -> Dict[str, Any]:
+    try:
+        path = motion_file_path(
+            file_id, _selected_motion_files_dir(repository, motion_projects_dir)
+        )
+    except ValueError as exc:
+        return {
+            **list_motion_files(repository, motion_projects_dir),
+            'success': False,
+            'message': str(exc),
+        }
+    return {
+        **list_motion_files(repository, motion_projects_dir),
+        'success': True,
+        'message': 'motion file loaded',
+        'file': motion_file_entry(path, include_detail=True),
+    }

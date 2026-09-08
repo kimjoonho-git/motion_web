@@ -127,7 +127,7 @@ motion_system(C++)  모터 단일 통로                 유지 · 스캐너만 
 | 1 | `motion_common` 신설 · 순수 함수 이관(파서·값·경로) | 최저 | **완료** · 목표 6모듈 전부 · 911테스트 통과 |
 | 2 | `RequestChannel` 단일화 · 5곳 교체 · 토픽명·페이로드 형식 유지 | 낮음 | **완료** · `rpc.ResultStore` 4곳 · 전송 계약 불변 · 실물 미검증 |
 | 3 | 토픽 상수 단일화 · `motor_command_topic` 명칭 정정 | 낮음 | **완료** · `topics.py` 27종 · 리터럴 잔여 0 · launch 7개 로드 확인 |
-| 4 | `bridge_node` 분해 · 서비스 6개 | 중간 | **진행 중** · 순수 함수 -1,107줄(§6-9) · 상태 동반 이동 미착수 |
+| 4 | `bridge_node` 분해 · 서비스 6개 | 중간 | **진행 중** · 순수 함수 -1,107줄(§6-9) · 불변 경로 인자화 -644줄(§6-11) · 가변 상태 이동 미착수 |
 | 5 | 영속 계층 통합 · 단일 저장 API + 파일락 · 다중 writer 제거 | 중간 | **부분 완료** · `store.py` 5종 통합 · 2개 프로젝트 격리 미검증 |
 | 6 | 장기작업 Action 전환 · 스캔·초기화·모션 실행 | 중간 | 진행률·취소 실물 검증 |
 | 7 | 프런트엔드 빌드 도입(해시 파일명) · CSS·HTML 분할 | 중간 | 브라우저 캐시 확인 |
@@ -440,6 +440,74 @@ motion_system(C++)  모터 단일 통로                 유지 · 스캐너만 
 정정 · §3-6 "모듈 3중 인스턴스화"는 배포본에서 성립하지 않는다. `web_ui/CMakeLists.txt`가
 빌드 시 `scripts/update_cache.py`로 모든 `?v=` 토큰을 빌드 타임스탬프 1종으로 덮어쓴다.
 소스 위생 문제였고, 배포까지 노출되던 `refactor.py`는 실제 문제가 맞았다.
+
+### 6-11. 불변 경로 인자화 · 순수 추출 4차
+
+`MotionWebBridge` 6,300 → 5,656줄 (-644) · 메서드 200 → 188 (2026-09-08)
+
+의존 지도를 다시 그리면서 §6-8이 `상태만`으로 묶었던 것의 성격을 나눴다.
+`__init__`이 세우는 125개 필드 중 **80개는 재대입도 변형도 없는 불변값**이다.
+`workspace_root` · `motion_projects_dir` · `event_log_dir` · `host` · `port` 따위가
+그렇다. 이것들은 상태가 아니라 설정이므로 **옮길 상태가 없다 · 인자로 넘기면 끝난다.**
+
+| 묶음 | 대상 | 이동처 | 감소 |
+|---|---|---|---|
+| A | 모션 파일 목록·상세 3함수 | `motion_file_analysis` | -57 |
+| B | 바탕화면 바로가기 1함수 | `desktop_shortcut` 신설 | -122 |
+| C | 모터 설정 생성 8함수 | `motor_config_build` 신설 | -465 |
+
+C는 처음에 `motor_config_rules`로 넣었더니 1,345줄이 되어 §7 파일 기준을 넘겼다.
+판정 규칙과 생성 규칙을 나눠 `motor_config_build`를 세웠다 · 857 + 500줄.
+의존은 생성 → 판정 한쪽이다.
+
+`DYNAMIXEL_BAUDRATE`는 `bridge_helpers`에서 `motor_config_build`로 옮겼다.
+쓰는 곳이 함께 이동해 노드에는 남을 이유가 없었다.
+
+`test_pure_modules.py`에 두 모듈을 등록하고, **순수 모듈끼리의 import를 허용**하도록
+규칙을 넓혔다. 금지의 목적은 노드로 되돌아가는 의존을 막는 것이고 그 경계는
+`test_module_does_not_import_the_node`가 따로 지킨다.
+
+검증
+
+- 코드 검증 · `ruff check src` 55건 유지 · 신규 0건
+- 실행 검증 · `pytest` 1,000건 통과 · 실패 0 (직전 995건)
+- 데이터 검증 · **이동 전후 동치** · 실가동 프로젝트(`연동2`) 레지스트리 1건 +
+  합성 4종(Dynamixel W150/W270 · 혼합 · 다중 EtherCAT 마스터 · 빈 레지스트리) × 기준설정 2종
+- 실물 검증 · `colcon build` 31패키지 · 서비스 재시작 · A `GET /api/motion-files`
+  목록·상세·실패 경로 · B `POST /api/system/desktop-shortcut` `already_installed`
+- 실물 미검증 · B의 `created` 경로(바로가기가 이미 있어 확인 불가 · 단위 테스트로만)
+  · C의 웹 저장 경로 `PUT /api/motor-config`(가동 중 프로젝트 설정을 다시 쓰므로 미수행)
+- 검증 불가 · Dynamixel(직렬 포트 부재) · MIDI(장치 미연결) · 다중 PC(전원 차단)
+
+작업 중 잡은 회귀 1건 · `_read_current_motor_config`에서 기본 설정을 미리 계산하도록
+바꿨다가 지연 평가가 깨져 `test_project_repository`가 실패했다. 원래 호출 위치를
+그대로 두는 것으로 되돌렸다. 인자화는 **호출 시점까지 같아야** 동치다.
+
+분해 남은 몫 · 상태 무의존 7메서드 56줄 · 상태만 49메서드 722줄 · 락 관여 132메서드
+4,487줄 · 지도 `docs/metrics/bridge-state-map-20260908.json`
+
+### 6-12. 다음 단계 · 위임 껍데기 27개
+
+`상태만` 722줄 중 137줄이 **이미 존재하는 서비스로의 위임 껍데기**다 · §3-1 지목분.
+
+| 대상 서비스 | 껍데기 | 줄 | 외부 호출 |
+|---|---|---|---|
+| `MotionStudioRosBridge` | 10 | 49 | 21 |
+| `MotionStudioSync` | 6 | 22 | 24 |
+| `CoordinationWebBridge` | 4 | 14 | 2 |
+| `rpc.ResultStore` ×5 | 5 | 30 | 0 |
+| `MotorRestartCoordinator` | 1 | 12 | 0 |
+| `EthercatAliasManager` | 1 | 10 | 0 |
+
+껍데기를 지우기 전에 **역참조를 끊어야 한다.** 서비스가 노드를 다시 부른다 ·
+`motion_studio_sync.py:284` → `bridge._motion_studio_start_order_lock()` ·
+`motion_studio_sync.py:287` → `bridge.prepare_unified_motion_studio()`.
+지금 껍데기만 지우면 그 호출이 끊긴다.
+
+외부 호출 0인 `rpc.ResultStore` 5개(30줄)부터가 가장 안전하다.
+
+그 뒤가 진짜 가변 상태다 · `motor_config_file`(재대입 10곳 · 락 관여 15메서드 1,039줄) ·
+`applied_motor_config_file`(락 관여 39메서드 2,476줄). 락 구간과 함께 설계해야 한다.
 
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
