@@ -3,6 +3,8 @@ from unittest import mock
 import threading
 import json
 import subprocess
+import tempfile
+from pathlib import Path
 import time
 
 import pytest
@@ -10,6 +12,7 @@ from std_msgs.msg import String
 
 from motion_web_bridge.bridge_node import MotionWebBridge, create_app
 from motion_web_bridge.motion_studio_session import MotionStudioSession
+from motion_web_bridge.motor_event_log import MotorEventLog
 from motion_web_bridge.motion_studio_sync import MotionStudioSync
 from motion_common import rpc
 from motion_web_bridge import ethercat_project_compat, motor_config_rules
@@ -24,6 +27,21 @@ def _restore_patched_module_functions():
     """
     yield
     mock.patch.stopall()
+
+
+def _memory_event_log():
+    """파일에 쓰지 않는 로그 서비스 · 프로젝트 전환 기억만 검사한다(§6-17)."""
+    return MotorEventLog(
+        log_dir=Path(tempfile.mkdtemp(prefix='motor-events-')),
+        retention_days=30,
+        max_bytes=10 * 1024 * 1024,
+        max_records=5000,
+        max_files=14,
+        repository=None,
+        workspace_root=Path('.'),
+        runtime_project_id=lambda: '',
+        logger=lambda: None,
+    )
 
 
 class _StubTransport:
@@ -125,7 +143,7 @@ def make_bridge():
         'state': 'starting', 'ready': False, 'context_id': '', 'nodes': {},
     }
     bridge._lock = threading.Lock()
-    bridge._event_log_lock = threading.RLock()
+    bridge._motor_event_log = _memory_event_log()
     bridge._jog_result_lock = threading.Lock()
     bridge._action_result_lock = threading.Lock()
     bridge._motion_mapping_lock = threading.Lock()
@@ -135,8 +153,6 @@ def make_bridge():
     bridge._motion_studio_editor_lock = threading.Lock()
     bridge._motion_state = {'generated_at': 1.0, 'last_motor_status_at': 1.0, 'motors': []}
     bridge._motion_state_received_at = 1.0
-    bridge._active_motor_errors = {}
-    bridge._last_motion_run_state = None
     bridge._jog_store = rpc.ResultStore()
     bridge._action_store = rpc.ResultStore()
     bridge._motion_mapping_store = rpc.ResultStore()
@@ -660,7 +676,7 @@ def test_project_change_deletes_previous_project_values_from_bridge_memory():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge._motion_studio_session = MotionStudioSession()
     bridge._lock = threading.Lock()
-    bridge._event_log_lock = threading.RLock()
+    bridge._motor_event_log = _memory_event_log()
     bridge._jog_result_lock = threading.Lock()
     bridge._action_result_lock = threading.Lock()
     bridge._motion_mapping_lock = threading.Lock()
@@ -670,8 +686,8 @@ def test_project_change_deletes_previous_project_values_from_bridge_memory():
     bridge._motion_studio_editor_lock = threading.Lock()
     bridge._motion_state = {'motors': [{'alias': 403}]}
     bridge._motion_state_received_at = 1.0
-    bridge._active_motor_errors = {'0': 'old-error'}
-    bridge._last_motion_run_state = 'running'
+    bridge._motor_event_log._active_motor_errors = {'0': 'old-error'}
+    bridge._motor_event_log._last_motion_run_state = 'running'
     bridge._jog_store = rpc.ResultStore()
     bridge._jog_store.store('old', {'success': True})
     bridge._action_store = rpc.ResultStore()
@@ -694,8 +710,8 @@ def test_project_change_deletes_previous_project_values_from_bridge_memory():
 
     assert bridge._motion_state is None
     assert bridge._motion_state_received_at is None
-    assert bridge._active_motor_errors == {}
-    assert bridge._last_motion_run_state is None
+    assert bridge._motor_event_log._active_motor_errors == {}
+    assert bridge._motor_event_log._last_motion_run_state is None
     assert bridge._jog_store.pending_count() == 0
     assert bridge._action_store.pending_count() == 0
     assert bridge._motion_mapping_store.pending_count() == 0

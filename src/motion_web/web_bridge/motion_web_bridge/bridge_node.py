@@ -4,12 +4,10 @@ import hashlib
 import json
 import math
 import os
-import re
 import socket
 import subprocess
 import threading
 import time
-from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -39,6 +37,7 @@ from . import (
 from .motor_restart_diagnostics import diagnose_motor_restart_failure
 from .motion_studio_bridge import MotionStudioRosBridge
 from .motion_studio_session import MotionStudioSession
+from .motor_event_log import MotorEventLog
 from .motion_studio_routes import register_motion_studio_routes
 from .bridge_helpers import (
     add_monitoring_motion_values,
@@ -226,6 +225,17 @@ class MotionWebBridge(Node):
             1,
             int(self.declare_parameter('event_log_max_files', 14).value),
         )
+        self._motor_event_log = MotorEventLog(
+            log_dir=self.event_log_dir,
+            retention_days=self.event_log_retention_days,
+            max_bytes=self.event_log_max_bytes,
+            max_records=self.event_log_max_records,
+            max_files=self.event_log_max_files,
+            repository=self.project_repository,
+            workspace_root=self.workspace_root,
+            runtime_project_id=lambda: self._runtime_project_id(),
+            logger=self.get_logger,
+        )
         self.web_publish_hz = float(self.declare_parameter('web_publish_hz', 10.0).value)
         self._web_access = self._build_web_access_info()
 
@@ -281,7 +291,6 @@ class MotionWebBridge(Node):
             'nodes': {},
             'updated_at': time.time(),
         }
-        self._event_log_lock = threading.RLock()
         self._scan_progress_lock = threading.RLock()
         self._motor_scan_request_lock = threading.Lock()
         self._motor_lifecycle_lock = threading.Lock()
@@ -293,8 +302,6 @@ class MotionWebBridge(Node):
             'running': False,
             'updated_at': None,
         }
-        self._active_motor_errors: Dict[str, str] = {}
-        self._last_motion_run_state: Optional[str] = None
 
         self._subscription = self.create_subscription(
             String,
@@ -467,7 +474,7 @@ class MotionWebBridge(Node):
         with self._lock:
             self._motion_state = payload
             self._motion_state_received_at = time.time()
-        self._record_motor_error_transitions(payload)
+        self._motor_event_log.record_motor_error_transitions(payload)
 
     def _motion_value_callback(self, msg: String) -> None:
         try:
@@ -630,7 +637,7 @@ class MotionWebBridge(Node):
             if isinstance(status, dict) and self._payload_matches_selected_project(status):
                 self._motion_run_status = status
         if isinstance(status, dict) and self._payload_matches_selected_project(status):
-            self._record_motion_run_transition(status)
+            self._motor_event_log.record_motion_run_transition(status)
 
     def _motion_run_status_callback(self, msg: String) -> None:
         try:
@@ -644,7 +651,7 @@ class MotionWebBridge(Node):
             return
         with self._motion_run_lock:
             self._motion_run_status = payload
-        self._record_motion_run_transition(payload)
+        self._motor_event_log.record_motion_run_transition(payload)
 
     def _midi_monitor_state_callback(self, msg: String) -> None:
         try:
@@ -1742,351 +1749,6 @@ class MotionWebBridge(Node):
             time.sleep(poll_interval)
         return last_status
 
-    def _record_motor_error_transitions(self, payload: Dict[str, Any]) -> None:
-        motors = payload.get('motors')
-        if not isinstance(motors, list):
-            return
-
-        current_errors: Dict[str, str] = {}
-        new_events: List[Dict[str, Any]] = []
-        with self._event_log_lock:
-            previous_errors = dict(self._active_motor_errors)
-            for motor in motors:
-                if not isinstance(motor, dict):
-                    continue
-                axis = values.optional_int(motor.get('controller_index'), None)
-                if axis is None:
-                    continue
-                errorcode = values.optional_int(motor.get('errorcode'), 0) or 0
-                statusword = values.optional_int(motor.get('statusword'), 0) or 0
-                fault = bool(motor.get('fault')) or errorcode != 0 or bool(statusword & 0x0008)
-                if not fault:
-                    continue
-
-                error_hex = str(motor.get('errorcode_hex') or f'0x{errorcode & 0xFFFF:04X}')
-                error_text = str(
-                    motor.get('error_text')
-                    or motor.get('status_text')
-                    or '모터 오류 상태'
-                )
-                signature = f'{error_hex}|{statusword & 0x0008}|{error_text}'
-                axis_key = str(axis)
-                current_errors[axis_key] = signature
-                if previous_errors.get(axis_key) == signature:
-                    continue
-
-                name = str(motor.get('display_name') or f'Axis {axis}')
-                new_events.append({
-                    'category': 'error',
-                    'event_type': 'motor_error',
-                    'target': f'Axis {axis} · {name}',
-                    'content': f'{error_hex} {error_text}',
-                    'details': {
-                        'axis': axis,
-                        'name': name,
-                        'motor_type': str(motor.get('motor_type_label') or motor.get('motor_type') or ''),
-                        'errorcode': errorcode,
-                        'errorcode_hex': error_hex,
-                        'error_text': error_text,
-                        'statusword': statusword,
-                    },
-                })
-            self._active_motor_errors = current_errors
-
-        for event in new_events:
-            self._append_motor_event(**event)
-
-    def _record_motion_run_transition(self, status: Dict[str, Any]) -> None:
-        state = str(status.get('state') or 'idle')
-        with self._event_log_lock:
-            previous_state = self._last_motion_run_state
-            self._last_motion_run_state = state
-        if previous_state is None or previous_state == state:
-            return
-
-        motion_file = str(status.get('motion_file_id') or '-')
-        mapping_file = str(status.get('mapping_file_id') or '-')
-        axes = status.get('axes') if isinstance(status.get('axes'), list) else []
-        target = f'{motion_file} · {len(axes)}축'
-        details = {
-            'previous_state': previous_state,
-            'state': state,
-            'motion_file_id': motion_file,
-            'mapping_file_id': mapping_file,
-            'axis_count': len(axes),
-            'run_mode': str(status.get('run_mode') or 'once'),
-        }
-
-        if state == 'initializing' and previous_state != 'initializing':
-            self._append_motor_event(
-                category='initial_position',
-                event_type='initial_position_started',
-                target=target,
-                content=f'초기 위치 이동 시작 · 매핑 {mapping_file}',
-                details=details,
-            )
-
-        if previous_state == 'initializing' and state != 'initializing':
-            completed = state in {'initialized', 'ready', 'running'}
-            self._append_motor_event(
-                category='initial_position',
-                event_type='initial_position_completed' if completed else 'initial_position_stopped',
-                target=target,
-                content='초기 위치 이동 완료' if completed else f'초기 위치 이동 종료 · 상태 {state}',
-                details=details,
-            )
-
-        if state == 'running' and previous_state != 'running':
-            continuous = details['run_mode'] == 'continuous'
-            motion_label = '연속 모션' if continuous else '1회 모션'
-            self._append_motor_event(
-                category='motion',
-                event_type='continuous_motion_started' if continuous else 'single_motion_started',
-                target=target,
-                content=f'{motion_label} 시작 · 매핑 {mapping_file}',
-                details=details,
-            )
-
-    def _append_motor_event(
-        self,
-        category: str,
-        event_type: str,
-        target: str,
-        content: str,
-        details: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        now = datetime.now().astimezone()
-        record = {
-            'id': f'{time.time_ns()}',
-            'timestamp': now.timestamp(),
-            'timestamp_text': now.isoformat(timespec='milliseconds'),
-            'category': str(category),
-            'event_type': str(event_type),
-            'target': str(target),
-            'content': str(content),
-            'details': details if isinstance(details, dict) else {},
-        }
-        log_dir, project_id, project_name = self._motor_event_log_context(for_write=True)
-        if project_id:
-            record['project_id'] = project_id
-            record['project_name'] = project_name
-        path = log_dir / f'{now:%Y-%m-%d}.jsonl'
-        try:
-            with self._event_log_lock:
-                log_dir.mkdir(parents=True, exist_ok=True)
-                with path.open('a', encoding='utf-8') as stream:
-                    stream.write(json.dumps(record, ensure_ascii=False, separators=(',', ':')))
-                    stream.write('\n')
-                self._prune_motor_event_logs(log_dir)
-        except OSError as error:
-            self.get_logger().error(f'Failed to write motor event log {path}: {error}')
-        return record
-
-    def _motor_event_log_context(self, for_write: bool = False) -> tuple[Path, str, str]:
-        configured_fallback = getattr(self, 'event_log_dir', None)
-        workspace_root = Path(getattr(self, 'workspace_root', Path.cwd()))
-        fallback = Path(configured_fallback or workspace_root / 'log' / 'motor_events')
-        repository = getattr(self, 'project_repository', None)
-        if repository is None:
-            return fallback, '', ''
-
-        project_id = ''
-        if for_write:
-            try:
-                project_id = str(self._runtime_project_id() or '')
-            except (AttributeError, OSError, ValueError):
-                project_id = ''
-        if not project_id:
-            try:
-                project_id = str(repository.selected_project_id() or '')
-            except (AttributeError, OSError, ValueError):
-                project_id = ''
-        if not project_id:
-            return fallback, '', ''
-        try:
-            project = repository.get_project(project_id).get('project') or {}
-            return repository.project_logs_dir(project_id), project_id, str(project.get('name') or project_id)
-        except (AttributeError, OSError, ValueError):
-            return fallback, '', ''
-
-    @staticmethod
-    def _event_log_paths(log_dir: Path) -> List[Path]:
-        return sorted(
-            path for path in log_dir.glob('*.jsonl')
-            if path.is_file() and not path.is_symlink()
-        )
-
-    @staticmethod
-    def _event_log_lines(path: Path) -> List[str]:
-        try:
-            return [line for line in path.read_text(encoding='utf-8').splitlines() if line.strip()]
-        except OSError:
-            return []
-
-    def _prune_motor_event_logs(self, log_dir: Optional[Path] = None) -> None:
-        target_dir = Path(log_dir or self.event_log_dir)
-        cutoff = datetime.now().astimezone().date() - timedelta(
-            days=self.event_log_retention_days - 1
-        )
-        with self._event_log_lock:
-            paths = self._event_log_paths(target_dir)
-            for path in list(paths):
-                try:
-                    file_date = datetime.strptime(path.stem, '%Y-%m-%d').date()
-                except ValueError:
-                    continue
-                if file_date < cutoff:
-                    try:
-                        path.unlink()
-                    except OSError:
-                        continue
-                    paths.remove(path)
-
-            while len(paths) > self.event_log_max_files:
-                oldest = paths.pop(0)
-                try:
-                    oldest.unlink()
-                except OSError:
-                    pass
-
-            sizes: Dict[Path, int] = {}
-            for path in paths:
-                try:
-                    sizes[path] = path.stat().st_size
-                except OSError:
-                    sizes[path] = 0
-            total_bytes = sum(sizes.values())
-            while total_bytes > self.event_log_max_bytes and len(paths) > 1:
-                oldest = paths.pop(0)
-                try:
-                    oldest.unlink()
-                except OSError:
-                    continue
-                total_bytes -= sizes.get(oldest, 0)
-
-            line_counts = {path: len(self._event_log_lines(path)) for path in paths}
-            total_records = sum(line_counts.values())
-            while total_records > self.event_log_max_records and len(paths) > 1:
-                oldest = paths.pop(0)
-                try:
-                    oldest.unlink()
-                except OSError:
-                    continue
-                total_records -= line_counts.get(oldest, 0)
-
-            if paths:
-                newest = paths[-1]
-                lines = self._event_log_lines(newest)
-                if len(lines) > self.event_log_max_records:
-                    lines = lines[-self.event_log_max_records:]
-                encoded_lines = [(line + '\n').encode('utf-8') for line in lines]
-                encoded_size = sum(len(line) for line in encoded_lines)
-                while encoded_lines and encoded_size > self.event_log_max_bytes:
-                    encoded_size -= len(encoded_lines.pop(0))
-                try:
-                    newest.write_bytes(b''.join(encoded_lines))
-                except OSError:
-                    pass
-
-    def clear_motor_events(self) -> Dict[str, Any]:
-        log_dir, project_id, project_name = self._motor_event_log_context()
-        deleted_files = 0
-        deleted_bytes = 0
-        with self._event_log_lock:
-            for path in self._event_log_paths(log_dir):
-                try:
-                    deleted_bytes += path.stat().st_size
-                    path.unlink()
-                    deleted_files += 1
-                except OSError:
-                    continue
-        return {
-            'success': True,
-            'message': '현재 프로젝트의 모터 동작 로그를 삭제했습니다.',
-            'deleted_files': deleted_files,
-            'deleted_bytes': deleted_bytes,
-            'project_id': project_id,
-            'project_name': project_name,
-        }
-
-    def delete_motor_event_file(self, file_name: Any) -> Dict[str, Any]:
-        name = str(file_name or '').strip()
-        if name != Path(name).name or not re.fullmatch(r'\d{4}-\d{2}-\d{2}\.jsonl', name):
-            raise ValueError('올바르지 않은 로그 파일명입니다')
-        log_dir, project_id, project_name = self._motor_event_log_context()
-        path = log_dir / name
-        if not path.is_file() or path.is_symlink():
-            raise ValueError(f'로그 파일을 찾을 수 없습니다: {name}')
-        with self._event_log_lock:
-            size = path.stat().st_size
-            path.unlink()
-        return {
-            'success': True,
-            'message': f'{name} 로그 파일을 삭제했습니다.',
-            'deleted_file': name,
-            'deleted_bytes': size,
-            'project_id': project_id,
-            'project_name': project_name,
-        }
-
-    def motor_events(
-        self, limit: int = 200, category: str = 'all', file_name: str = 'all'
-    ) -> Dict[str, Any]:
-        safe_limit = max(1, min(int(limit), 1000))
-        category_filter = str(category or 'all')
-        file_filter = str(file_name or 'all')
-        log_dir, project_id, project_name = self._motor_event_log_context()
-        events: List[Dict[str, Any]] = []
-        file_rows: List[Dict[str, Any]] = []
-        with self._event_log_lock:
-            paths = list(reversed(self._event_log_paths(log_dir)))
-            for path in paths:
-                lines = self._event_log_lines(path)
-                try:
-                    size = path.stat().st_size
-                except OSError:
-                    size = 0
-                file_rows.append({
-                    'name': path.name,
-                    'size': size,
-                    'record_count': len(lines),
-                })
-            if file_filter != 'all':
-                paths = [path for path in paths if path.name == file_filter]
-            for path in paths:
-                try:
-                    lines = path.read_text(encoding='utf-8').splitlines()
-                except OSError:
-                    continue
-                for line in reversed(lines):
-                    try:
-                        event = json.loads(line)
-                    except (json.JSONDecodeError, TypeError):
-                        continue
-                    if not isinstance(event, dict):
-                        continue
-                    if category_filter != 'all' and event.get('category') != category_filter:
-                        continue
-                    events.append(event)
-                    if len(events) >= safe_limit:
-                        break
-                if len(events) >= safe_limit:
-                    break
-        return {
-            'success': True,
-            'category': category_filter,
-            'file_name': file_filter,
-            'count': len(events),
-            'events': events,
-            'files': file_rows,
-            'retention_days': self.event_log_retention_days,
-            'max_bytes': self.event_log_max_bytes,
-            'max_records': self.event_log_max_records,
-            'max_files': self.event_log_max_files,
-            'project_id': project_id,
-            'project_name': project_name,
-        }
-
     def _build_web_access_info(self) -> Dict[str, Any]:
         lan_ip = self.access_host or self._detect_lan_ip()
         display_host = lan_ip or self.host
@@ -2220,7 +1882,7 @@ class MotionWebBridge(Node):
             )
         except EthercatAliasError as exc:
             return {'success': False, 'message': str(exc)}
-        self._append_motor_event(
+        self._motor_event_log.append(
             category='system',
             event_type='ethercat_alias_written',
             target=(
@@ -2990,9 +2652,7 @@ class MotionWebBridge(Node):
         with self._lock:
             self._motion_state = None
             self._motion_state_received_at = None
-        with self._event_log_lock:
-            self._active_motor_errors = {}
-            self._last_motion_run_state = None
+        self._motor_event_log.clear_project_memory()
         self._jog_store.clear()
         self._action_store.clear()
         self._motion_mapping_store.clear()

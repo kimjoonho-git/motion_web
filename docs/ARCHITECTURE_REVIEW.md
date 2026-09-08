@@ -784,6 +784,66 @@ Dynamixel 장치가 없어 **실물 미검증**이다.
   `ethercat-aliases`·`scan/progress`가 통과해 배선은 확인됐으나 스캔 자체는
   버스를 재열거하므로 별도 지시 없이 다시 돌리지 않았다
 
+### 6-17. `MotorEventLog` 신설 · §5 분해 목표안 첫 서비스
+
+`MotionWebBridge` 5,327 → **4,987줄** · 메서드 173 → 163 · 락 16 → 15 ·
+락 관여 4,486 → 4,147줄
+
+§5의 `bridge_node` 분해 목표안 6개 중 하나를 실제로 세웠다.
+
+#### 옮긴 것 · 10메서드 335줄 + 상태 9개
+
+| 메서드 | 줄 | 서비스 이름 |
+|---|---|---|
+| `_prune_motor_event_logs` | 64 | `prune` |
+| `motor_events` | 57 | `events` |
+| `_record_motor_error_transitions` | 53 | `record_motor_error_transitions` |
+| `_record_motion_run_transition` | 50 | `record_motion_run_transition` |
+| `_append_motor_event` | 34 | `append` |
+| `_motor_event_log_context` | 26 | `context` |
+| `clear_motor_events` | 20 | `clear` |
+| `delete_motor_event_file` | 19 | `delete_file` |
+| `_event_log_paths` · `_event_log_lines` | 10 | 모듈 함수 |
+
+상태 · `_event_log_lock`(RLock) · `event_log_dir` · `event_log_retention_days` ·
+`event_log_max_bytes` · `event_log_max_records` · `event_log_max_files` ·
+`_active_motor_errors` · `_last_motion_run_state`
+
+노드에서 받는 것은 협력자뿐이다 · `project_repository` · `workspace_root` ·
+`runtime_project_id` 콜러블 · `logger` 콜러블.
+
+#### 전이 기록을 함께 옮긴 이유
+
+`_record_motor_error_transitions`와 `_record_motion_run_transition`은 로그 기록이
+아니라 **판정**이다 · 이전 상태와 비교해 달라진 것만 이벤트로 남긴다. 이 판정과
+기록이 같은 락 아래에서 일어나야 같은 오류가 두 번 적히지 않는다.
+
+로그 저장소만 떼어내고 판정을 노드에 남기면, 노드는 판정용으로 별도 락을 들어야
+하고 그 순간 **판정과 기록 사이가 벌어진다.** 그래서 락과 함께 옮겼다.
+
+`append`가 락 안에서 `prune`을 다시 부르므로 `RLock`을 그대로 유지했다.
+
+#### 라우트
+
+`bridge.motor_events` · `bridge.clear_motor_events` · `bridge.delete_motor_event_file`
+세 껍데기를 지우고 `motor_routes`가 `bridge._motor_event_log.events(...)` 형태로
+직접 부른다 · §6-15·§6-16과 같은 규칙.
+
+#### 테스트
+
+`test_motor_event_log.py`가 **노드를 아예 만들지 않는다.** 이전에는
+`MotionWebBridge.__new__`로 껍데기를 세우고 필드 8개를 손으로 꽂았다. 지금은
+`MotorEventLog(...)`를 직접 만든다 · 7건 통과.
+
+`test_execution_context.py`의 `make_bridge`는 파일에 쓰지 않는 로그 서비스를
+꽂는다 · 프로젝트 전환 시 전이 기억이 지워지는지만 검사한다.
+
+#### 검증
+
+- 코드 검증 · `ruff check src` 55건 유지 · 신규 0건
+- 실행 검증 · `pytest` 1,005건 통과 · 실패 0
+- 실물 검증 · 아래 별도 기록
+
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
 - 파일 1,000줄 이하 · 함수 60줄 이하 · `Node` 서브클래스 500줄 이하

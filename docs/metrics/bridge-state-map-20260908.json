@@ -5,7 +5,6 @@
   "_action_request_publisher",
   "_action_result_subscription",
   "_action_store",
-  "_active_motor_errors",
   "_bridge_instance_id",
   "_bridge_started_at",
   "_coordination_poll_lock",
@@ -13,14 +12,12 @@
   "_coordination_watchdog_stop_execution_id",
   "_coordination_watchdog_timer",
   "_coordination_web_bridge",
-  "_event_log_lock",
   "_execution_context_apply_lock",
   "_execution_context_lock",
   "_execution_context_status",
   "_jog_request_publisher",
   "_jog_result_subscription",
   "_jog_store",
-  "_last_motion_run_state",
   "_lock",
   "_midi_monitor_lock",
   "_midi_monitor_request_publisher",
@@ -54,6 +51,7 @@
   "_motion_value_lock",
   "_motion_value_state",
   "_motion_value_subscription",
+  "_motor_event_log",
   "_motor_lifecycle_lock",
   "_motor_operation_reconcile_lock",
   "_motor_operation_reconcile_timer",
@@ -96,7 +94,6 @@
   "motion_mapping_request_topic",
   "motion_mapping_response_topic",
   "motion_projects_dir",
-  "motion_run",
   "motion_run_request_topic",
   "motion_run_response_topic",
   "motion_run_status_topic",
@@ -107,7 +104,6 @@
   "motion_studio_response_topic",
   "motion_studio_status_topic",
   "motion_value_topic",
-  "motor",
   "motor_config_file",
   "motor_restart_coordinator",
   "port",
@@ -124,7 +120,6 @@
  ],
  "locks": [
   "_coordination_poll_lock",
-  "_event_log_lock",
   "_execution_context_apply_lock",
   "_execution_context_lock",
   "_lock",
@@ -195,7 +190,6 @@
   "motion_mapping_request_topic",
   "motion_mapping_response_topic",
   "motion_projects_dir",
-  "motion_run",
   "motion_run_request_topic",
   "motion_run_response_topic",
   "motion_run_status_topic",
@@ -206,7 +200,6 @@
   "motion_studio_response_topic",
   "motion_studio_status_topic",
   "motion_value_topic",
-  "motor",
   "port",
   "project_repository",
   "restart_script",
@@ -221,12 +214,10 @@
  ],
  "mutable_fields": [
   "_action_store",
-  "_active_motor_errors",
   "_coordination_poll_received_monotonic",
   "_coordination_watchdog_stop_execution_id",
   "_execution_context_status",
   "_jog_store",
-  "_last_motion_run_state",
   "_midi_monitor_status",
   "_midi_monitor_store",
   "_monitoring_motion_mapping_context_id",
@@ -239,6 +230,7 @@
   "_motion_studio_ros_bridge",
   "_motion_studio_sync_service",
   "_motion_value_state",
+  "_motor_event_log",
   "_project_generation",
   "_safety_status",
   "_scan_progress",
@@ -249,12 +241,11 @@
  ],
  "methods": {
   "__init__": {
-   "lines": 378,
+   "lines": 384,
    "state": [
     "_action_request_publisher",
     "_action_result_subscription",
     "_action_store",
-    "_active_motor_errors",
     "_automation_triggered_context_id",
     "_bridge_instance_id",
     "_bridge_started_at",
@@ -266,7 +257,6 @@
     "_jog_request_publisher",
     "_jog_result_subscription",
     "_jog_store",
-    "_last_motion_run_state",
     "_midi_monitor_request_publisher",
     "_midi_monitor_response_subscription",
     "_midi_monitor_state_subscription",
@@ -295,6 +285,7 @@
     "_motion_studio_sync_service",
     "_motion_value_state",
     "_motion_value_subscription",
+    "_motor_event_log",
     "_motor_operation_reconcile_timer",
     "_project_generation",
     "_safety_request_publisher",
@@ -330,7 +321,6 @@
     "motion_mapping_request_topic",
     "motion_mapping_response_topic",
     "motion_projects_dir",
-    "motion_run",
     "motion_run_request_topic",
     "motion_run_response_topic",
     "motion_run_status_topic",
@@ -341,7 +331,6 @@
     "motion_studio_response_topic",
     "motion_studio_status_topic",
     "motion_value_topic",
-    "motor",
     "motor_config_file",
     "motor_restart_coordinator",
     "port",
@@ -358,7 +347,6 @@
    ],
    "locks": [
     "_coordination_poll_lock",
-    "_event_log_lock",
     "_execution_context_apply_lock",
     "_execution_context_lock",
     "_lock",
@@ -392,6 +380,7 @@
     "_motion_studio_status_callback",
     "_motion_value_callback",
     "_motor_operation_reconcile_callback",
+    "_runtime_project_id",
     "_safety_status_callback",
     "_scan_progress_callback",
     "_schedule_execution_context_reconcile"
@@ -401,29 +390,21 @@
   "_motion_state_callback": {
    "lines": 18,
    "state": [
-    "_active_motor_errors",
     "_motion_state",
     "_motion_state_received_at",
+    "_motor_event_log",
     "_project_generation",
     "applied_motor_config_file",
-    "event_log_dir",
-    "event_log_max_bytes",
-    "event_log_max_files",
-    "event_log_max_records",
-    "event_log_retention_days",
     "motion_projects_dir",
     "motion_state_topic",
-    "project_repository",
-    "workspace_root"
+    "project_repository"
    ],
    "locks": [
-    "_event_log_lock",
     "_lock",
     "_project_generation_lock"
    ],
    "calls": [
     "_payload_matches_selected_project",
-    "_record_motor_error_transitions",
     "_selected_project_owns_runtime"
    ],
    "opaque": false
@@ -526,29 +507,19 @@
   "_motion_run_response_callback": {
    "lines": 20,
    "state": [
-    "_last_motion_run_state",
     "_motion_run_status",
     "_motion_run_store",
+    "_motor_event_log",
     "_project_generation",
-    "applied_motor_config_file",
-    "event_log_dir",
-    "event_log_max_bytes",
-    "event_log_max_files",
-    "event_log_max_records",
-    "event_log_retention_days",
-    "motion_projects_dir",
     "motion_run_response_topic",
-    "project_repository",
-    "workspace_root"
+    "project_repository"
    ],
    "locks": [
-    "_event_log_lock",
     "_motion_run_lock",
     "_project_generation_lock"
    ],
    "calls": [
     "_payload_matches_selected_project",
-    "_record_motion_run_transition",
     "_response_matches_current_generation"
    ],
    "opaque": false
@@ -556,28 +527,18 @@
   "_motion_run_status_callback": {
    "lines": 13,
    "state": [
-    "_last_motion_run_state",
     "_motion_run_status",
+    "_motor_event_log",
     "_project_generation",
-    "applied_motor_config_file",
-    "event_log_dir",
-    "event_log_max_bytes",
-    "event_log_max_files",
-    "event_log_max_records",
-    "event_log_retention_days",
-    "motion_projects_dir",
     "motion_run_status_topic",
-    "project_repository",
-    "workspace_root"
+    "project_repository"
    ],
    "locks": [
-    "_event_log_lock",
     "_motion_run_lock",
     "_project_generation_lock"
    ],
    "calls": [
-    "_payload_matches_selected_project",
-    "_record_motion_run_transition"
+    "_payload_matches_selected_project"
    ],
    "opaque": false
   },
@@ -786,24 +747,6 @@
    ],
    "opaque": false
   },
-  "coordination_status": {
-   "lines": 3,
-   "state": [
-    "_coordination_web_bridge"
-   ],
-   "locks": [],
-   "calls": [],
-   "opaque": false
-  },
-  "update_coordination_settings": {
-   "lines": 5,
-   "state": [
-    "_coordination_web_bridge"
-   ],
-   "locks": [],
-   "calls": [],
-   "opaque": false
-  },
   "coordination_local_readiness": {
    "lines": 3,
    "state": [],
@@ -853,15 +796,6 @@
    "calls": [
     "coordination_stop_now"
    ],
-   "opaque": false
-  },
-  "coordination_control": {
-   "lines": 3,
-   "state": [
-    "_coordination_web_bridge"
-   ],
-   "locks": [],
-   "calls": [],
    "opaque": false
   },
   "coordination_local_control": {
@@ -1059,10 +993,8 @@
    "state": [
     "_action_request_publisher",
     "_action_store",
-    "_active_motor_errors",
     "_execution_context_status",
     "_jog_store",
-    "_last_motion_run_state",
     "_midi_monitor_request_publisher",
     "_midi_monitor_status",
     "_midi_monitor_store",
@@ -1076,6 +1008,7 @@
     "_motion_studio_ros_bridge",
     "_motion_studio_session",
     "_motion_studio_sync_service",
+    "_motor_event_log",
     "_project_generation",
     "_safety_request_publisher",
     "_scan_progress",
@@ -1083,7 +1016,6 @@
     "project_repository"
    ],
    "locks": [
-    "_event_log_lock",
     "_execution_context_lock",
     "_lock",
     "_midi_monitor_lock",
@@ -1119,12 +1051,10 @@
    "state": [
     "_action_request_publisher",
     "_action_store",
-    "_active_motor_errors",
     "_automation_triggered_context_id",
     "_coordination_web_bridge",
     "_execution_context_status",
     "_jog_store",
-    "_last_motion_run_state",
     "_midi_monitor_request_publisher",
     "_midi_monitor_status",
     "_midi_monitor_store",
@@ -1138,6 +1068,7 @@
     "_motion_studio_ros_bridge",
     "_motion_studio_session",
     "_motion_studio_sync_service",
+    "_motor_event_log",
     "_project_generation",
     "_safety_request_publisher",
     "_scan_progress",
@@ -1148,7 +1079,6 @@
     "workspace_root"
    ],
    "locks": [
-    "_event_log_lock",
     "_execution_context_apply_lock",
     "_execution_context_lock",
     "_lock",
@@ -1167,12 +1097,10 @@
    "state": [
     "_action_request_publisher",
     "_action_store",
-    "_active_motor_errors",
     "_automation_triggered_context_id",
     "_coordination_web_bridge",
     "_execution_context_status",
     "_jog_store",
-    "_last_motion_run_state",
     "_midi_monitor_request_publisher",
     "_midi_monitor_status",
     "_midi_monitor_store",
@@ -1186,6 +1114,7 @@
     "_motion_studio_ros_bridge",
     "_motion_studio_session",
     "_motion_studio_sync_service",
+    "_motor_event_log",
     "_project_generation",
     "_safety_request_publisher",
     "_scan_progress",
@@ -1196,7 +1125,6 @@
     "workspace_root"
    ],
    "locks": [
-    "_event_log_lock",
     "_execution_context_apply_lock",
     "_execution_context_lock",
     "_lock",
@@ -1252,12 +1180,10 @@
    "state": [
     "_action_request_publisher",
     "_action_store",
-    "_active_motor_errors",
     "_automation_triggered_context_id",
     "_coordination_web_bridge",
     "_execution_context_status",
     "_jog_store",
-    "_last_motion_run_state",
     "_midi_monitor_request_publisher",
     "_midi_monitor_status",
     "_midi_monitor_store",
@@ -1271,6 +1197,7 @@
     "_motion_studio_ros_bridge",
     "_motion_studio_session",
     "_motion_studio_sync_service",
+    "_motor_event_log",
     "_project_generation",
     "_safety_request_publisher",
     "_scan_progress",
@@ -1281,7 +1208,6 @@
     "workspace_root"
    ],
    "locks": [
-    "_event_log_lock",
     "_execution_context_apply_lock",
     "_execution_context_lock",
     "_lock",
@@ -1293,177 +1219,6 @@
    "calls": [
     "_reconcile_execution_context",
     "execution_context_status"
-   ],
-   "opaque": false
-  },
-  "_record_motor_error_transitions": {
-   "lines": 53,
-   "state": [
-    "_active_motor_errors",
-    "applied_motor_config_file",
-    "event_log_dir",
-    "event_log_max_bytes",
-    "event_log_max_files",
-    "event_log_max_records",
-    "event_log_retention_days",
-    "motion_projects_dir",
-    "project_repository",
-    "workspace_root"
-   ],
-   "locks": [
-    "_event_log_lock"
-   ],
-   "calls": [
-    "_append_motor_event"
-   ],
-   "opaque": false
-  },
-  "_record_motion_run_transition": {
-   "lines": 50,
-   "state": [
-    "_last_motion_run_state",
-    "applied_motor_config_file",
-    "event_log_dir",
-    "event_log_max_bytes",
-    "event_log_max_files",
-    "event_log_max_records",
-    "event_log_retention_days",
-    "motion_projects_dir",
-    "project_repository",
-    "workspace_root"
-   ],
-   "locks": [
-    "_event_log_lock"
-   ],
-   "calls": [
-    "_append_motor_event"
-   ],
-   "opaque": false
-  },
-  "_append_motor_event": {
-   "lines": 34,
-   "state": [
-    "applied_motor_config_file",
-    "event_log_dir",
-    "event_log_max_bytes",
-    "event_log_max_files",
-    "event_log_max_records",
-    "event_log_retention_days",
-    "motion_projects_dir",
-    "project_repository",
-    "workspace_root"
-   ],
-   "locks": [
-    "_event_log_lock"
-   ],
-   "calls": [
-    "_motor_event_log_context",
-    "_prune_motor_event_logs"
-   ],
-   "opaque": false
-  },
-  "_motor_event_log_context": {
-   "lines": 26,
-   "state": [
-    "applied_motor_config_file",
-    "event_log_dir",
-    "motion_projects_dir",
-    "project_repository",
-    "workspace_root"
-   ],
-   "locks": [],
-   "calls": [
-    "_runtime_project_id"
-   ],
-   "opaque": false
-  },
-  "_event_log_paths": {
-   "lines": 5,
-   "state": [],
-   "locks": [],
-   "calls": [],
-   "opaque": false
-  },
-  "_event_log_lines": {
-   "lines": 5,
-   "state": [],
-   "locks": [],
-   "calls": [],
-   "opaque": false
-  },
-  "_prune_motor_event_logs": {
-   "lines": 64,
-   "state": [
-    "event_log_dir",
-    "event_log_max_bytes",
-    "event_log_max_files",
-    "event_log_max_records",
-    "event_log_retention_days"
-   ],
-   "locks": [
-    "_event_log_lock"
-   ],
-   "calls": [
-    "_event_log_lines",
-    "_event_log_paths"
-   ],
-   "opaque": false
-  },
-  "clear_motor_events": {
-   "lines": 20,
-   "state": [
-    "applied_motor_config_file",
-    "event_log_dir",
-    "motion_projects_dir",
-    "project_repository",
-    "workspace_root"
-   ],
-   "locks": [
-    "_event_log_lock"
-   ],
-   "calls": [
-    "_event_log_paths",
-    "_motor_event_log_context"
-   ],
-   "opaque": false
-  },
-  "delete_motor_event_file": {
-   "lines": 19,
-   "state": [
-    "applied_motor_config_file",
-    "event_log_dir",
-    "motion_projects_dir",
-    "project_repository",
-    "workspace_root"
-   ],
-   "locks": [
-    "_event_log_lock"
-   ],
-   "calls": [
-    "_motor_event_log_context"
-   ],
-   "opaque": false
-  },
-  "motor_events": {
-   "lines": 57,
-   "state": [
-    "applied_motor_config_file",
-    "event_log_dir",
-    "event_log_max_bytes",
-    "event_log_max_files",
-    "event_log_max_records",
-    "event_log_retention_days",
-    "motion_projects_dir",
-    "project_repository",
-    "workspace_root"
-   ],
-   "locks": [
-    "_event_log_lock"
-   ],
-   "calls": [
-    "_event_log_lines",
-    "_event_log_paths",
-    "_motor_event_log_context"
    ],
    "opaque": false
   },
@@ -1676,23 +1431,11 @@
   "write_ethercat_alias": {
    "lines": 48,
    "state": [
-    "applied_motor_config_file",
-    "ethercat_alias_manager",
-    "event_log_dir",
-    "event_log_max_bytes",
-    "event_log_max_files",
-    "event_log_max_records",
-    "event_log_retention_days",
-    "motion_projects_dir",
-    "project_repository",
-    "workspace_root"
+    "_motor_event_log",
+    "ethercat_alias_manager"
    ],
-   "locks": [
-    "_event_log_lock"
-   ],
-   "calls": [
-    "_append_motor_event"
-   ],
+   "locks": [],
+   "calls": [],
    "opaque": false
   },
   "_call_scan_service": {
@@ -2050,12 +1793,10 @@
    "opaque": false
   },
   "_clear_project_scoped_memory": {
-   "lines": 31,
+   "lines": 29,
    "state": [
     "_action_store",
-    "_active_motor_errors",
     "_jog_store",
-    "_last_motion_run_state",
     "_midi_monitor_status",
     "_midi_monitor_store",
     "_motion_mapping_store",
@@ -2066,10 +1807,10 @@
     "_motion_studio_ros_bridge",
     "_motion_studio_session",
     "_motion_studio_sync_service",
+    "_motor_event_log",
     "_scan_progress"
    ],
    "locks": [
-    "_event_log_lock",
     "_lock",
     "_midi_monitor_lock",
     "_motion_run_lock",
@@ -2149,12 +1890,10 @@
    "state": [
     "_action_request_publisher",
     "_action_store",
-    "_active_motor_errors",
     "_automation_triggered_context_id",
     "_coordination_web_bridge",
     "_execution_context_status",
     "_jog_store",
-    "_last_motion_run_state",
     "_midi_monitor_request_publisher",
     "_midi_monitor_status",
     "_midi_monitor_store",
@@ -2168,6 +1907,7 @@
     "_motion_studio_ros_bridge",
     "_motion_studio_session",
     "_motion_studio_sync_service",
+    "_motor_event_log",
     "_project_generation",
     "_safety_request_publisher",
     "_scan_progress",
@@ -2179,7 +1919,6 @@
     "workspace_root"
    ],
    "locks": [
-    "_event_log_lock",
     "_execution_context_apply_lock",
     "_execution_context_lock",
     "_lock",
@@ -2203,10 +1942,8 @@
    "state": [
     "_action_request_publisher",
     "_action_store",
-    "_active_motor_errors",
     "_execution_context_status",
     "_jog_store",
-    "_last_motion_run_state",
     "_midi_monitor_request_publisher",
     "_midi_monitor_status",
     "_midi_monitor_store",
@@ -2220,6 +1957,7 @@
     "_motion_studio_ros_bridge",
     "_motion_studio_session",
     "_motion_studio_sync_service",
+    "_motor_event_log",
     "_project_generation",
     "_safety_request_publisher",
     "_scan_progress",
@@ -2230,7 +1968,6 @@
     "project_repository"
    ],
    "locks": [
-    "_event_log_lock",
     "_execution_context_apply_lock",
     "_execution_context_lock",
     "_lock",
@@ -2290,12 +2027,10 @@
    "state": [
     "_action_request_publisher",
     "_action_store",
-    "_active_motor_errors",
     "_automation_triggered_context_id",
     "_coordination_web_bridge",
     "_execution_context_status",
     "_jog_store",
-    "_last_motion_run_state",
     "_midi_monitor_request_publisher",
     "_midi_monitor_status",
     "_midi_monitor_store",
@@ -2309,6 +2044,7 @@
     "_motion_studio_ros_bridge",
     "_motion_studio_session",
     "_motion_studio_sync_service",
+    "_motor_event_log",
     "_project_generation",
     "_safety_request_publisher",
     "_scan_progress",
@@ -2319,7 +2055,6 @@
     "workspace_root"
    ],
    "locks": [
-    "_event_log_lock",
     "_execution_context_apply_lock",
     "_execution_context_lock",
     "_lock",
@@ -2352,12 +2087,10 @@
    "state": [
     "_action_request_publisher",
     "_action_store",
-    "_active_motor_errors",
     "_automation_triggered_context_id",
     "_coordination_web_bridge",
     "_execution_context_status",
     "_jog_store",
-    "_last_motion_run_state",
     "_midi_monitor_request_publisher",
     "_midi_monitor_status",
     "_midi_monitor_store",
@@ -2371,6 +2104,7 @@
     "_motion_studio_ros_bridge",
     "_motion_studio_session",
     "_motion_studio_sync_service",
+    "_motor_event_log",
     "_project_generation",
     "_safety_request_publisher",
     "_scan_progress",
@@ -2382,7 +2116,6 @@
     "workspace_root"
    ],
    "locks": [
-    "_event_log_lock",
     "_execution_context_apply_lock",
     "_execution_context_lock",
     "_lock",
@@ -2901,12 +2634,10 @@
    "state": [
     "_action_request_publisher",
     "_action_store",
-    "_active_motor_errors",
     "_automation_triggered_context_id",
     "_coordination_web_bridge",
     "_execution_context_status",
     "_jog_store",
-    "_last_motion_run_state",
     "_midi_monitor_request_publisher",
     "_midi_monitor_status",
     "_midi_monitor_store",
@@ -2920,6 +2651,7 @@
     "_motion_studio_ros_bridge",
     "_motion_studio_session",
     "_motion_studio_sync_service",
+    "_motor_event_log",
     "_project_generation",
     "_safety_request_publisher",
     "_scan_progress",
@@ -2930,7 +2662,6 @@
     "workspace_root"
    ],
    "locks": [
-    "_event_log_lock",
     "_execution_context_apply_lock",
     "_execution_context_lock",
     "_lock",

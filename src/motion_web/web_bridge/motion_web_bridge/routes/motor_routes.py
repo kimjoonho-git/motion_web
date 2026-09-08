@@ -54,15 +54,17 @@ def register_motor_routes(app: FastAPI, bridge, project_call) -> None:
     async def motor_events(
         limit: int = 200, category: str = 'all', file_name: str = 'all'
     ):
-        return bridge.motor_events(limit=limit, category=category, file_name=file_name)
+        return bridge._motor_event_log.events(
+            limit=limit, category=category, file_name=file_name
+        )
 
     @app.delete('/api/motor-events')
     async def clear_motor_events():
-        return bridge.clear_motor_events()
+        return bridge._motor_event_log.clear()
 
     @app.delete('/api/motor-events/files/{file_name}')
     async def delete_motor_event_file(file_name: str):
-        return project_call(bridge.delete_motor_event_file, file_name)
+        return project_call(bridge._motor_event_log.delete_file, file_name)
 
     @app.get('/api/servo-alarm-policy')
     async def servo_alarm_policy():
