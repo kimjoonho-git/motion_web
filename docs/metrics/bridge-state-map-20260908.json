@@ -748,7 +748,7 @@
    "opaque": false
   },
   "_motor_operation_reconcile_callback": {
-   "lines": 24,
+   "lines": 29,
    "state": [
     "_automation_triggered_context_id",
     "_bridge_started_at",
@@ -774,14 +774,13 @@
    ],
    "calls": [
     "_reconcile_motor_operation_status",
-    "_runtime_service_status",
     "_try_trigger_automation_resume",
     "execution_context_status"
    ],
    "opaque": false
   },
   "snapshot": {
-   "lines": 113,
+   "lines": 118,
    "state": [
     "_bridge_instance_id",
     "_bridge_started_at",
@@ -820,7 +819,6 @@
     "_current_project_generation",
     "_monitoring_mapping_rows_for_context",
     "_runtime_project_id_from_path",
-    "_runtime_service_status",
     "_safety_adjusted_midi_status",
     "execution_context_status"
    ],
@@ -1199,7 +1197,7 @@
    "opaque": false
   },
   "_reconcile_execution_context": {
-   "lines": 177,
+   "lines": 182,
    "state": [
     "_action_request_publisher",
     "_action_store",
@@ -1249,7 +1247,6 @@
     "_request_motion_mapping",
     "_request_motion_run",
     "_runtime_project_id",
-    "_runtime_service_status",
     "_set_execution_context_status",
     "_try_trigger_automation_resume",
     "execution_context_status",
@@ -1329,17 +1326,6 @@
     "_reconcile_execution_context",
     "execution_context_status"
    ],
-   "opaque": false
-  },
-  "_runtime_service_status": {
-   "lines": 73,
-   "state": [
-    "applied_motor_config_file",
-    "project_repository",
-    "workspace_root"
-   ],
-   "locks": [],
-   "calls": [],
    "opaque": false
   },
   "_record_motor_error_transitions": {
@@ -1932,7 +1918,7 @@
    "opaque": false
   },
   "_call_scan_service_locked": {
-   "lines": 65,
+   "lines": 67,
    "state": [
     "_bridge_instance_id",
     "_bridge_started_at",
@@ -1969,21 +1955,9 @@
     "_safety_status_lock"
    ],
    "calls": [
-    "_annotate_ethercat_project_compatibility",
     "_current_project_generation",
+    "load_motor_config",
     "snapshot"
-   ],
-   "opaque": false
-  },
-  "_annotate_ethercat_project_compatibility": {
-   "lines": 185,
-   "state": [
-    "motor_config_file",
-    "project_repository"
-   ],
-   "locks": [],
-   "calls": [
-    "load_motor_config"
    ],
    "opaque": false
   },

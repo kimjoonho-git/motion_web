@@ -15,6 +15,7 @@ import pytest
 
 from motion_web_bridge import (
     desktop_shortcut,
+    ethercat_project_compat,
     motion_file_analysis,
     motor_config_build,
     motor_config_rules,
@@ -26,6 +27,7 @@ PURE_MODULES = [
     motor_config_build,
     motion_file_analysis,
     desktop_shortcut,
+    ethercat_project_compat,
 ]
 
 #: 순수 모듈이 기대어도 되는 것 · 공용 커널과 표준 라이브러리

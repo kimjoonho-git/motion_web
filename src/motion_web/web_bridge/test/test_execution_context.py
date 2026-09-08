@@ -1,4 +1,5 @@
 import asyncio
+from unittest import mock
 import threading
 import json
 import subprocess
@@ -9,7 +10,25 @@ from std_msgs.msg import String
 
 from motion_web_bridge.bridge_node import MotionWebBridge, create_app
 from motion_common import rpc
-from motion_web_bridge import motor_config_rules
+from motion_web_bridge import ethercat_project_compat, motor_config_rules
+
+
+@pytest.fixture(autouse=True)
+def _restore_patched_module_functions():
+    """`make_bridge`가 모듈 함수를 갈아끼우므로 테스트마다 되돌린다.
+
+    `_runtime_service_status`는 노드 메서드였을 때 인스턴스에 직접 꽂아 쓰던
+    이음매다(§6-13). 순수 모듈로 옮기면서 이음매도 모듈 함수로 옮겼다.
+    """
+    yield
+    mock.patch.stopall()
+
+
+def _patch_runtime_service_status(value):
+    mock.patch.object(
+        motor_config_rules, 'runtime_service_status', lambda *_a, **_k: value
+    ).start()
+
 
 
 def operation_repository(selected_project_id):
@@ -112,9 +131,9 @@ def make_bridge():
         'request_id': request_id,
     }
     bridge._runtime_project_id = lambda: 'project-1'
-    bridge._runtime_service_status = lambda _state: {
-        'phase': 'ready', 'message': 'motor runtime ready',
-    }
+    _patch_runtime_service_status(
+        {'phase': 'ready', 'message': 'motor runtime ready'}
+    )
 
     def response(_command, payload, **_kwargs):
         return {
@@ -372,7 +391,7 @@ def test_snapshot_reads_motor_operation_without_reconciling_it(tmp_path):
     bridge.motion_state_topic = '/motion_state'
     bridge.max_jog_delta_deg = 360.0
     bridge._web_access = {}
-    bridge._runtime_service_status = lambda _state: {'phase': 'ready'}
+    _patch_runtime_service_status({'phase': 'ready'})
     bridge.execution_context_status = lambda **_kwargs: {'ready': True}
     bridge._safety_adjusted_midi_status = lambda status, **_kwargs: status
     bridge._current_project_generation = lambda: 1
@@ -406,7 +425,7 @@ def test_motor_operation_coordinator_is_the_reconcile_writer():
     bridge._lock = threading.Lock()
     bridge._motion_state = {'motors': []}
     bridge._motion_state_received_at = time.time()
-    bridge._runtime_service_status = lambda _state: {'phase': 'ready'}
+    _patch_runtime_service_status({'phase': 'ready'})
     bridge.execution_context_status = lambda **_kwargs: {'ready': True}
     calls = []
     bridge._reconcile_motor_operation_status = (
@@ -600,10 +619,9 @@ def test_coordinator_blocks_after_node_apply_until_motor_config_is_applied():
 
 def test_coordinator_waits_for_current_project_motor_runtime():
     bridge = make_bridge()
-    bridge._runtime_service_status = lambda _state: {
-        'phase': 'waiting_motor_state',
-        'message': 'motor state waiting',
-    }
+    _patch_runtime_service_status(
+        {'phase': 'waiting_motor_state', 'message': 'motor state waiting'}
+    )
 
     result = bridge._reconcile_execution_context()
 
@@ -878,7 +896,9 @@ def test_scan_result_marks_unused_disconnected_master_as_project_compatible_part
         }],
     }
 
-    bridge._annotate_ethercat_project_compatibility(scan)
+    ethercat_project_compat.annotate_ethercat_project_compatibility(
+        scan, bridge.load_motor_config
+    )
 
     comparison = scan['project_comparison']['ethercat_project']
     assert comparison['compatible'] is True
@@ -1091,7 +1111,9 @@ def test_scan_result_keeps_failure_when_required_project_master_is_missing():
         'dynamixel_scan': {'skipped': True},
     }
 
-    bridge._annotate_ethercat_project_compatibility(scan)
+    ethercat_project_compat.annotate_ethercat_project_compatibility(
+        scan, bridge.load_motor_config
+    )
 
     assert scan['project_comparison']['ethercat_project']['compatible'] is False
     assert motor_config_rules.scan_operation_outcome(

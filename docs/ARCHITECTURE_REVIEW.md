@@ -509,6 +509,105 @@ C는 처음에 `motor_config_rules`로 넣었더니 1,345줄이 되어 §7 파�
 그 뒤가 진짜 가변 상태다 · `motor_config_file`(재대입 10곳 · 락 관여 15메서드 1,039줄) ·
 `applied_motor_config_file`(락 관여 39메서드 2,476줄). 락 구간과 함께 설계해야 한다.
 
+### 6-13. 판정 로직 추출 · 5차 · §6-12 계획 정정
+
+`MotionWebBridge` 5,656 → 5,418줄 (-238) · 메서드 188 → 186 (2026-09-08)
+
+| 대상 | 줄 | 이동처 | 노드 결합 |
+|---|---|---|---|
+| `_annotate_ethercat_project_compatibility` | 185 | `ethercat_project_compat` 신설 | `self.load_motor_config()` 하나뿐 · 콜러블로 전달 |
+| `_runtime_service_status` | 73 | `motor_config_rules` | 읽기 전용 상태 3개 · 인자화 |
+
+`상태만` 분류 722 → 464줄.
+
+#### §6-12 정정 · `rpc.ResultStore` 껍데기 제거는 이득이 적다
+
+§6-12는 외부 호출 0인 `rpc.ResultStore` 껍데기 5개(30줄)를 "가장 안전한 첫
+대상"으로 지목했으나, 측정해 보니 그렇지 않다.
+
+- 이 5개는 **테스트 이음매다** · `bridge._wait_for_jog_result = lambda ...` 형태로
+  6곳이 인스턴스에 직접 꽂아 쓴다
+- 각 껍데기가 **채널별 기본 대기시간을 담고 있다** · jog 1.0초 · mapping 2.0초 등 ·
+  지우면 그 값이 호출 지점 14곳으로 흩어진다
+
+껍데기 제거의 목적은 로직을 노드 밖으로 꺼내는 것인데, 이 5개에는 꺼낼 로직이
+없다. 지우면 기본값만 흩어진다. **보류한다.**
+
+같은 이유로 `상태만` 잔여분 중 불변 필드만 쓰는 14메서드 111줄도 보류한다.
+`project_repository` 위임 3~13줄짜리라 모듈로 빼면 껍데기가 늘어난다 · §6-9의
+판단과 같다.
+
+#### 남은 것은 설계가 필요하다
+
+기계적 추출은 여기서 끝이다. 남은 `상태만` 464줄의 중심은 가변 상태 2개다.
+
+| 상태 | 재대입 | 상태만 | 락 관여 |
+|---|---|---|---|
+| `motor_config_file` | 15곳 | 7메서드 147줄 | 15메서드 1,039줄 |
+| `applied_motor_config_file` | 1곳 | 5메서드 87줄 | 39메서드 2,476줄 |
+
+`motor_config_file`은 겉보기에 "저장소에서 파생되는 캐시"라 없앨 수 있어 보이지만,
+`test_project_repository`가 **프로젝트 전환 시 `Path()`로 비워지는 것**을 격리
+보장으로 검증한다. 즉 이 필드는 계약의 일부다. 없애려면 그 계약을 어디로 옮길지
+먼저 정해야 한다 · 락 구간과 함께 설계할 것.
+
+#### 테스트 이음매의 이동
+
+`_runtime_service_status`는 인스턴스에 꽂아 쓰던 이음매였다. 순수 모듈로 옮기면서
+이음매도 모듈 함수로 옮기고, `mock.patch.stopall()`을 도는 autouse 픽스처로
+테스트마다 되돌린다. 로직이 73줄이라 옮길 값어치가 있었고, 이 점이 위 5개
+껍데기와 다르다.
+
+작업 중 잡은 회귀 1건 · `self.workspace_root`가 원본에서는 `or` 뒤에 있어 늦게
+평가됐는데, 인자로 올리면서 호출 시점으로 앞당겨져 노드 스텁 10건이 실패했다.
+`getattr(self, 'workspace_root', Path())`로 되돌렸다. §6-11에서 겪은 것과 같은
+종류다 · **인자화는 호출 시점까지 같아야 동치다.**
+
+검증 · `ruff check src` 55건 유지 · `pytest` 1,005건 통과 · 실패 0
+
+### 6-14. 결함 기록 · `motion_supervisor` 수신 정지
+
+발생 · 2026-09-08 15:47 재시작 직후 · 현상 해소는 재시작 1회
+
+증상은 "모션 스튜디오의 레이어가 사라졌다"였으나 **데이터 손실은 없었다.**
+레이어 파일도 `project.json`의 `studio_managed_layer_sha256`도 그대로였다.
+
+연쇄
+
+```
+motion_supervisor 수신 정지
+  → project_generation_boundary 무응답
+  → 브리지 1초 주기 자동 재적용(bridge_node.py:422) 계속 실패
+  → motion_studio_node · motion_mapping_manager 세대 0 유지
+  → 모든 명령 "현재 프로젝트 세대와 다른 요청을 폐기했습니다"
+  → 화면에는 레이어가 없는 것처럼 보임
+```
+
+측정된 사실
+
+| 항목 | 결과 |
+|---|---|
+| 프로세스 | 생존 · 13스레드 · State S |
+| 발신 | 정상 · `safety_status` 2 Hz · 브리지가 수신 |
+| 수신 | 전무 · 구독 콜백 미실행 |
+| 근거 | 브리지 발행 `project_generation_boundary` 6건을 버스에서 관측 · 응답 0건 |
+| 근거 | 락을 쓰지 않는 잘못된 JSON 경로조차 무응답 · jog·safety 요청도 무응답 |
+
+구조상의 소인 · `MultiThreadedExecutor(num_threads=2)` + 기본 콜백 그룹
+`MutuallyExclusive`. `safety_status`만 별도 그룹(`_safety_callback_group`)이라
+살아남았고, 기본 그룹의 콜백 하나가 막히면 나머지 구독이 전부 멈춘다.
+막힌 지점은 특정하지 못했다.
+
+재발 판별 · `safety_status`는 2 Hz로 나오는데
+`POST /api/execution-context/apply`가 `waiting_motor_runtime`으로 실패하면 같은 증상.
+
+다음 조치 후보
+
+- `motion_supervisor`에 `faulthandler.register(SIGUSR1)` 추가 · 재발 시 `kill -USR1`로
+  스레드 덤프 확보 (현재 `py-spy` 미설치 · `pip` 부재로 sudo 필요)
+- 구독별 콜백 그룹 분리 검토 · 하나가 막혀도 나머지가 살아남도록
+- 자동 재적용이 N회 연속 실패하면 로그로 드러내기 · 지금은 조용히 재시도만 한다
+
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
 - 파일 1,000줄 이하 · 함수 60줄 이하 · `Node` 서브클래스 500줄 이하

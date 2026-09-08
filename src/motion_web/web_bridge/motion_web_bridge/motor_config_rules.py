@@ -18,7 +18,7 @@ from pathlib import Path
 from urllib.parse import quote
 from typing import Any, Dict, List, Optional
 
-from motion_common.values import optional_int
+from motion_common.values import optional_float, optional_int
 
 
 def is_ac_servo_motor(motor: Dict[str, Any]) -> bool:
@@ -855,3 +855,91 @@ def rollback_failed_motor_apply(
                 error=f'{error} · 이전 실행 설정 재시작 요청 실패: {exc}',
             )
     return completed
+
+
+# ---------------------------------------------------------------------------
+# 모터 런타임 서비스 상태 판정
+#
+# `MotionWebBridge._runtime_service_status`에서 떼어냈다. 읽기 전용 상태 3개를
+# 인자로 받는다 · §6-13
+# ---------------------------------------------------------------------------
+
+
+def runtime_service_status(
+    motion_state: Any,
+    *,
+    applied_motor_config_file: Any,
+    repository: Any,
+    workspace_root: Path,
+) -> Dict[str, Any]:
+    runtime_path = Path(applied_motor_config_file or Path())
+    runtime_config = str(runtime_path) if runtime_path.is_file() else ''
+    runtime_target = (
+        repository.motor_runtime_state()
+        if repository is not None and hasattr(repository, 'motor_runtime_state')
+        else {}
+    )
+    target_config = str(runtime_target.get('config_file') or '')
+    runtime_target_matches_process = bool(
+        runtime_target.get('valid') is True
+        and runtime_config
+        and Path(target_config).resolve() == runtime_path.resolve()
+    )
+    start_block_reason = str(
+        os.environ.get('MOTOR_START_BLOCK_REASON') or ''
+    ).strip()
+    motor_manager_expected = (
+        bool(runtime_config)
+        and runtime_target_matches_process
+        and not start_block_reason
+    )
+    runtime_config_path = runtime_config or str(
+        workspace_root / 'config' / 'bootstrap_motor_config.yaml'
+    )
+    state_payload = motion_state if isinstance(motion_state, dict) else {}
+    generated_at = optional_float(state_payload.get('generated_at'), None)
+    last_motor_status_at = optional_float(
+        state_payload.get('last_motor_status_at'), None
+    )
+    motor_feedback_age_sec = None
+    if generated_at is not None and last_motor_status_at is not None:
+        motor_feedback_age_sec = max(generated_at - last_motor_status_at, 0.0)
+    motors = state_payload.get('motors')
+    motor_count = len(motors) if isinstance(motors, list) else 0
+    if start_block_reason:
+        runtime_phase = 'motor_manager_start_blocked'
+        runtime_message = start_block_reason
+    elif runtime_target.get('valid') is True and not runtime_target_matches_process:
+        runtime_phase = 'runtime_config_mismatch'
+        runtime_message = 'Motor Manager 실행 설정과 적용 대상 설정이 다릅니다'
+    elif not motor_manager_expected:
+        runtime_phase = 'motor_manager_disabled'
+        runtime_message = '모터 실행 설정이 없어 motor_manager_node를 시작하지 않았습니다'
+    elif last_motor_status_at is None:
+        runtime_phase = 'waiting_motor_feedback'
+        runtime_message = 'motor_manager_node 시작 후 첫 모터 상태를 기다리는 중입니다'
+    elif motor_feedback_age_sec is not None and motor_feedback_age_sec > 1.5:
+        runtime_phase = 'motor_feedback_stale'
+        runtime_message = 'motor_manager_node의 모터 상태 갱신이 중단되었습니다'
+    else:
+        runtime_phase = 'ready'
+        runtime_message = f'모터 상태 {motor_count}축 수신 중'
+
+    return {
+        'phase': runtime_phase,
+        'message': runtime_message,
+        'motor_manager_expected': motor_manager_expected,
+        'motor_manager_start_block_reason': start_block_reason,
+        'ros_localhost_only': str(
+            os.environ.get('ROS_LOCALHOST_ONLY') or ''
+        ) == '1',
+        'runtime_config_file': runtime_config_path,
+        'runtime_target_file': target_config,
+        'runtime_target_matches_process': runtime_target_matches_process,
+        'motor_count': motor_count,
+        'last_motor_status_at': last_motor_status_at,
+        'motor_feedback_age_sec': (
+            None if motor_feedback_age_sec is None
+            else round(motor_feedback_age_sec, 3)
+        ),
+    }

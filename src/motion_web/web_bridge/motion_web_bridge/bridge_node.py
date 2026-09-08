@@ -29,7 +29,12 @@ from .coordination_bridge import (
     CoordinationWebBridge, local_motion_control, local_motion_readiness,
 )
 from .motor_restart_coordinator import MotorRestartCoordinator
-from . import motion_file_analysis, motor_config_build, motor_config_rules
+from . import (
+    ethercat_project_compat,
+    motion_file_analysis,
+    motor_config_build,
+    motor_config_rules,
+)
 from .motor_restart_diagnostics import diagnose_motor_restart_failure
 from .motion_studio_bridge import MotionStudioRosBridge
 from .motion_studio_routes import register_motion_studio_routes
@@ -759,7 +764,12 @@ class MotionWebBridge(Node):
         try:
             with self._lock:
                 motion_state = copy.deepcopy(self._motion_state)
-            runtime_status = self._runtime_service_status(motion_state)
+            runtime_status = motor_config_rules.runtime_service_status(
+                motion_state,
+                applied_motor_config_file=getattr(self, 'applied_motor_config_file', None),
+                repository=getattr(self, 'project_repository', None),
+                workspace_root=getattr(self, 'workspace_root', Path()),
+            )
             execution_context = self.execution_context_status(validate_files=False)
             self._reconcile_motor_operation_status(
                 runtime_status,
@@ -796,7 +806,12 @@ class MotionWebBridge(Node):
             midi_monitor, safety_status=safety_status
         )
 
-        runtime_status = self._runtime_service_status(motion_state)
+        runtime_status = motor_config_rules.runtime_service_status(
+            motion_state,
+            applied_motor_config_file=getattr(self, 'applied_motor_config_file', None),
+            repository=getattr(self, 'project_repository', None),
+            workspace_root=getattr(self, 'workspace_root', Path()),
+        )
         # Websocket status is published frequently. The stored execution
         # project service).  The stored execution context hashes every active
         # project file, so validating it for every websocket frame makes page
@@ -1627,7 +1642,12 @@ class MotionWebBridge(Node):
 
             with self._lock:
                 motion_state = copy.deepcopy(self._motion_state)
-            motor_runtime = self._runtime_service_status(motion_state)
+            motor_runtime = motor_config_rules.runtime_service_status(
+                motion_state,
+                applied_motor_config_file=getattr(self, 'applied_motor_config_file', None),
+                repository=getattr(self, 'project_repository', None),
+                workspace_root=getattr(self, 'workspace_root', Path()),
+            )
             motor_runtime.update({
                 'success': (
                     self._runtime_project_id() == project_id
@@ -1756,80 +1776,6 @@ class MotionWebBridge(Node):
                 return last_status
             time.sleep(poll_interval)
         return last_status
-
-    def _runtime_service_status(self, motion_state: Any) -> Dict[str, Any]:
-        runtime_path = Path(getattr(self, 'applied_motor_config_file', Path()))
-        runtime_config = str(runtime_path) if runtime_path.is_file() else ''
-        repository = getattr(self, 'project_repository', None)
-        runtime_target = (
-            repository.motor_runtime_state()
-            if repository is not None and hasattr(repository, 'motor_runtime_state')
-            else {}
-        )
-        target_config = str(runtime_target.get('config_file') or '')
-        runtime_target_matches_process = bool(
-            runtime_target.get('valid') is True
-            and runtime_config
-            and Path(target_config).resolve() == runtime_path.resolve()
-        )
-        start_block_reason = str(
-            os.environ.get('MOTOR_START_BLOCK_REASON') or ''
-        ).strip()
-        motor_manager_expected = (
-            bool(runtime_config)
-            and runtime_target_matches_process
-            and not start_block_reason
-        )
-        runtime_config_path = runtime_config or str(
-            self.workspace_root / 'config' / 'bootstrap_motor_config.yaml'
-        )
-        state_payload = motion_state if isinstance(motion_state, dict) else {}
-        generated_at = values.optional_float(state_payload.get('generated_at'), None)
-        last_motor_status_at = values.optional_float(
-            state_payload.get('last_motor_status_at'), None
-        )
-        motor_feedback_age_sec = None
-        if generated_at is not None and last_motor_status_at is not None:
-            motor_feedback_age_sec = max(generated_at - last_motor_status_at, 0.0)
-        motors = state_payload.get('motors')
-        motor_count = len(motors) if isinstance(motors, list) else 0
-        if start_block_reason:
-            runtime_phase = 'motor_manager_start_blocked'
-            runtime_message = start_block_reason
-        elif runtime_target.get('valid') is True and not runtime_target_matches_process:
-            runtime_phase = 'runtime_config_mismatch'
-            runtime_message = 'Motor Manager 실행 설정과 적용 대상 설정이 다릅니다'
-        elif not motor_manager_expected:
-            runtime_phase = 'motor_manager_disabled'
-            runtime_message = '모터 실행 설정이 없어 motor_manager_node를 시작하지 않았습니다'
-        elif last_motor_status_at is None:
-            runtime_phase = 'waiting_motor_feedback'
-            runtime_message = 'motor_manager_node 시작 후 첫 모터 상태를 기다리는 중입니다'
-        elif motor_feedback_age_sec is not None and motor_feedback_age_sec > 1.5:
-            runtime_phase = 'motor_feedback_stale'
-            runtime_message = 'motor_manager_node의 모터 상태 갱신이 중단되었습니다'
-        else:
-            runtime_phase = 'ready'
-            runtime_message = f'모터 상태 {motor_count}축 수신 중'
-
-        return {
-            'phase': runtime_phase,
-            'message': runtime_message,
-            'motor_manager_expected': motor_manager_expected,
-            'motor_manager_start_block_reason': start_block_reason,
-            'ros_localhost_only': str(
-                os.environ.get('ROS_LOCALHOST_ONLY') or ''
-            ) == '1',
-            'runtime_config_file': runtime_config_path,
-            'runtime_target_file': target_config,
-            'runtime_target_matches_process': runtime_target_matches_process,
-            'motor_count': motor_count,
-            'last_motor_status_at': last_motor_status_at,
-            'motor_feedback_age_sec': (
-                None if motor_feedback_age_sec is None
-                else round(motor_feedback_age_sec, 3)
-            ),
-        }
 
     def _record_motor_error_transitions(self, payload: Dict[str, Any]) -> None:
         motors = payload.get('motors')
@@ -2953,7 +2899,9 @@ class MotionWebBridge(Node):
         except json.JSONDecodeError:
             self.get_logger().warn('Invalid scan JSON received.')
         if isinstance(scan, dict):
-            self._annotate_ethercat_project_compatibility(scan)
+            ethercat_project_compat.annotate_ethercat_project_compatibility(
+                scan, self.load_motor_config
+            )
         message = motor_config_rules.scan_result_message(
             bool(response.success),
             scan,
@@ -2967,192 +2915,6 @@ class MotionWebBridge(Node):
             'project_id': scan_project_id,
             'project_generation': scan_generation,
             **self.snapshot(),
-        }
-
-    def _annotate_ethercat_project_compatibility(
-        self,
-        scan: Dict[str, Any],
-    ) -> None:
-        """Compare physical EtherCAT evidence with the selected project.
-
-        Physical scan completeness remains unchanged: every registered Master
-        is still rescanned and reported.  This additional result only answers
-        whether the Masters used by the selected project match exactly, so an
-        unused disconnected Master is not confused with a project mismatch.
-        """
-        ethercat = scan.get('ethercat_scan')
-        if not isinstance(ethercat, dict) or ethercat.get('skipped') is True:
-            return
-
-        comparison = scan.setdefault('project_comparison', {})
-        if not isinstance(comparison, dict):
-            comparison = {}
-            scan['project_comparison'] = comparison
-
-        try:
-            registry_result = self.load_motor_config()
-        except (OSError, ValueError, yaml.YAMLError) as exc:
-            comparison['ethercat_project'] = {
-                'available': False,
-                'compatible': False,
-                'message': f'현재 프로젝트 모터축 설정 확인 실패: {exc}',
-            }
-            return
-        if registry_result.get('success') is not True:
-            comparison['ethercat_project'] = {
-                'available': False,
-                'compatible': False,
-                'message': str(
-                    registry_result.get('message')
-                    or '현재 프로젝트 모터축 설정을 확인할 수 없습니다'
-                ),
-            }
-            return
-
-        expected_by_master: Dict[int, List[Dict[str, Any]]] = {}
-        registry = registry_result.get('registry')
-        for motor in (
-            registry.get('motors', [])
-            if isinstance(registry, dict)
-            else []
-        ):
-            if not isinstance(motor, dict):
-                continue
-            if str(motor.get('transport') or '').lower() != 'ethercat':
-                continue
-            if motor.get('enabled') is False or motor.get('deleted') is True:
-                continue
-            config = motor.get('config') if isinstance(motor.get('config'), dict) else {}
-            identity = (
-                motor.get('identity')
-                if isinstance(motor.get('identity'), dict)
-                else {}
-            )
-            master_index = values.optional_int(
-                config.get('ethercat_master_index'),
-                values.optional_int(identity.get('ethercat_master_index'), 0),
-            )
-            position = values.optional_int(config.get('position'), None)
-            if master_index is None or master_index < 0 or position is None:
-                continue
-            expected_by_master.setdefault(master_index, []).append({
-                'controller_index': values.optional_int(
-                    config.get('controller_index'),
-                    values.optional_int(motor.get('axis'), None),
-                ),
-                'position': position,
-                'alias': values.optional_int(
-                    identity.get('ethercat_alias'),
-                    values.optional_int(config.get('alias'), 0),
-                ),
-                'vendor_id': values.optional_int(
-                    identity.get('vendor_id'),
-                    values.optional_int(config.get('vendor_id'), None),
-                ),
-                'product_code': values.optional_int(
-                    identity.get('product_code'),
-                    values.optional_int(config.get('product_id'), None),
-                ),
-                'serial_number': values.optional_int(
-                    identity.get('serial_number'), None
-                ),
-            })
-
-        if not expected_by_master:
-            comparison['ethercat_project'] = {
-                'available': False,
-                'compatible': False,
-                'message': '현재 프로젝트에 EtherCAT 모터축 설정이 없습니다',
-                'required_master_indices': [],
-            }
-            return
-
-        observed_by_master: Dict[int, List[Dict[str, Any]]] = {}
-        for slave in ethercat.get('slaves') or []:
-            if not isinstance(slave, dict):
-                continue
-            master_index = values.optional_int(slave.get('master_index'), 0)
-            if master_index is None:
-                continue
-            observed_by_master.setdefault(master_index, []).append(slave)
-
-        master_rows = []
-        compatible = True
-        for master_index in sorted(expected_by_master):
-            expected = expected_by_master[master_index]
-            observed = observed_by_master.get(master_index, [])
-            errors = []
-            if len(observed) != len(expected):
-                errors.append(f'축 수 {len(observed)}/{len(expected)}')
-            observed_by_position = {
-                values.optional_int(item.get('slave_position'), None): item
-                for item in observed
-                if values.optional_int(item.get('slave_position'), None) is not None
-            }
-            for target in expected:
-                position = target['position']
-                actual = observed_by_position.get(position)
-                if actual is None:
-                    errors.append(f'Slave {position} 응답 없음')
-                    continue
-                if actual.get('direct_read_complete') is not True:
-                    errors.append(
-                        f'Slave {position} 물리 식별정보 읽기 미완료'
-                    )
-                for field in ('vendor_id', 'product_code', 'serial_number'):
-                    expected_value = target.get(field)
-                    actual_value = values.optional_int(actual.get(field), None)
-                    if (
-                        expected_value is not None
-                        and expected_value > 0
-                        and actual_value != expected_value
-                    ):
-                        errors.append(
-                            f'Slave {position} {field} 불일치'
-                        )
-                expected_alias = target.get('alias')
-                actual_alias = values.optional_int(
-                    actual.get('ethercat_alias'), 0
-                )
-                if (
-                    expected_alias is not None
-                    and expected_alias > 0
-                    and actual_alias != expected_alias
-                ):
-                    errors.append(f'Slave {position} EEPROM Alias 불일치')
-            row_complete = not errors
-            compatible = compatible and row_complete
-            master_rows.append({
-                'master_index': master_index,
-                'expected_slaves_count': len(expected),
-                'observed_slaves_count': len(observed),
-                'compatible': row_complete,
-                'errors': errors,
-            })
-
-        registered_indices = {
-            values.optional_int(row.get('master_index'), 0)
-            for row in ethercat.get('masters') or []
-            if isinstance(row, dict)
-        }
-        required_indices = sorted(expected_by_master)
-        unused_indices = sorted(
-            index
-            for index in registered_indices
-            if index is not None and index not in expected_by_master
-        )
-        comparison['ethercat_project'] = {
-            'available': True,
-            'compatible': compatible,
-            'required_master_indices': required_indices,
-            'unused_registered_master_indices': unused_indices,
-            'masters': master_rows,
-            'message': (
-                f'프로젝트 EtherCAT 구성 확인 완료 · '
-                f'Master {", ".join(str(index) for index in required_indices)}'
-                if compatible
-                else '프로젝트 EtherCAT 구성 불일치'
-            ),
         }
 
 

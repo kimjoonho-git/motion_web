@@ -1734,7 +1734,12 @@ def test_runtime_status_reports_disabled_motor_manager_without_runtime_config(
     bridge.workspace_root = tmp_path
     monkeypatch.delenv('MOTOR_CONFIG_FILE', raising=False)
 
-    status = bridge._runtime_service_status({'generated_at': 100.0, 'motors': []})
+    status = motor_config_rules.runtime_service_status(
+        {'generated_at': 100.0, 'motors': []},
+        applied_motor_config_file=getattr(bridge, 'applied_motor_config_file', None),
+        repository=getattr(bridge, 'project_repository', None),
+        workspace_root=getattr(bridge, 'workspace_root', Path()),
+    )
 
     assert status['phase'] == 'motor_manager_disabled'
     assert status['motor_manager_expected'] is False
@@ -1754,11 +1759,16 @@ def test_runtime_status_reports_ready_motor_feedback(tmp_path, monkeypatch):
         },
     })()
 
-    status = bridge._runtime_service_status({
-        'generated_at': 100.0,
-        'last_motor_status_at': 99.8,
-        'motors': [{'controller_index': 0}],
-    })
+    status = motor_config_rules.runtime_service_status(
+        {
+            'generated_at': 100.0,
+            'last_motor_status_at': 99.8,
+            'motors': [{'controller_index': 0}],
+        },
+        applied_motor_config_file=getattr(bridge, 'applied_motor_config_file', None),
+        repository=getattr(bridge, 'project_repository', None),
+        workspace_root=getattr(bridge, 'workspace_root', Path()),
+    )
 
     assert status['phase'] == 'ready'
     assert status['motor_manager_expected'] is True
@@ -1782,11 +1792,16 @@ def test_runtime_status_rejects_process_and_target_config_mismatch(tmp_path):
         },
     })()
 
-    status = bridge._runtime_service_status({
-        'generated_at': 100.0,
-        'last_motor_status_at': 99.9,
-        'motors': [{'controller_index': 0}],
-    })
+    status = motor_config_rules.runtime_service_status(
+        {
+            'generated_at': 100.0,
+            'last_motor_status_at': 99.9,
+            'motors': [{'controller_index': 0}],
+        },
+        applied_motor_config_file=getattr(bridge, 'applied_motor_config_file', None),
+        repository=getattr(bridge, 'project_repository', None),
+        workspace_root=getattr(bridge, 'workspace_root', Path()),
+    )
 
     assert status['phase'] == 'runtime_config_mismatch'
     assert status['motor_manager_expected'] is False
@@ -2169,7 +2184,12 @@ def test_runtime_status_reports_ethercat_start_block_instead_of_waiting_forever(
     )
     monkeypatch.setenv('ROS_LOCALHOST_ONLY', '1')
 
-    status = bridge._runtime_service_status({'generated_at': 100.0, 'motors': []})
+    status = motor_config_rules.runtime_service_status(
+        {'generated_at': 100.0, 'motors': []},
+        applied_motor_config_file=getattr(bridge, 'applied_motor_config_file', None),
+        repository=getattr(bridge, 'project_repository', None),
+        workspace_root=getattr(bridge, 'workspace_root', Path()),
+    )
 
     assert status['phase'] == 'motor_manager_start_blocked'
     assert status['motor_manager_expected'] is False
