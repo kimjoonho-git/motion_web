@@ -18,6 +18,8 @@ import time
 from copy import deepcopy
 from typing import Any, Dict, List, Optional
 
+from .motor_values import parse_int
+
 
 class EthercatScanner:
     def __init__(self, monitor: Any) -> None:
@@ -29,7 +31,7 @@ class EthercatScanner:
     def _poll_ethercat_bus_status(self) -> None:
         now = time.time()
         master_indices = sorted({
-            self.monitor._parse_int(metadata.get('ethercat_master_index')) or 0
+            parse_int(metadata.get('ethercat_master_index')) or 0
             for metadata in getattr(self.monitor, '_motor_metadata', {}).values()
             if str(metadata.get('transport') or '').lower() == 'ethercat'
         }) or [0]
@@ -587,17 +589,17 @@ class EthercatScanner:
             key, value = [part.strip() for part in line.split(':', 1)]
             first_value = value.split()[0] if value else ''
             if key == 'Alias':
-                current['ethercat_alias'] = self.monitor._parse_int(first_value)
+                current['ethercat_alias'] = parse_int(first_value)
             elif key == 'State':
                 current['device_state'] = first_value
             elif key == 'Vendor Id':
-                current['vendor_id'] = self.monitor._parse_int(first_value)
+                current['vendor_id'] = parse_int(first_value)
             elif key == 'Product code':
-                current['product_code'] = self.monitor._parse_int(first_value)
+                current['product_code'] = parse_int(first_value)
             elif key == 'Revision number':
-                current['revision_number'] = self.monitor._parse_int(first_value)
+                current['revision_number'] = parse_int(first_value)
             elif key == 'Serial number':
-                current['serial_number'] = self.monitor._parse_int(first_value)
+                current['serial_number'] = parse_int(first_value)
             elif key == 'Order number':
                 current['order_number'] = value
             elif key == 'Device name':
@@ -721,7 +723,7 @@ class EthercatScanner:
 
         parts = completed.stdout.strip().split()
         raw_hex = parts[0] if parts else ''
-        value = self.monitor._parse_int(parts[-1]) if parts else None
+        value = parse_int(parts[-1]) if parts else None
         if raw_hex.lower().startswith('0x'):
             raw_hex = '0x' + raw_hex[2:].upper()
         return {
@@ -733,13 +735,13 @@ class EthercatScanner:
     def _scanned_ethercat_identity(
         self, slave: Dict[str, Any]
     ) -> Optional[tuple]:
-        master_index = self.monitor._parse_int(slave.get('master_index')) or 0
-        alias = self.monitor._parse_int(slave.get('ethercat_alias'))
+        master_index = parse_int(slave.get('master_index')) or 0
+        alias = parse_int(slave.get('ethercat_alias'))
         if alias is None or alias <= 0:
-            alias = self.monitor._parse_int(slave.get('rotary_alias'))
+            alias = parse_int(slave.get('rotary_alias'))
         if alias is not None and alias > 0:
             return ('alias', master_index, alias)
-        position = self.monitor._parse_int(slave.get('slave_position'))
+        position = parse_int(slave.get('slave_position'))
         if position is None:
             return None
         return ('position', master_index, position)
@@ -747,21 +749,21 @@ class EthercatScanner:
     def _configured_ethercat_identity(
         self, axis: Dict[str, Any]
     ) -> Optional[tuple]:
-        master_index = self.monitor._parse_int(axis.get('ethercat_master_index')) or 0
-        alias = self.monitor._parse_int(axis.get('ethercat_alias'))
+        master_index = parse_int(axis.get('ethercat_master_index')) or 0
+        alias = parse_int(axis.get('ethercat_alias'))
         if alias is not None and alias > 0:
             return ('alias', master_index, alias)
-        position = self.monitor._parse_int(axis.get('slave_position'))
+        position = parse_int(axis.get('slave_position'))
         if position is None:
             return None
         return ('position', master_index, position)
 
     def _ethercat_axis_state(self, motor: Dict[str, Any]) -> str:
         status = self._ethercat_master_status(motor)
-        alias = self.monitor._parse_int(motor.get('alias'))
+        alias = parse_int(motor.get('alias'))
         if alias is not None and alias > 0:
             return str((status.get('states_by_alias') or {}).get(str(alias)) or '')
-        position = self.monitor._parse_int(motor.get('slave_position'))
+        position = parse_int(motor.get('slave_position'))
         if position is None:
             return ''
         return str(
@@ -770,7 +772,7 @@ class EthercatScanner:
 
     def _ethercat_master_status(self, motor: Dict[str, Any]) -> Dict[str, Any]:
         status = self.status if isinstance(self.status, dict) else {}
-        master_index = self.monitor._parse_int(motor.get('ethercat_master_index')) or 0
+        master_index = parse_int(motor.get('ethercat_master_index')) or 0
         masters = status.get('masters') if isinstance(status.get('masters'), dict) else {}
         master_status = masters.get(str(master_index))
         if isinstance(master_status, dict):

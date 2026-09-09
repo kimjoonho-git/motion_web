@@ -20,6 +20,21 @@ from rclpy.executors import MultiThreadedExecutor
 from motion_coordination_interfaces.action import MotorScan
 
 from .ethercat_scanner import EthercatScanner
+from .motor_values import (
+    MOTOR_TYPE_LABELS,
+    parse_int,
+    unchecked_float,
+    statusword_text,
+    dynamixel_statusword_text,
+    error_text,
+    normalized_errorcode,
+    hex16,
+    motor_type_label,
+    transport_label,
+    count_values,
+    array_value,
+    dynamixel_position_raw,
+)
 from .dynamixel_scanner import (
     DynamixelScanner,
     DYNAMIXEL_SCAN_BAUDRATES,
@@ -28,22 +43,6 @@ from .dynamixel_scanner import (
 )
 from motion_common import topics
 
-
-MOTOR_TYPE_LABELS = {
-    'minas': 'AC Servo',
-    'zeroerr': 'ZeroErr Motor',
-    'dynamixel': 'Dynamixel',
-    'cubemars': 'CubeMars',
-    'unknown': 'Unknown',
-}
-
-TRANSPORT_LABELS = {
-    'ethercat': 'EtherCAT',
-    'canopen': 'CANopen',
-    'socketcan': 'SocketCAN',
-    'serial': 'Serial',
-    'unknown': 'Unknown',
-}
 
 MOTOR_TYPE_CATALOG = [
     {'type': 'minas', 'label': MOTOR_TYPE_LABELS['minas']},
@@ -242,29 +241,29 @@ class MotionStateMonitor(Node):
                 self._motor_metadata[controller_index] = {
                     'display_name': display_name,
                     'motor_type': motor_type,
-                    'motor_type_label': self._motor_type_label(motor_type),
+                    'motor_type_label': motor_type_label(motor_type),
                     'transport': transport,
-                    'transport_label': self._transport_label(transport),
+                    'transport_label': transport_label(transport),
                     'master_id': master_id,
                     'ethercat_master_index': ethercat_master_index,
                     'driver_id': slave.get('driver_id'),
                     'driver_model': driver_model,
                     'pulse_per_revolution': pulse_per_revolution,
                     **raw_model,
-                    'rated_power_w': self._optional_float(driver.get('rated_power_w')),
-                    'rated_torque_nm': self._optional_float(
+                    'rated_power_w': unchecked_float(driver.get('rated_power_w')),
+                    'rated_torque_nm': unchecked_float(
                         driver.get('rated_effort', driver.get('rated_torque'))
                     ),
-                    'rated_current_a': self._optional_float(driver.get('rated_current')),
-                    'rated_speed_rpm': self._optional_float(driver.get('rated_speed_rpm')),
-                    'speed': self._optional_float(driver.get('speed')),
-                    'acceleration': self._optional_float(driver.get('acceleration')),
-                    'deceleration': self._optional_float(driver.get('deceleration')),
-                    'profile_velocity': self._optional_float(driver.get('profile_velocity')),
-                    'profile_acceleration': self._optional_float(driver.get('profile_acceleration')),
-                    'profile_deceleration': self._optional_float(driver.get('profile_deceleration')),
-                    'lower': self._optional_float(driver.get('lower')),
-                    'upper': self._optional_float(driver.get('upper')),
+                    'rated_current_a': unchecked_float(driver.get('rated_current')),
+                    'rated_speed_rpm': unchecked_float(driver.get('rated_speed_rpm')),
+                    'speed': unchecked_float(driver.get('speed')),
+                    'acceleration': unchecked_float(driver.get('acceleration')),
+                    'deceleration': unchecked_float(driver.get('deceleration')),
+                    'profile_velocity': unchecked_float(driver.get('profile_velocity')),
+                    'profile_acceleration': unchecked_float(driver.get('profile_acceleration')),
+                    'profile_deceleration': unchecked_float(driver.get('profile_deceleration')),
+                    'lower': unchecked_float(driver.get('lower')),
+                    'upper': unchecked_float(driver.get('upper')),
                     'alias': slave.get('alias'),
                     'slave_position': slave.get('position'),
                     'node_id': slave.get(
@@ -281,7 +280,7 @@ class MotionStateMonitor(Node):
 
     def _dynamixel_raw_model_info(self, driver: Dict[str, Any]) -> Dict[str, Any]:
         info: Dict[str, Any] = {}
-        pulse_per_revolution = self._optional_float(driver.get('pulse_per_revolution'))
+        pulse_per_revolution = unchecked_float(driver.get('pulse_per_revolution'))
         if pulse_per_revolution is not None and pulse_per_revolution > 0:
             info['position_raw_per_degree'] = pulse_per_revolution / 360.0
 
@@ -313,10 +312,10 @@ class MotionStateMonitor(Node):
         model_info = self._read_dynamixel_model_file(model_path)
         info.update(model_info)
 
-        min_raw = self._optional_float(info.get('dynamixel_min_position_raw'))
-        max_raw = self._optional_float(info.get('dynamixel_max_position_raw'))
-        min_rad = self._optional_float(info.get('dynamixel_min_radian'))
-        max_rad = self._optional_float(info.get('dynamixel_max_radian'))
+        min_raw = unchecked_float(info.get('dynamixel_min_position_raw'))
+        max_raw = unchecked_float(info.get('dynamixel_max_position_raw'))
+        min_rad = unchecked_float(info.get('dynamixel_min_radian'))
+        max_rad = unchecked_float(info.get('dynamixel_max_radian'))
         if (
             min_raw is not None
             and max_raw is not None
@@ -354,7 +353,7 @@ class MotionStateMonitor(Node):
             key = mapping.get(parts[0])
             if not key:
                 continue
-            value = self._optional_float(parts[1])
+            value = unchecked_float(parts[1])
             if value is not None:
                 result[key] = value
         return result
@@ -572,8 +571,8 @@ class MotionStateMonitor(Node):
             'known_axes_count': len(motors),
             'connected_axes_count': len(connected_axes),
             'online_motors_count': len(connected_axes),
-            'motor_type_counts': self._count_values(motors, 'motor_type_label'),
-            'transport_counts': self._count_values(motors, 'transport_label'),
+            'motor_type_counts': count_values(motors, 'motor_type_label'),
+            'transport_counts': count_values(motors, 'transport_label'),
             'ethercat_scan': ethercat_scan,
             'dynamixel_scan': dynamixel_scan,
             'matching_rows': matching_rows,
@@ -812,13 +811,13 @@ class MotionStateMonitor(Node):
         controller_index: int,
         now: float,
     ) -> Dict[str, Any]:
-        statusword = int(self._array_value(msg, 'statusword', index, 0))
+        statusword = int(array_value(msg, 'statusword', index, 0))
         metadata = self._metadata_for(controller_index)
-        position = float(self._array_value(msg, 'position', index, 0.0))
-        velocity = float(self._array_value(msg, 'velocity', index, 0.0))
-        effort = float(self._array_value(msg, 'effort', index, 0.0))
-        raw_errorcode = int(self._array_value(msg, 'errorcode', index, 0))
-        errorcode = self._normalized_errorcode(raw_errorcode, metadata)
+        position = float(array_value(msg, 'position', index, 0.0))
+        velocity = float(array_value(msg, 'velocity', index, 0.0))
+        effort = float(array_value(msg, 'effort', index, 0.0))
+        raw_errorcode = int(array_value(msg, 'errorcode', index, 0))
+        errorcode = normalized_errorcode(raw_errorcode, metadata)
         communication_unavailable = raw_errorcode == COMMUNICATION_UNAVAILABLE_ERROR
         motor_type = str(metadata.get('motor_type', '')).lower()
         is_dynamixel = motor_type == 'dynamixel'
@@ -827,9 +826,9 @@ class MotionStateMonitor(Node):
             'Communication unavailable'
             if communication_unavailable
             else (
-                self._dynamixel_statusword_text(statusword)
+                dynamixel_statusword_text(statusword)
                 if is_dynamixel
-                else self._statusword_text(statusword)
+                else statusword_text(statusword)
             )
         )
         if internal_limit_active and not communication_unavailable:
@@ -841,7 +840,7 @@ class MotionStateMonitor(Node):
             else (bool(errorcode) if is_dynamixel else bool(statusword & 0x0008))
         )
         position_raw = (
-            self._calculated_dynamixel_position_raw(position, metadata)
+            dynamixel_position_raw(position, metadata)
             if is_dynamixel
             else None
         )
@@ -856,16 +855,16 @@ class MotionStateMonitor(Node):
             'state': 'disconnected' if communication_unavailable else 'detected',
             'last_seen_at': now,
             'age_sec': 0.0,
-            'controlword': int(self._array_value(msg, 'controlword', index, 0)),
+            'controlword': int(array_value(msg, 'controlword', index, 0)),
             'statusword': statusword,
             'status_text': status_text,
             'errorcode': errorcode,
             'errorcode_raw': raw_errorcode,
-            'errorcode_hex': self._hex16(raw_errorcode),
+            'errorcode_hex': hex16(raw_errorcode),
             'error_text': (
                 'Communication unavailable'
                 if communication_unavailable
-                else self._error_text(errorcode, '')
+                else error_text(errorcode, '')
             ),
             'station_alias_register': None,
             'position': position,
@@ -883,32 +882,6 @@ class MotionStateMonitor(Node):
             'internal_limit_active': internal_limit_active,
             'fault': fault,
         }
-
-    def _calculated_dynamixel_position_raw(
-        self,
-        position_deg: float,
-        metadata: Dict[str, Any],
-    ) -> Optional[int]:
-        raw_per_degree = self._optional_float(metadata.get('position_raw_per_degree'))
-        if raw_per_degree is None or math.isclose(raw_per_degree, 0.0):
-            pulse_per_revolution = self._optional_float(metadata.get('pulse_per_revolution'))
-            if pulse_per_revolution is None or pulse_per_revolution <= 0:
-                return None
-            raw_per_degree = pulse_per_revolution / 360.0
-
-        zero_raw = self._optional_float(metadata.get('dynamixel_zero_position_raw'))
-        if zero_raw is None:
-            pulse_per_revolution = self._optional_float(metadata.get('pulse_per_revolution'))
-            zero_raw = pulse_per_revolution / 2.0 if pulse_per_revolution else 0.0
-
-        raw = int(round(zero_raw + (position_deg * raw_per_degree)))
-        min_raw = self._optional_float(metadata.get('dynamixel_min_position_raw'))
-        max_raw = self._optional_float(metadata.get('dynamixel_max_position_raw'))
-        if min_raw is not None and max_raw is not None:
-            lower = int(round(min(min_raw, max_raw)))
-            upper = int(round(max(min_raw, max_raw)))
-            raw = max(lower, min(upper, raw))
-        return raw
 
     def _publish_motion_state(self) -> None:
         now = time.time()
@@ -940,8 +913,8 @@ class MotionStateMonitor(Node):
                 [m for m in motors if m.get('connection_connected', False)]
             ),
             'connection_summary': self._connection_summary(motors),
-            'motor_type_counts': self._count_values(motors, 'motor_type_label'),
-            'transport_counts': self._count_values(motors, 'transport_label'),
+            'motor_type_counts': count_values(motors, 'motor_type_label'),
+            'transport_counts': count_values(motors, 'transport_label'),
             'motors': motors,
         }
 
@@ -1109,17 +1082,17 @@ class MotionStateMonitor(Node):
             })
             return
 
-        expected_alias = self._parse_int(motor.get('alias'))
-        expected_position = self._parse_int(motor.get('slave_position'))
-        expected_master = self._parse_int(motor.get('ethercat_master_index')) or 0
+        expected_alias = parse_int(motor.get('alias'))
+        expected_position = parse_int(motor.get('slave_position'))
+        expected_master = parse_int(motor.get('ethercat_master_index')) or 0
         matched = None
         for slave in scan.get('slaves') or []:
             if not isinstance(slave, dict):
                 continue
-            physical_alias = self._parse_int(
+            physical_alias = parse_int(
                 slave.get('ethercat_alias', slave.get('rotary_alias'))
             )
-            physical_master = self._parse_int(slave.get('master_index')) or 0
+            physical_master = parse_int(slave.get('master_index')) or 0
             if (
                 expected_alias not in (None, 0)
                 and physical_alias == expected_alias
@@ -1129,7 +1102,7 @@ class MotionStateMonitor(Node):
                 break
             if (
                 expected_alias in (None, 0)
-                and self._parse_int(slave.get('slave_position')) == expected_position
+                and parse_int(slave.get('slave_position')) == expected_position
                 and physical_master == expected_master
             ):
                 matched = slave
@@ -1217,14 +1190,14 @@ class MotionStateMonitor(Node):
         scan_dynamixel: bool,
     ) -> List[Dict[str, Any]]:
         ethercat_aliases = {
-            self._parse_int(slave.get('ethercat_alias'))
+            parse_int(slave.get('ethercat_alias'))
             for slave in ethercat_scan.get('slaves', [])
-            if self._parse_int(slave.get('ethercat_alias')) is not None
+            if parse_int(slave.get('ethercat_alias')) is not None
         }
         dynamixel_ids = {
-            self._parse_int(device.get('id'))
+            parse_int(device.get('id'))
             for device in dynamixel_scan.get('devices', [])
-            if self._parse_int(device.get('id')) is not None
+            if parse_int(device.get('id')) is not None
         }
         rows: List[Dict[str, Any]] = []
         for motor in motors:
@@ -1238,7 +1211,7 @@ class MotionStateMonitor(Node):
             if transport == 'ethercat' and scan_ethercat:
                 scanned = not bool(ethercat_scan.get('skipped', False))
                 scan_available = bool(ethercat_scan.get('available', False))
-                found = self._parse_int(motor.get('alias')) in ethercat_aliases
+                found = parse_int(motor.get('alias')) in ethercat_aliases
                 scan_source = 'ethercat_slave_scan'
             elif (transport == 'serial' or motor_type == 'dynamixel') and scan_dynamixel:
                 scanned = not bool(dynamixel_scan.get('skipped', False))
@@ -1248,7 +1221,7 @@ class MotionStateMonitor(Node):
                     if motor.get('bus_id') is not None
                     else motor.get('node_id')
                 )
-                identity = self._parse_int(raw_identity)
+                identity = parse_int(raw_identity)
                 found = identity in dynamixel_ids
                 scan_source = (
                     'runtime_topic'
@@ -1343,7 +1316,7 @@ class MotionStateMonitor(Node):
             'status_text': 'No runtime state',
             'errorcode': 0,
             'errorcode_raw': 0,
-            'errorcode_hex': self._hex16(0),
+            'errorcode_hex': hex16(0),
             'error_text': 'No error',
             'station_alias_register': None,
             'position': None,
@@ -1546,112 +1519,10 @@ class MotionStateMonitor(Node):
         motor_type = str(metadata.get('motor_type', 'unknown'))
         transport = str(metadata.get('transport', 'unknown'))
         metadata['motor_type'] = motor_type
-        metadata['motor_type_label'] = self._motor_type_label(motor_type)
+        metadata['motor_type_label'] = motor_type_label(motor_type)
         metadata['transport'] = transport
-        metadata['transport_label'] = self._transport_label(transport)
+        metadata['transport_label'] = transport_label(transport)
         return metadata
-
-    @staticmethod
-    def _pulse_per_revolution(metadata: Dict[str, Any]) -> Optional[float]:
-        try:
-            value = float(metadata.get('pulse_per_revolution') or 0.0)
-        except (TypeError, ValueError):
-            return None
-        return value if value > 0.0 else None
-
-    @staticmethod
-    def _optional_float(value: Any) -> Optional[float]:
-        if value is None:
-            return None
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return None
-
-    @staticmethod
-    def _counts_to_degrees(value: Optional[int], pulse_per_revolution: Optional[float]) -> Optional[float]:
-        if value is None or not pulse_per_revolution:
-            return None
-        return float(value) / pulse_per_revolution * 360.0
-
-    @staticmethod
-    def _statusword_text(statusword: int) -> str:
-        if statusword & 0x0008:
-            return 'Fault'
-        masked_6f = statusword & 0x006F
-        masked_4f = statusword & 0x004F
-        if masked_6f == 0x0027:
-            return 'Operation enabled'
-        if masked_6f == 0x0023:
-            return 'Switched on'
-        if masked_6f == 0x0021:
-            return 'Ready to switch on'
-        if masked_4f == 0x0040:
-            return 'Switch on disabled'
-        if masked_6f == 0x0007:
-            return 'Quick stop active'
-        if masked_4f == 0x000F:
-            return 'Fault reaction active'
-        if masked_4f == 0x0000:
-            return 'Not ready to switch on'
-        return 'Unknown status'
-
-    @staticmethod
-    def _dynamixel_statusword_text(statusword: int) -> str:
-        return 'Torque enabled' if statusword & 0x01 else 'Torque disabled'
-
-    @staticmethod
-    def _error_text(errorcode: int, alarm_text: str) -> str:
-        del alarm_text
-        if errorcode == 0:
-            return 'No error'
-        return f'Error {float(errorcode):.1f}'
-
-    @staticmethod
-    def _normalized_errorcode(raw_errorcode: int, metadata: Dict[str, Any]) -> int:
-        if (
-            str(metadata.get('motor_type', '')).lower() == 'minas'
-            and (raw_errorcode & 0xFF00) == 0xFF00
-            and (raw_errorcode & 0x00FF) != 0
-        ):
-            return raw_errorcode & 0x00FF
-        return raw_errorcode
-
-    @staticmethod
-    def _hex16(value: int) -> str:
-        return f'0x{int(value) & 0xFFFF:04X}'
-
-    @staticmethod
-    def _motor_type_label(motor_type: str) -> str:
-        return MOTOR_TYPE_LABELS.get(str(motor_type), str(motor_type) or 'Unknown')
-
-    @staticmethod
-    def _transport_label(transport: str) -> str:
-        return TRANSPORT_LABELS.get(str(transport), str(transport) or 'Unknown')
-
-    @staticmethod
-    def _count_values(items: List[Dict[str, Any]], key: str) -> Dict[str, int]:
-        counts: Dict[str, int] = {}
-        for item in items:
-            value = str(item.get(key) or 'Unknown')
-            counts[value] = counts.get(value, 0) + 1
-        return counts
-
-    @staticmethod
-    def _parse_int(value: Any) -> Optional[int]:
-        if value is None or value == '':
-            return None
-        try:
-            return int(str(value), 0)
-        except (TypeError, ValueError):
-            return None
-
-    @staticmethod
-    def _array_value(msg: MotorStatus, field: str, index: int, default: Any) -> Any:
-        values = getattr(msg, field, None)
-        if values is None or index >= len(values):
-            return default
-        return values[index]
 
 
 def main(args=None) -> None:
