@@ -253,11 +253,13 @@ def local_motion_readiness(bridge: Any) -> Dict[str, Any]:
     """Run the existing local motion readiness check using local active files."""
     # A group prepare must not race the periodic project-context reconciler.
     # Apply and verify the context synchronously before reporting this PC ready.
-    reconcile = getattr(bridge, '_reconcile_execution_context_blocking', None)
+    reconcile = getattr(
+        getattr(bridge, '_execution_context', None), 'reconcile_blocking', None
+    )
     if callable(reconcile):
         context = reconcile(timeout_sec=10.0)
     else:
-        context = bridge._reconcile_execution_context()
+        context = bridge._execution_context.reconcile()
     if not context.get('ready'):
         return {
             'success': False,

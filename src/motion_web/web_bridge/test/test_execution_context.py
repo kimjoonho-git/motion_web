@@ -11,6 +11,7 @@ import pytest
 from std_msgs.msg import String
 
 from motion_web_bridge.motor_config_service import MotorConfigService
+from motion_web_bridge.execution_context_service import ExecutionContextService
 from motion_web_bridge.bridge_node import MotionWebBridge, create_app
 from motion_web_bridge.motion_studio_session import MotionStudioSession
 from motion_web_bridge.motor_event_log import MotorEventLog
@@ -18,6 +19,24 @@ from motion_web_bridge.scan_orchestrator import ScanOrchestrator
 from motion_web_bridge.motion_studio_sync import MotionStudioSync
 from motion_common import rpc
 from motion_web_bridge import ethercat_project_compat, motor_config_rules
+
+
+def _execution_context_of(bridge, **overrides):
+    """노드 스텁에 실행 컨텍스트 서비스를 붙인다 · §6-20으로 노드에서 떨어져 나왔다."""
+    service = getattr(bridge, '_execution_context', None)
+    if service is None:
+        service = ExecutionContextService(
+            bridge,
+            repository=getattr(bridge, 'project_repository', None),
+            workspace_root=getattr(bridge, 'workspace_root', Path('.')),
+        )
+        bridge._execution_context = service
+    repository = getattr(bridge, 'project_repository', None)
+    if repository is not None:
+        service.repository = repository
+    for name, value in overrides.items():
+        setattr(service, name, value)
+    return service
 
 
 def _motor_config_of(bridge, **overrides):
@@ -192,11 +211,11 @@ def make_bridge():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = ContextRepository()
-    bridge._execution_context_lock = threading.RLock()
-    bridge._execution_context_apply_lock = threading.Lock()
+    _execution_context_of(bridge)._lock = threading.RLock()
+    _execution_context_of(bridge)._apply_lock = threading.Lock()
     bridge._project_generation_lock = threading.Lock()
     bridge._project_generation = 1
-    bridge._execution_context_status = {
+    _execution_context_of(bridge)._status = {
         'state': 'starting', 'ready': False, 'context_id': '', 'nodes': {},
     }
     bridge._lock = threading.Lock()
@@ -250,7 +269,7 @@ def make_bridge():
 def test_coordinator_allows_control_only_after_all_nodes_confirm_context():
     bridge = make_bridge()
 
-    result = bridge._reconcile_execution_context()
+    result = _execution_context_of(bridge).reconcile()
 
     assert result['state'] == 'ready'
     assert result['ready'] is True
@@ -265,7 +284,7 @@ def test_coordinator_allows_control_only_after_all_nodes_confirm_context():
 
 def test_motion_automation_commands_use_current_execution_context():
     bridge = make_bridge()
-    bridge._execution_context_status = {
+    _execution_context_of(bridge)._status = {
         'state': 'ready',
         'ready': True,
         'context_id': 'context-sha',
@@ -299,7 +318,7 @@ def test_motion_automation_commands_use_current_execution_context():
 
 def test_group_motion_commands_include_execution_context_id():
     bridge = make_bridge()
-    bridge._execution_context_status = {
+    _execution_context_of(bridge)._status = {
         'state': 'ready',
         'ready': True,
         'context_id': 'context-sha',
@@ -376,7 +395,7 @@ def test_coordinator_establishes_persisted_generation_after_program_restart():
         'project_generation': 1,
     }
 
-    result = bridge._reconcile_execution_context()
+    result = _execution_context_of(bridge).reconcile()
 
     assert result['state'] == 'ready'
     assert published == [{
@@ -395,7 +414,7 @@ def test_coordinator_does_not_enable_context_without_supervisor_generation_ack()
     })()
     bridge._wait_for_action_result = lambda *_args, **_kwargs: None
 
-    result = bridge._reconcile_execution_context()
+    result = _execution_context_of(bridge).reconcile()
 
     assert result['state'] == 'waiting_motor_runtime'
     assert result['ready'] is False
@@ -450,7 +469,7 @@ def test_frequent_status_read_does_not_rehash_project_files():
         return original(project_id)
 
     bridge.project_repository.execution_context = counted
-    bridge._execution_context_status = {
+    _execution_context_of(bridge)._status = {
         'state': 'ready',
         'ready': True,
         'project_id': 'project-1',
@@ -460,7 +479,7 @@ def test_frequent_status_read_does_not_rehash_project_files():
     }
     calls.clear()
 
-    status = bridge.execution_context_status(validate_files=False)
+    status = _execution_context_of(bridge).status(validate_files=False)
 
     assert status['ready'] is True
     assert calls == []
@@ -490,7 +509,7 @@ def test_snapshot_reads_motor_operation_without_reconciling_it(tmp_path):
     bridge.max_jog_delta_deg = 360.0
     bridge._web_access = {}
     _patch_runtime_service_status({'phase': 'ready'})
-    bridge.execution_context_status = lambda **_kwargs: {'ready': True}
+    _execution_context_of(bridge).status = lambda **_kwargs: {'ready': True}
     bridge._safety_adjusted_midi_status = lambda status, **_kwargs: status
     bridge._current_project_generation = lambda: 1
     bridge._runtime_project_id_from_path = lambda _selected='': 'project-a'
@@ -525,7 +544,7 @@ def test_motor_operation_coordinator_is_the_reconcile_writer():
     bridge._motion_state = {'motors': []}
     bridge._motion_state_received_at = time.time()
     _patch_runtime_service_status({'phase': 'ready'})
-    bridge.execution_context_status = lambda **_kwargs: {'ready': True}
+    _execution_context_of(bridge).status = lambda **_kwargs: {'ready': True}
     calls = []
     bridge._reconcile_motor_operation_status = (
         lambda runtime, motion, context: calls.append(
@@ -615,7 +634,7 @@ def test_coordinator_keeps_control_blocked_when_one_node_does_not_confirm():
         else {'success': False, 'message': 'node unavailable'}
     )
 
-    result = bridge._reconcile_execution_context()
+    result = _execution_context_of(bridge).reconcile()
 
     assert result['state'] == 'waiting_nodes'
     assert result['ready'] is False
@@ -640,7 +659,7 @@ def test_coordinator_accepts_midi_snapshot_with_nested_context_acknowledgement()
 
     bridge._request_midi_monitor = midi_response
 
-    result = bridge._reconcile_execution_context()
+    result = _execution_context_of(bridge).reconcile()
 
     assert result['state'] == 'ready'
     assert result['ready'] is True
@@ -667,7 +686,7 @@ def test_coordinator_accepts_studio_status_with_nested_context_acknowledgement()
 
     bridge._motion_studio_ros_bridge = _StubTransport(studio_response)
 
-    result = bridge._reconcile_execution_context()
+    result = _execution_context_of(bridge).reconcile()
 
     assert result['state'] == 'ready'
     assert result['ready'] is True
@@ -680,9 +699,9 @@ def test_coordinator_blocks_and_invalidates_when_required_file_is_missing():
     context['configuration_complete'] = False
     bridge.project_repository.execution_context = lambda _project_id: context
     invalidations = []
-    bridge._invalidate_execution_nodes = lambda context_id='': invalidations.append(context_id)
+    _execution_context_of(bridge).invalidate_nodes = lambda context_id='': invalidations.append(context_id)
 
-    result = bridge._reconcile_execution_context()
+    result = _execution_context_of(bridge).reconcile()
 
     assert result['state'] == 'configuration_required'
     assert result['ready'] is False
@@ -698,7 +717,7 @@ def test_coordinator_blocks_after_node_apply_until_motor_config_is_applied():
     invalidations = []
     midi_commands = []
     default_midi_response = bridge._request_midi_monitor
-    bridge._invalidate_execution_nodes = lambda context_id='': invalidations.append(context_id)
+    _execution_context_of(bridge).invalidate_nodes = lambda context_id='': invalidations.append(context_id)
 
     def midi_response(command, payload, **kwargs):
         midi_commands.append(command)
@@ -706,7 +725,7 @@ def test_coordinator_blocks_after_node_apply_until_motor_config_is_applied():
 
     bridge._request_midi_monitor = midi_response
 
-    result = bridge._reconcile_execution_context()
+    result = _execution_context_of(bridge).reconcile()
 
     assert result['state'] == 'motor_apply_required'
     assert result['ready'] is False
@@ -722,7 +741,7 @@ def test_coordinator_waits_for_current_project_motor_runtime():
         {'phase': 'waiting_motor_state', 'message': 'motor state waiting'}
     )
 
-    result = bridge._reconcile_execution_context()
+    result = _execution_context_of(bridge).reconcile()
 
     assert result['state'] == 'waiting_motor_runtime'
     assert result['ready'] is False
@@ -1648,8 +1667,8 @@ def test_motor_runtime_recovery_rejects_an_empty_expected_axis_set():
 def test_execution_context_blocks_control_when_one_axis_is_offline():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge._motion_studio_session = MotionStudioSession()
-    bridge._execution_context_lock = threading.Lock()
-    bridge._execution_context_status = {'ready': True, 'context_id': 'ctx'}
+    _execution_context_of(bridge)._lock = threading.Lock()
+    _execution_context_of(bridge)._status = {'ready': True, 'context_id': 'ctx'}
     bridge._lock = threading.Lock()
     bridge._motion_state_received_at = time.time()
     bridge._motion_state = {
@@ -1672,7 +1691,7 @@ def test_execution_context_blocks_control_when_one_axis_is_offline():
         'selected_project_id': lambda _self: '',
     })()
 
-    status = bridge.execution_context_status(validate_files=False)
+    status = _execution_context_of(bridge).status(validate_files=False)
 
     assert status['ready'] is True
     assert status['control_allowed'] is False
@@ -2005,7 +2024,7 @@ def test_coordinator_rejects_successful_confirmation_for_wrong_context():
 
     bridge._motion_studio_ros_bridge = _StubTransport(studio_response)
 
-    result = bridge._reconcile_execution_context()
+    result = _execution_context_of(bridge).reconcile()
 
     assert result['state'] == 'waiting_nodes'
     assert result['ready'] is False
@@ -2027,8 +2046,8 @@ def test_coordinator_recovers_on_retry_after_temporary_node_failure():
 
     bridge._request_motion_run = run_response
 
-    first = bridge._reconcile_execution_context()
-    second = bridge._reconcile_execution_context()
+    first = _execution_context_of(bridge).reconcile()
+    second = _execution_context_of(bridge).reconcile()
 
     assert first['state'] == 'waiting_nodes'
     assert first['ready'] is False
@@ -2038,18 +2057,18 @@ def test_coordinator_recovers_on_retry_after_temporary_node_failure():
 
 def test_ready_context_becomes_stale_immediately_when_project_files_change():
     bridge = make_bridge()
-    ready = bridge._reconcile_execution_context()
+    ready = _execution_context_of(bridge).reconcile()
     assert ready['ready'] is True
     changed = bridge.project_repository.execution_context('project-1')
     changed['context_id'] = 'new-context-sha'
     bridge.project_repository.execution_context = lambda _project_id: changed
 
-    status = bridge.execution_context_status()
+    status = _execution_context_of(bridge).status()
 
     assert status['state'] == 'stale'
     assert status['ready'] is False
     assert status['control_allowed'] is False
-    assert bridge._execution_context_id() == ''
+    assert _execution_context_of(bridge).context_id() == ''
 
 
 def test_ready_context_is_not_reapplied_during_an_active_operation():
@@ -2062,14 +2081,14 @@ def test_ready_context_is_not_reapplied_during_an_active_operation():
         return default_run_response(command, payload, **kwargs)
 
     bridge._request_motion_run = run_response
-    first = bridge._reconcile_execution_context()
+    first = _execution_context_of(bridge).reconcile()
     assert first['ready'] is True
     assert calls == ['apply_context', 'confirm_context']
 
     # The periodic coordinator may run long after the original verification.
     # It must not send apply_context again while recording/playback can be live.
-    bridge._execution_context_status['verified_at'] = 0.0
-    second = bridge._reconcile_execution_context()
+    _execution_context_of(bridge)._status['verified_at'] = 0.0
+    second = _execution_context_of(bridge).reconcile()
 
     assert second['ready'] is True
     assert calls == ['apply_context', 'confirm_context']

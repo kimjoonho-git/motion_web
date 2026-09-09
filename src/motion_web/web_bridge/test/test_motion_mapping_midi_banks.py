@@ -1,5 +1,7 @@
 import threading
+from pathlib import Path
 
+from motion_web_bridge.execution_context_service import ExecutionContextService
 from motion_web_bridge.bridge_node import MotionWebBridge
 from motion_web_bridge.motion_studio_session import MotionStudioSession
 
@@ -9,6 +11,24 @@ MIDI_STATE = {
     'active_bank_id': 'bank_1',
     'banks': [{'bank_id': 'bank_1', 'name': 'Bank 1', 'mappings': []}],
 }
+
+
+def _execution_context_of(bridge, **overrides):
+    """노드 스텁에 실행 컨텍스트 서비스를 붙인다 · §6-20으로 노드에서 떨어져 나왔다."""
+    service = getattr(bridge, '_execution_context', None)
+    if service is None:
+        service = ExecutionContextService(
+            bridge,
+            repository=getattr(bridge, 'project_repository', None),
+            workspace_root=getattr(bridge, 'workspace_root', Path('.')),
+        )
+        bridge._execution_context = service
+    repository = getattr(bridge, 'project_repository', None)
+    if repository is not None:
+        service.repository = repository
+    for name, value in overrides.items():
+        setattr(service, name, value)
+    return service
 
 
 class StartupTimer:
@@ -63,7 +83,7 @@ def test_startup_project_context_delegates_to_central_reconciler():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge._motion_studio_session = MotionStudioSession()
     calls = []
-    bridge._reconcile_execution_context = lambda: calls.append(True)
+    _execution_context_of(bridge).reconcile = lambda: calls.append(True)
 
     bridge._initialize_selected_project_context()
 
@@ -136,8 +156,8 @@ def test_saving_motion_mapping_syncs_active_file_then_reconciles_execution_conte
         ),
     )
     monkeypatch.setattr(
-        bridge,
-        '_reconcile_execution_context',
+        _execution_context_of(bridge),
+        'reconcile',
         lambda: (
             calls.append(('reconcile',))
             or {'ready': True, 'message': 'ready'}

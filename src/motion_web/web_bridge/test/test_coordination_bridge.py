@@ -7,6 +7,14 @@ from motion_web_bridge.coordination_bridge import (
 )
 
 
+class _FakeExecutionContext:
+    def reconcile(self):
+        return {'ready': True, 'message': 'applied'}
+
+    def reconcile_blocking(self, *, timeout_sec=10.0):
+        return self.reconcile()
+
+
 class _Node:
     def __init__(self):
         self.generation = [1]
@@ -35,16 +43,12 @@ class _Bridge:
     def __init__(self, repository):
         self.project_repository = repository
         self.payload = None
+        #: 실행 컨텍스트는 서비스가 갖는다 (§6-20)
+        self._execution_context = _FakeExecutionContext()
 
     def motion_run_check(self, payload):
         self.payload = payload
         return {'success': True, 'status': {'state': 'ready'}}
-
-    def _reconcile_execution_context(self):
-        return {'ready': True, 'message': 'applied'}
-
-    def _reconcile_execution_context_blocking(self, *, timeout_sec=10.0):
-        return self._reconcile_execution_context()
 
     def motion_run_status(self):
         return {'status': {'automation': {'repeat_mode': 'dwell', 'dwell_sec': 0.25}}}

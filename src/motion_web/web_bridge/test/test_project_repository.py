@@ -20,6 +20,7 @@ from motion_web_bridge.project_repository import (
     _text_limit,
 )
 from motion_web_bridge.motor_config_service import MotorConfigService
+from motion_web_bridge.execution_context_service import ExecutionContextService
 from motion_web_bridge.bridge_node import (
     MotionWebBridge,
     _project_tree_category_signature,
@@ -36,6 +37,24 @@ MOTION_TEXT = '\n'.join([
     json.dumps({'type': 'motion_header', 'rotation_unit': 'deg'}),
     json.dumps([1, 0.0, '1-1', 0.0]),
 ])
+
+
+def _execution_context_of(bridge, **overrides):
+    """노드 스텁에 실행 컨텍스트 서비스를 붙인다 · §6-20으로 노드에서 떨어져 나왔다."""
+    service = getattr(bridge, '_execution_context', None)
+    if service is None:
+        service = ExecutionContextService(
+            bridge,
+            repository=getattr(bridge, 'project_repository', None),
+            workspace_root=getattr(bridge, 'workspace_root', Path('.')),
+        )
+        bridge._execution_context = service
+    repository = getattr(bridge, 'project_repository', None)
+    if repository is not None:
+        service.repository = repository
+    for name, value in overrides.items():
+        setattr(service, name, value)
+    return service
 
 
 def _motor_config_of(bridge, **overrides):
@@ -2698,10 +2717,10 @@ def test_clear_motor_runtime_application_stops_and_allows_delete(
         motor_config_rules, 'clear_motor_config_selection', lambda _repository: None
     )
     bridge._motor_lifecycle_lock = threading.Lock()
-    bridge._execution_context_apply_lock = threading.Lock()
+    _execution_context_of(bridge)._apply_lock = threading.Lock()
     bridge._project_generation = 1
     bridge._project_generation_lock = threading.Lock()
-    bridge._invalidate_execution_nodes = lambda *_args, **_kwargs: None
+    _execution_context_of(bridge).invalidate_nodes = lambda *_args, **_kwargs: None
     monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
 
     assert bridge._runtime_project_id() == project_id

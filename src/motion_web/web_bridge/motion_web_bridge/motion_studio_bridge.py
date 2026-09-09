@@ -15,9 +15,11 @@ from std_msgs.msg import String
 
 
 class MotionStudioRosBridge:
-    def __init__(self, bridge: Any, session: Any) -> None:
+    def __init__(self, bridge: Any, session: Any, context_id: Any = None) -> None:
         self.bridge = bridge
         self.session = session
+        #: 실행 컨텍스트 식별자를 돌려주는 콜러블 (§6-20)
+        self.context_id = context_id or (lambda: '')
 
     def status_callback(self, msg: String) -> None:
         bridge = self.bridge
@@ -91,7 +93,7 @@ class MotionStudioRosBridge:
         )
         request_payload['project_generation'] = project_generation
         if command in {'record', 'play'}:
-            request_payload['context_id'] = bridge._execution_context_id()
+            request_payload['context_id'] = self.context_id()
         msg.data = json.dumps({
             'request_id': request_id,
             'project_generation': project_generation,

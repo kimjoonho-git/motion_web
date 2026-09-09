@@ -12,9 +12,7 @@
   "_coordination_watchdog_stop_execution_id",
   "_coordination_watchdog_timer",
   "_coordination_web_bridge",
-  "_execution_context_apply_lock",
-  "_execution_context_lock",
-  "_execution_context_status",
+  "_execution_context",
   "_jog_request_publisher",
   "_jog_result_subscription",
   "_jog_store",
@@ -116,8 +114,6 @@
  ],
  "locks": [
   "_coordination_poll_lock",
-  "_execution_context_apply_lock",
-  "_execution_context_lock",
   "_lock",
   "_midi_monitor_lock",
   "_monitoring_motion_mapping_lock",
@@ -136,6 +132,7 @@
   "_bridge_started_at",
   "_coordination_watchdog_timer",
   "_coordination_web_bridge",
+  "_execution_context",
   "_jog_request_publisher",
   "_jog_result_subscription",
   "_midi_monitor_request_publisher",
@@ -211,7 +208,6 @@
   "_action_store",
   "_coordination_poll_received_monotonic",
   "_coordination_watchdog_stop_execution_id",
-  "_execution_context_status",
   "_jog_store",
   "_midi_monitor_status",
   "_midi_monitor_store",
@@ -233,7 +229,7 @@
  ],
  "methods": {
   "__init__": {
-   "lines": 395,
+   "lines": 389,
    "state": [
     "_action_request_publisher",
     "_action_result_subscription",
@@ -245,7 +241,7 @@
     "_coordination_watchdog_stop_execution_id",
     "_coordination_watchdog_timer",
     "_coordination_web_bridge",
-    "_execution_context_status",
+    "_execution_context",
     "_jog_request_publisher",
     "_jog_result_subscription",
     "_jog_store",
@@ -337,8 +333,6 @@
    ],
    "locks": [
     "_coordination_poll_lock",
-    "_execution_context_apply_lock",
-    "_execution_context_lock",
     "_lock",
     "_midi_monitor_lock",
     "_monitoring_motion_mapping_lock",
@@ -369,8 +363,7 @@
     "_motion_value_callback",
     "_motor_operation_reconcile_callback",
     "_runtime_project_id",
-    "_safety_status_callback",
-    "_schedule_execution_context_reconcile"
+    "_safety_status_callback"
    ],
    "opaque": false
   },
@@ -535,6 +528,7 @@
   "_motion_studio_status_callback": {
    "lines": 2,
    "state": [
+    "_execution_context",
     "_motion_studio_ros_bridge",
     "_motion_studio_session"
    ],
@@ -559,6 +553,7 @@
   "_motion_studio_response_callback": {
    "lines": 2,
    "state": [
+    "_execution_context",
     "_motion_studio_ros_bridge",
     "_motion_studio_session"
    ],
@@ -571,6 +566,7 @@
   "_motion_studio_editor_response_callback": {
    "lines": 2,
    "state": [
+    "_execution_context",
     "_motion_studio_ros_bridge",
     "_motion_studio_session"
    ],
@@ -631,7 +627,7 @@
     "_automation_triggered_context_id",
     "_bridge_started_at",
     "_coordination_web_bridge",
-    "_execution_context_status",
+    "_execution_context",
     "_motion_run_request_publisher",
     "_motion_run_status",
     "_motion_run_store",
@@ -644,7 +640,6 @@
     "workspace_root"
    ],
    "locks": [
-    "_execution_context_lock",
     "_lock",
     "_motor_operation_reconcile_lock",
     "_motor_operation_recovery_lock",
@@ -652,8 +647,7 @@
    ],
    "calls": [
     "_reconcile_motor_operation_status",
-    "_try_trigger_automation_resume",
-    "execution_context_status"
+    "_try_trigger_automation_resume"
    ],
    "opaque": false
   },
@@ -663,7 +657,7 @@
     "_bridge_instance_id",
     "_bridge_started_at",
     "_coordination_web_bridge",
-    "_execution_context_status",
+    "_execution_context",
     "_midi_monitor_status",
     "_monitoring_motion_mapping_context_id",
     "_monitoring_motion_mapping_rows",
@@ -683,7 +677,6 @@
     "workspace_root"
    ],
    "locks": [
-    "_execution_context_lock",
     "_lock",
     "_midi_monitor_lock",
     "_monitoring_motion_mapping_lock",
@@ -696,8 +689,7 @@
     "_current_project_generation",
     "_monitoring_mapping_rows_for_context",
     "_runtime_project_id_from_path",
-    "_safety_adjusted_midi_status",
-    "execution_context_status"
+    "_safety_adjusted_midi_status"
    ],
    "opaque": false
   },
@@ -728,12 +720,10 @@
    "state": [
     "_coordination_poll_received_monotonic",
     "_coordination_watchdog_stop_execution_id",
-    "_execution_context_status",
+    "_execution_context",
     "_motion_run_request_publisher",
     "_motion_run_status",
     "_motion_run_store",
-    "_motion_state",
-    "_motion_state_received_at",
     "_motion_studio_ros_bridge",
     "_motion_studio_session",
     "_project_generation",
@@ -742,8 +732,6 @@
    ],
    "locks": [
     "_coordination_poll_lock",
-    "_execution_context_lock",
-    "_lock",
     "_motion_run_lock",
     "_project_generation_lock"
    ],
@@ -762,11 +750,9 @@
   "coordination_stop_now": {
    "lines": 44,
    "state": [
-    "_execution_context_status",
+    "_execution_context",
     "_motion_run_request_publisher",
     "_motion_run_store",
-    "_motion_state",
-    "_motion_state_received_at",
     "_motion_studio_ros_bridge",
     "_motion_studio_session",
     "_project_generation",
@@ -774,8 +760,6 @@
     "project_repository"
    ],
    "locks": [
-    "_execution_context_lock",
-    "_lock",
     "_project_generation_lock"
    ],
    "calls": [
@@ -860,23 +844,6 @@
    "calls": [],
    "opaque": false
   },
-  "execution_context_status": {
-   "lines": 25,
-   "state": [
-    "_execution_context_status",
-    "_motion_state",
-    "_motion_state_received_at",
-    "project_repository"
-   ],
-   "locks": [
-    "_execution_context_lock",
-    "_lock"
-   ],
-   "calls": [
-    "_motor_runtime_control_blocker"
-   ],
-   "opaque": false
-  },
   "_motor_runtime_control_blocker": {
    "lines": 40,
    "state": [
@@ -889,40 +856,12 @@
    "calls": [],
    "opaque": false
   },
-  "_set_execution_context_status": {
-   "lines": 4,
-   "state": [
-    "_execution_context_status"
-   ],
-   "locks": [
-    "_execution_context_lock"
-   ],
-   "calls": [],
-   "opaque": false
-  },
-  "_execution_context_id": {
-   "lines": 3,
-   "state": [
-    "_execution_context_status",
-    "_motion_state",
-    "_motion_state_received_at",
-    "project_repository"
-   ],
-   "locks": [
-    "_execution_context_lock",
-    "_lock"
-   ],
-   "calls": [
-    "execution_context_status"
-   ],
-   "opaque": false
-  },
   "_establish_project_generation_boundary": {
    "lines": 50,
    "state": [
     "_action_request_publisher",
     "_action_store",
-    "_execution_context_status",
+    "_execution_context",
     "_jog_store",
     "_project_generation",
     "_safety_request_publisher",
@@ -930,173 +869,13 @@
     "project_repository"
    ],
    "locks": [
-    "_execution_context_lock",
     "_project_generation_lock"
    ],
    "calls": [
     "_current_project_generation",
     "_new_project_request_id",
-    "_set_execution_context_status",
     "_wait_for_action_result",
     "publish_servo_alarm_policy"
-   ],
-   "opaque": false
-  },
-  "_invalidate_execution_nodes": {
-   "lines": 10,
-   "state": [
-    "_action_request_publisher",
-    "_action_store",
-    "_execution_context_status",
-    "_jog_store",
-    "_midi_monitor_request_publisher",
-    "_midi_monitor_status",
-    "_midi_monitor_store",
-    "_motion_mapping_request_publisher",
-    "_motion_mapping_store",
-    "_motion_run_request_publisher",
-    "_motion_run_status",
-    "_motion_run_store",
-    "_motion_state",
-    "_motion_state_received_at",
-    "_motion_studio_ros_bridge",
-    "_motion_studio_session",
-    "_motion_studio_sync_service",
-    "_motor_event_log",
-    "_project_generation",
-    "_safety_request_publisher",
-    "_scan",
-    "_supervisor_project_generation",
-    "project_repository"
-   ],
-   "locks": [
-    "_execution_context_lock",
-    "_lock",
-    "_midi_monitor_lock",
-    "_motion_run_lock",
-    "_project_generation_lock"
-   ],
-   "calls": [
-    "_clear_project_scoped_memory",
-    "_establish_project_generation_boundary",
-    "_motion_studio_transport",
-    "_request_midi_monitor",
-    "_request_motion_mapping",
-    "_request_motion_run"
-   ],
-   "opaque": false
-  },
-  "_execution_context_ack_matches": {
-   "lines": 49,
-   "state": [
-    "_project_generation"
-   ],
-   "locks": [
-    "_project_generation_lock"
-   ],
-   "calls": [
-    "_current_project_generation"
-   ],
-   "opaque": false
-  },
-  "_schedule_execution_context_reconcile": {
-   "lines": 13,
-   "state": [
-    "_action_request_publisher",
-    "_action_store",
-    "_automation_triggered_context_id",
-    "_coordination_web_bridge",
-    "_execution_context_status",
-    "_jog_store",
-    "_midi_monitor_request_publisher",
-    "_midi_monitor_status",
-    "_midi_monitor_store",
-    "_motion_mapping_request_publisher",
-    "_motion_mapping_store",
-    "_motion_run_request_publisher",
-    "_motion_run_status",
-    "_motion_run_store",
-    "_motion_state",
-    "_motion_state_received_at",
-    "_motion_studio_ros_bridge",
-    "_motion_studio_session",
-    "_motion_studio_sync_service",
-    "_motor_config",
-    "_motor_event_log",
-    "_project_generation",
-    "_safety_request_publisher",
-    "_scan",
-    "_supervisor_project_generation",
-    "motion_projects_dir",
-    "project_repository",
-    "workspace_root"
-   ],
-   "locks": [
-    "_execution_context_apply_lock",
-    "_execution_context_lock",
-    "_lock",
-    "_midi_monitor_lock",
-    "_motion_run_lock",
-    "_project_generation_lock"
-   ],
-   "calls": [
-    "_reconcile_execution_context"
-   ],
-   "opaque": false
-  },
-  "_reconcile_execution_context": {
-   "lines": 182,
-   "state": [
-    "_action_request_publisher",
-    "_action_store",
-    "_automation_triggered_context_id",
-    "_coordination_web_bridge",
-    "_execution_context_status",
-    "_jog_store",
-    "_midi_monitor_request_publisher",
-    "_midi_monitor_status",
-    "_midi_monitor_store",
-    "_motion_mapping_request_publisher",
-    "_motion_mapping_store",
-    "_motion_run_request_publisher",
-    "_motion_run_status",
-    "_motion_run_store",
-    "_motion_state",
-    "_motion_state_received_at",
-    "_motion_studio_ros_bridge",
-    "_motion_studio_session",
-    "_motion_studio_sync_service",
-    "_motor_config",
-    "_motor_event_log",
-    "_project_generation",
-    "_safety_request_publisher",
-    "_scan",
-    "_supervisor_project_generation",
-    "motion_projects_dir",
-    "project_repository",
-    "workspace_root"
-   ],
-   "locks": [
-    "_execution_context_apply_lock",
-    "_execution_context_lock",
-    "_lock",
-    "_midi_monitor_lock",
-    "_motion_run_lock",
-    "_project_generation_lock"
-   ],
-   "calls": [
-    "_current_project_generation",
-    "_establish_project_generation_boundary",
-    "_execution_context_ack_matches",
-    "_invalidate_execution_nodes",
-    "_motion_studio_transport",
-    "_request_midi_monitor",
-    "_request_motion_mapping",
-    "_request_motion_run",
-    "_runtime_project_id",
-    "_set_execution_context_status",
-    "_try_trigger_automation_resume",
-    "execution_context_status"
    ],
    "opaque": false
   },
@@ -1105,7 +884,7 @@
    "state": [
     "_automation_triggered_context_id",
     "_coordination_web_bridge",
-    "_execution_context_status",
+    "_execution_context",
     "_motion_run_request_publisher",
     "_motion_run_status",
     "_motion_run_store",
@@ -1115,60 +894,12 @@
     "project_repository"
    ],
    "locks": [
-    "_execution_context_lock",
     "_lock",
     "_project_generation_lock"
    ],
    "calls": [
     "_motor_runtime_control_blocker",
-    "execution_context_status",
     "motion_automation_start"
-   ],
-   "opaque": false
-  },
-  "_reconcile_execution_context_blocking": {
-   "lines": 19,
-   "state": [
-    "_action_request_publisher",
-    "_action_store",
-    "_automation_triggered_context_id",
-    "_coordination_web_bridge",
-    "_execution_context_status",
-    "_jog_store",
-    "_midi_monitor_request_publisher",
-    "_midi_monitor_status",
-    "_midi_monitor_store",
-    "_motion_mapping_request_publisher",
-    "_motion_mapping_store",
-    "_motion_run_request_publisher",
-    "_motion_run_status",
-    "_motion_run_store",
-    "_motion_state",
-    "_motion_state_received_at",
-    "_motion_studio_ros_bridge",
-    "_motion_studio_session",
-    "_motion_studio_sync_service",
-    "_motor_config",
-    "_motor_event_log",
-    "_project_generation",
-    "_safety_request_publisher",
-    "_scan",
-    "_supervisor_project_generation",
-    "motion_projects_dir",
-    "project_repository",
-    "workspace_root"
-   ],
-   "locks": [
-    "_execution_context_apply_lock",
-    "_execution_context_lock",
-    "_lock",
-    "_midi_monitor_lock",
-    "_motion_run_lock",
-    "_project_generation_lock"
-   ],
-   "calls": [
-    "_reconcile_execution_context",
-    "execution_context_status"
    ],
    "opaque": false
   },
@@ -1198,7 +929,7 @@
     "_bridge_instance_id",
     "_bridge_started_at",
     "_coordination_web_bridge",
-    "_execution_context_status",
+    "_execution_context",
     "_midi_monitor_status",
     "_monitoring_client",
     "_monitoring_motion_mapping_context_id",
@@ -1220,7 +951,6 @@
     "workspace_root"
    ],
    "locks": [
-    "_execution_context_lock",
     "_lock",
     "_midi_monitor_lock",
     "_monitoring_motion_mapping_lock",
@@ -1432,6 +1162,7 @@
    "lines": 20,
    "state": [
     "_action_store",
+    "_execution_context",
     "_jog_store",
     "_midi_monitor_status",
     "_midi_monitor_store",
@@ -1512,40 +1243,15 @@
   "create_motion_project": {
    "lines": 14,
    "state": [
-    "_action_request_publisher",
-    "_action_store",
-    "_automation_triggered_context_id",
-    "_coordination_web_bridge",
-    "_execution_context_status",
+    "_execution_context",
     "_jog_store",
-    "_midi_monitor_request_publisher",
-    "_midi_monitor_status",
-    "_midi_monitor_store",
-    "_motion_mapping_request_publisher",
-    "_motion_mapping_store",
-    "_motion_run_request_publisher",
     "_motion_run_status",
-    "_motion_run_store",
-    "_motion_state",
-    "_motion_state_received_at",
-    "_motion_studio_ros_bridge",
-    "_motion_studio_session",
-    "_motion_studio_sync_service",
     "_motor_config",
-    "_motor_event_log",
     "_project_generation",
     "_safety_request_publisher",
-    "_scan",
-    "_supervisor_project_generation",
-    "motion_projects_dir",
-    "project_repository",
-    "workspace_root"
+    "project_repository"
    ],
    "locks": [
-    "_execution_context_apply_lock",
-    "_execution_context_lock",
-    "_lock",
-    "_midi_monitor_lock",
     "_motion_run_lock",
     "_motor_lifecycle_lock",
     "_project_generation_lock"
@@ -1554,7 +1260,6 @@
     "_advance_project_generation",
     "_current_project_generation",
     "_ensure_project_change_allowed",
-    "_invalidate_execution_nodes",
     "select_motion_project"
    ],
    "opaque": false
@@ -1562,37 +1267,14 @@
   "delete_motion_project": {
    "lines": 21,
    "state": [
-    "_action_request_publisher",
-    "_action_store",
-    "_execution_context_status",
-    "_jog_store",
-    "_midi_monitor_request_publisher",
-    "_midi_monitor_status",
-    "_midi_monitor_store",
-    "_motion_mapping_request_publisher",
-    "_motion_mapping_store",
-    "_motion_run_request_publisher",
+    "_execution_context",
     "_motion_run_status",
-    "_motion_run_store",
-    "_motion_state",
-    "_motion_state_received_at",
-    "_motion_studio_ros_bridge",
-    "_motion_studio_session",
-    "_motion_studio_sync_service",
     "_motor_config",
-    "_motor_event_log",
     "_project_generation",
-    "_safety_request_publisher",
-    "_scan",
-    "_supervisor_project_generation",
     "motion_projects_dir",
     "project_repository"
    ],
    "locks": [
-    "_execution_context_apply_lock",
-    "_execution_context_lock",
-    "_lock",
-    "_midi_monitor_lock",
     "_motion_run_lock",
     "_motor_lifecycle_lock",
     "_project_generation_lock"
@@ -1601,7 +1283,6 @@
     "_advance_project_generation",
     "_current_project_generation",
     "_ensure_project_mutation_allowed",
-    "_invalidate_execution_nodes",
     "_runtime_project_id"
    ],
    "opaque": false
@@ -1645,46 +1326,10 @@
   "_initialize_selected_project_context": {
    "lines": 2,
    "state": [
-    "_action_request_publisher",
-    "_action_store",
-    "_automation_triggered_context_id",
-    "_coordination_web_bridge",
-    "_execution_context_status",
-    "_jog_store",
-    "_midi_monitor_request_publisher",
-    "_midi_monitor_status",
-    "_midi_monitor_store",
-    "_motion_mapping_request_publisher",
-    "_motion_mapping_store",
-    "_motion_run_request_publisher",
-    "_motion_run_status",
-    "_motion_run_store",
-    "_motion_state",
-    "_motion_state_received_at",
-    "_motion_studio_ros_bridge",
-    "_motion_studio_session",
-    "_motion_studio_sync_service",
-    "_motor_config",
-    "_motor_event_log",
-    "_project_generation",
-    "_safety_request_publisher",
-    "_scan",
-    "_supervisor_project_generation",
-    "motion_projects_dir",
-    "project_repository",
-    "workspace_root"
+    "_execution_context"
    ],
-   "locks": [
-    "_execution_context_apply_lock",
-    "_execution_context_lock",
-    "_lock",
-    "_midi_monitor_lock",
-    "_motion_run_lock",
-    "_project_generation_lock"
-   ],
-   "calls": [
-    "_reconcile_execution_context"
-   ],
+   "locks": [],
+   "calls": [],
    "opaque": false
   },
   "load_motion_project": {
@@ -1704,40 +1349,15 @@
   "select_motion_project": {
    "lines": 38,
    "state": [
-    "_action_request_publisher",
-    "_action_store",
-    "_automation_triggered_context_id",
-    "_coordination_web_bridge",
-    "_execution_context_status",
+    "_execution_context",
     "_jog_store",
-    "_midi_monitor_request_publisher",
-    "_midi_monitor_status",
-    "_midi_monitor_store",
-    "_motion_mapping_request_publisher",
-    "_motion_mapping_store",
-    "_motion_run_request_publisher",
     "_motion_run_status",
-    "_motion_run_store",
-    "_motion_state",
-    "_motion_state_received_at",
-    "_motion_studio_ros_bridge",
-    "_motion_studio_session",
-    "_motion_studio_sync_service",
     "_motor_config",
-    "_motor_event_log",
     "_project_generation",
     "_safety_request_publisher",
-    "_scan",
-    "_supervisor_project_generation",
-    "motion_projects_dir",
-    "project_repository",
-    "workspace_root"
+    "project_repository"
    ],
    "locks": [
-    "_execution_context_apply_lock",
-    "_execution_context_lock",
-    "_lock",
-    "_midi_monitor_lock",
     "_motion_run_lock",
     "_motor_lifecycle_lock",
     "_project_generation_lock"
@@ -1746,9 +1366,6 @@
     "_advance_project_generation",
     "_current_project_generation",
     "_ensure_project_change_allowed",
-    "_invalidate_execution_nodes",
-    "_reconcile_execution_context",
-    "_set_execution_context_status",
     "publish_servo_alarm_policy"
    ],
    "opaque": false
@@ -2005,47 +1622,20 @@
   "save_motion_mapping": {
    "lines": 41,
    "state": [
-    "_action_request_publisher",
-    "_action_store",
-    "_automation_triggered_context_id",
-    "_coordination_web_bridge",
-    "_execution_context_status",
-    "_jog_store",
-    "_midi_monitor_request_publisher",
-    "_midi_monitor_status",
-    "_midi_monitor_store",
+    "_execution_context",
     "_motion_mapping_request_publisher",
     "_motion_mapping_store",
-    "_motion_run_request_publisher",
     "_motion_run_status",
-    "_motion_run_store",
-    "_motion_state",
-    "_motion_state_received_at",
-    "_motion_studio_ros_bridge",
-    "_motion_studio_session",
-    "_motion_studio_sync_service",
-    "_motor_config",
-    "_motor_event_log",
     "_project_generation",
-    "_safety_request_publisher",
-    "_scan",
-    "_supervisor_project_generation",
-    "motion_projects_dir",
-    "project_repository",
-    "workspace_root"
+    "project_repository"
    ],
    "locks": [
-    "_execution_context_apply_lock",
-    "_execution_context_lock",
-    "_lock",
-    "_midi_monitor_lock",
     "_motion_run_lock",
     "_motor_lifecycle_lock",
     "_project_generation_lock"
    ],
    "calls": [
     "_project_change_blocker",
-    "_reconcile_execution_context",
     "_request_motion_mapping",
     "_sync_project_file"
    ],
@@ -2127,18 +1717,14 @@
   "motion_run_status": {
    "lines": 12,
    "state": [
-    "_execution_context_status",
+    "_execution_context",
     "_motion_run_request_publisher",
     "_motion_run_status",
     "_motion_run_store",
-    "_motion_state",
-    "_motion_state_received_at",
     "_project_generation",
     "project_repository"
    ],
    "locks": [
-    "_execution_context_lock",
-    "_lock",
     "_motion_run_lock",
     "_project_generation_lock"
    ],
@@ -2150,17 +1736,13 @@
   "motion_run_check": {
    "lines": 2,
    "state": [
-    "_execution_context_status",
+    "_execution_context",
     "_motion_run_request_publisher",
     "_motion_run_store",
-    "_motion_state",
-    "_motion_state_received_at",
     "_project_generation",
     "project_repository"
    ],
    "locks": [
-    "_execution_context_lock",
-    "_lock",
     "_project_generation_lock"
    ],
    "calls": [
@@ -2181,7 +1763,7 @@
    "lines": 9,
    "state": [
     "_coordination_web_bridge",
-    "_execution_context_status",
+    "_execution_context",
     "_motion_run_request_publisher",
     "_motion_run_store",
     "_motion_state",
@@ -2190,7 +1772,6 @@
     "project_repository"
    ],
    "locks": [
-    "_execution_context_lock",
     "_lock",
     "_project_generation_lock"
    ],
@@ -2205,7 +1786,7 @@
    "lines": 9,
    "state": [
     "_coordination_web_bridge",
-    "_execution_context_status",
+    "_execution_context",
     "_motion_run_request_publisher",
     "_motion_run_store",
     "_motion_state",
@@ -2214,7 +1795,6 @@
     "project_repository"
    ],
    "locks": [
-    "_execution_context_lock",
     "_lock",
     "_project_generation_lock"
    ],
@@ -2228,16 +1808,13 @@
   "motion_automation_configure": {
    "lines": 21,
    "state": [
-    "_execution_context_status",
+    "_execution_context",
     "_motion_run_request_publisher",
     "_motion_run_store",
-    "_motion_state",
-    "_motion_state_received_at",
     "_project_generation",
     "project_repository"
    ],
    "locks": [
-    "_execution_context_lock",
     "_lock",
     "_project_generation_lock"
    ],
@@ -2250,7 +1827,7 @@
    "lines": 12,
    "state": [
     "_coordination_web_bridge",
-    "_execution_context_status",
+    "_execution_context",
     "_motion_run_request_publisher",
     "_motion_run_store",
     "_motion_state",
@@ -2259,7 +1836,6 @@
     "project_repository"
    ],
    "locks": [
-    "_execution_context_lock",
     "_lock",
     "_project_generation_lock"
    ],
@@ -2274,17 +1850,13 @@
    "lines": 9,
    "state": [
     "_coordination_web_bridge",
-    "_execution_context_status",
+    "_execution_context",
     "_motion_run_request_publisher",
     "_motion_run_store",
-    "_motion_state",
-    "_motion_state_received_at",
     "_project_generation",
     "project_repository"
    ],
    "locks": [
-    "_execution_context_lock",
-    "_lock",
     "_project_generation_lock"
    ],
    "calls": [
@@ -2296,17 +1868,13 @@
   "motion_automation_disable": {
    "lines": 4,
    "state": [
-    "_execution_context_status",
+    "_execution_context",
     "_motion_run_request_publisher",
     "_motion_run_store",
-    "_motion_state",
-    "_motion_state_received_at",
     "_project_generation",
     "project_repository"
    ],
    "locks": [
-    "_execution_context_lock",
-    "_lock",
     "_project_generation_lock"
    ],
    "calls": [
@@ -2317,17 +1885,13 @@
   "motion_run_stop": {
    "lines": 2,
    "state": [
-    "_execution_context_status",
+    "_execution_context",
     "_motion_run_request_publisher",
     "_motion_run_store",
-    "_motion_state",
-    "_motion_state_received_at",
     "_project_generation",
     "project_repository"
    ],
    "locks": [
-    "_execution_context_lock",
-    "_lock",
     "_project_generation_lock"
    ],
    "calls": [
@@ -2338,17 +1902,13 @@
   "motion_run_stop_after_cycle": {
    "lines": 2,
    "state": [
-    "_execution_context_status",
+    "_execution_context",
     "_motion_run_request_publisher",
     "_motion_run_store",
-    "_motion_state",
-    "_motion_state_received_at",
     "_project_generation",
     "project_repository"
    ],
    "locks": [
-    "_execution_context_lock",
-    "_lock",
     "_project_generation_lock"
    ],
    "calls": [
@@ -2359,7 +1919,7 @@
   "motion_group_prepare": {
    "lines": 5,
    "state": [
-    "_execution_context_status",
+    "_execution_context",
     "_motion_run_request_publisher",
     "_motion_run_store",
     "_motion_state",
@@ -2368,7 +1928,6 @@
     "project_repository"
    ],
    "locks": [
-    "_execution_context_lock",
     "_lock",
     "_project_generation_lock"
    ],
@@ -2381,17 +1940,13 @@
   "motion_group_start_at": {
    "lines": 2,
    "state": [
-    "_execution_context_status",
+    "_execution_context",
     "_motion_run_request_publisher",
     "_motion_run_store",
-    "_motion_state",
-    "_motion_state_received_at",
     "_project_generation",
     "project_repository"
    ],
    "locks": [
-    "_execution_context_lock",
-    "_lock",
     "_project_generation_lock"
    ],
    "calls": [
@@ -2402,17 +1957,13 @@
   "motion_group_initialize_at": {
    "lines": 2,
    "state": [
-    "_execution_context_status",
+    "_execution_context",
     "_motion_run_request_publisher",
     "_motion_run_store",
-    "_motion_state",
-    "_motion_state_received_at",
     "_project_generation",
     "project_repository"
    ],
    "locks": [
-    "_execution_context_lock",
-    "_lock",
     "_project_generation_lock"
    ],
    "calls": [
@@ -2423,17 +1974,13 @@
   "motion_group_cancel": {
    "lines": 2,
    "state": [
-    "_execution_context_status",
+    "_execution_context",
     "_motion_run_request_publisher",
     "_motion_run_store",
-    "_motion_state",
-    "_motion_state_received_at",
     "_project_generation",
     "project_repository"
    ],
    "locks": [
-    "_execution_context_lock",
-    "_lock",
     "_project_generation_lock"
    ],
    "calls": [
@@ -2703,30 +2250,26 @@
   "_request_motion_run": {
    "lines": 40,
    "state": [
-    "_execution_context_status",
+    "_execution_context",
     "_motion_run_request_publisher",
     "_motion_run_store",
-    "_motion_state",
-    "_motion_state_received_at",
     "_project_generation",
     "project_repository"
    ],
    "locks": [
-    "_execution_context_lock",
-    "_lock",
     "_project_generation_lock"
    ],
    "calls": [
     "_current_project_generation",
-    "_execution_context_id",
     "_new_project_request_id",
     "_wait_for_motion_run_result"
    ],
    "opaque": false
   },
   "_motion_studio_transport": {
-   "lines": 6,
+   "lines": 11,
    "state": [
+    "_execution_context",
     "_motion_studio_ros_bridge",
     "_motion_studio_session"
    ],
@@ -2737,6 +2280,7 @@
   "_motion_studio_sync": {
    "lines": 8,
    "state": [
+    "_execution_context",
     "_motion_studio_ros_bridge",
     "_motion_studio_session",
     "_motion_studio_sync_service"
@@ -2750,6 +2294,7 @@
   "cancel_pending_motion_studio_start": {
    "lines": 2,
    "state": [
+    "_execution_context",
     "_motion_studio_ros_bridge",
     "_motion_studio_session"
    ],
@@ -2791,7 +2336,7 @@
     "_bridge_instance_id",
     "_bridge_started_at",
     "_coordination_web_bridge",
-    "_execution_context_status",
+    "_execution_context",
     "_jog_request_publisher",
     "_jog_store",
     "_midi_monitor_status",
@@ -2813,7 +2358,6 @@
     "workspace_root"
    ],
    "locks": [
-    "_execution_context_lock",
     "_lock",
     "_midi_monitor_lock",
     "_monitoring_motion_mapping_lock",
@@ -2837,7 +2381,7 @@
     "_bridge_instance_id",
     "_bridge_started_at",
     "_coordination_web_bridge",
-    "_execution_context_status",
+    "_execution_context",
     "_jog_request_publisher",
     "_jog_store",
     "_midi_monitor_status",
@@ -2859,7 +2403,6 @@
     "workspace_root"
    ],
    "locks": [
-    "_execution_context_lock",
     "_lock",
     "_midi_monitor_lock",
     "_monitoring_motion_mapping_lock",
@@ -2885,7 +2428,7 @@
     "_bridge_instance_id",
     "_bridge_started_at",
     "_coordination_web_bridge",
-    "_execution_context_status",
+    "_execution_context",
     "_midi_monitor_status",
     "_monitoring_motion_mapping_context_id",
     "_monitoring_motion_mapping_rows",
@@ -2905,7 +2448,6 @@
     "workspace_root"
    ],
    "locks": [
-    "_execution_context_lock",
     "_lock",
     "_midi_monitor_lock",
     "_monitoring_motion_mapping_lock",
@@ -2931,7 +2473,7 @@
     "_bridge_instance_id",
     "_bridge_started_at",
     "_coordination_web_bridge",
-    "_execution_context_status",
+    "_execution_context",
     "_midi_monitor_status",
     "_monitoring_motion_mapping_context_id",
     "_monitoring_motion_mapping_rows",
@@ -2951,7 +2493,6 @@
     "workspace_root"
    ],
    "locks": [
-    "_execution_context_lock",
     "_lock",
     "_midi_monitor_lock",
     "_monitoring_motion_mapping_lock",
@@ -2975,7 +2516,7 @@
     "_bridge_instance_id",
     "_bridge_started_at",
     "_coordination_web_bridge",
-    "_execution_context_status",
+    "_execution_context",
     "_jog_request_publisher",
     "_jog_store",
     "_midi_monitor_status",
@@ -2997,7 +2538,6 @@
     "workspace_root"
    ],
    "locks": [
-    "_execution_context_lock",
     "_lock",
     "_midi_monitor_lock",
     "_monitoring_motion_mapping_lock",
@@ -3022,7 +2562,7 @@
     "_bridge_instance_id",
     "_bridge_started_at",
     "_coordination_web_bridge",
-    "_execution_context_status",
+    "_execution_context",
     "_jog_store",
     "_midi_monitor_status",
     "_monitoring_motion_mapping_context_id",
@@ -3044,7 +2584,6 @@
     "workspace_root"
    ],
    "locks": [
-    "_execution_context_lock",
     "_lock",
     "_midi_monitor_lock",
     "_monitoring_motion_mapping_lock",

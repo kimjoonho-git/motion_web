@@ -999,6 +999,40 @@ project_comparison: compatible true · required [0] · unused [1]
 - 실물 미검증 · 프로젝트 전환 시 `clear_selection` 계약 · 가동 중 프로젝트를
   바꿔야 확인된다
 
+### 6-20. `ExecutionContextService` 신설 · §5 분해 목표안 네 번째 서비스
+
+`MotionWebBridge` 3,722 → **3,409줄** · 메서드 140 → 132 · 락 13 → 11 ·
+락 관여 3,069 → **2,756줄**
+
+#### 옮긴 것 · 8메서드 305줄
+
+`reconcile` 182 · `_ack_matches` 49 · `status` 25 · `reconcile_blocking` 19 ·
+`schedule_reconcile` 13 · `invalidate_nodes` 10 · `_set_status` 4 · `context_id` 3
+
+서비스가 갖는 것 · `_status`와 그 락(RLock) · 적용 직렬화 락(`_apply_lock`).
+
+#### 세대 번호는 노드에 남겼다
+
+`_project_generation`과 `_current_project_generation`은 옮기지 않았다.
+**노드 안 25곳이 쓰는 전역 개념이고 실행 컨텍스트만의 것이 아니다.**
+`_establish_project_generation_boundary`도 같은 이유로 남겼다.
+
+경계를 락으로만 그으면 이렇게 여러 관심사가 한 락 아래 섞인 것을 통째로 옮기게
+된다. 락은 후보를 찾는 데 쓰고, 실제 경계는 **누가 그 개념을 쓰는가**로 정했다.
+
+#### 서비스끼리의 의존을 또 인자로
+
+`MotionStudioRosBridge`가 `record`·`play` 요청에 컨텍스트 식별자를 실어 보낸다.
+`bridge._execution_context.context_id()`로 두면 스튜디오 전송이 노드를 거쳐 다른
+서비스를 아는 꼴이므로 `context_id` 콜러블을 생성자 인자로 받게 했다 ·
+§6-19에서 `load_motor_config`에 한 것과 같다.
+
+#### 검증
+
+- 코드 검증 · `ruff check src` 55건 유지 · 신규 0건
+- 실행 검증 · `pytest` 1,005건 통과 · 실패 0
+- 실물 검증 · 아래 별도 기록
+
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
 - 파일 1,000줄 이하 · 함수 60줄 이하 · `Node` 서브클래스 500줄 이하

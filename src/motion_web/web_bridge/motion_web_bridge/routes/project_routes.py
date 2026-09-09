@@ -9,7 +9,7 @@ def register_project_routes(app: FastAPI, bridge, project_call) -> None:
 
     @app.post('/api/execution-context/apply')
     async def apply_execution_context():
-        return project_call(bridge._reconcile_execution_context)
+        return project_call(bridge._execution_context.reconcile)
 
     @app.post('/api/projects')
     async def create_motion_project(request: Request):

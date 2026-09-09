@@ -34,6 +34,7 @@ from . import (
 from .motor_restart_diagnostics import diagnose_motor_restart_failure
 from .motion_studio_bridge import MotionStudioRosBridge
 from .motion_studio_session import MotionStudioSession
+from .execution_context_service import ExecutionContextService
 from .motor_config_service import MotorConfigService
 from .motor_event_log import MotorEventLog
 from .scan_orchestrator import ScanOrchestrator
@@ -194,6 +195,11 @@ class MotionWebBridge(Node):
         self._motor_lifecycle_lock = threading.Lock()
         # 기동 시점의 파일과 선택 프로젝트의 편집 파일을 분리해 둔다. 적용·재시작
         # 전까지는 실행 중인 모터 스택이 기동 시점 파일을 물고 있다.
+        self._execution_context = ExecutionContextService(
+            self,
+            repository=self.project_repository,
+            workspace_root=self.workspace_root,
+        )
         self._motor_config = MotorConfigService(
             self,
             lifecycle_lock=self._motor_lifecycle_lock,
@@ -272,15 +278,13 @@ class MotionWebBridge(Node):
         self._midi_monitor_store = rpc.ResultStore()
         self._motion_studio_session = MotionStudioSession()
         self._motion_studio_ros_bridge = MotionStudioRosBridge(
-            self, self._motion_studio_session
+            self, self._motion_studio_session, self._execution_context.context_id
         )
         self._motion_studio_sync_service = MotionStudioSync(
             self, self._motion_studio_session, self._motion_studio_ros_bridge
         )
         self._safety_status_lock = threading.Lock()
         self._safety_status: Dict[str, Any] = {}
-        self._execution_context_lock = threading.RLock()
-        self._execution_context_apply_lock = threading.Lock()
         self._monitoring_motion_mapping_lock = threading.Lock()
         self._monitoring_motion_mapping_context_id = ''
         self._monitoring_motion_mapping_rows: List[Dict[str, Any]] = []
@@ -289,15 +293,6 @@ class MotionWebBridge(Node):
         self._supervisor_project_generation = 0
         self._bridge_instance_id = f'{os.getpid()}-{time.time_ns()}'
         self._bridge_started_at = time.time()
-        self._execution_context_status: Dict[str, Any] = {
-            'state': 'starting',
-            'ready': False,
-            'message': '현재 프로젝트 실행 컨텍스트 확인 중',
-            'context_id': '',
-            'project_id': '',
-            'nodes': {},
-            'updated_at': time.time(),
-        }
         self._motor_operation_recovery_lock = threading.Lock()
         self._motor_operation_reconcile_lock = threading.Lock()
 
@@ -438,7 +433,7 @@ class MotionWebBridge(Node):
             self._current_project_generation,
         )
         self._startup_project_context_timer = self.create_timer(
-            1.0, self._schedule_execution_context_reconcile
+            1.0, self._execution_context.schedule_reconcile
         )
         self._motor_operation_reconcile_timer = self.create_timer(
             0.2, self._motor_operation_reconcile_callback
@@ -723,7 +718,7 @@ class MotionWebBridge(Node):
                 repository=getattr(self, 'project_repository', None),
                 workspace_root=getattr(self, 'workspace_root', Path()),
             )
-            execution_context = self.execution_context_status(validate_files=False)
+            execution_context = self._execution_context.status(validate_files=False)
             self._reconcile_motor_operation_status(
                 runtime_status,
                 motion_state,
@@ -770,7 +765,7 @@ class MotionWebBridge(Node):
         # and API responses contend with continuous disk reads and hashing.
         # The coordinator and explicit context endpoints still perform the
         # full validation; a status frame only reports that validated result.
-        execution_context = self.execution_context_status(validate_files=False)
+        execution_context = self._execution_context.status(validate_files=False)
         motor_operation = self.project_repository.motor_operation_status()
         selected_project_id = self.project_repository.selected_project_id()
         runtime_project_id = self._runtime_project_id_from_path(selected_project_id)
@@ -1259,32 +1254,6 @@ class MotionWebBridge(Node):
             self._monitoring_motion_mapping_rows = rows
             return copy.deepcopy(rows)
 
-    def execution_context_status(self, *, validate_files: bool = True) -> Dict[str, Any]:
-        with self._execution_context_lock:
-            status = copy.deepcopy(self._execution_context_status)
-        project_id = self.project_repository.selected_project_id()
-        if validate_files and project_id and status.get('ready'):
-            try:
-                current = self.project_repository.execution_context(project_id)
-            except (OSError, ValueError, json.JSONDecodeError):
-                current = {}
-            if current.get('context_id') != status.get('context_id'):
-                status.update({
-                    'state': 'stale',
-                    'ready': False,
-                    'message': '저장 설정이 변경되어 실행 컨텍스트 재적용 대기 중',
-                    'stored_context_id': current.get('context_id', ''),
-                })
-        runtime_blocker = (
-            self._motor_runtime_control_blocker()
-            if status.get('ready')
-            else ''
-        )
-        status['control_allowed'] = bool(status.get('ready') and not runtime_blocker)
-        status['control_block_reason'] = runtime_blocker
-        status['stored_equals_runtime'] = bool(status.get('ready'))
-        return status
-
     def _motor_runtime_control_blocker(self) -> str:
         lock = getattr(self, '_lock', None)
         if lock is None:
@@ -1326,15 +1295,6 @@ class MotionWebBridge(Node):
             return f'오류 축이 있습니다: {", ".join(faulted)}'
         return ''
 
-    def _set_execution_context_status(self, **values: Any) -> None:
-        with self._execution_context_lock:
-            self._execution_context_status.update(values)
-            self._execution_context_status['updated_at'] = time.time()
-
-    def _execution_context_id(self) -> str:
-        status = self.execution_context_status()
-        return str(status.get('context_id') or '') if status.get('ready') else ''
-
     def _establish_project_generation_boundary(self, *, force: bool = False) -> None:
         """Synchronize the persistent project generation with the command owner.
 
@@ -1367,7 +1327,7 @@ class MotionWebBridge(Node):
                 )
         policy_result = self.publish_servo_alarm_policy()
         if policy_result.get('success') is not True:
-            self._set_execution_context_status(
+            self._execution_context._set_status(
                 state='waiting_motor_runtime',
                 ready=False,
                 project_id=str(self.project_repository.selected_project_id() or ''),
@@ -1386,264 +1346,6 @@ class MotionWebBridge(Node):
             )
         self._supervisor_project_generation = generation
 
-    def _invalidate_execution_nodes(self, context_id: str = '') -> None:
-        payload = {'context_id': context_id}
-        # A forced boundary also stops any command that belonged to the
-        # invalidated context, even when the numeric generation is unchanged.
-        self._establish_project_generation_boundary(force=True)
-        self._request_motion_mapping('invalidate_context', payload, timeout_sec=0.5)
-        self._request_midi_monitor('invalidate_context', payload, timeout_sec=0.5)
-        self._request_motion_run('invalidate_context', payload, timeout_sec=0.5)
-        self._motion_studio_transport().request('invalidate_context', payload, timeout_sec=0.5)
-        self._clear_project_scoped_memory()
-
-    def _execution_context_ack_matches(
-        self, result: Dict[str, Any], context_id: str, project_id: str
-    ) -> bool:
-        """Accept the common acknowledgement fields, including UI snapshots.
-
-        MIDI status snapshots historically expose the context as a nested
-        object, while the other managed nodes return it at the top level.
-        The coordinator must validate the values, not mistake that harmless
-        response-shape difference for a failed project application.
-        """
-        nested = result.get('execution_context')
-        if not isinstance(nested, dict):
-            nested = {}
-        status = result.get('status')
-        status_context = (
-            status.get('execution_context')
-            if isinstance(status, dict) else {}
-        )
-        if not isinstance(status_context, dict):
-            status_context = {}
-        acknowledged_context = str(
-            result.get('context_id')
-            or nested.get('context_id')
-            or status_context.get('context_id')
-            or ''
-        )
-        acknowledged_project = str(
-            result.get('project_id')
-            or nested.get('project_id')
-            or status_context.get('project_id')
-            or ''
-        )
-        acknowledged_generation = result.get('project_generation')
-        if acknowledged_generation is None:
-            acknowledged_generation = nested.get('project_generation')
-        if acknowledged_generation is None:
-            acknowledged_generation = status_context.get('project_generation')
-        try:
-            generation_matches = (
-                int(acknowledged_generation) == self._current_project_generation()
-            )
-        except (TypeError, ValueError):
-            generation_matches = False
-        return (
-            result.get('success') is True
-            and acknowledged_context == context_id
-            and acknowledged_project == project_id
-            and generation_matches
-        )
-
-    def _schedule_execution_context_reconcile(self) -> None:
-        """Run orchestration outside the single ROS callback thread.
-
-        Response subscriptions must remain free while the coordinator waits
-        for acknowledgements from the managed nodes.
-        """
-        if self._execution_context_apply_lock.locked():
-            return
-        threading.Thread(
-            target=self._reconcile_execution_context,
-            name='project-context-coordinator',
-            daemon=True,
-        ).start()
-
-    def _reconcile_execution_context(self) -> Dict[str, Any]:
-        if not self._execution_context_apply_lock.acquire(blocking=False):
-            return self.execution_context_status()
-        try:
-            project_id = self.project_repository.selected_project_id()
-            if not project_id:
-                self._set_execution_context_status(
-                    state='no_project', ready=False, project_id='', context_id='',
-                    message='현재 프로젝트를 선택하세요', nodes={},
-                )
-                return self.execution_context_status()
-            try:
-                context = self.project_repository.execution_context(project_id)
-            except (OSError, ValueError, json.JSONDecodeError) as exc:
-                self._set_execution_context_status(
-                    state='error', ready=False, project_id=project_id, context_id='',
-                    message=f'프로젝트 실행 컨텍스트 생성 실패: {exc}', nodes={},
-                )
-                return self.execution_context_status()
-
-            context_id = str(context.get('context_id') or '')
-            with self._execution_context_lock:
-                previous = dict(self._execution_context_status)
-            try:
-                self._establish_project_generation_boundary()
-            except ValueError as exc:
-                self._set_execution_context_status(
-                    state='waiting_motor_runtime', ready=False,
-                    project_id=project_id, context_id=context_id,
-                    message=str(exc), nodes={},
-                    failures={'motor_runtime': str(exc)}, context=context,
-                )
-                return self.execution_context_status()
-            if context.get('missing'):
-                if previous.get('state') != 'configuration_required' or previous.get('context_id') != context_id:
-                    self._invalidate_execution_nodes(context_id)
-                self._set_execution_context_status(
-                    state='configuration_required', ready=False,
-                    project_id=project_id, context_id=context_id,
-                    message='모터축 설정과 모션축 설정 파일을 확정하세요',
-                    missing=list(context.get('missing') or []), nodes={}, context=context,
-                )
-                return self.execution_context_status()
-            mapping = context['files']['motion_axis_matching']
-            if (
-                previous.get('state') == 'motor_apply_required'
-                and previous.get('context_id') == context_id
-                and time.time() - float(previous.get('updated_at') or 0.0) < 5.0
-            ):
-                return self.execution_context_status()
-            payload = {
-                'context_id': context_id,
-                'project_generation': self._current_project_generation(),
-                'mapping_file_id': mapping['name'],
-                'mapping_sha256': mapping['sha256'],
-            }
-            if previous.get('ready') and previous.get('context_id') == context_id:
-                # A ready context is immutable: its id already includes the
-                # selected project's configuration file hashes. Re-sending
-                # apply_context as a periodic health check is unsafe because
-                # motion_run intentionally rejects configuration changes while
-                # initialization/playback is active. Treating that rejection as
-                # a node failure used to invalidate MIDI, motion_run and studio
-                # in the middle of recording. A changed file produces a new
-                # context_id and naturally takes the normal apply path below.
-                return self.execution_context_status()
-            if not previous.get('ready') or previous.get('context_id') != context_id:
-                self._set_execution_context_status(
-                    state='applying', ready=False, project_id=project_id,
-                    context_id=context_id, message='프로젝트 설정을 각 노드에 적용 중',
-                    context=context,
-                )
-            nodes = {
-                'motion_mapping': self._request_motion_mapping(
-                    'apply_context', payload, timeout_sec=2.0
-                ),
-                'midi_control': self._request_midi_monitor(
-                    'select_project', payload, timeout_sec=2.0
-                ),
-                'motion_run': self._request_motion_run(
-                    'apply_context', payload, timeout_sec=2.0
-                ),
-                'motion_studio': self._motion_studio_transport().request(
-                    'apply_context', payload, timeout_sec=2.0
-                ),
-            }
-            failed = {
-                name: str(result.get('message') or '응답 없음')
-                for name, result in nodes.items()
-                if not self._execution_context_ack_matches(
-                    result, context_id, project_id
-                )
-            }
-            if failed:
-                self._invalidate_execution_nodes(context_id)
-                self._set_execution_context_status(
-                    state='waiting_nodes', ready=False, nodes=nodes,
-                    message='필수 노드의 프로젝트 설정 적용 응답 대기 중',
-                    failures=failed,
-                )
-                return self.execution_context_status()
-
-            if not context.get('motor_applied'):
-                # The project files were accepted by every consumer above.
-                # Keep that project-scoped mapping and MIDI bank loaded while
-                # motor control remains blocked.  Invalidating here used to
-                # erase the MIDI node's project_id and restore its default
-                # Bank 1 once per reconciliation cycle, even though the saved
-                # project data itself was valid.
-                self._set_execution_context_status(
-                    state='motor_apply_required', ready=False,
-                    project_id=project_id, context_id=context_id,
-                    message='프로젝트 파일은 각 노드에 전달됐지만 모터축 설정 적용 및 재시작이 필요합니다',
-                    nodes=nodes, failures={}, context=context,
-                )
-                return self.execution_context_status()
-
-            with self._lock:
-                motion_state = copy.deepcopy(self._motion_state)
-            motor_runtime = motor_config_rules.runtime_service_status(
-                motion_state,
-                applied_motor_config_file=getattr(getattr(self, '_motor_config', None), 'applied', None),
-                repository=getattr(self, 'project_repository', None),
-                workspace_root=getattr(self, 'workspace_root', Path()),
-            )
-            motor_runtime.update({
-                'success': (
-                    self._runtime_project_id() == project_id
-                    and motor_runtime.get('phase') == 'ready'
-                ),
-                'project_id': self._runtime_project_id(),
-                'context_id': context_id,
-            })
-            nodes['motor_runtime'] = motor_runtime
-            if not motor_runtime['success']:
-                self._invalidate_execution_nodes(context_id)
-                self._set_execution_context_status(
-                    state='waiting_motor_runtime', ready=False, nodes=nodes,
-                    message='현재 프로젝트의 모터 관리 노드 상태 확인 대기 중',
-                    failures={'motor_runtime': str(motor_runtime.get('message') or '')},
-                )
-                return self.execution_context_status()
-
-            confirmations = {
-                'midi_control': self._request_midi_monitor(
-                    'confirm_context', payload, timeout_sec=2.0
-                ),
-                'motion_run': self._request_motion_run(
-                    'confirm_context', payload, timeout_sec=2.0
-                ),
-                'motion_studio': self._motion_studio_transport().request(
-                    'confirm_context', payload, timeout_sec=2.0
-                ),
-            }
-            confirm_failed = {
-                name: str(result.get('message') or '응답 없음')
-                for name, result in confirmations.items()
-                if not self._execution_context_ack_matches(
-                    result, context_id, project_id
-                )
-            }
-            nodes.update({f'{name}_confirm': value for name, value in confirmations.items()})
-            if confirm_failed:
-                self._invalidate_execution_nodes(context_id)
-                self._set_execution_context_status(
-                    state='waiting_nodes', ready=False, nodes=nodes,
-                    message='필수 노드의 제어 허용 확인 대기 중',
-                    failures=confirm_failed,
-                )
-                return self.execution_context_status()
-            self._set_execution_context_status(
-                state='ready', ready=True, nodes=nodes, failures={},
-                message='저장 설정과 실행 설정이 일치합니다 · 사용자 제어 가능',
-                verified_at=time.time(),
-            )
-            
-            # 부팅 시 자동 재생 (자동 반복 시작 핸들러 호출)
-            self._try_trigger_automation_resume()
-            
-            return self.execution_context_status()
-        finally:
-            self._execution_context_apply_lock.release()
-
     def _try_trigger_automation_resume(
         self, execution_context: Optional[Dict[str, Any]] = None
     ) -> None:
@@ -1651,7 +1353,7 @@ class MotionWebBridge(Node):
         context = (
             execution_context
             if isinstance(execution_context, dict)
-            else self.execution_context_status(validate_files=False)
+            else self._execution_context.status(validate_files=False)
         )
         if not context.get('ready'):
             return
@@ -1694,26 +1396,6 @@ class MotionWebBridge(Node):
             self.get_logger().warn(
                 f"자동 재생 트리거 대기 중: {res.get('message') if isinstance(res, dict) else res}"
             )
-
-    def _reconcile_execution_context_blocking(
-        self, *, timeout_sec: float = 10.0, poll_interval: float = 0.1,
-    ) -> Dict[str, Any]:
-        """Wait until project execution context is ready or a terminal state is reached."""
-        terminal_states = {
-            'ready', 'error', 'configuration_required', 'no_project',
-        }
-        deadline = time.monotonic() + max(float(timeout_sec), 0.0)
-        last_status = self.execution_context_status()
-        while time.monotonic() < deadline:
-            if self._execution_context_apply_lock.locked():
-                time.sleep(min(poll_interval, 0.05))
-                continue
-            last_status = self._reconcile_execution_context()
-            state = str(last_status.get('state') or '')
-            if state in terminal_states:
-                return last_status
-            time.sleep(poll_interval)
-        return last_status
 
     def _build_web_access_info(self) -> Dict[str, Any]:
         lan_ip = self.access_host or self._detect_lan_ip()
@@ -2199,13 +1881,13 @@ class MotionWebBridge(Node):
     def create_motion_project(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         self._ensure_project_change_allowed()
         previous_generation = self._current_project_generation()
-        self._execution_context_apply_lock.acquire()
+        self._execution_context._apply_lock.acquire()
         try:
             self._advance_project_generation()
-            self._invalidate_execution_nodes()
+            self._execution_context.invalidate_nodes()
             created = self.project_repository.create_project(payload.get('name'))
         finally:
-            self._execution_context_apply_lock.release()
+            self._execution_context._apply_lock.release()
         result = self.select_motion_project(created['project']['project_id'])
         result['previous_project_generation'] = previous_generation
         result['project_generation'] = self._current_project_generation()
@@ -2220,13 +1902,13 @@ class MotionWebBridge(Node):
                 '다른 프로젝트를 적용한 뒤 삭제하세요'
             )
         previous_generation = self._current_project_generation()
-        self._execution_context_apply_lock.acquire()
+        self._execution_context._apply_lock.acquire()
         try:
             self._advance_project_generation()
-            self._invalidate_execution_nodes()
+            self._execution_context.invalidate_nodes()
             result = self.project_repository.delete_project(project_id)
         finally:
-            self._execution_context_apply_lock.release()
+            self._execution_context._apply_lock.release()
         result['previous_project_generation'] = previous_generation
         result['project_generation'] = self._current_project_generation()
         if not self.project_repository.selected_project_id():
@@ -2274,7 +1956,7 @@ class MotionWebBridge(Node):
             return
 
     def _initialize_selected_project_context(self) -> None:
-        self._reconcile_execution_context()
+        self._execution_context.reconcile()
 
     def load_motion_project(self, project_id: Any) -> Dict[str, Any]:
         result = self.project_repository.get_project(project_id)
@@ -2288,11 +1970,11 @@ class MotionWebBridge(Node):
         )
         if changing_project:
             self._ensure_project_change_allowed()
-            self._execution_context_apply_lock.acquire()
+            self._execution_context._apply_lock.acquire()
         try:
             if changing_project:
                 self._advance_project_generation()
-                self._invalidate_execution_nodes()
+                self._execution_context.invalidate_nodes()
             result = self.project_repository.select_project(project_id)
             result['previous_project_generation'] = previous_generation
             result['project_generation'] = self._current_project_generation()
@@ -2304,20 +1986,20 @@ class MotionWebBridge(Node):
                 )
             else:
                 self._motor_config.selected = Path()
-            self._set_execution_context_status(
+            self._execution_context._set_status(
                 state='selected', ready=False, project_id=str(project_id), context_id='',
                 message='프로젝트 선택 완료 · 실행 컨텍스트 적용 대기 중', nodes={},
             )
         finally:
             if changing_project:
-                self._execution_context_apply_lock.release()
+                self._execution_context._apply_lock.release()
         policy_result = self.publish_servo_alarm_policy()
         if policy_result.get('success') is not True:
             raise ValueError(
                 '선택 프로젝트의 서보 에러 정책을 적용하지 못했습니다: '
                 f'{policy_result.get("message") or "응답 없음"}'
             )
-        result['execution_context'] = self._reconcile_execution_context()
+        result['execution_context'] = self._execution_context.reconcile()
         return result
 
     def servo_alarm_policy(self) -> Dict[str, Any]:
@@ -2595,7 +2277,7 @@ class MotionWebBridge(Node):
             # the MIDI axis registry and every other consumer on the previous
             # file hash. Reconcile the complete context after the repository
             # has confirmed the saved file and active-file selection.
-            execution_context = self._reconcile_execution_context()
+            execution_context = self._execution_context.reconcile()
             result['execution_context'] = execution_context
             result['runtime_applied'] = bool(execution_context.get('ready'))
             if result['runtime_applied']:
@@ -2994,7 +2676,7 @@ class MotionWebBridge(Node):
             'automation_start',
             'automation_disable',
         }:
-            request_payload['context_id'] = self._execution_context_id()
+            request_payload['context_id'] = self._execution_context.context_id()
         msg.data = json.dumps({
             'request_id': request_id,
             'project_generation': project_generation,
@@ -3015,7 +2697,12 @@ class MotionWebBridge(Node):
     def _motion_studio_transport(self) -> MotionStudioRosBridge:
         service = getattr(self, '_motion_studio_ros_bridge', None)
         if service is None:
-            service = MotionStudioRosBridge(self, self._motion_studio_session)
+            context = getattr(self, '_execution_context', None)
+            service = MotionStudioRosBridge(
+                self,
+                self._motion_studio_session,
+                context.context_id if context is not None else None,
+            )
             self._motion_studio_ros_bridge = service
         return service
 

@@ -1,8 +1,10 @@
 import json
 import threading
+from pathlib import Path
 
 import pytest
 
+from motion_web_bridge.execution_context_service import ExecutionContextService
 from motion_web_bridge.bridge_node import (
     MotionWebBridge,
     _project_tree_category_signature,
@@ -10,6 +12,24 @@ from motion_web_bridge.bridge_node import (
 from motion_web_bridge.motion_studio_session import MotionStudioSession
 from motion_web_bridge.motion_studio_sync import MotionStudioSync
 from motion_web_bridge.project_repository import ProjectRepository
+
+
+def _execution_context_of(bridge, **overrides):
+    """노드 스텁에 실행 컨텍스트 서비스를 붙인다 · §6-20으로 노드에서 떨어져 나왔다."""
+    service = getattr(bridge, '_execution_context', None)
+    if service is None:
+        service = ExecutionContextService(
+            bridge,
+            repository=getattr(bridge, 'project_repository', None),
+            workspace_root=getattr(bridge, 'workspace_root', Path('.')),
+        )
+        bridge._execution_context = service
+    repository = getattr(bridge, 'project_repository', None)
+    if repository is not None:
+        service.repository = repository
+    for name, value in overrides.items():
+        setattr(service, name, value)
+    return service
 
 
 class _StubTransport:
@@ -398,7 +418,7 @@ def test_motion_studio_stop_cancels_start_still_in_preparation():
     bridge._motion_studio_request_publisher = Publisher()
     bridge._new_project_request_id = lambda prefix: f'{prefix}-request'
     bridge._current_project_generation = lambda: 1
-    bridge._execution_context_id = lambda: 'context'
+    _execution_context_of(bridge).context_id = lambda: 'context'
     bridge.project_repository = type(
         'Repository',
         (),
@@ -440,7 +460,7 @@ def test_motion_studio_start_publishes_before_a_later_stop_generation():
     bridge._motion_studio_request_publisher = Publisher()
     bridge._new_project_request_id = lambda prefix: f'{prefix}-request'
     bridge._current_project_generation = lambda: 1
-    bridge._execution_context_id = lambda: 'context'
+    _execution_context_of(bridge).context_id = lambda: 'context'
     bridge.project_repository = type(
         'Repository',
         (),
