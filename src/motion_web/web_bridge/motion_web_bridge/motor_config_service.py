@@ -27,6 +27,8 @@ from typing import Any, Dict, Optional
 
 import yaml
 
+from motion_common import store
+
 from motion_web_bridge import (
     motion_file_analysis,
     motion_studio_session,
@@ -197,8 +199,9 @@ class MotorConfigService:
             while backup.exists():
                 backup = history_dir / f'{timestamp}-{counter}-{target.name}'
                 counter += 1
-            backup.write_text(target.read_text(encoding='utf-8'), encoding='utf-8')
-        target.write_text(content.rstrip() + '\n', encoding='utf-8')
+            store.atomic_write_text(backup, target.read_text(encoding='utf-8'))
+        # 원자적 교체 · 기록 도중 죽어도 모터 설정이 반쪽으로 남지 않는다 · §6-24
+        store.atomic_write_text(target, content.rstrip() + '\n')
         self.selected = target
         motor_config_rules.write_motor_config_selection(self.repository, target)
 

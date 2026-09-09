@@ -128,7 +128,7 @@ motion_system(C++)  모터 단일 통로                 유지 · 스캐너만 
 | 2 | `RequestChannel` 단일화 · 5곳 교체 · 토픽명·페이로드 형식 유지 | 낮음 | **완료** · `rpc.ResultStore` 4곳 · 전송 계약 불변 · 실물 미검증 |
 | 3 | 토픽 상수 단일화 · `motor_command_topic` 명칭 정정 | 낮음 | **완료** · `topics.py` 27종 · 리터럴 잔여 0 · launch 7개 로드 확인 |
 | 4 | `bridge_node` 분해 · 서비스 6개 | 중간 | **완료**(기준 A · §6-23) · 7,407 → 2,037줄(-73%) · 목표안 서비스 6개 + 추가 3개 신설 · 잔여 1,537줄은 노드 고유(구성·상태 취합·전송) |
-| 5 | 영속 계층 통합 · 단일 저장 API + 파일락 · 다중 writer 제거 | 중간 | **부분 완료** · `store.py` 5종 통합 · 직접 기록 모듈 잔존 · 2개 프로젝트 격리 미검증 |
+| 5 | 영속 계층 통합 · 단일 저장 API + 파일락 · 다중 writer 제거 | 중간 | **완료**(§6-24) · 직접 기록 잔여 0 · 재진입 락 · 다중 writer 4곳 잠금 · mtime 폴링은 6단계에서 |
 | 6 | 장기작업 Action 전환 · 스캔·초기화·모션 실행 | 중간 | 진행률·취소 실물 검증 |
 | 7 | 프런트엔드 빌드 도입(해시 파일명) · CSS·HTML 분할 | 중간 | 브라우저 캐시 확인 |
 | 8 | 하드웨어 스캐너 분리 · `motion_system` 범위 협의 후 | 높음 | 모터 스캔 계약 + 실물 검증 |
@@ -1197,6 +1197,80 @@ f(self)               ← self 통째로 넘기기
   판정이 서비스 안에서 동작한다
 - 실물 미검증 · 프로젝트 전환·생성·삭제 · 가동 중 프로젝트를 바꿔야 한다
 - 실물 미검증 · 프로젝트 파일 저장·이름변경·복사·가져오기·삭제
+
+### 6-24. 영속 계층 통합 · 5단계 · 직접 기록 0 · 다중 writer 락
+
+§3-4가 지적한 세 가지를 모두 처리했다.
+
+#### ① 직접 기록 모듈 · 프로덕션 잔여 **0**
+
+| 모듈 | 이전 | 이후 |
+|---|---|---|
+| `motion_automation_store` | 자체 임시파일+`replace` (fsync 없음) | `store.atomic_write_json` |
+| `project_repository._atomic_write` | 자체 구현 | `store.atomic_write_text` + 락 |
+| `motor_config_service._write` | `target.write_text` · **원자성 없음** | `store.atomic_write_text` |
+| `motor_event_log.prune` | `write_bytes` | `store.atomic_write_text` |
+| `motor_config_rules` 선택 파일 | `write_text` | `store.atomic_write_text` |
+| `midi_bank_store` 백업 | `write_text` | `store.atomic_write_text` |
+| `desktop_shortcut` | `NamedTemporaryFile`+`chmod`+`replace` 15줄 | `store.atomic_write_text(mode=0o755)` |
+
+**모터축 설정 저장이 원자적이지 않았다.** `target.write_text`는 기록 도중 죽으면
+반쪽 파일을 남긴다 · 모터 설정이 그렇게 깨지면 다음 기동이 실패한다.
+
+#### ② 파일락을 재진입 가능하게 · 이것이 전제였다
+
+`flock`은 **파일 서술자 단위**다. 같은 프로세스가 다른 서술자로 다시 잠그면
+자기 자신을 기다리며 멈춘다. 저장 API가 서로를 감싸는 구조(예: `save_midi_banks`
+안에서 `atomic_write_with_backup`)에서 실제로 걸린다.
+
+`store.file_lock`을 고쳤다.
+
+- 경로마다 프로세스 안 `threading.RLock` · 같은 스레드는 재진입, 다른 스레드는 대기
+- 이미 `flock`을 잡은 경로면 다시 걸지 않는다 · 스레드별 깊이 계수
+- 프로세스 사이는 여전히 `flock`이 막는다
+
+검증 3건 추가 · 중첩 진입 · 다른 스레드 직렬화 · 4스레드 × 25회 증가에서
+갱신 손실 0(`test_store.py`).
+
+#### ③ 다중 writer에 락을 걸었다
+
+모션축 설정 파일(`motion_axis_matching`)을 **두 프로세스가 쓴다** ·
+`project_repository`(web_bridge) ↔ `motion_mapping_manager`(motion_runtime).
+
+원자적 기록만으로는 찢긴 읽기만 막는다. 각자 읽고 각자 쓰면 나중 기록이 앞선
+수정을 지운다. 읽기-수정-기록 구간을 감쌌다.
+
+- `project_repository._atomic_write` · `locked_update`
+- `midi_bank_store.atomic_write_with_backup` · `locked_update`
+- `midi_bank_store.save_midi_banks` · 읽기부터 감싼다 (중첩 · 재진입 필요)
+- `motion_mapping_manager._save_mapping` · MIDI 구간 병합부터 감싼다
+
+#### 락 파일을 숨김 이름으로 바꿨다 · 규약 변경
+
+`<이름>.lock` → **`.<이름>.lock`**
+
+락 파일은 프로젝트 데이터 디렉터리 안에 생긴다. 프로젝트 파일 전체에 락을 걸자
+`layers/`·`motions/`에 락 파일이 쌓였고, **활성 파일 판정이 `.hello.json.lock`을
+사용자 파일로 골랐다.** 테스트가 잡았다.
+
+두 가지를 함께 고쳤다.
+
+- 락 파일을 숨김 이름으로
+- `project_repository`의 파일 열거 4곳에 `_is_user_file()` 적용 ·
+  숨김 파일과 심볼릭 링크 제외
+
+기존 `schedule_store.json.lock`은 고아가 된다 · 무해하며 지워도 된다.
+
+#### 남은 것
+
+`check_and_reload()` mtime 폴링은 그대로다. 웹이 바꾼 것을 노드가 알아채는
+수단이 폴링뿐이기 때문이다 · 알림 채널은 6단계(Action 전환)에서 함께 볼 일이다.
+
+#### 검증
+
+- 코드 검증 · `ruff check src` 55건 유지 · 신규 0건
+- 실행 검증 · `pytest` **1,008건 통과** · 실패 0 · 락 검증 3건 신규
+- 실물 검증 · 아래 별도 기록
 
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 

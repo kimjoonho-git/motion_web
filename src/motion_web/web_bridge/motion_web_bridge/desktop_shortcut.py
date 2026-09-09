@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import os
 import subprocess
-import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ament_index_python.packages import get_package_share_directory
+
+from motion_common import store
 
 #: 바탕화면에 놓이는 파일 이름 · 화면 표기와 같다
 SHORTCUT_FILENAME = '모션 프로그램 열기.desktop'
@@ -86,25 +87,13 @@ def create_desktop_shortcut(workspace_root: Optional[Path] = None) -> Dict[str, 
             and bool(destination.stat().st_mode & 0o111)
         )
         if not already_installed:
-            temporary_path: Optional[Path] = None
-            try:
-                with tempfile.NamedTemporaryFile(
-                    dir=desktop,
-                    prefix='.motion-program-',
-                    suffix='.desktop',
-                    delete=False,
-                ) as temporary:
-                    temporary.write(launcher_data)
-                    temporary_path = Path(temporary.name)
-                temporary_path.chmod(0o755)
-                os.replace(temporary_path, destination)
-                temporary_path = None
-            finally:
-                if temporary_path is not None:
-                    temporary_path.unlink(missing_ok=True)
+            # 공용 저장 API 단일 경로 · 임시파일 정리와 실행 권한까지 맡긴다 · §6-24
+            store.atomic_write_text(
+                destination, launcher_data.decode('utf-8'), mode=0o755
+            )
         else:
             destination.chmod(destination.stat().st_mode | 0o111)
-    except (OSError, ValueError) as exc:
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
         return {
             'success': False,
             'message': f'바탕화면 바로가기를 만들 수 없습니다: {exc}',

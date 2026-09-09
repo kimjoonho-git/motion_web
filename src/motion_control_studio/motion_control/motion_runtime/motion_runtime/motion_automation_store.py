@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 import math
 import time
-import uuid
+
+from motion_common import store
 from pathlib import Path
 from typing import Any, Dict
 
@@ -83,15 +84,8 @@ class MotionAutomationStore:
         state = normalize_automation_state(value)
         state['updated_at'] = time.time()
         path = self._state_path(project_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_name(f'.{path.name}.{uuid.uuid4().hex}.tmp')
-        text = json.dumps(state, ensure_ascii=False, indent=2) + '\n'
-        try:
-            temporary.write_text(text, encoding='utf-8')
-            temporary.replace(path)
-        finally:
-            if temporary.exists():
-                temporary.unlink()
+        # 공용 저장 API가 fsync까지 하고 실패 시 임시파일을 지운다 · §6-24
+        store.atomic_write_json(path, state)
         return dict(state)
 
     def _state_path(self, project_id: Any) -> Path:

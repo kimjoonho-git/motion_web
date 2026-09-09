@@ -18,9 +18,10 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Iterator, Optional, Union
+from typing import Any, Callable, Dict, Iterator, Optional, Union
 
 __all__ = [
     'LOCK_SUFFIX',
@@ -152,9 +153,43 @@ def read_json(path: PathLike, default: Any = None) -> Any:
 # --------------------------------------------------------------------------- #
 
 def lock_path_for(path: PathLike) -> Path:
-    """대상 파일에 대응하는 락 파일 경로 · 기존 규약 ``<이름>.lock``을 따른다."""
+    """대상 파일에 대응하는 락 파일 경로 · ``.<이름>.lock``.
+
+    **숨김 이름을 쓴다.** 락 파일은 프로젝트 데이터 디렉터리 안에 생기는데,
+    화면의 파일 목록과 해시 계산이 그것을 사용자 파일로 세면 안 된다 · §6-24
+    목록 쪽은 이미 `.`으로 시작하는 이름을 거른다.
+
+    두 프로세스가 같은 함수로 경로를 얻으므로 규약은 저절로 맞는다.
+    """
     target = Path(path)
-    return target.parent / f'{target.name}{LOCK_SUFFIX}'
+    return target.parent / f'.{target.name}{LOCK_SUFFIX}'
+
+
+#: 같은 프로세스 안에서 경로마다 하나씩 두는 재진입 락.
+#: `flock`은 **파일 서술자 단위**라 같은 프로세스가 다른 서술자로 다시 잠그면
+#: 자기 자신을 기다리며 멈춘다. 프로세스 안쪽은 이 락이 막고, 프로세스 사이는
+#: `flock`이 막는다.
+_process_locks: Dict[str, threading.RLock] = {}
+_process_locks_guard = threading.Lock()
+#: 이 스레드가 이미 `flock`을 잡고 있는 경로 · 중첩 호출을 알아보기 위한 표시
+_thread_state = threading.local()
+
+
+def _process_lock_for(key: str) -> threading.RLock:
+    with _process_locks_guard:
+        lock = _process_locks.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _process_locks[key] = lock
+        return lock
+
+
+def _flocked_paths() -> Dict[str, int]:
+    held = getattr(_thread_state, 'held', None)
+    if held is None:
+        held = {}
+        _thread_state.held = held
+    return held
 
 
 @contextmanager
@@ -164,29 +199,48 @@ def file_lock(path: PathLike, *, exclusive: bool = True) -> Iterator[None]:
     잠금 대상은 대상 파일 자체가 아니라 옆에 둔 ``<이름>.lock``이다. 대상 파일은
     ``os.replace``로 교체되므로 inode가 바뀌어 직접 잠그면 락이 풀린다.
 
+    **재진입 가능하다.** 같은 스레드가 같은 경로를 다시 잠그면 `flock`을 다시
+    걸지 않고 그대로 진행한다. `flock`은 서술자 단위라 다시 걸면 자기 자신을
+    기다리며 멈추기 때문이다 · 저장 API가 서로를 감싸는 구조에서 실제로 걸린다.
+
     락 파일을 만들지 못하는 환경(읽기 전용 디렉터리 등)에서는 잠금 없이 진행한다 ·
     기록 자체는 원자적이므로 읽는 쪽이 깨진 내용을 보는 일은 없다.
     """
-    if fcntl is None:
-        yield
-        return
+    key = str(Path(path).resolve() if Path(path).parent.exists() else Path(path))
+    process_lock = _process_lock_for(key)
+    with process_lock:
+        held = _flocked_paths()
+        if fcntl is None or held.get(key):
+            # 잠금 불가 환경이거나 이미 이 스레드가 잡고 있다 · 중첩 진입
+            if fcntl is not None:
+                held[key] = held.get(key, 0) + 1
+            try:
+                yield
+            finally:
+                if fcntl is not None:
+                    held[key] -= 1
+                    if not held[key]:
+                        held.pop(key, None)
+            return
 
-    lock_file = lock_path_for(path)
-    try:
-        lock_file.parent.mkdir(parents=True, exist_ok=True)
-        handle = lock_file.open('a+', encoding='utf-8')
-    except OSError:
-        yield
-        return
-
-    try:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+        lock_file = lock_path_for(path)
         try:
+            lock_file.parent.mkdir(parents=True, exist_ok=True)
+            handle = lock_file.open('a+', encoding='utf-8')
+        except OSError:
             yield
+            return
+
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+            held[key] = 1
+            try:
+                yield
+            finally:
+                held.pop(key, None)
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
         finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-    finally:
-        handle.close()
+            handle.close()
 
 
 @contextmanager

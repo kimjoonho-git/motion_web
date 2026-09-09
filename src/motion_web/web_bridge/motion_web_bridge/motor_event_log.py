@@ -21,6 +21,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from motion_common import store
 from motion_common.values import optional_int
 
 
@@ -305,8 +306,11 @@ class MotorEventLog:
                 while encoded_lines and encoded_size > self.max_bytes:
                     encoded_size -= len(encoded_lines.pop(0))
                 try:
-                    newest.write_bytes(b''.join(encoded_lines))
-                except OSError:
+                    # 원자적 교체 · 정리 도중 죽어도 로그가 잘리지 않는다 · §6-24
+                    store.atomic_write_text(
+                        newest, b''.join(encoded_lines).decode('utf-8')
+                    )
+                except (OSError, UnicodeDecodeError):
                     pass
 
     def clear(self) -> Dict[str, Any]:

@@ -1,5 +1,6 @@
 """파일 기록 단일 구현 검증 · atomic write + 파일락."""
 
+import threading
 import json
 import multiprocessing
 import os
@@ -133,10 +134,16 @@ def test_lock_falls_back_to_no_locking_without_fcntl(tmp_path, monkeypatch):
     assert not store.lock_path_for(target).exists()
 
 
-def test_lock_path_follows_existing_convention(tmp_path):
-    assert store.lock_path_for(tmp_path / 'schedule_store.json').name == (
-        'schedule_store.json.lock'
-    )
+def test_lock_path_is_hidden_beside_the_target(tmp_path):
+    """락 파일은 숨김 이름이어야 한다.
+
+    프로젝트 데이터 디렉터리 안에 생기므로, 화면 파일 목록과 활성 파일 판정이
+    이것을 사용자 파일로 세면 안 된다 · §6-24에서 `<이름>.lock`에서 바꿨다.
+    """
+    lock = store.lock_path_for(tmp_path / 'schedule_store.json')
+    assert lock.name == '.schedule_store.json.lock'
+    assert lock.name.startswith('.')
+    assert lock.parent == tmp_path
 
 
 def test_lock_is_reentrant_across_sequential_uses(tmp_path):
@@ -193,3 +200,73 @@ def test_update_json_applies_mutation_under_lock(tmp_path):
     result = store.update_json(target, lambda current: (current or []) + ['a'], default=[])
     assert result == ['a']
     assert store.read_json(target) == ['a']
+
+
+# --------------------------------------------------------------------------- #
+# 재진입과 경합 · §6-24
+# --------------------------------------------------------------------------- #
+
+def test_file_lock_is_reentrant_within_one_thread(tmp_path):
+    """저장 API가 서로를 감싸도 멈추지 않아야 한다.
+
+    `flock`은 파일 서술자 단위라 같은 프로세스가 다른 서술자로 다시 잠그면
+    자기 자신을 기다리며 멈춘다. 실제로 `locked_update` 안에서 다시
+    `locked_update`를 부르는 구조가 생긴다.
+    """
+    target = tmp_path / 'nested.json'
+    with store.locked_update(target):
+        with store.locked_update(target):
+            store.atomic_write_json(target, {'depth': 2})
+    assert store.read_json(target) == {'depth': 2}
+
+
+def test_file_lock_serializes_other_threads(tmp_path):
+    """재진입을 허용해도 다른 스레드는 여전히 기다려야 한다."""
+    target = tmp_path / 'serialized.json'
+    order = []
+    entered = threading.Event()
+    release = threading.Event()
+
+    def first():
+        with store.locked_update(target):
+            order.append('first-in')
+            entered.set()
+            release.wait(timeout=5.0)
+            order.append('first-out')
+
+    def second():
+        entered.wait(timeout=5.0)
+        release.set()
+        with store.locked_update(target):
+            order.append('second-in')
+
+    threads = [threading.Thread(target=first), threading.Thread(target=second)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10.0)
+
+    assert order == ['first-in', 'first-out', 'second-in']
+
+
+def test_locked_update_prevents_lost_update(tmp_path):
+    """읽고-고치고-쓰는 구간을 감싸면 나중 기록이 앞선 수정을 지우지 않는다."""
+    target = tmp_path / 'counter.json'
+    store.atomic_write_json(target, {'count': 0})
+    barrier = threading.Barrier(4)
+
+    def bump():
+        barrier.wait(timeout=5.0)
+        for _ in range(25):
+            with store.locked_update(target):
+                current = store.read_json(target, {'count': 0})
+                current['count'] = int(current['count']) + 1
+                store.atomic_write_json(target, current)
+
+    threads = [threading.Thread(target=bump) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=20.0)
+
+    assert store.read_json(target)['count'] == 100

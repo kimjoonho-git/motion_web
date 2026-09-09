@@ -22,6 +22,8 @@ from typing import Any, Dict, Iterable, Optional
 
 import yaml
 
+from motion_common import store
+
 from .motor_identity import missing_ethercat_identity
 
 
@@ -80,6 +82,15 @@ def _studio_layer_signature(layer_hashes: Dict[str, str]) -> str:
     return _sha256(
         json.dumps(rows, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
     )
+
+
+def _is_user_file(path: Path) -> bool:
+    """사용자 파일인가 · 숨김 파일과 심볼릭 링크는 제외한다.
+
+    프로세스 간 락이 대상 파일 옆에 `.<이름>.lock`을 만든다(§6-24). 그것을
+    사용자 파일로 세면 목록·활성 파일 판정·해시 계산이 전부 어긋난다.
+    """
+    return path.is_file() and not path.is_symlink() and not path.name.startswith('.')
 
 
 def _text_limit(category: str) -> tuple[int, str]:
@@ -310,7 +321,8 @@ class ProjectRepository:
                 remaining = sorted(
                     path.name
                     for path in (project_dir / 'motion_axis_matching').iterdir()
-                    if path.is_file() and path.suffix.lower() in ('.yaml', '.yml')
+                    if _is_user_file(path)
+                    and path.suffix.lower() in ('.yaml', '.yml')
                 )
                 active['motion_axis_matching'] = remaining[0] if remaining else ''
             manifest['updated_at'] = time.time()
@@ -1134,7 +1146,7 @@ class ProjectRepository:
         if was_active:
             remaining = sorted(
                 path.name for path in (project_dir / safe_category).iterdir()
-                if path.is_file() and not path.is_symlink()
+                if _is_user_file(path)
             )
             if remaining:
                 replacement = remaining[0]
@@ -1623,7 +1635,7 @@ class ProjectRepository:
         hashed_file_count = 0
         reused_hash_count = 0
         for path in (project_dir / 'layers').iterdir():
-            if not path.is_file() or path.is_symlink():
+            if not _is_user_file(path):
                 continue
             stat = path.stat()
             cached = cached_files.get(path.name)
@@ -1903,7 +1915,8 @@ class ProjectRepository:
             'motion_axis_count': motion_axis_count,
             'motion_axes_configured': motion_axis_count > 0,
             'motion_count': sum(
-                1 for path in (project_dir / 'motions').iterdir() if path.is_file()
+                1 for path in (project_dir / 'motions').iterdir()
+                if _is_user_file(path)
             ),
         }
 
@@ -2056,9 +2069,14 @@ class ProjectRepository:
 
     @staticmethod
     def _atomic_write(path: Path, content: str) -> None:
-        temporary = path.with_name(f'.{path.name}.{uuid.uuid4().hex}.tmp')
-        temporary.write_text(content, encoding='utf-8')
-        temporary.replace(path)
+        """프로젝트 파일 기록 · 프로세스 간 락 안에서 원자적으로 (§6-24).
+
+        같은 파일을 `motion_mapping_manager`(motion_runtime 프로세스)도 쓴다.
+        원자적 기록만으로는 찢긴 읽기만 막을 뿐, 각자 읽고 각자 쓰면 나중
+        기록이 앞선 수정을 지운다. 두 쪽이 같은 락 파일에서 만나야 한다.
+        """
+        with store.locked_update(path):
+            store.atomic_write_text(path, content)
 
     @staticmethod
     def _empty_motor_config() -> Dict[str, Any]:

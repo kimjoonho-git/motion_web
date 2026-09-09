@@ -14,6 +14,7 @@ from rclpy.node import Node
 from std_msgs.msg import String
 
 from motion_common import command_router, generation, topics, values
+from motion_common import store as common_store
 from motion_runtime.midi_bank_store import (
     atomic_write_with_backup,
     load_midi_banks,
@@ -336,18 +337,21 @@ class MotionMappingManager(Node):
                 '목록을 새로고침하세요'
             )
         path = self._new_or_existing_mapping_path(file_id, mapping.get('name'))
-        midi_banks = self._midi_banks_from_file(source_path or path)
-        if midi_banks is not None:
-            # MIDI owns this section. A normal motion-axis mapping save must
-            # preserve it even though it is not part of mapping validation.
-            mapping['midi_banks'] = midi_banks
-        mapping['file_id'] = path.name
-        content = yaml.safe_dump(mapping, sort_keys=False, allow_unicode=True)
-        backup = atomic_write_with_backup(
-            path,
-            content,
-            self.mappings_dir.parent / 'runtime' / 'history' / 'motion_axis_matching',
-        )
+        # MIDI 구간을 읽어 합치고 기록하는 동안 다른 기록이 끼어들면 뱅크가
+        # 되돌아간다 · 읽기부터 기록까지 한 락 안에서 한다 (§6-24)
+        with common_store.locked_update(path):
+            midi_banks = self._midi_banks_from_file(source_path or path)
+            if midi_banks is not None:
+                # MIDI owns this section. A normal motion-axis mapping save must
+                # preserve it even though it is not part of mapping validation.
+                mapping['midi_banks'] = midi_banks
+            mapping['file_id'] = path.name
+            content = yaml.safe_dump(mapping, sort_keys=False, allow_unicode=True)
+            backup = atomic_write_with_backup(
+                path,
+                content,
+                self.mappings_dir.parent / 'runtime' / 'history' / 'motion_axis_matching',
+            )
 
         return {
             **self._list_mappings(),

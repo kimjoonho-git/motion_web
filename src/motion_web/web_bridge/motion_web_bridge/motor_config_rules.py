@@ -18,6 +18,7 @@ from pathlib import Path
 from urllib.parse import quote
 from typing import Any, Dict, List, Optional
 
+from motion_common import store
 from motion_common.values import optional_float, optional_int
 
 
@@ -706,8 +707,7 @@ def write_motor_config_selection(repository, path: Path) -> None:
         raise ValueError('통합 프로젝트를 먼저 선택하세요')
     project = repository.get_project(project_id)['project']
     selection_file = Path(project['path']) / 'runtime' / 'selected_motor_config_path.txt'
-    selection_file.parent.mkdir(parents=True, exist_ok=True)
-    selection_file.write_text(str(path) + '\n', encoding='utf-8')
+    store.atomic_write_text(selection_file, str(path) + '\n')
 
 
 def clear_motor_config_selection(repository) -> None:
