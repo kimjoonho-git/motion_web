@@ -1031,7 +1031,16 @@ project_comparison: compatible true · required [0] · unused [1]
 
 - 코드 검증 · `ruff check src` 55건 유지 · 신규 0건
 - 실행 검증 · `pytest` 1,005건 통과 · 실패 0
-- 실물 검증 · 아래 별도 기록
+- 실물 검증 · `colcon build` · 재시작 · **`reconcile`이 전체 적용 사이클을 돌았다**
+
+```
+state ready · control_allowed True · context_id 4a5d43b3d5097ecd7f9a9fc5…
+motion_mapping True · midi_control True · motion_run True · motion_studio True
+motor_runtime True · midi_control_confirm True · motion_run_confirm True
+motion_studio_confirm True
+```
+
+노드 4개 적용과 확인 4건이 모두 성공했다 · 엔드포인트 8종 HTTP 200
 
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
