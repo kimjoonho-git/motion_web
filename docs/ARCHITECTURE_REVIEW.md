@@ -1866,6 +1866,112 @@ Slave뿐이라 그렇다. **이번 분해 이전부터 그랬다**(`git log -S`�
 드러나지 않는다. 등록 후에는 `미등록`/`누락` 판정이 필요해진다 · **별도 항목으로
 남긴다** · 이번 범위 밖이다.
 
+### 6-34. `motor_values` 신설 · 같은 것과 다른 것을 가른다
+
+`MotionStateMonitor` 1,675 → **1,549줄**
+
+변환 함수 13개와 라벨 상수 2개를 순수 함수 모듈로 뺐다. 핵심은 옮긴 것이 아니라
+**두 가지를 구분한 것**이다.
+
+| 이름 | 판단 | 근거 |
+| --- | --- | --- |
+| `_parse_int` | **합쳤다** → `motion_common.values.optional_int` | `int(str(v), 0)` · `None`·`''` 처리까지 완전히 같다 |
+| `_optional_float` | **합치지 않았다** → `unchecked_float`로 개명 | `inf`·`nan`을 통과시킨다 · `values.optional_float`은 막는다 |
+
+`_optional_float`를 그냥 `optional_float`로 바꿨다면 `inf`가 들어오던 자리에서
+조용히 `None`이 됐을 것이다. **동작이 바뀌는 통합은 통합이 아니다.** §6-5의
+'의도적으로 흡수하지 않은 변형'에 한 줄 더 붙는다.
+
+이름을 `unchecked_float`으로 바꾼 이유도 같다 · 다음 사람이 `optional_float`와
+같은 것으로 오해하지 않게 차이를 이름에 새겼다.
+
+#### 새 함정 · 이미 떼어낸 모듈이 노드를 되부른다
+
+`ethercat_scanner`가 `self.monitor._parse_int(...)`를 16곳에서 부르고 있었다.
+**노드 파일만 보면 안 보인다** · 노드에서 메서드를 지우자 이미 분리된 모듈이
+깨졌다. 시험이 잡았다.
+
+**절차에 추가한다 · 메서드를 옮길 때는 패키지 전체를 grep한다.** 분해가 진행될수록
+`self.monitor.<노드메서드>` 형태의 역참조가 늘어난다.
+
+#### 지역 변수와 이름이 겹치면 조용히 가려진다
+
+`pulse_per_revolution`을 import했더니 `_motor_from_status` 안의 지역 변수와
+겹쳐 `F811`이 났다. **노드가 쓰지 않는 이름은 아예 가져오지 않는 것으로 정리했다** ·
+§6-30에서 `values.finite_float` 때 겪은 것과 같은 종류다.
+
+#### 미사용 2건 · 삭제하지 않았다
+
+`pulse_per_revolution`과 `counts_to_degrees`는 호출부가 없다. 삭제는 판단이
+필요하므로 그대로 옮겨두었다 · **정리 대상으로 남긴다.**
+
+### 6-35. `connection_state` 신설 · 판정과 상태를 나눈다
+
+`MotionStateMonitor` 1,549 → **1,297줄** · 메서드 43 → 30 · 클래스 1,212줄
+
+연결 판정 규칙 5개는 **순수 함수**로, 확정 지연을 재는 것만 **상태를 가진 클래스**로
+갈랐다.
+
+- `set_connection_fields` · `set_physical_connection_fields` ·
+  `connection_message` · `connection_summary` · `build_scan_connection_rows`
+- `CommunicationHealth` · 축별 실패·복구 확정을 지연 판정한다 ·
+  `_communication_health` 사전을 갖는다
+
+**상태는 그 상태를 쓰는 것과 같이 옮긴다**는 규칙 그대로다.
+
+#### 시한 두 개는 붙잡지 않았다
+
+`connection_loss_confirm_sec` · `connection_recovery_confirm_sec`은 노드
+파라미터다. `CommunicationHealth`가 생성 시점에 값으로 붙잡으면 나중에 바뀐 값이
+반영되지 않는다 · **부를 때마다 노드에서 읽는다** · §6-11에서 두 번 데인 것이다.
+
+`_last_ethercat_physical_scan`은 반대로 **인자로 바꿨다** · 호출 직전에 읽어
+넘기므로 시점이 같다.
+
+#### 이번에 새로 만든 함정 · `(self, ` 일괄 치환
+
+인스턴스 메서드를 모듈 함수로 바꾸며 `(self, `를 `(`로 일괄 치환했더니
+`getattr(self, '_last_ethercat_physical_scan', {})`까지 먹혀
+`getattr('_last_ethercat_physical_scan', {})`가 됐다.
+
+**인자 두 개짜리 `getattr`는 구문 오류가 아니다** · 첫 인자를 객체로 보고
+실행 시점에야 `TypeError`를 낸다. 시험이 잡았다.
+
+**교훈** · 일괄 치환은 `def` 줄과 `self.` 접두만 대상으로 삼고, `self`를 **인자로
+받는 내장 함수**(`getattr`·`setattr`·`hasattr`·`isinstance`)는 먼저 걸러야 한다.
+지금까지의 '이름 다섯 형태'가 *읽는* 쪽 함정이었다면 이것은 *쓰는* 쪽 함정이다.
+
+#### 검증
+
+- 코드 검증 · `ruff check src` 55건 유지 · 신규 0건
+- 실행 검증 · `pytest` 1,013건 통과
+- 실물 검증 · **AC Servo 실기 · 발행 토픽과 스캔 응답 양쪽 확인**
+
+`/motion_control/motion_state` 수신 원문에서 확인한 값이다.
+
+```
+connection_summary   total 1 · online 1 · confirmed 1 · all_online true
+connection_state     online · confirmed true · source runtime_topic
+connection_message   모터 런타임 피드백이 정상 수신 중입니다.
+physical_connection  unknown · confirmed false
+                     "Master 1: 재스캔 후 응답한 Slave가 없습니다"
+status_text          Operation enabled   ← statusword 1591 = 0x0637
+errorcode_hex        0x0000              ← hex16
+error_text           No error            ← error_text
+motor_type_label     AC Servo            ← motor_type_label
+transport_label      EtherCAT            ← transport_label
+position_deg         -124.68 (실시간 갱신)
+```
+
+스캔 응답의 `connection_rows`·`connection_summary`도 같이 확인했다 ·
+`discovery_state detected` · `통신 버스 검색에서 모터가 확인되었습니다`.
+
+**회귀 아님을 확인한 것** · 스캔 응답의 `connected_axes`·`known_axes`에는
+`physical_connection_*`이 실리지 않는다(`None`). §6-33 이전에 받아둔 응답에도
+같아서 이번 변경과 무관하다 · `_build_scan_result`가 `_current_motor_list`를
+`_last_ethercat_physical_scan` 갱신보다 **먼저** 부르는 순서 때문이다 ·
+**별도 항목으로 남긴다.**
+
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
 - 파일 1,000줄 이하 · 함수 60줄 이하 · `Node` 서브클래스 500줄 이하
