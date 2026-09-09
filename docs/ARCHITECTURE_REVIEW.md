@@ -1689,6 +1689,51 @@ f(self)                 self를 통째로 넘기기
 - 실물 검증 · **실제 재생 확인** · 작업자가 화면에서 돌렸고 정상 동작 ·
   899줄을 옮긴 재생 경로가 그대로 산다
 
+### 6-32. `EthercatScanner` 신설 · 물리 스캔을 노드 밖으로
+
+`MotionStateMonitor` 2,884 → **2,131줄** · 메서드 78 → 65
+
+§5 `monitor_node` 분해 목표 셋 중 첫째다.
+
+#### 모터 스캔 영구 불변조건을 그대로 지켰다
+
+`AGENTS.md`가 세션·재시작을 넘어 유지하라고 못박은 조건이다. **명령도 순서도
+판정도 바꾸지 않았다.**
+
+- `전체 모터 검색`은 여전히 `ethercat rescan`으로 기존 열거정보를 폐기한 뒤
+  Slave를 다시 열거한다
+- 각 Slave의 SII EEPROM과 Alias 레지스터를 읽는다
+- 물리 응답이 없으면 이전 값을 쓰지 않고 실패로 남긴다
+
+`motion_system` 안으로 옮기는 것(§5 8단계)은 별개다 · 여기서는 노드 밖 모듈로만 뺐다.
+
+#### 옮긴 것 · 13메서드 753줄
+
+`_scan_ethercat_slaves` 360 · `_poll_ethercat_bus_status` 123 ·
+`_read_station_alias_register` 66 · `_parse_ethercat_slaves` 50 ·
+`_read_sii_identity` 43 · 그 외 8개
+
+서비스가 갖는 것 · 마지막 버스 상태(`status`)와 그 시각(`last_status_at`).
+
+#### 놓칠 뻔한 것 · `@staticmethod`
+
+옮기면서 데코레이터를 일괄로 떼었는데 **원래 정적이던 둘**(`_skipped_ethercat_scan` ·
+`_parse_sii_identity`)까지 떼여 `self`가 첫 인자를 먹었다. 시험이 잡았다.
+
+원본에서 데코레이터 목록을 다시 읽어 복원했다. **이름 다섯 형태에 이어 여섯 번째
+주의점이다 · 메서드의 종류(`staticmethod`·`classmethod`·`property`)도 따라가야 한다.**
+
+#### 테스트 monkeypatch 대상도 이동
+
+`motion_state_monitor.monitor_node.subprocess.run` → `...ethercat_scanner.subprocess.run` ·
+§6-22에서 같은 일을 겪었다 · 모듈 경로 문자열 패치는 코드가 옮겨가면 조용히 어긋난다.
+
+#### 검증
+
+- 코드 검증 · `ruff check src` 55건 유지 · 신규 0건
+- 실행 검증 · `pytest` 1,013건 통과 · 실패 0 · EtherCAT 스캔 계약 시험 그대로 통과
+- 실물 검증 · 아래 별도 기록
+
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
 - 파일 1,000줄 이하 · 함수 60줄 이하 · `Node` 서브클래스 500줄 이하

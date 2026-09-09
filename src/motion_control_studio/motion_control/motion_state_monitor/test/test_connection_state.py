@@ -5,12 +5,15 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from motion_state_monitor.ethercat_scanner import EthercatScanner
 from motion_state_monitor.monitor_node import MotionStateMonitor
 
 
 class ConnectionStateTest(unittest.TestCase):
     def setUp(self):
         self.monitor = object.__new__(MotionStateMonitor)
+        # EtherCAT 스캔은 별도 객체가 맡는다 (§6-32)
+        self.monitor._ethercat = EthercatScanner(self.monitor)
         self.monitor.connection_loss_confirm_sec = 1.0
         self.monitor.connection_recovery_confirm_sec = 0.5
         self.monitor._communication_health = {}
@@ -177,7 +180,7 @@ class ConnectionStateTest(unittest.TestCase):
         data[24:28] = (1).to_bytes(4, 'little')
         data[28:32] = (0x24121207).to_bytes(4, 'little')
 
-        identity = self.monitor._parse_sii_identity(bytes(data))
+        identity = self.monitor._ethercat._parse_sii_identity(bytes(data))
 
         self.assertEqual(identity['ethercat_alias'], 0)
         self.assertEqual(identity['vendor_id'], 0x0000066F)
@@ -231,11 +234,11 @@ class ConnectionStateTest(unittest.TestCase):
         self.monitor.monitoring_enabled = True
         self.monitor.input_topic = '/motor_status'
         self.monitor.ethercat_status_topic = '/ethercat_status'
-        self.monitor._ethercat_status = {}
+        self.monitor._ethercat.status = {}
         self.monitor._motor_metadata = {}
         self.monitor._motors = {}
         self.monitor._started_at = 0.0
-        self.monitor._skipped_ethercat_scan = lambda now: {
+        self.monitor._ethercat._skipped_ethercat_scan = lambda now: {
             'available': False, 'complete': False, 'skipped': True,
             'slaves_count': 0, 'slaves': [], 'scanned_at': now,
         }
@@ -314,8 +317,8 @@ Identity:
                 return SimpleNamespace(returncode=0, stdout='0x0000 0', stderr='')
             raise AssertionError(command)
 
-        with patch('motion_state_monitor.monitor_node.subprocess.run', side_effect=run):
-            result = self.monitor._scan_ethercat_slaves()
+        with patch('motion_state_monitor.ethercat_scanner.subprocess.run', side_effect=run):
+            result = self.monitor._ethercat._scan_ethercat_slaves()
 
         self.assertTrue(result['complete'])
         self.assertTrue(result['rescan_performed'])
@@ -379,8 +382,8 @@ Identity:
                 return SimpleNamespace(returncode=0, stdout='0x0000 0', stderr='')
             raise AssertionError(command)
 
-        with patch('motion_state_monitor.monitor_node.subprocess.run', side_effect=run):
-            result = self.monitor._scan_ethercat_slaves()
+        with patch('motion_state_monitor.ethercat_scanner.subprocess.run', side_effect=run):
+            result = self.monitor._ethercat._scan_ethercat_slaves()
 
         self.assertTrue(result['complete'])
         self.assertEqual(
@@ -420,8 +423,8 @@ Identity:
                 )
             return SimpleNamespace(returncode=0, stdout=listing, stderr='')
 
-        with patch('motion_state_monitor.monitor_node.subprocess.run', side_effect=run):
-            result = self.monitor._scan_ethercat_slaves()
+        with patch('motion_state_monitor.ethercat_scanner.subprocess.run', side_effect=run):
+            result = self.monitor._ethercat._scan_ethercat_slaves()
 
         self.assertFalse(result['available'])
         self.assertTrue(result['rescan_blocked'])
@@ -443,8 +446,8 @@ Identity:
                 )
             raise AssertionError('Slave 조회 전에 Master 사용 상태로 차단해야 합니다')
 
-        with patch('motion_state_monitor.monitor_node.subprocess.run', side_effect=run):
-            result = self.monitor._scan_ethercat_slaves()
+        with patch('motion_state_monitor.ethercat_scanner.subprocess.run', side_effect=run):
+            result = self.monitor._ethercat._scan_ethercat_slaves()
 
         self.assertFalse(result['available'])
         self.assertTrue(result['rescan_blocked'])
@@ -548,16 +551,16 @@ Identity:
         ])
 
         with patch(
-            'motion_state_monitor.monitor_node.subprocess.run',
+            'motion_state_monitor.ethercat_scanner.subprocess.run',
             side_effect=lambda *_args, **_kwargs: next(responses),
         ):
-            self.monitor._poll_ethercat_bus_status()
+            self.monitor._ethercat._poll_ethercat_bus_status()
 
-        self.assertTrue(self.monitor._ethercat_status['master_active'])
-        self.assertTrue(self.monitor._ethercat_status['link_up'])
-        self.assertEqual(self.monitor._ethercat_status['slaves_responding'], 0)
+        self.assertTrue(self.monitor._ethercat.status['master_active'])
+        self.assertTrue(self.monitor._ethercat.status['link_up'])
+        self.assertEqual(self.monitor._ethercat.status['slaves_responding'], 0)
         self.assertEqual(
-            self.monitor._ethercat_axis_state({'alias': 0, 'slave_position': 0}),
+            self.monitor._ethercat._ethercat_axis_state({'alias': 0, 'slave_position': 0}),
             '',
         )
 
@@ -582,17 +585,17 @@ Identity:
         ])
 
         with patch(
-            'motion_state_monitor.monitor_node.subprocess.run',
+            'motion_state_monitor.ethercat_scanner.subprocess.run',
             side_effect=lambda *_args, **_kwargs: next(responses),
         ):
-            self.monitor._poll_ethercat_bus_status()
+            self.monitor._ethercat._poll_ethercat_bus_status()
 
         self.assertEqual(
-            self.monitor._ethercat_axis_state({'alias': 0, 'slave_position': 0}),
+            self.monitor._ethercat._ethercat_axis_state({'alias': 0, 'slave_position': 0}),
             'OP',
         )
         self.assertEqual(
-            self.monitor._ethercat_axis_state({'alias': 101, 'slave_position': 0}),
+            self.monitor._ethercat._ethercat_axis_state({'alias': 101, 'slave_position': 0}),
             'PREOP',
         )
 
@@ -625,10 +628,10 @@ Identity:
         ])
 
         with patch(
-            'motion_state_monitor.monitor_node.subprocess.run',
+            'motion_state_monitor.ethercat_scanner.subprocess.run',
             side_effect=lambda *_args, **_kwargs: next(responses),
         ) as run:
-            self.monitor._poll_ethercat_bus_status()
+            self.monitor._ethercat._poll_ethercat_bus_status()
 
         self.assertEqual(
             [call.args[0] for call in run.call_args_list],
@@ -640,7 +643,7 @@ Identity:
             ],
         )
         self.assertEqual(
-            self.monitor._ethercat_axis_state({
+            self.monitor._ethercat._ethercat_axis_state({
                 'ethercat_master_index': 0,
                 'alias': 0,
                 'slave_position': 0,
@@ -648,7 +651,7 @@ Identity:
             'OP',
         )
         self.assertEqual(
-            self.monitor._ethercat_axis_state({
+            self.monitor._ethercat._ethercat_axis_state({
                 'ethercat_master_index': 1,
                 'alias': 0,
                 'slave_position': 0,
@@ -746,6 +749,7 @@ class MotorScanActionTest(unittest.TestCase):
 
     def _monitor(self):
         monitor = MotionStateMonitor.__new__(MotionStateMonitor)
+        monitor._ethercat = EthercatScanner(monitor)
         monitor._scan_sequence = 0
         monitor._active_scan_id = ''
         monitor._scan_progress_publisher = None
@@ -760,14 +764,14 @@ class MotorScanActionTest(unittest.TestCase):
     def test_cancel_between_transports_skips_the_remaining_one(self):
         monitor = self._monitor()
         calls = []
-        monitor._safe_scan_ethercat_slaves = lambda: (
+        monitor._ethercat._safe_scan_ethercat_slaves = lambda: (
             calls.append('ethercat') or {'available': True, 'complete': True, 'slaves_count': 1}
         )
         monitor._safe_scan_dynamixel_motors = lambda: (
             calls.append('dynamixel') or {'available': True, 'complete': True, 'devices_count': 1}
         )
         monitor._skipped_dynamixel_scan = lambda now: {'skipped': True}
-        monitor._current_ethercat_status = lambda now: {}
+        monitor._ethercat._current_ethercat_status = lambda now: {}
         monitor._current_motor_list = lambda now: []
         monitor._configured_axis_list = lambda motors: []
         monitor._build_matching_rows = lambda slaves, axes: []
@@ -787,13 +791,13 @@ class MotorScanActionTest(unittest.TestCase):
     def test_without_cancel_both_transports_run(self):
         monitor = self._monitor()
         calls = []
-        monitor._safe_scan_ethercat_slaves = lambda: (
+        monitor._ethercat._safe_scan_ethercat_slaves = lambda: (
             calls.append('ethercat') or {'available': True, 'complete': True, 'slaves_count': 1}
         )
         monitor._safe_scan_dynamixel_motors = lambda: (
             calls.append('dynamixel') or {'available': True, 'complete': True, 'devices_count': 1}
         )
-        monitor._current_ethercat_status = lambda now: {}
+        monitor._ethercat._current_ethercat_status = lambda now: {}
         monitor._current_motor_list = lambda now: []
         monitor._configured_axis_list = lambda motors: []
         monitor._build_matching_rows = lambda slaves, axes: []
