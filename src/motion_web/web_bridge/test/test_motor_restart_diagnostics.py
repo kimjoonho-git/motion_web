@@ -1,9 +1,27 @@
+from pathlib import Path
+from motion_web_bridge.motor_runtime_service import MotorRuntimeService
 from motion_web_bridge.bridge_node import MotionWebBridge
 from motion_web_bridge.motor_restart_diagnostics import (
     diagnose_motor_restart_failure,
     motor_restart_service_failure,
 )
 from motion_web_bridge.project_repository import ProjectRepository
+
+
+def _runtime_of(bridge):
+    """노드 스텁에 모터 런타임 서비스를 붙인다 · §6-22로 노드에서 떨어져 나왔다."""
+    service = getattr(bridge, '_motor_runtime', None)
+    if service is None:
+        service = MotorRuntimeService(
+            bridge,
+            repository=getattr(bridge, 'project_repository', None),
+            workspace_root=getattr(bridge, 'workspace_root', Path('.')),
+        )
+        bridge._motor_runtime = service
+    repository = getattr(bridge, 'project_repository', None)
+    if repository is not None:
+        service.repository = repository
+    return service
 
 
 def _operation(*axes):
@@ -86,7 +104,7 @@ def test_motor_restart_timeout_persists_diagnosis_for_the_popup(
     bridge.project_repository = repository
     bridge._bridge_started_at = 99.0
 
-    result = bridge._reconcile_motor_operation_status(
+    result = _runtime_of(bridge).reconcile_operation_status(
         {'phase': 'ready'},
         {
             'motors': [{

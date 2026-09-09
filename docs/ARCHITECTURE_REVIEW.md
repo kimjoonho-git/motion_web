@@ -1078,6 +1078,55 @@ motion_studio_confirm True
 - 실물 미검증 · 조그·절대 이동·서보 제어 · **모터를 실제로 움직이는 명령이라
   별도 지시 없이 돌리지 않았다**
 
+### 6-22. `MotorRuntimeService` 신설 · 서비스 간 공유 협력자
+
+`MotionWebBridge` 2,902 → **2,452줄** · 메서드 120 → 111 · 락 11 → 9 ·
+락 관여 2,273 → **1,871줄**
+
+#### 왜 만들었나 · 두 서비스가 노드를 거쳐 같은 것을 쓰고 있었다
+
+`ScanOrchestrator`(§6-18)와 `MotorConfigService`(§6-19)가 각각
+`self.bridge._wait_for_motor_runtime_recovery` · `self.bridge._ethercat_scan_safety_blocker` ·
+`self.bridge._run_managed_user_service` 를 부르고 있었다.
+
+서비스가 **노드를 우편함처럼 써서** 서로의 필요를 충족하는 모양이다. §6-19·§6-20에서
+`load_motor_config`·`context_id`를 콜러블로 넘긴 것과 같은 문제인데, 여기서는
+대상이 하나가 아니라 다섯이라 **객체로 묶어 넘기는 편이 맞았다.**
+
+이제 둘 다 생성자에서 `runtime=`으로 받는다 · `self.runtime.___`.
+
+#### 옮긴 것 · 9메서드 434줄
+
+| 메서드 | 줄 | 서비스 이름 |
+|---|---|---|
+| `_reconcile_motor_operation_status` | 151 | `reconcile_operation_status` |
+| `_wait_for_motor_runtime_recovery` | 69 | `wait_for_runtime_recovery` |
+| `_ethercat_scan_safety_blocker` | 68 | `ethercat_scan_safety_blocker` |
+| `_recover_interrupted_scan` | 55 | `recover_interrupted_scan` |
+| `_motor_operation_reconcile_callback` | 29 | `reconcile_callback` |
+| `_schedule_interrupted_scan_recovery` | 28 | `schedule_interrupted_scan_recovery` |
+| `_run_managed_user_service` | 13 | `run_managed_service` |
+| `_motor_restart_lifecycle` | 12 | `restart_lifecycle` |
+| `_managed_user_service_active` | 9 | `managed_service_active` |
+
+서비스가 갖는 것 · 복구 락 · 조정 락 · `MotorRestartCoordinator`.
+
+#### 테스트 monkeypatch 대상도 따라 옮겼다
+
+`motion_web_bridge.bridge_node.subprocess.Popen`을 패치하던 곳이 4군데 있었다.
+`subprocess` 호출이 `motor_config_service`로 옮겨갔으므로 패치 대상도 옮겼다 ·
+**모듈 경로를 문자열로 쓰는 패치는 코드 이동 때 조용히 어긋난다.**
+
+작업 중 정규식이 `motion_web_bridge.motor_restart_coordinator`라는 **모듈 경로까지
+치환**해 두 파일이 깨졌다. 구문 검사로 즉시 잡아 되돌렸다 · 이름 치환은
+`bridge.___` 앞에 무엇이 붙어 있는지 봐야 한다.
+
+#### 검증
+
+- 코드 검증 · `ruff check src` 55건 유지 · 신규 0건
+- 실행 검증 · `pytest` 1,005건 통과 · 실패 0
+- 실물 검증 · 아래 별도 기록
+
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
 - 파일 1,000줄 이하 · 함수 60줄 이하 · `Node` 서브클래스 500줄 이하

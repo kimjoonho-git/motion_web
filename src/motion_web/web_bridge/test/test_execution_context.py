@@ -13,6 +13,7 @@ from std_msgs.msg import String
 from motion_web_bridge.motor_config_service import MotorConfigService
 from motion_web_bridge.execution_context_service import ExecutionContextService
 from motion_web_bridge.manual_motor_commands import ManualMotorCommandService
+from motion_web_bridge.motor_runtime_service import MotorRuntimeService
 from motion_web_bridge.bridge_node import MotionWebBridge, create_app
 from motion_web_bridge.motion_studio_session import MotionStudioSession
 from motion_web_bridge.motor_event_log import MotorEventLog
@@ -20,6 +21,22 @@ from motion_web_bridge.scan_orchestrator import ScanOrchestrator
 from motion_web_bridge.motion_studio_sync import MotionStudioSync
 from motion_common import rpc
 from motion_web_bridge import ethercat_project_compat, motor_config_rules
+
+
+def _runtime_of(bridge):
+    """노드 스텁에 모터 런타임 서비스를 붙인다 · §6-22로 노드에서 떨어져 나왔다."""
+    service = getattr(bridge, '_motor_runtime', None)
+    if service is None:
+        service = MotorRuntimeService(
+            bridge,
+            repository=getattr(bridge, 'project_repository', None),
+            workspace_root=getattr(bridge, 'workspace_root', Path('.')),
+        )
+        bridge._motor_runtime = service
+    repository = getattr(bridge, 'project_repository', None)
+    if repository is not None:
+        service.repository = repository
+    return service
 
 
 def _manual_of(bridge, **overrides):
@@ -75,6 +92,7 @@ def _motor_config_of(bridge, **overrides):
     if service is None:
         service = MotorConfigService(
             bridge,
+            runtime=_runtime_of(bridge),
             lifecycle_lock=getattr(
                 bridge, '_motor_lifecycle_lock', None
             ) or threading.Lock(),
@@ -128,6 +146,7 @@ def _scan_of(bridge, **overrides):
     if scan is None:
         scan = ScanOrchestrator(
             bridge,
+            runtime=_runtime_of(bridge),
             lifecycle_lock=getattr(
                 bridge, '_motor_lifecycle_lock', None
             ) or threading.Lock(),
@@ -543,7 +562,7 @@ def test_snapshot_reads_motor_operation_without_reconciling_it(tmp_path):
     bridge._safety_adjusted_midi_status = lambda status, **_kwargs: status
     bridge._current_project_generation = lambda: 1
     bridge._runtime_project_id_from_path = lambda _selected='': 'project-a'
-    bridge._reconcile_motor_operation_status = lambda *_args: (
+    _runtime_of(bridge).reconcile_operation_status = lambda *_args: (
         pytest.fail('snapshot must be read-only')
     )
     bridge.project_repository = type('Repository', (), {
@@ -576,13 +595,13 @@ def test_motor_operation_coordinator_is_the_reconcile_writer():
     _patch_runtime_service_status({'phase': 'ready'})
     _execution_context_of(bridge).status = lambda **_kwargs: {'ready': True}
     calls = []
-    bridge._reconcile_motor_operation_status = (
+    _runtime_of(bridge).reconcile_operation_status = (
         lambda runtime, motion, context: calls.append(
             (runtime, motion, context)
         )
     )
 
-    bridge._motor_operation_reconcile_callback()
+    _runtime_of(bridge).reconcile_callback()
 
     assert len(calls) == 1
     assert calls[0][0]['phase'] == 'ready'
@@ -1372,10 +1391,10 @@ def test_ac_servo_scan_temporarily_releases_and_restores_motor_service(monkeypat
     bridge.project_repository = operation_repository(lambda: 'project-a')
     bridge.snapshot = lambda: {}
     bridge._current_project_generation = lambda: 3
-    bridge._managed_user_service_active = lambda _service: True
+    _runtime_of(bridge).managed_service_active = lambda _service: True
     bridge._expected_runtime_ethercat_axes = lambda: [0]
     calls = []
-    bridge._run_managed_user_service = (
+    _runtime_of(bridge).run_managed_service = (
         lambda action, service: calls.append((action, service))
     )
     monkeypatch.setattr(
@@ -1387,7 +1406,7 @@ def test_ac_servo_scan_temporarily_releases_and_restores_motor_service(monkeypat
         'message': 'scan complete',
         'scan': {'scan_id': 'scan-1'},
     }
-    bridge._wait_for_motor_runtime_recovery = lambda *_args, **_kwargs: {
+    _runtime_of(bridge).wait_for_runtime_recovery = lambda *_args, **_kwargs: {
         'required': True,
         'expected_axes': [0],
         'online_axes': [0],
@@ -1440,8 +1459,8 @@ def test_ac_servo_scan_fails_when_motor_runtime_does_not_recover(monkeypatch):
     )
     bridge.snapshot = lambda: {}
     bridge._current_project_generation = lambda: 3
-    bridge._managed_user_service_active = lambda _service: True
-    bridge._run_managed_user_service = lambda _action, _service: None
+    _runtime_of(bridge).managed_service_active = lambda _service: True
+    _runtime_of(bridge).run_managed_service = lambda _action, _service: None
     monkeypatch.setattr(
         motor_config_rules, 'wait_for_ethercat_release', lambda timeout_sec: None
     )
@@ -1451,7 +1470,7 @@ def test_ac_servo_scan_fails_when_motor_runtime_does_not_recover(monkeypatch):
         'message': 'scan complete',
         'scan': {'scan_id': 'scan-1'},
     }
-    bridge._wait_for_motor_runtime_recovery = lambda *_args, **_kwargs: {
+    _runtime_of(bridge).wait_for_runtime_recovery = lambda *_args, **_kwargs: {
         'required': True,
         'expected_axes': [0, 1],
         'online_axes': [0],
@@ -1495,7 +1514,7 @@ def test_ac_servo_scan_restores_service_even_when_stop_command_times_out(monkeyp
     bridge.project_repository = operation_repository(lambda: 'project-a')
     bridge.snapshot = lambda: {}
     bridge._current_project_generation = lambda: 3
-    bridge._managed_user_service_active = lambda _service: True
+    _runtime_of(bridge).managed_service_active = lambda _service: True
     bridge._expected_runtime_ethercat_axes = lambda: [0]
     calls = []
 
@@ -1504,8 +1523,8 @@ def test_ac_servo_scan_restores_service_even_when_stop_command_times_out(monkeyp
         if action == 'stop':
             raise subprocess.TimeoutExpired(['systemctl', 'stop'], 10.0)
 
-    bridge._run_managed_user_service = service_action
-    bridge._wait_for_motor_runtime_recovery = lambda *_args, **_kwargs: {
+    _runtime_of(bridge).run_managed_service = service_action
+    _runtime_of(bridge).wait_for_runtime_recovery = lambda *_args, **_kwargs: {
         'required': True,
         'expected_axes': [0],
         'online_axes': [0],
@@ -1559,10 +1578,10 @@ def test_ac_servo_scan_restores_service_even_when_status_update_fails(monkeypatc
     bridge.project_repository = repository
     bridge.snapshot = lambda: {}
     bridge._current_project_generation = lambda: 3
-    bridge._managed_user_service_active = lambda _service: True
+    _runtime_of(bridge).managed_service_active = lambda _service: True
     bridge._expected_runtime_ethercat_axes = lambda: [0]
     calls = []
-    bridge._run_managed_user_service = (
+    _runtime_of(bridge).run_managed_service = (
         lambda action, service: calls.append((action, service))
     )
     monkeypatch.setattr(
@@ -1573,7 +1592,7 @@ def test_ac_servo_scan_restores_service_even_when_status_update_fails(monkeypatc
         'message': 'scan complete',
         'scan': {'scan_id': 'scan-1'},
     }
-    bridge._wait_for_motor_runtime_recovery = lambda *_args, **_kwargs: {
+    _runtime_of(bridge).wait_for_runtime_recovery = lambda *_args, **_kwargs: {
         'required': True,
         'expected_axes': [0],
         'online_axes': [0],
@@ -1619,9 +1638,9 @@ def test_motor_runtime_recovery_requires_all_configured_transports():
         ],
     }
     bridge._motion_state_received_at = time.time() + 1.0
-    bridge._managed_user_service_active = lambda _service: True
+    _runtime_of(bridge).managed_service_active = lambda _service: True
 
-    result = bridge._wait_for_motor_runtime_recovery(
+    result = _runtime_of(bridge).wait_for_runtime_recovery(
         [0, 1],
         timeout_sec=0.1,
         motor_service='motion-motor.service',
@@ -1653,7 +1672,7 @@ def test_ethercat_release_waits_until_slaves_leave_operational_state(monkeypatch
             'stderr': '',
         })()
 
-    monkeypatch.setattr('motion_web_bridge.bridge_node.subprocess.run', run)
+    monkeypatch.setattr('motion_web_bridge.motor_config_service.subprocess.run', run)
     monkeypatch.setattr('motion_web_bridge.bridge_node.time.sleep', lambda _sec: None)
 
     motor_config_rules.wait_for_ethercat_release(1.0)
@@ -1675,7 +1694,7 @@ def test_motor_runtime_recovery_requires_fresh_online_feedback():
         }],
     }
 
-    result = bridge._wait_for_motor_runtime_recovery([0], timeout_sec=0.1)
+    result = _runtime_of(bridge).wait_for_runtime_recovery([0], timeout_sec=0.1)
 
     assert result['recovered'] is True
     assert result['online_axes'] == [0]
@@ -1688,7 +1707,7 @@ def test_motor_runtime_recovery_rejects_an_empty_expected_axis_set():
     bridge._motion_state_received_at = time.time() + 1.0
     bridge._motion_state = {'motors': []}
 
-    result = bridge._wait_for_motor_runtime_recovery([], timeout_sec=0.01)
+    result = _runtime_of(bridge).wait_for_runtime_recovery([], timeout_sec=0.01)
 
     assert result['recovered'] is False
     assert result['expected_axes'] == []
@@ -1751,7 +1770,7 @@ def test_ac_servo_scan_is_blocked_while_runtime_velocity_is_nonzero(monkeypatch)
     bridge.project_repository = operation_repository(lambda: 'project-a')
     bridge.snapshot = lambda: {}
     bridge._current_project_generation = lambda: 3
-    bridge._managed_user_service_active = lambda _service: (
+    _runtime_of(bridge).managed_service_active = lambda _service: (
         pytest.fail('moving motor must be rejected before checking systemd')
     )
     monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
@@ -1782,8 +1801,8 @@ def test_ac_servo_scan_is_blocked_when_running_motor_state_is_not_fresh(
     bridge.project_repository = operation_repository(lambda: 'project-a')
     bridge.snapshot = lambda: {}
     bridge._current_project_generation = lambda: 3
-    bridge._managed_user_service_active = lambda _service: True
-    bridge._run_managed_user_service = lambda *_args: pytest.fail(
+    _runtime_of(bridge).managed_service_active = lambda _service: True
+    _runtime_of(bridge).run_managed_service = lambda *_args: pytest.fail(
         'stale motor state must be rejected before stopping Motor Manager'
     )
     monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
@@ -1817,9 +1836,9 @@ def test_ac_servo_scan_retires_previous_project_runtime_without_feedback(
     bridge.project_repository = repository
     bridge.snapshot = lambda: {}
     bridge._current_project_generation = lambda: 4
-    bridge._managed_user_service_active = lambda _service: True
+    _runtime_of(bridge).managed_service_active = lambda _service: True
     calls = []
-    bridge._run_managed_user_service = (
+    _runtime_of(bridge).run_managed_service = (
         lambda action, service: calls.append((action, service))
     )
     monkeypatch.setattr(
@@ -1831,7 +1850,7 @@ def test_ac_servo_scan_retires_previous_project_runtime_without_feedback(
         'message': 'scan complete',
         'scan': {'scan_id': 'scan-project-b'},
     }
-    bridge._wait_for_motor_runtime_recovery = lambda *_args, **_kwargs: (
+    _runtime_of(bridge).wait_for_runtime_recovery = lambda *_args, **_kwargs: (
         pytest.fail('the previous project runtime must not be restarted')
     )
     monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
@@ -1886,7 +1905,7 @@ def test_ac_servo_scan_still_blocks_observed_motion_during_project_handoff(
     bridge.project_repository = repository
     bridge.snapshot = lambda: {}
     bridge._current_project_generation = lambda: 4
-    bridge._managed_user_service_active = lambda _service: (
+    _runtime_of(bridge).managed_service_active = lambda _service: (
         pytest.fail('moving motor must be rejected before checking systemd')
     )
     monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
@@ -1927,7 +1946,7 @@ def test_ac_servo_scan_ignores_stopped_servo_velocity_quantization_noise():
     bridge.snapshot = lambda: {}
     bridge._current_project_generation = lambda: 3
 
-    assert bridge._ethercat_scan_safety_blocker() == ''
+    assert _runtime_of(bridge).ethercat_scan_safety_blocker() == ''
 
 
 def test_ac_servo_scan_blocks_clear_motion_even_when_target_is_reached():
@@ -1956,7 +1975,7 @@ def test_ac_servo_scan_blocks_clear_motion_even_when_target_is_reached():
     bridge.snapshot = lambda: {}
     bridge._current_project_generation = lambda: 3
 
-    blocker = bridge._ethercat_scan_safety_blocker()
+    blocker = _runtime_of(bridge).ethercat_scan_safety_blocker()
 
     assert '축 4' in blocker
     assert '움직이는 중' in blocker
@@ -1986,7 +2005,7 @@ def test_ac_servo_scan_ignores_stale_velocity_when_axis_is_bus_down():
         'selected_project_id': lambda _self: 'project-a',
     })()
 
-    assert bridge._ethercat_scan_safety_blocker() == ''
+    assert _runtime_of(bridge).ethercat_scan_safety_blocker() == ''
 
 
 def test_scan_result_is_discarded_after_a_to_b_to_a_project_switch():

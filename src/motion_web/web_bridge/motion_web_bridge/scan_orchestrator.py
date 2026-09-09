@@ -36,6 +36,7 @@ class ScanOrchestrator:
         self,
         bridge: Any,
         *,
+        runtime: Any,
         lifecycle_lock: threading.Lock,
         repository: Any,
         scan_client: Any,
@@ -47,6 +48,8 @@ class ScanOrchestrator:
         load_motor_config: Any,
     ) -> None:
         self.bridge = bridge
+        #: 모터 런타임 수명주기 협력자 (§6-22)
+        self.runtime = runtime
         #: 설정 적용·재시작과 공유한다 · 노드가 소유
         self.lifecycle_lock = lifecycle_lock
         self.repository = repository
@@ -355,7 +358,7 @@ class ScanOrchestrator:
         if motor_service != 'motion-motor.service':
             return self._call_service_locked(client, service_name, timeout_sec)
 
-        blocker = self.bridge._ethercat_scan_safety_blocker(
+        blocker = self.runtime.ethercat_scan_safety_blocker(
             require_fresh_motor_state=False,
         )
         if blocker:
@@ -369,11 +372,11 @@ class ScanOrchestrator:
                 **self.bridge.snapshot(),
             }
 
-        was_active = self.bridge._managed_user_service_active(motor_service)
+        was_active = self.runtime.managed_service_active(motor_service)
         runtime_handoff = self._runtime_handoff()
         restore_runtime = bool(was_active and not runtime_handoff['required'])
         if restore_runtime:
-            blocker = self.bridge._ethercat_scan_safety_blocker(
+            blocker = self.runtime.ethercat_scan_safety_blocker(
                 require_fresh_motor_state=True,
             )
             if blocker:
@@ -451,7 +454,7 @@ class ScanOrchestrator:
                         'stopping_runtime',
                         message=stop_message,
                     )
-                self.bridge._run_managed_user_service('stop', motor_service)
+                self.runtime.run_managed_service('stop', motor_service)
                 motor_config_rules.wait_for_ethercat_release(timeout_sec=5.0)
             if operation_id:
                 self.repository.update_motor_operation(
@@ -485,8 +488,8 @@ class ScanOrchestrator:
                             # not depend on operation bookkeeping still being
                             # writable/running.
                             pass
-                    self.bridge._run_managed_user_service('start', motor_service)
-                    recovery = self.bridge._wait_for_motor_runtime_recovery(
+                    self.runtime.run_managed_service('start', motor_service)
+                    recovery = self.runtime.wait_for_runtime_recovery(
                         expected_recovery_axes,
                         timeout_sec=12.0,
                         motor_service=motor_service,

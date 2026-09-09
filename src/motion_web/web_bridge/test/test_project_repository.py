@@ -21,6 +21,7 @@ from motion_web_bridge.project_repository import (
 )
 from motion_web_bridge.motor_config_service import MotorConfigService
 from motion_web_bridge.execution_context_service import ExecutionContextService
+from motion_web_bridge.motor_runtime_service import MotorRuntimeService
 from motion_web_bridge.bridge_node import (
     MotionWebBridge,
     _project_tree_category_signature,
@@ -37,6 +38,22 @@ MOTION_TEXT = '\n'.join([
     json.dumps({'type': 'motion_header', 'rotation_unit': 'deg'}),
     json.dumps([1, 0.0, '1-1', 0.0]),
 ])
+
+
+def _runtime_of(bridge):
+    """노드 스텁에 모터 런타임 서비스를 붙인다 · §6-22로 노드에서 떨어져 나왔다."""
+    service = getattr(bridge, '_motor_runtime', None)
+    if service is None:
+        service = MotorRuntimeService(
+            bridge,
+            repository=getattr(bridge, 'project_repository', None),
+            workspace_root=getattr(bridge, 'workspace_root', Path('.')),
+        )
+        bridge._motor_runtime = service
+    repository = getattr(bridge, 'project_repository', None)
+    if repository is not None:
+        service.repository = repository
+    return service
 
 
 def _execution_context_of(bridge, **overrides):
@@ -63,6 +80,7 @@ def _motor_config_of(bridge, **overrides):
     if service is None:
         service = MotorConfigService(
             bridge,
+            runtime=_runtime_of(bridge),
             lifecycle_lock=getattr(
                 bridge, '_motor_lifecycle_lock', None
             ) or threading.Lock(),
@@ -1452,8 +1470,8 @@ def test_timed_out_motor_apply_restores_previous_target_and_requests_restart(
     monkeypatch.setenv('MOTION_CONTROL_SERVICE_UNIT', 'motion-control.service')
     monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
 
-    result = bridge._reconcile_motor_operation_status({}, {}, {})
-    repeated = bridge._reconcile_motor_operation_status({}, {}, {})
+    result = _runtime_of(bridge).reconcile_operation_status({}, {}, {})
+    repeated = _runtime_of(bridge).reconcile_operation_status({}, {}, {})
 
     assert result['status'] == 'timeout'
     assert result['phase'] == 'rollback_requested'
@@ -1891,7 +1909,7 @@ def test_restarted_bridge_completes_persisted_motor_apply_operation(tmp_path):
     bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
     bridge._bridge_started_at = operation['started_at'] + 1.0
-    result = bridge._reconcile_motor_operation_status(
+    result = _runtime_of(bridge).reconcile_operation_status(
         {
             'phase': 'ready',
             'runtime_config_file': str(runtime),
@@ -1932,7 +1950,7 @@ def test_motor_apply_completes_without_motion_axis_execution_context(tmp_path):
     bridge.project_repository = repository
     bridge._bridge_started_at = operation['started_at'] + 1.0
 
-    result = bridge._reconcile_motor_operation_status(
+    result = _runtime_of(bridge).reconcile_operation_status(
         {
             'phase': 'ready',
             'runtime_config_file': str(runtime),
@@ -1980,7 +1998,7 @@ def test_motor_restart_success_uses_terminal_completed_phase(tmp_path):
     bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
     bridge._bridge_started_at = operation['started_at'] - 1.0
-    result = bridge._reconcile_motor_operation_status(
+    result = _runtime_of(bridge).reconcile_operation_status(
         {
             'phase': 'ready',
             'runtime_config_file': str(runtime),
@@ -2024,7 +2042,7 @@ def test_motor_restart_does_not_complete_before_service_restart_is_observed(
     bridge.project_repository = repository
     bridge._bridge_started_at = operation['started_at'] - 1.0
 
-    result = bridge._reconcile_motor_operation_status(
+    result = _runtime_of(bridge).reconcile_operation_status(
         {
             'phase': 'ready',
             'runtime_config_file': str(runtime),
@@ -2068,7 +2086,7 @@ def test_motor_restart_waits_for_every_configured_axis_to_be_online(tmp_path):
     bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
     bridge._bridge_started_at = operation['started_at'] - 1.0
-    result = bridge._reconcile_motor_operation_status(
+    result = _runtime_of(bridge).reconcile_operation_status(
         {
             'phase': 'ready',
             'runtime_config_file': str(runtime),
@@ -2122,7 +2140,7 @@ def test_motor_restart_fails_when_motor_manager_uses_another_config(tmp_path):
     bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
     bridge._bridge_started_at = operation['started_at'] - 1.0
-    result = bridge._reconcile_motor_operation_status(
+    result = _runtime_of(bridge).reconcile_operation_status(
         {
             'phase': 'ready',
             'runtime_config_file': str(actual),
@@ -2170,9 +2188,9 @@ def test_restarted_bridge_schedules_interrupted_ac_servo_scan_recovery(tmp_path)
         scheduled.append(dict(payload))
         return dict(payload)
 
-    bridge._schedule_interrupted_scan_recovery = schedule
+    _runtime_of(bridge).schedule_interrupted_scan_recovery = schedule
 
-    result = bridge._reconcile_motor_operation_status(
+    result = _runtime_of(bridge).reconcile_operation_status(
         {'phase': 'waiting_motor_feedback'},
         {},
         {'ready': False},
@@ -2197,7 +2215,7 @@ def test_active_ac_servo_scan_is_not_reconciled_as_motor_restart(tmp_path):
     bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
     bridge._bridge_started_at = operation['started_at'] - 1.0
-    result = bridge._reconcile_motor_operation_status(
+    result = _runtime_of(bridge).reconcile_operation_status(
         {'phase': 'ready'},
         {
             'last_motor_status_at': operation['started_at'] + 1.0,
@@ -2227,10 +2245,10 @@ def test_interrupted_ac_servo_scan_restores_motor_service_and_records_failure(
     bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
     actions = []
-    bridge._run_managed_user_service = (
+    _runtime_of(bridge).run_managed_service = (
         lambda action, service: actions.append((action, service))
     )
-    bridge._wait_for_motor_runtime_recovery = lambda *_args, **_kwargs: {
+    _runtime_of(bridge).wait_for_runtime_recovery = lambda *_args, **_kwargs: {
         'required': True,
         'expected_axes': [0],
         'online_axes': [0],
@@ -2238,7 +2256,7 @@ def test_interrupted_ac_servo_scan_restores_motor_service_and_records_failure(
         'service_active': True,
     }
 
-    bridge._recover_interrupted_scan(operation)
+    _runtime_of(bridge).recover_interrupted_scan(operation)
 
     completed = repository.motor_operation_status()
     assert actions == [('start', 'motion-motor.service')]
@@ -2303,7 +2321,7 @@ def test_web_apply_requests_managed_service_restart_without_second_launch(
     monkeypatch.setenv('MOTION_CONTROL_SERVICE_UNIT', 'motion-control.service')
     monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
     monkeypatch.setattr(
-        'motion_web_bridge.bridge_node.subprocess.Popen',
+        'motion_web_bridge.motor_config_service.subprocess.Popen',
         lambda command, **kwargs: commands.append((command, kwargs)),
     )
 
@@ -2358,7 +2376,7 @@ def test_web_apply_schedule_failure_restores_previous_runtime(
     monkeypatch.setenv('MOTION_CONTROL_SERVICE_UNIT', 'motion-control.service')
     monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
     monkeypatch.setattr(
-        'motion_web_bridge.bridge_node.subprocess.Popen',
+        'motion_web_bridge.motor_config_service.subprocess.Popen',
         lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError('schedule failed')),
     )
 
@@ -2383,7 +2401,7 @@ def test_user_can_request_managed_program_restart_from_web(monkeypatch):
     monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
     monkeypatch.setenv('MOTION_COORDINATION_SERVICE_UNIT', 'motion-coordination.service')
     monkeypatch.setattr(
-        'motion_web_bridge.bridge_node.subprocess.Popen',
+        'motion_web_bridge.motor_config_service.subprocess.Popen',
         lambda command, **kwargs: commands.append((command, kwargs)),
     )
 
@@ -2463,7 +2481,7 @@ def test_user_can_restart_only_motor_control_service_from_web(monkeypatch):
                 },
             )
 
-    bridge.motor_restart_coordinator = Coordinator()
+    _runtime_of(bridge)._restart_coordinator = Coordinator()
     monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
 
     result = _motor_config_of(bridge).restart_motor_control()
@@ -2539,7 +2557,7 @@ def test_motor_control_restart_rejects_project_without_applied_motor_config(monk
     commands = []
     monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
     monkeypatch.setattr(
-        'motion_web_bridge.bridge_node.subprocess.Popen',
+        'motion_web_bridge.motor_config_service.subprocess.Popen',
         lambda command, **kwargs: commands.append((command, kwargs)),
     )
 
@@ -2704,9 +2722,9 @@ def test_clear_motor_runtime_application_stops_and_allows_delete(
     bridge._motion_run_lock = threading.Lock()
     bridge._motion_studio_session.lock = threading.Lock()
     bridge._coordination_execution_blocker = lambda: ''
-    bridge._ethercat_scan_safety_blocker = lambda **_kwargs: ''
-    bridge._managed_user_service_active = lambda _unit: True
-    bridge._run_managed_user_service = lambda *_args, **_kwargs: None
+    _runtime_of(bridge).ethercat_scan_safety_blocker = lambda **_kwargs: ''
+    _runtime_of(bridge).managed_service_active = lambda _unit: True
+    _runtime_of(bridge).run_managed_service = lambda *_args, **_kwargs: None
     monkeypatch.setattr(
         motor_config_rules, 'wait_for_ethercat_release',
         lambda *_args, **_kwargs: None,

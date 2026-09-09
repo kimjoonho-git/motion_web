@@ -40,6 +40,7 @@ class MotorConfigService:
         self,
         bridge: Any,
         *,
+        runtime: Any,
         lifecycle_lock: threading.Lock,
         repository: Any,
         workspace_root: Path,
@@ -48,6 +49,8 @@ class MotorConfigService:
         restart_script: Path,
     ) -> None:
         self.bridge = bridge
+        #: 모터 런타임 수명주기 협력자 (§6-22)
+        self.runtime = runtime
         #: `ScanOrchestrator`와 공유 · 노드가 소유 (§6-18)
         self.lifecycle_lock = lifecycle_lock
         self.repository = repository
@@ -597,7 +600,7 @@ class MotorConfigService:
                 **self.bridge.snapshot(),
             }
         try:
-            operation = self.bridge._motor_restart_lifecycle().begin(
+            operation = self.runtime.restart_lifecycle().begin(
                 project_id=self.repository.selected_project_id(),
                 runtime_file=runtime_config,
                 expected_axes=expected_axes,
@@ -675,8 +678,8 @@ class MotorConfigService:
                 'message': f'실행 적용 해제 미실행: {execution_blocker}',
                 **self.bridge.snapshot(),
             }
-        moving_blocker = self.bridge._ethercat_scan_safety_blocker(
-            require_fresh_motor_state=self.bridge._managed_user_service_active(motor_service),
+        moving_blocker = self.runtime.ethercat_scan_safety_blocker(
+            require_fresh_motor_state=self.runtime.managed_service_active(motor_service),
             allow_run_stopping=True,
             allow_studio_stopping=True,
         )
@@ -716,13 +719,13 @@ class MotorConfigService:
                 self.bridge.publish_safety_stop(False)
             except Exception:
                 pass
-            if self.bridge._managed_user_service_active(motor_service):
+            if self.runtime.managed_service_active(motor_service):
                 self.repository.update_motor_operation(
                     str(operation['operation_id']),
                     'stopping_runtime',
                     message='Motor Manager 정지 및 EtherCAT 소유권 해제 중',
                 )
-                self.bridge._run_managed_user_service('stop', motor_service)
+                self.runtime.run_managed_service('stop', motor_service)
                 try:
                     motor_config_rules.wait_for_ethercat_release(8.0)
                 except Exception:

@@ -1,15 +1,34 @@
+from pathlib import Path
 import json
 import threading
 from types import SimpleNamespace
 
+from motion_web_bridge.motor_runtime_service import MotorRuntimeService
 from motion_web_bridge.bridge_node import MotionWebBridge
 from motion_web_bridge.scan_orchestrator import ScanOrchestrator
+
+
+def _runtime_of(bridge):
+    """노드 스텁에 모터 런타임 서비스를 붙인다 · §6-22로 노드에서 떨어져 나왔다."""
+    service = getattr(bridge, '_motor_runtime', None)
+    if service is None:
+        service = MotorRuntimeService(
+            bridge,
+            repository=getattr(bridge, 'project_repository', None),
+            workspace_root=getattr(bridge, 'workspace_root', Path('.')),
+        )
+        bridge._motor_runtime = service
+    repository = getattr(bridge, 'project_repository', None)
+    if repository is not None:
+        service.repository = repository
+    return service
 
 
 def scan_orchestrator(bridge) -> ScanOrchestrator:
     """노드 없이 스캔 조율만 세운다 · §6-18로 노드에서 떨어져 나왔다."""
     return ScanOrchestrator(
         bridge,
+        runtime=_runtime_of(bridge),
         lifecycle_lock=threading.Lock(),
         repository=getattr(bridge, 'project_repository', None),
         scan_client=None,

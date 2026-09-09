@@ -1,9 +1,27 @@
+from pathlib import Path
 import subprocess
 
 import pytest
 
 from motion_web_bridge.motor_restart_coordinator import MotorRestartCoordinator
+from motion_web_bridge.motor_runtime_service import MotorRuntimeService
 from motion_web_bridge.project_repository import ProjectRepository
+
+
+def _runtime_of(bridge):
+    """노드 스텁에 모터 런타임 서비스를 붙인다 · §6-22로 노드에서 떨어져 나왔다."""
+    service = getattr(bridge, '_motor_runtime', None)
+    if service is None:
+        service = MotorRuntimeService(
+            bridge,
+            repository=getattr(bridge, 'project_repository', None),
+            workspace_root=getattr(bridge, 'workspace_root', Path('.')),
+        )
+        bridge._motor_runtime = service
+    repository = getattr(bridge, 'project_repository', None)
+    if repository is not None:
+        service.repository = repository
+    return service
 
 
 def _begin_restart(repository):
