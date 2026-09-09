@@ -12,6 +12,7 @@ from motion_state_monitor.connection_state import (
     set_physical_connection_fields,
 )
 from motion_state_monitor.dynamixel_scanner import DynamixelScanner
+from motion_state_monitor.state_publisher import StatePublisher
 from motion_state_monitor.ethercat_scanner import EthercatScanner
 from motion_state_monitor.monitor_node import MotionStateMonitor
 
@@ -23,6 +24,8 @@ class ConnectionStateTest(unittest.TestCase):
         self.monitor._ethercat = EthercatScanner(self.monitor)
         # Dynamixel 검색도 별도 객체가 맡는다 (§6-33)
         self.monitor._dynamixel = DynamixelScanner(self.monitor)
+        # 축 상태 수신·발행도 별도 객체가 맡는다 (§6-36)
+        self.monitor._state = StatePublisher(self.monitor)
         self.monitor.connection_loss_confirm_sec = 1.0
         self.monitor.connection_recovery_confirm_sec = 0.5
         self.monitor._health = CommunicationHealth(self.monitor)
@@ -43,7 +46,7 @@ class ConnectionStateTest(unittest.TestCase):
 
     def test_internal_limit_bit_is_reported_for_ac_servo(self):
         self.monitor._motor_metadata = {1: {'motor_type': 'minas'}}
-        self.monitor._metadata_for = lambda _axis: {'motor_type': 'minas'}
+        self.monitor._state._metadata_for = lambda _axis: {'motor_type': 'minas'}
         message = SimpleNamespace(
             statusword=[0x0E37],
             position=[0.0],
@@ -53,7 +56,7 @@ class ConnectionStateTest(unittest.TestCase):
             controlword=[0x000F],
         )
 
-        motor = self.monitor._motor_from_status(message, 0, 1, 10.0)
+        motor = self.monitor._state._motor_from_status(message, 0, 1, 10.0)
 
         self.assertTrue(motor['internal_limit_active'])
         self.assertIn('Internal limit active', motor['status_text'])
@@ -61,19 +64,19 @@ class ConnectionStateTest(unittest.TestCase):
     def test_high_rate_feedback_updates_freshness_without_reprocessing_axes(self):
         self.monitor.monitoring_enabled = True
         self.monitor.feedback_process_hz = 100.0
-        self.monitor._last_motor_status_at = 10.0
-        self.monitor._last_motor_status_processed_at = 10.0
+        self.monitor._state.last_status_at = 10.0
+        self.monitor._state.last_processed_at = 10.0
         self.monitor.max_motors = 50
-        self.monitor._motor_from_status = lambda *_args: self.fail(
+        self.monitor._state._motor_from_status = lambda *_args: self.fail(
             'feedback inside the 100 Hz window must not be converted again'
         )
         message = SimpleNamespace(controller_index=[0])
 
         with patch('motion_state_monitor.monitor_node.time.time', return_value=10.005):
-            self.monitor._motor_status_callback(message)
+            self.monitor._state._motor_status_callback(message)
 
-        self.assertEqual(self.monitor._last_motor_status_at, 10.005)
-        self.assertEqual(self.monitor._last_motor_status_processed_at, 10.0)
+        self.assertEqual(self.monitor._state.last_status_at, 10.005)
+        self.assertEqual(self.monitor._state.last_processed_at, 10.0)
 
     def test_bus_discovery_does_not_override_runtime_offline(self):
         motors = [{
@@ -245,8 +248,8 @@ class ConnectionStateTest(unittest.TestCase):
         self.monitor.ethercat_status_topic = '/ethercat_status'
         self.monitor._ethercat.status = {}
         self.monitor._motor_metadata = {}
-        self.monitor._motors = {}
-        self.monitor._started_at = 0.0
+        self.monitor._state.motors = {}
+        self.monitor._state.started_at = 0.0
         self.monitor._ethercat._skipped_ethercat_scan = lambda now: {
             'available': False, 'complete': False, 'skipped': True,
             'slaves_count': 0, 'slaves': [], 'scanned_at': now,
@@ -290,7 +293,7 @@ class ConnectionStateTest(unittest.TestCase):
     def test_ethercat_scan_rescans_bus_before_reading_sii(self):
         # A cached frame from the stopped Motor Manager must not block a scan
         # after the master is confirmed idle.
-        self.monitor._last_motor_status_at = 10**12
+        self.monitor._state.last_status_at = 10**12
         self.monitor.disconnected_timeout_sec = 2.0
         self.monitor._motor_metadata = {}
         listing = '''=== Master 0, Slave 0 ===
@@ -338,7 +341,7 @@ Identity:
         )
 
     def test_ethercat_scan_reads_duplicate_slave_positions_from_each_master(self):
-        self.monitor._last_motor_status_at = None
+        self.monitor._state.last_status_at = None
         self.monitor._motor_metadata = {}
         listing = '''=== Master 0, Slave 0 ===
 State: PREOP
@@ -416,7 +419,7 @@ Identity:
         )
 
     def test_ethercat_scan_blocks_rescan_while_slave_is_operational(self):
-        self.monitor._last_motor_status_at = None
+        self.monitor._state.last_status_at = None
         self.monitor.disconnected_timeout_sec = 2.0
         self.monitor._motor_metadata = {}
         listing = '=== Master 0, Slave 0 ===\nState: OP\n'
@@ -440,7 +443,7 @@ Identity:
         self.assertNotIn(['ethercat', 'rescan'], calls)
 
     def test_ethercat_scan_blocks_rescan_while_master_is_claimed_during_startup(self):
-        self.monitor._last_motor_status_at = None
+        self.monitor._state.last_status_at = None
         self.monitor.disconnected_timeout_sec = 2.0
         self.monitor._motor_metadata = {}
         calls = []
@@ -519,7 +522,7 @@ Identity:
                 'slave_position': 0,
             },
         }
-        self.monitor._metadata_for = lambda axis: self.monitor._motor_metadata[axis]
+        self.monitor._state._metadata_for = lambda axis: self.monitor._motor_metadata[axis]
         runtime = [{
             'controller_index': 0,
             'display_name': 'Axis 0',
@@ -531,7 +534,7 @@ Identity:
             'connection_connected': True,
         }]
 
-        axes = self.monitor._configured_axis_list(runtime)
+        axes = self.monitor._state._configured_axis_list(runtime)
         rows = self.monitor._build_matching_rows(
             [{
                 'master_index': 0,
@@ -760,6 +763,8 @@ class MotorScanActionTest(unittest.TestCase):
         monitor = MotionStateMonitor.__new__(MotionStateMonitor)
         monitor._ethercat = EthercatScanner(monitor)
         monitor._dynamixel = DynamixelScanner(monitor)
+        # 축 상태 수신·발행도 별도 객체가 맡는다 (§6-36)
+        monitor._state = StatePublisher(monitor)
         monitor._scan_sequence = 0
         monitor._active_scan_id = ''
         monitor._scan_progress_publisher = None
@@ -781,8 +786,8 @@ class MotorScanActionTest(unittest.TestCase):
         )
         monitor._dynamixel._skipped_dynamixel_scan = lambda now: {'skipped': True}
         monitor._ethercat._current_ethercat_status = lambda now: {}
-        monitor._current_motor_list = lambda now: []
-        monitor._configured_axis_list = lambda motors: []
+        monitor._state._current_motor_list = lambda now: []
+        monitor._state._configured_axis_list = lambda motors: []
         monitor._build_matching_rows = lambda slaves, axes: []
 
         result = monitor._build_scan_result(
@@ -806,8 +811,8 @@ class MotorScanActionTest(unittest.TestCase):
             calls.append('dynamixel') or {'available': True, 'complete': True, 'devices_count': 1}
         )
         monitor._ethercat._current_ethercat_status = lambda now: {}
-        monitor._current_motor_list = lambda now: []
-        monitor._configured_axis_list = lambda motors: []
+        monitor._state._current_motor_list = lambda now: []
+        monitor._state._configured_axis_list = lambda motors: []
         monitor._build_matching_rows = lambda slaves, axes: []
 
         result = monitor._build_scan_result(scan_ethercat=True, scan_dynamixel=True)
