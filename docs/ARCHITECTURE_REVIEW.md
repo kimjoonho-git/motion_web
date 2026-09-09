@@ -907,7 +907,30 @@ Protocol 2.0 Ping 범위도 그대로다. 코드 이동이며 규약 변경이 �
 
 - 코드 검증 · `ruff check src` 55건 유지 · 신규 0건
 - 실행 검증 · `pytest` 1,005건 통과 · 실패 0
-- 실물 검증 · 아래 별도 기록
+- 실물 검증 · **AC Servo 물리 스캔 1회** · `scan_id 1788912484901-1` ·
+  새 조율 경로가 처음부터 끝까지 돌았다
+
+```
+motor_service_was_active: True → restore_required: True → restored: True
+motor_runtime_recovery: expected_axes [0] · online_axes [0] · recovered True · 2.185s
+physical_scan: rescan_performed true · source ethercat_rescan_sii_and_register
+project_comparison: compatible true · required [0] · unused [1]
+결과: 부분 완료 (Master 1 미연결)
+```
+
+진행 이벤트 9건이 순서대로 쌓였다 · `started` → `ethercat_preflight` →
+`ethercat_rescan` → `ethercat_rescan_done`(2.915ms) → `ethercat_topology` …
+`_progress_lock`과 `_progress`가 서비스로 옮겨간 뒤에도 그대로다.
+
+스캔 후 · 실행 컨텍스트 `ready` · 차단 없음 · 모터 1축 온라인 ·
+`Master 0 [0:OP]` · `runtime: ready`
+
+**모터 서비스 일시 정지와 복구가 서비스 안에서 정상 동작했다.** 이것이
+`_call_ethercat_service_locked` 187줄의 핵심이고, 이번 이동에서 가장 위험한
+부분이었다.
+
+- 실물 미검증 · Dynamixel 스캔 · 포트 부재
+- 실물 미검증 · `scan_all`(전체 검색) · AC Servo·Dynamixel 동시 경로
 
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
