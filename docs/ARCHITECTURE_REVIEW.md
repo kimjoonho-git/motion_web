@@ -1352,7 +1352,21 @@ motion-mappings ['ㄴㅇㄹ']
 
 - 코드 검증 · `ruff check src` 55건 유지 · 신규 0건
 - 실행 검증 · `pytest` 1,008건 통과 · 실패 0
-- 실물 검증 · 아래 별도 기록
+- 실물 검증 · `colcon build` · 재시작 · 실행 컨텍스트 `ready` · 노드 확인 8건 성공
+- 실물 검증 · `GET /api/motion-run/status` · `_empty_status`가 만드는 31개 필드가
+  그대로 나온다 · `state: idle` · `run_mode: once` · `repeat_mode: direct`
+- 실물 검증 · `POST /api/motion-run/check` · **계획 수립 경로 전체 통과** ·
+  실가동 모션 파일 `ㄴㅇㄹ.json` + 매핑 `ㄴㅇㄹ.yaml`
+
+```
+axis_count 1 · duration_sec 3.26 · period_sec 0.02 · sample_count 164
+initial_move_time_sec 5.0 · continuous_available True · clamped_axis_count 0
+```
+
+모터 참조 해석 · 목표 범위 판정 · 보간 · 클램프 · 연속 재생 가능 판정이
+모두 새 모듈에서 돌았다 · 모터를 움직이지 않는 검사 경로다.
+
+- 실물 미검증 · 실제 모션 재생 · 모터가 움직인다
 
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
