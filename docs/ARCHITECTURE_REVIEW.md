@@ -2941,6 +2941,73 @@ motor_operation    operation_id motor-4ec1c8a6… · status partial
 
 남은 군집 · 기동 시 마이그레이션 4종 ~181줄 · 한 번만 도는 코드다.
 
+### 6-48. 전체 재분석 · 스튜디오만 공용 락에 빠져 있었다
+
+분해가 끝난 뒤 구조를 다시 훑었다 · 그 과정에서 나온 유일한 실결함이다.
+
+#### 결함 · 한쪽만 잡는 락
+
+`<프로젝트>/motions/`를 **세 프로세스**가 쓴다.
+
+| 쓰는 쪽 | 락 |
+| --- | --- |
+| 웹 브리지 `ProjectRepository._atomic_write` | `store.locked_update` **잡음** |
+| 매핑 관리자 `motion_mapping_manager:342` | `locked_update` **잡음** |
+| **스튜디오 `ProjectStore._atomic_write`** | `atomic_write_text`만 · **안 잡음** |
+
+웹 쪽 주석이 이미 답을 적어두고 있었다.
+
+> 두 쪽이 같은 락 파일에서 만나야 한다.
+
+**스튜디오가 그 자리에 나오지 않았다.** 한쪽만 잡는 락은 아무것도 막지 못한다 ·
+원자적 기록은 찢긴 읽기만 막을 뿐, 각자 읽고 각자 쓰면 나중 기록이 앞선 수정을
+지운다. §6-24가 남긴 마지막 구멍이다.
+
+#### 시험은 원자성이 아니라 **락을 잡는가**를 본다
+
+`test_project_store_locking.py` 3건 · `locked_update`를 감싸 **어느 경로의 락을
+잡았는지** 기록하고 대조한다.
+
+기록이 원자적인지만 보는 시험으로는 이 결함이 **통과해버린다** · 실제로
+`atomic_write_text`만으로도 파일은 온전하게 쓰인다.
+
+락을 되돌려 `1 failed`를 확인했다.
+
+#### 함께 확인한 것 · 이상 없음
+
+| 검사 | 결과 |
+| --- | --- |
+| 순환 import | **0** |
+| `getattr(self,'없는이름')` AST 감사 | **0** |
+| `pytest` | **1,031건** 통과 |
+| `ruff` | 55건 기준선 |
+
+#### 오해였던 것 · `ProjectStore` ≠ `ProjectRepository`
+
+이름이 겹쳐(`create_project`·`delete_project`·`list_projects`) 중복으로 보였다.
+**다른 물건이다.**
+
+| | 다루는 것 | 위치 |
+| --- | --- | --- |
+| `ProjectStore` | 스튜디오 프로젝트 | `runtime/studio_projects/*.json` |
+| `ProjectRepository` | 통합 프로젝트 | `project.json` |
+
+겹치는 것은 `motions/` 디렉터리 **하나뿐**이고, 그게 위 결함이었다.
+
+#### 남겨둔 것 · 판단 필요
+
+**죽은 코드 7건 · 약 140줄** · 시험·다른 모듈·프런트 어디에서도 부르지 않는다.
+
+| 함수 | 줄 | 파일 |
+| --- | --- | --- |
+| `_publish_initial_action_request` · `_wait_for_initial_action_start` · `_wait_for_initial_action_completion` | 71 | `motion_run_manager.py` |
+| `interpolate_range` · `scale_time_segment` | 45 | `curve_engine.py` |
+| `resolve_display_progress` | 12 | `motion_group_display.py` |
+| `selected_published_names` | 12 | `project_service.py` |
+
+**직접 시험이 없는 신규 모듈 2건** · `motor_runtime_store`(420줄) ·
+`motor_values`(157줄) · 간접 커버는 된다.
+
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
 - 파일 1,000줄 이하 · 함수 60줄 이하 · `Node` 서브클래스 500줄 이하
