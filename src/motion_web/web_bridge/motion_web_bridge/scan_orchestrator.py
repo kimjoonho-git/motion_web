@@ -76,6 +76,8 @@ class ScanOrchestrator:
         #: 노드에서 그대로 옮겼다 · 진행 이벤트를 락 안에서 다시 읽는다
         self._progress_lock = threading.RLock()
         self._progress: Dict[str, Any] = self._empty_progress()
+        #: 중복 진행 이벤트를 거르는 표식 · 토픽과 Action이 같은 것을 보낸다
+        self._seen_events: set = set()
 
     @staticmethod
     def _empty_progress() -> Dict[str, Any]:
@@ -90,6 +92,7 @@ class ScanOrchestrator:
         """프로젝트가 바뀌면 이전 스캔 진행 상태를 남기지 않는다."""
         with self._progress_lock:
             self._progress = self._empty_progress()
+            self._seen_events = set()
 
     def progress_callback(self, msg: String) -> None:
         try:
@@ -120,6 +123,21 @@ class ScanOrchestrator:
                     'project_id': self.repository.selected_project_id(),
                     'project_generation': self.bridge._current_project_generation(),
                 }
+                self._seen_events = set()
+            # 같은 이벤트가 토픽과 Action feedback 양쪽으로 온다 · 한 번만 센다
+            key = (
+                scan_id,
+                str(event.get('phase') or ''),
+                str(event.get('transport') or ''),
+                float(event.get('timestamp') or 0.0),
+            )
+            seen = getattr(self, '_seen_events', None)
+            if seen is None:
+                seen = set()
+                self._seen_events = seen
+            if key in seen:
+                return
+            seen.add(key)
             events = self._progress.setdefault('events', [])
             recorded = dict(event)
             recorded['index'] = len(events)

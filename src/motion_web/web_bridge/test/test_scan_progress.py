@@ -86,3 +86,30 @@ def test_scan_progress_groups_events_and_marks_completion():
         'started', 'ethercat_rescan', 'partial'
     ]
     assert payload['progress']['running'] is False
+
+
+def test_progress_records_each_event_once_from_both_channels():
+    """토픽과 Action feedback이 같은 이벤트를 보낸다 · 한 번만 센다 (§6-26).
+
+    Action 전환 직후 진행 이벤트가 2배로 쌓였다. 브리지가 토픽 구독과
+    feedback 콜백을 모두 갖고 있는데 서버가 양쪽으로 같은 것을 보내기 때문이다.
+    """
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge.project_repository = SimpleNamespace(selected_project_id=lambda: 'project-1')
+    bridge._current_project_generation = lambda: 3
+    bridge.get_logger = lambda: SimpleNamespace(warn=lambda _message: None)
+    scan = scan_orchestrator(bridge)
+
+    event = {
+        'scan_id': 'scan-9',
+        'phase': 'ethercat_rescan',
+        'transport': 'ethercat',
+        'message': '재열거',
+        'timestamp': 12.5,
+    }
+    scan.record_progress_event(dict(event))          # 토픽
+    scan.record_progress_event(dict(event))          # Action feedback · 같은 것
+    scan.record_progress_event({**event, 'phase': 'ethercat_topology'})
+
+    phases = [e['phase'] for e in scan.progress()['progress']['events']]
+    assert phases == ['ethercat_rescan', 'ethercat_topology']

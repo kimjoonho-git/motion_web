@@ -1433,9 +1433,37 @@ string scan_id · phase · transport · message · details · float64 timestamp
 #### 검증
 
 - 코드 검증 · `ruff check src` 55건 유지 · 신규 0건
-- 실행 검증 · `pytest` **1,011건 통과** · 실패 0 · Action 계약 3건 신규
+- 실행 검증 · `pytest` **1,012건 통과** · 실패 0 · Action 계약 3건 + 중복 제거 1건 신규
   (장치 종류 사이 취소 · 취소 없을 때 둘 다 실행 · 종류 표 완전성)
-- 실물 검증 · 아래 별도 기록
+- 실물 검증 · 재시작 후 `motion_state_monitor` 정상 기동 · AC Servo 물리 스캔 2회
+- 실물 검증 · **Action 경로로 돌았다** · 브리지 로그에 `Trigger 서비스로 진행` 0건
+- 실물 검증 · 진행 이벤트 8건이 Action feedback으로 순서대로 도착
+
+```
+0 started            EtherCAT 직접 스캔을 시작합니다
+1 ethercat_preflight EtherCAT Slave 운전 상태를 확인합니다
+2 ethercat_rescan    기존 Slave 정보를 폐기하고 물리 EtherCAT 버스를 재열거합니다
+3 ethercat_rescan_done  ethercat rescan 명령 실제 실행 완료 (3.385ms)
+4 ethercat_topology  새로 열거된 EtherCAT Slave 1개를 확인했습니다
+5 ethercat_slave_read   Master 0 · Slave 0: SII EEPROM과 Alias 레지스터를 읽습니다
+6 ethercat_slave_done   Master 0 · Slave 0: Alias 103, Serial 402982152 읽기
+7 failed             Master 1: 재스캔 후 응답한 Slave가 없습니다
+```
+
+`rescan_performed: true` · 모터 서비스 일시 정지·복구 정상 · `cancelled: false`
+
+#### 첫 검증에서 잡은 결함 · 진행 이벤트가 2배로 쌓였다
+
+브리지는 진행 토픽을 구독하면서 Action feedback도 받는다. 서버가 **같은 이벤트를
+양쪽으로** 보내므로 진행 목록이 두 배가 됐다 · 첫 스캔에서 16건이 나왔다.
+
+`(scan_id, phase, transport, timestamp)`로 한 번만 세도록 고쳤다 · 재스캔에서
+8건으로 정상. 검증 1건 추가.
+
+토픽을 없애지 않은 이유는 §6-26 본문 그대로다 · 되돌림 경로가 그것을 쓴다.
+
+- 실물 미검증 · **취소** · 스캔이 3초에 끝나 장치 종류 사이를 노려 취소하기 어렵고,
+  Dynamixel 장치가 없어 건너뛸 대상 자체가 없다 · 단위 시험으로만 확인했다
 
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
