@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { indexHtml } from '../tools/index_html.mjs';
 
 import { recoveryTargetForMotor } from '../static/js/motion_test.js';
 
-const html = readFileSync(new URL('../static/index.html', import.meta.url), 'utf8');
+const html = indexHtml;
 const dom = readFileSync(new URL('../static/js/dom.js', import.meta.url), 'utf8');
 const controller = readFileSync(new URL('../static/js/motion_test.js', import.meta.url), 'utf8');
 

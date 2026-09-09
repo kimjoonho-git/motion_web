@@ -1,11 +1,9 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
+import { indexHtml } from '../tools/index_html.mjs';
 
-const index = fs.readFileSync(
-  new URL('../static/index.html', import.meta.url),
-  'utf8',
-);
+const index = indexHtml;
 const navigation = fs.readFileSync(
   new URL('../static/js/workspace_navigation.js', import.meta.url),
   'utf8',

@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { indexHtml } from '../tools/index_html.mjs';
 
-const html = readFileSync(new URL('../static/index.html', import.meta.url), 'utf8');
+const html = indexHtml;
 const dom = readFileSync(new URL('../static/js/dom.js', import.meta.url), 'utf8');
 const controller = readFileSync(new URL('../static/js/midi_monitor.js', import.meta.url), 'utf8');
 

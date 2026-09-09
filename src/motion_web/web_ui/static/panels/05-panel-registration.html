@@ -1,0 +1,230 @@
+<!-- 모터 등록·설정
+     `index.html`에서 떼어낸 조각 · 원본 397~623줄 · §6-44
+     들여쓰기를 그대로 둔다 · 서버가 자리표시자 줄을 이 내용으로 바꾼다 -->
+      <section class="registration-panel workspace-panel settings-editor-page hidden" data-workspace-panel="config" aria-label="모터 관리">
+        <div class="section-head workspace-page-head">
+          <div><strong>모터 관리</strong><small>연결 확인부터 모션 실행 준비까지 한 화면에서 관리합니다</small></div>
+          <div class="registry-actions">
+            <button id="motorStatusRefreshButton" type="button">모터 상태 확인</button>
+          </div>
+        </div>
+
+        <section class="motor-readiness-overview" aria-label="모터 준비 전체 흐름">
+          <div class="motor-readiness-summary">
+            <div>
+              <span>전체 준비 상태</span>
+              <strong id="motorReadinessHeadline">상태 확인 중</strong>
+            </div>
+            <div>
+              <span>준비 축</span>
+              <strong id="motorReadinessAxisCount">0/0축</strong>
+            </div>
+            <div>
+              <span>현재 단계</span>
+              <strong id="motorReadinessCurrentStep">확인 중</strong>
+            </div>
+            <div>
+              <span>오류</span>
+              <strong id="motorReadinessFaultCount">0축</strong>
+            </div>
+          </div>
+          <ol id="motorReadinessSteps" class="motor-readiness-steps">
+            <li data-motor-readiness-step="service"><span>1</span><strong>서비스·전원</strong><small>확인 중</small></li>
+            <li data-motor-readiness-step="connection"><span>2</span><strong>물리 연결·식별</strong><small>확인 중</small></li>
+            <li data-motor-readiness-step="configuration"><span>3</span><strong>모터축 설정</strong><small>확인 중</small></li>
+            <li data-motor-readiness-step="application"><span>4</span><strong>저장·실행 적용</strong><small>확인 중</small></li>
+            <li data-motor-readiness-step="mapping"><span>5</span><strong>모션축 매칭</strong><small>확인 중</small></li>
+            <li data-motor-readiness-step="drive"><span>6</span><strong>서보·토크 준비</strong><small>확인 중</small></li>
+            <li data-motor-readiness-step="verification"><span>7</span><strong>조그·동작 검증</strong><small>실물 확인 필요</small></li>
+          </ol>
+          <div class="motor-readiness-next">
+            <div>
+              <span>다음 작업</span>
+              <strong id="motorReadinessNextAction">현재 상태를 확인하고 있습니다.</strong>
+            </div>
+            <div class="motor-readiness-control-groups">
+              <div class="motor-readiness-control-group">
+                <span>장비 제어</span>
+                <div class="registry-actions">
+                  <button id="allAcServoOnButton" class="primary" type="button" disabled>전체 AC 서보 켜기</button>
+                  <button id="allAcServoOffButton" class="off" type="button" disabled>전체 AC 서보 끄기</button>
+                </div>
+              </div>
+              <div class="motor-readiness-control-group motor-readiness-system-group">
+                <span>시스템</span>
+                <div class="registry-actions">
+                  <button id="motorControlRestartButton" class="danger" type="button" disabled>모터 제어 재시작</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="registry-message">
+            Dynamixel · Torque Enable/Disable · 동작 명령 시 Torque Enable
+          </div>
+        </section>
+
+        <section class="type-summary" aria-label="모터 종류 요약">
+          <div class="section-head">
+            <strong>현재 실행 장비 상태</strong>
+            <span id="motorTypeSummaryDetail">물리 감지는 최근 장비 검색 결과를 기준으로 합니다</span>
+          </div>
+          <div class="motor-type-status-wrap">
+            <table class="motor-type-status-table">
+              <thead>
+                <tr>
+                  <th>모터 종류</th>
+                  <th title="현재 선택 프로젝트에 저장된 활성 모터축">프로젝트 설정</th>
+                  <th title="최근 장비 검색에서 실제 응답한 장치">물리 감지</th>
+                  <th title="현재 실행 시스템에 실제 적용된 모터축">실행 적용</th>
+                  <th title="motor_manager 상태 메시지에 포함된 축 수이며 물리 연결 수가 아닙니다">런타임 보고 축</th>
+                  <th>오류</th>
+                  <th>서보·토크 ON</th>
+                  <th title="물리 감지, 실행 적용, 모션 매칭, 위치 범위 및 구동 조건을 충족한 축">제어 가능</th>
+                </tr>
+              </thead>
+              <tbody id="motorTypeRows">
+                <tr><td colspan="8" class="empty">장비 상태를 확인하고 있습니다</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="settings-panel motor-config-file-panel" aria-label="모터 설정 파일">
+          <div class="section-head">
+            <strong>현재 프로젝트 모터축 설정</strong>
+            <span id="motorConfigState">불러오지 않음</span>
+          </div>
+          <div class="registry-actions settings-file-actions">
+            <button id="reloadMotorConfigButton" type="button">설정 불러오기</button>
+            <button id="deleteMotorConfigButton" class="danger" type="button" disabled>설정 삭제</button>
+          </div>
+        </section>
+
+        <section class="axis-setup-step settings-step-card" aria-label="모터 타입별 검색">
+          <div class="section-head axis-settings-head">
+            <strong>1. 장비 검색</strong>
+          </div>
+          <div class="axis-scan-grid">
+            <section class="axis-type-scan" aria-label="전체 모터 검색">
+              <button id="scanAllButton" class="primary" type="button">전체 모터 검색</button>
+              <span id="scanAllResult">대기</span>
+            </section>
+            <section class="axis-type-scan" aria-label="AC Servo 검색">
+              <button id="scanButton" class="primary" type="button">AC Servo 검색</button>
+              <span id="scanResult">대기</span>
+            </section>
+            <section class="axis-type-scan" aria-label="Dynamixel 검색">
+              <button id="dynamixelScanButton" class="primary" type="button">Dynamixel 검색</button>
+              <span id="dynamixelScanResult">대기</span>
+            </section>
+          </div>
+        </section>
+
+        <section class="axis-settings-panel settings-step-card" aria-label="모터 축 설정 표">
+          <div class="section-head axis-settings-head">
+            <strong>2. 검색 결과 확인 및 축 편집</strong>
+            <span id="axisSummary">설정 파일을 불러오는 중</span>
+          </div>
+
+          <div id="axisSettingsTabs" class="tabbar axis-settings-tabs" role="tablist" aria-label="모터 축 설정 화면">
+            <button class="tab-button active" type="button" data-axis-settings-tab="current">축 목록 편집</button>
+            <button class="tab-button" type="button" data-axis-settings-tab="table">상세 설정 표</button>
+            <button class="tab-button" type="button" data-axis-settings-tab="raw">원본 보기</button>
+          </div>
+
+          <div class="axis-settings-tab-panel" data-axis-settings-panel="current">
+            <div id="axisWorkflowStatus" class="axis-workflow-status" data-state="loading">
+              <span>현재 상태</span>
+              <strong id="axisWorkflowState">설정 확인 중</strong>
+              <p id="axisWorkflowDetail">현재 프로젝트와 실제 모터 상태를 확인하고 있습니다.</p>
+              <small id="axisWorkflowNext">다음 작업을 확인하고 있습니다.</small>
+            </div>
+            <div id="axisActionMessage" class="registry-message">전체 모터 검색을 실행하면 신규 축이 자동 선택됩니다</div>
+            <div class="axis-edit-toolbar">
+              <div class="registry-actions axis-edit-main-actions">
+                <button id="addAxisButton" class="primary" type="button" disabled>선택 축 추가</button>
+                <button id="updateAxisIdentityButton" type="button" disabled>선택 축 검색값 반영</button>
+                <button id="setAxisModelProfileButton" type="button" disabled>모델·운전 프로필 설정</button>
+                <button id="toggleAxisButton" type="button" disabled>선택 축 사용상태 변경</button>
+              </div>
+              <div class="registry-actions axis-edit-list-actions">
+                <button id="sortAxisButton" type="button" disabled>축 번호 정렬</button>
+              </div>
+              <div class="registry-actions axis-edit-danger-actions">
+                <button id="deleteAxisButton" class="danger" type="button" disabled>선택 축 삭제</button>
+              </div>
+            </div>
+            <div class="matching-table-wrap">
+              <table class="matching-table">
+                <thead>
+                  <tr>
+                    <th>선택</th>
+                    <th>축·이름</th>
+                    <th>실제 장치 식별</th>
+                    <th>모델·운전 프로필</th>
+                    <th>연결 정보</th>
+                    <th>설정·실행 적용</th>
+                    <th>모션 매칭</th>
+                    <th>서보·토크</th>
+                    <th>조그·동작</th>
+                    <th>모션 실행</th>
+                    <th>최종 상태</th>
+                  </tr>
+                </thead>
+                <tbody id="axisRows">
+                  <tr>
+                    <td colspan="11" class="empty">설정 파일을 불러오거나 모터 스캔을 실행하세요</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <details class="axis-hardware-tools">
+              <summary>고급 장비 설정</summary>
+              <p>AC Servo · EtherCAT EEPROM Alias</p>
+              <div class="registry-actions">
+                <button id="writeEthercatAliasButton" type="button" disabled>EEPROM Alias 변경</button>
+              </div>
+            </details>
+          </div>
+
+          <div class="axis-settings-tab-panel hidden" data-axis-settings-panel="table">
+            <div class="registry-message">값 수정 → 초안 반영 → 변경 내용 검증 후 저장</div>
+            <div id="motorConfigTablePath" class="registry-message config-file-path">설정 파일: -</div>
+            <div class="registry-message">파일 관리 · 프로젝트 파일 ⋮</div>
+            <div class="registry-actions">
+              <button id="updateConfigTableButton" type="button" disabled>표 변경값을 초안에 반영</button>
+            </div>
+            <div class="config-profile-help">
+              <strong>프로파일 값 기준</strong>
+              <span>profile_position_value / profile_velocity_value / profile_effort_value는 위치, 속도, 토크 명령에 사용할 내부 인터페이스 ID입니다. AC 서보에서는 보통 목표 위치(Target position), 목표 속도(Target velocity), 목표 토크(Target effort) PDO 항목과 연결됩니다.</span>
+            </div>
+            <div id="motorConfigTableRows" class="config-table-groups">
+              <div class="empty config-table-empty">설정 파일을 불러오는 중</div>
+            </div>
+          </div>
+
+          <div class="axis-settings-tab-panel hidden" data-axis-settings-panel="raw">
+            <pre id="motorConfigRawText" class="config-raw-text">설정 파일을 불러오는 중</pre>
+          </div>
+        </section>
+
+        <section class="axis-setup-step settings-step-card settings-final-card" aria-label="모터 설정 저장 및 실행 적용">
+          <div class="section-head axis-settings-head">
+            <strong>3. 저장·실행 적용</strong>
+            <span>프로젝트 설정 저장 → 실행 설정 적용</span>
+          </div>
+          <div class="registry-message settings-final-note">
+            저장 · 프로젝트 파일 │ 적용 · 실행 설정 · motor_manager 재시작
+          </div>
+          <div class="settings-final-actions">
+            <div class="settings-final-action">
+              <span>프로젝트 설정</span>
+              <button id="saveAxisConfigButton" class="primary" type="button" disabled>변경 내용 검증 후 저장</button>
+            </div>
+            <div class="settings-final-action settings-final-apply">
+              <span>실행 설정</span>
+              <button id="applyAxisConfigButton" class="danger" type="button" disabled>설정 적용 및 재시작</button>
+            </div>
+          </div>
+        </section>
+      </section>

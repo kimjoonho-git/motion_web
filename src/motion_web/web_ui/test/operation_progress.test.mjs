@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { stylesCss } from '../tools/index_html.mjs';
 
 import { createOperationProgressManager } from '../static/js/operation_progress.js';
 
@@ -150,7 +151,7 @@ test('manager initialization clears a restored blocking overlay state', () => {
 });
 
 test('scan log scrolls without clipping the completion action footer', () => {
-  const styles = readFileSync(new URL('../static/styles.css', import.meta.url), 'utf8');
+  const styles = stylesCss;
   assert.match(
     styles,
     /\.operation-progress-dialog\s*\{[^}]*display:\s*flex;[^}]*flex-direction:\s*column;/s,

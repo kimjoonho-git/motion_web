@@ -1,0 +1,471 @@
+<!-- 모션 데이터
+     `index.html`에서 떼어낸 조각 · 원본 914~1381줄 · §6-44
+     들여쓰기를 그대로 둔다 · 서버가 자리표시자 줄을 이 내용으로 바꾼다 -->
+      <section class="motion-data-panel workspace-panel hidden" data-workspace-panel="motion" aria-label="모션 데이터">
+        <div class="section-head workspace-page-head">
+          <div><strong id="motionWorkspaceTitle">모션 파일</strong><small id="motionWorkspaceSubtitle">현재 프로젝트의 모션 데이터를 확인하고 분석합니다</small></div>
+        </div>
+        <div id="motionWorkflowGuide" class="workspace-guide" aria-label="모션 사용 순서">
+          <strong>사용 순서</strong>
+          <ol><li>모션 파일 준비</li><li>모션축 설정</li><li>MIDI 입력 설정(선택)</li><li>실행·시험에서 모션 실행</li></ol>
+        </div>
+
+        <div class="motion-tab-panel" data-motion-panel="files">
+          <div class="motion-file-layout">
+            <section class="motion-file-column" aria-label="모션 파일 목록">
+              <div class="section-head compact">
+                <strong>현재 프로젝트 모션 파일</strong>
+                <span id="motionFileMessage">현재 파일 확인 중</span>
+              </div>
+              <div class="motion-file-upload">
+                <div class="registry-message">목록은 저장·삭제·프로젝트 전환 시 자동 갱신됩니다. 파일을 선택한 뒤 상세 화면에서 스튜디오 내보내기·재생 등록·삭제를 관리합니다.</div>
+              </div>
+              <div class="table-wrap motion-file-table-wrap">
+                <table class="motion-file-table">
+                  <thead>
+                    <tr>
+                      <th>파일명</th>
+                      <th>상태</th>
+                      <th>시간</th>
+                      <th>ID</th>
+                      <th>크기</th>
+                    </tr>
+                  </thead>
+                  <tbody id="motionFileRows">
+                    <tr>
+                      <td colspan="5" class="empty">저장된 모션 파일이 없습니다</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            <section class="motion-file-detail" aria-label="모션 파일 상세">
+              <div class="section-head compact">
+                <strong>선택 파일 요약</strong>
+                <div class="registry-actions">
+                  <span>읽기 전용</span>
+                  <button id="exportMotionFileToStudioButton" type="button" disabled>스튜디오로 내보내기</button>
+                  <button id="registerMotionFileButton" type="button" disabled>재생 등록</button>
+                  <button id="unregisterMotionFileButton" type="button" class="danger" disabled>재생 등록 해제</button>
+                  <button id="deleteMotionFileButton" type="button" class="danger" disabled>삭제</button>
+                </div>
+              </div>
+              <div id="motionFileSummary" class="motion-file-summary">
+                <div class="empty">파일을 선택하세요</div>
+              </div>
+
+              <div class="motion-file-detail-grid">
+                <section class="motion-file-subsection" aria-label="모션 검사">
+                  <div class="section-head compact">
+                    <strong>검사 / 보간</strong>
+                    <span>20ms 기준</span>
+                  </div>
+                  <div id="motionFileValidation" class="motion-value-table">파일을 선택하세요</div>
+                </section>
+
+                <section class="motion-file-subsection motion-graph-section" aria-label="모션 그래프">
+                  <div class="section-head compact">
+                    <strong>모션 그래프</strong>
+                    <span>모션 ID별 위치값</span>
+                  </div>
+                  <canvas id="motionFileGraphCanvas" class="motion-graph" width="1040" height="280"></canvas>
+                  <div id="motionFileGraphAxisToggles" class="motion-run-graph-axis-toggles" aria-label="모션 파일 그래프 축 표시 선택"></div>
+                  <div id="motionFileGraphMessage" class="registry-message">파일을 선택하세요</div>
+                </section>
+              </div>
+
+              <section class="motion-file-subsection" aria-label="모션 ID 목록">
+                <div class="section-head compact">
+                  <strong>모션 ID 목록</strong>
+                  <span>시작 / 종료 / 최솟값 / 최댓값</span>
+                </div>
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>모션 ID</th>
+                        <th>개수</th>
+                        <th>시작값</th>
+                        <th>끝값</th>
+                        <th>최솟값</th>
+                        <th>최댓값</th>
+                        <th>시간</th>
+                        <th>보간</th>
+                      </tr>
+                    </thead>
+                    <tbody id="motionFileMotionIdRows">
+                      <tr>
+                        <td colspan="8" class="empty">파일을 선택하세요</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+
+              <section class="motion-file-subsection" aria-label="모션 원본 보기">
+                <div class="section-head compact">
+                  <strong>원본 보기</strong>
+                  <span>전체 파일</span>
+                </div>
+                <pre id="motionFilePreviewRows" class="motion-file-preview-text">파일을 선택하세요</pre>
+              </section>
+            </section>
+          </div>
+        </div>
+
+        <div class="motion-tab-panel settings-editor-page hidden" data-motion-panel="mapping">
+          <div class="motion-mapping-layout">
+            <section class="motion-file-subsection settings-step-card" aria-label="모션축 설정 파일">
+              <div class="section-head compact">
+                <strong>1. 설정 파일 선택</strong>
+                <span id="motionMappingMessage">현재 매칭 확인 중</span>
+              </div>
+              <div class="motion-mapping-toolbar">
+                <label class="manual-field">
+                  <span>편집할 매칭</span>
+                  <select id="motionMappingSelect">
+                    <option value="">매핑 파일 없음</option>
+                  </select>
+                </label>
+                <div class="registry-actions">
+                  <button id="refreshMotionMappingsButton" type="button">목록 새로고침</button>
+                  <button id="newMotionMappingButton" type="button">새 매칭 작성</button>
+                </div>
+              </div>
+              <div class="motion-mapping-form">
+                <label class="manual-field">
+                  <span>매핑 이름</span>
+                  <input id="motionMappingName" type="text" value="" placeholder="예: face_test_mapping" autocomplete="off" autocapitalize="off" spellcheck="false">
+                </label>
+                <label class="manual-field">
+                  <span>모션 파일</span>
+                  <select id="motionMappingFileSelect">
+                    <option value="">모션 파일 선택</option>
+                  </select>
+                </label>
+                <div class="registry-actions align-end">
+                  <button id="importMotionIdsButton" type="button">모션 ID 반영</button>
+                </div>
+              </div>
+            </section>
+
+            <section class="motion-file-subsection settings-step-card" aria-label="모션축 설정 표">
+              <div class="section-head compact">
+                <strong>2. 모션축 편집</strong>
+                <span>모션 ID를 현재 프로젝트의 AC 서보 축 또는 다이나믹셀 ID에 연결</span>
+              </div>
+              <div class="registry-actions settings-step-actions">
+                <button id="addMotionIdButton" type="button">모션 ID 추가</button>
+                <button id="generateMotionIdsButton" type="button">모터축 행 자동 생성</button>
+              </div>
+              <div class="table-wrap motion-mapping-table-wrap">
+                <table class="motion-mapping-table">
+                  <thead>
+                    <tr>
+                      <th><span class="mapping-head-label">모션 ID</span><span class="mapping-head-unit"></span></th>
+                      <th><span class="mapping-head-label">사용</span><span class="mapping-head-unit"></span></th>
+                      <th><span class="mapping-head-label">모터 ID</span><span class="mapping-head-unit">현재 축 번호 자동 해석</span></th>
+                      <th class="mapping-number-head"><span class="mapping-head-label">감속비</span><span class="mapping-head-unit">x</span></th>
+                      <th class="mapping-number-head"><span class="mapping-head-label">기준점</span><span class="mapping-head-unit">deg</span></th>
+                      <th><span class="mapping-head-label">기준 사용·캡처</span><span class="mapping-head-unit"></span></th>
+                      <th class="mapping-number-head"><span class="mapping-head-label">최솟값</span><span class="mapping-head-unit">deg</span></th>
+                      <th class="mapping-number-head"><span class="mapping-head-label">최댓값</span><span class="mapping-head-unit">deg</span></th>
+                      <th><span class="mapping-head-label">초기 방식</span><span class="mapping-head-unit"></span></th>
+                      <th class="mapping-number-head"><span class="mapping-head-label">초기위치</span><span class="mapping-head-unit">deg</span></th>
+                      <th class="mapping-number-head"><span class="mapping-head-label">초기이동</span><span class="mapping-head-unit">s</span></th>
+                      <th><span class="mapping-head-label">반전</span><span class="mapping-head-unit"></span></th>
+                      <th class="mapping-number-head"><span class="mapping-head-label">모션 보정값</span><span class="mapping-head-unit">deg</span></th>
+                      <th class="mapping-number-head"><span class="mapping-head-label">배율</span><span class="mapping-head-unit">x</span></th>
+                      <th><span class="mapping-head-label">상태</span><span class="mapping-head-unit"></span></th>
+                    </tr>
+                  </thead>
+                  <tbody id="motionMappingRows">
+                    <tr>
+                      <td colspan="15" class="empty">모션 파일을 선택하고 모션 ID를 반영하세요</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="motion-mapping-guide motion-mapping-guide-below">
+                <div>
+                  <strong>값 기준</strong>
+                  <span>모션 ID는 사용자가 정하는 모션축 번호입니다. 양의 정수-양의 정수 형식으로 입력합니다(예: 1-1, 2-3).</span>
+                  <span>모션값·최솟값/최댓값·초기 위치·보정값은 모션/출력축 deg 기준입니다.</span>
+                  <span>기준점과 최종 모터 목표는 모터축 deg 기준입니다.</span>
+                  <span>기준점 사용을 해제하면 계산 기준점은 0 deg가 됩니다.</span>
+                  <span>최솟값/최댓값 초과 데이터는 실행을 막지 않고 경계값으로 제한해 명령합니다.</span>
+                </div>
+                <div>
+                  <strong>계산 흐름</strong>
+                  <span>제한 모션값 = 모션값을 최솟값~최댓값 범위로 제한</span>
+                  <span>출력축 값 = (제한 모션값 + 보정값) × 배율 × 반전 부호</span>
+                  <span>모터축 목표 = 기준점 + (출력축 값 × 감속비)</span>
+                </div>
+              </div>
+            </section>
+
+            <section class="motion-file-subsection settings-step-card settings-commit-card" aria-label="모션축 설정 검증 및 저장">
+              <div class="section-head compact">
+                <strong>3. 검증·미리보기·저장</strong>
+                <span>검증을 통과한 계산 결과만 현재 프로젝트에 저장합니다</span>
+              </div>
+              <div class="registry-actions settings-step-actions motion-mapping-final-actions">
+                <button id="saveMotionMappingButton" class="primary" type="button">검증·미리보기·저장</button>
+                <button id="resetMotionMappingButton" type="button">저장된 내용으로 되돌리기</button>
+                <button id="deleteMotionMappingButton" class="danger" type="button" disabled>현재 설정 파일 삭제</button>
+              </div>
+              <div id="motionMappingValidation" class="motion-value-table">
+                <div class="empty">검증·미리보기·저장을 누르면 결과가 표시됩니다</div>
+              </div>
+            </section>
+
+            <section class="motion-file-subsection settings-reference-card" aria-label="미사용 모터 축">
+              <div class="section-head compact">
+                <strong>미사용 모터축</strong>
+                <span>현재 매핑에서 비어 있는 축</span>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>축 번호</th>
+                      <th>ID</th>
+                      <th>모터 종류</th>
+                      <th>이름</th>
+                      <th>상태</th>
+                    </tr>
+                  </thead>
+                  <tbody id="motionMappingUnusedMotorRows">
+                    <tr>
+                      <td colspan="5" class="empty">모터 상태 수신 대기</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            <section class="motion-file-subsection settings-reference-card" aria-label="모션축 설정 YAML 원본">
+              <div class="section-head compact">
+                <strong>고급: 매핑 YAML 원본</strong>
+                <span>읽기 전용</span>
+              </div>
+              <pre id="motionMappingRawText" class="motion-file-preview-text">매핑 파일을 선택하거나 저장하면 YAML 원본이 표시됩니다</pre>
+            </section>
+          </div>
+        </div>
+
+        <div class="motion-tab-panel hidden" data-motion-panel="midi">
+          <div class="midi-monitor-layout">
+            <section class="motion-file-subsection" aria-label="MIDI 연결 테스트">
+              <div class="section-head compact">
+                <strong>MIDI 연결 테스트</strong>
+                <span id="midiMonitorMessage">MIDI 모니터 상태 확인 중</span>
+              </div>
+              <div class="midi-safety-notice">
+                <strong>모터 출력 비활성</strong>
+                <span>실제 모터축 제어 명령은 전송하지 않습니다. 손을 뗀 MIDI 페이더가 현재 위치에 머물도록 해당 페이더에만 유지값을 한 번 보냅니다.</span>
+              </div>
+              <div class="midi-bank-controls">
+                <label class="compact-field">
+                  <span>활성 뱅크</span>
+                  <select id="midiBankSelect" aria-label="MIDI 뱅크"></select>
+                </label>
+                <label class="compact-field midi-bank-name-field">
+                  <span>뱅크 이름</span>
+                  <input id="midiBankName" type="text" maxlength="40" value="Bank 1">
+                </label>
+                <div class="registry-actions midi-bank-actions">
+                  <button id="addMidiBankButton" type="button">뱅크 추가</button>
+                  <button id="deleteMidiBankButton" class="danger" type="button">뱅크 삭제</button>
+                  <button id="saveMidiMappingButton" class="primary" type="button">MIDI 뱅크 설정 저장</button>
+                  <button id="loadMidiBanksFileButton" type="button">파일에서 불러오기</button>
+                </div>
+              </div>
+              <div id="midiMappingPath" class="registry-message">모션축 설정 파일의 MIDI 뱅크 상태 확인 중</div>
+              <div id="midiMonitorSummary" class="motion-file-summary midi-monitor-summary">
+                <div><span>연결</span><strong id="midiConnectionState">대기</strong></div>
+                <div><span>MIDI 입력</span><strong id="midiInputState">입력 대기</strong></div>
+                <div><span>최근 MIDI 입력</span><strong id="midiLastInputState">기록 없음</strong></div>
+                <div><span>최근 전원 재연결</span><strong id="midiPowerReconnectState">감지 기록 없음</strong></div>
+                <div><span>입력 범위</span><strong>14bit · 0~16383</strong></div>
+                <div><span>출력 단위</span><strong>14bit</strong></div>
+                <div><span>필터</span><strong>2차 저역통과</strong></div>
+                <div><span>모터 출력</span><strong id="midiMotorOutputState">사용 안 함</strong></div>
+              </div>
+              <div class="registry-actions">
+                <button id="connectMidiDeviceButton" class="primary" type="button">MIDI 연결</button>
+                <button id="disconnectMidiDeviceButton" type="button">연결 해제</button>
+                <button id="refreshMidiMonitorButton" type="button">상태 새로고침</button>
+                <button id="resetMidiRuntimeButton" class="danger" type="button">실시간 값 초기화</button>
+              </div>
+            </section>
+
+            <section class="motion-file-subsection" aria-label="MIDI 채널값">
+              <div class="section-head compact">
+                <strong>채널값 및 필터 출력</strong>
+                <span>14bit MIDI → 필터 → 뱅크 출력 범위</span>
+              </div>
+              <div class="table-wrap midi-monitor-table-wrap">
+                <table class="midi-monitor-table">
+                  <thead>
+                    <tr>
+                      <th>사용</th>
+                      <th>채널</th>
+                      <th>셀렉트</th>
+                      <th>모션 ID (최대 3개)</th>
+                      <th>MIDI 값</th>
+                      <th>필터 출력</th>
+                      <th>최솟값 (%)</th>
+                      <th>최댓값 (%)</th>
+                      <th>반전</th>
+                      <th>필터 (0~13단계)</th>
+                      <th>최종 출력</th>
+                      <th>최종 비율</th>
+                      <th>모션값 (deg)</th>
+                      <th>입력 상태</th>
+                    </tr>
+                  </thead>
+                  <tbody id="midiMonitorRows">
+                    <tr><td colspan="14" class="empty">MIDI 모니터 노드 상태 수신 대기</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="registry-message">한 MIDI 채널에 Motion ID를 최대 3개까지 연결할 수 있습니다. 현재는 연결된 축의 모션 최소·최대 범위가 모두 같아야 하며, SELECT 시 현재 모션값도 서로 가까워야 합니다. 모션값 하나를 각 모션축 설정으로 변환해 연결된 모터에 동시에 전달합니다. 필터 출력은 2차 저역통과 필터만 적용한 값이고, 최종 출력은 반전과 최솟값/최댓값(%)까지 적용한 값입니다.</div>
+            </section>
+          </div>
+        </div>
+
+        <div class="motion-tab-panel hidden" data-motion-panel="run">
+          <div class="motion-run-layout">
+            <section class="motion-file-subsection" aria-label="모션 실행 제어">
+              <div class="section-head compact">
+                <strong>모션 실행</strong>
+                <span id="motionRunMessage">모션 파일과 매핑 파일을 선택하세요</span>
+              </div>
+              <div id="motionRunSummary" class="motion-file-summary motion-run-summary">
+                <div class="empty">선택된 모션 파일과 매핑 파일 기준으로 실행합니다</div>
+              </div>
+
+              <div class="coordination-control-panel">
+                <div class="coord-control-groups">
+                  <div class="coord-group autoplay-group">
+                  <span class="coord-group-label">자동 재생 (부팅 시)</span>
+                  <div class="coord-group-buttons">
+                    <label class="motion-automation-toggle">
+                      <input id="motionAutomationEnabled" type="checkbox">
+                      <span>부팅 시 자동 재생 예약</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div class="coord-group motion-group">
+                  <span class="coord-group-label">모션 제어</span>
+                  <div class="coord-motion-options">
+                    <label class="compact-field"><span>초기 이동 시간</span>
+                      <select id="motionRunInitialMoveTime" class="compact-select">
+                        <option value="mapping">매핑 설정 사용</option>
+                        <option value="5" selected>5초 일괄 적용</option>
+                        <option value="7">7초 일괄 적용</option>
+                        <option value="10">10초 일괄 적용</option>
+                      </select>
+                    </label>
+                    <label class="compact-field"><span>회차 사이 동작</span>
+                      <select id="motionAutomationRepeatMode" class="compact-select" disabled>
+                        <option value="direct">바로 다음 모션</option>
+                        <option value="dwell">대기 후 다음 모션</option>
+                        <option value="reinitialize" selected>초기 위치 이동 후 다음</option>
+                        <option value="dwell_reinitialize">대기 후 초기위치 → 다음</option>
+                      </select>
+                    </label>
+                    <label id="motionAutomationDwellWrap" class="compact-field hidden"><span>대기 시간(초)</span>
+                      <input id="motionAutomationDwellSec" type="number" min="0" max="86400" step="0.1" value="5.0" disabled>
+                    </label>
+                    <label id="motionRunTargetCycleWrap" class="compact-field"><span>정지 목표(N)회차</span>
+                      <input id="motionRunTargetCycle" type="number" min="0" max="10000" step="1" value="0" title="0은 무한 반복입니다">
+                    </label>
+                  </div>
+                  <div class="coord-group-buttons">
+                    <button id="motionRunCheckButton" type="button">실행 준비 검사</button>
+                    <button id="motionRunInitializeButton" type="button" disabled>초기 위치 이동</button>
+                    <button id="motionRunStartButton" class="primary" type="button" disabled>1회 시작</button>
+                    <button id="motionRunContinuousStartButton" class="primary" type="button" disabled>연속 시작</button>
+                    <button id="motionAutomationStartButton" type="button" style="display:none;" disabled>자동 반복 예약 (숨김)</button>
+                    <button id="motionAutomationReserveButton" type="button" style="display:none;" disabled>부팅 시 예약</button>
+                  </div>
+                </div>
+
+                <div class="coord-group safety-group">
+                  <span class="coord-group-label">정지 및 상태</span>
+                  <div class="coord-group-buttons">
+                    <button id="motionRunStopButton" class="danger" type="button" disabled>즉시 정지</button>
+                    <button id="motionRunStopAfterButton" class="warning-button" type="button" disabled>현재 회차 후 정지</button>
+                    <button id="motionRunRefreshButton" type="button">상태 새로고침</button>
+                  </div>
+                </div>
+                </div>
+              </div>
+              <div id="motionAutomationDetail" class="motion-automation-detail">재생 등록 파일과 현재 모션축 설정을 사용합니다.</div>
+            </section>
+
+            <section class="motion-file-subsection" aria-label="모션 실행 상태">
+              <div class="section-head compact">
+                <strong>실행 상태</strong>
+                <span>motion_run_manager</span>
+              </div>
+              <div id="motionRunStatus" class="motion-value-table motion-run-status-compact">
+                <div class="empty">상태 수신 대기</div>
+              </div>
+            </section>
+
+            <section class="motion-file-subsection" aria-label="모션 실행 그래프">
+              <div class="section-head compact">
+                <strong>진행 그래프</strong>
+                <span id="motionRunGraphMessage">모션 진행 대기</span>
+              </div>
+              <div id="motionRunStageStrip" class="motion-run-stage-strip"></div>
+              <div class="motion-run-progress" aria-label="모션 실행 진행률">
+                <div class="motion-run-progress-head">
+                  <strong id="motionRunCurrentPhase">현재 단계: 모션 전</strong>
+                  <span id="motionRunProgressText">0.0 %</span>
+                </div>
+                <div class="motion-run-progress-track">
+                  <div id="motionRunProgressFill" class="motion-run-progress-fill"></div>
+                </div>
+              </div>
+              <canvas id="motionRunGraphCanvas" class="motion-run-graph"></canvas>
+              <div id="motionRunGraphAxisToggles" class="motion-run-graph-axis-toggles" aria-label="그래프 축 표시 선택"></div>
+            </section>
+
+            <section class="motion-file-subsection" aria-label="모션 실행 축">
+              <div class="section-head compact">
+                <strong>실행 축</strong>
+                <span>활성 매핑 기준</span>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>모션 ID</th>
+                      <th>모터 축</th>
+                      <th>종류</th>
+                      <th>최솟값</th>
+                      <th>최댓값</th>
+                      <th>초기 목표</th>
+                      <th>모터 목표 범위</th>
+                      <th>모션 시작/종료</th>
+                      <th>연속 판정</th>
+                      <th>범위 제한</th>
+                    </tr>
+                  </thead>
+                  <tbody id="motionRunAxisRows">
+                    <tr>
+                      <td colspan="10" class="empty">실행 준비 검사를 누르면 표시됩니다</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+        </div>
+      </section>

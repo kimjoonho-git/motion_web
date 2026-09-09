@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { indexHtml, stylesCss } from '../tools/index_html.mjs';
 
-const html = readFileSync(new URL('../static/index.html', import.meta.url), 'utf8');
-const styles = readFileSync(new URL('../static/styles.css', import.meta.url), 'utf8');
+const html = indexHtml;
+const styles = stylesCss;
 const scripts = [
   'motor_config.js',
   'motion_data.js',

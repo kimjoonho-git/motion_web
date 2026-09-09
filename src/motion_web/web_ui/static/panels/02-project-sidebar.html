@@ -1,0 +1,23 @@
+<!-- 현재 프로젝트 사이드바
+     `index.html`에서 떼어낸 조각 · 원본 91~110줄 · §6-44
+     들여쓰기를 그대로 둔다 · 서버가 자리표시자 줄을 이 내용으로 바꾼다 -->
+      <div class="workspace-layout">
+        <aside class="project-sidebar" aria-label="현재 프로젝트 파일">
+          <div class="project-sidebar-head">
+            <div>
+              <strong>현재 프로젝트</strong>
+              <span id="projectExplorerMessage"></span>
+            </div>
+            <button id="projectExplorerRefreshButton" class="icon-button" type="button" title="새로고침" aria-label="프로젝트 새로고침">↻</button>
+          </div>
+          <div id="projectExplorerCurrentName" class="project-current-display">선택된 프로젝트 없음</div>
+          <select id="projectExplorerSelect" class="wide-select project-sidebar-select" aria-label="현재 프로젝트 변경">
+            <option value="">프로젝트 선택</option>
+          </select>
+          <aside id="projectExplorerTree" class="project-explorer-tree" aria-label="프로젝트 파일">
+            <div class="empty">프로젝트를 만들거나 선택하세요</div>
+          </aside>
+          <section id="projectSetupProgress" class="project-setup-progress" aria-label="최초 설정 진행 상태"></section>
+          <div class="project-sidebar-help">＋ 레이어 추가&nbsp;&nbsp;·&nbsp;&nbsp;⋮ 파일 관리</div>
+        </aside>
+

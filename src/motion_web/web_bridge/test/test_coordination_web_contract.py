@@ -1,13 +1,16 @@
 from pathlib import Path
 
 
+from motion_web_bridge.routes.system_routes import IndexComposer
+
 WORKSPACE = Path(__file__).resolve().parents[4]
 UI = WORKSPACE / 'src/motion_web/web_ui/static'
 BRIDGE = WORKSPACE / 'src/motion_web/web_bridge/motion_web_bridge/bridge_node.py'
 
 
 def test_coordination_screen_has_dds_group_controls_only():
-    html = (UI / 'index.html').read_text(encoding='utf-8')
+    # 화면은 셸에 조각을 끼운 결과다 · 셸만 읽으면 패널이 보이지 않는다 · §6-44
+    html, _etag = IndexComposer(UI / 'index.html').compose()
     for marker in (
         'id="coordinationGroupId"', 'id="coordinationDomainId"',
         'id="coordinationJoinButton"', 'id="coordinationLeaveButton"',

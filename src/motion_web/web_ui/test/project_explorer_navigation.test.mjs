@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { indexHtml } from '../tools/index_html.mjs';
 
 const main = readFileSync(new URL('../static/js/main.js', import.meta.url), 'utf8');
 const motionData = readFileSync(new URL('../static/js/motion_data.js', import.meta.url), 'utf8');
@@ -133,7 +134,7 @@ test('project explorer hides recoverable trash without deleting backend data', (
 });
 
 test('runtime clear button and delete-blocked popup guide the stop-clear-delete path', () => {
-  const html = readFileSync(new URL('../static/index.html', import.meta.url), 'utf8');
+  const html = indexHtml;
   const api = readFileSync(new URL('../static/js/api.js', import.meta.url), 'utf8');
   assert.match(html, /id="clearMotorRuntimeButton"[^>]*>실행 적용 해제</);
   assert.match(api, /clearMotorRuntimeApplication[\s\S]*?\/api\/system\/motor-runtime\/clear/);

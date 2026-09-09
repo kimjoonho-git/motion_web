@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { indexHtml, stylesCss } from '../tools/index_html.mjs';
 
-const html = readFileSync(new URL('../static/index.html', import.meta.url), 'utf8');
+const html = indexHtml;
 const controller = readFileSync(new URL('../static/js/motor_config.js', import.meta.url), 'utf8');
 const motionTest = readFileSync(new URL('../static/js/motion_test.js', import.meta.url), 'utf8');
-const styles = readFileSync(new URL('../static/styles.css', import.meta.url), 'utf8');
+const styles = stylesCss;
 
 test('motor management exposes one seven-stage preparation flow', () => {
   for (const step of [

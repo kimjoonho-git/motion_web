@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { indexHtml, stylesCss } from '../tools/index_html.mjs';
 
 import {
   applyMotionStudioProjectPatch,
@@ -508,10 +509,7 @@ test('each layer editor session starts without a general-motion range mode', () 
 });
 
 test('primary edit workflow actions stay in the fixed top action area', () => {
-  const html = readFileSync(
-    new URL('../static/index.html', import.meta.url),
-    'utf8',
-  );
+  const html = indexHtml;
   const actionArea = html.match(
     /<div class="studio-editor-primary-actions"[\s\S]*?<\/div>\s*<div class="studio-editor-layout">/,
   )?.[0] || '';
@@ -536,14 +534,8 @@ test('primary edit workflow actions stay in the fixed top action area', () => {
 });
 
 test('editor keeps the graph and compact range toolbar in one viewport layout', () => {
-  const html = readFileSync(
-    new URL('../static/index.html', import.meta.url),
-    'utf8',
-  );
-  const styles = readFileSync(
-    new URL('../static/styles.css', import.meta.url),
-    'utf8',
-  );
+  const html = indexHtml;
+  const styles = stylesCss;
   assert.match(
     html,
     /studio-editor-layout[\s\S]*?studio-editor-sidebar[\s\S]*?studio-editor-main[\s\S]*?studioEditorGraph[\s\S]*?studio-editor-inspector/,
@@ -659,10 +651,7 @@ test('unlocking an axis range preserves the visible fixed bounds', () => {
 });
 
 test('editor exposes whole-axis point creation without motion-section conversions', () => {
-  const html = readFileSync(
-    new URL('../static/index.html', import.meta.url),
-    'utf8',
-  );
+  const html = indexHtml;
   const source = motionStudioRuntimeSource();
   assert.match(
     html,
@@ -709,10 +698,7 @@ test('applied point curves can be edited again before the layer is saved', () =>
 });
 
 test('motion export identifies the playback-selected layer and ignores the blue detail row', () => {
-  const html = readFileSync(
-    new URL('../static/index.html', import.meta.url),
-    'utf8',
-  );
+  const html = indexHtml;
   const source = motionStudioRuntimeSource();
   assert.match(html, /id="studioExportTarget"/);
   assert.match(html, /재생 선택 체크 기준 · 연한 파란색 행과 무관/);
@@ -742,15 +728,9 @@ test('range editing accepts two distinct times from different axes', () => {
 });
 
 test('point range actions reset stale selection and use the point-curve apply path', () => {
-  const html = readFileSync(
-    new URL('../static/index.html', import.meta.url),
-    'utf8',
-  );
+  const html = indexHtml;
   const source = motionStudioRuntimeSource();
-  const styles = readFileSync(
-    new URL('../static/styles.css', import.meta.url),
-    'utf8',
-  );
+  const styles = stylesCss;
   const addFlow = source.match(
     /studioEditorPointAddButton\?\.addEventListener\('click'[\s\S]*?studioEditorPointDeleteButton/,
   )?.[0] || '';
@@ -869,10 +849,7 @@ test('axis range violations remain visible warnings without blocking edit apply'
 
 test('layer axis deletion uses preview, apply, and save workflow', () => {
   const source = motionStudioRuntimeSource();
-  const html = readFileSync(
-    new URL('../static/index.html', import.meta.url),
-    'utf8',
-  );
+  const html = indexHtml;
   const deletionFlow = source.match(
     /async function previewEditorAxisDeletion\(\)[\s\S]*?async function applyEditorOperation/,
   )?.[0] || '';
@@ -925,10 +902,7 @@ test('linear point curves do not become dirty only from legacy tangent naming', 
 });
 
 test('general-motion range controls are absent from the simplified editor', () => {
-  const html = readFileSync(
-    new URL('../static/index.html', import.meta.url),
-    'utf8',
-  );
+  const html = indexHtml;
   const sidebar = html.match(
     /<aside class="studio-editor-sidebar">[\s\S]*?<\/aside>/,
   )?.[0] || '';

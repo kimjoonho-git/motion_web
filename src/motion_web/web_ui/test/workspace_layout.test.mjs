@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { indexHtml, stylesCss } from '../tools/index_html.mjs';
 
-const html = readFileSync(new URL('../static/index.html', import.meta.url), 'utf8');
+const html = indexHtml;
 const main = readFileSync(new URL('../static/js/main.js', import.meta.url), 'utf8');
-const styles = readFileSync(new URL('../static/styles.css', import.meta.url), 'utf8');
+const styles = stylesCss;
 
 function countId(id) {
   return [...html.matchAll(new RegExp(`id=["']${id}["']`, 'g'))].length;

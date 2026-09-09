@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { indexHtml, stylesCss } from '../tools/index_html.mjs';
 
 import {
   motionStudioEditorNextValueScale,
@@ -230,14 +231,8 @@ test('studio mutations render their response without an automatic full refresh',
 });
 
 test('editor operations and axis management keep a fixed compact layout', () => {
-  const html = readFileSync(
-    new URL('../static/index.html', import.meta.url),
-    'utf8',
-  );
-  const styles = readFileSync(
-    new URL('../static/styles.css', import.meta.url),
-    'utf8',
-  );
+  const html = indexHtml;
+  const styles = stylesCss;
   const source = motionStudioRuntimeSource();
 
   assert.match(
@@ -270,10 +265,7 @@ test('editor operations and axis management keep a fixed compact layout', () => 
 });
 
 test('layer merge lets the user choose one whole layer to append', () => {
-  const html = readFileSync(
-    new URL('../static/index.html', import.meta.url),
-    'utf8',
-  );
+  const html = indexHtml;
   const source = motionStudioRuntimeSource();
 
   assert.match(

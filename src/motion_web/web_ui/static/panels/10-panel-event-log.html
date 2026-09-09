@@ -1,0 +1,52 @@
+<!-- 동작 기록
+     `index.html`에서 떼어낸 조각 · 원본 1790~1838줄 · §6-44
+     들여쓰기를 그대로 둔다 · 서버가 자리표시자 줄을 이 내용으로 바꾼다 -->
+      <section class="event-log-panel workspace-panel hidden" data-workspace-panel="log" aria-label="모터 동작 로그">
+        <div class="section-head workspace-page-head">
+          <strong>모터 동작 로그</strong>
+          <span id="motorEventLogSummary">로그를 불러오는 중</span>
+        </div>
+        <div class="workspace-guide" aria-label="모터 동작 로그 사용 순서">
+          <strong>사용 방법</strong>
+          <ol><li>분류 선택</li><li>날짜 선택</li><li>기록 확인·관리</li></ol>
+        </div>
+        <div class="event-log-toolbar">
+          <div id="motorEventLogFilters" class="tabbar event-log-filters" role="tablist" aria-label="모터 동작 로그 필터">
+            <button class="tab-button active" type="button" data-event-log-filter="all">전체</button>
+            <button class="tab-button" type="button" data-event-log-filter="error">모터 에러</button>
+            <button class="tab-button" type="button" data-event-log-filter="initial_position">초기 위치 이동</button>
+            <button class="tab-button" type="button" data-event-log-filter="motion">모션 시작</button>
+          </div>
+          <div class="event-log-actions">
+            <button id="refreshMotorEventLogButton" type="button">로그 새로고침</button>
+            <button id="clearMotorEventLogButton" class="off" type="button">현재 프로젝트 전체 로그 삭제</button>
+          </div>
+        </div>
+        <div class="event-log-filebar">
+          <label>
+            <span>로그 파일</span>
+            <select id="motorEventLogFileSelect" class="wide-select">
+              <option value="all">전체 날짜</option>
+            </select>
+          </label>
+          <span id="motorEventLogStorage">프로젝트 로그 저장 정보를 불러오는 중</span>
+          <button id="deleteMotorEventLogFileButton" class="off" type="button" disabled>선택 파일 삭제</button>
+        </div>
+        <div class="table-wrap event-log-table-wrap">
+          <table class="event-log-table">
+            <thead>
+              <tr>
+                <th>시간</th>
+                <th>구분</th>
+                <th>대상</th>
+                <th>내용</th>
+              </tr>
+            </thead>
+            <tbody id="motorEventLogRows">
+              <tr>
+                <td colspan="4" class="empty">기록된 모터 동작 로그가 없습니다</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>

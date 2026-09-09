@@ -1,0 +1,409 @@
+<!-- 모션 스튜디오 · 레이어 편집기
+     `index.html`에서 떼어낸 조각 · 원본 1383~1788줄 · §6-44
+     들여쓰기를 그대로 둔다 · 서버가 자리표시자 줄을 이 내용으로 바꾼다 -->
+      <section class="motion-studio-panel workspace-panel hidden" data-workspace-panel="studio" aria-label="모션 스튜디오">
+        <div class="section-head workspace-page-head">
+          <strong>모션 스튜디오</strong>
+          <span id="studioMessage">프로젝트 상태 확인 중</span>
+        </div>
+
+        <div class="studio-grid">
+          <section class="motion-file-subsection studio-transport-panel">
+            <div class="section-head compact">
+              <strong>녹화 / 재생</strong>
+              <span id="studioState">대기</span>
+            </div>
+            <div class="registry-actions studio-transport-actions">
+              <label class="compact-field"><span>초기 이동</span>
+                <select id="studioInitialMoveTime" class="compact-select">
+                  <option value="5">5초</option><option value="7">7초</option><option value="10">10초</option>
+                </select>
+              </label>
+              <button id="studioInitializeButton" type="button" disabled>초기 위치 이동</button>
+              <button id="studioRecordButton" class="primary" type="button" disabled>● 녹화</button>
+              <button id="studioPlayButton" type="button" disabled>▶ 합성 미리보기</button>
+              <button id="studioStopButton" class="off" type="button" disabled>■ 녹화·재생 정지</button>
+            </div>
+            <div class="studio-time"><strong id="studioElapsed">00:00.000</strong><span id="studioFrameCount">0프레임 · 20ms</span></div>
+            <div class="studio-playback-quick" aria-label="합성 재생 현재 상태">
+              <div>
+                <span id="studioPlaybackQuickPhase" class="status-chip off">대기</span>
+                <strong id="studioPlaybackQuickTime">00:00.000 / 00:00.000</strong>
+              </div>
+              <small id="studioPlaybackQuickMessage">합성 미리보기 대기</small>
+            </div>
+          </section>
+
+          <details class="motion-file-subsection studio-axis-panel">
+            <summary><strong>축 상태 및 파일 내보내기</strong><span>필요할 때 펼쳐서 확인</span></summary>
+            <div class="studio-secondary-grid">
+              <div class="studio-axis-status">
+                <div class="section-head compact">
+                  <strong>녹화 대상 Motion ID</strong>
+                  <span>모션축 설정에 포함된 축 · MIDI 선택된 축만 실제 녹화</span>
+                </div>
+                <div id="studioMappingInfo" class="registry-message">현재 프로젝트의 모션축 설정 파일을 확인하세요</div>
+                <div class="table-wrap">
+                  <table><thead><tr><th>모션 ID</th><th>모터 축</th><th>MIDI 선택</th><th>모션값</th></tr></thead>
+                    <tbody id="studioAxisRows"><tr><td colspan="4" class="empty">프로젝트를 불러오세요</td></tr></tbody>
+                  </table>
+                </div>
+              </div>
+              <div class="studio-export-panel">
+                <div class="section-head compact"><strong>모션 실행으로 보내기</strong><span>재생 선택 체크 기준 · 연한 파란색 행과 무관</span></div>
+                <div id="studioExportTarget" class="studio-export-target" data-state="empty">
+                  내보내기 대상 없음 · 재생 선택 레이어를 1개만 체크하세요
+                </div>
+                <input id="studioExportName" type="text" placeholder="내보낼 모션 파일명">
+                <button id="studioExportButton" type="button" disabled>모션 실행 파일 저장</button>
+                <small>스튜디오 편집본과 독립된 파일로 저장되며, 모션 실행에서 별도로 재생 등록합니다.</small>
+              </div>
+            </div>
+          </details>
+
+          <section class="motion-file-subsection studio-layer-panel">
+            <div class="section-head compact studio-layer-main-head">
+              <div><strong>레이어 재생 선택</strong><span>체크한 레이어를 아래에서 위 순서로 합성</span></div>
+              <button id="studioLayerManagerOpenButton" type="button">레이어 관리 열기</button>
+            </div>
+            <div id="studioConflictInfo" class="studio-layer-warning hidden" role="alert"></div>
+            <div class="registry-actions studio-layer-quick-actions" aria-label="선택 레이어 빠른 작업">
+              <button id="studioSelectedLayerDetailButton" type="button" disabled>상세보기</button>
+              <button id="studioSelectedLayerEditButton" type="button" disabled>레이어 편집</button>
+              <button id="studioSelectedLayerLockButton" type="button" disabled>잠금</button>
+              <button id="studioSelectedLayerDeleteButton" class="danger" type="button" disabled>삭제</button>
+            </div>
+            <div class="studio-layer-controls" aria-label="레이어 작업">
+              <div class="studio-layer-control-row studio-layer-safety-row">
+                <strong class="studio-layer-control-title">재생 안전</strong>
+                <div class="studio-layer-control-content studio-layer-safety-content">
+                  <label class="compact-field" title="N° 또는 모션축 범위의 N% 중 큰 값을 허용합니다"><span>급변 기준</span>
+                    <select id="studioTransitionSafetyLevel" class="compact-select">
+                      <option value="1">1단계</option><option value="2">2단계</option>
+                      <option value="3">3단계</option><option value="4" selected>4단계</option>
+                      <option value="5">5단계</option><option value="6">6단계</option>
+                      <option value="7">7단계</option><option value="8">8단계</option>
+                      <option value="9">9단계</option><option value="10">10단계</option>
+                    </select>
+                  </label>
+                  <span id="studioTransitionRuleInfo" class="studio-transition-rule-info">4단계: 4° 또는 축 모션 범위의 4% 중 큰 값을 허용</span>
+                </div>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table class="studio-layer-table"><thead><tr><th>재생 선택</th><th>레이어</th><th>레이어 정보</th></tr></thead>
+                <tbody id="studioLayerRows"><tr><td colspan="3" class="empty">녹화 레이어가 없습니다</td></tr></tbody>
+              </table>
+            </div>
+            <section id="studioLayerDetail" class="studio-layer-detail" aria-label="레이어 상세 정보">
+              <div class="section-head compact">
+                <div><strong id="studioLayerDetailName">합성 재생 그래프 / 레이어 상세정보</strong><small id="studioLayerDetailStatus">레이어를 추가하면 정보가 표시됩니다</small></div>
+              </div>
+              <div class="motion-file-summary studio-layer-summary">
+                <div><span>프레임</span><strong id="studioLayerDetailFrames">0</strong></div>
+                <div><span>시간</span><strong id="studioLayerDetailDuration">0.000초</strong></div>
+                <div><span>Motion ID</span><strong id="studioLayerDetailAxisCount">0개</strong></div>
+              </div>
+              <div id="studioLayerDetailTabs" class="tabbar studio-layer-detail-tabs" role="tablist" aria-label="레이어 상세정보 종류">
+                <button class="tab-button active" type="button" data-studio-layer-detail-tab="graph">그래프</button>
+                <button id="studioCompositionDetailButton" class="studio-composition-detail-button" type="button" disabled>재생 선택 레이어 보기</button>
+                <button class="tab-button" type="button" data-studio-layer-detail-tab="axes">축별 정보</button>
+                <button class="tab-button" type="button" data-studio-layer-detail-tab="info">레이어 정보</button>
+              </div>
+              <div data-studio-layer-detail-panel="graph" class="studio-layer-detail-panel">
+                <div class="studio-layer-graph-wrap">
+                  <div id="studioPlaybackMonitor" class="studio-playback-monitor" data-state="idle">
+                    <div class="studio-playback-monitor-row">
+                      <span id="studioPlaybackPhase" class="status-chip off">대기</span>
+                      <strong id="studioPlaybackTime">00:00.000 / 00:00.000</strong>
+                      <span id="studioPlaybackLayerCount">재생 선택 0개 · 합성 그래프</span>
+                    </div>
+                    <div class="studio-playback-progress" aria-hidden="true">
+                      <i id="studioPlaybackProgressBar"></i>
+                    </div>
+                    <small id="studioPlaybackMessage">합성 미리보기를 시작하면 진행 위치가 그래프에 표시됩니다.</small>
+                  </div>
+                  <div class="studio-layer-canvas-stage">
+                    <canvas id="studioLayerGraph" height="320" aria-label="레이어 모션 그래프"></canvas>
+                    <div id="studioLayerPlayhead" class="studio-layer-playhead hidden" aria-hidden="true"><span>00:00.000</span></div>
+                  </div>
+                  <div id="studioLayerGraphLegend" class="studio-layer-graph-legend"></div>
+                </div>
+              </div>
+              <div data-studio-layer-detail-panel="axes" class="studio-layer-detail-panel hidden">
+                <div class="table-wrap">
+                <table>
+                  <thead><tr><th>Motion ID</th><th>최초 시각</th><th>최초 기록값</th><th>마지막 시각</th><th>마지막 기록값</th><th>최솟값</th><th>최댓값</th><th>기록 수</th></tr></thead>
+                  <tbody id="studioLayerAxisDetailRows"><tr><td colspan="8" class="empty">레이어를 선택하세요</td></tr></tbody>
+                </table>
+                </div>
+              </div>
+              <div data-studio-layer-detail-panel="info" class="studio-layer-detail-panel hidden">
+                <div id="studioLayerInfoRows" class="monitoring-detail-values">
+                  <div><dt>상태</dt><dd>레이어 없음</dd></div>
+                </div>
+              </div>
+            </section>
+          </section>
+        </div>
+      </section>
+
+      <div id="studioLayerManagerModal" class="studio-editor-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="studioLayerManagerTitle">
+        <section class="studio-layer-manager-dialog">
+          <div class="section-head">
+            <div><strong id="studioLayerManagerTitle">레이어 관리</strong><span>생성, 복사, 합치기를 구분해서 작업합니다</span></div>
+            <button id="studioLayerManagerCloseButton" type="button">닫기</button>
+          </div>
+          <div id="studioLayerManagerTabs" class="tabbar studio-layer-manager-tabs" role="tablist" aria-label="레이어 관리 기능">
+            <button class="tab-button active" type="button" data-layer-manager-tab="create">레이어 생성</button>
+            <button class="tab-button" type="button" data-layer-manager-tab="copy">레이어 복사</button>
+            <button class="tab-button" type="button" data-layer-manager-tab="merge">레이어 합치기</button>
+          </div>
+
+          <section class="studio-layer-manager-panel" data-layer-manager-panel="create">
+            <div class="studio-layer-manager-guide">
+              <strong>새 빈 레이어 생성</strong>
+              <span>자동 이름으로 레이어 1개를 만들며 재생 미선택 상태로 추가합니다.</span>
+            </div>
+            <button id="studioCreateLayerButton" class="primary" type="button" disabled>새 레이어 생성</button>
+          </section>
+
+          <section class="studio-layer-manager-panel hidden" data-layer-manager-panel="copy">
+            <div class="studio-layer-manager-guide">
+              <strong>레이어 복사</strong>
+              <span>복사할 레이어 1개를 선택하면 재생 미선택 상태의 독립 복사본을 만듭니다.</span>
+            </div>
+            <div class="table-wrap studio-layer-manager-table-wrap">
+              <table class="studio-layer-manager-table">
+                <thead><tr><th>복사 대상</th><th>레이어</th><th>레이어 정보</th></tr></thead>
+                <tbody id="studioManagerLayerRows"><tr><td colspan="3" class="empty">레이어가 없습니다</td></tr></tbody>
+              </table>
+            </div>
+            <div class="registry-actions studio-layer-manager-actions">
+              <button id="studioSelectedLayerCopyButton" type="button" disabled>선택 레이어 복사</button>
+            </div>
+          </section>
+
+          <section class="studio-layer-manager-panel hidden" data-layer-manager-panel="merge">
+            <div class="studio-layer-manager-guide">
+              <strong>레이어 합치기</strong>
+              <span>모든 모션축에 포인트가 생성된 레이어만 선택할 수 있습니다. 뒤에 이어 붙이기는 지정한 레이어의 전체 축을 나머지 레이어 뒤로 함께 이동합니다.</span>
+            </div>
+            <div class="studio-merge-options" aria-label="레이어 합치기 방식">
+              <label><span>합치기 방식</span><select id="studioMergeMode">
+                <option value="preserve">시간 위치 유지</option>
+                <option value="append">뒤에 이어 붙이기</option>
+              </select></label>
+              <label><span>뒤로 이동할 레이어</span><select id="studioMergeAppendLayer" disabled>
+                <option value="">선택한 레이어 중 지정</option>
+              </select></label>
+            </div>
+            <div class="table-wrap studio-layer-manager-table-wrap">
+              <table class="studio-layer-manager-table">
+                <thead><tr><th>합치기</th><th>레이어</th><th>레이어 정보</th></tr></thead>
+                <tbody id="studioManagerMergeRows"><tr><td colspan="3" class="empty">레이어가 없습니다</td></tr></tbody>
+              </table>
+            </div>
+            <span id="studioMergeStatus" class="studio-merge-status" role="status">합칠 레이어를 2개 이상 선택하세요</span>
+            <div class="registry-actions studio-layer-manager-actions">
+              <button id="studioMergeButton" class="primary" type="button" disabled>레이어 합치기</button>
+            </div>
+          </section>
+        </section>
+      </div>
+
+      <div id="studioLayerEditorModal" class="studio-editor-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="studioEditorTitle">
+        <section class="studio-editor-dialog">
+          <div class="section-head">
+            <div><strong id="studioEditorTitle">레이어 편집</strong><span id="studioEditorSubtitle">임시 작업본</span></div>
+            <span id="studioEditorSaveStatus" class="status-chip off" role="status">저장됨</span>
+          </div>
+          <div class="studio-editor-primary-actions" aria-label="레이어 편집 주요 작업">
+            <div class="studio-editor-history-actions">
+              <button id="studioEditorUndoButton" type="button" disabled>실행 취소</button>
+              <button id="studioEditorRedoButton" type="button" disabled>다시 실행</button>
+            </div>
+            <div class="studio-editor-preview-actions">
+              <span>미리보기 후 반영</span>
+              <button id="studioEditorApplyButton" type="button">변경 미리보기</button>
+              <button id="studioEditorUpdateButton" class="primary" type="button" disabled>작업본 반영</button>
+            </div>
+            <div class="studio-editor-final-actions">
+              <button id="studioEditorSaveButton" class="primary" type="button" disabled>저장</button>
+              <button id="studioEditorCloseButton" type="button">닫기</button>
+            </div>
+          </div>
+          <div class="studio-editor-layout">
+            <aside class="studio-editor-sidebar">
+              <strong>모션축 선택</strong>
+              <div class="registry-actions"><button id="studioEditorSelectAllButton" type="button">전체 선택</button><button id="studioEditorSelectNoneButton" type="button">전체 해제</button></div>
+              <div id="studioEditorAxisList" class="studio-editor-axis-list"></div>
+              <section class="studio-editor-axis-management" aria-label="축 관리">
+                <strong class="studio-editor-axis-management-title">축 관리</strong>
+                <div class="studio-editor-add-axis">
+                  <section class="studio-editor-axis-form">
+                    <strong>추가</strong>
+                    <label><span>Motion ID</span><input id="studioEditorAddAxisSelect" type="text" inputmode="text" placeholder="예: 1-2" aria-label="추가할 Motion ID"></label>
+                    <label><span>초기값</span><input id="studioEditorAddAxisValue" type="number" step="0.1" value="0" aria-label="새 축 초기값"></label>
+                    <button id="studioEditorAddAxisButton" type="button">추가</button>
+                  </section>
+                  <section class="studio-editor-axis-form">
+                    <strong>복사</strong>
+                    <label><span>원본 축</span><select id="studioEditorCopyAxisSource" aria-label="복사할 원본 Motion ID"><option value="">원본 축 없음</option></select></label>
+                    <label><span>대상 ID</span><input id="studioEditorCopyAxisTarget" type="text" inputmode="text" placeholder="예: 1-2" aria-label="복사 대상 Motion ID"></label>
+                    <button id="studioEditorCopyAxisButton" type="button">복사</button>
+                  </section>
+                  <section class="studio-editor-axis-form studio-editor-axis-delete-form">
+                    <strong>삭제</strong>
+                    <button id="studioEditorDeleteAxisButton" class="off" type="button">선택 축 삭제</button>
+                  </section>
+                  <small>현재 레이어의 축만 변경합니다.</small>
+                </div>
+              </section>
+            </aside>
+            <div class="studio-editor-main">
+              <div class="studio-editor-toolbar">
+                <div class="studio-editor-tool-group" aria-label="시간축 도구">
+                  <span>시간</span>
+                  <button id="studioEditorTimeZoomInButton" type="button">확대</button>
+                  <button id="studioEditorTimeZoomOutButton" type="button">축소</button>
+                </div>
+                <div class="studio-editor-tool-group" aria-label="값축 도구">
+                  <span>값</span>
+                  <button id="studioEditorValueZoomInButton" type="button">확대</button>
+                  <button id="studioEditorValueZoomOutButton" type="button">축소</button>
+                </div>
+                <button id="studioEditorValueRangeLockButton" type="button" aria-pressed="false">축 범위 고정</button>
+                <button id="studioEditorFitSelectionButton" type="button">선택 포인트 맞춤</button>
+                <button id="studioEditorFitAllButton" type="button">전체 맞춤</button>
+              </div>
+              <div class="studio-editor-canvas-wrap"><canvas id="studioEditorGraph" height="360"></canvas></div>
+              <div id="studioEditorLegend" class="studio-layer-graph-legend"></div>
+              <div class="studio-editor-feedback">
+                <div id="studioEditorSelectedPointSummary" class="studio-editor-selected-point hidden" aria-live="polite">
+                  <strong id="studioEditorSelectedPointTitle">선택 포인트</strong>
+                  <span class="studio-editor-selected-point-values">
+                    <small>시작</small>
+                    <b id="studioEditorSelectedPointStartTime">-</b>
+                    <b id="studioEditorSelectedPointStartValue">-</b>
+                  </span>
+                  <i aria-hidden="true">→</i>
+                  <span id="studioEditorSelectedPointEnd" class="studio-editor-selected-point-values">
+                    <small>끝</small>
+                    <b id="studioEditorSelectedPointEndTime">선택 필요</b>
+                    <b id="studioEditorSelectedPointEndValue">-</b>
+                  </span>
+                </div>
+                <div class="studio-editor-feedback-text">
+                  <div id="studioEditorCursorInfo" class="studio-editor-cursor-info">그래프 위에 마우스를 올리세요</div>
+                  <span aria-hidden="true">·</span>
+                  <div id="studioEditorMessage" class="registry-message">편집 결과가 여기에 표시됩니다.</div>
+                </div>
+                <div id="studioEditorValidationDetails" class="studio-editor-validation-details hidden" aria-live="polite"></div>
+              </div>
+              <aside id="studioEditorInspector" class="studio-editor-inspector">
+                <div class="studio-editor-inspector-head">
+                  <strong>편집 인스펙터</strong>
+                  <span id="studioEditorInspectorState" class="status-chip off">선택 없음</span>
+                </div>
+                <div class="studio-editor-inspector-content">
+                  <section class="studio-editor-operation-panel">
+                    <div class="studio-editor-operation-summary">
+                      <strong id="studioEditorOperationTitle">포인트 편집</strong>
+                      <p id="studioEditorSelectionGuide" class="studio-editor-selection-guide">축 전체 포인트 생성 후 편집 가능</p>
+                    </div>
+                    <div class="studio-editor-conversion-controls">
+                      <label class="compact-field studio-editor-inspector-field"><span>정밀도</span>
+                        <select id="studioEditorApproximationTolerance">
+                          <option value="0.5">부드럽게 (0.5°)</option>
+                          <option value="0.1" selected>표준 (0.1°)</option>
+                          <option value="0.02">정밀하게 (0.02°)</option>
+                        </select>
+                      </label>
+                      <label class="compact-field studio-editor-inspector-field"><span>곡선</span>
+                        <select id="studioEditorApproximationOrder">
+                          <option value="1">1차 (직선)</option>
+                          <option value="3" selected>3차 (부드럽게)</option>
+                          <option value="5">5차 (더 부드럽게)</option>
+                        </select>
+                      </label>
+                      <label class="compact-field studio-editor-inspector-field"><span>포인트 수</span>
+                        <input id="studioEditorApproximationMaximumPoints" type="number" min="3" max="200" step="1" value="200">
+                      </label>
+                      <button id="studioEditorCreatePointsButton" type="button">전체 포인트 생성</button>
+                    </div>
+                    <div class="studio-editor-operations">
+                      <select id="studioEditorOperation" class="hidden" aria-hidden="true" tabindex="-1">
+                        <option value="time_scale">시간 배율</option>
+                        <option value="value_scale">모션값 배율</option>
+                        <option value="time_shift">시간 이동</option>
+                        <option value="value_offset">모션값 이동</option>
+                        <option value="point_curve">포인트 곡선</option>
+                      </select>
+                      <div class="studio-editor-operation-choices" role="radiogroup" aria-label="편집 기능">
+                        <button type="button" data-studio-editor-operation="time_shift" aria-pressed="false">시간 이동</button>
+                        <button type="button" data-studio-editor-operation="time_scale" aria-pressed="true">시간 배율</button>
+                        <button type="button" data-studio-editor-operation="value_offset" aria-pressed="false">모션값 이동</button>
+                        <button type="button" data-studio-editor-operation="value_scale" aria-pressed="false">모션값 배율</button>
+                        <button class="studio-editor-point-operation" type="button" data-studio-editor-operation="point_curve" aria-pressed="false">포인트 곡선</button>
+                      </div>
+                      <label class="compact-field hidden" data-studio-editor-value="offset"><span>이동값(°)</span><input id="studioEditorOffset" type="number" step="0.1" value="0"></label>
+                      <label class="compact-field" data-studio-editor-value="factor"><span id="studioEditorFactorLabel">시간 배율</span><input id="studioEditorFactor" type="number" min="0.01" max="100" step="0.01" value="1.00"></label>
+                      <label class="compact-field hidden" data-studio-editor-value="delta"><span>이동값(ms)</span><input id="studioEditorDelta" type="number" step="20" value="0"></label>
+                      <div id="studioEditorPointControls" class="studio-editor-point-controls hidden" data-studio-editor-value="points">
+                        <label class="compact-field"><span>곡선</span><select id="studioEditorPointCurveOrder">
+                          <option value="1">직선</option><option value="3" selected>3차 곡선</option><option value="5">5차 곡선</option>
+                        </select></label>
+                        <label class="compact-field"><span>끝(초)</span><input id="studioEditorPointTimelineEnd" type="number" min="0.02" step="0.02" value="10.00"></label>
+                        <label class="compact-field"><span>시간(초)</span><input id="studioEditorPointTime" type="number" min="0" step="0.02" disabled></label>
+                        <label class="compact-field"><span>모션값(°)</span><input id="studioEditorPointValue" type="number" step="0.01" disabled></label>
+                        <label class="compact-field"><span>탄젠트</span><select id="studioEditorPointMode" disabled>
+                          <option value="auto">자동</option><option value="smooth">부드럽게</option><option value="broken">분리</option>
+                        </select></label>
+                      </div>
+                    </div>
+                    <div id="studioEditorOperationHelp" class="studio-editor-operation-help">선택한 포인트의 시간을 조절합니다.</div>
+                  </section>
+                  <section id="studioEditorRangeActions" class="studio-editor-range-actions" aria-label="선택 구간 편집">
+                    <div class="studio-editor-range-head">
+                      <strong>포인트·구간 편집</strong>
+                      <button id="studioEditorRangeSelectButton" type="button" aria-pressed="false">구간 선택</button>
+                    </div>
+                    <span id="studioEditorRangeStatus" class="studio-editor-range-status" aria-live="polite">선택된 축에서 시작·종료 포인트를 선택하세요. 서로 다른 축도 가능합니다.</span>
+                    <div class="studio-editor-point-action-row">
+                      <strong>포인트</strong>
+                      <button id="studioEditorPointAddButton" class="primary" type="button" disabled>포인트 추가</button>
+                      <button id="studioEditorPointDeleteButton" class="off" type="button" disabled>포인트 삭제</button>
+                    </div>
+                    <div class="studio-editor-range-action-row">
+                      <strong>구간</strong>
+                      <label class="compact-field studio-editor-range-copy-field"><span>복사 시작(초)</span>
+                        <input id="studioEditorRangeCopyTarget" type="number" min="0" step="0.02" value="0.00" disabled>
+                      </label>
+                      <button id="studioEditorRangeCopyButton" type="button" disabled>구간 복사</button>
+                      <button id="studioEditorRangeDeleteButton" class="off" type="button" disabled>구간 삭제</button>
+                    </div>
+                  </section>
+                </div>
+              </aside>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div id="studioEditorSaveConfirmModal" class="confirm-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="studioEditorSaveConfirmTitle">
+        <section class="confirm-dialog studio-editor-save-confirm">
+          <strong id="studioEditorSaveConfirmTitle">레이어를 저장할까요?</strong>
+          <dl class="studio-editor-save-summary">
+            <div><dt>레이어</dt><dd id="studioEditorSaveLayerName">-</dd></div>
+            <div><dt>반영된 편집</dt><dd id="studioEditorSaveEditCount">0회</dd></div>
+            <div><dt>포인트 곡선</dt><dd id="studioEditorSavePointChange">변경 없음</dd></div>
+            <div><dt>축 범위 경고</dt><dd id="studioEditorSaveWarningCount">0건</dd></div>
+          </dl>
+          <p>저장하면 실행 취소 기록이 초기화됩니다.</p>
+          <div class="registry-actions">
+            <button id="studioEditorSaveCancelButton" type="button">취소</button>
+            <button id="studioEditorSaveConfirmButton" class="primary" type="button">저장</button>
+          </div>
+        </section>
+      </div>

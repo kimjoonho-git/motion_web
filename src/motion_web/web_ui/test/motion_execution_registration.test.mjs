@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { indexHtml } from '../tools/index_html.mjs';
 
 import {
   motionFileOriginalText,
@@ -11,7 +12,7 @@ const controller = readFileSync(
   new URL('../static/js/motion_data.js', import.meta.url),
   'utf8',
 );
-const html = readFileSync(new URL('../static/index.html', import.meta.url), 'utf8');
+const html = indexHtml;
 const dom = readFileSync(new URL('../static/js/dom.js', import.meta.url), 'utf8');
 const main = readFileSync(new URL('../static/js/main.js', import.meta.url), 'utf8');
 const api = readFileSync(new URL('../static/js/api.js', import.meta.url), 'utf8');

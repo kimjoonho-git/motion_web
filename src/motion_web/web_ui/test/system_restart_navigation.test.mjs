@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { indexHtml } from '../tools/index_html.mjs';
 
 const api = readFileSync(new URL('../static/js/api.js', import.meta.url), 'utf8');
-const html = readFileSync(new URL('../static/index.html', import.meta.url), 'utf8');
+const html = indexHtml;
 const main = readFileSync(new URL('../static/js/main.js', import.meta.url), 'utf8');
 
 test('program and motor-control restart actions keep distinct API routes', () => {
