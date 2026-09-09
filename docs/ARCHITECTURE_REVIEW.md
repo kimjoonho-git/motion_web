@@ -2282,6 +2282,73 @@ Pickup        pickup_complete true · pickup_pending false
 **남은 미검증** · 파킹 실패 분기(`fader_park_failed`) · 재연결 세대 표식 무효화 ·
 정상 경로에서는 타지 않는 예외 분기다.
 
+### 6-41. `midi_snapshot` 신설 · 화면 표현을 뗀다
+
+`midi_control_node` 2,800 → **2,397줄** · 클래스 2,722 → **2,321줄**
+
+`_snapshot` 400줄을 `build_snapshot(node)` 모듈 함수로 뺐다. **읽기만 하고
+판정하지 않는다** · 채널 8개의 매핑·필터·SELECT·Pickup·모터 명령 상태를 화면과
+응답이 쓰는 형태로 옮겨 담는다.
+
+#### `MidiDecoder`는 미뤘다 · 이름보다 경계를 본다
+
+§5 목표안의 넷째다. 입력 해석은 `_midi_callback`의 **459줄짜리 채널 루프 안에**
+있고, 파킹·SELECT 판정과 줄 단위로 엇갈려 있다.
+
+떼려면 상태 **16개**(`_raw_channels` · `_channels` · `_filter_stage1/2` ·
+`_touch` · `_btn0~3` · `_previous_*` 등)를 옮겨야 한다 · 노드 참조 106곳 ·
+시험 참조 71곳. **방금 실물 검증을 통과한 핫패스다.**
+
+먼저 루프를 국면별로 가르는 것이 순서다 · **별도 항목으로 둔다.**
+
+#### §6-39의 결함을 잡았다 · 다중행 `getattr`
+
+```python
+getattr(
+    self,
+    'pickup_feedback_consistency_deg',
+    PICKUP_FEEDBACK_CONSISTENCY_DEG,
+)
+```
+
+한 줄 치환이 지나갔다. `PickupPolicy`에 없는 이름이라 **늘 기본값 1.0을 쓰고
+있었다** · launch override가 없어 관측 영향은 없었지만, 있었다면 조용히 무시됐다.
+
+**§6-40에서 같은 종류를 하나 잡고도 또 나왔다.** 그때 만든 정규식 감사가
+줄바꿈을 못 봤기 때문이다.
+
+#### 감사 도구를 정규식에서 AST로 바꿨다
+
+`ast.Call`의 인자를 보므로 줄바꿈에 영향받지 않는다.
+
+```
+self 를 첫 인자로 받는 getattr/hasattr/setattr 중
+문자열 이름이 그 클래스에 없는 것을 찾는다
+대상 · self.node / self.monitor / self.bridge 를 갖는 서비스 클래스
+```
+
+`src` 전체에 돌려 **잔여 0** 확인 · 정규식 감사는 폐기한다.
+
+#### 시험 통로도 옮겼다
+
+`node._snapshot = lambda: ...` 인스턴스 monkeypatch가 모듈 함수를 비껴갔다 ·
+`monkeypatch.setattr(midi_node_module, 'build_snapshot', ...)`로 바꿨다.
+
+**모듈 전역에 직접 대입하지 않았다** · 복원되지 않아 시험 간 오염이 된다 ·
+`monkeypatch` 픽스처가 끝나면 되돌린다.
+
+#### 검증
+
+- 코드 검증 · `ruff check src` 55건 유지 · AST 감사 잔여 0
+- 실행 검증 · `pytest` 1,016건 통과
+- 실물 검증 · X-Touch 연결 상태 재시작 · **스냅샷 구조가 이전과 같다**
+
+```
+node_state ok · success true · "X-Touch connected" · 오류 로그 없음
+최상위 키 43 · 채널 8 · 채널당 필드 55  ← 분리 전과 동일
+bridge_publish_age_sec 0.004 (갱신 중)
+```
+
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
 - 파일 1,000줄 이하 · 함수 60줄 이하 · `Node` 서브클래스 500줄 이하
