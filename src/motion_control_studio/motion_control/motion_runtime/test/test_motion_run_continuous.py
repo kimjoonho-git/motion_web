@@ -3,17 +3,34 @@ import threading
 import time
 from pathlib import Path
 
+from unittest import mock
+
 import pytest
 
 from motion_runtime.motion_mapping_manager import MotionMappingManager
+from motion_runtime import motion_run_rules
 from motion_runtime.motion_run_manager import (
     CONTINUOUS_LOOP_TOLERANCE_DEG,
     MotionRunManager,
 )
 
 
+def _patch_rule(name, value):
+    """규칙 함수를 시험용으로 갈아끼운다 · §6-25로 노드에서 떨어져 나왔다.
+
+    이전에는 `manager.<이름> = ...`로 인스턴스에 꽂았다. 규칙이 모듈 함수가
+    되면서 이음매도 모듈로 옮겼다 · autouse 픽스처가 테스트마다 되돌린다.
+    """
+    mock.patch.object(motion_run_rules, name, value).start()
+
+
+@pytest.fixture(autouse=True)
+def _restore_patched_rules():
+    yield
+    mock.patch.stopall()
+
+
 def test_runtime_ignores_optional_studio_editor_metadata_in_motion_header():
-    manager = MotionRunManager.__new__(MotionRunManager)
     content = (
         '{"title":"편집 가능 모션","type":"motion_header","rotation_unit":"deg",'
         '"fields":["frame","time_sec","id","value"],'
@@ -22,7 +39,7 @@ def test_runtime_ignores_optional_studio_editor_metadata_in_motion_header():
         '[1,0.02,"1-1",3.5]\n'
     )
 
-    rows, headers = manager._extract_motion_rows(content)
+    rows, headers = motion_run_rules._extract_motion_rows(content)
 
     assert headers == ['frame', 'time_sec', 'id', 'value']
     assert rows == [[1, 0.02, '1-1', 3.5]]
@@ -48,7 +65,7 @@ def test_motion_run_confirmation_returns_standard_context_acknowledgement():
 
 
 def test_continuous_capability_accepts_values_inside_axis_tolerances():
-    capability = MotionRunManager._continuous_capability([
+    capability = motion_run_rules._continuous_capability([
         {
             'motor_axis': 0,
             'loop_delta_deg': 4.9,
@@ -90,7 +107,7 @@ def test_motion_run_publishes_final_control_motion_values():
 
 
 def test_four_degree_motion_seam_is_allowed_even_if_motor_delta_is_large():
-    capability = MotionRunManager._continuous_capability([{
+    capability = motion_run_rules._continuous_capability([{
         'motor_axis': 0,
         'loop_delta_deg': 4.0,
         'loop_motor_delta_deg': 400.0,
@@ -119,9 +136,10 @@ def test_past_synchronized_start_is_rejected_instead_of_running_late():
     manager = MotionRunManager.__new__(MotionRunManager)
     manager._stop_event = threading.Event()
     captured = []
-    manager._status_from_plan = lambda state, message, _plan: {
-        'state': state, 'message': message,
-    }
+    _patch_rule(
+        '_status_from_plan',
+        lambda state, message, _plan: {'state': state, 'message': message},
+    )
     manager._set_status = captured.append
     result = manager._run_countdown({
         'scheduled_start_at': time.time() - 0.1,
@@ -132,15 +150,14 @@ def test_past_synchronized_start_is_rejected_instead_of_running_late():
 
 
 def test_motion_value_clamps_to_mapping_min_and_max():
-    assert MotionRunManager._clamp_motion_value(-35.0, -30.0, 30.0) == -30.0
-    assert MotionRunManager._clamp_motion_value(12.0, -30.0, 30.0) == 12.0
-    assert MotionRunManager._clamp_motion_value(35.0, -30.0, 30.0) == 30.0
+    assert motion_run_rules._clamp_motion_value(-35.0, -30.0, 30.0) == -30.0
+    assert motion_run_rules._clamp_motion_value(12.0, -30.0, 30.0) == 12.0
+    assert motion_run_rules._clamp_motion_value(35.0, -30.0, 30.0) == 30.0
 
 
 def test_legacy_initial_disabled_setting_is_ignored():
-    manager = MotionRunManager.__new__(MotionRunManager)
 
-    initial = manager._initial_motion_value({
+    initial = motion_run_rules._initial_motion_value({
         'initial_enabled': False,
         'initial_mode': 'manual',
         'initial_motion_position_deg': 12.5,
@@ -170,7 +187,7 @@ def test_legacy_initial_disabled_mapping_keeps_initial_settings_and_drops_option
 
 
 def test_continuous_capability_rejects_only_continuous_mode_on_seam_mismatch():
-    capability = MotionRunManager._continuous_capability([
+    capability = motion_run_rules._continuous_capability([
         {
             'motor_axis': 2,
             'loop_delta_deg': 5.001,
@@ -184,15 +201,14 @@ def test_continuous_capability_rejects_only_continuous_mode_on_seam_mismatch():
 
 
 def test_failed_readiness_marks_all_actions_unavailable():
-    capabilities = MotionRunManager._unavailable_capabilities('모터 연결 끊김')
+    capabilities = motion_run_rules._unavailable_capabilities('모터 연결 끊김')
 
     assert all(item['available'] is False for item in capabilities.values())
     assert all(item['reason'] == '모터 연결 끊김' for item in capabilities.values())
 
 
 def test_motor_alarm_is_reported_even_when_fault_flag_is_missing():
-    manager = MotionRunManager.__new__(MotionRunManager)
-    error = manager._motor_ready_error({
+    error = motion_run_rules._motor_ready_error({
         'controller_index': 0,
         'state': 'detected',
         'motor_type': 'AC Servo',
@@ -207,7 +223,6 @@ def test_motor_alarm_is_reported_even_when_fault_flag_is_missing():
 
 
 def test_motor_target_applies_reference_scale_direction_and_gear_ratio():
-    manager = MotionRunManager.__new__(MotionRunManager)
     row = {
         'reference_position_deg': 10.0,
         'offset_deg': 2.0,
@@ -216,11 +231,10 @@ def test_motor_target_applies_reference_scale_direction_and_gear_ratio():
         'gear_ratio': 2.0,
     }
 
-    assert manager._motor_target(row, 3.0) == -5.0
+    assert motion_run_rules._motor_target(row, 3.0) == -5.0
 
 
 def test_interpolation_uses_precomputed_time_index_for_irregular_samples():
-    manager = MotionRunManager.__new__(MotionRunManager)
     records = [
         {'time_sec': 0.0, 'value': 0.0},
         {'time_sec': 1.0, 'value': 10.0},
@@ -228,10 +242,10 @@ def test_interpolation_uses_precomputed_time_index_for_irregular_samples():
     ]
     record_times = [record['time_sec'] for record in records]
 
-    assert manager._interpolated_value(records, record_times, -1.0) == 0.0
-    assert manager._interpolated_value(records, record_times, 0.5) == 5.0
-    assert manager._interpolated_value(records, record_times, 2.0) == 20.0
-    assert manager._interpolated_value(records, record_times, 4.0) == 30.0
+    assert motion_run_rules._interpolated_value(records, record_times, -1.0) == 0.0
+    assert motion_run_rules._interpolated_value(records, record_times, 0.5) == 5.0
+    assert motion_run_rules._interpolated_value(records, record_times, 2.0) == 20.0
+    assert motion_run_rules._interpolated_value(records, record_times, 4.0) == 30.0
 
 
 def _initialization_only_manager(mapping):
@@ -241,9 +255,9 @@ def _initialization_only_manager(mapping):
     manager._load_mapping = lambda _path: mapping
     manager._current_motors = lambda: [{'axis': 0}]
     manager._motor_for_axis = lambda _axis, motors: motors[0]
-    manager._motor_ready_error = lambda _motor: ''
-    manager._target_range_limit_error = lambda _motor, _low, _high: ''
-    manager._motor_type = lambda _motor: 'ac_servo'
+    _patch_rule('_motor_ready_error', lambda _motor: '')
+    _patch_rule('_target_range_limit_error', lambda _motor, _low, _high: '')
+    _patch_rule('_motor_type', lambda _motor: 'ac_servo')
     return manager
 
 
@@ -313,9 +327,9 @@ def test_motion_run_initialization_uses_every_enabled_mapping_axis():
     motors = [{'axis': 0}, {'axis': 1}]
     manager._current_motors = lambda: motors
     manager._motor_for_axis = lambda axis, _motors: motors[axis]
-    manager._motor_ready_error = lambda _motor: ''
-    manager._target_range_limit_error = lambda _motor, _low, _high: ''
-    manager._motor_type = lambda _motor: 'ac_servo'
+    _patch_rule('_motor_ready_error', lambda _motor: '')
+    _patch_rule('_target_range_limit_error', lambda _motor, _low, _high: '')
+    _patch_rule('_motor_type', lambda _motor: 'ac_servo')
 
     plan = manager._build_plan({
         'request_source': 'motion_run',
@@ -361,9 +375,9 @@ def test_plan_uses_motion_state_captured_before_slow_motion_file_processing():
         motors if time.monotonic() - started_at < 1.0 else []
     )
     manager._motor_for_axis = lambda _axis, _motors: motors[0]
-    manager._motor_ready_error = lambda _motor: ''
-    manager._target_range_limit_error = lambda _motor, _low, _high: ''
-    manager._motor_type = lambda _motor: 'ac_servo'
+    _patch_rule('_motor_ready_error', lambda _motor: '')
+    _patch_rule('_target_range_limit_error', lambda _motor, _low, _high: '')
+    _patch_rule('_motor_type', lambda _motor: 'ac_servo')
 
     plan = manager._build_plan({
         'motion_file_id': 'motion.json',
@@ -436,11 +450,14 @@ def test_motion_run_initialization_fails_when_any_mapping_axis_is_not_ready():
     motors = [{'axis': 0}, {'axis': 1}]
     manager._current_motors = lambda: motors
     manager._motor_for_axis = lambda axis, _motors: motors[axis]
-    manager._motor_ready_error = lambda motor: (
-        'Axis 1 servo is off' if motor['axis'] == 1 else ''
+    _patch_rule(
+        '_motor_ready_error',
+        lambda motor: (
+            'Axis 1 servo is off' if motor['axis'] == 1 else ''
+        ),
     )
-    manager._target_range_limit_error = lambda _motor, _low, _high: ''
-    manager._motor_type = lambda _motor: 'ac_servo'
+    _patch_rule('_target_range_limit_error', lambda _motor, _low, _high: '')
+    _patch_rule('_motor_type', lambda _motor: 'ac_servo')
 
     with pytest.raises(ValueError, match='Motion ID 1-2: Axis 1 servo is off'):
         manager._build_plan({
@@ -469,9 +486,9 @@ def test_motion_run_playback_uses_only_motion_ids_present_in_file():
     motors = [{'axis': 0}, {'axis': 1}]
     manager._current_motors = lambda: motors
     manager._motor_for_axis = lambda axis, _motors: motors[axis]
-    manager._motor_ready_error = lambda _motor: ''
-    manager._target_range_limit_error = lambda _motor, _low, _high: ''
-    manager._motor_type = lambda _motor: 'ac_servo'
+    _patch_rule('_motor_ready_error', lambda _motor: '')
+    _patch_rule('_target_range_limit_error', lambda _motor, _low, _high: '')
+    _patch_rule('_motor_type', lambda _motor: 'ac_servo')
 
     plan = manager._build_plan({
         'request_source': 'motion_run',
@@ -553,7 +570,7 @@ def test_start_routes_one_owned_initialization_and_motion_sequence(monkeypatch):
         }
 
     manager._build_plan = build_plan
-    manager._motion_auto_start_guard_error = lambda _plan: ''
+    _patch_rule('_motion_auto_start_guard_error', lambda _plan: '')
     calls = []
     manager._run_initialization_then_motion = lambda initialization, motion: calls.append(
         ('initialize_then_motion', initialization['name'], motion['name'])
@@ -660,7 +677,7 @@ def test_owned_sequence_runs_countdown_between_initialization_and_motion():
 def test_countdown_stop_prevents_motion_start():
     manager = MotionRunManager.__new__(MotionRunManager)
     manager._run_lock = threading.RLock()
-    manager._status = manager._empty_status()
+    manager._status = motion_run_rules._empty_status()
     manager._publish_status = lambda: None
     manager._stop_event = threading.Event()
     manager._stop_event.set()
@@ -675,7 +692,7 @@ def test_countdown_stop_prevents_motion_start():
 
 
 def test_auto_start_rejects_unsafe_continuous_motion_before_initialization():
-    reason = MotionRunManager._motion_auto_start_guard_error({
+    reason = motion_run_rules._motion_auto_start_guard_error({
         'run_mode': 'continuous',
         'capabilities': {
             'continuous_run': {
@@ -686,7 +703,7 @@ def test_auto_start_rejects_unsafe_continuous_motion_before_initialization():
     })
 
     assert reason == '시작·종료값 차이 초과'
-    assert MotionRunManager._motion_auto_start_guard_error({
+    assert motion_run_rules._motion_auto_start_guard_error({
         'run_mode': 'once',
         'capabilities': {},
     }) == ''
@@ -734,9 +751,9 @@ def test_plan_keeps_single_run_available_when_continuous_seam_fails():
     }
     manager._current_motors = lambda: [{'axis': 0}]
     manager._motor_for_axis = lambda _axis, motors: motors[0]
-    manager._motor_ready_error = lambda _motor: ''
-    manager._target_range_limit_error = lambda _motor, _low, _high: ''
-    manager._motor_type = lambda _motor: 'ac_servo'
+    _patch_rule('_motor_ready_error', lambda _motor: '')
+    _patch_rule('_target_range_limit_error', lambda _motor, _low, _high: '')
+    _patch_rule('_motor_type', lambda _motor: 'ac_servo')
     plan = manager._build_plan({
         'motion_file_id': 'motion.json',
         'mapping_file_id': 'mapping.yaml',
@@ -777,8 +794,8 @@ def test_plan_resolves_current_axis_from_stable_alias_instead_of_saved_axis():
         'motor_type': 'ac_servo',
         'alias': 101,
     }]
-    manager._motor_ready_error = lambda _motor: ''
-    manager._target_range_limit_error = lambda _motor, _low, _high: ''
+    _patch_rule('_motor_ready_error', lambda _motor: '')
+    _patch_rule('_target_range_limit_error', lambda _motor, _low, _high: '')
 
     plan = manager._build_plan({
         'motion_file_id': 'motion.json',
@@ -791,8 +808,7 @@ def test_plan_resolves_current_axis_from_stable_alias_instead_of_saved_axis():
 
 
 def test_motor_ref_matching_is_scoped_by_ethercat_master_and_serial_port():
-    manager = MotionRunManager.__new__(MotionRunManager)
-    manager._motor_type = lambda motor: motor['motor_type']
+    _patch_rule('_motor_type', lambda motor: motor['motor_type'])
     motors = [
         {
             'controller_index': 0,
@@ -822,18 +838,18 @@ def test_motor_ref_matching_is_scoped_by_ethercat_master_and_serial_port():
 
     assert [
         motor['controller_index']
-        for motor in manager._motors_for_ref(
+        for motor in motion_run_rules._motors_for_ref(
             'ac_servo:master:1:alias:101', motors
         )
     ] == [5]
     assert [
         motor['controller_index']
-        for motor in manager._motors_for_ref(
+        for motor in motion_run_rules._motors_for_ref(
             'dynamixel:port:%2Fdev%2FttyUSB1:id:3', motors
         )
     ] == [9]
-    assert len(manager._motors_for_ref('ac_servo:alias:101', motors)) == 2
-    assert len(manager._motors_for_ref('dynamixel:id:3', motors)) == 2
+    assert len(motion_run_rules._motors_for_ref('ac_servo:alias:101', motors)) == 2
+    assert len(motion_run_rules._motors_for_ref('dynamixel:id:3', motors)) == 2
 
 
 def test_plan_runs_with_out_of_range_data_and_clamps_every_command():
@@ -860,9 +876,9 @@ def test_plan_runs_with_out_of_range_data_and_clamps_every_command():
     }
     manager._current_motors = lambda: [{'axis': 0}]
     manager._motor_for_axis = lambda _axis, motors: motors[0]
-    manager._motor_ready_error = lambda _motor: ''
-    manager._target_range_limit_error = lambda _motor, _low, _high: ''
-    manager._motor_type = lambda _motor: 'ac_servo'
+    _patch_rule('_motor_ready_error', lambda _motor: '')
+    _patch_rule('_target_range_limit_error', lambda _motor, _low, _high: '')
+    _patch_rule('_motor_type', lambda _motor: 'ac_servo')
 
     plan = manager._build_plan({
         'motion_file_id': 'motion.json',
@@ -901,9 +917,9 @@ def test_motion_studio_can_use_read_only_mapping_with_generated_preview_file():
     motors = [{'axis': 0}, {'axis': 1}]
     manager._current_motors = lambda: motors
     manager._motor_for_axis = lambda axis, _motors: motors[axis]
-    manager._motor_ready_error = lambda _motor: ''
-    manager._target_range_limit_error = lambda _motor, _low, _high: ''
-    manager._motor_type = lambda _motor: 'dynamixel'
+    _patch_rule('_motor_ready_error', lambda _motor: '')
+    _patch_rule('_target_range_limit_error', lambda _motor, _low, _high: '')
+    _patch_rule('_motor_type', lambda _motor: 'dynamixel')
 
     plan = manager._build_plan({
         'request_source': 'motion_studio',

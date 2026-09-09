@@ -1305,6 +1305,55 @@ motion-mappings ['ㄴㅇㄹ']
 - 실물 미검증 · 두 프로세스 동시 기록 경합 · 웹과 매핑 관리자가 같은 파일을
   같은 순간에 저장해야 한다 · 단위 테스트로는 4스레드 경합까지 확인했다
 
+### 6-25. `motion_run_manager` 분해 착수 · 순수 규칙 추출
+
+`MotionRunManager` 3,693 → **3,234줄** · 메서드 120 → 82 · 상태 무의존 483 → 84줄
+
+§5 분해 목표안에서 `bridge_node` 다음으로 적혀 있던 노드다. 지금 워크스페이스에서
+가장 큰 파일이었다. `bridge_node`에 쓴 순서를 그대로 적용했다.
+
+#### ① 죽은/위임 껍데기 11개 제거
+
+`motion_common`으로 그냥 넘기기만 하던 것들이다 · §6-9가 `bridge_node`에서 지운
+것과 같은 패턴.
+
+| 상태 | 메서드 |
+|---|---|
+| **호출 0** · 죽은 껍데기 | `_column_key` · `_column_value` · `_header_map` · `_header_has_required` · `_parse_header_line` · `_extract_motion_rows_from_text` |
+| 호출부 갱신 후 제거 | `_finite_float`(23곳) · `_optional_int`(12곳) · `_expand_pair_rows` · `_parse_text_row` · `_parse_motion_row` |
+
+이름 충돌 하나를 만났다. `values.finite_float(...)`로 바꾸자 **지역 변수 `values`가
+모듈을 가렸다** · `_publish_motion_values(self, values)`의 인자다.
+`from motion_common.values import finite_float, optional_int`로 이름을 직접 들여와
+피했다. 테스트가 잡았다.
+
+#### ② 순수 규칙 27개 → `motion_run_rules` 신설
+
+실행 상태 초안 · 모터 참조 해석 · 목표값 판정 · 보간과 클램프 · 재생 주기 계산 ·
+420줄.
+
+#### 파일 입출력은 옮기지 않았다
+
+`_load_motion_records`(64줄) · `_load_mapping`(5줄)은 한 번 옮겼다가 **되돌렸다.**
+파일을 열어 읽는 일이고, 규칙 모듈을 I/O 없는 채로 두는 편이 낫다 ·
+`test_pure_modules`가 `motion_web_bridge`에 요구하는 성질과 같은 기준이다.
+
+되돌린 덕에 이 둘을 스텁으로 쓰던 시험 19곳도 그대로 남았다.
+
+#### 테스트 이음매 30곳 이동
+
+`manager._motor_type = ...` 처럼 인스턴스에 꽂던 것을 `_patch_rule('_motor_type', ...)`로
+바꿨다 · `mock.patch.object` + autouse 픽스처가 테스트마다 되돌린다 · §6-13과 같다.
+
+이음매가 옮겨가자 `manager` 인스턴스를 만들 이유가 없어진 시험이 6개 나왔다 ·
+그 생성도 지웠다.
+
+#### 검증
+
+- 코드 검증 · `ruff check src` 55건 유지 · 신규 0건
+- 실행 검증 · `pytest` 1,008건 통과 · 실패 0
+- 실물 검증 · 아래 별도 기록
+
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
 - 파일 1,000줄 이하 · 함수 60줄 이하 · `Node` 서브클래스 500줄 이하

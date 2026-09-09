@@ -2,6 +2,7 @@ import threading
 import time
 
 from motion_runtime.motion_run_manager import MotionRunManager
+from motion_runtime import motion_run_rules
 
 
 def _wait_until(predicate, timeout=1.0):
@@ -151,11 +152,11 @@ def test_group_stop_after_cycle_before_motion_prevents_next_start():
 
 def test_playback_cycle_number_uses_group_cycle_for_network_motion():
     plan = {'group_execution': True, 'group_cycle_number': 36}
-    assert MotionRunManager._playback_cycle_number(plan, 0) == 36
-    assert MotionRunManager._playback_cycle_number(plan, 2) == 36
+    assert motion_run_rules._playback_cycle_number(plan, 0) == 36
+    assert motion_run_rules._playback_cycle_number(plan, 2) == 36
 
 
 def test_playback_cycle_number_uses_local_counter_for_standalone_motion():
     plan = {'group_execution': False}
-    assert MotionRunManager._playback_cycle_number(plan, 0) == 1
-    assert MotionRunManager._playback_cycle_number(plan, 2) == 3
+    assert motion_run_rules._playback_cycle_number(plan, 0) == 1
+    assert motion_run_rules._playback_cycle_number(plan, 2) == 3

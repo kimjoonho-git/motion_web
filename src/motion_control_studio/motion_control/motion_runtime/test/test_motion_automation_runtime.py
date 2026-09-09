@@ -1,8 +1,27 @@
+from unittest import mock
+
+import pytest
 import threading
 import time
 
 from motion_runtime.motion_automation_store import default_automation_state
+from motion_runtime import motion_run_rules
 from motion_runtime.motion_run_manager import MotionRunManager
+
+
+def _patch_rule(name, value):
+    """규칙 함수를 시험용으로 갈아끼운다 · §6-25로 노드에서 떨어져 나왔다.
+
+    이전에는 `manager.<이름> = ...`로 인스턴스에 꽂았다. 규칙이 모듈 함수가
+    되면서 이음매도 모듈로 옮겼다 · autouse 픽스처가 테스트마다 되돌린다.
+    """
+    mock.patch.object(motion_run_rules, name, value).start()
+
+
+@pytest.fixture(autouse=True)
+def _restore_patched_rules():
+    yield
+    mock.patch.stopall()
 
 
 class _Logger:
@@ -16,7 +35,7 @@ def _manager():
     manager._run_lock = threading.RLock()
     manager._stop_event = threading.Event()
     manager._graceful_stop_event = threading.Event()
-    manager._status = manager._empty_status()
+    manager._status = motion_run_rules._empty_status()
     manager._execution_context = {}
     manager._execution_context_ready = True
     manager._automation_state = {
@@ -36,7 +55,7 @@ def _manager():
     manager._current_motors = lambda: []
     manager._prepare_motion_stream = lambda _motors, _axes: None
     manager._publish_motion_setpoints = lambda *_args, **_kwargs: None
-    manager._sleep_until = lambda _deadline: None
+    _patch_rule('_sleep_until', lambda _deadline: None)
     manager._current_servo_alarm_grade = lambda: 0
     manager.get_logger = lambda: _Logger()
     return manager
@@ -173,7 +192,7 @@ def test_grade_one_alarm_allows_current_cycle_then_blocks_next_cycle():
 
 
 def test_reinitialize_repeat_does_not_require_direct_loop_seam():
-    reason = MotionRunManager._motion_auto_start_guard_error({
+    reason = motion_run_rules._motion_auto_start_guard_error({
         'run_mode': 'continuous',
         'repeat_mode': 'reinitialize',
         'capabilities': {

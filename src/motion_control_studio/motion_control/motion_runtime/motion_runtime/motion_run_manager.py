@@ -1,25 +1,25 @@
 """Validate and execute motion plans independently from the web API process."""
 
-from bisect import bisect_left
 import hashlib
 import json
 import math
 import os
 import threading
 import time
-from urllib.parse import quote
 import traceback
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
 import rclpy
 import yaml
-from motion_common import command_router, generation as generation_mod, motion_table, topics, values
+from motion_common import command_router, generation as generation_mod, motion_table, topics
+from motion_common.values import finite_float, optional_int
 from motion_control_msgs.msg import MotorStatus
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Int8MultiArray, String
 
+from . import motion_run_rules
 from .motion_automation_store import (
     MotionAutomationStore,
     REPEAT_MODES,
@@ -174,7 +174,7 @@ class MotionRunManager(Node):
             float(self.declare_parameter('target_settle_timeout_sec', TARGET_SETTLE_TIMEOUT_SEC).value),
             0.0,
         )
-        self._status: Dict[str, Any] = self._empty_status()
+        self._status: Dict[str, Any] = motion_run_rules._empty_status()
         self._execution_context: Dict[str, Any] = {}
         self._execution_context_ready = False
         self._project_generation = 0
@@ -279,7 +279,7 @@ class MotionRunManager(Node):
             for key, values in list(self._action_results.items()):
                 last_stamp = now
                 if values:
-                    last_stamp = self._finite_float(values[-1].get('stamp')) or now
+                    last_stamp = finite_float(values[-1].get('stamp')) or now
                 if now - last_stamp > 60.0:
                     self._action_results.pop(key, None)
 
@@ -341,7 +341,7 @@ class MotionRunManager(Node):
             self._execution_context_ready = False
             self.motion_files_dir = self.motion_projects_dir
             self.mappings_dir = self.motion_projects_dir
-            self._status = self._empty_status()
+            self._status = motion_run_rules._empty_status()
             self._automation_project_id = ''
             self._automation_state = default_automation_state()
             self._automation_runtime = {
@@ -807,7 +807,7 @@ class MotionRunManager(Node):
             plan = self._build_plan(payload)
         except Exception as exc:
             reason = str(exc) or '실행 준비 검사 실패'
-            status = self._empty_status()
+            status = motion_run_rules._empty_status()
             status.update({
                 'state': 'error',
                 'phase': 'error',
@@ -815,7 +815,7 @@ class MotionRunManager(Node):
                 'project_id': str(payload.get('project_id') or ''),
                 'motion_file_id': str(payload.get('motion_file_id') or ''),
                 'mapping_file_id': str(payload.get('mapping_file_id') or ''),
-                'capabilities': self._unavailable_capabilities(reason),
+                'capabilities': motion_run_rules._unavailable_capabilities(reason),
                 'updated_at': time.time(),
             })
             self._set_status(status)
@@ -825,7 +825,7 @@ class MotionRunManager(Node):
                 'status': self.status(),
                 'summary': {},
             }
-        status = self._status_from_plan('ready', '실행 준비 검사 완료', plan)
+        status = motion_run_rules._status_from_plan('ready', '실행 준비 검사 완료', plan)
         status['phase'] = 'ready'
         status['lifecycle'] = {
             **status.get('lifecycle', {}),
@@ -866,7 +866,7 @@ class MotionRunManager(Node):
             self._automation_resume_pending = False
             if hasattr(self, '_automation_runtime') and isinstance(self._automation_runtime, dict):
                 self._automation_runtime['resume_pending'] = False
-            preparing_status = self._empty_status()
+            preparing_status = motion_run_rules._empty_status()
             preparing_status.update({
                 'state': 'preparing',
                 'phase': 'preparing',
@@ -910,7 +910,7 @@ class MotionRunManager(Node):
     def _start_group_session(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Prepare one persistent group session without enabling local repeat."""
         execution_id = str(payload.get('execution_id') or '').strip()
-        initialize_monotonic = self._finite_float(
+        initialize_monotonic = finite_float(
             payload.get('initialize_monotonic')
         )
         if not execution_id:
@@ -950,7 +950,7 @@ class MotionRunManager(Node):
                 'next_initialize_cycle_number': 0,
                 'stop_after_cycle': False,
             }
-            status = self._empty_status()
+            status = motion_run_rules._empty_status()
             status.update({
                 'state': 'preparing',
                 'phase': 'group_preparing',
@@ -1001,7 +1001,7 @@ class MotionRunManager(Node):
             validation_plan = self._build_plan(
                 validation_payload, motors_snapshot=motors_snapshot,
             )
-            guard_error = self._motion_auto_start_guard_error(validation_plan)
+            guard_error = motion_run_rules._motion_auto_start_guard_error(validation_plan)
             if guard_error:
                 raise ValueError(guard_error)
             motion_payload = {
@@ -1235,7 +1235,7 @@ class MotionRunManager(Node):
 
     def _schedule_group_cycle(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         execution_id = str(payload.get('execution_id') or '').strip()
-        start_monotonic = self._finite_float(payload.get('start_monotonic'))
+        start_monotonic = finite_float(payload.get('start_monotonic'))
         try:
             cycle_number = int(payload.get('cycle_number'))
         except (TypeError, ValueError) as exc:
@@ -1281,7 +1281,7 @@ class MotionRunManager(Node):
         self, payload: Dict[str, Any],
     ) -> Dict[str, Any]:
         execution_id = str(payload.get('execution_id') or '').strip()
-        initialize_monotonic = self._finite_float(payload.get('initialize_monotonic'))
+        initialize_monotonic = finite_float(payload.get('initialize_monotonic'))
         try:
             cycle_number = int(payload.get('cycle_number'))
         except (TypeError, ValueError) as exc:
@@ -1402,13 +1402,13 @@ class MotionRunManager(Node):
                         
                         for motor_axis in sorted(axes_to_check):
                             motor = self._motor_for_axis(motor_axis, motors)
-                            motor_error = self._motor_ready_error(
+                            motor_error = motion_run_rules._motor_ready_error(
                                 motor or {'controller_index': motor_axis}
                             )
                             if motor_error:
                                 error = motor_error
                                 break
-                            if self._motor_position_deg(motor) is None:
+                            if motion_run_rules._motor_position_deg(motor) is None:
                                 error = f'Axis {motor_axis} position is unavailable'
                                 break
                     except ValueError as exc:
@@ -1462,7 +1462,7 @@ class MotionRunManager(Node):
             ownership_error = self._playback_ownership_error()
             if ownership_error:
                 raise ValueError(ownership_error)
-            guard_error = self._motion_auto_start_guard_error(plan)
+            guard_error = motion_run_rules._motion_auto_start_guard_error(plan)
             if guard_error:
                 raise ValueError(guard_error)
             self._run_initialization_then_motion(initialization_plan, plan)
@@ -1474,7 +1474,7 @@ class MotionRunManager(Node):
             self.get_logger().error(
                 f'motion run preparation failed: {mode}\n{traceback.format_exc()}'
             )
-            status = self._empty_status()
+            status = motion_run_rules._empty_status()
             status.update({
                 'state': 'error',
                 'phase': 'error',
@@ -1611,7 +1611,7 @@ class MotionRunManager(Node):
             init_axes = list(plan['axes'])
             if not init_axes:
                 now = time.time()
-                status = self._status_from_plan('initialized', '초기 위치 이동 대상이 없습니다', plan)
+                status = motion_run_rules._status_from_plan('initialized', '초기 위치 이동 대상이 없습니다', plan)
                 status['phase'] = 'initialized'
                 status.update(group_cycle_context)
                 status['phase_started_at'] = now
@@ -1631,12 +1631,12 @@ class MotionRunManager(Node):
             for axis in init_axes:
                 motor_axis = int(axis['motor_axis'])
                 motor = self._motor_for_axis(motor_axis, motors)
-                motor_error = self._motor_ready_error(
+                motor_error = motion_run_rules._motor_ready_error(
                     motor or {'controller_index': motor_axis}
                 )
                 if motor_error:
                     raise RuntimeError(motor_error)
-                current = self._motor_position_deg(motor)
+                current = motion_run_rules._motor_position_deg(motor)
                 if current is None:
                     raise RuntimeError(f'Axis {motor_axis} current position is unavailable')
                 starts[motor_axis] = current
@@ -1645,7 +1645,7 @@ class MotionRunManager(Node):
 
             max_duration = max(durations.values()) if durations else self.period_sec
             initial_started_at = time.time()
-            status = self._status_from_plan('initializing', '초기 위치 이동 중', plan)
+            status = motion_run_rules._status_from_plan('initializing', '초기 위치 이동 중', plan)
             status['phase'] = 'initializing'
             status.update(group_cycle_context)
             status['phase_started_at'] = initial_started_at
@@ -1682,7 +1682,7 @@ class MotionRunManager(Node):
                 for axis in init_axes
             })
             initial_finished_at = time.time()
-            status = self._status_from_plan('initialized', '초기 위치 이동 완료', plan)
+            status = motion_run_rules._status_from_plan('initialized', '초기 위치 이동 완료', plan)
             status['phase'] = 'initialized'
             status.update(group_cycle_context)
             status['phase_started_at'] = initial_started_at
@@ -1700,14 +1700,14 @@ class MotionRunManager(Node):
                     })
             self._set_status(status)
         except InterruptedError:
-            status = self._status_from_plan('stopped', '초기 위치 이동 정지', plan)
+            status = motion_run_rules._status_from_plan('stopped', '초기 위치 이동 정지', plan)
             status['phase'] = 'stopped'
             status['phase_finished_at'] = time.time()
             status['lifecycle'] = self._current_lifecycle()
             self._set_status(status)
         except Exception as exc:
             self.get_logger().error(f'initial position move failed\n{traceback.format_exc()}')
-            status = self._status_from_plan('error', f'초기 위치 이동 실패: {exc}', plan)
+            status = motion_run_rules._status_from_plan('error', f'초기 위치 이동 실패: {exc}', plan)
             status['phase'] = 'error'
             status['phase_finished_at'] = time.time()
             status['lifecycle'] = self._current_lifecycle()
@@ -1749,7 +1749,7 @@ class MotionRunManager(Node):
         if scheduled_at > 0.0:
             duration = max(scheduled_at - time.time(), 0.0)
             if duration <= 0.0:
-                status = self._status_from_plan('error', '예약 시작 시각이 이미 지났습니다', plan)
+                status = motion_run_rules._status_from_plan('error', '예약 시작 시각이 이미 지났습니다', plan)
                 status['phase'] = 'error'
                 self._set_status(status)
                 return False
@@ -1757,7 +1757,7 @@ class MotionRunManager(Node):
             return True
         started_at = time.time()
         deadline = time.monotonic() + duration
-        status = self._status_from_plan('countdown', '모션 시작 대기', plan)
+        status = motion_run_rules._status_from_plan('countdown', '모션 시작 대기', plan)
         status['phase'] = 'countdown'
         status['phase_started_at'] = started_at
         status['phase_finished_at'] = None
@@ -1765,7 +1765,7 @@ class MotionRunManager(Node):
         self._set_status(status)
         while True:
             if self._stop_event.is_set():
-                status = self._status_from_plan(
+                status = motion_run_rules._status_from_plan(
                     'stopped',
                     '모션 시작 대기 중 정지',
                     plan,
@@ -1815,7 +1815,7 @@ class MotionRunManager(Node):
                 if automation_run
                 else ('연속 모션 실행 중' if continuous else '모션 1회 실행 중')
             )
-            status = self._status_from_plan('running', running_message, plan)
+            status = motion_run_rules._status_from_plan('running', running_message, plan)
             status['phase'] = 'running'
             status['phase_started_at'] = motion_started_at
             status['phase_finished_at'] = None
@@ -1838,7 +1838,7 @@ class MotionRunManager(Node):
                         'state': 'running',
                         'message': running_message,
                     })
-            playback_cycle = self._playback_cycle_number(plan, 0)
+            playback_cycle = motion_run_rules._playback_cycle_number(plan, 0)
             if playback_cycle > 0:
                 status['current_cycle'] = playback_cycle
             self._set_status(status)
@@ -1849,7 +1849,7 @@ class MotionRunManager(Node):
                 cycle_started = time.monotonic()
                 for index, sample in enumerate(samples):
                     if self._stop_event.is_set():
-                        status = self._status_from_plan('stopped', '연속 모션 정지' if continuous else '모션 실행 정지', plan)
+                        status = motion_run_rules._status_from_plan('stopped', '연속 모션 정지' if continuous else '모션 실행 정지', plan)
                         status['phase'] = 'stopped'
                         status['phase_started_at'] = motion_started_at
                         status['phase_finished_at'] = time.time()
@@ -1875,11 +1875,11 @@ class MotionRunManager(Node):
                         len(positions),
                         run_mode=run_mode,
                         cycle_count=cycle_count,
-                        current_cycle=self._playback_cycle_number(
+                        current_cycle=motion_run_rules._playback_cycle_number(
                             plan, cycle_count,
                         ),
                     )
-                    self._sleep_until(cycle_started + ((index + 1) * self.period_sec))
+                    motion_run_rules._sleep_until(cycle_started + ((index + 1) * self.period_sec))
                 cycle_count += 1
                 synchronized_count = int(plan.get('synchronized_repeat_count') or 0)
                 if synchronized_count:
@@ -1968,7 +1968,7 @@ class MotionRunManager(Node):
                     final_positions,
                     samples[-1].get('motion_values'),
                 )
-                status = self._status_from_plan('verifying', '모션 최종 위치 확인 중', plan)
+                status = motion_run_rules._status_from_plan('verifying', '모션 최종 위치 확인 중', plan)
                 status['phase'] = 'verifying'
                 status['phase_started_at'] = motion_started_at
                 status['phase_finished_at'] = None
@@ -1989,7 +1989,7 @@ class MotionRunManager(Node):
                 if not reached:
                     raise RuntimeError(f'모션 최종 위치 도달 확인 실패: {message}')
             motion_finished_at = time.time()
-            status = self._status_from_plan('completed', '모션 실행 완료', plan)
+            status = motion_run_rules._status_from_plan('completed', '모션 실행 완료', plan)
             status['phase'] = 'completed'
             status['phase_started_at'] = motion_started_at
             status['phase_finished_at'] = motion_finished_at
@@ -2009,7 +2009,7 @@ class MotionRunManager(Node):
             self._set_status(status)
         except Exception as exc:
             self.get_logger().error(f'motion run failed\n{traceback.format_exc()}')
-            status = self._status_from_plan('error', f'모션 실행 실패: {exc}', plan)
+            status = motion_run_rules._status_from_plan('error', f'모션 실행 실패: {exc}', plan)
             status['phase'] = 'error'
             status['phase_finished_at'] = time.time()
             status['lifecycle'] = self._current_lifecycle()
@@ -2039,7 +2039,7 @@ class MotionRunManager(Node):
             if self._stop_event.is_set():
                 return False
             if self._graceful_stop_event.is_set():
-                status = self._status_from_plan(
+                status = motion_run_rules._status_from_plan(
                     'stopped', '다음 동기 반복 시작 전 정지', plan
                 )
                 status['phase'] = 'stopped'
@@ -2052,7 +2052,7 @@ class MotionRunManager(Node):
                     motors, plan['axes'], final_sample['positions'],
                     final_sample.get('motion_values'),
                 )
-            self._sleep_until(min(time.monotonic() + self.period_sec, deadline))
+            motion_run_rules._sleep_until(min(time.monotonic() + self.period_sec, deadline))
         self._restore_running_status(plan, time.time(), cycle_count)
         return True
 
@@ -2065,7 +2065,7 @@ class MotionRunManager(Node):
         *,
         state: str = 'stopped',
     ) -> None:
-        status = self._status_from_plan(state, message, plan)
+        status = motion_run_rules._status_from_plan(state, message, plan)
         status['phase'] = state
         status['phase_started_at'] = motion_started_at
         status['phase_finished_at'] = time.time()
@@ -2096,7 +2096,7 @@ class MotionRunManager(Node):
         dwell_sec: float,
     ) -> bool:
         started_at = time.time()
-        status = self._status_from_plan(
+        status = motion_run_rules._status_from_plan(
             'waiting',
             f'자동 반복 대기 중 · {dwell_sec:g}초',
             plan,
@@ -2163,7 +2163,7 @@ class MotionRunManager(Node):
             if plan.get('automation_run')
             else '연속 모션 실행 중'
         )
-        status = self._status_from_plan('running', message, plan)
+        status = motion_run_rules._status_from_plan('running', message, plan)
         cycle_started_at = time.time()
         status['phase'] = 'running'
         status['phase_started_at'] = cycle_started_at
@@ -2192,17 +2192,6 @@ class MotionRunManager(Node):
             return 0
         return grade if grade in (1, 2, 3) else 0
 
-    @staticmethod
-    def _motion_auto_start_guard_error(plan: Dict[str, Any]) -> str:
-        if (
-            plan.get('run_mode') == 'continuous'
-            and plan.get('repeat_mode') not in {'reinitialize', 'dwell_reinitialize'}
-        ):
-            capability = plan.get('capabilities', {}).get('continuous_run', {})
-            if not capability.get('available'):
-                return str(capability.get('reason') or '모션 시작값과 끝값이 달라 연속 동작할 수 없습니다')
-        return ''
-
     def _run_initial_position_stream(
         self,
         motors: List[Dict[str, Any]],
@@ -2218,7 +2207,7 @@ class MotionRunManager(Node):
         threads from overwriting each other when many motors move together.
         """
         duration = max(float(max_duration), self.period_sec)
-        has_ac_axes = self._has_ac_axes(axes)
+        has_ac_axes = motion_run_rules._has_ac_axes(axes)
         clear_sec = self._setpoint_clear_sec() if has_ac_axes else 0.0
         tick_sec = self.period_sec + clear_sec if has_ac_axes else self.period_sec
         steps = max(1, int(math.ceil(duration / tick_sec)))
@@ -2237,7 +2226,7 @@ class MotionRunManager(Node):
                 target = float(targets[motor_axis])
                 axis_duration = max(float(durations.get(motor_axis, duration)), self.period_sec)
                 ratio = min(max(elapsed / axis_duration, 0.0), 1.0)
-                positions[motor_axis] = start + ((target - start) * self._smoothstep(ratio))
+                positions[motor_axis] = start + ((target - start) * motion_run_rules._smoothstep(ratio))
 
             self._publish_initial_positions(motors, axes, positions, has_ac_axes, clear_sec)
             self._update_progress(
@@ -2250,7 +2239,7 @@ class MotionRunManager(Node):
 
             if step >= steps:
                 break
-            self._sleep_until(start_time + ((step + 1) * tick_sec))
+            motion_run_rules._sleep_until(start_time + ((step + 1) * tick_sec))
 
         self._publish_initial_positions(motors, axes, targets, has_ac_axes, clear_sec)
 
@@ -2264,7 +2253,7 @@ class MotionRunManager(Node):
     ) -> None:
         if has_ac_axes:
             self._publish_ac_enable_for_axes(motors, axes, positions)
-            self._sleep_until(time.monotonic() + max(float(clear_sec), 0.0))
+            motion_run_rules._sleep_until(time.monotonic() + max(float(clear_sec), 0.0))
         self._publish_motion_setpoints(motors, axes, positions)
 
     def _publish_initial_action_request(
@@ -2313,7 +2302,7 @@ class MotionRunManager(Node):
                 raise RuntimeError(f'Axis {request["axis"]} 초기 위치 동작 시작 응답이 없습니다')
             if not bool(result.get('success')):
                 raise RuntimeError(str(result.get('message') or f'Axis {request["axis"]} 초기 위치 동작 시작 실패'))
-            if not self._is_terminal_action_result(result):
+            if not motion_run_rules._is_terminal_action_result(result):
                 pending[request_id] = request
         return pending
 
@@ -2370,20 +2359,13 @@ class MotionRunManager(Node):
             if not values:
                 return None
             for index, payload in enumerate(values):
-                if terminal_only and not self._is_terminal_action_result(payload):
+                if terminal_only and not motion_run_rules._is_terminal_action_result(payload):
                     continue
                 result = values.pop(index)
                 if not values:
                     self._action_results.pop(request_id, None)
                 return result
         return None
-
-    @staticmethod
-    def _is_terminal_action_result(payload: Dict[str, Any]) -> bool:
-        if not bool(payload.get('success')):
-            return True
-        message = str(payload.get('message') or '').lower()
-        return 'completed' in message or 'did not reach target' in message
 
     def _build_plan(
         self,
@@ -2399,17 +2381,17 @@ class MotionRunManager(Node):
         repeat_mode = str(payload.get('repeat_mode') or 'direct').strip().lower()
         if repeat_mode not in REPEAT_MODES:
             raise ValueError(f'지원하지 않는 자동 반복 방식입니다: {repeat_mode}')
-        dwell_sec = self._finite_float(payload.get('dwell_sec'))
+        dwell_sec = finite_float(payload.get('dwell_sec'))
         dwell_sec = 0.0 if dwell_sec is None else dwell_sec
         if dwell_sec < 0.0:
             raise ValueError('자동 반복 대기 시간은 0초 이상이어야 합니다')
-        countdown_sec = self._finite_float(payload.get('countdown_sec'))
+        countdown_sec = finite_float(payload.get('countdown_sec'))
         countdown_sec = 0.0 if countdown_sec is None else countdown_sec
         if countdown_sec < 0.0 or countdown_sec > 10.0:
             raise ValueError('모션 시작 대기 시간은 0초 이상 10초 이하여야 합니다')
-        scheduled_start_at = self._finite_float(payload.get('scheduled_start_at'))
+        scheduled_start_at = finite_float(payload.get('scheduled_start_at'))
         scheduled_start_at = 0.0 if scheduled_start_at is None else scheduled_start_at
-        synchronized_cycle_sec = self._finite_float(payload.get('synchronized_cycle_sec'))
+        synchronized_cycle_sec = finite_float(payload.get('synchronized_cycle_sec'))
         synchronized_cycle_sec = 0.0 if synchronized_cycle_sec is None else synchronized_cycle_sec
         try:
             synchronized_repeat_count = int(payload.get('synchronized_repeat_count') or 0)
@@ -2445,7 +2427,7 @@ class MotionRunManager(Node):
             for value in (payload.get('active_motion_ids') or [])
             if str(value or '').strip()
         }
-        initial_move_time_override = self._initial_move_time_override_sec(payload)
+        initial_move_time_override = motion_run_rules._initial_move_time_override_sec(payload)
         if hasattr(self, 'motion_projects_dir'):
             project_id, motion_files_dir, mappings_dir = self._project_asset_dirs(payload)
             motion_directory = motion_files_dir
@@ -2493,7 +2475,7 @@ class MotionRunManager(Node):
                 f'mapping file expects motion file {mapping_motion_file_id}, not {motion_file_id}'
             )
 
-        groups = self._motion_groups(motion_records)
+        groups = motion_run_rules._motion_groups(motion_records)
         if request_source != 'motion_studio':
             requested_motion_ids = (
                 set()
@@ -2520,10 +2502,10 @@ class MotionRunManager(Node):
                 errors.append('enabled mapping row without motion_id')
                 continue
             motor_ref = str(row.get('motor_ref') or '').strip()
-            motor_axis = self._optional_int(row.get('motor_axis'))
+            motor_axis = optional_int(row.get('motor_axis'))
             motor = None
             if motor_ref:
-                matches = self._motors_for_ref(motor_ref, motors)
+                matches = motion_run_rules._motors_for_ref(motor_ref, motors)
                 if len(matches) == 0:
                     errors.append(f'Motion ID {motion_id}: Motor {motor_ref} not found')
                     continue
@@ -2531,7 +2513,7 @@ class MotionRunManager(Node):
                     errors.append(f'Motion ID {motion_id}: Motor {motor_ref} is duplicated')
                     continue
                 motor = matches[0]
-                motor_axis = self._optional_int(motor.get('controller_index'))
+                motor_axis = optional_int(motor.get('controller_index'))
             elif motor_axis is not None:
                 # Backward compatibility for mapping files saved before motor_ref.
                 motor = self._motor_for_axis(motor_axis, motors)
@@ -2545,7 +2527,7 @@ class MotionRunManager(Node):
                     continue
                 initial_mode = str(row.get('initial_mode') or 'first_frame')
                 fallback_value = (
-                    self._finite_float(row.get('initial_motion_position_deg')) or 0.0
+                    finite_float(row.get('initial_motion_position_deg')) or 0.0
                     if initial_mode == 'manual'
                     else 0.0
                 )
@@ -2570,15 +2552,15 @@ class MotionRunManager(Node):
             if motor is None:
                 errors.append(f'Motion ID {motion_id}: Axis {motor_axis} not found')
                 continue
-            motor_error = self._motor_ready_error(motor)
+            motor_error = motion_run_rules._motor_ready_error(motor)
             if motor_error and not automation_run:
                 errors.append(f'Motion ID {motion_id}: {motor_error}')
 
             motion_values = [record['value'] for record in groups[motion_id]]
             motion_min = min(motion_values)
             motion_max = max(motion_values)
-            lower = self._finite_float(row.get('motion_lower_deg'))
-            upper = self._finite_float(row.get('motion_upper_deg'))
+            lower = finite_float(row.get('motion_lower_deg'))
+            upper = finite_float(row.get('motion_upper_deg'))
             if lower is not None and upper is not None and lower > upper:
                 errors.append(f'Motion ID {motion_id}: motion min limit must be <= max limit')
                 continue
@@ -2600,25 +2582,25 @@ class MotionRunManager(Node):
                     f'Motion ID {motion_id}: {motion_max:.3f}° 이상 데이터는 {upper:.3f}°로 제한'
                 )
 
-            command_motion_min = self._clamp_motion_value(motion_min, lower, upper)
-            command_motion_max = self._clamp_motion_value(motion_max, lower, upper)
+            command_motion_min = motion_run_rules._clamp_motion_value(motion_min, lower, upper)
+            command_motion_max = motion_run_rules._clamp_motion_value(motion_max, lower, upper)
 
-            target_min = self._motor_target(row, command_motion_min)
-            target_max = self._motor_target(row, command_motion_max)
+            target_min = motion_run_rules._motor_target(row, command_motion_min)
+            target_max = motion_run_rules._motor_target(row, command_motion_max)
             target_low = min(target_min, target_max)
             target_high = max(target_min, target_max)
-            limit_error = self._target_range_limit_error(motor, target_low, target_high)
+            limit_error = motion_run_rules._target_range_limit_error(motor, target_low, target_high)
             if limit_error:
                 errors.append(f'Motion ID {motion_id}: {limit_error}')
 
-            initial_motion_source_value = self._initial_motion_value(row, groups[motion_id])
-            initial_motion_value = self._clamp_motion_value(
+            initial_motion_source_value = motion_run_rules._initial_motion_value(row, groups[motion_id])
+            initial_motion_value = motion_run_rules._clamp_motion_value(
                 initial_motion_source_value,
                 lower,
                 upper,
             )
             row_initial_time = max(
-                self._finite_float(row.get('initial_move_time_sec')) or 0.0,
+                finite_float(row.get('initial_move_time_sec')) or 0.0,
                 0.0,
             )
             initial_move_time = (
@@ -2630,11 +2612,11 @@ class MotionRunManager(Node):
                 'motion_id': motion_id,
                 'motor_ref': motor_ref,
                 'motor_axis': motor_axis,
-                'motor_type': self._motor_type(motor),
+                'motor_type': motion_run_rules._motor_type(motor),
                 'initial_move_time_sec': initial_move_time,
                 'initial_motion_source_position_deg': initial_motion_source_value,
                 'initial_motion_position_deg': initial_motion_value,
-                'initial_motor_target_deg': self._motor_target(row, initial_motion_value),
+                'initial_motor_target_deg': motion_run_rules._motor_target(row, initial_motion_value),
                 'motion_limit_lower_deg': lower,
                 'motion_limit_upper_deg': upper,
                 'source_motion_min_deg': motion_min,
@@ -2644,15 +2626,15 @@ class MotionRunManager(Node):
                 'motion_clamped': command_motion_min != motion_min or command_motion_max != motion_max,
                 'target_min_deg': target_low,
                 'target_max_deg': target_high,
-                'loop_start_motion_deg': self._clamp_motion_value(motion_values[0], lower, upper),
-                'loop_end_motion_deg': self._clamp_motion_value(motion_values[-1], lower, upper),
+                'loop_start_motion_deg': motion_run_rules._clamp_motion_value(motion_values[0], lower, upper),
+                'loop_end_motion_deg': motion_run_rules._clamp_motion_value(motion_values[-1], lower, upper),
                 'row': row,
             }
-            axis_plan['loop_start_target_deg'] = self._motor_target(
+            axis_plan['loop_start_target_deg'] = motion_run_rules._motor_target(
                 row,
                 axis_plan['loop_start_motion_deg'],
             )
-            axis_plan['loop_end_target_deg'] = self._motor_target(
+            axis_plan['loop_end_target_deg'] = motion_run_rules._motor_target(
                 row,
                 axis_plan['loop_end_motion_deg'],
             )
@@ -2675,7 +2657,7 @@ class MotionRunManager(Node):
                     'requested Motion ID is unavailable: '
                     + ', '.join(missing_requested)
                 )
-        duplicate_axes = self._duplicate_axis_text(axes)
+        duplicate_axes = motion_run_rules._duplicate_axis_text(axes)
         if duplicate_axes:
             errors.append(f'duplicate motor axis in enabled mappings: {duplicate_axes}')
         if errors:
@@ -2700,17 +2682,17 @@ class MotionRunManager(Node):
                 motion_values = {}
                 for axis in axes:
                     motion_id = str(axis['motion_id'])
-                    motion_value = self._interpolated_value(
+                    motion_value = motion_run_rules._interpolated_value(
                         groups[motion_id],
                         group_times[motion_id],
                         sample_time,
                     )
-                    motion_value = self._clamp_motion_value(
+                    motion_value = motion_run_rules._clamp_motion_value(
                         motion_value,
                         axis.get('motion_limit_lower_deg'),
                         axis.get('motion_limit_upper_deg'),
                     )
-                    positions[int(axis['motor_axis'])] = self._motor_target(
+                    positions[int(axis['motor_axis'])] = motion_run_rules._motor_target(
                         axis['row'],
                         motion_value,
                     )
@@ -2726,7 +2708,7 @@ class MotionRunManager(Node):
             source_motion_data_available and not initialization_fallback_used
         )
         continuous_capability = (
-            self._continuous_capability(axes)
+            motion_run_rules._continuous_capability(axes)
             if complete_motion_data_available
             else {
                 'available': False,
@@ -2807,49 +2789,6 @@ class MotionRunManager(Node):
             },
         }
 
-    @staticmethod
-    def _continuous_capability(axes: List[Dict[str, Any]]) -> Dict[str, Any]:
-        mismatched = [
-            axis for axis in axes
-            if float(axis['loop_delta_deg']) > float(axis['loop_tolerance_deg'])
-        ]
-        if not mismatched:
-            return {
-                'available': True,
-                'reason': '모든 축의 모션 시작·종료값이 5° 이내입니다',
-            }
-        details = ', '.join(
-            f"Axis {axis['motor_axis']} 모션값 차이 {axis['loop_delta_deg']:.3f}° "
-            f"(허용 {axis['loop_tolerance_deg']:.3f}°)"
-            for axis in mismatched[:4]
-        )
-        return {
-            'available': False,
-            'reason': f'모션 시작·종료값 차이가 5°를 초과합니다: {details}',
-        }
-
-    @staticmethod
-    def _clamp_motion_value(
-        value: float,
-        lower: Optional[float],
-        upper: Optional[float],
-    ) -> float:
-        result = float(value)
-        if lower is not None:
-            result = max(result, float(lower))
-        if upper is not None:
-            result = min(result, float(upper))
-        return result
-
-    @staticmethod
-    def _unavailable_capabilities(reason: str) -> Dict[str, Dict[str, Any]]:
-        message = str(reason or '실행 준비 검사 실패')
-        return {
-            'initial_position': {'available': False, 'reason': message},
-            'single_run': {'available': False, 'reason': message},
-            'continuous_run': {'available': False, 'reason': message},
-        }
-
     def _publish_motion_setpoints(
         self,
         motors: List[Dict[str, Any]],
@@ -2869,7 +2808,7 @@ class MotionRunManager(Node):
             return
         cleaned = {}
         for motion_id, value in values.items():
-            number = self._finite_float(value)
+            number = finite_float(value)
             key = str(motion_id or '').strip()
             if key and number is not None:
                 cleaned[key] = float(number)
@@ -2925,7 +2864,7 @@ class MotionRunManager(Node):
         axes: List[Dict[str, Any]],
     ) -> None:
         """Prime AC servo axes once before frame-by-frame motion streaming."""
-        if self._has_ac_axes(axes):
+        if motion_run_rules._has_ac_axes(axes):
             self._publish_ac_enable_for_axes(motors, axes)
             time.sleep(self._setpoint_clear_sec())
 
@@ -2935,8 +2874,8 @@ class MotionRunManager(Node):
         axes: List[Dict[str, Any]],
         positions: Dict[int, float],
     ) -> None:
-        target_axes = self._sorted_controller_axes(positions.keys())
-        command = self._empty_motor_command(target_axes)
+        target_axes = motion_run_rules._sorted_controller_axes(positions.keys())
+        command = motion_run_rules._empty_motor_command(target_axes)
         axes_by_index = {int(axis['motor_axis']): axis for axis in axes}
         for slot, motor_axis in enumerate(target_axes):
             target = positions.get(motor_axis)
@@ -2970,17 +2909,13 @@ class MotionRunManager(Node):
         ]
         if not ac_axes:
             return
-        ac_axes = self._sorted_controller_axes(ac_axes)
-        command = self._empty_motor_command(ac_axes)
+        ac_axes = motion_run_rules._sorted_controller_axes(ac_axes)
+        command = motion_run_rules._empty_motor_command(ac_axes)
         for slot, _axis in enumerate(ac_axes):
             command.number_of_target_interfaces[slot] = 1
             command.target_interface_id[slot] = Int8MultiArray(data=[ID_CONTROLWORD])
             command.controlword[slot] = CW_ENABLE_OPERATION_MINAS
         self._command_pub.publish(command)
-
-    @staticmethod
-    def _has_ac_axes(axes: List[Dict[str, Any]]) -> bool:
-        return any(axis.get('motor_type') == 'ac_servo' for axis in axes)
 
     def _setpoint_clear_sec(self) -> float:
         return max(self.period_sec + 0.002, 0.002)
@@ -3002,12 +2937,12 @@ class MotionRunManager(Node):
                 if motor_axis not in targets:
                     continue
                 motor = self._motor_for_axis(motor_axis, motors)
-                ready_error = self._motor_ready_error(
+                ready_error = motion_run_rules._motor_ready_error(
                     motor or {'controller_index': motor_axis}
                 )
                 if ready_error:
                     return False, ready_error
-                current = self._motor_position_deg(motor)
+                current = motion_run_rules._motor_position_deg(motor)
                 target = float(targets[motor_axis])
                 tolerance = self._target_tolerance_deg(axis_plan)
                 if current is None:
@@ -3054,36 +2989,6 @@ class MotionRunManager(Node):
             return float(fallback)
         return max(value, 0.0)
 
-    def _empty_motor_command(
-        self,
-        controller_axes: List[int],
-    ) -> MotorStatus:
-        indexes = self._sorted_controller_axes(controller_axes)
-        size = len(indexes)
-        command = MotorStatus()
-        command.number_of_target_interfaces = [0] * size
-        command.target_interface_id = [Int8MultiArray(data=[]) for _ in range(size)]
-        command.controller_index = indexes
-        command.controlword = [0] * size
-        command.statusword = [0] * size
-        command.errorcode = [0] * size
-        command.position = [0.0] * size
-        command.velocity = [0.0] * size
-        command.effort = [0.0] * size
-        return command
-
-    @staticmethod
-    def _sorted_controller_axes(values: Any) -> List[int]:
-        axes = []
-        for value in values:
-            try:
-                axis = int(value)
-            except (TypeError, ValueError):
-                continue
-            if axis >= 0 and axis not in axes:
-                axes.append(axis)
-        return sorted(axes)
-
     def _current_motors(self) -> List[Dict[str, Any]]:
         with self._state_lock:
             state = self._latest_state
@@ -3117,168 +3022,9 @@ class MotionRunManager(Node):
         motors: Optional[List[Dict[str, Any]]] = None,
     ) -> Optional[Dict[str, Any]]:
         for motor in motors if motors is not None else self._current_motors():
-            if self._optional_int(motor.get('controller_index')) == axis:
+            if optional_int(motor.get('controller_index')) == axis:
                 return motor
         return None
-
-    def _motor_ref_for_motor(self, motor: Dict[str, Any]) -> str:
-        motor_type = self._motor_type(motor)
-        if motor_type == 'ac_servo':
-            alias = self._optional_int(
-                motor.get('alias', motor.get('ethercat_alias'))
-            )
-            master_index = self._optional_int(
-                motor.get('ethercat_master_index')
-            )
-            if master_index is None:
-                master_index = 0
-            if alias is not None and alias > 0 and master_index >= 0:
-                return f'ac_servo:master:{master_index}:alias:{alias}'
-            slave_position = self._optional_int(motor.get('slave_position'))
-            return (
-                f'ac_servo:master:{master_index}:slave:{slave_position}'
-                if slave_position is not None
-                and slave_position >= 0
-                and master_index >= 0
-                else ''
-            )
-        if motor_type == 'dynamixel':
-            bus_id = self._optional_int(
-                motor.get('bus_id', motor.get('node_id'))
-            )
-            serial_port = str(motor.get('serial_port') or '').strip()
-            return (
-                f'dynamixel:port:{quote(serial_port, safe="")}:id:{bus_id}'
-                if bus_id is not None and bus_id >= 0 and serial_port else ''
-            )
-        return ''
-
-    def _motor_refs_for_motor(self, motor: Dict[str, Any]) -> List[str]:
-        canonical = self._motor_ref_for_motor(motor)
-        if self._motor_type(motor) == 'ac_servo':
-            alias = self._optional_int(
-                motor.get('alias', motor.get('ethercat_alias'))
-            )
-            legacy = f'ac_servo:alias:{alias}' if alias is not None and alias > 0 else ''
-        elif self._motor_type(motor) == 'dynamixel':
-            bus_id = self._optional_int(motor.get('bus_id', motor.get('node_id')))
-            legacy = f'dynamixel:id:{bus_id}' if bus_id is not None and bus_id >= 0 else ''
-        else:
-            legacy = ''
-        return [item for item in (canonical, legacy) if item]
-
-    def _motors_for_ref(
-        self,
-        motor_ref: Any,
-        motors: List[Dict[str, Any]],
-    ) -> List[Dict[str, Any]]:
-        target = str(motor_ref or '').strip().lower()
-        if not target:
-            return []
-        return [
-            motor for motor in motors
-            if target in {
-                ref.lower() for ref in self._motor_refs_for_motor(motor)
-            }
-        ]
-
-    def _motor_ready_error(self, motor: Dict[str, Any]) -> str:
-        axis = self._optional_int(motor.get('controller_index'))
-        if str(motor.get('state') or '') != 'detected':
-            return f'Axis {axis} is not detected'
-        errorcode = self._optional_int(motor.get('errorcode')) or 0
-        if errorcode:
-            error_hex = str(motor.get('errorcode_hex') or f'0x{errorcode & 0xFFFF:04X}')
-            error_text = str(motor.get('error_text') or '').strip()
-            detail = f' ({error_text})' if error_text else ''
-            return f'Axis {axis} motor alarm {error_hex}{detail}'
-        if bool(motor.get('fault', False)):
-            return f'Axis {axis} has error'
-        if self._motor_type(motor) == 'ac_servo' and motor.get('servo_on') is not True:
-            return f'Axis {axis} servo is OFF'
-        return ''
-
-    def _target_range_limit_error(
-        self,
-        motor: Dict[str, Any],
-        target_min: float,
-        target_max: float,
-    ) -> str:
-        lower = self._finite_float(motor.get('lower'))
-        upper = self._finite_float(motor.get('upper'))
-        axis = self._optional_int(motor.get('controller_index'))
-        if lower is not None and target_min < lower:
-            return f'Axis {axis} target min {target_min:.3f} < lower {lower:.3f}'
-        if upper is not None and target_max > upper:
-            return f'Axis {axis} target max {target_max:.3f} > upper {upper:.3f}'
-        return ''
-
-    def _motor_position_deg(self, motor: Optional[Dict[str, Any]]) -> Optional[float]:
-        if motor is None:
-            return None
-        for key in (
-            'position_deg',
-            'position_actual_deg',
-            'output_position_deg',
-            'present_position_deg',
-            'position_actual',
-            'position',
-        ):
-            number = self._finite_float(motor.get(key))
-            if number is not None:
-                return number
-        return None
-
-    def _motor_type(self, motor: Dict[str, Any]) -> str:
-        values = [
-            motor.get('motor_type'),
-            motor.get('motor_type_label'),
-            motor.get('driver_model'),
-            motor.get('driver_name'),
-            motor.get('transport'),
-        ]
-        text = ' '.join(str(value or '').lower() for value in values)
-        if 'dynamixel' in text:
-            return 'dynamixel'
-        if 'minas' in text or 'ac servo' in text or 'ac_servo' in text:
-            return 'ac_servo'
-        return 'unknown'
-
-    def _motor_target(self, row: Dict[str, Any], motion_value: float) -> float:
-        sign = -1.0 if bool(row.get('invert')) else 1.0
-        reference = self._finite_float(row.get('reference_position_deg')) or 0.0
-        if row.get('reference_enabled') is False:
-            reference = 0.0
-        offset = self._finite_float(row.get('offset_deg')) or 0.0
-        scale = self._finite_float(row.get('scale')) or 1.0
-        gear_ratio = self._finite_float(row.get('gear_ratio')) or 1.0
-        output_axis_value = (float(motion_value) + offset) * scale * sign
-        return reference + (output_axis_value * gear_ratio)
-
-    def _initial_motion_value(
-        self,
-        row: Dict[str, Any],
-        records: List[Dict[str, Any]],
-    ) -> float:
-        if str(row.get('initial_mode') or 'first_frame') == 'manual':
-            return self._finite_float(row.get('initial_motion_position_deg')) or 0.0
-        return float(records[0]['value'])
-
-    def _load_mapping(self, path: Path) -> Dict[str, Any]:
-        data = yaml.safe_load(path.read_text(encoding='utf-8')) or {}
-        if not isinstance(data, dict):
-            raise ValueError('motion mapping root must be an object')
-        return data
-
-    def _initial_move_time_override_sec(self, payload: Dict[str, Any]) -> Optional[float]:
-        value = self._finite_float(payload.get('initial_move_time_sec'))
-        if value is None:
-            return None
-        for option in INITIAL_MOVE_TIME_OPTIONS_SEC:
-            if math.isclose(value, option, rel_tol=0.0, abs_tol=1e-6):
-                return option
-        allowed = ', '.join(f'{option:g}' for option in INITIAL_MOVE_TIME_OPTIONS_SEC)
-        raise ValueError(f'initial_move_time_sec must be one of: {allowed}')
 
     def _load_motion_records(self, path: Path) -> List[Dict[str, Any]]:
         first_line = ''
@@ -3311,11 +3057,11 @@ class MotionRunManager(Node):
                     line = raw_line.strip()
                     if not line or line.startswith('#'):
                         continue
-                    parsed = self._parse_text_row(line)
+                    parsed = motion_table.parse_text_row(line)
                     if parsed is None:
                         continue
-                    for row in self._expand_pair_rows([parsed]):
-                        record = self._parse_motion_row(row, headers)
+                    for row in motion_table.expand_pair_rows([parsed]):
+                        record, _row_error = motion_table.parse_row(row, headers)
                         if record is None:
                             continue
                         record['row_index'] = row_index
@@ -3333,10 +3079,10 @@ class MotionRunManager(Node):
                 )
 
         content = path.read_text(encoding='utf-8')
-        rows, headers = self._extract_motion_rows(content)
+        rows, headers = motion_run_rules._extract_motion_rows(content)
         records = []
         for index, row in enumerate(rows):
-            record = self._parse_motion_row(row, headers)
+            record, _row_error = motion_table.parse_row(row, headers)
             if record is None:
                 continue
             record['row_index'] = index
@@ -3345,64 +3091,11 @@ class MotionRunManager(Node):
             raise ValueError('motion file has no valid records')
         return sorted(records, key=lambda item: (item['time_sec'], str(item['motion_id']), item['row_index']))
 
-    @staticmethod
-    def _extract_motion_rows(content: str) -> tuple[List[Any], List[str]]:
-        rows, headers, _source, _warning = motion_table.extract_rows_from_content(content)
-        return rows, headers
-
-    @staticmethod
-    def _extract_motion_rows_from_text(content: str) -> tuple[List[Any], List[str]]:
-        rows, headers, _source, _warning = motion_table.extract_rows_from_text(content)
-        return rows, headers
-
-    @staticmethod
-    def _parse_motion_row(row: Any, headers: List[str]) -> Optional[Dict[str, Any]]:
-        record, _error = motion_table.parse_row(row, headers)
-        return record
-
-    @staticmethod
-    def _parse_header_line(line: str) -> List[str]:
-        return motion_table.parse_header_line(line)
-
-    @staticmethod
-    def _parse_text_row(line: str) -> Optional[List[Any]]:
-        return motion_table.parse_text_row(line)
-
-    @staticmethod
-    def _expand_pair_rows(rows: List[Any], headers: Any = None) -> List[Any]:
-        return motion_table.expand_pair_rows(rows, headers)
-
-    def _motion_groups(
-        self,
-        records: List[Dict[str, Any]],
-    ) -> Dict[str, List[Dict[str, Any]]]:
-        groups: Dict[str, List[Dict[str, Any]]] = {}
-        for record in records:
-            groups.setdefault(str(record['motion_id']), []).append(record)
-        for key in list(groups):
-            groups[key] = sorted(groups[key], key=lambda item: item['time_sec'])
-        return groups
-
-    def _interpolated_value(
-        self,
-        records: List[Dict[str, Any]],
-        record_times: List[float],
-        time_sec: float,
-    ) -> float:
-        if not records:
-            return 0.0
-        if time_sec <= records[0]['time_sec']:
-            return float(records[0]['value'])
-        if time_sec >= records[-1]['time_sec']:
-            return float(records[-1]['value'])
-        after_index = bisect_left(record_times, time_sec)
-        before = records[after_index - 1]
-        after = records[after_index]
-        span = max(float(after['time_sec'] - before['time_sec']), 1e-9)
-        ratio = (time_sec - before['time_sec']) / span
-        return float(before['value']) + (
-            (float(after['value']) - float(before['value'])) * ratio
-        )
+    def _load_mapping(self, path: Path) -> Dict[str, Any]:
+        data = yaml.safe_load(path.read_text(encoding='utf-8')) or {}
+        if not isinstance(data, dict):
+            raise ValueError('motion mapping root must be an object')
+        return data
 
     def _project_asset_dirs(self, payload: Dict[str, Any]) -> tuple[str, Path, Path]:
         project_id = str(payload.get('project_id') or '').strip()
@@ -3444,106 +3137,6 @@ class MotionRunManager(Node):
             raise ValueError(f'motion file not found: {name}')
         return path
 
-    def _status_from_plan(self, state: str, message: str, plan: Dict[str, Any]) -> Dict[str, Any]:
-        return {
-            **self._empty_status(),
-            'state': state,
-            'message': message,
-            'project_id': plan.get('project_id', ''),
-            'motion_file_id': plan.get('motion_file_id', ''),
-            'mapping_file_id': plan.get('mapping_file_id', ''),
-            'run_mode': plan.get('run_mode', 'once'),
-            'automation_run': bool(plan.get('automation_run')),
-            'repeat_mode': plan.get('repeat_mode', 'direct'),
-            'dwell_sec': float(plan.get('dwell_sec') or 0.0),
-            'countdown_sec': float(plan.get('countdown_sec') or 0.0),
-            'scheduled_start_at': float(plan.get('scheduled_start_at') or 0.0),
-            'synchronized_cycle_sec': float(plan.get('synchronized_cycle_sec') or 0.0),
-            'synchronized_repeat_count': int(plan.get('synchronized_repeat_count') or 0),
-            'network_operation_id': plan.get('network_operation_id', ''),
-            'operation_generation': int(plan.get('operation_generation') or 0),
-            'request_source': plan.get('request_source', 'motion_run'),
-            'group_execution': bool(plan.get('group_execution')),
-            'execution_id': str(plan.get('execution_id') or ''),
-            'group_cycle_number': int(plan.get('group_cycle_number') or 0),
-            'cycle_count': 0,
-            'current_cycle': 0,
-            'summary': plan.get('summary', {}),
-            'warnings': plan.get('warnings', []),
-            'capabilities': plan.get('capabilities', {}),
-            'axes': [
-                {
-                    'motion_id': axis['motion_id'],
-                    'motor_axis': axis['motor_axis'],
-                    'motor_type': axis['motor_type'],
-                    'initial_motion_source_position_deg': axis['initial_motion_source_position_deg'],
-                    'initial_motion_position_deg': axis['initial_motion_position_deg'],
-                    'initial_motor_target_deg': axis['initial_motor_target_deg'],
-                    'motion_limit_lower_deg': axis['motion_limit_lower_deg'],
-                    'motion_limit_upper_deg': axis['motion_limit_upper_deg'],
-                    'source_motion_min_deg': axis['source_motion_min_deg'],
-                    'source_motion_max_deg': axis['source_motion_max_deg'],
-                    'command_motion_min_deg': axis['command_motion_min_deg'],
-                    'command_motion_max_deg': axis['command_motion_max_deg'],
-                    'motion_clamped': axis['motion_clamped'],
-                    'target_min_deg': axis['target_min_deg'],
-                    'target_max_deg': axis['target_max_deg'],
-                    'loop_start_motion_deg': axis['loop_start_motion_deg'],
-                    'loop_end_motion_deg': axis['loop_end_motion_deg'],
-                    'loop_start_target_deg': axis['loop_start_target_deg'],
-                    'loop_end_target_deg': axis['loop_end_target_deg'],
-                    'loop_delta_deg': axis['loop_delta_deg'],
-                    'loop_motor_delta_deg': axis['loop_motor_delta_deg'],
-                    'loop_tolerance_deg': axis['loop_tolerance_deg'],
-                }
-                for axis in plan.get('axes', [])
-            ],
-            'updated_at': time.time(),
-        }
-
-    def _empty_status(self) -> Dict[str, Any]:
-        return {
-            'state': 'idle',
-            'message': 'motion run idle',
-            'project_id': '',
-            'motion_file_id': '',
-            'mapping_file_id': '',
-            'run_mode': 'once',
-            'automation_run': False,
-            'repeat_mode': 'direct',
-            'dwell_sec': 0.0,
-            'countdown_sec': 0.0,
-            'operation_generation': 0,
-            'request_source': 'motion_run',
-            'group_execution': False,
-            'execution_id': '',
-            'group_cycle_number': 0,
-            'cycle_count': 0,
-            'current_cycle': 0,
-            'summary': {},
-            'warnings': [],
-            'capabilities': {},
-            'axes': [],
-            'phase': 'idle',
-            'phase_started_at': None,
-            'phase_finished_at': None,
-            'lifecycle': {
-                'checked_at': None,
-                'initial_started_at': None,
-                'initial_finished_at': None,
-                'motion_started_at': None,
-                'motion_finished_at': None,
-            },
-            'progress': {
-                'elapsed_sec': 0.0,
-                'duration_sec': 0.0,
-                'ratio': 0.0,
-                'sample_index': 0,
-                'active_axis_count': 0,
-            },
-            'updated_at': time.time(),
-        }
-
     def _set_status(self, status: Dict[str, Any]) -> None:
         with self._run_lock:
             self._status = status
@@ -3562,15 +3155,6 @@ class MotionRunManager(Node):
         with self._run_lock:
             lifecycle = self._status.get('lifecycle', {})
         return dict(lifecycle) if isinstance(lifecycle, dict) else {}
-
-    @staticmethod
-    def _playback_cycle_number(plan: Mapping[str, Any], cycle_count: int) -> int:
-        """Return the user-visible motion cycle for playback progress."""
-        if bool(plan.get('group_execution')):
-            group_cycle = int(plan.get('group_cycle_number') or 0)
-            if group_cycle > 0:
-                return group_cycle
-        return int(cycle_count) + 1
 
     def _update_progress(
         self,
@@ -3627,55 +3211,12 @@ class MotionRunManager(Node):
         self._status_pub.publish(msg)
 
     def _load_period_sec(self) -> float:
-        period = self._finite_float(
+        period = finite_float(
             self.declare_parameter('command_period_sec', DEFAULT_PERIOD_SEC).value
         )
         if period is None or period <= 0:
             return DEFAULT_PERIOD_SEC
         return max(period, 0.001)
-
-    def _sleep_until(self, deadline: float) -> None:
-        delay = deadline - time.monotonic()
-        if delay > 0.0:
-            time.sleep(delay)
-
-    @staticmethod
-    def _smoothstep(value: float) -> float:
-        clamped = min(max(float(value), 0.0), 1.0)
-        return (clamped * clamped) * (3.0 - (2.0 * clamped))
-
-    @staticmethod
-    def _duplicate_axis_text(axes: List[Dict[str, Any]]) -> str:
-        counts: Dict[int, int] = {}
-        for axis in axes:
-            key = int(axis['motor_axis'])
-            counts[key] = counts.get(key, 0) + 1
-        duplicates = [str(axis) for axis, count in counts.items() if count > 1]
-        return ', '.join(duplicates)
-
-    @staticmethod
-    def _column_value(row: Dict[str, Any], target: str) -> Any:
-        return motion_table.column_value(row, target)
-
-    @staticmethod
-    def _header_map(headers: List[str]) -> Dict[str, int]:
-        return motion_table.header_map(headers)
-
-    @staticmethod
-    def _header_has_required(headers: List[Any]) -> bool:
-        return motion_table.header_has_required(headers)
-
-    @staticmethod
-    def _column_key(label: str) -> str:
-        return motion_table.column_key(label)
-
-    @staticmethod
-    def _optional_int(value: Any) -> Optional[int]:
-        return values.optional_int(value)
-
-    @staticmethod
-    def _finite_float(value: Any) -> Optional[float]:
-        return values.finite_float(value)
 
 
 def main(args=None) -> None:

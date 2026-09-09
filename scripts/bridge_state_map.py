@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""bridge_node 상태·락 의존 지도.
+"""노드 상태·락 의존 지도 · 기본 대상은 `bridge_node`.
 
 `docs/ARCHITECTURE_REVIEW.md` §6-8 의 측정을 재현한다.
 세션 임시본이 소실돼 재작성했으므로 이 파일을 유지할 것.
@@ -11,6 +11,7 @@
     python3 scripts/bridge_state_map.py
     python3 scripts/bridge_state_map.py --json out.json
     python3 scripts/bridge_state_map.py --bundles
+    python3 scripts/bridge_state_map.py --path <다른 노드>.py --bundles
 """
 from __future__ import annotations
 
@@ -52,6 +53,21 @@ def _dynamic_self_keys(fn: ast.AST) -> tuple[set[str], bool]:
         else:
             opaque = True
     return keys, opaque
+
+
+def _first_node_class(path: Path) -> str:
+    """파일에서 첫 `Node` 서브클래스 이름을 찾는다 · 다른 노드에도 쓰기 위해."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef):
+            for base in node.bases:
+                name = base.attr if isinstance(base, ast.Attribute) else getattr(base, "id", "")
+                if name == "Node":
+                    return node.name
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef):
+            return node.name
+    raise SystemExit(f"클래스를 찾지 못했다 · {path}")
 
 
 def analyze(path: Path = TARGET, class_name: str = CLASS_NAME) -> dict:
@@ -252,9 +268,11 @@ def main() -> None:
     ap.add_argument("--json", help="지도 JSON 출력 경로")
     ap.add_argument("--bundles", action="store_true", help="이동 단위 후보 묶음 출력")
     ap.add_argument("--path", default=str(TARGET))
+    ap.add_argument("--class", dest="class_name", default=None,
+                    help="대상 클래스 이름 · 생략 시 파일의 첫 Node 서브클래스")
     args = ap.parse_args()
 
-    data = analyze(Path(args.path))
+    data = analyze(Path(args.path), args.class_name or _first_node_class(Path(args.path)))
     summarize(data)
     if args.bundles:
         bundles(data)
