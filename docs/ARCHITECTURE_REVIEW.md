@@ -1070,7 +1070,13 @@ motion_studio_confirm True
 
 - 코드 검증 · `ruff check src` 55건 유지 · 신규 0건
 - 실행 검증 · `pytest` 1,005건 통과 · 실패 0
-- 실물 검증 · 아래 별도 기록
+- 실물 검증 · `colcon build` · 재시작 · 실행 컨텍스트 `ready` ·
+  노드 확인 8건 전부 성공 · `control_allowed True` · 엔드포인트 9종 HTTP 200
+- 실물 검증 · **응답 대기 경로** · `publish_servo_alarm_policy`가 실행 컨텍스트
+  적용 중 `wait_for_jog_result`를 타고 성공했다 (`motor_runtime: True` ·
+  safety `동작 가능`)
+- 실물 미검증 · 조그·절대 이동·서보 제어 · **모터를 실제로 움직이는 명령이라
+  별도 지시 없이 돌리지 않았다**
 
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
