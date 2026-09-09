@@ -34,6 +34,17 @@ from motion_web_bridge import (
 )
 
 
+#: 장치 종류별 물리 검색 시한.
+#:
+#: **전체 검색은 두 종류를 차례로 돌리므로 합보다 짧으면 안 된다.** §6-16에서
+#: Dynamixel 시한만 20 → 40초로 올리고 전체 검색은 20초로 남겨두어, 장치가 늘면
+#: 단독 검색은 되는데 전체 검색만 시한 초과로 실패하는 상태였다. 값을 한 곳에서
+#: 유도해 다시 갈라지지 않게 한다 · §6-37
+AC_SERVO_SCAN_TIMEOUT_SEC = 10.0
+DYNAMIXEL_SCAN_TIMEOUT_SEC = 40.0
+FULL_SCAN_TIMEOUT_SEC = AC_SERVO_SCAN_TIMEOUT_SEC + DYNAMIXEL_SCAN_TIMEOUT_SEC
+
+
 class ScanOrchestrator:
     def __init__(
         self,
@@ -161,7 +172,7 @@ class ScanOrchestrator:
             'project_generation': self.bridge._current_project_generation(),
         }
 
-    def scan_all(self, timeout_sec: float = 20.0) -> Dict[str, Any]:
+    def scan_all(self, timeout_sec: float = FULL_SCAN_TIMEOUT_SEC) -> Dict[str, Any]:
         return self._call_service(
             self._scan_client,
             self.scan_service,
@@ -170,7 +181,7 @@ class ScanOrchestrator:
             operation_type='full_scan',
         )
 
-    def scan_ac_servo(self, timeout_sec: float = 10.0) -> Dict[str, Any]:
+    def scan_ac_servo(self, timeout_sec: float = AC_SERVO_SCAN_TIMEOUT_SEC) -> Dict[str, Any]:
         return self._call_service(
             self._scan_ac_servo_client,
             self.scan_ac_servo_service,
@@ -179,7 +190,7 @@ class ScanOrchestrator:
             operation_type='ac_servo_scan',
         )
 
-    def scan_dynamixel(self, timeout_sec: float = 40.0) -> Dict[str, Any]:
+    def scan_dynamixel(self, timeout_sec: float = DYNAMIXEL_SCAN_TIMEOUT_SEC) -> Dict[str, Any]:
         return self._call_service(
             self._scan_dynamixel_client,
             self.scan_dynamixel_service,
