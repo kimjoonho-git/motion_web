@@ -1360,11 +1360,15 @@ motion-mappings ['ㄴㅇㄹ']
 
 ```
 axis_count 1 · duration_sec 3.26 · period_sec 0.02 · sample_count 164
-initial_move_time_sec 5.0 · continuous_available True · clamped_axis_count 0
+initial_move_time_sec None · continuous_available False · clamped_axis_count 0
 ```
 
 모터 참조 해석 · 목표 범위 판정 · 보간 · 클램프 · 연속 재생 가능 판정이
 모두 새 모듈에서 돌았다 · 모터를 움직이지 않는 검사 경로다.
+
+`continuous_available False`는 이 모션 파일의 시작·끝 값이 이어지지 않아
+연속 재생을 못 한다는 판정이고(`_continuous_capability`), `initial_move_time_sec`가
+`None`인 것은 요청에 재정의가 없었다는 뜻이다 · 둘 다 정상 결과다.
 
 - 실물 미검증 · 실제 모션 재생 · 모터가 움직인다
 
