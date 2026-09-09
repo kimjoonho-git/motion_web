@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 import time
+from types import SimpleNamespace
 
 import pytest
 from std_msgs.msg import String
@@ -695,8 +696,42 @@ def test_web_ui_files_are_not_served_from_stale_browser_cache():
     index_response = asyncio.run(index_endpoint())
     script_response = asyncio.run(static_endpoint('app.js'))
 
-    assert index_response.headers['cache-control'] == 'no-store'
-    assert script_response.headers['cache-control'] == 'no-store'
+    # `no-store`는 캐시 자체를 막아 함께 나가는 ETag를 무의미하게 만든다.
+    # `no-cache`는 **매번 물어보게** 하므로 낡은 화면 위험은 같다 · §6-42
+    assert index_response.headers['cache-control'] == 'no-cache'
+    assert script_response.headers['cache-control'] == 'no-cache'
+    for response in (index_response, script_response):
+        assert response.headers['etag']
+        assert 'max-age' not in response.headers['cache-control']
+        assert 'immutable' not in response.headers['cache-control']
+
+
+def test_unchanged_web_ui_file_answers_304_without_body():
+    """바뀌지 않았으면 본문을 다시 보내지 않는다 · §6-42."""
+    app = create_app(make_bridge())
+    static_endpoint = next(
+        route.endpoint for route in app.routes
+        if getattr(route, 'path', '') == '/static/{asset_path:path}'
+    )
+
+    first = asyncio.run(static_endpoint('app.js'))
+    etag = first.headers['etag']
+
+    repeat = asyncio.run(static_endpoint(
+        'app.js',
+        SimpleNamespace(headers={'if-none-match': etag}),
+    ))
+
+    assert repeat.status_code == 304
+    assert repeat.body == b''
+    assert repeat.headers['etag'] == etag
+
+    stale = asyncio.run(static_endpoint(
+        'app.js',
+        SimpleNamespace(headers={'if-none-match': 'other-etag'}),
+    ))
+
+    assert stale.status_code == 200
 
 
 def test_coordinator_keeps_control_blocked_when_one_node_does_not_confirm():

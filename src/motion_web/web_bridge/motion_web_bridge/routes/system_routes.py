@@ -5,10 +5,22 @@ from pathlib import Path
 from typing import List
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from ament_index_python.packages import get_package_share_directory
 
 from motion_web_bridge import desktop_shortcut
+
+
+def _is_not_modified(response_headers, request_headers) -> bool:
+    """`ETag`가 같으면 본문을 다시 보내지 않아도 된다.
+
+    `Last-Modified`는 보지 않는다 · 초 단위라 같은 초 안의 수정을 놓친다 ·
+    낡은 화면이 뜨느니 한 번 더 보내는 편이 낫다.
+    """
+    request_etag = request_headers.get('if-none-match')
+    if not request_etag:
+        return False
+    return request_etag == response_headers.get('etag')
 
 
 def register_system_routes(app: FastAPI, bridge, project_call) -> None:
@@ -18,25 +30,48 @@ def register_system_routes(app: FastAPI, bridge, project_call) -> None:
     if workspace_dir and dev_static.is_dir():
         ui_share = dev_static
 
-    @app.get('/')
-    async def index():
-        return FileResponse(
-            str(ui_share / 'index.html'),
-            headers={'Cache-Control': 'no-store'},
+    def _asset_response(asset: Path, request: Request = None):
+        """정적 파일을 재검증 가능한 형태로 돌려준다 · §6-42.
+
+        `no-store`는 브라우저가 아예 캐시하지 않게 만들어, 함께 나가는 `ETag`를
+        무의미하게 한다. `no-cache`는 **매번 물어보되 안 바뀌었으면 본문을 받지
+        않는** 것이라 낡은 화면 위험은 같고 전송만 줄어든다.
+
+        Starlette의 `FileResponse`는 조건부 요청을 스스로 처리하지 않는다 ·
+        `If-None-Match`를 보고 304를 돌려주는 것은 여기서 한다.
+        """
+        response = FileResponse(
+            str(asset),
+            headers={'Cache-Control': 'no-cache'},
+            stat_result=asset.stat(),
+        )
+        request_headers = getattr(request, 'headers', None)
+        if request_headers is None:
+            return response
+        if not _is_not_modified(response.headers, request_headers):
+            return response
+        return Response(
+            status_code=304,
+            headers={
+                'Cache-Control': 'no-cache',
+                'ETag': response.headers['etag'],
+                'Last-Modified': response.headers['last-modified'],
+            },
         )
 
+    @app.get('/')
+    async def index(request: Request = None):
+        return _asset_response(ui_share / 'index.html', request)
+
     @app.get('/static/{asset_path:path}')
-    async def static_asset(asset_path: str):
+    async def static_asset(asset_path: str, request: Request = None):
         relative_path = Path(asset_path)
         if relative_path.is_absolute() or '..' in relative_path.parts:
             raise HTTPException(status_code=404, detail='Not Found')
         asset = ui_share / relative_path
         if not asset.is_file():
             raise HTTPException(status_code=404, detail='Not Found')
-        return FileResponse(
-            str(asset),
-            headers={'Cache-Control': 'no-store'},
-        )
+        return _asset_response(asset, request)
 
     @app.get('/api/status')
     async def status():
