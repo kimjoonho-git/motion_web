@@ -5,6 +5,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from motion_state_monitor.connection_state import (
+    CommunicationHealth,
+    build_scan_connection_rows,
+    set_connection_fields,
+    set_physical_connection_fields,
+)
 from motion_state_monitor.dynamixel_scanner import DynamixelScanner
 from motion_state_monitor.ethercat_scanner import EthercatScanner
 from motion_state_monitor.monitor_node import MotionStateMonitor
@@ -19,12 +25,12 @@ class ConnectionStateTest(unittest.TestCase):
         self.monitor._dynamixel = DynamixelScanner(self.monitor)
         self.monitor.connection_loss_confirm_sec = 1.0
         self.monitor.connection_recovery_confirm_sec = 0.5
-        self.monitor._communication_health = {}
+        self.monitor._health = CommunicationHealth(self.monitor)
 
     def test_connection_fields_are_transport_independent(self):
         for transport in ('ethercat', 'serial', 'can'):
             motor = {'transport': transport, 'last_seen_at': 10.0, 'age_sec': 0.01}
-            self.monitor._set_connection_fields(
+            set_connection_fields(
                 motor,
                 'detected',
                 'runtime_feedback_fresh',
@@ -85,7 +91,7 @@ class ConnectionStateTest(unittest.TestCase):
             'connection_source': 'runtime_topic',
             'connection_message': 'runtime offline',
         }]
-        rows = self.monitor._build_scan_connection_rows(
+        rows = build_scan_connection_rows(
             motors,
             {'available': True, 'slaves': [{'ethercat_alias': 101}]},
             {'available': False, 'skipped': True, 'devices': []},
@@ -116,7 +122,7 @@ class ConnectionStateTest(unittest.TestCase):
             'connection_state': 'online',
         }
 
-        self.monitor._set_physical_connection_fields(motor)
+        set_physical_connection_fields(motor, self.monitor._last_ethercat_physical_scan)
 
         self.assertEqual(motor['connection_state'], 'online')
         self.assertEqual(motor['physical_connection_state'], 'detected')
@@ -135,7 +141,7 @@ class ConnectionStateTest(unittest.TestCase):
             'connection_state': 'online',
         }
 
-        self.monitor._set_physical_connection_fields(motor)
+        set_physical_connection_fields(motor, self.monitor._last_ethercat_physical_scan)
 
         self.assertEqual(motor['connection_state'], 'online')
         self.assertEqual(motor['physical_connection_state'], 'unknown')
@@ -159,7 +165,7 @@ class ConnectionStateTest(unittest.TestCase):
             'connection_source': 'runtime_topic',
             'connection_message': 'runtime online',
         }]
-        rows = self.monitor._build_scan_connection_rows(
+        rows = build_scan_connection_rows(
             motors,
             {'available': False, 'skipped': True, 'slaves': []},
             {
@@ -458,19 +464,19 @@ Identity:
         self.assertEqual(calls, [['ethercat', 'master']])
 
     def test_transient_communication_failure_is_debounced(self):
-        first_failure = self.monitor._update_communication_health(3, True, 10.0)
+        first_failure = self.monitor._health.update(3, True, 10.0)
         self.assertFalse(first_failure['confirmed_offline'])
 
-        recovered = self.monitor._update_communication_health(3, False, 10.2)
+        recovered = self.monitor._health.update(3, False, 10.2)
         self.assertFalse(recovered['confirmed_offline'])
 
-        self.monitor._update_communication_health(3, True, 20.0)
-        confirmed = self.monitor._update_communication_health(3, True, 21.0)
+        self.monitor._health.update(3, True, 20.0)
+        confirmed = self.monitor._health.update(3, True, 21.0)
         self.assertTrue(confirmed['confirmed_offline'])
 
-        recovering = self.monitor._update_communication_health(3, False, 21.1)
+        recovering = self.monitor._health.update(3, False, 21.1)
         self.assertTrue(recovering['confirmed_offline'])
-        online = self.monitor._update_communication_health(3, False, 21.6)
+        online = self.monitor._health.update(3, False, 21.6)
         self.assertFalse(online['confirmed_offline'])
 
     def test_zero_alias_axes_match_by_slave_position(self):
@@ -678,7 +684,7 @@ Identity:
             'alias': 101,
         }
 
-        self.monitor._set_physical_connection_fields(motor)
+        set_physical_connection_fields(motor, self.monitor._last_ethercat_physical_scan)
 
         self.assertEqual(motor['physical_connection_state'], 'detected')
         self.assertEqual(motor['physical_slave_position'], 0)
@@ -762,7 +768,6 @@ class MotorScanActionTest(unittest.TestCase):
         monitor.ethercat_status_topic = '/ethercat_status'
         monitor._count_values = lambda motors, key: {}
         monitor._matching_summary = lambda rows: {}
-        monitor._connection_summary = lambda rows: {}
         return monitor
 
     def test_cancel_between_transports_skips_the_remaining_one(self):
@@ -779,7 +784,6 @@ class MotorScanActionTest(unittest.TestCase):
         monitor._current_motor_list = lambda now: []
         monitor._configured_axis_list = lambda motors: []
         monitor._build_matching_rows = lambda slaves, axes: []
-        monitor._build_scan_connection_rows = lambda *a, **k: []
 
         result = monitor._build_scan_result(
             scan_ethercat=True,
@@ -805,7 +809,6 @@ class MotorScanActionTest(unittest.TestCase):
         monitor._current_motor_list = lambda now: []
         monitor._configured_axis_list = lambda motors: []
         monitor._build_matching_rows = lambda slaves, axes: []
-        monitor._build_scan_connection_rows = lambda *a, **k: []
 
         result = monitor._build_scan_result(scan_ethercat=True, scan_dynamixel=True)
 
