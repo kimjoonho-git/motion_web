@@ -90,7 +90,7 @@ class PlanBuilder:
             if str(value or '').strip()
         }
         initial_move_time_override = motion_run_rules._initial_move_time_override_sec(payload)
-        if hasattr(self, 'motion_projects_dir'):
+        if hasattr(self.manager, 'motion_projects_dir'):
             project_id, motion_files_dir, mappings_dir = self.manager._project_asset_dirs(payload)
             motion_directory = motion_files_dir
             if studio_request and motion_file_id.startswith('__studio_'):

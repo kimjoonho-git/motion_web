@@ -1036,3 +1036,40 @@ def test_run_manager_resolves_assets_only_inside_requested_project(tmp_path):
     assert manager._motion_file_path('same.json', second[1]).read_text() == 'two'
     assert manager._mapping_file_path('same.yaml', first[2]).read_text() == 'one'
     assert manager._mapping_file_path('same.yaml', second[2]).read_text() == 'two'
+
+
+def test_plan_builder_reads_project_dirs_from_the_manager(tmp_path):
+    """프로젝트 경로 판정이 노드를 봐야 한다 · §6-30
+
+    `_build_plan`을 `PlanBuilder`로 옮길 때 `hasattr(self, 'motion_projects_dir')`가
+    그대로 남아 **빌더 자신**을 검사하게 됐다. 빌더에는 그 속성이 없으므로 항상
+    호환 분기로 빠져 프로젝트 디렉터리를 무시했고, 실기에서
+    `motion file not found`가 났다.
+
+    단위 시험이 못 잡았던 이유는 시험들이 그 호환 분기를 쓰기 때문이다 ·
+    이 시험은 반대쪽 분기를 고정한다.
+    """
+    manager = MotionRunManager.__new__(MotionRunManager)
+    manager._plan_builder = PlanBuilder(manager)
+    manager.motion_projects_dir = tmp_path
+    manager.period_sec = 0.02
+    asked = []
+    manager._project_asset_dirs = lambda payload: (
+        asked.append(payload) or ('project-1', tmp_path / 'motions', tmp_path / 'mappings')
+    )
+    manager._motion_file_path = lambda file_id, directory=None: (
+        asked.append(('motion', directory)) or None
+    )
+    manager._mapping_file_path = lambda file_id, directory=None: (
+        asked.append(('mapping', directory)) or None
+    )
+    manager._load_mapping = lambda path: {'mappings': []}
+    manager._load_motion_records = lambda path: []
+    manager._current_motors = lambda: [{'axis': 0}]
+
+    with pytest.raises(ValueError):
+        manager._plan_builder.build({'motion_file_id': 'm.json', 'mapping_file_id': 'x.yaml'})
+
+    # 프로젝트 분기를 탔다면 디렉터리를 함께 넘긴다
+    assert ('motion', tmp_path / 'motions') in asked
+    assert ('mapping', tmp_path / 'mappings') in asked

@@ -1598,8 +1598,36 @@ self._group_condition = threading.Condition(self._run_lock)
 #### 검증
 
 - 코드 검증 · `ruff check src` 55건 유지 · 신규 0건
-- 실행 검증 · `pytest` 1,012건 통과 · 실패 0
-- 실물 검증 · 아래 별도 기록
+- 실행 검증 · `pytest` **1,013건 통과** · 실패 0 · 회귀 시험 1건 신규
+- 실물 검증 · `POST /api/motion-run/check` · `axis_count 1` · `duration_sec 3.26` ·
+  `sample_count 164` · `period_sec 0.02`
+
+#### 실물 검증이 잡은 결함 · 시험은 못 잡았다
+
+옮긴 직후 실기에서 `motion file not found: ㄴㅇㄹ.json`이 났다.
+
+```python
+if hasattr(self, 'motion_projects_dir'):   # self가 이제 PlanBuilder다
+```
+
+빌더에는 그 속성이 없으니 **항상 호환 분기로 빠져** 프로젝트 디렉터리를 무시했다.
+`hasattr(self.manager, ...)`로 고쳤다.
+
+**단위 시험은 이것을 못 잡았다.** 시험들이 바로 그 호환 분기를 쓰기 때문이다 ·
+경로 도우미를 인자 하나로 스텁한다. 반대쪽 분기를 고정하는 시험을 새로 넣고,
+일부러 되돌려 실패하는 것까지 확인했다.
+
+**이름 치환에서 놓치는 형태가 이번이 세 번째다.**
+
+```
+self.___              §6-19에서 확인
+getattr(self, '___')  §6-23에서 놓쳤다
+hasattr(self, '___')  §6-30에서 놓쳤다   ← 이번
+f(self)               §6-19에서 놓쳤다
+```
+
+`scripts/bridge_state_map.py`는 이 넷을 모두 센다. **옮길 때도 그 넷을 모두
+바꿔야 한다.**
 
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
