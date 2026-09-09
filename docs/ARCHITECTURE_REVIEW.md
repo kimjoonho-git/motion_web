@@ -145,7 +145,7 @@ motion_system(C++)  모터 단일 통로                 유지 · 스캐너만 
 
 - `bridge_node` → `ExecutionContextService` · `MotorConfigService` · `ScanOrchestrator` · `MotorEventLog` · `MotionFileService` · `ProjectService`
 - `motion_run_manager` → `PlanBuilder` · `MotionPlayer` · `GroupSession` · `StatusStore`
-- `midi_control_node` → `MidiDecoder` · `FaderStateMachine` · `PickupPolicy` · `MotionValueMapper` — **넷 중 셋 완료**(§6-38~§6-40) · 3,354 → 2,800줄 · `MidiDecoder` 잔여
+- `midi_control_node` → `MidiDecoder` · `FaderStateMachine` · `PickupPolicy` · `MotionValueMapper` — **넷 중 셋 완료**(§6-38~§6-41) · 3,354 → 2,397줄 · `MidiDecoder` 잔여(루프 분해 선행 필요)
 - `monitor_node` → `DynamixelScanner` · `EthercatScanner` · `StatePublisher` — **완료**(§6-32~§6-36) · 2,884 → 866줄
 
 ## 6. 즉시 처리 권고 · 저위험·고효과
