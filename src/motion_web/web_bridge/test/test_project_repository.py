@@ -13,6 +13,10 @@ import yaml
 import motion_web_bridge.project_repository as project_repository_module
 from motion_web_bridge import service_entrypoint
 from motion_web_bridge.motor_restart_coordinator import MotorRestartCoordinator
+# 프로파일 검증은 별도 모듈이 갖는다 (§6-46)
+from motion_web_bridge.motor_profile_validation import (
+    validate_runtime_motor_profiles,
+)
 from motion_web_bridge.project_repository import (
     MAX_MOTION_TEXT_BYTES,
     MAX_TEXT_BYTES,
@@ -317,7 +321,7 @@ def test_runtime_allows_same_dynamixel_id_on_different_serial_ports():
         }],
     }
 
-    ProjectRepository._validate_runtime_motor_profiles(payload)
+    validate_runtime_motor_profiles(payload)
 
 
 def test_runtime_rejects_duplicate_dynamixel_id_on_same_serial_port():
@@ -345,11 +349,11 @@ def test_runtime_rejects_duplicate_dynamixel_id_on_same_serial_port():
     }
 
     with pytest.raises(ValueError, match='ID 3.*중복'):
-        ProjectRepository._validate_runtime_motor_profiles(payload)
+        validate_runtime_motor_profiles(payload)
 
 
-def test_runtime_rejects_duplicate_ethercat_master_index(tmp_path):
-    repository = ProjectRepository(tmp_path / 'projects')
+def test_runtime_rejects_duplicate_ethercat_master_index():
+    # 검증은 순수 함수다 · 저장소가 없어도 된다 (§6-46)
     payload = {
         'period': 1000000,
         'masters': [
@@ -365,7 +369,7 @@ def test_runtime_rejects_duplicate_ethercat_master_index(tmp_path):
     }
 
     with pytest.raises(ValueError, match='EtherCAT Master 0 설정이 중복'):
-        repository._validate_runtime_motor_profiles(payload)
+        validate_runtime_motor_profiles(payload)
 
 
 def test_runtime_rejects_unverified_ac_servo_profile(tmp_path):

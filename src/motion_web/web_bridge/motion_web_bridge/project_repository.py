@@ -7,10 +7,8 @@ configuration or issue a motor command.
 
 from __future__ import annotations
 
-import hashlib
 import io
 import json
-import re
 import shutil
 import time
 import uuid
@@ -22,7 +20,17 @@ import yaml
 
 from motion_common import store
 
-from .motor_identity import missing_ethercat_identity
+from .project_tree import build_tree
+from .project_paths import (
+    PROJECT_CATEGORIES,
+    _is_user_file,
+    _safe_stem,
+    _sha256,
+    _sha256_file,
+    local_directory,
+)
+
+from .motor_profile_validation import validate_runtime_motor_profiles
 
 
 PROJECT_VERSION = 1
@@ -39,36 +47,6 @@ MOTOR_RUNTIME_TARGET_FIELDS = {
     'project_generation',
     'applied_at',
 }
-PROJECT_CATEGORIES = {
-    'motor_axes': {'.yaml', '.yml'},
-    'motion_axis_matching': {'.yaml', '.yml'},
-    'motions': {'.json'},
-    'layers': {'.json'},
-}
-DISPLAY_NAMES = {
-    'motor_axes': '모터축 설정',
-    'motion_axis_matching': '모션축 설정',
-    'motions': '모션 파일',
-    'layers': '레이어',
-}
-
-
-def _safe_stem(value: Any, fallback: str = 'project') -> str:
-    text = re.sub(r'[^0-9A-Za-z가-힣._-]+', '_', str(value or '').strip())
-    text = text.strip('._-')
-    return text[:80] or fallback
-
-
-def _sha256(content: bytes) -> str:
-    return hashlib.sha256(content).hexdigest()
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open('rb') as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b''):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _studio_layer_signature(layer_hashes: Dict[str, str]) -> str:
@@ -80,15 +58,6 @@ def _studio_layer_signature(layer_hashes: Dict[str, str]) -> str:
     return _sha256(
         json.dumps(rows, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
     )
-
-
-def _is_user_file(path: Path) -> bool:
-    """사용자 파일인가 · 숨김 파일과 심볼릭 링크는 제외한다.
-
-    프로세스 간 락이 대상 파일 옆에 `.<이름>.lock`을 만든다(§6-24). 그것을
-    사용자 파일로 세면 목록·활성 파일 판정·해시 계산이 전부 어긋난다.
-    """
-    return path.is_file() and not path.is_symlink() and not path.name.startswith('.')
 
 
 def _text_limit(category: str) -> tuple[int, str]:
@@ -217,7 +186,7 @@ class ProjectRepository:
                     if not source.is_file() or source.is_symlink():
                         continue
                     if history_dir is None:
-                        history_dir = self._local_directory(
+                        history_dir = local_directory(
                             project_dir, 'runtime', 'history', category
                         )
                     target = history_dir / source.name
@@ -288,7 +257,7 @@ class ProjectRepository:
                 or payload.get('mappings') != []
             ):
                 continue
-            trash_dir = self._local_directory(
+            trash_dir = local_directory(
                 project_dir, 'trash', 'motion_axis_matching'
             )
             target = trash_dir / f'legacy-generated-empty-{DEFAULT_MOTION_AXIS_FILE}'
@@ -418,7 +387,7 @@ class ProjectRepository:
         return {
             'success': True,
             'project': self._project_summary(project_dir, manifest),
-            'tree': self._tree(project_dir, manifest),
+            'tree': build_tree(project_dir, manifest),
         }
 
     def update_project_memo(self, project_id: Any, memo: Any) -> Dict[str, Any]:
@@ -443,7 +412,7 @@ class ProjectRepository:
 
     def project_logs_dir(self, project_id: Any) -> Path:
         project_dir = self._project_dir(project_id)
-        return self._local_directory(project_dir, 'logs')
+        return local_directory(project_dir, 'logs')
 
     def _read_selection(self) -> Dict[str, Any]:
         try:
@@ -551,7 +520,7 @@ class ProjectRepository:
         runtime_content = prepared.read_bytes()
         config_sha256 = _sha256(runtime_content)
         session_id = f'motor-{config_sha256}'
-        session_dir = self._local_directory(project_dir, 'runtime', 'sessions')
+        session_dir = local_directory(project_dir, 'runtime', 'sessions')
         runtime = session_dir / f'{session_id}.yaml'
         if runtime.exists():
             if runtime.is_symlink() or _sha256(runtime.read_bytes()) != config_sha256:
@@ -1118,7 +1087,7 @@ class ProjectRepository:
         source = self._asset_path(project_id, safe_category, file_name)
         manifest = self._read_manifest(project_dir)
         was_active = manifest['active_files'].get(safe_category) == source.name
-        trash_dir = self._local_directory(project_dir, 'trash', safe_category)
+        trash_dir = local_directory(project_dir, 'trash', safe_category)
         stamp = time.strftime('%Y%m%d-%H%M%S')
         target = trash_dir / f'{stamp}-{source.name}'
         counter = 1
@@ -1191,7 +1160,7 @@ class ProjectRepository:
         )
         if motor_count < 1:
             raise ValueError('등록된 모터축이 없어 설정을 적용할 수 없습니다')
-        self._validate_runtime_motor_profiles(payload)
+        validate_runtime_motor_profiles(payload)
         runtime_payload = self._runtime_motor_payload(payload)
         runtime_content = yaml.safe_dump(
             runtime_payload, sort_keys=False, allow_unicode=True
@@ -1252,235 +1221,6 @@ class ProjectRepository:
             return runtime.is_file() and _sha256(runtime.read_bytes()) == _sha256(expected)
         except (OSError, yaml.YAMLError, AttributeError):
             return False
-
-    @staticmethod
-    def _validate_runtime_motor_profiles(payload: Dict[str, Any]) -> None:
-        """Reject incomplete or accidentally count-scaled motion profiles.
-
-        A bus scan identifies devices, but it does not measure a safe motion
-        profile.  Applying a slave that references no driver, or a profile so
-        slow that ordinary jog appears broken, must fail before control nodes
-        are restarted.
-        """
-        drivers = {
-            driver.get('id'): driver
-            for driver in payload.get('drivers') or []
-            if isinstance(driver, dict) and driver.get('id') is not None
-        }
-        required_positive = (
-            'profile_velocity',
-            'profile_acceleration',
-            'profile_deceleration',
-        )
-        used_controller_indices = set()
-        used_nonzero_aliases = set()
-        used_zero_alias_positions = set()
-        used_serial_devices = set()
-        used_master_ids = set()
-        used_ethercat_master_indices = set()
-        identity_by_axis = {
-            item.get('controller_index'): item
-            for item in payload.get('web_axis_identities') or []
-            if isinstance(item, dict) and item.get('controller_index') is not None
-        }
-        profile_by_axis = {
-            item.get('controller_index'): item
-            for item in payload.get('web_axis_profiles') or []
-            if isinstance(item, dict) and item.get('controller_index') is not None
-        }
-        for master in payload.get('masters') or []:
-            if not isinstance(master, dict):
-                continue
-            try:
-                master_id = int(master.get('id'))
-            except (TypeError, ValueError) as exc:
-                raise ValueError('모터 Master ID는 정수여야 합니다') from exc
-            if master_id in used_master_ids:
-                raise ValueError(f'Motor Master ID {master_id} 값이 중복되어 있습니다')
-            used_master_ids.add(master_id)
-            ethercat_master_index = None
-            if str(master.get('type') or '') == 'ethercat':
-                try:
-                    ethercat_master_index = int(
-                        master.get('ethercat_master_index', 0)
-                    )
-                except (TypeError, ValueError) as exc:
-                    raise ValueError(
-                        'EtherCAT Master 번호는 0 이상의 정수여야 합니다'
-                    ) from exc
-                if ethercat_master_index < 0:
-                    raise ValueError('EtherCAT Master 번호는 0 이상의 정수여야 합니다')
-                if ethercat_master_index in used_ethercat_master_indices:
-                    raise ValueError(
-                        f'EtherCAT Master {ethercat_master_index} 설정이 중복되어 있습니다'
-                    )
-                used_ethercat_master_indices.add(ethercat_master_index)
-            for slave in master.get('slaves') or []:
-                if not isinstance(slave, dict):
-                    continue
-                axis = slave.get('controller_index', '?')
-                if axis in used_controller_indices:
-                    raise ValueError(f'Control Index {axis} 값이 중복되어 있습니다')
-                used_controller_indices.add(axis)
-                if str(master.get('type') or '') == 'ethercat':
-                    try:
-                        alias = int(slave.get('alias') or 0)
-                        position = int(slave.get('position') or 0)
-                    except (TypeError, ValueError) as exc:
-                        raise ValueError(
-                            f'Axis {axis}의 EEPROM Alias 또는 Position 값이 올바르지 않습니다'
-                        ) from exc
-                    identity = identity_by_axis.get(axis)
-                    if isinstance(identity, dict):
-                        try:
-                            identity_master_index = int(
-                                identity.get(
-                                    'ethercat_master_index',
-                                    ethercat_master_index,
-                                )
-                            )
-                            identity_alias = int(identity.get('eeprom_alias'))
-                            identity_position = int(identity.get('slave_position'))
-                        except (TypeError, ValueError) as exc:
-                            raise ValueError(
-                                f'Axis {axis}의 물리 식별 정보가 완전하지 않습니다'
-                            ) from exc
-                        if identity_master_index != ethercat_master_index:
-                            raise ValueError(
-                                f'Axis {axis}의 EtherCAT Master가 실행 설정'
-                                f'({ethercat_master_index})과 물리 식별 정보'
-                                f'({identity_master_index})에서 다릅니다'
-                            )
-                        if alias != identity_alias:
-                            raise ValueError(
-                                f'Axis {axis}의 EEPROM Alias가 실행 설정({alias})과 '
-                                f'물리 식별 정보({identity_alias})에서 다릅니다. '
-                                '모터축 설정에서 확인 후 변경 내용 저장을 누르세요'
-                            )
-                        if position != identity_position:
-                            raise ValueError(
-                                f'Axis {axis}의 Slave Position이 실행 설정({position})과 '
-                                f'물리 식별 정보({identity_position})에서 다릅니다. '
-                                '모터축 설정에서 확인 후 변경 내용 저장을 누르세요'
-                            )
-                        missing_identity = missing_ethercat_identity({
-                            **identity,
-                            'product_code': identity.get('product_id'),
-                        })
-                        if missing_identity:
-                            raise ValueError(
-                                f'Axis {axis}의 실제 EtherCAT 식별정보가 완전하지 않습니다: '
-                                f'{", ".join(missing_identity)}. '
-                                '전체 모터 검색 후 해당 검색 장비의 연결정보를 반영하고 저장하세요'
-                            )
-                    if alias != 0:
-                        alias_key = (ethercat_master_index, alias)
-                        if alias_key in used_nonzero_aliases:
-                            raise ValueError(
-                                f'EtherCAT Master {ethercat_master_index}의 '
-                                f'EEPROM Alias {alias} 값이 중복되어 있습니다'
-                            )
-                        used_nonzero_aliases.add(alias_key)
-                    else:
-                        position_key = (ethercat_master_index, position)
-                        if position_key in used_zero_alias_positions:
-                            raise ValueError(
-                                f'EtherCAT Master {ethercat_master_index}의 '
-                                f'EEPROM Alias 0 Slave Position {position} 값이 '
-                                '중복되어 있습니다'
-                            )
-                        used_zero_alias_positions.add(position_key)
-                elif str(master.get('type') or '') == 'serial':
-                    serial_port = str(
-                        master.get('serial_port') or master.get('port') or ''
-                    ).strip()
-                    if not serial_port:
-                        raise ValueError(
-                            f'Axis {axis}의 Dynamixel 직렬 포트가 설정되지 않았습니다'
-                        )
-                    try:
-                        bus_id = int(
-                            slave.get('bus_id')
-                            if slave.get('bus_id') is not None
-                            else slave.get('id')
-                        )
-                    except (TypeError, ValueError) as exc:
-                        raise ValueError(
-                            f'Axis {axis}의 Dynamixel ID가 올바르지 않습니다'
-                        ) from exc
-                    if bus_id < 0 or bus_id > 252:
-                        raise ValueError(
-                            f'Axis {axis}의 Dynamixel ID는 0~252여야 합니다'
-                        )
-                    serial_key = (serial_port, bus_id)
-                    if serial_key in used_serial_devices:
-                        raise ValueError(
-                            f'Dynamixel 직렬 포트 {serial_port}의 ID {bus_id}가 '
-                            '중복되어 있습니다'
-                        )
-                    used_serial_devices.add(serial_key)
-                    identity = identity_by_axis.get(axis)
-                    if isinstance(identity, dict):
-                        identity_port = str(identity.get('serial_port') or '').strip()
-                        try:
-                            identity_bus_id = int(
-                                identity.get('bus_id', identity.get('node_id'))
-                            )
-                        except (TypeError, ValueError) as exc:
-                            raise ValueError(
-                                f'Axis {axis}의 Dynamixel 물리 식별 정보가 '
-                                '완전하지 않습니다'
-                            ) from exc
-                        if identity_port != serial_port or identity_bus_id != bus_id:
-                            raise ValueError(
-                                f'Axis {axis}의 Dynamixel 직렬 포트·ID가 실행 설정과 '
-                                '물리 식별 정보에서 다릅니다'
-                            )
-                driver_id = slave.get('driver_id')
-                driver = drivers.get(driver_id)
-                if not isinstance(driver, dict):
-                    raise ValueError(
-                        f'Axis {axis}의 driver_id {driver_id} 설정이 없습니다'
-                    )
-                if (
-                    str(driver.get('type') or '') == 'minas'
-                    and str(driver.get('driver_model') or '').strip().upper()
-                    == 'UNVERIFIED_MINAS'
-                ):
-                    raise ValueError(
-                        f'Axis {axis}의 실제 서보 드라이버 모델이 확인되지 않았습니다. '
-                        '드라이버 명판을 확인해 실제 드라이버 모델을 입력하세요'
-                    )
-                if (
-                    str(driver.get('type') or '') == 'minas'
-                    and str(driver.get('driver_model') or '').strip()
-                    and (
-                        profile_by_axis.get(axis, {}).get(
-                            'model_confirmed',
-                            identity_by_axis.get(axis, {}).get('nameplate_confirmed'),
-                        ) is not True
-                    )
-                ):
-                    raise ValueError(
-                        f'Axis {axis}의 서보 드라이버 모델이 명판 확인되지 않았습니다. '
-                        '모델·운전 프로필 설정에서 모델을 확인하고 저장하세요'
-                    )
-                for field in required_positive:
-                    try:
-                        value = float(driver.get(field))
-                    except (TypeError, ValueError):
-                        value = 0.0
-                    if value <= 0.0:
-                        raise ValueError(
-                            f'Axis {axis}의 {field} 값을 0보다 크게 설정하세요'
-                        )
-                if str(driver.get('type') or '') == 'minas':
-                    velocity = float(driver['profile_velocity'])
-                    if velocity < 0.1:
-                        raise ValueError(
-                            f'Axis {axis}의 AC profile_velocity가 {velocity:g} deg/s로 '
-                            '지나치게 낮습니다. 모터 모델의 운전 프로파일을 확인하세요'
-                        )
 
     def discover_usb_projects(self) -> Dict[str, Any]:
         """Rescan project folders copied into the project root by USB/file manager."""
@@ -1673,173 +1413,6 @@ class ProjectRepository:
             'reused_hash_count': reused_hash_count,
         }
 
-    def _tree(self, project_dir: Path, manifest: Dict[str, Any]) -> list[Dict[str, Any]]:
-        tree = []
-        manifest_path = project_dir / 'project.json'
-        manifest_content = manifest_path.read_bytes()
-        tree.append({
-            'category': 'project_root',
-            'name': '프로젝트 정보',
-            'read_only': True,
-            'children': [{
-                'node_type': 'file',
-                'name': manifest_path.name,
-                'relative_path': manifest_path.name,
-                'category': 'project_root',
-                'size': len(manifest_content),
-                'sha256': _sha256(manifest_content),
-                'active': False,
-                'read_only': True,
-                'internal': True,
-            }],
-        })
-        active = manifest.get('active_files') or {}
-        for category in PROJECT_CATEGORIES:
-            children = []
-            for path in sorted(
-                (project_dir / category).iterdir(), key=lambda item: item.name.lower()
-            ):
-                if not path.is_file() or path.is_symlink():
-                    continue
-                if path.suffix.lower() not in PROJECT_CATEGORIES[category]:
-                    continue
-                size = path.stat().st_size
-                children.append({
-                    'name': path.name,
-                    'category': category,
-                    'size': size,
-                    'sha256': _sha256_file(path),
-                    'active': active.get(category) == path.name,
-                    **(
-                        {'midi_banks': self._midi_bank_tree_info(path)}
-                        if category == 'motion_axis_matching' else {}
-                    ),
-                })
-            tree.append({
-                'category': category,
-                'name': DISPLAY_NAMES[category],
-                'children': children,
-            })
-        logs_dir = self._local_directory(project_dir, 'logs')
-        log_children = []
-        for path in sorted(logs_dir.glob('*.jsonl'), reverse=True):
-            if not path.is_file() or path.is_symlink():
-                continue
-            try:
-                size = path.stat().st_size
-                record_count = sum(
-                    1 for line in path.read_text(encoding='utf-8').splitlines() if line.strip()
-                )
-            except OSError:
-                continue
-            log_children.append({
-                'name': path.name,
-                'category': 'logs',
-                'size': size,
-                'record_count': record_count,
-                'active': False,
-            })
-        tree.append({
-            'category': 'logs',
-            'name': '로그',
-            'children': log_children,
-        })
-        for category, label in (
-            ('runtime', 'runtime · 실행용'),
-            ('trash', 'trash · 휴지통'),
-        ):
-            directory = self._local_directory(project_dir, category)
-            tree.append({
-                'category': category,
-                'name': label,
-                'read_only': True,
-                'children': self._read_only_directory_tree(directory, project_dir, category),
-            })
-        return tree
-
-    def _read_only_directory_tree(
-        self,
-        directory: Path,
-        project_dir: Path,
-        category: str,
-    ) -> list[Dict[str, Any]]:
-        """Return the real on-disk subtree without exposing mutation APIs."""
-        nodes: list[Dict[str, Any]] = []
-        try:
-            entries = sorted(
-                directory.iterdir(),
-                key=lambda item: (not item.is_dir(), item.name.lower()),
-            )
-        except OSError:
-            return nodes
-        for path in entries:
-            if path.is_symlink() or path.name.startswith('.'):
-                continue
-            try:
-                relative_path = path.relative_to(project_dir).as_posix()
-                if path.is_dir():
-                    nodes.append({
-                        'node_type': 'folder',
-                        'name': path.name,
-                        'relative_path': relative_path,
-                        'category': category,
-                        'read_only': True,
-                        'internal': True,
-                        'children': self._read_only_directory_tree(
-                            path, project_dir, category
-                        ),
-                    })
-                    continue
-                if not path.is_file():
-                    continue
-                content = path.read_bytes()
-            except OSError:
-                continue
-            nodes.append({
-                'node_type': 'file',
-                'name': path.name,
-                'relative_path': relative_path,
-                'category': category,
-                'size': len(content),
-                'sha256': _sha256(content),
-                'active': False,
-                'read_only': True,
-                'internal': True,
-            })
-        return nodes
-
-    @staticmethod
-    def _midi_bank_tree_info(path: Path) -> Dict[str, Any]:
-        """Describe the MIDI banks embedded in one project-local mapping file."""
-        try:
-            root = yaml.safe_load(path.read_text(encoding='utf-8')) or {}
-        except (OSError, yaml.YAMLError):
-            root = {}
-        state = root.get('midi_banks') if isinstance(root, dict) else None
-        if not isinstance(state, dict):
-            return {
-                'stored': False,
-                'count': 0,
-                'active_bank_id': '',
-                'banks': [],
-            }
-        banks = []
-        for item in state.get('banks') or []:
-            if not isinstance(item, dict):
-                continue
-            mappings = item.get('mappings')
-            banks.append({
-                'bank_id': str(item.get('bank_id') or ''),
-                'name': str(item.get('name') or item.get('bank_id') or '이름 없음'),
-                'mapping_count': len(mappings) if isinstance(mappings, list) else 0,
-            })
-        return {
-            'stored': True,
-            'count': len(banks),
-            'active_bank_id': str(state.get('active_bank_id') or ''),
-            'banks': banks,
-        }
-
     def _project_summary(self, project_dir: Path, manifest: Dict[str, Any]) -> Dict[str, Any]:
         counts = {
             category: sum(
@@ -1945,10 +1518,10 @@ class ProjectRepository:
         }
         payload['memo'] = str(payload.get('memo') or '')
         for category in PROJECT_CATEGORIES:
-            self._local_directory(project_dir, category)
-        self._local_directory(project_dir, 'logs')
-        self._local_directory(project_dir, 'runtime')
-        self._local_directory(project_dir, 'trash')
+            local_directory(project_dir, category)
+        local_directory(project_dir, 'logs')
+        local_directory(project_dir, 'runtime')
+        local_directory(project_dir, 'trash')
         return payload
 
     def _write_manifest(self, project_dir: Path, manifest: Dict[str, Any]) -> None:
@@ -1975,28 +1548,6 @@ class ProjectRepository:
         ):
             raise ValueError(f'프로젝트 파일을 찾을 수 없습니다: {name}')
         return path
-
-    @staticmethod
-    def _local_directory(project_dir: Path, *parts: str) -> Path:
-        """Create a directory without following a link outside its project."""
-        root = project_dir.resolve()
-        current = project_dir
-        for part in parts:
-            current = current / part
-            if current.is_symlink():
-                raise ValueError(
-                    f'프로젝트 내부 폴더는 링크일 수 없습니다: {current.name}'
-                )
-            if current.exists() and not current.is_dir():
-                raise ValueError(
-                    f'프로젝트 폴더 경로가 올바르지 않습니다: {current.name}'
-                )
-            current.mkdir(exist_ok=True)
-            try:
-                current.resolve().relative_to(root)
-            except ValueError as exc:
-                raise ValueError('프로젝트 외부 폴더는 사용할 수 없습니다') from exc
-        return current
 
     @staticmethod
     def _category(category: Any) -> str:
