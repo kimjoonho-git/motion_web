@@ -1189,7 +1189,14 @@ f(self)               ← self 통째로 넘기기
 
 - 코드 검증 · `ruff check src` 55건 유지 · 신규 0건
 - 실행 검증 · `pytest` 1,005건 통과 · 실패 0
-- 실물 검증 · 아래 별도 기록
+- 실물 검증 · `colcon build` · 재시작 · 실행 컨텍스트 `ready` · 노드 확인 8건 성공 ·
+  엔드포인트 10종 HTTP 200
+- 실물 검증 · `list_projects` · 프로젝트 6개 · 선택 프로젝트 `연동2` 표시
+- 실물 검증 · `project_scope` · `selected_project_id` = `runtime_project_id` ·
+  `runtime_matches_selected: true` · `runtime_project_id`·`selected_owns_runtime`
+  판정이 서비스 안에서 동작한다
+- 실물 미검증 · 프로젝트 전환·생성·삭제 · 가동 중 프로젝트를 바꿔야 한다
+- 실물 미검증 · 프로젝트 파일 저장·이름변경·복사·가져오기·삭제
 
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
