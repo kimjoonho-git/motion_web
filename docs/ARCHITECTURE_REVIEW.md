@@ -2859,6 +2859,88 @@ logs                  2건 · runtime 7건 · trash 0건   ← 읽기 전용 하
 | 모터 런타임 상태·조작 기록 | ~305 | **`motor_runtime_file`과 그 락을 갖는다** · 다음 차례 |
 | 기동 시 마이그레이션 4종 | ~181 | 한 번만 도는 코드 |
 
+### 6-47. `MotorRuntimeStore` 신설 · 파일과 락을 소유자에게
+
+`project_repository.py` **1,652 → 1,272줄** · 클래스 1,569 → **1,204줄** · 메서드 64 → 49
+
+15메서드 338줄과 **파일락 데코레이터**가 함께 갔다.
+
+#### 왜 다른 물건인가
+
+`.motor_runtime.json` 하나에 **적용된 설정**과 **조작 진행 상황**이 같이 들어 있고,
+웹·조율·모니터가 모두 이 파일을 통해 이야기한다.
+
+저장소는 프로젝트 **파일들**을 다루고, 이쪽은 **지금 무엇이 돌고 있는지**를
+다룬다 · 같은 클래스에 있을 이유가 없었다.
+
+```
+MotorRuntimeStore
+  path      .motor_runtime.json      ← 이 파일과 그 락을 갖는다
+  적용 설정  mark_runtime_motor_config_applied · motor_runtime_state · …
+  조작 기록  begin/update/finish_motor_operation · motor_operation_status
+```
+
+#### 위임 껍데기를 남기지 않았다
+
+바깥에서 부르는 곳이 **65군데**였다 · 전부 `repository.runtime.<이름>`으로 고쳤다 ·
+`ProjectRepository`에 같은 이름의 껍데기를 두면 어느 쪽이 진짜인지 흐려진다.
+
+#### 이름 다섯 형태가 또 나왔다 · 이번엔 판정이 뒤집혔다
+
+```python
+hasattr(repository, 'motor_operation_status')   # ← 호출부 치환에서 빠졌다
+```
+
+5곳. 옮긴 뒤 이 이름은 저장소에 없으므로 **참이던 것이 거짓이 된다** ·
+`runtime_service_status`가 `ready` 대신 `motor_manager_disabled`를 냈다.
+
+**예외도 아니고 구문 오류도 아니다 · 판정만 조용히 뒤집힌다.** §6-40·§6-41과
+같은 종류가 세 번째로 나왔다 · 시험이 잡았다.
+
+#### 시험 스텁도 함께 옮겼다 · 정규식으로는 안 됐다
+
+시험이 `type('Repository', (), {...})()`로 스텁을 만든다. 정규식으로 일괄
+이동했더니 **`selected_project_id`까지 `runtime` 밑으로 끌고 갔다** ·
+그것은 저장소에 남아야 한다.
+
+`ast`로 사전 항목을 읽어 **실행 상태 메서드만** 내리고 나머지는 저장소에 남겼다.
+
+#### 계층
+
+```
+project_paths            → (없음)
+project_tree             → project_paths
+motor_runtime_store      → project_paths
+motor_profile_validation → motor_identity
+project_repository       → 위 넷 전부
+```
+
+순환 없음.
+
+#### 검증
+
+- 코드 검증 · `ruff check src` 55건 유지
+- 실행 검증 · `pytest` **1,028건** 통과
+- 실물 검증 · 재시작 후
+
+```
+execution_context  state ready · "저장 설정과 실행 설정이 일치합니다"
+motor_operation    operation_id motor-4ec1c8a6… · status partial
+                   ← 앞서 돌린 전체 검색의 기록이 그대로 읽힌다
+런타임 파일        .motor_runtime.json 1,524B · 키 8종
+락 파일            ..motor_runtime.json.lock  ← 숨김 규칙(§6-24)이
+                   숨김 파일에도 적용된 모양이다
+```
+
+#### `project_repository` 분해 누적
+
+| | 시작 | 지금 |
+| --- | --- | --- |
+| 파일 | 2,100줄 | **1,272줄** (−39%) |
+| 클래스 | 1,987줄 · 69메서드 | **1,204줄 · 49메서드** |
+
+남은 군집 · 기동 시 마이그레이션 4종 ~181줄 · 한 번만 도는 코드다.
+
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
 - 파일 1,000줄 이하 · 함수 60줄 이하 · `Node` 서브클래스 500줄 이하
