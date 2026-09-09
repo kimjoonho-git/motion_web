@@ -2358,8 +2358,12 @@ bridge_publish_age_sec 0.004 (갱신 중)
 
 ## 8. 검증 상태
 
-- 최종 갱신 · 2026-09-09
-- 실기 · joonhoTest 가동 중 · AC Servo 1축(alias 103) · 다른 PC 전원 차단
+- 최종 갱신 · 2026-09-09 (§6-41 반영)
+- 실기 · joonhoTest 가동 중
+  - AC Servo 1축 · Panasonic MADLN05BE · alias 103 · Master 0 · OP
+  - **Dynamixel 2대** · XM540-W150(ID 3) · XM540-W270(ID 5) · FTDI FT232H
+  - **X-Touch-Ext** · BEHRINGER 1397:00b6 · ALSA card 2
+  - Master 1 랜선 분리 · 다른 PC 2대 전원 차단
 
 ### 검토 자체(§1~§5)
 
@@ -2372,8 +2376,9 @@ bridge_publish_age_sec 0.004 (갱신 중)
 |---|---|
 | 빌드 검증 | 완료 · `colcon build --symlink-install` 31패키지 |
 | 정적 검증 | 완료 · `ruff check src` **55건 유지** · 이번 작업 신규 0건 |
-| 실행 검증 | 완료 · `pytest` **1,005건 통과** · 실패 0 |
+| 실행 검증 | 완료 · `pytest` **1,016건 통과** · 실패 0 · 건너뜀 5(DDS 통합, 선택) |
 | 데이터 검증 | 완료 · 이동 전후 동치(§6-11) · 모션 파일 78개 전수(§6-2) |
+| 이동 감사 | 완료 · 데코레이터 원본 대조 · **AST 기반 `getattr(self,…)` 감사**(§6-41) |
 | 실물 검증 | 부분 · 아래 표 |
 
 ### 실물 검증 · 통과
@@ -2381,31 +2386,50 @@ bridge_publish_age_sec 0.004 (갱신 중)
 | 항목 | 절 |
 |---|---|
 | 서비스 재시작 8회 · 실행 컨텍스트 자동 적용 · 노드 확인 8건 | §6-20·21·22 |
-| AC Servo 물리 스캔 2회 · 모터 서비스 정지·복구 · EtherCAT 재열거 | §6-13·18 |
+| AC Servo 물리 스캔 · 모터 서비스 정지·복구 · EtherCAT 재열거 | §6-13·18·32 |
 | 프로젝트 EtherCAT 구성 판정 · 미사용 Master 미연결 허용 | §6-13 |
 | 모션 스튜디오 레이어 165프레임 · 라우트→서비스→세션 전 경로 | §6-15 |
 | 모터 동작 로그 조회 · 보존 정책 · 프로젝트 로그 경로 | §6-17 |
 | 설정 `selected`·`applied` 경로 · 실행 세션 일치 | §6-19 |
 | 조작 상태 조정 타이머 · systemd 서비스 판정 | §6-22 |
 | 엔드포인트 10종 HTTP 200 | 전반 |
+| **Dynamixel 물리 검색** · Broadcast Ping · CRC · 패킷 분해 · 모델명 매핑 | §6-33 |
+| **매번 새로 물리 검색** · 2회 연속 스캔 값 동일 · `scanned_at` 갱신 | §6-33 |
+| **상태 발행 10Hz** · `age_sec` 실시간 · 상태어·오류코드 변환 | §6-36 |
+| **전체 검색 시한** · 50초 예산 · EtherCAT 1 + Dynamixel 2 완주 | §6-37 |
+| **MIDI 전 경로** · 페이더 → Pickup → 값 변환 → 서보 도달 | §6-38~41 |
+
+MIDI 전 경로 근거 · `raw_value 5820` → `pickup_reference_source motor_feedback` →
+명령 `motion −52.111°` → **서보 실측 `−52.111°`** 일치.
 
 ### 실물 미검증 · 남은 것
 
 | 항목 | 사유 |
 |---|---|
-| Dynamixel 스캔 · **40초 제한시간**(§6-16 결함 수정) | 직렬 포트 부재 |
-| MIDI 화면 · 뱅크·페이더·매핑 | 컨트롤러 미연결 |
 | 다중 PC · 연동 스케줄 · 마스터 판정 | 다른 PC 전원 차단 |
 | 조그·절대 이동·서보 제어 | 모터가 실제로 움직인다 |
 | 설정 저장·적용·재시작·실행 해제 | 모터 설정을 다시 쓴다 |
 | 프로젝트 전환 `clear_selection` 격리 계약 | 가동 중 프로젝트를 바꿔야 한다 |
 | 스튜디오 녹화·재생·레이어 편집 | 화면 조작 필요 |
 | `recover_interrupted_scan` · 안전 차단 분기 | 중단·이동 상태를 만들어야 한다 |
+| `_ping_dynamixel_id` **성공** 반환 | 두 대 모두 Broadcast에 응답해 보조 Ping이 성공 경로로 가지 않는다 |
+| 페이더 파킹 **실패** 분기 · 재연결 세대 무효화 | 정상 경로에서 타지 않는 예외 분기 |
+
+### 알려진 것 · 결함은 아니나 손봐야 하는 것
+
+| 항목 | 내용 |
+|---|---|
+| 매칭표가 EtherCAT 전용 | 물리 Dynamixel 2대가 매칭표에 행으로 뜨지 않는다 · 분해 이전부터 · §6-33 |
+| `connected_axes` 물리 필드 누락 | `_build_scan_result`가 `_current_motor_list`를 스캔 갱신보다 먼저 부른다 · §6-35 |
+| 미사용 함수 2건 | `pulse_per_revolution` · `counts_to_degrees` · 호출부 없음 · §6-34 |
 
 ### 배포 잔여
 
 **다른 PC 2대는 `colcon build` 필수** · `motion_common` 외 신규 패키지 다수 ·
+`motion_coordination_interfaces`에 Action 추가 ·
 미빌드 시 `ModuleNotFoundError`로 노드 기동 실패 · `docs/HANDOFF.md` §3-①
+
+**원격 미반영** · 이 저장소는 로컬에 **61커밋** 앞서 있다 · 원격 최신 `dbe1256`.
 
 ### 미해결 결함
 

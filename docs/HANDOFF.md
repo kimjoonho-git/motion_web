@@ -1,10 +1,14 @@
 # 인수인계
 
 - 최초 작성 · 2026-08-22 (출장 중 Windows 작업 대비)
-- 최종 갱신 · 2026-09-09
+- 최종 갱신 · 2026-09-09 (§6-41 반영)
 - 브랜치 · `refactor/motion-common-extract`
-- 마지막 커밋 · `ea4c3ea`
-- 상황 · Linux 실기(joonhoTest) 가동 중 · AC Servo 1축 연결 · 다른 PC 전원 차단
+- 마지막 커밋 · `bc5268a` · **원격보다 61커밋 앞섬**(원격 최신 `dbe1256`)
+- 상황 · Linux 실기(joonhoTest) 가동 중
+  - AC Servo 1축 · MADLN05BE · alias 103 · Master 0 · OP
+  - **Dynamixel 2대** · XM540-W150(ID 3) · XM540-W270(ID 5) · FTDI FT232H
+  - **X-Touch-Ext** MIDI · ALSA card 2
+  - Master 1 랜선 분리 · 다른 PC 2대 전원 차단
 
 > 08-22 작성분은 출장 중 Windows 전용 지침이었다. 복귀 후 실기에서 4단계를
 > 크게 진행했으므로 §2 이후를 현행화했다. §1(Windows 제약)은 다음 출장 때
@@ -66,13 +70,13 @@ Windows에서 파일 기록 관련 동작을 판단할 때 이 차이를 잊지 
 | 1 · `motion_common` 신설 | ✅ 완료 · 9모듈 |
 | 2 · `RequestChannel` 단일화 | ✅ 완료 |
 | 3 · 토픽 상수 단일화 | ✅ 완료 |
-| 4 · `bridge_node` 분해 | 🔸 진행 중 · **서비스 5개 신설** · -61% |
-| 5 · 영속 계층 통합 | 🔸 `store.py`는 완료 · 직접 기록 모듈 잔존 |
-| 6 · Action 전환 | ⬜ 미착수 |
-| 7 · 프런트엔드 빌드 | ⬜ 미착수 |
-| 8 · 하드웨어 스캐너 분리 | ⬜ 미착수 |
+| 4 · `bridge_node` 분해 | ✅ 완료 (기준 A) · 서비스 6+3개 · -73% |
+| 5 · 영속 계층 통합 | ✅ 완료 · 직접 기록 잔여 0 · 재진입 락 |
+| 6 · Action 전환 | ✅ 완료 · 스캔 전환 · 초기화·모션 실행은 전환 안 함(§6-28) |
+| 7 · 프런트엔드 빌드 | ⬜ **미착수 ← 다음 번호 단계** |
+| 8 · 하드웨어 스캐너 분리 | ⬜ 미착수 · 범위 협의 필요 |
 
-### 4단계 안에서 어디까지 왔나 · `docs/ARCHITECTURE_REVIEW.md` §6
+### §5 분해 목표안 · 어디까지 왔나 · `docs/ARCHITECTURE_REVIEW.md` §6
 
 | 절 | 작업 |
 |---|---|
@@ -86,24 +90,33 @@ Windows에서 파일 기록 관련 동작을 판단할 때 이 차이를 잊지 
 | §6-19 | `MotorConfigService` · 가변 상태 이관 |
 | §6-20 | `ExecutionContextService` |
 | §6-21 | `ManualMotorCommandService` |
+| §6-23 | `ProjectService` · 4단계 목표안 완료 |
+| §6-24 | 영속 계층 통합 · 재진입 락 · 숨김 락 파일 |
+| §6-26 | 스캔 Action 전환 · 진행·취소 |
+| §6-29~31 | `GroupSession` · `PlanBuilder` · `MotionPlayer` |
+| §6-32~36 | `monitor_node` 분해 완료 · 2,884 → 866줄 |
+| §6-37 | 전체 검색 시한 결함 수정 |
+| §6-38~41 | `midi_control_node` 분해 · 3,354 → 2,397줄 |
 
-§5 분해 목표안 6개 중 **`ProjectService` 하나만 남았다.**
+**목표안 넷 중 둘 완료** · `bridge_node` · `monitor_node` ·
+`midi_control_node`는 넷 중 셋(`MidiDecoder` 잔여) ·
+`motion_run_manager`는 넷 중 셋(`StatusStore` 잔여).
 
 ### 지표
 
 ```
-bridge_node        7,407 → 2,902줄  (-61%)
-MotionWebBridge    7,407 → 2,577줄 · 메서드 239 → 120
-상태 필드          125 → 108 · 락 18 → 11
-락 관여            4,479 → 2,273줄
-테스트             68파일(실패 11) → 1,005건(실패 0)
-ruff               도입 · 잔여 55건 (신규 0)
-파일 1,000줄 초과   7개
-Node 클래스 500줄 초과  8개
+bridge_node          7,407 → 2,037줄  (-73%)
+MotionStateMonitor   2,884 →   866줄  (-70%)  메서드 78 → 20
+midi_control_node    3,354 → 2,397줄  (-29%)  클래스 3,025 → 2,321
+motion_run_manager   3,693 → 1,435줄  (-61%)
+테스트               68파일(실패 11) → 1,016건(실패 0) · 건너뜀 5
+ruff                 잔여 55건 (신규 0 · 기준선 유지)
+파일 1,000줄 초과     7 → 6개
+Node 클래스 500줄 초과   8개 (변화 없음) · 최대 MotionSupervisor 2,378줄
 ```
 
 기준선 · `docs/metrics/baseline-20260822.json`
-현재 · `docs/metrics/after-decomposition-10.json`
+현재 · `docs/metrics/after-decomposition-25.json`
 의존 지도 · `docs/metrics/bridge-state-map-20260908.json`
 
 ```bash
@@ -136,17 +149,29 @@ find ~/ros2_ws/motion_projects -name schedule_store.json -exec sh -c 'echo "== $
 
 빈 배열이면 안전.
 
-### ② MIDI 화면 검증 — 여전히 미검증
+### ② MIDI — **검증 완료** (2026-09-09)
 
-`midi_control_node`의 명령 19개를 처리기 표로 옮겼는데(283줄 → 20줄) 장치가
-없어 확인하지 못했다. 컨트롤러를 붙이고 볼 것 · 뱅크 생성·전환·삭제 ·
-페이더 SELECT·재동기화 · 프로젝트 전환 시 매핑 반영 · 녹화 준비(페이더 0 복귀).
+X-Touch-Ext를 붙이고 페이더에서 서보까지 한 줄로 확인했다.
 
-### ③ Dynamixel 검증 — 장치 없음
+```
+raw_value 5820 → pickup_reference_source motor_feedback (기준 −33.378°)
+             → 명령 motion −52.111° → 서보 실측 −52.111° 일치
+```
 
-직렬 포트가 없어 스캔 경로를 한 번도 못 탔다. 특히 **§6-16에서 고친 40초
-제한시간**이 실효를 갖는지 확인해야 한다. 그전에는 복제 층 때문에 20초로
-동작하고 있었다.
+**남은 미검증** · 페이더 파킹 *실패* 분기 · 재연결 세대 무효화 ·
+정상 경로에서 타지 않는 예외 분기다.
+
+### ③ Dynamixel — **검증 완료** (2026-09-09)
+
+XM540-W150(ID 3) · XM540-W270(ID 5) 2대 검출. Broadcast Ping · CRC ·
+상태 패킷 분해 · 모델명 매핑 · 포트 자동 탐색 · **매번 새로 물리 검색**
+(2회 연속 값 동일 · `scanned_at` 갱신) 전부 통과 · §6-33.
+
+§6-16의 40초 시한은 단일 경로임을 확인했고, 그 과정에서 **전체 검색만 20초**로
+남아 있던 결함을 찾아 고쳤다(§6-37 · 지금은 50초).
+
+**남은 미검증** · `_ping_dynamixel_id`의 *성공* 반환 · 두 대 모두 Broadcast에
+응답해 보조 Ping이 성공 경로로 가지 않는다.
 
 ### ④ 모터 조작 경로 미검증 3종
 
@@ -165,14 +190,22 @@ find ~/ros2_ws/motion_projects -name schedule_store.json -exec sh -c 'echo "== $
 
 ## 4. 다음 개발 단계
 
-### 4단계 잔여 · 88메서드 2,273줄
+### 다음 후보 · 우선순위순
 
-| 대상 | 줄 | 성격 |
+| # | 항목 | 근거 |
 |---|---|---|
-| 모터 조작 복구 묶음 | 343 | `_reconcile_motor_operation_status` 외 3 · 다음 순서 |
-| 프로젝트 생성·전환·삭제 | ~250 | `ProjectService` · §5 목표안 마지막 |
-| `__init__` | 389 | 서비스 조립 · 노드 고유 |
-| `snapshot` | 117 | 상태 취합 · 노드 고유 |
+| 1 | **원격 푸시** | 61커밋이 이 PC에만 있다 · 유실 위험 |
+| 2 | **§6-14 근본 원인** | 유일한 미해결 결함 · 재발 판별법만 존재 |
+| 3 | **슬레이브 2대 재빌드** | 미빌드 시 노드 기동 실패 · 아래 ① |
+| 4 | 매칭표 Dynamixel 포함 | 물리 2대가 매칭표에 안 뜬다 · 지금 실물 검증 가능 |
+| 5 | `connected_axes` 물리 필드 | `_build_scan_result` 호출 순서 문제 |
+| 6 | **7단계 프런트엔드 빌드** | 번호 단계 다음 · 장치 무관 |
+| 7 | `MotionSupervisor` 2,378줄 | 현재 최대 Node · 모터 명령 경로라 위험 |
+| 8 | `MidiDecoder` | `_midi_callback` 459줄 루프 국면 분해 선행 필요 |
+| 9 | 8단계 스캐너 이관 | 범위 협의 필요 |
+
+`StatusStore`(목표안 잔여)는 접근자 위주라 가치가 낮다고 평가했다 ·
+제외 여부를 결정할 것.
 
 ### 이번에 확립한 방식
 
@@ -187,13 +220,42 @@ find ~/ros2_ws/motion_projects -name schedule_store.json -exec sh -c 'echo "== $
 5. **노드에 위임 껍데기를 남기지 않는다** · 라우트가 서비스를 직접 부른다
 6. **테스트 이음매도 함께 옮긴다** · 노드 없이 서비스만 세워 검사한다
 
-### 흔한 함정 두 가지
+### 흔한 함정 여섯 가지 · 전부 실제로 겪었다
 
-- **전이 도달 집합만 보고 "전용"이라 판단하지 말 것** · 도달 집합 안에 노드에
-  남을 메서드가 섞여 있으면 그 하위도 남아야 한다 · §6-18에서
-  `_monitoring_mapping_rows_for_context`를 잘못 분류했다
-- **`self`를 통째로 넘기는 호출을 볼 것** · `self.___`만 기계적으로 바꾸면
-  `f(self)`를 놓친다 · §6-19에서 `session_of(self)`가 서비스를 가리키게 됐다
+| # | 함정 | 무엇을 잡았나 | 절 |
+|---|---|---|---|
+| 1 | **이름 다섯 형태** · `self.X()` · `self.X` · `getattr/hasattr(self,'X')` · `f(self)` | 시험·실물 | §6-19 |
+| 2 | **메서드 종류** · `@staticmethod`·`@classmethod`·`@property`도 따라가야 한다 | 시험 | §6-32 |
+| 3 | **떼어낸 모듈이 노드를 되부른다** · 노드 파일만 보면 안 보인다 | 시험 | §6-34 |
+| 4 | **`(self, ` 일괄 치환이 `getattr(self, …)`를 먹는다** · 실행 시점에야 터진다 | 시험 | §6-35 |
+| 5 | **상수를 기억으로 적는다** · `0xFFFF`를 65344로 적을 뻔했다 | 사전 대조 | §6-36 |
+| 6 | **인자화로 평가 시점이 달라진다** · 호출 직전에 읽어야 동치다 | 실물 | §6-11 |
+
+특히 1번은 **여러 줄로 쪼개진 형태**에서 두 번 재발했다.
+
+```python
+getattr(
+    self,                       # ← 한 줄 정규식으로는 안 잡힌다
+    'pickup_feedback_consistency_deg',
+    기본값,
+)
+```
+
+**감사는 정규식이 아니라 AST로 한다** · `ast.Call`의 인자를 보므로 줄바꿈에
+영향받지 않는다 · §6-41에서 정규식 감사를 폐기했다.
+
+```
+self 를 첫 인자로 받는 getattr/hasattr/setattr 중
+문자열 이름이 그 클래스에 없는 것을 찾는다
+대상 · self.node / self.monitor / self.bridge 를 갖는 서비스 클래스
+```
+
+그리고 **시험 이음매도 코드를 따라간다**.
+
+- 모듈 경로 문자열 패치 · `patch('a.b.subprocess')` → 코드가 옮겨가면 조용히 어긋난다
+- 인스턴스 monkeypatch(`node._snapshot = ...`)는 모듈 함수를 비껴간다
+- 모듈 전역에 직접 대입하지 말 것 · 복원되지 않아 시험 간 오염이 된다 ·
+  `monkeypatch.setattr`를 쓴다
 
 ### 지도를 다시 그리는 방법
 
@@ -252,7 +314,7 @@ S110    예외 무음 삼킴    7건
 ### 검증 명령 모음
 
 ```bash
-pytest                                    # 1,005건 · Linux 전용
+pytest                                    # 1,016건 · Linux 전용
 pytest src/motion_common                  # Windows 가능
 ruff check src                            # 55건이면 정상 (신규 0)
 python3 scripts/code_metrics.py --baseline docs/metrics/baseline-20260822.json
@@ -276,13 +338,19 @@ git switch main && ./scripts/build_and_restart.sh
 ## 7. 참고 문서
 
 - `docs/ARCHITECTURE_REVIEW.md` · 전체 검토 · **§5 표가 계획 · §6이 이력**
-  - §5 · 8단계 로드맵 · 4단계 행이 현재 위치
+  - §5 · 8단계 로드맵 · **7단계 행이 현재 위치** · 표 아래가 분해 목표안
   - §6-8 · 상태·락 의존 지도 · 분해의 출발점
-  - §6-9 ~ §6-13 · 함수 추출 1~5차
-  - §6-14 · **결함 기록** · `motion_supervisor` 수신 정지
-  - §6-15 ~ §6-21 · 서비스 5개 신설 · 각 절에 실물 검증 결과 포함
-- `docs/metrics/` · 지표 스냅숏 11개 · 의존 지도 JSON
+  - §6-14 · **결함 기록** · `motion_supervisor` 수신 정지 · 미해결
+  - §6-15 ~ §6-23 · `bridge_node` 서비스 9개 신설
+  - §6-24 ~ §6-28 · 영속 계층 · Action 전환 · 전환하지 않기로 한 이유
+  - §6-29 ~ §6-31 · `motion_run_manager` 분해
+  - §6-32 ~ §6-36 · `monitor_node` 분해 완료
+  - §6-37 · **결함 기록** · 전체 검색 시한 · 수정 완료
+  - §6-38 ~ §6-41 · `midi_control_node` 분해
+  - §8 · 검증 상태 · 실물 통과/미통과 표
+- `docs/metrics/` · 지표 스냅숏 · 의존 지도 JSON
 - `scripts/bridge_state_map.py` · 의존 지도 재작성 도구
+- `scripts/check_locks.sh` · 락 파일 점검
 - `.claude/settings.json` · Claude Code 권한 · 모터 관련 명령은 확인을 받도록 설정
 
 ### 신설된 서비스·모듈 (`src/motion_web/web_bridge/motion_web_bridge/`)
@@ -300,3 +368,30 @@ git switch main && ./scripts/build_and_restart.sh
 | `desktop_shortcut.py` | 바탕화면 바로가기 | §6-11 |
 
 삭제 · `motor_service.py` · `motion_run_service.py` (빈 위임 층 · §6-16)
+
+### 신설된 모듈 · `motion_state_monitor/`
+
+| 파일 | 역할 | 절 |
+|---|---|---|
+| `ethercat_scanner.py` | EtherCAT 물리 검색 · 버스 상태 | §6-32 |
+| `dynamixel_scanner.py` | Dynamixel 물리 검색 · Protocol 2.0 | §6-33 |
+| `motor_values.py` | 값 변환 순수 함수 · 라벨 | §6-34 |
+| `connection_state.py` | 연결 판정 · `CommunicationHealth` | §6-35 |
+| `state_publisher.py` | 축 상태 수신·발행 | §6-36 |
+
+### 신설된 모듈 · `midi_control/`
+
+| 파일 | 역할 | 절 |
+|---|---|---|
+| `motion_value_map.py` | 페이더↔모션↔모터 변환 · 범위 검사 | §6-38 |
+| `pickup_policy.py` | 튐 방지 판정 · 채널별 대기 상태 | §6-39 |
+| `fader_state.py` | 페이더 파킹·동기화 대기 | §6-40 |
+| `midi_snapshot.py` | 화면 표현 · 읽기 전용 | §6-41 |
+
+### 신설된 모듈 · `motion_runtime/`
+
+| 파일 | 역할 | 절 |
+|---|---|---|
+| `motion_run_rules.py` · `plan_builder.py` | 실행 규칙 · 계획 수립 | §6-30 |
+| `group_session.py` | 그룹 실행 세션 | §6-29 |
+| `motion_player.py` · `motion_run_constants.py` | 재생 · 상수 단일화 | §6-31 |
