@@ -225,9 +225,8 @@ def _patch_runtime_service_status(value):
 def operation_repository(selected_project_id):
     operation = {}
 
-    class Repository:
-        def selected_project_id(self):
-            return str(selected_project_id())
+    class Runtime:
+        """모터 실행 상태는 별도 객체가 갖는다 (§6-47)."""
 
         def begin_motor_operation(self, operation_type, phase, **_kwargs):
             operation.clear()
@@ -251,6 +250,12 @@ def operation_repository(selected_project_id):
             assert operation_id == operation['operation_id']
             operation.update({'status': status, 'phase': phase})
             return dict(operation)
+
+    class Repository:
+        runtime = Runtime()
+
+        def selected_project_id(self):
+            return str(selected_project_id())
 
     return Repository()
 
@@ -591,12 +596,15 @@ def test_snapshot_reads_motor_operation_without_reconciling_it(tmp_path):
         pytest.fail('snapshot must be read-only')
     )
     bridge.project_repository = type('Repository', (), {
-        'selected_project_id': lambda _self: 'project-a',
-        'motor_operation_status': lambda _self: {
+        # 모터 실행 상태는 별도 객체가 갖는다 (§6-47)
+        'runtime': type('Runtime', (), {
+            'motor_operation_status': lambda _self: {
             'operation_id': 'operation-1',
             'status': 'running',
             'phase': 'verifying',
         },
+        })(),
+        'selected_project_id': lambda _self: 'project-a',
     })()
 
     result = bridge.snapshot()
@@ -1400,7 +1408,7 @@ def test_full_scan_returns_terminal_partial_operation():
     repository = operation_repository(lambda: 'project-a')
     bridge.project_repository = repository
     bridge.snapshot = lambda: {
-        'motor_operation': repository.motor_operation_status(),
+        'motor_operation': repository.runtime.motor_operation_status(),
     }
     _scan_of(bridge)._call_ethercat_service_locked = lambda *_args, **_kwargs: {
         'success': False,
@@ -1512,7 +1520,7 @@ def test_ac_servo_scan_fails_when_motor_runtime_does_not_recover(monkeypatch):
     bridge._motion_studio_session.lock = threading.Lock()
     bridge._motion_studio_session.status = {}
     bridge.project_repository = operation_repository(lambda: 'project-a')
-    operation = bridge.project_repository.begin_motor_operation(
+    operation = bridge.project_repository.runtime.begin_motor_operation(
         'ac_servo_scan',
         'preparing',
     )
@@ -1625,15 +1633,15 @@ def test_ac_servo_scan_restores_service_even_when_status_update_fails(monkeypatc
     bridge._motion_studio_session.lock = threading.Lock()
     bridge._motion_studio_session.status = {}
     repository = operation_repository(lambda: 'project-a')
-    operation = repository.begin_motor_operation('ac_servo_scan', 'preparing')
-    original_update = repository.update_motor_operation
+    operation = repository.runtime.begin_motor_operation('ac_servo_scan', 'preparing')
+    original_update = repository.runtime.update_motor_operation
 
     def update(operation_id, phase, **kwargs):
         if phase == 'restoring':
             raise ValueError('operation was concurrently finalized')
         return original_update(operation_id, phase, **kwargs)
 
-    repository.update_motor_operation = update
+    repository.runtime.update_motor_operation = update
     bridge.project_repository = repository
     bridge.snapshot = lambda: {}
     bridge._current_project_generation = lambda: 3
@@ -1888,7 +1896,7 @@ def test_ac_servo_scan_retires_previous_project_runtime_without_feedback(
     bridge._motion_studio_session.lock = threading.Lock()
     bridge._motion_studio_session.status = {}
     repository = operation_repository(lambda: 'project-b')
-    repository.motor_runtime_state = lambda: {
+    repository.runtime.motor_runtime_state = lambda: {
         'valid': True,
         'target_project_id': 'project-a',
     }
@@ -1957,7 +1965,7 @@ def test_ac_servo_scan_still_blocks_observed_motion_during_project_handoff(
     bridge._motion_studio_session.lock = threading.Lock()
     bridge._motion_studio_session.status = {}
     repository = operation_repository(lambda: 'project-b')
-    repository.motor_runtime_state = lambda: {
+    repository.runtime.motor_runtime_state = lambda: {
         'valid': True,
         'target_project_id': 'project-a',
     }

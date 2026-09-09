@@ -239,7 +239,7 @@ class MotorRuntimeService:
         expected_axes = list(expected_axes) if isinstance(expected_axes, list) else []
         try:
             if not was_active:
-                self.repository.finish_motor_operation(
+                self.repository.runtime.finish_motor_operation(
                     operation_id,
                     'failure',
                     phase='interrupted',
@@ -253,7 +253,7 @@ class MotorRuntimeService:
                 motor_service='motion-motor.service',
             )
             if recovery.get('recovered') is True:
-                self.repository.finish_motor_operation(
+                self.repository.runtime.finish_motor_operation(
                     operation_id,
                     'failure',
                     phase='interrupted_recovered',
@@ -264,7 +264,7 @@ class MotorRuntimeService:
                     details={'recovery': recovery},
                 )
             else:
-                self.repository.finish_motor_operation(
+                self.repository.runtime.finish_motor_operation(
                     operation_id,
                     'failure',
                     phase='restore_failed',
@@ -273,7 +273,7 @@ class MotorRuntimeService:
                 )
         except (OSError, RuntimeError, subprocess.TimeoutExpired, ValueError) as exc:
             try:
-                self.repository.finish_motor_operation(
+                self.repository.runtime.finish_motor_operation(
                     operation_id,
                     'failure',
                     phase='restore_failed',
@@ -294,10 +294,10 @@ class MotorRuntimeService:
             lock = threading.Lock()
             self._recovery_lock = lock
         if not lock.acquire(blocking=False):
-            return self.repository.motor_operation_status()
+            return self.repository.runtime.motor_operation_status()
         operation_id = str(operation.get('operation_id') or '')
         try:
-            updated = self.repository.update_motor_operation(
+            updated = self.repository.runtime.update_motor_operation(
                 operation_id,
                 'restoring_after_bridge_restart',
                 message='중단된 AC Servo 검색의 Motor Manager 복구 중',
@@ -305,7 +305,7 @@ class MotorRuntimeService:
             )
         except ValueError:
             lock.release()
-            return self.repository.motor_operation_status()
+            return self.repository.runtime.motor_operation_status()
         threading.Thread(
             target=self._recover_interrupted_scan,
             args=(updated,),
@@ -321,9 +321,9 @@ class MotorRuntimeService:
         execution_context: Dict[str, Any],
     ) -> Dict[str, Any]:
         repository = getattr(self, 'repository', None)
-        if repository is None or not hasattr(repository, 'motor_operation_status'):
+        if repository is None or not hasattr(getattr(repository, 'runtime', None), 'motor_operation_status'):
             return {}
-        operation = repository.motor_operation_status()
+        operation = repository.runtime.motor_operation_status()
         if not operation:
             return {}
         operation_id = str(operation.get('operation_id') or '')
@@ -363,7 +363,7 @@ class MotorRuntimeService:
                     runtime_status,
                 )
                 try:
-                    return repository.finish_motor_operation(
+                    return repository.runtime.finish_motor_operation(
                         operation_id,
                         'timeout',
                         phase='timed_out',
@@ -377,7 +377,7 @@ class MotorRuntimeService:
                 except ValueError:
                     return operation
             try:
-                return repository.finish_motor_operation(
+                return repository.runtime.finish_motor_operation(
                     operation_id,
                     'timeout',
                     phase='timed_out',
@@ -429,7 +429,7 @@ class MotorRuntimeService:
                     status='failure',
                     error=error,
                 )
-            return repository.finish_motor_operation(
+            return repository.runtime.finish_motor_operation(
                 operation_id,
                 'failure',
                 phase='failed',
@@ -442,7 +442,7 @@ class MotorRuntimeService:
                 and fresh_feedback
                 and readiness.get('ready') is True
             ):
-                return repository.finish_motor_operation(
+                return repository.runtime.finish_motor_operation(
                     operation_id,
                     'success',
                     phase='completed',

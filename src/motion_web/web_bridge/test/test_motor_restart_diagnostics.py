@@ -108,7 +108,7 @@ def test_motor_restart_timeout_persists_diagnosis_for_the_popup(
         'motion_web_bridge.project_repository.time.time',
         lambda: 100.0,
     )
-    operation = repository.begin_motor_operation(
+    operation = repository.runtime.begin_motor_operation(
         'motor_restart',
         'verifying',
         timeout_sec=1.0,

@@ -237,7 +237,7 @@ class ScanOrchestrator:
         operation: Dict[str, Any] = {}
         result: Dict[str, Any]
         try:
-            operation = self.repository.begin_motor_operation(
+            operation = self.repository.runtime.begin_motor_operation(
                 operation_type,
                 'preparing',
                 timeout_sec=timeout_sec + (20.0 if release_ethercat else 5.0),
@@ -255,13 +255,13 @@ class ScanOrchestrator:
                     operation_id=operation_id,
                 )
             else:
-                self.repository.update_motor_operation(
+                self.repository.runtime.update_motor_operation(
                     operation_id,
                     'scanning',
                     message='모터 물리 검색 진행 중',
                 )
                 result = self._call_service_locked(client, service_name, timeout_sec)
-            current = self.repository.motor_operation_status()
+            current = self.repository.runtime.motor_operation_status()
             outcome = motor_config_rules.scan_operation_outcome(
                 result.get('scan'),
                 operation_type=operation_type,
@@ -273,7 +273,7 @@ class ScanOrchestrator:
                 current.get('operation_id') == operation_id
                 and current.get('status') == 'running'
             ):
-                current = self.repository.finish_motor_operation(
+                current = self.repository.runtime.finish_motor_operation(
                     operation_id,
                     outcome,
                     phase={
@@ -304,7 +304,7 @@ class ScanOrchestrator:
             operation_id = str(operation.get('operation_id') or '')
             if operation_id:
                 try:
-                    self.repository.finish_motor_operation(
+                    self.repository.runtime.finish_motor_operation(
                         operation_id,
                         'failure',
                         phase='failed',
@@ -549,7 +549,7 @@ class ScanOrchestrator:
             self._expected_runtime_axes() if restore_runtime else []
         )
         if operation_id:
-            self.repository.update_motor_operation(
+            self.repository.runtime.update_motor_operation(
                 operation_id,
                 'preparing',
                 details={
@@ -601,7 +601,7 @@ class ScanOrchestrator:
                         if runtime_handoff['required']
                         else 'Motor Manager 정지 및 EtherCAT 소유권 해제 중'
                     )
-                    self.repository.update_motor_operation(
+                    self.repository.runtime.update_motor_operation(
                         operation_id,
                         'stopping_runtime',
                         message=stop_message,
@@ -609,7 +609,7 @@ class ScanOrchestrator:
                 self.runtime.run_managed_service('stop', motor_service)
                 motor_config_rules.wait_for_ethercat_release(timeout_sec=5.0)
             if operation_id:
-                self.repository.update_motor_operation(
+                self.repository.runtime.update_motor_operation(
                     operation_id,
                     'scanning',
                     message='AC Servo 물리 검색 진행 중',
@@ -630,7 +630,7 @@ class ScanOrchestrator:
                 try:
                     if operation_id:
                         try:
-                            self.repository.update_motor_operation(
+                            self.repository.runtime.update_motor_operation(
                                 operation_id,
                                 'restoring',
                                 message='검색 전 Motor Manager 실행 상태 복구 중',
@@ -680,9 +680,9 @@ class ScanOrchestrator:
     def _expected_runtime_axes(self) -> List[int]:
         repository = getattr(self, 'repository', None)
         runtime = (
-            repository.applied_runtime_motor_config()
+            repository.runtime.applied_runtime_motor_config()
             if repository is not None
-            and hasattr(repository, 'applied_runtime_motor_config')
+            and hasattr(getattr(repository, 'runtime', None), 'applied_runtime_motor_config')
             else None
         )
         if runtime is not None:
@@ -712,9 +712,9 @@ class ScanOrchestrator:
     def _expected_runtime_ethercat_axes(self) -> List[int]:
         repository = getattr(self, 'repository', None)
         runtime = (
-            repository.applied_runtime_motor_config()
+            repository.runtime.applied_runtime_motor_config()
             if repository is not None
-            and hasattr(repository, 'applied_runtime_motor_config')
+            and hasattr(getattr(repository, 'runtime', None), 'applied_runtime_motor_config')
             else None
         )
         if runtime is not None:
@@ -762,7 +762,7 @@ class ScanOrchestrator:
         ).strip()
         runtime_project_id = ''
         try:
-            runtime_state = self.repository.motor_runtime_state()
+            runtime_state = self.repository.runtime.motor_runtime_state()
         except (AttributeError, OSError, ValueError, json.JSONDecodeError):
             runtime_state = {}
         if isinstance(runtime_state, dict):

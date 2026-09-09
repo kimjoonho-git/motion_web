@@ -702,7 +702,7 @@ class MotionWebBridge(Node):
         # The coordinator and explicit context endpoints still perform the
         # full validation; a status frame only reports that validated result.
         execution_context = self._execution_context.status(validate_files=False)
-        motor_operation = self.project_repository.motor_operation_status()
+        motor_operation = self.project_repository.runtime.motor_operation_status()
         selected_project_id = self.project_repository.selected_project_id()
         runtime_project_id = self._project.runtime_project_id_from_path(selected_project_id)
         stored_context = execution_context.get('context')

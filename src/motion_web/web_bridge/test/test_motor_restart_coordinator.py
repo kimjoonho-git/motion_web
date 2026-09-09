@@ -46,7 +46,7 @@ def _runtime_of(bridge):
 
 
 def _begin_restart(repository):
-    return repository.begin_motor_operation(
+    return repository.runtime.begin_motor_operation(
         'motor_restart',
         'restart_requested',
         timeout_sec=45.0,
@@ -62,7 +62,7 @@ def test_worker_does_not_overwrite_a_terminal_operation(tmp_path):
     operation = _begin_restart(repository)
 
     def terminate_then_fail(_service):
-        repository.finish_motor_operation(
+        repository.runtime.finish_motor_operation(
             operation['operation_id'],
             'timeout',
             phase='timeout',
@@ -80,7 +80,7 @@ def test_worker_does_not_overwrite_a_terminal_operation(tmp_path):
 
     coordinator._restart_worker(operation['operation_id'], {})
 
-    status = repository.motor_operation_status()
+    status = repository.runtime.motor_operation_status()
     assert status['status'] == 'timeout'
     assert status['error'] == '작업 제한시간 초과'
 

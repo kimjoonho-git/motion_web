@@ -763,7 +763,7 @@ def motor_operation_runtime_readiness(
                 ),
             }
         try:
-            repository.update_motor_operation(
+            repository.runtime.update_motor_operation(
                 str(operation.get('operation_id') or ''),
                 str(operation.get('phase') or 'verifying'),
                 details={'verified_motor_config_file': actual_file},
@@ -829,13 +829,13 @@ def rollback_failed_motor_apply(
         dict(previous_runtime)
         if isinstance(previous_runtime, dict) else {}
     )
-    completed = repository.finish_motor_operation(
+    completed = repository.runtime.finish_motor_operation(
         operation_id,
         status,
         phase='rollback_requested',
         error=error,
     )
-    repository.restore_motor_runtime_target(previous_runtime)
+    repository.runtime.restore_motor_runtime_target(previous_runtime)
     if (
         os.environ.get('MOTION_CONTROL_SERVICE_UNIT')
         == 'motion-control.service'
@@ -848,7 +848,7 @@ def rollback_failed_motor_apply(
                 'motion-control.service',
             )
         except (OSError, ValueError) as exc:
-            completed = repository.finish_motor_operation(
+            completed = repository.runtime.finish_motor_operation(
                 operation_id,
                 status,
                 phase='rollback_schedule_failed',
@@ -875,8 +875,8 @@ def runtime_service_status(
     runtime_path = Path(applied_motor_config_file or Path())
     runtime_config = str(runtime_path) if runtime_path.is_file() else ''
     runtime_target = (
-        repository.motor_runtime_state()
-        if repository is not None and hasattr(repository, 'motor_runtime_state')
+        repository.runtime.motor_runtime_state()
+        if repository is not None and hasattr(getattr(repository, 'runtime', None), 'motor_runtime_state')
         else {}
     )
     target_config = str(runtime_target.get('config_file') or '')

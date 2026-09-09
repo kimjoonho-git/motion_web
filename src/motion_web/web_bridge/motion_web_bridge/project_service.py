@@ -58,9 +58,9 @@ class ProjectService:
         if (
             not ignore_motor_lifecycle
             and repository is not None
-            and hasattr(repository, 'motor_operation_status')
+            and hasattr(getattr(repository, 'runtime', None), 'motor_operation_status')
         ):
-            operation = repository.motor_operation_status()
+            operation = repository.runtime.motor_operation_status()
             if operation.get('status') == 'running':
                 return '모터 설정·검색·재시작 작업이 진행 중이므로 프로젝트를 변경할 수 없습니다'
         run_lock = getattr(self.bridge, '_motion_run_lock', None)

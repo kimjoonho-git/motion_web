@@ -57,7 +57,7 @@ class MotorRestartCoordinator:
         ):
             raise RuntimeError('Motor Manager 서비스가 실행 중이 아닙니다')
 
-        operation = self._repository.begin_motor_operation(
+        operation = self._repository.runtime.begin_motor_operation(
             'motor_restart',
             'restart_requested',
             timeout_sec=45.0,
@@ -79,7 +79,7 @@ class MotorRestartCoordinator:
         try:
             self._schedule(operation['operation_id'], identity_before)
         except (OSError, RuntimeError, ValueError) as exc:
-            self._repository.finish_motor_operation(
+            self._repository.runtime.finish_motor_operation(
                 operation['operation_id'],
                 'failure',
                 phase='failed',
@@ -128,7 +128,7 @@ class MotorRestartCoordinator:
         )
         operation_id = str(operation.get('operation_id') or '')
         if readiness.get('failed') is True:
-            return self._repository.finish_motor_operation(
+            return self._repository.runtime.finish_motor_operation(
                 operation_id,
                 'failure',
                 phase='failed',
@@ -138,7 +138,7 @@ class MotorRestartCoordinator:
                 ),
             )
         if readiness.get('ready') is True:
-            return self._repository.finish_motor_operation(
+            return self._repository.runtime.finish_motor_operation(
                 operation_id,
                 'success',
                 phase='completed',
@@ -167,7 +167,7 @@ class MotorRestartCoordinator:
         try:
             # Allow the HTTP response containing operation_id to leave first.
             self._sleep(0.5)
-            self._repository.update_motor_operation(
+            self._repository.runtime.update_motor_operation(
                 operation_id,
                 'restarting',
                 message='Motor Manager 서비스를 재시작하는 중입니다',
@@ -175,7 +175,7 @@ class MotorRestartCoordinator:
             self._restart_service(self.SERVICE)
             identity_after = self._service_identity(self.SERVICE)
             self._validate_new_generation(identity_before, identity_after)
-            self._repository.update_motor_operation(
+            self._repository.runtime.update_motor_operation(
                 operation_id,
                 'verifying',
                 message='새 Motor Manager 실행과 모터 상태를 확인하는 중입니다',
@@ -228,14 +228,14 @@ class MotorRestartCoordinator:
         operation_id: str,
         error: str,
     ) -> None:
-        current = self._repository.motor_operation_status()
+        current = self._repository.runtime.motor_operation_status()
         if (
             str(current.get('operation_id') or '') != operation_id
             or str(current.get('status') or '') != 'running'
         ):
             return
         try:
-            self._repository.finish_motor_operation(
+            self._repository.runtime.finish_motor_operation(
                 operation_id,
                 'failure',
                 phase='failed',

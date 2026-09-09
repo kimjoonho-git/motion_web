@@ -377,9 +377,9 @@ class MotorConfigService:
                 **self.bridge.snapshot(),
             }
         operation: Dict[str, Any] = {}
-        previous_runtime = self.repository.motor_runtime_target_snapshot()
+        previous_runtime = self.repository.runtime.motor_runtime_target_snapshot()
         try:
-            operation = self.repository.begin_motor_operation(
+            operation = self.repository.runtime.begin_motor_operation(
                 'motor_apply',
                 'preparing',
                 timeout_sec=45.0,
@@ -389,7 +389,7 @@ class MotorConfigService:
                 },
             )
             prepared = self.repository.prepare_runtime_motor_config(project_id)
-            runtime_file = self.repository.mark_runtime_motor_config_applied(
+            runtime_file = self.repository.runtime.mark_runtime_motor_config_applied(
                 project_id
             )
             expected_axes = motion_file_analysis.configured_axes_from_runtime_file(
@@ -397,7 +397,7 @@ class MotorConfigService:
             )
             if not expected_axes:
                 raise ValueError('적용할 모터 실행 설정에서 대상 축을 확인할 수 없습니다')
-            self.repository.update_motor_operation(
+            self.repository.runtime.update_motor_operation(
                 str(operation['operation_id']),
                 'prepared',
                 details={
@@ -438,7 +438,7 @@ class MotorConfigService:
                     stderr=subprocess.DEVNULL,
                 )
                 restart_mode = 'legacy_script'
-            self.repository.update_motor_operation(
+            self.repository.runtime.update_motor_operation(
                 str(operation['operation_id']),
                 'restart_requested',
                 message='새 모터 설정으로 서비스 재시작 요청 완료',
@@ -448,7 +448,7 @@ class MotorConfigService:
             operation_id = str(operation.get('operation_id') or '')
             if operation_id:
                 try:
-                    self.repository.finish_motor_operation(
+                    self.repository.runtime.finish_motor_operation(
                         operation_id,
                         'failure',
                         phase='failed',
@@ -456,7 +456,7 @@ class MotorConfigService:
                     )
                 except ValueError:
                     pass
-            self.repository.restore_motor_runtime_target(previous_runtime)
+            self.repository.runtime.restore_motor_runtime_target(previous_runtime)
             return {
                 'success': False,
                 'message': f'프로젝트 설정을 적용할 수 없습니다: {exc}',
@@ -474,11 +474,11 @@ class MotorConfigService:
             'runtime_config': {
                 **prepared,
                 'session_file': str(runtime_file),
-                'session_id': self.repository.motor_runtime_state().get(
+                'session_id': self.repository.runtime.motor_runtime_state().get(
                     'session_id', ''
                 ),
             },
-            'motor_operation': self.repository.motor_operation_status(),
+            'motor_operation': self.repository.runtime.motor_operation_status(),
             **self.bridge.snapshot(),
         }
 
@@ -574,7 +574,7 @@ class MotorConfigService:
                 ),
                 **self.bridge.snapshot(),
             }
-        runtime_config = self.repository.selected_runtime_motor_config()
+        runtime_config = self.repository.runtime.selected_runtime_motor_config()
         if runtime_config is None:
             self.clear_stopping_release_state()
             return {
@@ -617,7 +617,7 @@ class MotorConfigService:
             )
             if operation_id:
                 try:
-                    self.repository.finish_motor_operation(
+                    self.repository.runtime.finish_motor_operation(
                         operation_id,
                         'failure',
                         phase='failed',
@@ -639,7 +639,7 @@ class MotorConfigService:
                 'AC Servo가 OFF됐다가 자동 ON될 수 있습니다'
             ),
             'restart_mode': 'motor_service',
-            'motor_operation': self.repository.motor_operation_status(),
+            'motor_operation': self.repository.runtime.motor_operation_status(),
             **self.bridge.snapshot(),
         }
 
@@ -657,7 +657,7 @@ class MotorConfigService:
                 ),
                 **self.bridge.snapshot(),
             }
-        runtime_state = self.repository.motor_runtime_state()
+        runtime_state = self.repository.runtime.motor_runtime_state()
         runtime_project_id = str(runtime_state.get('target_project_id') or '').strip()
         if not runtime_project_id:
             return {
@@ -711,7 +711,7 @@ class MotorConfigService:
         operation: Dict[str, Any] = {}
         cleared: Dict[str, Any] = {}
         try:
-            operation = self.repository.begin_motor_operation(
+            operation = self.repository.runtime.begin_motor_operation(
                 'motor_runtime_clear',
                 'preparing',
                 timeout_sec=30.0,
@@ -726,7 +726,7 @@ class MotorConfigService:
             except Exception:
                 pass
             if self.runtime.managed_service_active(motor_service):
-                self.repository.update_motor_operation(
+                self.repository.runtime.update_motor_operation(
                     str(operation['operation_id']),
                     'stopping_runtime',
                     message='Motor Manager 정지 및 EtherCAT 소유권 해제 중',
@@ -736,13 +736,13 @@ class MotorConfigService:
                     motor_config_rules.wait_for_ethercat_release(8.0)
                 except Exception:
                     pass
-            cleared = self.repository.clear_motor_runtime_target()
+            cleared = self.repository.runtime.clear_motor_runtime_target()
             motor_config_rules.clear_motor_config_selection(self.repository)
             self.clear_stopping_release_state()
             # Drop launch-time ownership so delete / runtime_project_id update
             # without waiting for a Bridge restart.
             self.applied = Path()
-            self.repository.finish_motor_operation(
+            self.repository.runtime.finish_motor_operation(
                 str(operation['operation_id']),
                 'success',
                 phase='completed',
@@ -756,7 +756,7 @@ class MotorConfigService:
             operation_id = str(operation.get('operation_id') or '')
             if operation_id:
                 try:
-                    self.repository.finish_motor_operation(
+                    self.repository.runtime.finish_motor_operation(
                         operation_id,
                         'failure',
                         phase='failed',
@@ -781,7 +781,7 @@ class MotorConfigService:
                 '다시 사용하려면 프로젝트에서 「설정 적용 및 재시작」을 실행하세요'
             ),
             'runtime_project_id': '',
-            'motor_operation': self.repository.motor_operation_status(),
+            'motor_operation': self.repository.runtime.motor_operation_status(),
             **self.project.list_projects(),
             **self.bridge.snapshot(),
         }
