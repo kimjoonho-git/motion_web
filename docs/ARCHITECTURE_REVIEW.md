@@ -1796,7 +1796,30 @@ motor_service_restored True
 - 실물 검증 · **부분 완료** · 아래
 
 Dynamixel 장치가 없어 응답 경로는 **검증 불가**다. 다만 전체 스캔이 매번 타는
-**실패 경로는 실물로 확인 가능**하다 · 아래 별도 기록.
+**실패 경로는 실물로 확인 가능**하다.
+
+**전체 모터 검색 1회** · `scan_id 1788931552423-1`
+
+```
+판정            부분 완료 · complete false · success false
+EtherCAT       rescan true · direct true · alias 103
+               vendor 1647 · product 1614282756 · serial 402982152
+               direct_read_complete true
+Dynamixel      available false · direct true · mode direct_ping
+               protocol 2.0 · devices_count 0 · targets 0
+               scan_rule  auto serial port, baudrate 1000000,
+                          broadcast ping plus ID 0-252
+               error      직렬 포트를 찾지 못했습니다
+                          /dev/serial/by-id, /dev/ttyUSB*, /dev/ttyACM*
+scan_contract  version 3 · dynamixel_protocol 2.0 · baudrate 1000000
+               id 0~252 · full_success_requires_all_requested_transports true
+```
+
+**확인된 것** · 포트가 없을 때 이전 값을 되쓰지 않고 실패로 남긴다 · 한 장치
+종류만 성공하면 전체가 `부분 완료`다 · 검색 규약 값이 그대로다.
+
+**여전히 미검증** · 실제 Ping 응답 해석 · CRC 검사 · 상태 패킷 분해 ·
+**Dynamixel 실물 연결 시 재확인 필요** · §6-16의 40초 시한 확인도 함께 밀려 있다.
 
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
