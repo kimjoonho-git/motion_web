@@ -170,7 +170,7 @@ class PickupPolicy:
             0.0,
             float(
                 getattr(
-                    self,
+                    self.node,
                     'pickup_feedback_consistency_deg',
                     PICKUP_FEEDBACK_CONSISTENCY_DEG,
                 )

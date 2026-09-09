@@ -8,6 +8,7 @@ import pytest
 from midi_control.bank_manager import MIDI_CHANNEL_COUNT, MidiBankManager
 from midi_control.fader_state import FaderStateMachine
 from midi_control.pickup_policy import PickupPolicy
+from midi_control import midi_control_node as midi_node_module
 from midi_control.midi_control_node import (
     MIDI_VALUE_MAX,
     MidiControlNode,
@@ -99,7 +100,7 @@ def test_motion_value_topic_cache_accepts_only_current_project_generation():
     assert node._source_motion_values == {'2-1': 4.25}
 
 
-def test_rec_mode_sends_source_motion_text_and_off_mode_keeps_14bit_text():
+def test_rec_mode_sends_source_motion_text_and_off_mode_keeps_14bit_text(monkeypatch):
     node = MidiControlNode.__new__(MidiControlNode)
     node._pickup = PickupPolicy(node)
     node._faders = FaderStateMachine(node)
@@ -123,7 +124,9 @@ def test_rec_mode_sends_source_motion_text_and_off_mode_keeps_14bit_text():
         'observed_raw_value': 8192,
         'final_output_value': 12345.0,
     }
-    node._snapshot = lambda: {'channels': [dict(channel)]}
+    monkeypatch.setattr(
+        midi_node_module, 'build_snapshot', lambda _node: {'channels': [dict(channel)]}
+    )
 
     node._publish_state()
     fields = node._feedback_publisher.messages[-1].data.split('\t')
@@ -135,7 +138,9 @@ def test_rec_mode_sends_source_motion_text_and_off_mode_keeps_14bit_text():
 
     channel['display_motion_value'] = False
     channel['display_raw_value'] = 0
-    node._snapshot = lambda: {'channels': [dict(channel)]}
+    monkeypatch.setattr(
+        midi_node_module, 'build_snapshot', lambda _node: {'channels': [dict(channel)]}
+    )
     node._publish_state()
     fields = node._feedback_publisher.messages[-1].data.split('\t')
     assert fields[2] == '0'
@@ -340,7 +345,7 @@ def test_non_filter_bank_change_requires_select_reset():
     )
 
 
-def test_repeated_same_project_context_does_not_release_select(tmp_path):
+def test_repeated_same_project_context_does_not_release_select(tmp_path, monkeypatch):
     project_id = 'project-1'
     mapping_name = 'mapping.yaml'
     project_dir = tmp_path / project_id
@@ -372,11 +377,11 @@ def test_repeated_same_project_context_does_not_release_select(tmp_path):
     node._control_enabled = [True] + [False] * (MIDI_CHANNEL_COUNT - 1)
     reset_calls = []
     node._reset_bank_change_state_locked = lambda: reset_calls.append(True)
-    node._snapshot = lambda: {
+    monkeypatch.setattr(midi_node_module, 'build_snapshot', lambda _node: {
         'success': True,
         'project_id': node._project_id,
         'motion_mapping_file_id': node._selected_mapping_file_id,
-    }
+    })
     node._response_publisher = CapturePublisher()
 
     node._request_callback(SimpleNamespace(data=json.dumps({
