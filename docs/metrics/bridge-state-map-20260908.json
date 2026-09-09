@@ -4,7 +4,6 @@
  "init_fields": [
   "_action_request_publisher",
   "_action_result_subscription",
-  "_action_store",
   "_bridge_instance_id",
   "_bridge_started_at",
   "_coordination_poll_lock",
@@ -15,8 +14,8 @@
   "_execution_context",
   "_jog_request_publisher",
   "_jog_result_subscription",
-  "_jog_store",
   "_lock",
+  "_manual",
   "_midi_monitor_lock",
   "_midi_monitor_request_publisher",
   "_midi_monitor_response_subscription",
@@ -135,6 +134,7 @@
   "_execution_context",
   "_jog_request_publisher",
   "_jog_result_subscription",
+  "_manual",
   "_midi_monitor_request_publisher",
   "_midi_monitor_response_subscription",
   "_midi_monitor_state_subscription",
@@ -205,10 +205,8 @@
   "workspace_root"
  ],
  "mutable_fields": [
-  "_action_store",
   "_coordination_poll_received_monotonic",
   "_coordination_watchdog_stop_execution_id",
-  "_jog_store",
   "_midi_monitor_status",
   "_midi_monitor_store",
   "_monitoring_motion_mapping_context_id",
@@ -229,11 +227,10 @@
  ],
  "methods": {
   "__init__": {
-   "lines": 389,
+   "lines": 395,
    "state": [
     "_action_request_publisher",
     "_action_result_subscription",
-    "_action_store",
     "_automation_triggered_context_id",
     "_bridge_instance_id",
     "_bridge_started_at",
@@ -244,7 +241,7 @@
     "_execution_context",
     "_jog_request_publisher",
     "_jog_result_subscription",
-    "_jog_store",
+    "_manual",
     "_midi_monitor_request_publisher",
     "_midi_monitor_response_subscription",
     "_midi_monitor_state_subscription",
@@ -345,12 +342,10 @@
     "_safety_status_lock"
    ],
    "calls": [
-    "_action_result_callback",
     "_bind_selected_project_sources",
     "_build_web_access_info",
     "_coordination_watchdog_callback",
     "_current_project_generation",
-    "_jog_result_callback",
     "_midi_monitor_response_callback",
     "_midi_monitor_state_callback",
     "_motion_mapping_response_callback",
@@ -403,36 +398,6 @@
    ],
    "calls": [
     "_current_project_generation"
-   ],
-   "opaque": false
-  },
-  "_jog_result_callback": {
-   "lines": 14,
-   "state": [
-    "_jog_store",
-    "_project_generation",
-    "jog_result_topic"
-   ],
-   "locks": [
-    "_project_generation_lock"
-   ],
-   "calls": [
-    "_request_matches_current_generation"
-   ],
-   "opaque": false
-  },
-  "_action_result_callback": {
-   "lines": 14,
-   "state": [
-    "_action_store",
-    "_project_generation",
-    "action_result_topic"
-   ],
-   "locks": [
-    "_project_generation_lock"
-   ],
-   "calls": [
-    "_request_matches_current_generation"
    ],
    "opaque": false
   },
@@ -574,24 +539,6 @@
    "calls": [
     "_motion_studio_transport"
    ],
-   "opaque": false
-  },
-  "_wait_for_jog_result": {
-   "lines": 6,
-   "state": [
-    "_jog_store"
-   ],
-   "locks": [],
-   "calls": [],
-   "opaque": false
-  },
-  "_wait_for_action_result": {
-   "lines": 6,
-   "state": [
-    "_action_store"
-   ],
-   "locks": [],
-   "calls": [],
    "opaque": false
   },
   "_wait_for_motion_mapping_result": {
@@ -860,9 +807,8 @@
    "lines": 50,
    "state": [
     "_action_request_publisher",
-    "_action_store",
     "_execution_context",
-    "_jog_store",
+    "_manual",
     "_project_generation",
     "_safety_request_publisher",
     "_supervisor_project_generation",
@@ -874,7 +820,6 @@
    "calls": [
     "_current_project_generation",
     "_new_project_request_id",
-    "_wait_for_action_result",
     "publish_servo_alarm_policy"
    ],
    "opaque": false
@@ -1118,19 +1063,6 @@
    ],
    "opaque": false
   },
-  "_request_matches_current_generation": {
-   "lines": 4,
-   "state": [
-    "_project_generation"
-   ],
-   "locks": [
-    "_project_generation_lock"
-   ],
-   "calls": [
-    "_current_project_generation"
-   ],
-   "opaque": false
-  },
   "_response_matches_current_generation": {
    "lines": 2,
    "state": [
@@ -1159,11 +1091,10 @@
    "opaque": false
   },
   "_clear_project_scoped_memory": {
-   "lines": 20,
+   "lines": 19,
    "state": [
-    "_action_store",
     "_execution_context",
-    "_jog_store",
+    "_manual",
     "_midi_monitor_status",
     "_midi_monitor_store",
     "_motion_mapping_store",
@@ -1244,7 +1175,7 @@
    "lines": 14,
    "state": [
     "_execution_context",
-    "_jog_store",
+    "_manual",
     "_motion_run_status",
     "_motor_config",
     "_project_generation",
@@ -1350,7 +1281,7 @@
    "lines": 38,
    "state": [
     "_execution_context",
-    "_jog_store",
+    "_manual",
     "_motion_run_status",
     "_motor_config",
     "_project_generation",
@@ -1400,7 +1331,7 @@
   "save_servo_alarm_policy": {
    "lines": 29,
    "state": [
-    "_jog_store",
+    "_manual",
     "_motion_run_status",
     "_project_generation",
     "_safety_request_publisher",
@@ -1422,7 +1353,7 @@
   "publish_servo_alarm_policy": {
    "lines": 29,
    "state": [
-    "_jog_store",
+    "_manual",
     "_project_generation",
     "_safety_request_publisher",
     "project_repository"
@@ -1433,7 +1364,6 @@
    "calls": [
     "_current_project_generation",
     "_new_project_request_id",
-    "_wait_for_jog_result",
     "servo_alarm_policy"
    ],
    "opaque": false
@@ -2330,232 +2260,6 @@
    ],
    "opaque": false
   },
-  "request_ac_servo_jog": {
-   "lines": 82,
-   "state": [
-    "_bridge_instance_id",
-    "_bridge_started_at",
-    "_coordination_web_bridge",
-    "_execution_context",
-    "_jog_request_publisher",
-    "_jog_store",
-    "_midi_monitor_status",
-    "_monitoring_motion_mapping_context_id",
-    "_monitoring_motion_mapping_rows",
-    "_motion_run_status",
-    "_motion_state",
-    "_motion_state_received_at",
-    "_motion_studio_session",
-    "_motion_value_state",
-    "_motor_config",
-    "_project_generation",
-    "_safety_status",
-    "_web_access",
-    "max_jog_delta_deg",
-    "motion_projects_dir",
-    "motion_state_topic",
-    "project_repository",
-    "workspace_root"
-   ],
-   "locks": [
-    "_lock",
-    "_midi_monitor_lock",
-    "_monitoring_motion_mapping_lock",
-    "_motion_run_lock",
-    "_motion_value_lock",
-    "_project_generation_lock",
-    "_safety_status_lock"
-   ],
-   "calls": [
-    "_current_project_generation",
-    "_motion_state_motor",
-    "_new_project_request_id",
-    "_wait_for_jog_result",
-    "snapshot"
-   ],
-   "opaque": false
-  },
-  "request_dynamixel_jog": {
-   "lines": 76,
-   "state": [
-    "_bridge_instance_id",
-    "_bridge_started_at",
-    "_coordination_web_bridge",
-    "_execution_context",
-    "_jog_request_publisher",
-    "_jog_store",
-    "_midi_monitor_status",
-    "_monitoring_motion_mapping_context_id",
-    "_monitoring_motion_mapping_rows",
-    "_motion_run_status",
-    "_motion_state",
-    "_motion_state_received_at",
-    "_motion_studio_session",
-    "_motion_value_state",
-    "_motor_config",
-    "_project_generation",
-    "_safety_status",
-    "_web_access",
-    "max_jog_delta_deg",
-    "motion_projects_dir",
-    "motion_state_topic",
-    "project_repository",
-    "workspace_root"
-   ],
-   "locks": [
-    "_lock",
-    "_midi_monitor_lock",
-    "_monitoring_motion_mapping_lock",
-    "_motion_run_lock",
-    "_motion_value_lock",
-    "_project_generation_lock",
-    "_safety_status_lock"
-   ],
-   "calls": [
-    "_current_project_generation",
-    "_motion_state_motor",
-    "_new_project_request_id",
-    "_wait_for_jog_result",
-    "snapshot"
-   ],
-   "opaque": false
-  },
-  "request_ac_servo_action": {
-   "lines": 95,
-   "state": [
-    "_action_request_publisher",
-    "_action_store",
-    "_bridge_instance_id",
-    "_bridge_started_at",
-    "_coordination_web_bridge",
-    "_execution_context",
-    "_midi_monitor_status",
-    "_monitoring_motion_mapping_context_id",
-    "_monitoring_motion_mapping_rows",
-    "_motion_run_status",
-    "_motion_state",
-    "_motion_state_received_at",
-    "_motion_studio_session",
-    "_motion_value_state",
-    "_motor_config",
-    "_project_generation",
-    "_safety_status",
-    "_web_access",
-    "max_jog_delta_deg",
-    "motion_projects_dir",
-    "motion_state_topic",
-    "project_repository",
-    "workspace_root"
-   ],
-   "locks": [
-    "_lock",
-    "_midi_monitor_lock",
-    "_monitoring_motion_mapping_lock",
-    "_motion_run_lock",
-    "_motion_value_lock",
-    "_project_generation_lock",
-    "_safety_status_lock"
-   ],
-   "calls": [
-    "_current_project_generation",
-    "_motion_state_motor",
-    "_new_project_request_id",
-    "_wait_for_action_result",
-    "snapshot"
-   ],
-   "opaque": false
-  },
-  "request_dynamixel_action": {
-   "lines": 89,
-   "state": [
-    "_action_request_publisher",
-    "_action_store",
-    "_bridge_instance_id",
-    "_bridge_started_at",
-    "_coordination_web_bridge",
-    "_execution_context",
-    "_midi_monitor_status",
-    "_monitoring_motion_mapping_context_id",
-    "_monitoring_motion_mapping_rows",
-    "_motion_run_status",
-    "_motion_state",
-    "_motion_state_received_at",
-    "_motion_studio_session",
-    "_motion_value_state",
-    "_motor_config",
-    "_project_generation",
-    "_safety_status",
-    "_web_access",
-    "max_jog_delta_deg",
-    "motion_projects_dir",
-    "motion_state_topic",
-    "project_repository",
-    "workspace_root"
-   ],
-   "locks": [
-    "_lock",
-    "_midi_monitor_lock",
-    "_monitoring_motion_mapping_lock",
-    "_motion_run_lock",
-    "_motion_value_lock",
-    "_project_generation_lock",
-    "_safety_status_lock"
-   ],
-   "calls": [
-    "_current_project_generation",
-    "_motion_state_motor",
-    "_new_project_request_id",
-    "_wait_for_action_result",
-    "snapshot"
-   ],
-   "opaque": false
-  },
-  "request_ac_servo_control": {
-   "lines": 100,
-   "state": [
-    "_bridge_instance_id",
-    "_bridge_started_at",
-    "_coordination_web_bridge",
-    "_execution_context",
-    "_jog_request_publisher",
-    "_jog_store",
-    "_midi_monitor_status",
-    "_monitoring_motion_mapping_context_id",
-    "_monitoring_motion_mapping_rows",
-    "_motion_run_status",
-    "_motion_state",
-    "_motion_state_received_at",
-    "_motion_studio_session",
-    "_motion_value_state",
-    "_motor_config",
-    "_project_generation",
-    "_safety_status",
-    "_web_access",
-    "max_jog_delta_deg",
-    "motion_projects_dir",
-    "motion_state_topic",
-    "project_repository",
-    "workspace_root"
-   ],
-   "locks": [
-    "_lock",
-    "_midi_monitor_lock",
-    "_monitoring_motion_mapping_lock",
-    "_motion_run_lock",
-    "_motion_value_lock",
-    "_project_generation_lock",
-    "_safety_status_lock"
-   ],
-   "calls": [
-    "_current_project_generation",
-    "_motion_state_motor",
-    "_motion_state_motors",
-    "_new_project_request_id",
-    "_wait_for_jog_result",
-    "snapshot"
-   ],
-   "opaque": false
-  },
   "request_safety_stop": {
    "lines": 17,
    "state": [
@@ -2563,7 +2267,7 @@
     "_bridge_started_at",
     "_coordination_web_bridge",
     "_execution_context",
-    "_jog_store",
+    "_manual",
     "_midi_monitor_status",
     "_monitoring_motion_mapping_context_id",
     "_monitoring_motion_mapping_rows",
@@ -2593,7 +2297,6 @@
     "_safety_status_lock"
    ],
    "calls": [
-    "_wait_for_jog_result",
     "publish_safety_stop",
     "snapshot"
    ],
@@ -2612,30 +2315,6 @@
     "_current_project_generation",
     "_new_project_request_id"
    ],
-   "opaque": false
-  },
-  "_motion_state_motor": {
-   "lines": 5,
-   "state": [
-    "_motion_state"
-   ],
-   "locks": [
-    "_lock"
-   ],
-   "calls": [
-    "_motion_state_motors"
-   ],
-   "opaque": false
-  },
-  "_motion_state_motors": {
-   "lines": 9,
-   "state": [
-    "_motion_state"
-   ],
-   "locks": [
-    "_lock"
-   ],
-   "calls": [],
    "opaque": false
   }
  }

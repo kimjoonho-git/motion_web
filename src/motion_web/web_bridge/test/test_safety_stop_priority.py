@@ -1,7 +1,37 @@
 import asyncio
 import json
 import threading
+from motion_web_bridge.manual_motor_commands import ManualMotorCommandService
 from motion_web_bridge.bridge_node import MotionWebBridge, _safety_first_stop, create_app
+
+
+def _manual_of(bridge, **overrides):
+    """노드 스텁에 수동 명령 서비스를 붙인다 · §6-21로 노드에서 떨어져 나왔다."""
+    service = getattr(bridge, '_manual', None)
+    if service is None:
+        service = ManualMotorCommandService(
+            bridge,
+            repository=getattr(bridge, 'project_repository', None),
+            jog_publisher=getattr(bridge, '_jog_request_publisher', None),
+            action_publisher=getattr(bridge, '_action_request_publisher', None),
+            jog_result_topic=getattr(bridge, 'jog_result_topic', '/jog_result'),
+            action_result_topic=getattr(bridge, 'action_result_topic', '/action_result'),
+        )
+        bridge._manual = service
+    repository = getattr(bridge, 'project_repository', None)
+    if repository is not None:
+        service.repository = repository
+    #: 스텁은 발행자를 나중에 꽂기도 한다 · 매번 최신 값을 따라간다
+    for attr, field in (
+        ('_jog_request_publisher', '_jog_request_publisher'),
+        ('_action_request_publisher', '_action_request_publisher'),
+    ):
+        publisher = getattr(bridge, attr, None)
+        if publisher is not None:
+            setattr(service, field, publisher)
+    for name, value in overrides.items():
+        setattr(service, name, value)
+    return service
 
 
 class SafetyBridge:
@@ -63,7 +93,7 @@ def test_bridge_publishes_safety_stop_on_dedicated_topic():
             published.append(json.loads(message.data))
 
     bridge._safety_request_publisher = Publisher()
-    bridge._wait_for_jog_result = lambda request_id, timeout_sec: {
+    _manual_of(bridge).wait_for_jog_result = lambda request_id, timeout_sec: {
         'success': True,
         'message': 'stopped',
         'request_id': request_id,

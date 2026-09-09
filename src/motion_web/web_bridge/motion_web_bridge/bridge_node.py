@@ -1,7 +1,6 @@
 import copy
 from functools import partial
 import json
-import math
 import os
 import socket
 import subprocess
@@ -35,6 +34,7 @@ from .motor_restart_diagnostics import diagnose_motor_restart_failure
 from .motion_studio_bridge import MotionStudioRosBridge
 from .motion_studio_session import MotionStudioSession
 from .execution_context_service import ExecutionContextService
+from .manual_motor_commands import ManualMotorCommandService
 from .motor_config_service import MotorConfigService
 from .motor_event_log import MotorEventLog
 from .scan_orchestrator import ScanOrchestrator
@@ -264,8 +264,6 @@ class MotionWebBridge(Node):
             'stamps': {},
         }
         # 요청·응답 저장소 · motion_common.rpc.ResultStore 단일 구현
-        self._jog_store = rpc.ResultStore()
-        self._action_store = rpc.ResultStore()
         self._motion_mapping_store = rpc.ResultStore()
         self._motion_run_store = rpc.ResultStore()
         self._motion_run_lock = threading.Lock()
@@ -340,6 +338,14 @@ class MotionWebBridge(Node):
             String, self.safety_request_topic, 10
         )
         self._action_request_publisher = self.create_publisher(String, self.action_request_topic, 10)
+        self._manual = ManualMotorCommandService(
+            self,
+            repository=self.project_repository,
+            jog_publisher=self._jog_request_publisher,
+            action_publisher=self._action_request_publisher,
+            jog_result_topic=self.jog_result_topic,
+            action_result_topic=self.action_result_topic,
+        )
         self._motion_mapping_request_publisher = self.create_publisher(
             String,
             self.motion_mapping_request_topic,
@@ -364,13 +370,13 @@ class MotionWebBridge(Node):
         self._jog_result_subscription = self.create_subscription(
             String,
             self.jog_result_topic,
-            self._jog_result_callback,
+            lambda msg: self._manual.jog_result_callback(msg),
             10,
         )
         self._action_result_subscription = self.create_subscription(
             String,
             self.action_result_topic,
-            self._action_result_callback,
+            lambda msg: self._manual.action_result_callback(msg),
             10,
         )
         self._motion_mapping_response_subscription = self.create_subscription(
@@ -534,36 +540,6 @@ class MotionWebBridge(Node):
                 sources[motion_id] = source
                 stamps[motion_id] = stamp
 
-    def _jog_result_callback(self, msg: String) -> None:
-        try:
-            payload = json.loads(msg.data)
-        except json.JSONDecodeError:
-            self.get_logger().warn(f'Invalid {self.jog_result_topic} JSON received.')
-            return
-        if not isinstance(payload, dict):
-            return
-
-        request_id = str(payload.get('request_id') or '')
-        if not request_id or not self._request_matches_current_generation(request_id):
-            return
-
-        self._jog_store.store(request_id, payload)
-
-    def _action_result_callback(self, msg: String) -> None:
-        try:
-            payload = json.loads(msg.data)
-        except json.JSONDecodeError:
-            self.get_logger().warn(f'Invalid {self.action_result_topic} JSON received.')
-            return
-        if not isinstance(payload, dict):
-            return
-
-        request_id = str(payload.get('request_id') or '')
-        if not request_id or not self._request_matches_current_generation(request_id):
-            return
-
-        self._action_store.store(request_id, payload)
-
     def _motion_mapping_response_callback(self, msg: String) -> None:
         try:
             payload = json.loads(msg.data)
@@ -666,20 +642,6 @@ class MotionWebBridge(Node):
 
     def _motion_studio_editor_response_callback(self, msg: String) -> None:
         self._motion_studio_transport().editor_response_callback(msg)
-
-    def _wait_for_jog_result(
-        self,
-        request_id: str,
-        timeout_sec: float = 1.0,
-    ) -> Optional[Dict[str, Any]]:
-        return self._jog_store.wait(request_id, timeout_sec)
-
-    def _wait_for_action_result(
-        self,
-        request_id: str,
-        timeout_sec: float = 1.0,
-    ) -> Optional[Dict[str, Any]]:
-        return self._action_store.wait(request_id, timeout_sec)
 
     def _wait_for_motion_mapping_result(
         self,
@@ -1320,7 +1282,7 @@ class MotionWebBridge(Node):
         publisher = getattr(self, '_action_request_publisher', None)
         if publisher is not None:
             publisher.publish(boundary)
-            acknowledged = self._wait_for_action_result(boundary_id, timeout_sec=1.0)
+            acknowledged = self._manual.wait_for_action_result(boundary_id, timeout_sec=1.0)
             if not isinstance(acknowledged, dict) or acknowledged.get('success') is not True:
                 raise ValueError(
                     '최종 모터 명령 노드가 프로젝트 세대 전환을 확인하지 않았습니다'
@@ -1750,11 +1712,6 @@ class MotionWebBridge(Node):
     def _new_project_request_id(self, prefix: str) -> str:
         return generation.new_request_id(prefix, self._current_project_generation())
 
-    def _request_matches_current_generation(self, request_id: Any) -> bool:
-        return generation.request_id_matches(
-            request_id, self._current_project_generation()
-        )
-
     def _response_matches_current_generation(self, payload: Any) -> bool:
         return generation.response_matches(payload, self._current_project_generation())
 
@@ -1794,8 +1751,7 @@ class MotionWebBridge(Node):
             self._motion_state = None
             self._motion_state_received_at = None
         self._motor_event_log.clear_project_memory()
-        self._jog_store.clear()
-        self._action_store.clear()
+        self._manual.clear_pending()
         self._motion_mapping_store.clear()
         self._motion_run_store.clear()
         self._midi_monitor_store.clear()
@@ -2082,7 +2038,7 @@ class MotionWebBridge(Node):
         publisher.publish(
             String(data=json.dumps(payload, ensure_ascii=False, separators=(',', ':')))
         )
-        result = self._wait_for_jog_result(request_id, timeout_sec=1.0)
+        result = self._manual.wait_for_jog_result(request_id, timeout_sec=1.0)
         if not isinstance(result, dict):
             return {'success': False, 'message': 'Supervisor 정책 적용 응답이 없습니다'}
         return {
@@ -2807,456 +2763,9 @@ class MotionWebBridge(Node):
 
 
 
-    def request_ac_servo_jog(self, axis: Any, relative_deg: Any) -> Dict[str, Any]:
-        axis_value = values.optional_int(axis, None)
-        relative_value = values.optional_float(relative_deg, None)
-        if axis_value is None:
-            return {
-                'success': False,
-                'message': 'axis is required',
-                **self.snapshot(),
-            }
-        if relative_value is None or math.isclose(relative_value, 0.0, abs_tol=1e-9):
-            return {
-                'success': False,
-                'message': 'relative_deg is required',
-                **self.snapshot(),
-            }
-
-        motor = self._motion_state_motor(axis_value)
-        if motor is None:
-            return {
-                'success': False,
-                'message': f'Axis {axis_value} not found in current motion_state',
-                **self.snapshot(),
-            }
-        if not motor_config_rules.is_ac_servo_motor(motor):
-            return {
-                'success': False,
-                'message': f'Axis {axis_value} is not AC Servo',
-                **self.snapshot(),
-            }
-        if str(motor.get('state') or '') != 'detected':
-            return {
-                'success': False,
-                'message': f'Axis {axis_value} is not detected',
-                **self.snapshot(),
-            }
-        if motor.get('servo_on') is not True:
-            return {
-                'success': False,
-                'message': f'Axis {axis_value} servo is OFF',
-                **self.snapshot(),
-            }
-        if bool(motor.get('fault', False)):
-            return {
-                'success': False,
-                'message': f'Axis {axis_value} has error',
-                **self.snapshot(),
-            }
-
-        request_id = self._new_project_request_id('jog')
-        payload = {
-            'request_id': request_id,
-            'project_generation': self._current_project_generation(),
-            'command': 'ac_servo_jog',
-            'axis': axis_value,
-            'relative_deg': relative_value,
-        }
-        self._jog_request_publisher.publish(
-            String(data=json.dumps(payload, ensure_ascii=False, separators=(',', ':')))
-        )
-
-        result = self._wait_for_jog_result(request_id)
-        if result is None:
-            return {
-                'success': False,
-                'message': (
-                    f'AC Servo jog request published, but motion_supervisor result '
-                    f'timed out: Axis {axis_value}, {relative_value:+.3f} deg'
-                ),
-                'request_id': request_id,
-                **self.snapshot(),
-            }
-
-        success = bool(result.get('success'))
-        if success:
-            self.project_repository.mark_jog_verified()
-        return {
-            'success': success,
-            'message': str(result.get('message') or 'motion_supervisor returned empty result'),
-            'request_id': request_id,
-            'supervisor_result': result,
-            **self.snapshot(),
-        }
-
-    def request_dynamixel_jog(self, axis: Any, relative_deg: Any) -> Dict[str, Any]:
-        axis_value = values.optional_int(axis, None)
-        relative_value = values.optional_float(relative_deg, None)
-        if axis_value is None:
-            return {
-                'success': False,
-                'message': 'axis is required',
-                **self.snapshot(),
-            }
-        if relative_value is None or math.isclose(relative_value, 0.0, abs_tol=1e-9):
-            return {
-                'success': False,
-                'message': 'relative_deg is required',
-                **self.snapshot(),
-            }
-
-        motor = self._motion_state_motor(axis_value)
-        if motor is None:
-            return {
-                'success': False,
-                'message': f'Axis {axis_value} not found in current motion_state',
-                **self.snapshot(),
-            }
-        if not motor_config_rules.is_dynamixel_motor(motor):
-            return {
-                'success': False,
-                'message': f'Axis {axis_value} is not Dynamixel',
-                **self.snapshot(),
-            }
-        if str(motor.get('state') or '') != 'detected':
-            return {
-                'success': False,
-                'message': f'Axis {axis_value} is not detected',
-                **self.snapshot(),
-            }
-        if bool(motor.get('fault', False)):
-            return {
-                'success': False,
-                'message': f'Axis {axis_value} has error',
-                **self.snapshot(),
-            }
-
-        request_id = self._new_project_request_id('dynamixel-jog')
-        payload = {
-            'request_id': request_id,
-            'project_generation': self._current_project_generation(),
-            'command': 'dynamixel_jog',
-            'axis': axis_value,
-            'relative_deg': relative_value,
-        }
-        self._jog_request_publisher.publish(
-            String(data=json.dumps(payload, ensure_ascii=False, separators=(',', ':')))
-        )
-
-        result = self._wait_for_jog_result(request_id)
-        if result is None:
-            return {
-                'success': False,
-                'message': (
-                    f'Dynamixel jog request published, but motion_supervisor result '
-                    f'timed out: Axis {axis_value}, {relative_value:+.3f} deg'
-                ),
-                'request_id': request_id,
-                **self.snapshot(),
-            }
-
-        success = bool(result.get('success'))
-        if success:
-            self.project_repository.mark_jog_verified()
-        return {
-            'success': success,
-            'message': str(result.get('message') or 'motion_supervisor returned empty result'),
-            'request_id': request_id,
-            'supervisor_result': result,
-            **self.snapshot(),
-        }
-
-    def request_ac_servo_action(
-        self,
-        axis: Any,
-        target_deg: Any,
-        duration_sec: Any = None,
-        range_recovery: Any = False,
-    ) -> Dict[str, Any]:
-        axis_value = values.optional_int(axis, None)
-        target_value = values.optional_float(target_deg, None)
-        duration_value = values.optional_float(duration_sec, None)
-        if axis_value is None:
-            return {
-                'success': False,
-                'message': 'axis is required',
-                **self.snapshot(),
-            }
-        if target_value is None:
-            return {
-                'success': False,
-                'message': 'target_deg is required',
-                **self.snapshot(),
-            }
-        if duration_sec not in (None, '') and (duration_value is None or duration_value <= 0):
-            return {
-                'success': False,
-                'message': 'duration_sec must be greater than 0',
-                **self.snapshot(),
-            }
-
-        motor = self._motion_state_motor(axis_value)
-        if motor is None:
-            return {
-                'success': False,
-                'message': f'Axis {axis_value} not found in current motion_state',
-                **self.snapshot(),
-            }
-        if not motor_config_rules.is_ac_servo_motor(motor):
-            return {
-                'success': False,
-                'message': f'Axis {axis_value} is not AC Servo',
-                **self.snapshot(),
-            }
-        if str(motor.get('state') or '') != 'detected':
-            return {
-                'success': False,
-                'message': f'Axis {axis_value} is not detected',
-                **self.snapshot(),
-            }
-        if motor.get('servo_on') is not True:
-            return {
-                'success': False,
-                'message': f'Axis {axis_value} servo is OFF',
-                **self.snapshot(),
-            }
-        if bool(motor.get('fault', False)):
-            return {
-                'success': False,
-                'message': f'Axis {axis_value} has error',
-                **self.snapshot(),
-            }
-
-        request_id = self._new_project_request_id('ac-servo-action')
-        payload = {
-            'request_id': request_id,
-            'project_generation': self._current_project_generation(),
-            'command': 'ac_servo_absolute_move',
-            'axis': axis_value,
-            'target_deg': target_value,
-            'range_recovery': range_recovery is True,
-        }
-        if duration_value is not None:
-            payload['duration_sec'] = duration_value
-        self._action_request_publisher.publish(
-            String(data=json.dumps(payload, ensure_ascii=False, separators=(',', ':')))
-        )
-
-        result = self._wait_for_action_result(request_id)
-        if result is None:
-            return {
-                'success': False,
-                'message': (
-                    f'AC Servo action request published, but motion_supervisor result '
-                    f'timed out: Axis {axis_value}, target {target_value:.3f} deg'
-                ),
-                'request_id': request_id,
-                **self.snapshot(),
-            }
-
-        return {
-            'success': bool(result.get('success')),
-            'message': str(result.get('message') or 'motion_supervisor returned empty result'),
-            'request_id': request_id,
-            'supervisor_result': result,
-            **self.snapshot(),
-        }
-
-    def request_dynamixel_action(
-        self,
-        axis: Any,
-        target_deg: Any,
-        duration_sec: Any = None,
-        range_recovery: Any = False,
-    ) -> Dict[str, Any]:
-        axis_value = values.optional_int(axis, None)
-        target_value = values.optional_float(target_deg, None)
-        duration_value = values.optional_float(duration_sec, None)
-        if axis_value is None:
-            return {
-                'success': False,
-                'message': 'axis is required',
-                **self.snapshot(),
-            }
-        if target_value is None:
-            return {
-                'success': False,
-                'message': 'target_deg is required',
-                **self.snapshot(),
-            }
-        if duration_sec not in (None, '') and (duration_value is None or duration_value <= 0):
-            return {
-                'success': False,
-                'message': 'duration_sec must be greater than 0',
-                **self.snapshot(),
-            }
-
-        motor = self._motion_state_motor(axis_value)
-        if motor is None:
-            return {
-                'success': False,
-                'message': f'Axis {axis_value} not found in current motion_state',
-                **self.snapshot(),
-            }
-        if not motor_config_rules.is_dynamixel_motor(motor):
-            return {
-                'success': False,
-                'message': f'Axis {axis_value} is not Dynamixel',
-                **self.snapshot(),
-            }
-        if str(motor.get('state') or '') != 'detected':
-            return {
-                'success': False,
-                'message': f'Axis {axis_value} is not detected',
-                **self.snapshot(),
-            }
-        if bool(motor.get('fault', False)):
-            return {
-                'success': False,
-                'message': f'Axis {axis_value} has error',
-                **self.snapshot(),
-            }
-
-        request_id = self._new_project_request_id('dynamixel-action')
-        payload = {
-            'request_id': request_id,
-            'project_generation': self._current_project_generation(),
-            'command': 'dynamixel_absolute_move',
-            'axis': axis_value,
-            'target_deg': target_value,
-            'range_recovery': range_recovery is True,
-        }
-        if duration_value is not None:
-            payload['duration_sec'] = duration_value
-        self._action_request_publisher.publish(
-            String(data=json.dumps(payload, ensure_ascii=False, separators=(',', ':')))
-        )
-
-        result = self._wait_for_action_result(request_id)
-        if result is None:
-            return {
-                'success': False,
-                'message': (
-                    f'Dynamixel action request published, but motion_supervisor result '
-                    f'timed out: Axis {axis_value}, target {target_value:.3f} deg'
-                ),
-                'request_id': request_id,
-                **self.snapshot(),
-            }
-
-        return {
-            'success': bool(result.get('success')),
-            'message': str(result.get('message') or 'motion_supervisor returned empty result'),
-            'request_id': request_id,
-            'supervisor_result': result,
-            **self.snapshot(),
-        }
-
-    def request_ac_servo_control(
-        self,
-        action: Any,
-        axis: Any = None,
-        scope: Any = 'selected',
-    ) -> Dict[str, Any]:
-        action_value = str(action or '').strip().lower().replace('-', '_')
-        scope_value = str(scope or 'selected').strip().lower()
-        if action_value not in ('servo_on', 'servo_off', 'fault_reset'):
-            return {
-                'success': False,
-                'message': 'action must be servo_on, servo_off, or fault_reset',
-                **self.snapshot(),
-            }
-        if scope_value not in ('selected', 'all'):
-            return {
-                'success': False,
-                'message': 'scope must be selected or all',
-                **self.snapshot(),
-            }
-
-        if scope_value == 'all':
-            axes = [
-                values.optional_int(motor.get('controller_index'), None)
-                for motor in self._motion_state_motors()
-                if motor_config_rules.is_ac_servo_motor(motor)
-                and str(motor.get('state') or '') == 'detected'
-            ]
-            axes = [item for item in axes if item is not None]
-            if not axes:
-                return {
-                    'success': False,
-                    'message': 'detected AC Servo axis not found',
-                    **self.snapshot(),
-                }
-            axis_value = None
-        else:
-            axis_value = values.optional_int(axis, None)
-            if axis_value is None:
-                return {
-                    'success': False,
-                    'message': 'axis is required',
-                    **self.snapshot(),
-                }
-            motor = self._motion_state_motor(axis_value)
-            if motor is None:
-                return {
-                    'success': False,
-                    'message': f'Axis {axis_value} not found in current motion_state',
-                    **self.snapshot(),
-                }
-            if not motor_config_rules.is_ac_servo_motor(motor):
-                return {
-                    'success': False,
-                    'message': f'Axis {axis_value} is not AC Servo',
-                    **self.snapshot(),
-                }
-            if str(motor.get('state') or '') != 'detected':
-                return {
-                    'success': False,
-                    'message': f'Axis {axis_value} is not detected',
-                    **self.snapshot(),
-                }
-            axes = [axis_value]
-
-        request_id = self._new_project_request_id('ac-servo-control')
-        payload = {
-            'request_id': request_id,
-            'project_generation': self._current_project_generation(),
-            'command': 'ac_servo_control',
-            'action': action_value,
-            'scope': scope_value,
-            'axes': axes,
-        }
-        if axis_value is not None:
-            payload['axis'] = axis_value
-
-        self._jog_request_publisher.publish(
-            String(data=json.dumps(payload, ensure_ascii=False, separators=(',', ':')))
-        )
-
-        result = self._wait_for_jog_result(request_id, timeout_sec=2.0)
-        if result is None:
-            return {
-                'success': False,
-                'message': (
-                    f'AC Servo control request published, but motion_supervisor result '
-                    f'timed out: {action_value}'
-                ),
-                'request_id': request_id,
-                **self.snapshot(),
-            }
-
-        return {
-            'success': bool(result.get('success')),
-            'message': str(result.get('message') or 'motion_supervisor returned empty result'),
-            'request_id': request_id,
-            'supervisor_result': result,
-            **self.snapshot(),
-        }
-
     def request_safety_stop(self, emergency: bool) -> Dict[str, Any]:
         request_id = self.publish_safety_stop(emergency)
-        result = self._wait_for_jog_result(request_id, timeout_sec=2.0)
+        result = self._manual.wait_for_jog_result(request_id, timeout_sec=2.0)
         if result is None:
             return {
                 'success': False,
@@ -3295,22 +2804,6 @@ class MotionWebBridge(Node):
 
 
 
-
-    def _motion_state_motor(self, axis: int) -> Optional[Dict[str, Any]]:
-        for motor in self._motion_state_motors():
-            if values.optional_int(motor.get('controller_index'), None) == axis:
-                return motor
-        return None
-
-    def _motion_state_motors(self) -> List[Dict[str, Any]]:
-        with self._lock:
-            state = self._motion_state
-        if not isinstance(state, dict):
-            return []
-        motors = state.get('motors', [])
-        if not isinstance(motors, list):
-            return []
-        return [motor for motor in motors if isinstance(motor, dict)]
 
 
 

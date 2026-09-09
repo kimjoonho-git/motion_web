@@ -12,6 +12,7 @@ from std_msgs.msg import String
 
 from motion_web_bridge.motor_config_service import MotorConfigService
 from motion_web_bridge.execution_context_service import ExecutionContextService
+from motion_web_bridge.manual_motor_commands import ManualMotorCommandService
 from motion_web_bridge.bridge_node import MotionWebBridge, create_app
 from motion_web_bridge.motion_studio_session import MotionStudioSession
 from motion_web_bridge.motor_event_log import MotorEventLog
@@ -19,6 +20,35 @@ from motion_web_bridge.scan_orchestrator import ScanOrchestrator
 from motion_web_bridge.motion_studio_sync import MotionStudioSync
 from motion_common import rpc
 from motion_web_bridge import ethercat_project_compat, motor_config_rules
+
+
+def _manual_of(bridge, **overrides):
+    """노드 스텁에 수동 명령 서비스를 붙인다 · §6-21로 노드에서 떨어져 나왔다."""
+    service = getattr(bridge, '_manual', None)
+    if service is None:
+        service = ManualMotorCommandService(
+            bridge,
+            repository=getattr(bridge, 'project_repository', None),
+            jog_publisher=getattr(bridge, '_jog_request_publisher', None),
+            action_publisher=getattr(bridge, '_action_request_publisher', None),
+            jog_result_topic=getattr(bridge, 'jog_result_topic', '/jog_result'),
+            action_result_topic=getattr(bridge, 'action_result_topic', '/action_result'),
+        )
+        bridge._manual = service
+    repository = getattr(bridge, 'project_repository', None)
+    if repository is not None:
+        service.repository = repository
+    #: 스텁은 발행자를 나중에 꽂기도 한다 · 매번 최신 값을 따라간다
+    for attr, field in (
+        ('_jog_request_publisher', '_jog_request_publisher'),
+        ('_action_request_publisher', '_action_request_publisher'),
+    ):
+        publisher = getattr(bridge, attr, None)
+        if publisher is not None:
+            setattr(service, field, publisher)
+    for name, value in overrides.items():
+        setattr(service, name, value)
+    return service
 
 
 def _execution_context_of(bridge, **overrides):
@@ -229,8 +259,8 @@ def make_bridge():
     bridge._motion_studio_editor_lock = threading.Lock()
     bridge._motion_state = {'generated_at': 1.0, 'last_motor_status_at': 1.0, 'motors': []}
     bridge._motion_state_received_at = 1.0
-    bridge._jog_store = rpc.ResultStore()
-    bridge._action_store = rpc.ResultStore()
+    _manual_of(bridge)._jog_store = rpc.ResultStore()
+    _manual_of(bridge)._action_store = rpc.ResultStore()
     bridge._motion_mapping_store = rpc.ResultStore()
     bridge._motion_run_store = rpc.ResultStore()
     bridge._motion_run_status = {}
@@ -242,7 +272,7 @@ def make_bridge():
     bridge._safety_request_publisher = type('Publisher', (), {
         'publish': lambda _self, _message: None,
     })()
-    bridge._wait_for_jog_result = lambda request_id, **_kwargs: {
+    _manual_of(bridge).wait_for_jog_result = lambda request_id, **_kwargs: {
         'success': True,
         'request_id': request_id,
     }
@@ -389,7 +419,7 @@ def test_coordinator_establishes_persisted_generation_after_program_restart():
     bridge._action_request_publisher = type('Publisher', (), {
         'publish': lambda _self, message: published.append(json.loads(message.data)),
     })()
-    bridge._wait_for_action_result = lambda request_id, **_kwargs: {
+    _manual_of(bridge).wait_for_action_result = lambda request_id, **_kwargs: {
         'success': True,
         'request_id': request_id,
         'project_generation': 1,
@@ -412,7 +442,7 @@ def test_coordinator_does_not_enable_context_without_supervisor_generation_ack()
     bridge._action_request_publisher = type('Publisher', (), {
         'publish': lambda _self, _message: None,
     })()
-    bridge._wait_for_action_result = lambda *_args, **_kwargs: None
+    _manual_of(bridge).wait_for_action_result = lambda *_args, **_kwargs: None
 
     result = _execution_context_of(bridge).reconcile()
 
@@ -424,7 +454,7 @@ def test_coordinator_does_not_enable_context_without_supervisor_generation_ack()
 def test_range_recovery_flag_is_forwarded_to_motion_supervisor():
     bridge = make_bridge()
     published = []
-    bridge._motion_state_motor = lambda _axis: {
+    _manual_of(bridge)._motion_state_motor = lambda _axis: {
         'controller_index': 0,
         'motor_type': 'ac_servo',
         'state': 'detected',
@@ -436,13 +466,13 @@ def test_range_recovery_flag_is_forwarded_to_motion_supervisor():
     bridge._action_request_publisher = type('Publisher', (), {
         'publish': lambda _self, message: published.append(json.loads(message.data)),
     })()
-    bridge._wait_for_action_result = lambda _request_id: {
+    _manual_of(bridge).wait_for_action_result = lambda _request_id: {
         'success': True,
         'message': 'started',
     }
     bridge.snapshot = lambda: {}
 
-    result = bridge.request_ac_servo_action(
+    result = _manual_of(bridge).ac_servo_action(
         0,
         -1000.0,
         range_recovery=True,
@@ -764,10 +794,10 @@ def test_project_change_deletes_previous_project_values_from_bridge_memory():
     bridge._motion_state_received_at = 1.0
     bridge._motor_event_log._active_motor_errors = {'0': 'old-error'}
     bridge._motor_event_log._last_motion_run_state = 'running'
-    bridge._jog_store = rpc.ResultStore()
-    bridge._jog_store.store('old', {'success': True})
-    bridge._action_store = rpc.ResultStore()
-    bridge._action_store.store('old', {'success': True})
+    _manual_of(bridge)._jog_store = rpc.ResultStore()
+    _manual_of(bridge)._jog_store.store('old', {'success': True})
+    _manual_of(bridge)._action_store = rpc.ResultStore()
+    _manual_of(bridge)._action_store.store('old', {'success': True})
     bridge._motion_mapping_store = rpc.ResultStore()
     bridge._motion_mapping_store.store('old', {'project_id': 'old-project'})
     bridge._motion_run_store = rpc.ResultStore()
@@ -788,8 +818,8 @@ def test_project_change_deletes_previous_project_values_from_bridge_memory():
     assert bridge._motion_state_received_at is None
     assert bridge._motor_event_log._active_motor_errors == {}
     assert bridge._motor_event_log._last_motion_run_state is None
-    assert bridge._jog_store.pending_count() == 0
-    assert bridge._action_store.pending_count() == 0
+    assert _manual_of(bridge)._jog_store.pending_count() == 0
+    assert _manual_of(bridge)._action_store.pending_count() == 0
     assert bridge._motion_mapping_store.pending_count() == 0
     assert bridge._motion_run_store.pending_count() == 0
     assert bridge._motion_run_status == {}

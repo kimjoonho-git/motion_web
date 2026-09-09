@@ -81,7 +81,7 @@ def register_motor_routes(app: FastAPI, bridge, project_call) -> None:
     async def ac_servo_jog(request: Request):
         body = await request.json()
         return await asyncio.to_thread(
-            bridge.request_ac_servo_jog,
+            bridge._manual.ac_servo_jog,
             body.get('axis'),
             body.get('relative_deg'),
         )
@@ -90,7 +90,7 @@ def register_motor_routes(app: FastAPI, bridge, project_call) -> None:
     async def dynamixel_jog(request: Request):
         body = await request.json()
         return await asyncio.to_thread(
-            bridge.request_dynamixel_jog,
+            bridge._manual.dynamixel_jog,
             body.get('axis'),
             body.get('relative_deg'),
         )
@@ -99,7 +99,7 @@ def register_motor_routes(app: FastAPI, bridge, project_call) -> None:
     async def ac_servo_action(request: Request):
         body = await request.json()
         return await asyncio.to_thread(
-            bridge.request_ac_servo_action,
+            bridge._manual.ac_servo_action,
             body.get('axis'),
             body.get('target_deg'),
             body.get('duration_sec'),
@@ -110,7 +110,7 @@ def register_motor_routes(app: FastAPI, bridge, project_call) -> None:
     async def dynamixel_action(request: Request):
         body = await request.json()
         return await asyncio.to_thread(
-            bridge.request_dynamixel_action,
+            bridge._manual.dynamixel_action,
             body.get('axis'),
             body.get('target_deg'),
             body.get('duration_sec'),
@@ -121,7 +121,7 @@ def register_motor_routes(app: FastAPI, bridge, project_call) -> None:
     async def ac_servo_control(request: Request):
         body = await request.json()
         return await asyncio.to_thread(
-            bridge.request_ac_servo_control,
+            bridge._manual.ac_servo_control,
             body.get('action'),
             body.get('axis'),
             body.get('scope', 'selected'),

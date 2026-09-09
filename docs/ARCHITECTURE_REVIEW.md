@@ -1042,6 +1042,36 @@ motion_studio_confirm True
 
 노드 4개 적용과 확인 4건이 모두 성공했다 · 엔드포인트 8종 HTTP 200
 
+### 6-21. `ManualMotorCommandService` 신설 · 다섯 번째 서비스
+
+`MotionWebBridge` 3,409 → **2,902줄** · 메서드 132 → 120 · 락 관여 2,756 → **2,273줄**
+
+§5 목록에는 없던 서비스다. 남은 코드를 훑으니 **화면에서 사람이 직접 내리는 모터
+명령**이 500줄로 가장 큰 덩어리였고, 의존이 셋뿐이라 가장 깨끗했다.
+
+#### 옮긴 것 · 12메서드 500줄
+
+`ac_servo_control` 100 · `ac_servo_action` 95 · `dynamixel_action` 89 ·
+`ac_servo_jog` 82 · `dynamixel_jog` 76 · 응답 콜백 2개 28 · 대기 2개 12 ·
+모터 상태 조회 도우미 2개 14 · 세대 대조 4
+
+서비스가 갖는 것 · 조그·동작 요청 발행자와 응답 저장소(`_jog_store` · `_action_store`).
+
+최종 모터 출력은 여전히 `motion_supervisor`가 단독으로 발행한다 · 이 서비스는
+요청을 보내고 결과를 기다릴 뿐이다 · §2의 유지 대상 구조를 건드리지 않았다.
+
+#### 노드에 남긴 세 곳
+
+`publish_servo_alarm_policy` · `request_safety_stop` · `_establish_project_generation_boundary`가
+응답 대기를 쓴다 · `self._manual.wait_for_jog_result(...)` 형태로 서비스를 부른다.
+안전 정지와 세대 경계는 노드의 책임이므로 남겼다.
+
+#### 검증
+
+- 코드 검증 · `ruff check src` 55건 유지 · 신규 0건
+- 실행 검증 · `pytest` 1,005건 통과 · 실패 0
+- 실물 검증 · 아래 별도 기록
+
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
 - 파일 1,000줄 이하 · 함수 60줄 이하 · `Node` 서브클래스 500줄 이하
