@@ -701,6 +701,35 @@ Fast DDS의 SHM 전송은 참가자마다 `/dev/shm/fastrtps_portNNNN` 하나를
 (`~/.ros/log`·journal 모두 무소득). 다만 **앞선 구조 가설과 달리 관측과
 모순되지 않는다.**
 
+#### 가설을 약화시키는 관측 · 같은 날 추가
+
+노드별로 SHM 세그먼트를 실제로 매핑하고 있는지 셌다(`/proc/PID/maps`).
+
+```
+SHM 매핑 있음   motor_manager(84) · midi_input_bridge(84)
+                midi_control_node(74) · motion_coordination(49)
+SHM 매핑 0      motion_supervisor · motion_state_monitor
+                motion_run_manager · motion_mapping_manager
+                motion_studio · motion_studio_editor
+                motion_schedule · motion_web_bridge
+```
+
+**`motion_supervisor`는 지금 SHM을 하나도 매핑하고 있지 않다.** 언어 차이도
+아니다 · `midi_control_node`도 파이썬인데 74개를 매핑한다. 같은 기동 배치에서
+갈렸다.
+
+지금 상태만 보면 이 노드는 SHM 경로를 타지 않는다 · **사건 당시에도 그랬는지는
+알 수 없다.** 가설의 전제가 현재는 성립하지 않는다는 뜻이고, 그만큼 약해진다.
+
+#### 재발하지 않고 있다
+
+| 항목 | 값 |
+| --- | --- |
+| 발생 | 1회 · 2026-09-08 15:47 |
+| 이후 `motion-control` 재시작 | **26회**(2026-09-09 하루) |
+| 재발 | **0회** |
+| `waiting_motor_runtime` 실패 로그 | **0건** |
+
 #### 판별 도구 · `scripts/check_dds_shm.sh`
 
 읽기만 한다 · 고아 세그먼트를 시각과 함께 보여준다.
@@ -722,9 +751,29 @@ Fast DDS의 SHM 전송은 참가자마다 `/dev/shm/fastrtps_portNNNN` 하나를
 | 조치 | 성격 | 판단 |
 | --- | --- | --- |
 | 기동 시 고아 세그먼트 정리 | 서비스 스크립트 | 다른 서비스가 떠 있을 때의 경합을 먼저 정리해야 한다 |
-| SHM 전송 끄기(UDP 루프백만) | Fast DDS 프로필 XML | **가설이 맞다면 근본 차단** · 성능 영향 확인 필요 · 합의 후 |
+| SHM 전송 끄기(UDP 루프백만) | Fast DDS 프로필 XML | **지금은 하지 않는다** · 아래 |
 | 수신 기아 감시 | `motion_supervisor` 코드 | 발행 N회 동안 수신 0이면 로그 · 안전 노드라 신중히 |
 | 콜백 그룹 분리 | — | **철회** · 원인이 아니다 |
+
+#### 판단 · 전송 방식은 바꾸지 않는다
+
+바꾸면 **모든 노드의 통신 경로**가 달라진다. 그 대가로 막으려는 것은 ·
+1회 발생 · 재시작 26회 동안 재발 0 · 원인 미확정 · 그 가설조차 현재 관측과
+어긋난다(`motion_supervisor` SHM 매핑 0).
+
+**잘 도는 시스템을, 확인되지 않은 원인을 위해, 전면적으로 바꾸는 거래다.**
+지금은 값이 맞지 않는다.
+
+대신 **재발했을 때 증거를 남기는 쪽**에 든다.
+
+| 준비 | 비용 | 얻는 것 |
+| --- | --- | --- |
+| `check_dds_shm.sh` 즉시 실행 | 없음 · 이미 있음 | 고아 목록과 시각 |
+| 노드별 SHM 매핑 수 기록 | 없음 · 위 명령 | 사건 당시 SHM을 탔는지 |
+| Fast DDS 경고 로그 켜기 | 환경변수 1개 | `Port … not OK` 직접 증거 |
+
+재발 시 **재시작하기 전에** 위 셋을 먼저 뜬다 · 지난번에는 재시작이 증거를
+함께 지웠다.
 
 ### 6-15. 상태 동반 이동 1차 · 모션 스튜디오 · 순환 절단
 
