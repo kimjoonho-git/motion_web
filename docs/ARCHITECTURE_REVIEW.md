@@ -145,7 +145,7 @@ motion_system(C++)  모터 단일 통로                 유지 · 스캐너만 
 
 - `bridge_node` → `ExecutionContextService` · `MotorConfigService` · `ScanOrchestrator` · `MotorEventLog` · `MotionFileService` · `ProjectService`
 - `motion_run_manager` → `PlanBuilder` · `MotionPlayer` · `GroupSession` · `StatusStore`
-- `midi_control_node` → `MidiDecoder` · `FaderStateMachine` · `PickupPolicy` · `MotionValueMapper`
+- `midi_control_node` → `MidiDecoder` · `FaderStateMachine` · `PickupPolicy` · `MotionValueMapper` — **넷 중 셋 완료**(§6-38~§6-40) · 3,354 → 2,800줄 · `MidiDecoder` 잔여
 - `monitor_node` → `DynamixelScanner` · `EthercatScanner` · `StatePublisher` — **완료**(§6-32~§6-36) · 2,884 → 866줄
 
 ## 6. 즉시 처리 권고 · 저위험·고효과
@@ -2176,8 +2176,85 @@ midi_monitor   bridge_publish_age_sec 0.004 (갱신 중)
 connected      false · "X-Touch MIDI input port not found"
 ```
 
-**Pickup 판정 자체는 검증 불가** · 물리 페이더 입력이 있어야 탄다 ·
-X-Touch가 연결되면 재확인이 필요하다.
+**Pickup 판정 자체는 검증 불가** · 물리 페이더 입력이 있어야 탄다.
+
+**X-Touch 연결 후 재확인 · 2026-09-09**
+
+```
+장치      X-Touch-Ext (BEHRINGER 1397:00b6) · ALSA card 2
+ALSA      24:0 → 128:0 (입력) · 129:0 → 24:0 (출력) · 양방향 연결됨
+노드      device_connected true · "X-Touch connected" · node_state ok
+물리 입력  last_received_at 갱신 확인 (15:39:46)
+사용자     화면에서 정상 동작 확인
+```
+
+`connected`가 `false`인 것은 결함이 아니다 · 계산식이
+`device_connected AND 최근 물리 입력 ≤ stale_timeout`이라 손을 떼면 `false`가 된다.
+
+**여전히 미검증** · SELECT를 켠 뒤 페이더가 기준값을 지나는 순간의 판정 ·
+자동 관측으로 그 순간을 잡지 못했다 · 그 경로는 곧 모터가 움직이는 경로다.
+
+### 6-40. `FaderStateMachine` 신설 · 보낸 목표와 실제 도착을 가른다
+
+`midi_control_node` 3,100 → **2,800줄** · 클래스 2,874 → **2,722줄** · 메서드 80 → 74
+
+전동 페이더는 명령을 보낸다고 즉시 그 자리에 있지 않다. 보낸 목표와 실제 도착을
+따로 들고, 도착할 때까지 입력을 신뢰하지 않는다 · 그 대기 상태 **10개**를 옮겼다.
+
+- `parking` · 0으로 되돌리는 중인가
+- `awaiting_sync` · 보낸 목표에 아직 도착하지 않았는가
+- `input_generation` · 재연결 전 입력을 뒤늦게 받아 쓰지 않으려는 세대 표식
+
+#### 끌고 오지 않은 것
+
+`_resync_controlled_faders_locked`(61줄)는 남겼다. 뱅크·축 등록부·SELECT 상태까지
+건드리는 **노드 조율**이다 · 끌고 왔으면 `FaderStateMachine`이 페이더 정렬과
+매핑 재계산 둘을 겸했을 것이다.
+
+#### 이름 다섯 형태가 또 나왔다 · 이번엔 문자열
+
+`getattr(self, '_studio_select_locked', False)` 하나를 놓쳤다. 옮긴 뒤 이 이름은
+`FaderStateMachine`에 없으므로 **기본값 `False`가 조용히 반환된다.**
+
+구문 오류도 예외도 아니다 · **판정만 뒤집힌다.** 스튜디오 녹화 중 페이더 파킹이
+물리 0 복귀를 건너뛸 수 있는 분기였다 · 시험이 잡았다.
+
+`ast`는 `getattr`의 문자열 인자를 속성 참조로 보지 않는다 · **정규식 감사를
+따로 돌려** 이번에 만든 모듈 7개를 전부 확인했다.
+
+```
+getattr|hasattr|setattr(self, '<이름>')  중
+클래스가 갖지 않는 <이름>을 찾는다
+```
+
+#### 시험 스텁이 지연 기본값에 기대고 있었다
+
+`_fader_zero_required`는 노드 `__init__`이 `True`로, `_ensure_`가 지연으로
+`False`로 만든다. 운영은 `__init__`이 먼저라 **늘 `True`**였고, `__new__`로 만드는
+시험 스텁만 `False`를 받고 있었다.
+
+생성자가 운영과 같은 값을 쓰게 되자 시험 하나가 깨졌다. **운영 경로는 변하지
+않았다** · 스텁이 의도한 상태를 명시하도록 고쳤다.
+
+옮기기 전에는 이 차이가 보이지 않았다 · 분해가 드러낸 것이다.
+
+#### 검증
+
+- 코드 검증 · `ruff check src` 55건 유지 · 데코레이터 대조 불일치 0 ·
+  문자열 형태 감사 통과 · 잔여 참조 0
+- 실행 검증 · `pytest` 1,016건 통과
+- 실물 검증 · **부분** · X-Touch 연결 상태에서 재시작
+
+```
+node_state          ok · "X-Touch connected" · 오류 로그 없음
+input_state         6초간 261건 (약 43Hz)
+fader_input_generation  [0]×8 · 세대 표식 정상 스트림
+스냅샷              fader_parking false · fader_syncing false
+                    raw_value 0 · observed_raw_value 0
+motor_command       inactive · "SELECT 사용 가능"
+```
+
+**미검증** · 파킹 왕복(명령 → 물리 도착 → `awaiting_sync` 해제) · SELECT 조작 필요.
 
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
