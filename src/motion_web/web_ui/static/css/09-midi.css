@@ -1,0 +1,136 @@
+/* MIDI 화면
+ *
+ * `styles.css` 7,415줄을 순서 그대로 자른 조각이다 · §6-43
+ * 원본 6285~6415줄 · **연결 순서를 바꾸면 겹치기(cascade)가 달라진다.**
+ */
+.midi-safety-notice {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid #a7d7b4;
+  border-radius: 8px;
+  background: #effaf2;
+  color: #245b32;
+  font-size: 13px;
+}
+
+.midi-safety-notice strong {
+  flex: 0 0 auto;
+}
+
+.midi-monitor-summary {
+  margin-bottom: 12px;
+}
+
+.midi-bank-controls {
+  display: flex;
+  gap: 10px;
+  align-items: end;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.midi-bank-controls select,
+.midi-bank-controls input {
+  min-width: 150px;
+}
+
+.midi-bank-name-field {
+  flex: 1 1 220px;
+  max-width: 360px;
+}
+
+.midi-bank-name-field input {
+  width: 100%;
+}
+
+.midi-bank-actions {
+  margin: 0;
+}
+
+.midi-monitor-table-wrap {
+  max-height: 430px;
+}
+
+.midi-monitor-table {
+  min-width: 1240px;
+}
+
+.midi-monitor-table input[type="number"] {
+  width: 96px;
+}
+
+.midi-motion-id-input {
+  width: 88px;
+}
+
+.midi-motion-id-group {
+  display: grid;
+  grid-template-columns: repeat(3, 88px);
+  gap: 4px;
+  min-width: 268px;
+}
+
+.midi-motion-id-input.input-invalid,
+.midi-motion-id-input:invalid {
+  border-color: #dc2626;
+  background: #fff1f2;
+  color: #991b1b;
+}
+
+.midi-live-value {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.midi-motion-value {
+  font-weight: 700;
+  color: #1d4ed8;
+}
+
+.midi-touch-active {
+  color: #b45309;
+  font-weight: 700;
+}
+
+.midi-select-active {
+  color: #15803d;
+  font-weight: 700;
+}
+
+.midi-select-unmatched {
+  color: #9ca3af;
+}
+
+.midi-select-rejected {
+  min-width: 220px;
+  color: #991b1b;
+  background: #fee2e2;
+  font-weight: 700;
+  white-space: normal;
+}
+
+.status-ok {
+  color: #15803d;
+}
+
+.status-bad {
+  color: #b45309;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.hidden {
+  display: none;
+}
+
+.mono {
+  font-variant-numeric: tabular-nums;
+}
+

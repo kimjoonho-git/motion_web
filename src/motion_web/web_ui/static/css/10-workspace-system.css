@@ -1,0 +1,596 @@
+/* 작업공간 탭 · 설정 · 시스템 정보
+ *
+ * `styles.css` 7,415줄을 순서 그대로 자른 조각이다 · §6-43
+ * 원본 6416~7006줄 · **연결 순서를 바꾸면 겹치기(cascade)가 달라진다.**
+ */
+/* Shared visual frame for every main workspace tab.
+ * IDs, data attributes and tab-specific layouts intentionally remain unchanged. */
+.workspace-content > .workspace-panel {
+  overflow: visible;
+  padding: 14px;
+  border-radius: 12px;
+  box-shadow: 0 3px 12px rgba(23, 33, 43, 0.045);
+}
+
+.workspace-page-head {
+  align-items: center;
+  min-height: 58px;
+  margin: -14px -14px 16px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+  border-radius: 12px 12px 0 0;
+  background: #f8fafc;
+}
+
+.workspace-page-head > strong,
+.workspace-page-head > div > strong {
+  position: relative;
+  padding-left: 12px;
+  color: var(--ink);
+  font-size: 19px;
+  line-height: 1.3;
+}
+
+.workspace-page-head > strong::before,
+.workspace-page-head > div > strong::before {
+  position: absolute;
+  top: 0.12em;
+  bottom: 0.12em;
+  left: 0;
+  width: 3px;
+  border-radius: 3px;
+  background: var(--blue);
+  content: "";
+}
+
+.workspace-page-head > span {
+  max-width: min(52%, 620px);
+  padding: 5px 9px;
+  border: 1px solid #dce4ec;
+  border-radius: 999px;
+  background: #ffffff;
+  text-align: right;
+  line-height: 1.35;
+}
+
+.workspace-page-head > div {
+  display: grid;
+  gap: 4px;
+}
+
+.workspace-page-head small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.workspace-guide {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: -4px 0 14px;
+  padding: 8px 10px;
+  border: 1px solid #dce4ec;
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.workspace-guide > strong {
+  flex: 0 0 auto;
+  color: #445466;
+  font-size: 12px;
+}
+
+.workspace-guide ol {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: workspace-step;
+}
+
+.workspace-guide li {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+  counter-increment: workspace-step;
+}
+
+.workspace-guide li::before {
+  display: inline-grid;
+  width: 19px;
+  height: 19px;
+  place-items: center;
+  border-radius: 50%;
+  background: #e8f0fa;
+  color: #315f98;
+  content: counter(workspace-step);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.workspace-guide li:not(:last-child)::after {
+  margin-left: 2px;
+  color: #9aa8b6;
+  content: "→";
+}
+
+.workspace-panel .section-head:not(.workspace-page-head) {
+  min-height: 28px;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #e7ecf1;
+}
+
+.workspace-panel .section-head:not(.workspace-page-head) > strong,
+.workspace-panel .section-head:not(.workspace-page-head) > div > strong {
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+.workspace-panel .section-head.compact:not(.workspace-page-head) {
+  min-height: 24px;
+  margin-bottom: 10px;
+  padding-bottom: 7px;
+}
+
+.workspace-panel .type-summary,
+.workspace-panel .axis-setup-step,
+.workspace-panel .axis-settings-panel,
+.workspace-panel .settings-panel,
+.workspace-panel .motion-test-card,
+.workspace-panel .motion-test-result,
+.workspace-panel .motion-file-column,
+.workspace-panel .motion-file-detail,
+.workspace-panel .motion-file-subsection,
+.workspace-panel .monitoring-detail,
+.workspace-panel .project-system-manager,
+.workspace-panel .system-overview-card {
+  border-radius: 10px;
+}
+
+.workspace-panel .table-wrap,
+.workspace-panel .registry-table-wrap {
+  border-radius: 8px;
+}
+
+.workspace-panel .registry-actions,
+.workspace-panel .manual-actions,
+.workspace-panel .monitoring-actions,
+.workspace-panel .event-log-actions {
+  gap: 7px;
+}
+
+.workspace-panel .registry-message {
+  position: relative;
+  padding: 8px 10px;
+  border-left: 3px solid #bdc9d5;
+  border-radius: 0 6px 6px 0;
+  background: #f8fafc;
+  line-height: 1.45;
+}
+
+.workspace-panel .registry-message[data-feedback-state="busy"] {
+  padding-right: 34px;
+  border-left-color: #6ca2e8;
+  background: #f2f7ff;
+  color: #315f98;
+}
+
+.workspace-panel .registry-message[data-feedback-state="busy"]::after {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  width: 12px;
+  height: 12px;
+  margin-top: -7px;
+  border: 2px solid #b8cee9;
+  border-top-color: var(--blue);
+  border-radius: 50%;
+  animation: spin 800ms linear infinite;
+  content: "";
+}
+
+.workspace-panel .registry-message[data-feedback-state="success"] {
+  border-left-color: #56a879;
+  background: #f0faf4;
+  color: #17653b;
+}
+
+.workspace-panel .registry-message[data-feedback-state="warning"] {
+  border-left-color: #d2a13b;
+  background: #fff9e8;
+  color: #805b0b;
+}
+
+.workspace-panel .registry-message[data-feedback-state="error"] {
+  border-left-color: #d45a5a;
+  background: #fff2f2;
+  color: #9f1f1f;
+  font-weight: 700;
+}
+
+.workspace-content > .workspace-panel {
+  margin-bottom: 0;
+}
+
+.workspace-panel .tabbar:not(.workspace-tabs) {
+  padding-bottom: 8px;
+  border-bottom: 1px solid #e3e9ef;
+}
+
+.workspace-panel .tab-button {
+  transition: border-color 120ms ease, background 120ms ease, color 120ms ease;
+}
+
+.workspace-panel .tab-button.active {
+  box-shadow: inset 0 -2px 0 rgba(31, 111, 235, 0.18);
+}
+
+/* 설정 화면은 선택 → 편집 → 검증 → 저장의 같은 시각적 순서를 사용한다.
+ * 기존 버튼 ID와 기능 연결에는 영향을 주지 않는다. */
+.workspace-panel.settings-editor-page .settings-step-card,
+.workspace-panel .settings-editor-page .settings-step-card {
+  margin-bottom: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+.workspace-panel.settings-editor-page .settings-step-card > .section-head,
+.workspace-panel .settings-editor-page .settings-step-card > .section-head {
+  margin-bottom: 12px;
+}
+
+.settings-step-actions {
+  margin-bottom: 10px;
+}
+
+.motion-mapping-final-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 8px;
+  overflow-x: auto;
+}
+
+.motion-mapping-final-actions button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.settings-commit-card {
+  border-color: #b9cee7 !important;
+  background: #f8fbff !important;
+}
+
+.settings-commit-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.settings-commit-actions .registry-message,
+.settings-commit-actions .registry-actions {
+  margin: 0;
+}
+
+.settings-final-card {
+  border-color: #b9cee7 !important;
+  background: #f8fbff !important;
+}
+
+.settings-final-note {
+  margin-bottom: 10px;
+}
+
+.settings-final-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(260px, 1fr));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.settings-final-action {
+  display: grid;
+  grid-template-columns: minmax(110px, auto) minmax(210px, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+}
+
+.settings-final-action > span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.settings-final-apply {
+  border-left: 1px solid var(--line);
+}
+
+.settings-reference-card {
+  margin-bottom: 12px;
+  padding: 12px;
+  border: 1px solid #dfe6ed;
+  border-radius: 10px;
+  background: #f9fbfd;
+}
+
+.settings-file-actions .danger {
+  margin-left: auto;
+}
+
+/* System information dashboard. Keep these rules scoped away from the project sidebar. */
+.system-page-head {
+  align-items: flex-start;
+  margin-bottom: 14px;
+}
+
+.system-page-head > div {
+  display: grid;
+  gap: 4px;
+}
+
+.system-runtime-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(400px, 2fr);
+  gap: 14px;
+  align-items: stretch;
+  margin-bottom: 14px;
+}
+
+.system-runtime-grid > .system-overview-card,
+.system-runtime-grid > .system-program-card {
+  min-width: 0;
+  margin: 0;
+}
+
+.system-overview-card {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.system-overview-card .status-strip {
+  overflow: hidden;
+  border-radius: 8px;
+}
+
+.system-overview-card .status-strip:last-child {
+  margin-bottom: 0;
+}
+
+.system-status-primary {
+  grid-template-columns: minmax(0, 1.35fr) repeat(4, minmax(0, 1fr));
+  margin-bottom: 6px;
+}
+
+.system-status-primary > div {
+  min-height: 56px;
+  padding: 9px 10px;
+  border-top: 2px solid #b9c9da;
+}
+
+.system-status-primary strong {
+  font-size: 15px;
+}
+
+.system-status-secondary {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.system-status-secondary > div {
+  min-height: 46px;
+  padding: 7px 9px;
+}
+
+.system-status-secondary span {
+  margin-bottom: 3px;
+  font-size: 11px;
+}
+
+.system-status-secondary strong {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.system-status-secondary strong a {
+  display: block;
+  overflow: hidden;
+  color: inherit;
+  text-decoration: underline;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.system-program-card {
+  margin: 0;
+}
+
+.system-program-card > .section-head {
+  flex-wrap: nowrap;
+}
+
+.system-program-card > .section-head > strong {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.system-program-card #programHealthDetail {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.system-program-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.system-program-actions #programRestartButton {
+  grid-column: 1 / -1;
+}
+
+.system-restart-warning {
+  margin: 10px 0 0;
+  padding: 9px 10px;
+  border-left: 3px solid #d8a13b;
+  background: #fffaf0;
+  line-height: 1.45;
+}
+
+.system-project-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(400px, 2fr);
+  gap: 14px;
+  align-items: stretch;
+  margin-bottom: 14px;
+}
+
+.system-project-grid > .project-system-manager {
+  min-width: 0;
+  margin: 0;
+}
+
+.system-project-memo {
+  display: flex;
+  flex-direction: column;
+}
+
+.system-project-memo textarea {
+  flex: 1;
+  width: 100%;
+  min-height: 230px;
+  padding: 12px;
+  resize: vertical;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--ink);
+  font: inherit;
+  line-height: 1.55;
+}
+
+.system-project-memo textarea:focus {
+  border-color: #8fb4e8;
+  outline: 3px solid #e5effc;
+}
+
+.system-project-memo textarea:disabled {
+  background: #eef1f4;
+  color: #8b98a5;
+}
+
+.system-project-memo-footer {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 9px;
+}
+
+.system-project-memo-footer span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.system-project-memo-footer span.unsaved {
+  color: var(--yellow);
+  font-weight: 700;
+}
+
+.system-project-memo-footer button {
+  min-width: 110px;
+}
+
+.system-project-tools {
+  display: flex;
+  flex-direction: column;
+}
+
+.system-project-tools-body {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 9px;
+}
+
+.system-project-tools-body .project-sidebar-actions,
+.system-project-tools-body .project-import-row,
+.system-project-tools-body .project-usb-help {
+  padding: 0;
+}
+
+.system-project-tools-body .project-sidebar-actions {
+  align-self: start;
+}
+
+.system-project-tools-body .project-usb-help {
+  align-self: start;
+  font-size: 11px;
+}
+
+.system-project-tools-body .project-copy-box {
+  grid-column: auto;
+  grid-row: auto;
+  margin: 0;
+  padding: 10px;
+  background: #ffffff;
+}
+
+.system-panel #projectFileManager {
+  margin-top: 0;
+}
+
+.system-panel .project-file-manager-layout {
+  min-height: 0;
+}
+
+.system-panel .system-project-info-file {
+  margin-top: 0;
+}
+
+.system-project-info-head {
+  flex-wrap: nowrap;
+}
+
+.system-project-info-head > div {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.system-project-info-head > div > span,
+.system-project-info-head > #projectFileInfo {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.system-project-info-head > #projectFileInfo {
+  min-width: 0;
+  text-align: right;
+}
+
+.system-panel .system-project-info-file .project-file-editor {
+  min-height: 220px;
+  max-height: 360px;
+  margin-top: 12px;
+  resize: vertical;
+}
+
