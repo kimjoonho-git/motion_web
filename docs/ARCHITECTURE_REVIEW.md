@@ -1566,7 +1566,10 @@ self._group_condition = threading.Condition(self._run_lock)
 
 - 코드 검증 · `ruff check src` 55건 유지 · 신규 0건
 - 실행 검증 · `pytest` 1,012건 통과 · 실패 0 · 그룹 실행 시험 그대로 통과
-- 실물 검증 · 아래 별도 기록
+- 실물 검증 · `colcon build` · 재시작 · 실행 컨텍스트 `ready` · 노드 확인 8건 성공 ·
+  `motion_run: idle` · `group_execution: false` · 모터 `Operation enabled` · fault 없음
+- 실물 검증 · 계획 수립 재확인 · `axis_count 1` · `duration_sec 3.26` ·
+  `sample_count 164` · 그룹 분리 뒤에도 단일 실행 경로가 그대로다
 - 실물 검증 불가 · **그룹 실행 자체는 다른 PC가 있어야 한다** · 전원 차단
 
 ## 7. 유지보수 지표 · 신규 코드 규칙안
