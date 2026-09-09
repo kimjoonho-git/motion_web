@@ -28,7 +28,6 @@ from .coordination_bridge import (
 )
 from .motor_restart_coordinator import MotorRestartCoordinator
 from . import (
-    ethercat_project_compat,
     motion_studio_session,
     motion_file_analysis,
     motor_config_build,
@@ -38,6 +37,7 @@ from .motor_restart_diagnostics import diagnose_motor_restart_failure
 from .motion_studio_bridge import MotionStudioRosBridge
 from .motion_studio_session import MotionStudioSession
 from .motor_event_log import MotorEventLog
+from .scan_orchestrator import ScanOrchestrator
 from .motion_studio_routes import register_motion_studio_routes
 from .bridge_helpers import (
     add_monitoring_motion_values,
@@ -291,17 +291,9 @@ class MotionWebBridge(Node):
             'nodes': {},
             'updated_at': time.time(),
         }
-        self._scan_progress_lock = threading.RLock()
-        self._motor_scan_request_lock = threading.Lock()
         self._motor_lifecycle_lock = threading.Lock()
         self._motor_operation_recovery_lock = threading.Lock()
         self._motor_operation_reconcile_lock = threading.Lock()
-        self._scan_progress: Dict[str, Any] = {
-            'scan_id': '',
-            'events': [],
-            'running': False,
-            'updated_at': None,
-        }
 
         self._subscription = self.create_subscription(
             String,
@@ -323,13 +315,24 @@ class MotionWebBridge(Node):
         self._scan_progress_subscription = self.create_subscription(
             String,
             self.scan_progress_topic,
-            self._scan_progress_callback,
+            lambda msg: self._scan.progress_callback(msg),
             20,
         )
         self._monitoring_client = self.create_client(SetBool, self.monitoring_service)
         self._scan_client = self.create_client(Trigger, self.scan_service)
         self._scan_ac_servo_client = self.create_client(Trigger, self.scan_ac_servo_service)
         self._scan_dynamixel_client = self.create_client(Trigger, self.scan_dynamixel_service)
+        self._scan = ScanOrchestrator(
+            self,
+            lifecycle_lock=self._motor_lifecycle_lock,
+            repository=self.project_repository,
+            scan_client=self._scan_client,
+            scan_ac_servo_client=self._scan_ac_servo_client,
+            scan_dynamixel_client=self._scan_dynamixel_client,
+            scan_service=self.scan_service,
+            scan_ac_servo_service=self.scan_ac_servo_service,
+            scan_dynamixel_service=self.scan_dynamixel_service,
+        )
         self._jog_request_publisher = self.create_publisher(String, self.jog_request_topic, 10)
         self._safety_request_publisher = self.create_publisher(
             String, self.safety_request_topic, 10
@@ -528,50 +531,6 @@ class MotionWebBridge(Node):
                 values[motion_id] = value
                 sources[motion_id] = source
                 stamps[motion_id] = stamp
-
-    def _scan_progress_callback(self, msg: String) -> None:
-        try:
-            event = json.loads(msg.data)
-        except json.JSONDecodeError:
-            self.get_logger().warn(f'Invalid {self.scan_progress_topic} JSON received.')
-            return
-        if not isinstance(event, dict) or not str(event.get('scan_id') or ''):
-            return
-        now = time.time()
-        with self._scan_progress_lock:
-            scan_id = str(event['scan_id'])
-            if scan_id != self._scan_progress.get('scan_id'):
-                self._scan_progress = {
-                    'scan_id': scan_id,
-                    'events': [],
-                    'running': True,
-                    'started_at': event.get('timestamp') or now,
-                    'updated_at': now,
-                    'project_id': self.project_repository.selected_project_id(),
-                    'project_generation': self._current_project_generation(),
-                }
-            events = self._scan_progress.setdefault('events', [])
-            recorded = dict(event)
-            recorded['index'] = len(events)
-            events.append(recorded)
-            if len(events) > 300:
-                del events[:-300]
-                for index, item in enumerate(events):
-                    item['index'] = index
-            self._scan_progress['updated_at'] = now
-            if event.get('phase') in {'complete', 'completed', 'partial', 'failed'}:
-                self._scan_progress['running'] = False
-                self._scan_progress['completed_at'] = now
-
-    def motor_scan_progress(self) -> Dict[str, Any]:
-        with self._scan_progress_lock:
-            progress = copy.deepcopy(self._scan_progress)
-        return {
-            'success': True,
-            'progress': progress,
-            'project_id': self.project_repository.selected_project_id(),
-            'project_generation': self._current_project_generation(),
-        }
 
     def _jog_result_callback(self, msg: String) -> None:
         try:
@@ -1810,32 +1769,6 @@ class MotionWebBridge(Node):
             **self.snapshot(),
         }
 
-    def scan_motors(self, timeout_sec: float = 20.0) -> Dict[str, Any]:
-        return self._call_scan_service(
-            self._scan_client,
-            self.scan_service,
-            timeout_sec,
-            release_ethercat=True,
-            operation_type='full_scan',
-        )
-
-    def scan_ac_servo_motors(self, timeout_sec: float = 10.0) -> Dict[str, Any]:
-        return self._call_scan_service(
-            self._scan_ac_servo_client,
-            self.scan_ac_servo_service,
-            timeout_sec,
-            release_ethercat=True,
-            operation_type='ac_servo_scan',
-        )
-
-    def scan_dynamixel_motors(self, timeout_sec: float = 40.0) -> Dict[str, Any]:
-        return self._call_scan_service(
-            self._scan_dynamixel_client,
-            self.scan_dynamixel_service,
-            timeout_sec,
-            operation_type='dynamixel_scan',
-        )
-
     def read_ethercat_aliases(self) -> Dict[str, Any]:
         try:
             slaves = self.ethercat_alias_manager.read_slaves()
@@ -1895,348 +1828,6 @@ class MotionWebBridge(Node):
             details=result,
         )
         return {'success': True, **result}
-
-    def _call_scan_service(
-        self,
-        client,
-        service_name: str,
-        timeout_sec: float,
-        *,
-        release_ethercat: bool = False,
-        operation_type: str = 'motor_scan',
-    ) -> Dict[str, Any]:
-        lifecycle_lock = getattr(self, '_motor_lifecycle_lock', None)
-        if lifecycle_lock is None:
-            lifecycle_lock = threading.Lock()
-            self._motor_lifecycle_lock = lifecycle_lock
-        if not lifecycle_lock.acquire(blocking=False):
-            return {
-                'success': False,
-                'message': '다른 모터 설정·검색·재시작 작업이 진행 중입니다',
-                'scan': None,
-                'project_id': self.project_repository.selected_project_id(),
-                'project_generation': self._current_project_generation(),
-                **self.snapshot(),
-            }
-        scan_lock = getattr(self, '_motor_scan_request_lock', None)
-        if scan_lock is None:
-            scan_lock = threading.Lock()
-            self._motor_scan_request_lock = scan_lock
-        if not scan_lock.acquire(blocking=False):
-            lifecycle_lock.release()
-            return {
-                'success': False,
-                'message': '다른 모터 검색이 진행 중입니다. 완료 후 다시 시도하세요',
-                'scan': None,
-                'project_id': self.project_repository.selected_project_id(),
-                'project_generation': self._current_project_generation(),
-                **self.snapshot(),
-            }
-        operation: Dict[str, Any] = {}
-        result: Dict[str, Any]
-        try:
-            operation = self.project_repository.begin_motor_operation(
-                operation_type,
-                'preparing',
-                timeout_sec=timeout_sec + (20.0 if release_ethercat else 5.0),
-                details={
-                    'service_name': service_name,
-                    'project_id': self.project_repository.selected_project_id(),
-                },
-            )
-            operation_id = str(operation.get('operation_id') or '')
-            if release_ethercat:
-                result = self._call_ethercat_scan_service_locked(
-                    client,
-                    service_name,
-                    timeout_sec,
-                    operation_id=operation_id,
-                )
-            else:
-                self.project_repository.update_motor_operation(
-                    operation_id,
-                    'scanning',
-                    message='모터 물리 검색 진행 중',
-                )
-                result = self._call_scan_service_locked(client, service_name, timeout_sec)
-            current = self.project_repository.motor_operation_status()
-            outcome = motor_config_rules.scan_operation_outcome(
-                result.get('scan'),
-                operation_type=operation_type,
-                fallback_success=result.get('success') is True,
-            )
-            result['partial'] = outcome == 'partial'
-            result['success'] = outcome == 'success'
-            if (
-                current.get('operation_id') == operation_id
-                and current.get('status') == 'running'
-            ):
-                current = self.project_repository.finish_motor_operation(
-                    operation_id,
-                    outcome,
-                    phase={
-                        'success': 'completed',
-                        'partial': 'partial',
-                        'failure': 'failed',
-                    }[outcome],
-                    message=str(result.get('message') or ''),
-                    error=(
-                        ''
-                        if outcome in {'success', 'partial'}
-                        else str(result.get('message') or '')
-                    ),
-                )
-            result.update(self.snapshot())
-            result['motor_operation'] = current
-            return result
-        except ValueError as exc:
-            return {
-                'success': False,
-                'message': str(exc),
-                'scan': None,
-                'project_id': self.project_repository.selected_project_id(),
-                'project_generation': self._current_project_generation(),
-                **self.snapshot(),
-            }
-        except Exception as exc:
-            operation_id = str(operation.get('operation_id') or '')
-            if operation_id:
-                try:
-                    self.project_repository.finish_motor_operation(
-                        operation_id,
-                        'failure',
-                        phase='failed',
-                        error=str(exc),
-                    )
-                except ValueError:
-                    pass
-            raise
-        finally:
-            scan_lock.release()
-            lifecycle_lock.release()
-
-    def _call_ethercat_scan_service_locked(
-        self,
-        client,
-        service_name: str,
-        timeout_sec: float,
-        *,
-        operation_id: str = '',
-    ) -> Dict[str, Any]:
-        """Release the persistent EtherCAT owner for one physical scan.
-
-        The scan contract requires ``ethercat rescan``.  The persistent Motor
-        Manager must therefore be stopped first and restored afterwards.  This
-        orchestration belongs to the upper web layer; motion_system remains
-        unchanged.
-        """
-        motor_service = str(
-            os.environ.get('MOTION_MOTOR_SERVICE_UNIT') or ''
-        ).strip()
-        if motor_service != 'motion-motor.service':
-            return self._call_scan_service_locked(client, service_name, timeout_sec)
-
-        blocker = self._ethercat_scan_safety_blocker(
-            require_fresh_motor_state=False,
-        )
-        if blocker:
-            return {
-                'success': False,
-                'message': f'AC Servo 검색 미실행: {blocker}',
-                'scan': None,
-                'scan_blocked': True,
-                'project_id': self.project_repository.selected_project_id(),
-                'project_generation': self._current_project_generation(),
-                **self.snapshot(),
-            }
-
-        was_active = self._managed_user_service_active(motor_service)
-        runtime_handoff = self._ethercat_scan_runtime_handoff()
-        restore_runtime = bool(was_active and not runtime_handoff['required'])
-        if restore_runtime:
-            blocker = self._ethercat_scan_safety_blocker(
-                require_fresh_motor_state=True,
-            )
-            if blocker:
-                return {
-                    'success': False,
-                    'message': f'AC Servo 검색 미실행: {blocker}',
-                    'scan': None,
-                    'scan_blocked': True,
-                    'project_id': self.project_repository.selected_project_id(),
-                    'project_generation': self._current_project_generation(),
-                    **self.snapshot(),
-                }
-
-        expected_ethercat_axes = (
-            self._expected_runtime_ethercat_axes() if restore_runtime else []
-        )
-        expected_recovery_axes = (
-            self._expected_runtime_axes() if restore_runtime else []
-        )
-        if operation_id:
-            self.project_repository.update_motor_operation(
-                operation_id,
-                'preparing',
-                details={
-                    'motor_service_was_active': was_active,
-                    'expected_axes': expected_recovery_axes,
-                    'expected_ethercat_axes': expected_ethercat_axes,
-                    'runtime_handoff': runtime_handoff,
-                },
-            )
-        if restore_runtime and not expected_ethercat_axes:
-            return {
-                'success': False,
-                'message': (
-                    'AC Servo 검색 미실행: 실행 설정에서 복구 대상 EtherCAT 축을 '
-                    '확인할 수 없습니다'
-                ),
-                'scan': None,
-                'scan_blocked': True,
-                'project_id': self.project_repository.selected_project_id(),
-                'project_generation': self._current_project_generation(),
-                **self.snapshot(),
-            }
-        if restore_runtime and not expected_recovery_axes:
-            return {
-                'success': False,
-                'message': (
-                    'AC Servo 검색 미실행: 실행 설정에서 복구 대상 전체 모터축을 '
-                    '확인할 수 없습니다'
-                ),
-                'scan': None,
-                'scan_blocked': True,
-                'project_id': self.project_repository.selected_project_id(),
-                'project_generation': self._current_project_generation(),
-                **self.snapshot(),
-            }
-        result: Dict[str, Any]
-        restore_error = ''
-        recovery: Dict[str, Any] = {
-            'required': restore_runtime,
-            'expected_axes': expected_recovery_axes if restore_runtime else [],
-            'online_axes': [],
-            'recovered': not restore_runtime,
-        }
-        try:
-            if was_active:
-                if operation_id:
-                    stop_message = (
-                        '이전 프로젝트 Motor Manager 정지 및 EtherCAT 소유권 해제 중'
-                        if runtime_handoff['required']
-                        else 'Motor Manager 정지 및 EtherCAT 소유권 해제 중'
-                    )
-                    self.project_repository.update_motor_operation(
-                        operation_id,
-                        'stopping_runtime',
-                        message=stop_message,
-                    )
-                self._run_managed_user_service('stop', motor_service)
-                motor_config_rules.wait_for_ethercat_release(timeout_sec=5.0)
-            if operation_id:
-                self.project_repository.update_motor_operation(
-                    operation_id,
-                    'scanning',
-                    message='AC Servo 물리 검색 진행 중',
-                )
-            result = self._call_scan_service_locked(client, service_name, timeout_sec)
-        except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
-            result = {
-                'success': False,
-                'message': f'AC Servo 검색 미실행: {exc}',
-                'scan': None,
-                'scan_blocked': True,
-                'project_id': self.project_repository.selected_project_id(),
-                'project_generation': self._current_project_generation(),
-                **self.snapshot(),
-            }
-        finally:
-            if restore_runtime:
-                try:
-                    if operation_id:
-                        try:
-                            self.project_repository.update_motor_operation(
-                                operation_id,
-                                'restoring',
-                                message='검색 전 Motor Manager 실행 상태 복구 중',
-                            )
-                        except ValueError:
-                            # Runtime restoration is a safety action and must
-                            # not depend on operation bookkeeping still being
-                            # writable/running.
-                            pass
-                    self._run_managed_user_service('start', motor_service)
-                    recovery = self._wait_for_motor_runtime_recovery(
-                        expected_recovery_axes,
-                        timeout_sec=12.0,
-                        motor_service=motor_service,
-                    )
-                    if not recovery.get('recovered'):
-                        restore_error = (
-                            'Motor Manager 재시작 후 서비스·모터 상태 복구 실패: '
-                            f'{len(recovery.get("online_axes") or [])}/'
-                            f'{len(expected_recovery_axes)}축'
-                        )
-                except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
-                    restore_error = str(exc)
-
-        result['motor_service_was_active'] = was_active
-        result['motor_service_restore_required'] = restore_runtime
-        result['motor_service_restored'] = bool(
-            restore_runtime and not restore_error
-        )
-        result['motor_runtime_recovery'] = recovery
-        result['runtime_handoff'] = runtime_handoff
-        if runtime_handoff['required'] and result.get('success') is True:
-            result['message'] = (
-                f'{result.get("message") or "AC Servo 검색 완료"} / '
-                '이전 프로젝트 모터 실행은 정지되었습니다. '
-                '현재 프로젝트 설정을 저장한 뒤 설정 적용 및 재시작하세요'
-            )
-        if restore_error:
-            result['success'] = False
-            result['restore_error'] = restore_error
-            result['message'] = (
-                f'{result.get("message") or "AC Servo 검색 종료"} / '
-                f'Motor Manager 복구 실패: {restore_error}'
-            )
-        return result
-
-    def _ethercat_scan_runtime_handoff(self) -> Dict[str, Any]:
-        """Describe whether an active Motor Manager belongs to another project.
-
-        A project switch intentionally does not change the active runtime.
-        Therefore a physical scan for the newly selected project must be able
-        to retire the previous project's runtime without depending on feedback
-        from that runtime.  The scan safety blocker still rejects every active
-        upper-level motion operation and any observed moving EtherCAT axis.
-        """
-        selected_project_id = str(
-            self.project_repository.selected_project_id() or ''
-        ).strip()
-        runtime_project_id = ''
-        try:
-            runtime_state = self.project_repository.motor_runtime_state()
-        except (AttributeError, OSError, ValueError, json.JSONDecodeError):
-            runtime_state = {}
-        if isinstance(runtime_state, dict):
-            runtime_project_id = str(
-                runtime_state.get('target_project_id') or ''
-            ).strip()
-        if not runtime_project_id:
-            runtime_project_id = str(
-                self._runtime_project_id_from_path(selected_project_id) or ''
-            ).strip()
-        return {
-            'required': bool(
-                selected_project_id
-                and runtime_project_id
-                and runtime_project_id != selected_project_id
-            ),
-            'selected_project_id': selected_project_id,
-            'runtime_project_id': runtime_project_id,
-        }
 
     def _ethercat_scan_safety_blocker(
         self,
@@ -2334,77 +1925,6 @@ class MotionWebBridge(Node):
             raise RuntimeError(detail or f'{service} {action} 실패')
 
 
-    def _expected_runtime_ethercat_axes(self) -> List[int]:
-        repository = getattr(self, 'project_repository', None)
-        runtime = (
-            repository.applied_runtime_motor_config()
-            if repository is not None
-            and hasattr(repository, 'applied_runtime_motor_config')
-            else None
-        )
-        if runtime is not None:
-            return motion_file_analysis.configured_axes_from_runtime_file(
-                runtime,
-                transport='ethercat',
-            )
-
-        # Compatibility fallback for an unmanaged/legacy launch with no
-        # durable runtime target.
-        with self._lock:
-            motion_state = copy.deepcopy(self._motion_state)
-            received_at = self._motion_state_received_at
-        if (
-            not isinstance(motion_state, dict)
-            or received_at is None
-            or time.time() - float(received_at) > 1.0
-        ):
-            return []
-        axes = []
-        for motor in motion_state.get('motors') or []:
-            if not isinstance(motor, dict):
-                continue
-            if str(motor.get('transport') or '').lower() != 'ethercat':
-                continue
-            if motor.get('connection_connected') is not True:
-                continue
-            try:
-                axes.append(int(motor.get('controller_index')))
-            except (TypeError, ValueError):
-                continue
-        return sorted(set(axes))
-
-    def _expected_runtime_axes(self) -> List[int]:
-        repository = getattr(self, 'project_repository', None)
-        runtime = (
-            repository.applied_runtime_motor_config()
-            if repository is not None
-            and hasattr(repository, 'applied_runtime_motor_config')
-            else None
-        )
-        if runtime is not None:
-            return motion_file_analysis.configured_axes_from_runtime_file(runtime)
-
-        with self._lock:
-            motion_state = copy.deepcopy(self._motion_state)
-            received_at = self._motion_state_received_at
-        if (
-            not isinstance(motion_state, dict)
-            or received_at is None
-            or time.time() - float(received_at) > 1.0
-        ):
-            return []
-        axes = []
-        for motor in motion_state.get('motors') or []:
-            if not isinstance(motor, dict):
-                continue
-            if motor.get('connection_connected') is not True:
-                continue
-            try:
-                axes.append(int(motor.get('controller_index')))
-            except (TypeError, ValueError):
-                continue
-        return sorted(set(axes))
-
 
     def _wait_for_motor_runtime_recovery(
         self,
@@ -2474,74 +1994,6 @@ class MotionWebBridge(Node):
                 or self._managed_user_service_active(motor_service)
             ),
             'duration_sec': round(time.time() - started_at, 3),
-        }
-
-    def _call_scan_service_locked(
-        self,
-        client,
-        service_name: str,
-        timeout_sec: float,
-    ) -> Dict[str, Any]:
-        scan_project_id = self.project_repository.selected_project_id()
-        scan_generation = self._current_project_generation()
-        if not client.wait_for_service(timeout_sec=0.2):
-            return {
-                'success': False,
-                'message': f'scan service unavailable: {service_name}',
-                'scan': None,
-                'project_generation': scan_generation,
-                **self.snapshot(),
-            }
-
-        future = client.call_async(Trigger.Request())
-        deadline = time.time() + timeout_sec
-        while not future.done() and time.time() < deadline:
-            time.sleep(0.02)
-
-        if not future.done():
-            return {
-                'success': False,
-                'message': 'scan service timeout',
-                'scan': None,
-                'project_generation': scan_generation,
-                **self.snapshot(),
-            }
-
-        response = future.result()
-        if (
-            self.project_repository.selected_project_id() != scan_project_id
-            or self._current_project_generation() != scan_generation
-        ):
-            return {
-                'success': False,
-                'message': '프로젝트가 변경되어 이전 프로젝트의 검색 결과를 폐기했습니다',
-                'scan': None,
-                'project_id': self.project_repository.selected_project_id(),
-                'project_generation': self._current_project_generation(),
-                **self.snapshot(),
-            }
-        scan = None
-        try:
-            scan = json.loads(response.message)
-        except json.JSONDecodeError:
-            self.get_logger().warn('Invalid scan JSON received.')
-        if isinstance(scan, dict):
-            ethercat_project_compat.annotate_ethercat_project_compatibility(
-                scan, self.load_motor_config
-            )
-        message = motor_config_rules.scan_result_message(
-            bool(response.success),
-            scan,
-            str(response.message or ''),
-        )
-
-        return {
-            'success': bool(response.success),
-            'message': message,
-            'scan': scan,
-            'project_id': scan_project_id,
-            'project_generation': scan_generation,
-            **self.snapshot(),
         }
 
 
@@ -2664,18 +2116,9 @@ class MotionWebBridge(Node):
         with self._midi_monitor_lock:
             self._midi_monitor_status = {}
         self._motion_studio_sync().clear_project_memory()
-        empty_scan_progress = {
-            'scan_id': '',
-            'events': [],
-            'running': False,
-            'updated_at': None,
-        }
-        scan_progress_lock = getattr(self, '_scan_progress_lock', None)
-        if scan_progress_lock is None:
-            self._scan_progress = empty_scan_progress
-        else:
-            with scan_progress_lock:
-                self._scan_progress = empty_scan_progress
+        scan = getattr(self, '_scan', None)
+        if scan is not None:
+            scan.clear_progress()
 
     def _project_change_blocker(
         self,

@@ -852,6 +852,63 @@ Dynamixel 장치가 없어 **실물 미검증**이다.
   확인됐으나 새 이벤트를 낼 조건(모터 오류 · 모션 실행 전이)을 만들지 않았다
 - 실물 미검증 · `clear` · `delete_file` · 로그를 지우므로 돌리지 않았다
 
+### 6-18. `ScanOrchestrator` 신설 · §5 분해 목표안 두 번째 서비스
+
+`MotionWebBridge` 4,987 → **4,430줄** · 메서드 163 → 152 · 락 15 → 13 ·
+락 관여 4,147 → **3,635줄**
+
+#### 모터 스캔 불변조건은 건드리지 않았다
+
+먼저 밝혀둔다. 이 작업은 스캔의 **조율**만 옮긴 것이다. 물리 검색은 여전히
+`motion_system`의 스캔 서비스가 수행하고, `ethercat rescan` 요구도 `scan_contract`도
+Protocol 2.0 Ping 범위도 그대로다. 코드 이동이며 규약 변경이 아니다.
+
+#### 옮긴 것 · 11메서드 540줄
+
+| 메서드 | 줄 | 서비스 이름 |
+|---|---|---|
+| `_call_ethercat_scan_service_locked` | 187 | `_call_ethercat_service_locked` |
+| `_call_scan_service` | 118 | `_call_service` |
+| `_call_scan_service_locked` | 67 | `_call_service_locked` |
+| `_expected_runtime_ethercat_axes` | 38 | 그대로 |
+| `_ethercat_scan_runtime_handoff` | 34 | `_runtime_handoff` |
+| `_scan_progress_callback` | 33 | `progress_callback` |
+| `_expected_runtime_axes` | 31 | 그대로 |
+| `motor_scan_progress` | 9 | `progress` |
+| `scan_motors` · `scan_ac_servo_motors` · `scan_dynamixel_motors` | 23 | `scan_all` · `scan_ac_servo` · `scan_dynamixel` |
+
+서비스가 갖는 상태 · `_scan_request_lock` · `_progress_lock`(RLock) · `_progress` ·
+스캔 클라이언트 3종 · 서비스 이름 3종.
+
+#### 락 하나를 나눠 갖는다
+
+`_motor_lifecycle_lock`은 **노드가 소유하고 서비스에 넘긴다.** 설정 적용
+(`apply_motor_config`) · 재시작(`restart_motor_control_system`) · 실행 해제
+(`clear_motor_runtime_application`)가 같은 락을 쓰기 때문이다. 이 락은 "지금
+모터 관련 작업이 하나 돌고 있다"를 뜻하므로 **서비스마다 따로 만들면 그 뜻이
+깨진다.** 그래서 소유자를 노드에 두고 생성자 인자로 건넸다.
+
+이것이 남은 락 구간(3,635줄)의 핵심 난점이다. 락이 서비스 경계를 가로지른다.
+
+#### 노드에 남긴 것
+
+`_monitoring_mapping_rows_for_context`(52줄)는 처음에 스캔 전용으로 분류했으나
+실제 호출자는 `snapshot` 하나였다 · 노드에 남겼다. **전이 도달 집합만 보고
+"전용"이라 판단하면 안 된다** — 도달 집합 안에 노드에 남을 메서드가 섞여 있으면
+그 하위도 남아야 한다.
+
+#### 테스트
+
+`test_scan_progress.py`는 노드 없이 `ScanOrchestrator`만 세운다.
+`test_execution_context.py`는 `_scan_of(bridge)` 도우미로 스텁에 조율기를 붙인다 ·
+스텁이 저장소를 나중에 꽂는 경우가 있어 매번 최신 값을 따라가게 했다.
+
+#### 검증
+
+- 코드 검증 · `ruff check src` 55건 유지 · 신규 0건
+- 실행 검증 · `pytest` 1,005건 통과 · 실패 0
+- 실물 검증 · 아래 별도 기록
+
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
 - 파일 1,000줄 이하 · 함수 60줄 이하 · `Node` 서브클래스 500줄 이하

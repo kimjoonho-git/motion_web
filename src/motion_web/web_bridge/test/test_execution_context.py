@@ -13,6 +13,7 @@ from std_msgs.msg import String
 from motion_web_bridge.bridge_node import MotionWebBridge, create_app
 from motion_web_bridge.motion_studio_session import MotionStudioSession
 from motion_web_bridge.motor_event_log import MotorEventLog
+from motion_web_bridge.scan_orchestrator import ScanOrchestrator
 from motion_web_bridge.motion_studio_sync import MotionStudioSync
 from motion_common import rpc
 from motion_web_bridge import ethercat_project_compat, motor_config_rules
@@ -42,6 +43,33 @@ def _memory_event_log():
         runtime_project_id=lambda: '',
         logger=lambda: None,
     )
+
+
+def _scan_of(bridge, **overrides):
+    """노드 스텁에 스캔 조율을 붙인다 · §6-18로 노드에서 떨어져 나왔다."""
+    scan = getattr(bridge, '_scan', None)
+    if scan is None:
+        scan = ScanOrchestrator(
+            bridge,
+            lifecycle_lock=getattr(
+                bridge, '_motor_lifecycle_lock', None
+            ) or threading.Lock(),
+            repository=getattr(bridge, 'project_repository', None),
+            scan_client=None,
+            scan_ac_servo_client=None,
+            scan_dynamixel_client=None,
+            scan_service='/scan_motors',
+            scan_ac_servo_service='/scan_ac_servo_motors',
+            scan_dynamixel_service='/scan_dynamixel_motors',
+        )
+        bridge._scan = scan
+    #: 스텁은 저장소를 나중에 꽂기도 한다 · 매번 최신 값을 따라간다
+    repository = getattr(bridge, 'project_repository', None)
+    if repository is not None:
+        scan.repository = repository
+    for name, value in overrides.items():
+        setattr(scan, name, value)
+    return scan
 
 
 class _StubTransport:
@@ -769,7 +797,7 @@ def test_scan_result_is_discarded_if_project_changes_while_scanning():
         'call_async': lambda _self, _request: Future(),
     })()
 
-    result = bridge._call_scan_service(client, '/scan', 1.0)
+    result = _scan_of(bridge)._call_service(client, '/scan', 1.0)
 
     assert result['success'] is False
     assert result['scan'] is None
@@ -779,8 +807,7 @@ def test_scan_result_is_discarded_if_project_changes_while_scanning():
 def test_scan_request_is_rejected_while_another_motor_type_scan_is_running():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge._motion_studio_session = MotionStudioSession()
-    bridge._motor_scan_request_lock = threading.Lock()
-    bridge._motor_scan_request_lock.acquire()
+    _scan_of(bridge)._scan_request_lock.acquire()
     bridge._project_generation_lock = threading.Lock()
     bridge._project_generation = 3
     bridge.project_repository = operation_repository(lambda: 'project-a')
@@ -790,7 +817,7 @@ def test_scan_request_is_rejected_while_another_motor_type_scan_is_running():
         def wait_for_service(self, **_kwargs):
             raise AssertionError('busy scan must not call another ROS scan service')
 
-    result = bridge._call_scan_service(Client(), '/scan_dynamixel_motors', 1.0)
+    result = _scan_of(bridge)._call_service(Client(), '/scan_dynamixel_motors', 1.0)
 
     assert result['success'] is False
     assert result['scan'] is None
@@ -826,7 +853,7 @@ def test_physical_scan_is_allowed_without_a_selected_project():
         def call_async(self, _request):
             return Future()
 
-    result = bridge._call_scan_service(Client(), '/scan_ac_servo_motors', 1.0)
+    result = _scan_of(bridge)._call_service(Client(), '/scan_ac_servo_motors', 1.0)
 
     assert result['success'] is True
     assert result['project_id'] == ''
@@ -1187,11 +1214,11 @@ def test_scan_entrypoints_use_distinct_operation_types():
         captured.append((service_name, kwargs))
         return {}
 
-    bridge._call_scan_service = call
+    _scan_of(bridge)._call_service = call
 
-    bridge.scan_motors()
-    bridge.scan_ac_servo_motors()
-    bridge.scan_dynamixel_motors()
+    _scan_of(bridge).scan_all()
+    _scan_of(bridge).scan_ac_servo()
+    _scan_of(bridge).scan_dynamixel()
 
     assert captured == [
         ('/scan_motors', {
@@ -1212,7 +1239,6 @@ def test_full_scan_returns_terminal_partial_operation():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge._motion_studio_session = MotionStudioSession()
     bridge._motor_lifecycle_lock = threading.Lock()
-    bridge._motor_scan_request_lock = threading.Lock()
     bridge._project_generation_lock = threading.Lock()
     bridge._project_generation = 4
     repository = operation_repository(lambda: 'project-a')
@@ -1220,7 +1246,7 @@ def test_full_scan_returns_terminal_partial_operation():
     bridge.snapshot = lambda: {
         'motor_operation': repository.motor_operation_status(),
     }
-    bridge._call_ethercat_scan_service_locked = lambda *_args, **_kwargs: {
+    _scan_of(bridge)._call_ethercat_service_locked = lambda *_args, **_kwargs: {
         'success': False,
         'message': '모터 검색 부분 완료',
         'scan': {
@@ -1230,7 +1256,7 @@ def test_full_scan_returns_terminal_partial_operation():
         },
     }
 
-    result = bridge._call_scan_service(
+    result = _scan_of(bridge)._call_service(
         object(),
         '/scan_motors',
         20.0,
@@ -1278,7 +1304,7 @@ def test_ac_servo_scan_temporarily_releases_and_restores_motor_service(monkeypat
         motor_config_rules, 'wait_for_ethercat_release',
         lambda timeout_sec: calls.append(('released', timeout_sec)),
     )
-    bridge._call_scan_service_locked = lambda *_args: {
+    _scan_of(bridge)._call_service_locked = lambda *_args: {
         'success': True,
         'message': 'scan complete',
         'scan': {'scan_id': 'scan-1'},
@@ -1292,7 +1318,7 @@ def test_ac_servo_scan_temporarily_releases_and_restores_motor_service(monkeypat
     }
     monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
 
-    result = bridge._call_ethercat_scan_service_locked(
+    result = _scan_of(bridge)._call_ethercat_service_locked(
         object(), '/scan_ac_servo_motors', 10.0
     )
 
@@ -1342,7 +1368,7 @@ def test_ac_servo_scan_fails_when_motor_runtime_does_not_recover(monkeypatch):
         motor_config_rules, 'wait_for_ethercat_release', lambda timeout_sec: None
     )
     bridge._expected_runtime_ethercat_axes = lambda: [0, 1]
-    bridge._call_scan_service_locked = lambda *_args: {
+    _scan_of(bridge)._call_service_locked = lambda *_args: {
         'success': True,
         'message': 'scan complete',
         'scan': {'scan_id': 'scan-1'},
@@ -1356,7 +1382,7 @@ def test_ac_servo_scan_fails_when_motor_runtime_does_not_recover(monkeypatch):
     }
     monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
 
-    result = bridge._call_ethercat_scan_service_locked(
+    result = _scan_of(bridge)._call_ethercat_service_locked(
         object(),
         '/scan_ac_servo_motors',
         10.0,
@@ -1410,7 +1436,7 @@ def test_ac_servo_scan_restores_service_even_when_stop_command_times_out(monkeyp
     }
     monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
 
-    result = bridge._call_ethercat_scan_service_locked(
+    result = _scan_of(bridge)._call_ethercat_service_locked(
         object(), '/scan_ac_servo_motors', 10.0
     )
 
@@ -1464,7 +1490,7 @@ def test_ac_servo_scan_restores_service_even_when_status_update_fails(monkeypatc
     monkeypatch.setattr(
         motor_config_rules, 'wait_for_ethercat_release', lambda timeout_sec: None
     )
-    bridge._call_scan_service_locked = lambda *_args: {
+    _scan_of(bridge)._call_service_locked = lambda *_args: {
         'success': True,
         'message': 'scan complete',
         'scan': {'scan_id': 'scan-1'},
@@ -1478,7 +1504,7 @@ def test_ac_servo_scan_restores_service_even_when_status_update_fails(monkeypatc
     }
     monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
 
-    result = bridge._call_ethercat_scan_service_locked(
+    result = _scan_of(bridge)._call_ethercat_service_locked(
         object(),
         '/scan_ac_servo_motors',
         10.0,
@@ -1652,7 +1678,7 @@ def test_ac_servo_scan_is_blocked_while_runtime_velocity_is_nonzero(monkeypatch)
     )
     monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
 
-    result = bridge._call_ethercat_scan_service_locked(
+    result = _scan_of(bridge)._call_ethercat_service_locked(
         object(), '/scan_ac_servo_motors', 10.0
     )
 
@@ -1684,7 +1710,7 @@ def test_ac_servo_scan_is_blocked_when_running_motor_state_is_not_fresh(
     )
     monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
 
-    result = bridge._call_ethercat_scan_service_locked(
+    result = _scan_of(bridge)._call_ethercat_service_locked(
         object(), '/scan_ac_servo_motors', 10.0
     )
 
@@ -1722,7 +1748,7 @@ def test_ac_servo_scan_retires_previous_project_runtime_without_feedback(
         motor_config_rules, 'wait_for_ethercat_release',
         lambda timeout_sec: calls.append(('released', timeout_sec)),
     )
-    bridge._call_scan_service_locked = lambda *_args: {
+    _scan_of(bridge)._call_service_locked = lambda *_args: {
         'success': True,
         'message': 'scan complete',
         'scan': {'scan_id': 'scan-project-b'},
@@ -1732,7 +1758,7 @@ def test_ac_servo_scan_retires_previous_project_runtime_without_feedback(
     )
     monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
 
-    result = bridge._call_ethercat_scan_service_locked(
+    result = _scan_of(bridge)._call_ethercat_service_locked(
         object(), '/scan_ac_servo_motors', 10.0
     )
 
@@ -1787,7 +1813,7 @@ def test_ac_servo_scan_still_blocks_observed_motion_during_project_handoff(
     )
     monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
 
-    result = bridge._call_ethercat_scan_service_locked(
+    result = _scan_of(bridge)._call_ethercat_service_locked(
         object(), '/scan_ac_servo_motors', 10.0
     )
 
@@ -1911,7 +1937,7 @@ def test_scan_result_is_discarded_after_a_to_b_to_a_project_switch():
         'call_async': lambda _self, _request: Future(),
     })()
 
-    result = bridge._call_scan_service(client, '/scan', 1.0)
+    result = _scan_of(bridge)._call_service(client, '/scan', 1.0)
 
     assert result['success'] is False
     assert result['scan'] is None

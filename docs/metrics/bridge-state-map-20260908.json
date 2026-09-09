@@ -56,18 +56,16 @@
   "_motor_operation_reconcile_lock",
   "_motor_operation_reconcile_timer",
   "_motor_operation_recovery_lock",
-  "_motor_scan_request_lock",
   "_project_generation",
   "_project_generation_lock",
   "_safety_request_publisher",
   "_safety_status",
   "_safety_status_lock",
   "_safety_status_subscription",
+  "_scan",
   "_scan_ac_servo_client",
   "_scan_client",
   "_scan_dynamixel_client",
-  "_scan_progress",
-  "_scan_progress_lock",
   "_scan_progress_subscription",
   "_startup_project_context_timer",
   "_subscription",
@@ -130,10 +128,8 @@
   "_motor_lifecycle_lock",
   "_motor_operation_reconcile_lock",
   "_motor_operation_recovery_lock",
-  "_motor_scan_request_lock",
   "_project_generation_lock",
-  "_safety_status_lock",
-  "_scan_progress_lock"
+  "_safety_status_lock"
  ],
  "immutable_fields": [
   "_action_request_publisher",
@@ -163,6 +159,7 @@
   "_motor_operation_reconcile_timer",
   "_safety_request_publisher",
   "_safety_status_subscription",
+  "_scan",
   "_scan_ac_servo_client",
   "_scan_client",
   "_scan_dynamixel_client",
@@ -233,7 +230,6 @@
   "_motor_event_log",
   "_project_generation",
   "_safety_status",
-  "_scan_progress",
   "_supervisor_project_generation",
   "applied_motor_config_file",
   "motor_config_file",
@@ -241,7 +237,7 @@
  ],
  "methods": {
   "__init__": {
-   "lines": 384,
+   "lines": 387,
    "state": [
     "_action_request_publisher",
     "_action_result_subscription",
@@ -291,10 +287,10 @@
     "_safety_request_publisher",
     "_safety_status",
     "_safety_status_subscription",
+    "_scan",
     "_scan_ac_servo_client",
     "_scan_client",
     "_scan_dynamixel_client",
-    "_scan_progress",
     "_scan_progress_subscription",
     "_startup_project_context_timer",
     "_subscription",
@@ -357,10 +353,8 @@
     "_motor_lifecycle_lock",
     "_motor_operation_reconcile_lock",
     "_motor_operation_recovery_lock",
-    "_motor_scan_request_lock",
     "_project_generation_lock",
-    "_safety_status_lock",
-    "_scan_progress_lock"
+    "_safety_status_lock"
    ],
    "calls": [
     "_action_result_callback",
@@ -382,7 +376,6 @@
     "_motor_operation_reconcile_callback",
     "_runtime_project_id",
     "_safety_status_callback",
-    "_scan_progress_callback",
     "_schedule_execution_context_reconcile"
    ],
    "opaque": false
@@ -420,39 +413,6 @@
    "locks": [
     "_motion_value_lock",
     "_project_generation_lock"
-   ],
-   "calls": [
-    "_current_project_generation"
-   ],
-   "opaque": false
-  },
-  "_scan_progress_callback": {
-   "lines": 33,
-   "state": [
-    "_project_generation",
-    "_scan_progress",
-    "project_repository",
-    "scan_progress_topic"
-   ],
-   "locks": [
-    "_project_generation_lock",
-    "_scan_progress_lock"
-   ],
-   "calls": [
-    "_current_project_generation"
-   ],
-   "opaque": false
-  },
-  "motor_scan_progress": {
-   "lines": 9,
-   "state": [
-    "_project_generation",
-    "_scan_progress",
-    "project_repository"
-   ],
-   "locks": [
-    "_project_generation_lock",
-    "_scan_progress_lock"
    ],
    "calls": [
     "_current_project_generation"
@@ -1011,7 +971,7 @@
     "_motor_event_log",
     "_project_generation",
     "_safety_request_publisher",
-    "_scan_progress",
+    "_scan",
     "_supervisor_project_generation",
     "project_repository"
    ],
@@ -1020,8 +980,7 @@
     "_lock",
     "_midi_monitor_lock",
     "_motion_run_lock",
-    "_project_generation_lock",
-    "_scan_progress_lock"
+    "_project_generation_lock"
    ],
    "calls": [
     "_clear_project_scoped_memory",
@@ -1071,7 +1030,7 @@
     "_motor_event_log",
     "_project_generation",
     "_safety_request_publisher",
-    "_scan_progress",
+    "_scan",
     "_supervisor_project_generation",
     "applied_motor_config_file",
     "motion_projects_dir",
@@ -1084,8 +1043,7 @@
     "_lock",
     "_midi_monitor_lock",
     "_motion_run_lock",
-    "_project_generation_lock",
-    "_scan_progress_lock"
+    "_project_generation_lock"
    ],
    "calls": [
     "_reconcile_execution_context"
@@ -1117,7 +1075,7 @@
     "_motor_event_log",
     "_project_generation",
     "_safety_request_publisher",
-    "_scan_progress",
+    "_scan",
     "_supervisor_project_generation",
     "applied_motor_config_file",
     "motion_projects_dir",
@@ -1130,8 +1088,7 @@
     "_lock",
     "_midi_monitor_lock",
     "_motion_run_lock",
-    "_project_generation_lock",
-    "_scan_progress_lock"
+    "_project_generation_lock"
    ],
    "calls": [
     "_current_project_generation",
@@ -1200,7 +1157,7 @@
     "_motor_event_log",
     "_project_generation",
     "_safety_request_publisher",
-    "_scan_progress",
+    "_scan",
     "_supervisor_project_generation",
     "applied_motor_config_file",
     "motion_projects_dir",
@@ -1213,8 +1170,7 @@
     "_lock",
     "_midi_monitor_lock",
     "_motion_run_lock",
-    "_project_generation_lock",
-    "_scan_progress_lock"
+    "_project_generation_lock"
    ],
    "calls": [
     "_reconcile_execution_context",
@@ -1284,141 +1240,6 @@
    ],
    "opaque": false
   },
-  "scan_motors": {
-   "lines": 8,
-   "state": [
-    "_bridge_instance_id",
-    "_bridge_started_at",
-    "_coordination_web_bridge",
-    "_execution_context_status",
-    "_midi_monitor_status",
-    "_monitoring_motion_mapping_context_id",
-    "_monitoring_motion_mapping_rows",
-    "_motion_run_status",
-    "_motion_state",
-    "_motion_state_received_at",
-    "_motion_studio_session",
-    "_motion_value_state",
-    "_project_generation",
-    "_safety_status",
-    "_scan_client",
-    "_web_access",
-    "applied_motor_config_file",
-    "max_jog_delta_deg",
-    "motion_projects_dir",
-    "motion_state_topic",
-    "motor_config_file",
-    "project_repository",
-    "scan_service",
-    "workspace_root"
-   ],
-   "locks": [
-    "_execution_context_lock",
-    "_lock",
-    "_midi_monitor_lock",
-    "_monitoring_motion_mapping_lock",
-    "_motion_run_lock",
-    "_motion_value_lock",
-    "_motor_lifecycle_lock",
-    "_motor_scan_request_lock",
-    "_project_generation_lock",
-    "_safety_status_lock"
-   ],
-   "calls": [
-    "_call_scan_service"
-   ],
-   "opaque": false
-  },
-  "scan_ac_servo_motors": {
-   "lines": 8,
-   "state": [
-    "_bridge_instance_id",
-    "_bridge_started_at",
-    "_coordination_web_bridge",
-    "_execution_context_status",
-    "_midi_monitor_status",
-    "_monitoring_motion_mapping_context_id",
-    "_monitoring_motion_mapping_rows",
-    "_motion_run_status",
-    "_motion_state",
-    "_motion_state_received_at",
-    "_motion_studio_session",
-    "_motion_value_state",
-    "_project_generation",
-    "_safety_status",
-    "_scan_ac_servo_client",
-    "_web_access",
-    "applied_motor_config_file",
-    "max_jog_delta_deg",
-    "motion_projects_dir",
-    "motion_state_topic",
-    "motor_config_file",
-    "project_repository",
-    "scan_ac_servo_service",
-    "workspace_root"
-   ],
-   "locks": [
-    "_execution_context_lock",
-    "_lock",
-    "_midi_monitor_lock",
-    "_monitoring_motion_mapping_lock",
-    "_motion_run_lock",
-    "_motion_value_lock",
-    "_motor_lifecycle_lock",
-    "_motor_scan_request_lock",
-    "_project_generation_lock",
-    "_safety_status_lock"
-   ],
-   "calls": [
-    "_call_scan_service"
-   ],
-   "opaque": false
-  },
-  "scan_dynamixel_motors": {
-   "lines": 7,
-   "state": [
-    "_bridge_instance_id",
-    "_bridge_started_at",
-    "_coordination_web_bridge",
-    "_execution_context_status",
-    "_midi_monitor_status",
-    "_monitoring_motion_mapping_context_id",
-    "_monitoring_motion_mapping_rows",
-    "_motion_run_status",
-    "_motion_state",
-    "_motion_state_received_at",
-    "_motion_studio_session",
-    "_motion_value_state",
-    "_project_generation",
-    "_safety_status",
-    "_scan_dynamixel_client",
-    "_web_access",
-    "applied_motor_config_file",
-    "max_jog_delta_deg",
-    "motion_projects_dir",
-    "motion_state_topic",
-    "motor_config_file",
-    "project_repository",
-    "scan_dynamixel_service",
-    "workspace_root"
-   ],
-   "locks": [
-    "_execution_context_lock",
-    "_lock",
-    "_midi_monitor_lock",
-    "_monitoring_motion_mapping_lock",
-    "_motion_run_lock",
-    "_motion_value_lock",
-    "_motor_lifecycle_lock",
-    "_motor_scan_request_lock",
-    "_project_generation_lock",
-    "_safety_status_lock"
-   ],
-   "calls": [
-    "_call_scan_service"
-   ],
-   "opaque": false
-  },
   "read_ethercat_aliases": {
    "lines": 10,
    "state": [
@@ -1436,116 +1257,6 @@
    ],
    "locks": [],
    "calls": [],
-   "opaque": false
-  },
-  "_call_scan_service": {
-   "lines": 118,
-   "state": [
-    "_bridge_instance_id",
-    "_bridge_started_at",
-    "_coordination_web_bridge",
-    "_execution_context_status",
-    "_midi_monitor_status",
-    "_monitoring_motion_mapping_context_id",
-    "_monitoring_motion_mapping_rows",
-    "_motion_run_status",
-    "_motion_state",
-    "_motion_state_received_at",
-    "_motion_studio_session",
-    "_motion_value_state",
-    "_project_generation",
-    "_safety_status",
-    "_web_access",
-    "applied_motor_config_file",
-    "max_jog_delta_deg",
-    "motion_projects_dir",
-    "motion_state_topic",
-    "motor_config_file",
-    "project_repository",
-    "workspace_root"
-   ],
-   "locks": [
-    "_execution_context_lock",
-    "_lock",
-    "_midi_monitor_lock",
-    "_monitoring_motion_mapping_lock",
-    "_motion_run_lock",
-    "_motion_value_lock",
-    "_motor_lifecycle_lock",
-    "_motor_scan_request_lock",
-    "_project_generation_lock",
-    "_safety_status_lock"
-   ],
-   "calls": [
-    "_call_ethercat_scan_service_locked",
-    "_call_scan_service_locked",
-    "_current_project_generation",
-    "snapshot"
-   ],
-   "opaque": false
-  },
-  "_call_ethercat_scan_service_locked": {
-   "lines": 187,
-   "state": [
-    "_bridge_instance_id",
-    "_bridge_started_at",
-    "_coordination_web_bridge",
-    "_execution_context_status",
-    "_midi_monitor_status",
-    "_monitoring_motion_mapping_context_id",
-    "_monitoring_motion_mapping_rows",
-    "_motion_run_status",
-    "_motion_state",
-    "_motion_state_received_at",
-    "_motion_studio_session",
-    "_motion_value_state",
-    "_project_generation",
-    "_safety_status",
-    "_web_access",
-    "applied_motor_config_file",
-    "max_jog_delta_deg",
-    "motion_projects_dir",
-    "motion_state_topic",
-    "motor_config_file",
-    "project_repository",
-    "workspace_root"
-   ],
-   "locks": [
-    "_execution_context_lock",
-    "_lock",
-    "_midi_monitor_lock",
-    "_monitoring_motion_mapping_lock",
-    "_motion_run_lock",
-    "_motion_value_lock",
-    "_motor_lifecycle_lock",
-    "_project_generation_lock",
-    "_safety_status_lock"
-   ],
-   "calls": [
-    "_call_scan_service_locked",
-    "_current_project_generation",
-    "_ethercat_scan_runtime_handoff",
-    "_ethercat_scan_safety_blocker",
-    "_expected_runtime_axes",
-    "_expected_runtime_ethercat_axes",
-    "_managed_user_service_active",
-    "_run_managed_user_service",
-    "_wait_for_motor_runtime_recovery",
-    "snapshot"
-   ],
-   "opaque": false
-  },
-  "_ethercat_scan_runtime_handoff": {
-   "lines": 34,
-   "state": [
-    "applied_motor_config_file",
-    "motion_projects_dir",
-    "project_repository"
-   ],
-   "locks": [],
-   "calls": [
-    "_runtime_project_id_from_path"
-   ],
    "opaque": false
   },
   "_ethercat_scan_safety_blocker": {
@@ -1580,32 +1291,6 @@
    "calls": [],
    "opaque": false
   },
-  "_expected_runtime_ethercat_axes": {
-   "lines": 38,
-   "state": [
-    "_motion_state",
-    "_motion_state_received_at",
-    "project_repository"
-   ],
-   "locks": [
-    "_lock"
-   ],
-   "calls": [],
-   "opaque": false
-  },
-  "_expected_runtime_axes": {
-   "lines": 31,
-   "state": [
-    "_motion_state",
-    "_motion_state_received_at",
-    "project_repository"
-   ],
-   "locks": [
-    "_lock"
-   ],
-   "calls": [],
-   "opaque": false
-  },
   "_wait_for_motor_runtime_recovery": {
    "lines": 69,
    "state": [
@@ -1617,49 +1302,6 @@
    ],
    "calls": [
     "_managed_user_service_active"
-   ],
-   "opaque": false
-  },
-  "_call_scan_service_locked": {
-   "lines": 67,
-   "state": [
-    "_bridge_instance_id",
-    "_bridge_started_at",
-    "_coordination_web_bridge",
-    "_execution_context_status",
-    "_midi_monitor_status",
-    "_monitoring_motion_mapping_context_id",
-    "_monitoring_motion_mapping_rows",
-    "_motion_run_status",
-    "_motion_state",
-    "_motion_state_received_at",
-    "_motion_studio_session",
-    "_motion_value_state",
-    "_project_generation",
-    "_safety_status",
-    "_web_access",
-    "applied_motor_config_file",
-    "max_jog_delta_deg",
-    "motion_projects_dir",
-    "motion_state_topic",
-    "motor_config_file",
-    "project_repository",
-    "workspace_root"
-   ],
-   "locks": [
-    "_execution_context_lock",
-    "_lock",
-    "_midi_monitor_lock",
-    "_monitoring_motion_mapping_lock",
-    "_motion_run_lock",
-    "_motion_value_lock",
-    "_project_generation_lock",
-    "_safety_status_lock"
-   ],
-   "calls": [
-    "_current_project_generation",
-    "load_motor_config",
-    "snapshot"
    ],
    "opaque": false
   },
@@ -1793,7 +1435,7 @@
    "opaque": false
   },
   "_clear_project_scoped_memory": {
-   "lines": 29,
+   "lines": 20,
    "state": [
     "_action_store",
     "_jog_store",
@@ -1808,13 +1450,12 @@
     "_motion_studio_session",
     "_motion_studio_sync_service",
     "_motor_event_log",
-    "_scan_progress"
+    "_scan"
    ],
    "locks": [
     "_lock",
     "_midi_monitor_lock",
-    "_motion_run_lock",
-    "_scan_progress_lock"
+    "_motion_run_lock"
    ],
    "calls": [
     "_motion_studio_sync"
@@ -1910,7 +1551,7 @@
     "_motor_event_log",
     "_project_generation",
     "_safety_request_publisher",
-    "_scan_progress",
+    "_scan",
     "_supervisor_project_generation",
     "applied_motor_config_file",
     "motion_projects_dir",
@@ -1925,8 +1566,7 @@
     "_midi_monitor_lock",
     "_motion_run_lock",
     "_motor_lifecycle_lock",
-    "_project_generation_lock",
-    "_scan_progress_lock"
+    "_project_generation_lock"
    ],
    "calls": [
     "_advance_project_generation",
@@ -1960,7 +1600,7 @@
     "_motor_event_log",
     "_project_generation",
     "_safety_request_publisher",
-    "_scan_progress",
+    "_scan",
     "_supervisor_project_generation",
     "applied_motor_config_file",
     "motion_projects_dir",
@@ -1974,8 +1614,7 @@
     "_midi_monitor_lock",
     "_motion_run_lock",
     "_motor_lifecycle_lock",
-    "_project_generation_lock",
-    "_scan_progress_lock"
+    "_project_generation_lock"
    ],
    "calls": [
     "_advance_project_generation",
@@ -2047,7 +1686,7 @@
     "_motor_event_log",
     "_project_generation",
     "_safety_request_publisher",
-    "_scan_progress",
+    "_scan",
     "_supervisor_project_generation",
     "applied_motor_config_file",
     "motion_projects_dir",
@@ -2060,8 +1699,7 @@
     "_lock",
     "_midi_monitor_lock",
     "_motion_run_lock",
-    "_project_generation_lock",
-    "_scan_progress_lock"
+    "_project_generation_lock"
    ],
    "calls": [
     "_reconcile_execution_context"
@@ -2107,7 +1745,7 @@
     "_motor_event_log",
     "_project_generation",
     "_safety_request_publisher",
-    "_scan_progress",
+    "_scan",
     "_supervisor_project_generation",
     "applied_motor_config_file",
     "motion_projects_dir",
@@ -2122,8 +1760,7 @@
     "_midi_monitor_lock",
     "_motion_run_lock",
     "_motor_lifecycle_lock",
-    "_project_generation_lock",
-    "_scan_progress_lock"
+    "_project_generation_lock"
    ],
    "calls": [
     "_advance_project_generation",
@@ -2654,7 +2291,7 @@
     "_motor_event_log",
     "_project_generation",
     "_safety_request_publisher",
-    "_scan_progress",
+    "_scan",
     "_supervisor_project_generation",
     "applied_motor_config_file",
     "motion_projects_dir",
@@ -2668,8 +2305,7 @@
     "_midi_monitor_lock",
     "_motion_run_lock",
     "_motor_lifecycle_lock",
-    "_project_generation_lock",
-    "_scan_progress_lock"
+    "_project_generation_lock"
    ],
    "calls": [
     "_project_change_blocker",

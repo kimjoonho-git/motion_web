@@ -6,19 +6,19 @@ from fastapi import FastAPI, HTTPException, Request
 def register_motor_routes(app: FastAPI, bridge, project_call) -> None:
     @app.post('/api/motors/scan')
     async def scan_motors():
-        return await asyncio.to_thread(bridge.scan_motors)
+        return await asyncio.to_thread(bridge._scan.scan_all)
 
     @app.post('/api/motors/scan/ac-servo')
     async def scan_ac_servo_motors():
-        return await asyncio.to_thread(bridge.scan_ac_servo_motors)
+        return await asyncio.to_thread(bridge._scan.scan_ac_servo)
 
     @app.post('/api/motors/scan/dynamixel')
     async def scan_dynamixel_motors():
-        return await asyncio.to_thread(bridge.scan_dynamixel_motors)
+        return await asyncio.to_thread(bridge._scan.scan_dynamixel)
 
     @app.get('/api/motors/scan/progress')
     async def motor_scan_progress():
-        return bridge.motor_scan_progress()
+        return bridge._scan.progress()
 
     @app.get('/api/motors/ethercat-aliases')
     async def read_ethercat_aliases():
