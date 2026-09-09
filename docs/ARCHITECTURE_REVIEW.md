@@ -987,7 +987,17 @@ project_comparison: compatible true · required [0] · unused [1]
 
 - 코드 검증 · `ruff check src` 55건 유지 · 신규 0건
 - 실행 검증 · `pytest` 1,005건 통과 · 실패 0
-- 실물 검증 · 아래 별도 기록
+- 실물 검증 · `colcon build` · 재시작 · 실행 컨텍스트 `ready` · 차단 없음 ·
+  엔드포인트 7종 HTTP 200
+- 실물 검증 · `applied` · `service_management.runtime.runtime_config_file`이
+  실행 중인 세션 yaml을 가리키고 `runtime_target_matches_process: True`
+- 실물 검증 · `selected` · `GET /api/motor-config` ·
+  `연동2-29d895ca/motor_axes/motor_axes.yaml` · `config_revision 51145012…` ·
+  registry 1축
+- 실물 미검증 · `save` · `apply` · `delete` · `restart_motor_control` ·
+  `clear_runtime_application` · 모터 설정을 다시 쓰거나 서보를 재시작하는 경로다
+- 실물 미검증 · 프로젝트 전환 시 `clear_selection` 계약 · 가동 중 프로젝트를
+  바꿔야 확인된다
 
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
