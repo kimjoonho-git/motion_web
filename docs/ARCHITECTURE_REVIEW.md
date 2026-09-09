@@ -1732,7 +1732,23 @@ f(self)                 self를 통째로 넘기기
 
 - 코드 검증 · `ruff check src` 55건 유지 · 신규 0건
 - 실행 검증 · `pytest` 1,013건 통과 · 실패 0 · EtherCAT 스캔 계약 시험 그대로 통과
-- 실물 검증 · 아래 별도 기록
+- 실물 검증 · **AC Servo 물리 스캔 1회** · `scan_id 1788930966106-1` ·
+  **불변조건이 그대로 지켜졌다**
+
+```
+rescan_performed  True
+source            ethercat_rescan_sii_and_register
+direct            True
+slave             master 0 · position 0 · alias 103
+                  vendor 1647 · product 1614282756 · serial 402982152
+                  direct_read_complete True
+scan_contract     version 3 · physical_only true · ethercat_requires_rescan true
+project_comparison compatible true · required [0] · unused [1]
+motor_service_restored True
+```
+
+**값이 §6-13·§6-18·§6-26의 스캔과 동일하다.** alias·vendor·product·serial 네 가지가
+같은 값으로 다시 읽혔다 · 물리 검색 경로가 그대로라는 뜻이다.
 
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
