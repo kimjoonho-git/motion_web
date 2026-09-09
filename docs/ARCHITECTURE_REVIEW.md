@@ -2254,7 +2254,33 @@ fader_input_generation  [0]×8 · 세대 표식 정상 스트림
 motor_command       inactive · "SELECT 사용 가능"
 ```
 
-**미검증** · 파킹 왕복(명령 → 물리 도착 → `awaiting_sync` 해제) · SELECT 조작 필요.
+#### 실물 전 경로 검증 · 2026-09-09 · §6-38~§6-40 미검증 해소
+
+사용자가 MIDI로 모터를 조작했다. **페이더에서 서보까지 한 줄로 확인됐다.**
+
+```
+MIDI 채널 0    control_enabled true · raw_value 5820 (페이더 이동됨)
+Pickup        pickup_complete true · pickup_pending false
+              pickup_reference_source  motor_feedback
+              pickup_reference_motion_deg  -33.378
+명령          "MIDI target published: Axis 0, motion -52.111 deg,
+                                      motor -52.111 deg"
+서보 실측     position_deg -52.111 · velocity 1.373 · Operation enabled
+```
+
+**서보 실제 위치가 명령값과 정확히 일치한다.**
+
+| 해소된 미검증 | 근거 |
+| --- | --- |
+| `_pickup_reference_for_group_locked` | `motor_feedback` 경로로 기준을 잡았다 · 소스값 후보가 모두 걸러진 뒤 실측 역산으로 갔다는 뜻 |
+| `_motor_feedback_ready_for_pickup` | 위 경로의 전제 조건 · 통과했다 |
+| `_pickup_feedback_consistency_tolerance` | 같은 경로에서 실행됐다 |
+| `_pickup_reached` | `pending`이 `true → false`로 넘어갔다 · 기준값 통과 판정 성립 |
+| `motion_value_map` 변환 | 페이더 원시값 5820 → 모션 −52.111° → 모터 목표각 −52.111° |
+| `FaderStateMachine` 파킹 왕복 | SELECT가 켜졌다 · 파킹·동기화 대기가 풀려야 도달하는 상태다 |
+
+**남은 미검증** · 파킹 실패 분기(`fader_park_failed`) · 재연결 세대 표식 무효화 ·
+정상 경로에서는 타지 않는 예외 분기다.
 
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
