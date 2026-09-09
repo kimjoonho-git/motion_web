@@ -578,7 +578,15 @@ class ProjectStore:
 
     @staticmethod
     def _atomic_write(path: Path, content: str) -> None:
-        common_store.atomic_write_text(path, content)
+        """스튜디오 파일 기록 · 프로세스 간 락 안에서 원자적으로 (§6-48).
+
+        `motions/`는 웹 브리지(`ProjectRepository`)와 매핑 관리자도 쓴다.
+        그쪽 둘은 이미 같은 락 파일에서 만나는데 스튜디오만 빠져 있었다.
+        **한쪽만 잡는 락은 아무것도 막지 못한다** · 원자적 기록은 찢긴 읽기만
+        막을 뿐, 각자 읽고 각자 쓰면 나중 기록이 앞선 수정을 지운다.
+        """
+        with common_store.locked_update(path):
+            common_store.atomic_write_text(path, content)
 
     @staticmethod
     def _atomic_write_limited(
@@ -587,9 +595,11 @@ class ProjectStore:
         limit_bytes: int,
         error_message: str,
     ) -> None:
-        common_store.atomic_write_text(
-            path, content, max_bytes=limit_bytes, max_bytes_message=error_message
-        )
+        """크기 상한이 있는 기록 · 락 계약은 `_atomic_write`와 같다 (§6-48)."""
+        with common_store.locked_update(path):
+            common_store.atomic_write_text(
+                path, content, max_bytes=limit_bytes, max_bytes_message=error_message
+            )
 
 
 def project_duration(project: Dict[str, Any]) -> float:
