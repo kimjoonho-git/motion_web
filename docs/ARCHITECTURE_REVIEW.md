@@ -146,7 +146,7 @@ motion_system(C++)  모터 단일 통로                 유지 · 스캐너만 
 - `bridge_node` → `ExecutionContextService` · `MotorConfigService` · `ScanOrchestrator` · `MotorEventLog` · `MotionFileService` · `ProjectService`
 - `motion_run_manager` → `PlanBuilder` · `MotionPlayer` · `GroupSession` · `StatusStore`
 - `midi_control_node` → `MidiDecoder` · `FaderStateMachine` · `PickupPolicy` · `MotionValueMapper`
-- `monitor_node` → `DynamixelScanner` · `EthercatScanner` · `StatePublisher`
+- `monitor_node` → `DynamixelScanner` · `EthercatScanner` · `StatePublisher` — **완료**(§6-32~§6-36) · 2,884 → 866줄
 
 ## 6. 즉시 처리 권고 · 저위험·고효과
 
@@ -1971,6 +1971,85 @@ position_deg         -124.68 (실시간 갱신)
 같아서 이번 변경과 무관하다 · `_build_scan_result`가 `_current_motor_list`를
 `_last_ethercat_physical_scan` 갱신보다 **먼저** 부르는 순서 때문이다 ·
 **별도 항목으로 남긴다.**
+
+### 6-36. `StatePublisher` 신설 · `monitor_node` 분해 완료
+
+`MotionStateMonitor` 1,297 → **866줄** · 메서드 30 → 20 · 클래스 800줄
+
+§5 `monitor_node` 목표안 셋(`EthercatScanner` · `DynamixelScanner` ·
+`StatePublisher`)의 **마지막**이다.
+
+#### 세션 누적 · 하나가 다섯이 됐다
+
+| | 시작 | 끝 |
+| --- | --- | --- |
+| `MotionStateMonitor` | 2,884줄 · 78메서드 | **866줄 · 20메서드** (−70%) |
+
+| 갈라낸 것 | 줄수 | 개념 |
+| --- | --- | --- |
+| `ethercat_scanner` | 782 | EtherCAT 물리 검색 |
+| `dynamixel_scanner` | 490 | Dynamixel 물리 검색 |
+| `state_publisher` | 472 | 축 상태 수신·발행 |
+| `connection_state` | 285 | 연결 판정 |
+| `motor_values` | 157 | 값 변환 |
+
+#### 상태 7개가 같이 갔다
+
+`motors` · `last_healthy_motors` · `last_status_at` · `last_processed_at` ·
+`last_disabled_publish_at` · `started_at` · `subscription`
+
+노드에 남긴 것은 **ROS 개체 생성**(발행자·QoS·타이머)과 **설정 메타데이터 적재**뿐이다.
+판정과 목록 구성은 전부 서비스 쪽이라 **노드가 사서함 노릇을 하지 않는다.**
+
+#### 상수를 기억으로 적을 뻔했다
+
+새 모듈에 `COMMUNICATION_UNAVAILABLE_ERROR = 65344`라고 적었다. **실제는
+`0xFFFF`(65535)다.** 시험 전에 원본을 대조하다 잡았다.
+
+만약 통과했다면 통신 불가 판정이 **영원히 성립하지 않아** 축이 죽어도 `online`으로
+남았을 것이다. 시험도 못 잡는다 · 시험이 쓰는 값도 같이 틀렸을 테니.
+
+**옮길 때 상수는 반드시 원본에서 복사한다** · 기억이나 추정으로 적지 않는다.
+지금까지의 함정 목록에 붙는다.
+
+| # | 함정 | 잡은 것 |
+| --- | --- | --- |
+| 1 | 이름 다섯 형태 | 시험·실물 |
+| 2 | `@staticmethod` 등 메서드 종류 | 시험 (§6-32) |
+| 3 | 떼어낸 모듈이 노드를 되부름 | 시험 (§6-34) |
+| 4 | `(self, ` 치환이 `getattr(self, …)`를 먹음 | 시험 (§6-35) |
+| 5 | **상수를 기억으로 적음** | **사전 대조** (§6-36) |
+| 6 | 인자화로 평가 시점이 달라짐 | 실물 (§6-11) |
+
+#### 검증
+
+- 코드 검증 · `ruff check src` 55건 유지 · 데코레이터 원본 대조 불일치 0 ·
+  패키지 전역 역참조 0
+- 실행 검증 · `pytest` 1,013건 통과
+- 실물 검증 · **AC Servo + Dynamixel 동시 연결 상태에서 발행·스캔 양쪽**
+
+발행 · `/motion_control/motion_state` 6초 수신
+
+```
+수신          61건 · 주기 0.098초 (publish_hz 10)
+motor_count   1 · online 1 · connection_summary all_online true
+state         detected · age_sec 0.007 (실시간 갱신)
+status_text   Operation enabled · errorcode_hex 0x0000 · No error
+카탈로그       AC Servo · ZeroErr Motor · Dynamixel · CubeMars · Unknown
+last_motor_status_at 갱신 확인 → 구독 콜백 정상
+```
+
+스캔 · 전체 검색 1회
+
+```
+EtherCAT 1 · Dynamixel 2 · known_axes 1 · connected 1 · online 1
+known_axes    alias 103 · slave_position 0 · AC Servo · EtherCAT   ← _configured_axis_list
+matching      matched 1 · driver_model MADLN05BE
+connection    online · discovery detected · ethercat_slave_scan
+```
+
+`physical_connection_state`가 `unknown`인 것은 Master 1(랜선 분리)로 스캔이
+`complete`가 아니어서다 · §6-35에 기록한 그대로다.
 
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
