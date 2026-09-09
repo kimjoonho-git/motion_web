@@ -1528,6 +1528,47 @@ string scan_id · phase · transport · message · details · float64 timestamp
 - 여러 클라이언트가 같은 실행을 동시에 지켜봐야 할 때
 - 취소 응답을 요청 단위로 정확히 되돌려줘야 할 때
 
+### 6-29. `GroupSession` 신설 · §5 분해 목표안
+
+`MotionRunManager` 3,234 → **2,783줄** · 메서드 82 → 74 · 락 관여 2,772 → **2,360줄**
+
+§5가 `motion_run_manager` 분해 목표로 적어둔 넷(`PlanBuilder` · `MotionPlayer` ·
+`GroupSession` · `StatusStore`) 중 첫 번째다.
+
+#### 옮긴 것 · 8메서드 435줄
+
+`_run`(옛 `_prepare_and_run_group`) 192 · `prepare` 70 ·
+`schedule_initialization` 51 · `schedule_cycle` 43 · `cancel` 30 ·
+`_wait_initialization` 20 · `_finish` 17 · `_wait_cycle` 12
+
+서비스가 갖는 것 · 세션 상태(`session`)와 그 조건변수(`condition`).
+
+#### 조건변수는 실행 락 위에 선다
+
+```python
+self._group_condition = threading.Condition(self._run_lock)
+```
+
+**그룹 세션과 단일 실행이 같은 자원을 두고 다툰다.** 락을 나눠 가지면 그 다툼이
+사라지지 않고 숨는다. 노드가 `_run_lock`을 소유하고 서비스가 그 위에 조건변수를
+만든다 · §6-18에서 `lifecycle_lock`을 두 서비스가 나눠 가진 것과 같은 이유다.
+
+#### 정지 경로를 온전히 옮겼다
+
+`_handle_stop_after_cycle`의 그룹 분기를 서비스로 옮기면서 **세션 표시만 옮기지
+않도록** 주의했다. 정지가 실제로 서려면 재생 루프가 보는 `_graceful_stop_event`도
+함께 세워야 하고, 아직 움직이지 않는 중이면 `_stop_event`까지 세워야 한다.
+세 가지가 한 락 안에서 같이 일어나야 한다.
+
+`mark_stopping()` · `request_stop_after_cycle(current)` 두 개로 노드에 노출한다.
+
+#### 검증
+
+- 코드 검증 · `ruff check src` 55건 유지 · 신규 0건
+- 실행 검증 · `pytest` 1,012건 통과 · 실패 0 · 그룹 실행 시험 그대로 통과
+- 실물 검증 · 아래 별도 기록
+- 실물 검증 불가 · **그룹 실행 자체는 다른 PC가 있어야 한다** · 전원 차단
+
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
 - 파일 1,000줄 이하 · 함수 60줄 이하 · `Node` 서브클래스 500줄 이하
