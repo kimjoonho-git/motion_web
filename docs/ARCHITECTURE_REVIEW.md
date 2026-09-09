@@ -1270,7 +1270,20 @@ f(self)               ← self 통째로 넘기기
 
 - 코드 검증 · `ruff check src` 55건 유지 · 신규 0건
 - 실행 검증 · `pytest` **1,008건 통과** · 실패 0 · 락 검증 3건 신규
-- 실물 검증 · 아래 별도 기록
+- 실물 검증 · `./scripts/build_and_restart.sh` 31패키지 전체 빌드 · 두 서비스 재시작 ·
+  실행 컨텍스트 `ready` · 노드 확인 8건 성공 · 모터 1축 온라인
+- 실물 검증 · **락 파일이 어디에도 노출되지 않는다**
+
+```
+active_files   motor_axes.yaml · ㄴㅇㄹ.yaml · ㄴㅇㄹ.json · …__layer_….json
+motion-files   ['ㄴㅇㄹ.json']
+motion-mappings ['ㄴㅇㄹ']
+디스크          .schedule_store.json.lock (신규 · 숨김)
+               schedule_store.json.lock  (구 규약 · 고아 · 0바이트)
+```
+
+- 실물 미검증 · 두 프로세스 동시 기록 경합 · 웹과 매핑 관리자가 같은 파일을
+  같은 순간에 저장해야 한다 · 단위 테스트로는 4스레드 경합까지 확인했다
 
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
