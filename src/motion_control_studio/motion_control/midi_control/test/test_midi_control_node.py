@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from midi_control.bank_manager import MIDI_CHANNEL_COUNT, MidiBankManager
+from midi_control.fader_state import FaderStateMachine
 from midi_control.pickup_policy import PickupPolicy
 from midi_control.midi_control_node import (
     MIDI_VALUE_MAX,
@@ -74,6 +75,7 @@ def test_motion_value_preview_is_available_only_while_select_is_enabled():
 def test_motion_value_topic_cache_accepts_only_current_project_generation():
     node = MidiControlNode.__new__(MidiControlNode)
     node._pickup = PickupPolicy(node)
+    node._faders = FaderStateMachine(node)
     node._lock = threading.Lock()
     node._project_id = 'project-1'
     node._execution_context = {'project_generation': 3}
@@ -100,12 +102,13 @@ def test_motion_value_topic_cache_accepts_only_current_project_generation():
 def test_rec_mode_sends_source_motion_text_and_off_mode_keeps_14bit_text():
     node = MidiControlNode.__new__(MidiControlNode)
     node._pickup = PickupPolicy(node)
+    node._faders = FaderStateMachine(node)
     node._state_publisher = CapturePublisher()
     node._feedback_publisher = CapturePublisher()
     node._lock = threading.Lock()
-    node._pending_fader_positions = [4321] + [None] * (MIDI_CHANNEL_COUNT - 1)
-    node._fader_input_generation = [8] + [0] * (MIDI_CHANNEL_COUNT - 1)
-    node._pending_fader_input_generations = [7] + [0] * (
+    node._faders.pending_positions = [4321] + [None] * (MIDI_CHANNEL_COUNT - 1)
+    node._faders.input_generation = [8] + [0] * (MIDI_CHANNEL_COUNT - 1)
+    node._faders.pending_input_generations = [7] + [0] * (
         MIDI_CHANNEL_COUNT - 1
     )
     node._last_feedback = [None] * MIDI_CHANNEL_COUNT
@@ -146,6 +149,7 @@ def test_rec_mode_sends_source_motion_text_and_off_mode_keeps_14bit_text():
 def test_midi_node_rejects_previous_project_generation():
     node = MidiControlNode.__new__(MidiControlNode)
     node._pickup = PickupPolicy(node)
+    node._faders = FaderStateMachine(node)
     node._project_generation = 6
 
     with pytest.raises(ValueError, match='이전 프로젝트 세대'):
@@ -167,11 +171,11 @@ def add_motor_control_state(node):
     node._physical_touch = [False] * MIDI_CHANNEL_COUNT
     node._fader_moving = [False] * MIDI_CHANNEL_COUNT
     node._bridge_fader_syncing = [False] * MIDI_CHANNEL_COUNT
-    node._fader_input_generation = [0] * MIDI_CHANNEL_COUNT
-    node._pending_fader_input_generations = [0] * MIDI_CHANNEL_COUNT
-    node._fader_sync_targets = [None] * MIDI_CHANNEL_COUNT
-    node._awaiting_fader_sync = [False] * MIDI_CHANNEL_COUNT
-    node._fader_sync_not_before = [0.0] * MIDI_CHANNEL_COUNT
+    node._faders.input_generation = [0] * MIDI_CHANNEL_COUNT
+    node._faders.pending_input_generations = [0] * MIDI_CHANNEL_COUNT
+    node._faders.sync_targets = [None] * MIDI_CHANNEL_COUNT
+    node._faders.awaiting_sync = [False] * MIDI_CHANNEL_COUNT
+    node._faders.sync_not_before = [0.0] * MIDI_CHANNEL_COUNT
     node._last_select_toggle_at = [0.0] * MIDI_CHANNEL_COUNT
     node._last_motor_command_at = [0.0] * MIDI_CHANNEL_COUNT
     node._last_motor_target = [None] * MIDI_CHANNEL_COUNT
@@ -192,12 +196,13 @@ def add_motor_control_state(node):
 def test_input_state_keeps_physical_touch_movement_and_sync_separate():
     node = MidiControlNode.__new__(MidiControlNode)
     node._pickup = PickupPolicy(node)
+    node._faders = FaderStateMachine(node)
     node._lock = threading.Lock()
     node._physical_touch = [False] * MIDI_CHANNEL_COUNT
     node._fader_moving = [False] * MIDI_CHANNEL_COUNT
     node._bridge_fader_syncing = [False] * MIDI_CHANNEL_COUNT
-    node._fader_input_generation = [0] * MIDI_CHANNEL_COUNT
-    node._pending_fader_input_generations = [0] * MIDI_CHANNEL_COUNT
+    node._faders.input_generation = [0] * MIDI_CHANNEL_COUNT
+    node._faders.pending_input_generations = [0] * MIDI_CHANNEL_COUNT
     node._last_physical_input_monotonic = None
     node._last_physical_input_wall = None
 
@@ -212,7 +217,7 @@ def test_input_state_keeps_physical_touch_movement_and_sync_separate():
     assert node._physical_touch[:2] == [True, False]
     assert node._fader_moving[:2] == [False, True]
     assert node._bridge_fader_syncing[:2] == [False, True]
-    assert node._fader_input_generation[:2] == [12, 34]
+    assert node._faders.input_generation[:2] == [12, 34]
     assert node._last_physical_input_monotonic is not None
     assert time.monotonic() - node._last_physical_input_monotonic < 0.1
 
@@ -220,6 +225,7 @@ def test_input_state_keeps_physical_touch_movement_and_sync_separate():
 def test_old_generation_motor_result_and_motion_state_are_discarded():
     node = MidiControlNode.__new__(MidiControlNode)
     node._pickup = PickupPolicy(node)
+    node._faders = FaderStateMachine(node)
     node._lock = threading.Lock()
     node._project_id = 'project-1'
     node._execution_context = {'project_generation': 4}
@@ -253,12 +259,13 @@ def test_old_generation_motor_result_and_motion_state_are_discarded():
 def test_bank_change_clears_select_and_parks_all_faders_at_zero():
     node = MidiControlNode.__new__(MidiControlNode)
     node._pickup = PickupPolicy(node)
+    node._faders = FaderStateMachine(node)
     node._control_enabled = [True] * MIDI_CHANNEL_COUNT
     node._final_output_values = [1234.0] * MIDI_CHANNEL_COUNT
-    node._pending_fader_positions = [4321] * MIDI_CHANNEL_COUNT
-    node._fader_sync_targets = [4321] * MIDI_CHANNEL_COUNT
-    node._awaiting_fader_sync = [True] * MIDI_CHANNEL_COUNT
-    node._fader_sync_not_before = [1.0] * MIDI_CHANNEL_COUNT
+    node._faders.pending_positions = [4321] * MIDI_CHANNEL_COUNT
+    node._faders.sync_targets = [4321] * MIDI_CHANNEL_COUNT
+    node._faders.awaiting_sync = [True] * MIDI_CHANNEL_COUNT
+    node._faders.sync_not_before = [1.0] * MIDI_CHANNEL_COUNT
     node._last_select_toggle_at = [1.0] * MIDI_CHANNEL_COUNT
     node._last_motor_command_at = [1.0] * MIDI_CHANNEL_COUNT
     node._last_motor_target = [10.0] * MIDI_CHANNEL_COUNT
@@ -288,16 +295,17 @@ def test_bank_change_clears_select_and_parks_all_faders_at_zero():
     assert node._control_enabled == [False] * MIDI_CHANNEL_COUNT
     assert node._raw_channels == [0] * MIDI_CHANNEL_COUNT
     assert node._channels == [0.0] * MIDI_CHANNEL_COUNT
-    assert node._pending_fader_positions == [0] * MIDI_CHANNEL_COUNT
+    assert node._faders.pending_positions == [0] * MIDI_CHANNEL_COUNT
     assert node._previous_btn3 == node._btn3
 
 
 def test_filter_only_bank_change_keeps_select_and_fader_ownership():
     node = MidiControlNode.__new__(MidiControlNode)
     node._pickup = PickupPolicy(node)
+    node._faders = FaderStateMachine(node)
     node._banks = MidiBankManager()
     node._control_enabled = [True] + [False] * (MIDI_CHANNEL_COUNT - 1)
-    node._pending_fader_positions = [2345] + [None] * (MIDI_CHANNEL_COUNT - 1)
+    node._faders.pending_positions = [2345] + [None] * (MIDI_CHANNEL_COUNT - 1)
     node._raw_channels = [2345] * MIDI_CHANNEL_COUNT
     node._channels = [2345.0] * MIDI_CHANNEL_COUNT
     node._filter_stage1 = [1200.0] * MIDI_CHANNEL_COUNT
@@ -312,13 +320,14 @@ def test_filter_only_bank_change_keeps_select_and_fader_ownership():
 
     assert reset_select is False
     assert node._control_enabled[0] is True
-    assert node._pending_fader_positions[0] == 2345
+    assert node._faders.pending_positions[0] == 2345
     assert node._filter_stage1 == [2345.0] * MIDI_CHANNEL_COUNT
 
 
 def test_non_filter_bank_change_requires_select_reset():
     node = MidiControlNode.__new__(MidiControlNode)
     node._pickup = PickupPolicy(node)
+    node._faders = FaderStateMachine(node)
     node._banks = MidiBankManager()
     previous = node._banks.snapshot()
     mappings = node._banks.active_bank()['mappings']
@@ -343,6 +352,8 @@ def test_repeated_same_project_context_does_not_release_select(tmp_path):
     node = MidiControlNode.__new__(MidiControlNode)
 
     node._pickup = PickupPolicy(node)
+
+    node._faders = FaderStateMachine(node)
     node._lock = threading.Lock()
     node._motion_projects_dir = tmp_path
     node._project_id = project_id
@@ -415,6 +426,7 @@ def test_repeated_same_project_context_does_not_release_select(tmp_path):
 def test_pending_motor_targets_are_published_as_one_batch():
     node = MidiControlNode.__new__(MidiControlNode)
     node._pickup = PickupPolicy(node)
+    node._faders = FaderStateMachine(node)
     node._lock = threading.Lock()
     node._pending_motor_requests = {
         1: {'channel': 1, 'axis': 1, 'target_deg': 10.0},
@@ -438,13 +450,14 @@ def test_pending_motor_targets_are_published_as_one_batch():
 def test_only_supervisor_approved_motion_values_become_recording_source():
     node = MidiControlNode.__new__(MidiControlNode)
     node._pickup = PickupPolicy(node)
+    node._faders = FaderStateMachine(node)
     node._lock = threading.Lock()
     node._banks = MidiBankManager()
     node._axis_registry = SimpleNamespace(file_id='selected.yaml')
     node._project_id = 'project-1'
     node._execution_context = {'project_generation': 7}
     node._motion_value_publisher = CapturePublisher()
-    node._fader_parking = [False] * MIDI_CHANNEL_COUNT
+    node._faders.parking = [False] * MIDI_CHANNEL_COUNT
     node._motor_command_state = ['inactive'] * MIDI_CHANNEL_COUNT
     node._motor_command_message = [''] * MIDI_CHANNEL_COUNT
 
@@ -487,6 +500,7 @@ def test_only_supervisor_approved_motion_values_become_recording_source():
 def test_linked_targets_mark_the_channel_as_atomic():
     node = MidiControlNode.__new__(MidiControlNode)
     node._pickup = PickupPolicy(node)
+    node._faders = FaderStateMachine(node)
     node._lock = threading.Lock()
     node._pending_motor_requests = {
         (0, 1): {'channel': 0, 'axis': 1, 'target_deg': 10.0},
@@ -520,6 +534,7 @@ def test_linked_axes_current_version_requires_identical_motion_ranges():
 def test_linked_select_uses_logical_motion_values_not_motor_positions():
     node = MidiControlNode.__new__(MidiControlNode)
     node._pickup = PickupPolicy(node)
+    node._faders = FaderStateMachine(node)
     node._current_motion_values = {'1-1': 4.0, '1-2': 4.0}
     row = {
         'motion_lower_deg': -180.0,
@@ -552,6 +567,7 @@ def test_linked_select_uses_logical_motion_values_not_motor_positions():
 def test_unknown_logical_motion_value_falls_back_to_motor_feedback():
     node = MidiControlNode.__new__(MidiControlNode)
     node._pickup = PickupPolicy(node)
+    node._faders = FaderStateMachine(node)
     group = [{
         'motion_id': '1-1',
         'row': {
@@ -575,6 +591,7 @@ def test_unknown_logical_motion_value_falls_back_to_motor_feedback():
 def test_pickup_prefers_current_source_value_but_rejects_feedback_mismatch():
     node = MidiControlNode.__new__(MidiControlNode)
     node._pickup = PickupPolicy(node)
+    node._faders = FaderStateMachine(node)
     node._project_id = 'project-1'
     node._execution_context = {'project_generation': 3}
     node._source_motion_value_context = ('project-1', 3)
@@ -610,6 +627,7 @@ def test_pickup_prefers_current_source_value_but_rejects_feedback_mismatch():
 def test_mapping_change_recalculates_fader_from_feedback_with_new_ratio_and_range():
     node = MidiControlNode.__new__(MidiControlNode)
     node._pickup = PickupPolicy(node)
+    node._faders = FaderStateMachine(node)
     node._project_id = 'project-1'
     node._execution_context = {'project_generation': 3}
     node._source_motion_value_context = ('project-1', 3)
@@ -656,6 +674,7 @@ def test_mapping_change_recalculates_fader_from_feedback_with_new_ratio_and_rang
 def test_pickup_rejects_stale_feedback_and_detects_crossing():
     node = MidiControlNode.__new__(MidiControlNode)
     node._pickup = PickupPolicy(node)
+    node._faders = FaderStateMachine(node)
     node._project_id = 'project-1'
     node._execution_context = {'project_generation': 3}
     node._source_motion_value_context = ('project-1', 3)
@@ -690,12 +709,13 @@ def test_pickup_rejects_stale_feedback_and_detects_crossing():
 def parking_node():
     node = MidiControlNode.__new__(MidiControlNode)
     node._pickup = PickupPolicy(node)
+    node._faders = FaderStateMachine(node)
     node._control_enabled = [False] * MIDI_CHANNEL_COUNT
     node._control_enabled[0] = True
-    node._pending_fader_positions = [None] * MIDI_CHANNEL_COUNT
-    node._fader_sync_targets = [None] * MIDI_CHANNEL_COUNT
-    node._awaiting_fader_sync = [False] * MIDI_CHANNEL_COUNT
-    node._fader_sync_not_before = [0.0] * MIDI_CHANNEL_COUNT
+    node._faders.pending_positions = [None] * MIDI_CHANNEL_COUNT
+    node._faders.sync_targets = [None] * MIDI_CHANNEL_COUNT
+    node._faders.awaiting_sync = [False] * MIDI_CHANNEL_COUNT
+    node._faders.sync_not_before = [0.0] * MIDI_CHANNEL_COUNT
     node._last_motor_target = [None] * MIDI_CHANNEL_COUNT
     node._last_group_motor_targets = [{} for _ in range(MIDI_CHANNEL_COUNT)]
     node._last_group_motor_targets[0] = {2: 10.0, 3: 10.0}
@@ -725,23 +745,23 @@ def test_select_off_requests_motor_hold_and_retries_fader_zero():
     node._deactivate_control_channel_locked(0)
 
     assert node._control_enabled[0] is False
-    assert node._fader_parking[0] is True
-    assert node._pending_fader_positions[0] == 0
+    assert node._faders.parking[0] is True
+    assert node._faders.pending_positions[0] == 0
     assert node._pending_motor_requests == {}
     payload = json.loads(node._motor_request_publisher.messages[0].data)
     assert payload['hold_axes'] == [2, 3]
 
     # Simulate the bridge dropping the first zero command while the last hand
     # movement is still active. SELECT OFF must retry after release.
-    started = node._fader_park_last_command_at[0]
-    node._pending_fader_positions[0] = None
+    started = node._faders.park_last_command_at[0]
+    node._faders.pending_positions[0] = None
     node._fader_moving[0] = True
-    node._update_fader_parking_locked(0, 7000, started + 0.2)
-    assert node._pending_fader_positions[0] is None
+    node._faders._update_fader_parking_locked(0, 7000, started + 0.2)
+    assert node._faders.pending_positions[0] is None
 
     node._fader_moving[0] = False
-    node._update_fader_parking_locked(0, 7000, started + 0.3)
-    assert node._pending_fader_positions[0] == 0
+    node._faders._update_fader_parking_locked(0, 7000, started + 0.3)
+    assert node._faders.pending_positions[0] == 0
 
 
 def playback_lock_node():
@@ -791,8 +811,8 @@ def playback_follow_node():
     node._final_output_values = [0.0] * MIDI_CHANNEL_COUNT
     node._motor_angle_mode = [False] * MIDI_CHANNEL_COUNT
     node._bank_file_dirty = False
-    node._fader_input_generation = [0] * MIDI_CHANNEL_COUNT
-    node._pending_fader_input_generations = [0] * MIDI_CHANNEL_COUNT
+    node._faders.input_generation = [0] * MIDI_CHANNEL_COUNT
+    node._faders.pending_input_generations = [0] * MIDI_CHANNEL_COUNT
     node._last_select_toggle_at = [0.0] * MIDI_CHANNEL_COUNT
     node._last_received_monotonic = None
     node._last_received_wall = None
@@ -853,8 +873,8 @@ def test_motion_playback_start_releases_owner_without_locking_select():
     assert node._playback_phase == 'playing'
     assert node._select_lock_reason_locked() == ''
     assert node._control_enabled[0] is False
-    assert node._fader_parking[0] is True
-    assert node._pending_fader_positions[0] == 0
+    assert node._faders.parking[0] is True
+    assert node._faders.pending_positions[0] == 0
     # Playback already owns the robot motor, so SELECT release must not send
     # a competing MIDI hold request.
     assert node._motor_request_publisher.messages == []
@@ -936,7 +956,7 @@ def test_initial_move_blocks_select_and_preview_playback_allows_read_only_follow
     assert node._select_lock_reason_locked() == ''
     assert node._playback_follow_enabled[0] is True
     assert node._control_enabled[0] is False
-    assert node._pending_fader_positions[0] == round(MIDI_VALUE_MAX / 2)
+    assert node._faders.pending_positions[0] == round(MIDI_VALUE_MAX / 2)
     assert node._pending_motor_requests == {}
     assert node._motor_request_publisher.messages == []
 
@@ -948,7 +968,7 @@ def test_playback_touch_never_commands_motor_and_release_resumes_latest_target()
     node._set_playback_follow_enabled_locked(
         0, True, node._banks.active_bank()['mappings'][0]
     )
-    node._pending_fader_positions[0] = None
+    node._faders.pending_positions[0] = None
 
     node._input_state_callback(SimpleNamespace(data=json.dumps({
         'physical_touch': [True],
@@ -965,7 +985,7 @@ def test_playback_touch_never_commands_motor_and_release_resumes_latest_target()
     })))
 
     assert node._pending_motor_requests == {}
-    assert node._pending_fader_positions[0] is None
+    assert node._faders.pending_positions[0] is None
     assert node._playback_follow_targets[0] == round(MIDI_VALUE_MAX * 0.75)
 
     node._input_state_callback(SimpleNamespace(data=json.dumps({
@@ -974,11 +994,11 @@ def test_playback_touch_never_commands_motor_and_release_resumes_latest_target()
         'fader_syncing': [False],
         'fader_input_generation': [2],
     })))
-    assert node._pending_fader_positions[0] is None
+    assert node._faders.pending_positions[0] is None
     node._playback_follow_resume_not_before[0] = time.monotonic() - 0.01
     node._service_playback_follow_locked(time.monotonic())
 
-    assert node._pending_fader_positions[0] == round(MIDI_VALUE_MAX * 0.75)
+    assert node._faders.pending_positions[0] == round(MIDI_VALUE_MAX * 0.75)
     assert node._control_enabled[0] is False
     assert node._pending_motor_requests == {}
 
@@ -990,13 +1010,13 @@ def test_playback_follow_keeps_streaming_while_bridge_settles_previous_command()
     node._set_playback_follow_enabled_locked(
         0, True, node._banks.active_bank()['mappings'][0]
     )
-    node._pending_fader_positions[0] = None
+    node._faders.pending_positions[0] = None
     node._bridge_fader_syncing[0] = True
     node._source_motion_values['1-1'] = 5.0
 
     node._service_playback_follow_locked(time.monotonic())
 
-    assert node._pending_fader_positions[0] == round(MIDI_VALUE_MAX * 0.625)
+    assert node._faders.pending_positions[0] == round(MIDI_VALUE_MAX * 0.625)
     assert node._motor_command_state[0] == 'playback_follow'
     assert node._pending_motor_requests == {}
 
@@ -1017,7 +1037,7 @@ def test_general_and_preview_playback_end_force_follow_select_off():
     node._motion_run_status_callback(SimpleNamespace(data=json.dumps(run)))
     assert node._playback_phase == 'idle'
     assert node._playback_follow_enabled == [False] * MIDI_CHANNEL_COUNT
-    assert node._pending_fader_positions[0] == 0
+    assert node._faders.pending_positions[0] == 0
 
     studio = {
         'state': 'playing',
@@ -1039,7 +1059,7 @@ def test_general_and_preview_playback_end_force_follow_select_off():
     node._motion_run_status_callback(SimpleNamespace(data=json.dumps(run)))
     assert node._playback_phase == 'idle'
     assert node._playback_follow_enabled == [False] * MIDI_CHANNEL_COUNT
-    assert node._pending_fader_positions[0] == 0
+    assert node._faders.pending_positions[0] == 0
 
 
 def test_playback_status_isolated_between_projects():
@@ -1065,39 +1085,39 @@ def test_playback_status_isolated_between_projects():
 
 def test_fader_parking_waits_for_hand_release_retries_zero_and_confirms_arrival():
     node = parking_node()
-    node._start_fader_parking_locked(0, time.monotonic())
-    started = node._fader_park_last_command_at[0]
-    node._pending_fader_positions[0] = None
+    node._faders._start_fader_parking_locked(0, time.monotonic())
+    started = node._faders.park_last_command_at[0]
+    node._faders.pending_positions[0] = None
     node._physical_touch[0] = True
 
-    assert node._update_fader_parking_locked(0, 7000, started + 1.0) is True
-    assert node._pending_fader_positions[0] is None
-    assert node._fader_parking[0] is True
+    assert node._faders._update_fader_parking_locked(0, 7000, started + 1.0) is True
+    assert node._faders.pending_positions[0] is None
+    assert node._faders.parking[0] is True
 
     node._physical_touch[0] = False
-    node._update_fader_parking_locked(0, 7000, started + 1.1)
-    assert node._pending_fader_positions[0] == 0
-    assert node._fader_parking[0] is True
+    node._faders._update_fader_parking_locked(0, 7000, started + 1.1)
+    assert node._faders.pending_positions[0] == 0
+    assert node._faders.parking[0] is True
 
-    node._pending_fader_positions[0] = None
-    node._update_fader_parking_locked(0, 0, started + 1.2)
-    assert node._fader_parking[0] is False
+    node._faders.pending_positions[0] = None
+    node._faders._update_fader_parking_locked(0, 0, started + 1.2)
+    assert node._faders.parking[0] is False
     assert node._raw_channels[0] == 0
 
 
 def test_failed_normal_fader_parking_times_out_and_allows_select_retry():
     node = parking_node()
     node._studio_select_locked = False
-    node._start_fader_parking_locked(0, time.monotonic())
-    started = node._fader_park_started_at[0]
+    node._faders._start_fader_parking_locked(0, time.monotonic())
+    started = node._faders.park_started_at[0]
 
-    was_parking = node._update_fader_parking_locked(
+    was_parking = node._faders._update_fader_parking_locked(
         0, 2692, started + 2.1
     )
 
     assert was_parking is False
-    assert node._fader_parking[0] is False
-    assert node._pending_fader_positions[0] is None
+    assert node._faders.parking[0] is False
+    assert node._faders.pending_positions[0] is None
     assert node._motor_command_state[0] == 'fader_park_failed'
 
 
@@ -1110,36 +1130,36 @@ def test_select_off_nonzero_input_resends_zero_once_and_latches_failure():
     node._filter_stage2[0] = 0.0
     node._pending_motor_requests = {}
     started = time.monotonic()
-    node._start_fader_parking_locked(0, started)
-    node._update_fader_parking_locked(0, 0, started + 0.1)
+    node._faders._start_fader_parking_locked(0, started)
+    node._faders._update_fader_parking_locked(0, 0, started + 0.1)
 
     node._midi_callback(midi_message(touched=True, value=2600))
 
-    assert node._fader_parking[0] is False
-    assert node._pending_fader_positions[0] == 0
+    assert node._faders.parking[0] is False
+    assert node._faders.pending_positions[0] == 0
     assert node._motor_command_state[0] == 'fader_park_failed'
     assert '0 재명령 후 정지' in node._motor_command_message[0]
 
-    node._pending_fader_positions[0] = None
+    node._faders.pending_positions[0] = None
     node._midi_callback(midi_message(touched=True, value=2600))
 
-    assert node._fader_parking[0] is False
-    assert node._pending_fader_positions[0] is None
+    assert node._faders.parking[0] is False
+    assert node._faders.pending_positions[0] is None
     assert node._motor_command_state[0] == 'fader_park_failed'
 
 
 def test_studio_fader_parking_never_bypasses_physical_zero_requirement():
     node = parking_node()
     node._studio_select_locked = True
-    node._start_fader_parking_locked(0, time.monotonic())
-    started = node._fader_park_started_at[0]
+    node._faders._start_fader_parking_locked(0, time.monotonic())
+    started = node._faders.park_started_at[0]
 
-    was_parking = node._update_fader_parking_locked(
+    was_parking = node._faders._update_fader_parking_locked(
         0, 2692, started + 20.0
     )
 
     assert was_parking is True
-    assert node._fader_parking[0] is True
+    assert node._faders.parking[0] is True
 
 
 def test_studio_select_is_ignored_without_restarting_zero_fader_command():
@@ -1167,8 +1187,8 @@ def test_studio_select_is_ignored_without_restarting_zero_fader_command():
     node._device_connected = True
 
     node._deactivate_control_channel_locked(0, request_motor_hold=False)
-    node._start_fader_parking_locked(0, time.monotonic())
-    node._pending_fader_positions[0] = None
+    node._faders._start_fader_parking_locked(0, time.monotonic())
+    node._faders.pending_positions[0] = None
     node._fader_moving[0] = True
     message = SimpleNamespace(
         channel=[0] * MIDI_CHANNEL_COUNT,
@@ -1183,14 +1203,14 @@ def test_studio_select_is_ignored_without_restarting_zero_fader_command():
     node._midi_callback(message)
 
     assert node._control_enabled[0] is False
-    assert node._pending_fader_positions[0] is None
-    assert node._fader_parking[0] is True
+    assert node._faders.pending_positions[0] is None
+    assert node._faders.parking[0] is True
     assert node._motor_command_state[0] == 'studio_initializing'
     assert 'SELECT 입력 무시됨' in node._motor_command_message[0]
 
     node._fader_moving[0] = False
     node._midi_callback(message)
-    assert node._fader_parking[0] is False
+    assert node._faders.parking[0] is False
     assert node._studio_recording_zero_status_locked()['ready'] is True
 
     node._finish_studio_recording_initialization_locked()
@@ -1202,6 +1222,7 @@ def test_studio_select_is_ignored_without_restarting_zero_fader_command():
 def test_one_selected_fader_creates_same_motion_value_for_two_linked_axes():
     node = MidiControlNode.__new__(MidiControlNode)
     node._pickup = PickupPolicy(node)
+    node._faders = FaderStateMachine(node)
     node._lock = threading.Lock()
     node._banks = MidiBankManager()
     mappings = node._banks.active_bank()['mappings']
@@ -1225,7 +1246,7 @@ def test_one_selected_fader_creates_same_motion_value_for_two_linked_axes():
     node._confirmed = [False] * MIDI_CHANNEL_COUNT
     node._control_enabled = [False] * MIDI_CHANNEL_COUNT
     node._final_output_values = [0.0] * MIDI_CHANNEL_COUNT
-    node._pending_fader_positions = [None] * MIDI_CHANNEL_COUNT
+    node._faders.pending_positions = [None] * MIDI_CHANNEL_COUNT
     node._motor_angle_mode = [False] * MIDI_CHANNEL_COUNT
     node._bank_file_dirty = False
     add_motor_control_state(node)
@@ -1262,7 +1283,7 @@ def test_one_selected_fader_creates_same_motion_value_for_two_linked_axes():
 
     node._midi_callback(message(select=True))
     node._midi_callback(message())
-    node._awaiting_fader_sync[0] = False
+    node._faders.awaiting_sync[0] = False
     node._midi_callback(message(touch=True, value=round(MIDI_VALUE_MAX / 2)))
     assert node._pickup.pending[0] is False
     assert node._pending_motor_requests == {}
@@ -1406,6 +1427,8 @@ def test_studio_recording_prepare_clears_select_and_parks_at_physical_zero():
     node = MidiControlNode.__new__(MidiControlNode)
 
     node._pickup = PickupPolicy(node)
+
+    node._faders = FaderStateMachine(node)
     node._banks = Banks()
     node._axis_registry = Registry()
     node._preferred_mapping_file_id = ''
@@ -1424,10 +1447,10 @@ def test_studio_recording_prepare_clears_select_and_parks_at_physical_zero():
     node._filter_stage1 = [100.0] * MIDI_CHANNEL_COUNT
     node._filter_stage2 = [100.0] * MIDI_CHANNEL_COUNT
     node._filter_last_at = [None] * MIDI_CHANNEL_COUNT
-    node._pending_fader_positions = [None] * MIDI_CHANNEL_COUNT
-    node._fader_sync_targets = [None] * MIDI_CHANNEL_COUNT
-    node._awaiting_fader_sync = [False] * MIDI_CHANNEL_COUNT
-    node._fader_sync_not_before = [0.0] * MIDI_CHANNEL_COUNT
+    node._faders.pending_positions = [None] * MIDI_CHANNEL_COUNT
+    node._faders.sync_targets = [None] * MIDI_CHANNEL_COUNT
+    node._faders.awaiting_sync = [False] * MIDI_CHANNEL_COUNT
+    node._faders.sync_not_before = [0.0] * MIDI_CHANNEL_COUNT
     node._last_motor_target = [1.0] * MIDI_CHANNEL_COUNT
     node._pending_motor_requests = {0: {'target': 1.0}}
     node._motor_follow_active = [True] * MIDI_CHANNEL_COUNT
@@ -1448,7 +1471,7 @@ def test_studio_recording_prepare_clears_select_and_parks_at_physical_zero():
     assert node._studio_select_locked is True
     assert node._control_enabled == [False] * MIDI_CHANNEL_COUNT
     assert node._pending_motor_requests == {}
-    assert node._pending_fader_positions == [0] * MIDI_CHANNEL_COUNT
+    assert node._faders.pending_positions == [0] * MIDI_CHANNEL_COUNT
     assert node._studio_zero_fader_targets == [0] * MIDI_CHANNEL_COUNT
     assert node._raw_channels == [0] * MIDI_CHANNEL_COUNT
     assert node._motor_request_publisher.messages == []
@@ -1527,12 +1550,13 @@ def test_studio_recording_prepare_skips_linked_channel_with_mismatched_ranges():
         'message': '연동 Motion ID의 모션 범위가 서로 다릅니다',
     }]
     assert node._studio_select_locked is True
-    assert node._pending_fader_positions == [0] * MIDI_CHANNEL_COUNT
+    assert node._faders.pending_positions == [0] * MIDI_CHANNEL_COUNT
 
 
 def test_connection_state_keeps_midi_power_reconnect_timestamps():
     node = MidiControlNode.__new__(MidiControlNode)
     node._pickup = PickupPolicy(node)
+    node._faders = FaderStateMachine(node)
     node._lock = threading.Lock()
     node._device_connected = True
     node._device_connection_message = ''
@@ -1563,6 +1587,7 @@ def test_connection_state_keeps_midi_power_reconnect_timestamps():
 def test_device_reconnect_parks_every_select_off_fader_at_zero():
     node = MidiControlNode.__new__(MidiControlNode)
     node._pickup = PickupPolicy(node)
+    node._faders = FaderStateMachine(node)
     node._lock = threading.Lock()
     node._device_connected = False
     node._device_connection_message = ''
@@ -1571,26 +1596,26 @@ def test_device_reconnect_parks_every_select_off_fader_at_zero():
     node._device_last_power_reconnected_at = None
     node._device_connection_count = 0
     node._device_power_reconnect_count = 0
-    node._fader_input_generation = list(range(MIDI_CHANNEL_COUNT))
-    node._pending_fader_positions = [None] * MIDI_CHANNEL_COUNT
-    node._pending_fader_input_generations = [0] * MIDI_CHANNEL_COUNT
+    node._faders.input_generation = list(range(MIDI_CHANNEL_COUNT))
+    node._faders.pending_positions = [None] * MIDI_CHANNEL_COUNT
+    node._faders.pending_input_generations = [0] * MIDI_CHANNEL_COUNT
     reset_calls = []
     parking_calls = []
 
     def reset_runtime_controls():
         reset_calls.append(True)
-        node._pending_fader_positions = [0] * MIDI_CHANNEL_COUNT
-        node._pending_fader_input_generations = list(
-            node._fader_input_generation
+        node._faders.pending_positions = [0] * MIDI_CHANNEL_COUNT
+        node._faders.pending_input_generations = list(
+            node._faders.input_generation
         )
 
     node._reset_runtime_controls_locked = reset_runtime_controls
 
     def start_fader_parking(channel, _now):
         parking_calls.append(channel)
-        node._pending_fader_positions[channel] = 0
+        node._faders.pending_positions[channel] = 0
 
-    node._start_fader_parking_locked = start_fader_parking
+    node._faders._start_fader_parking_locked = start_fader_parking
     node._connection_state_callback(SimpleNamespace(data=json.dumps({
         'connected': True,
         'message': 'X-Touch connected',
@@ -1600,13 +1625,14 @@ def test_device_reconnect_parks_every_select_off_fader_at_zero():
 
     assert reset_calls == [True]
     assert parking_calls == list(range(MIDI_CHANNEL_COUNT))
-    assert node._pending_fader_positions == [0] * MIDI_CHANNEL_COUNT
-    assert node._pending_fader_input_generations == list(range(MIDI_CHANNEL_COUNT))
+    assert node._faders.pending_positions == [0] * MIDI_CHANNEL_COUNT
+    assert node._faders.pending_input_generations == list(range(MIDI_CHANNEL_COUNT))
 
 
 def test_device_disconnect_does_not_leave_undeliverable_zero_commands():
     node = MidiControlNode.__new__(MidiControlNode)
     node._pickup = PickupPolicy(node)
+    node._faders = FaderStateMachine(node)
     node._lock = threading.Lock()
     node._device_connected = True
     node._device_connection_message = ''
@@ -1615,16 +1641,16 @@ def test_device_disconnect_does_not_leave_undeliverable_zero_commands():
     node._device_last_power_reconnected_at = None
     node._device_connection_count = 1
     node._device_power_reconnect_count = 0
-    node._fader_input_generation = list(range(MIDI_CHANNEL_COUNT))
-    node._pending_fader_positions = [None] * MIDI_CHANNEL_COUNT
-    node._pending_fader_input_generations = [0] * MIDI_CHANNEL_COUNT
+    node._faders.input_generation = list(range(MIDI_CHANNEL_COUNT))
+    node._faders.pending_positions = [None] * MIDI_CHANNEL_COUNT
+    node._faders.pending_input_generations = [0] * MIDI_CHANNEL_COUNT
     node._touch = [True] * MIDI_CHANNEL_COUNT
     node._physical_touch = [True] * MIDI_CHANNEL_COUNT
     node._fader_moving = [True] * MIDI_CHANNEL_COUNT
     node._bridge_fader_syncing = [True] * MIDI_CHANNEL_COUNT
 
     def reset_runtime_controls():
-        node._pending_fader_positions = [0] * MIDI_CHANNEL_COUNT
+        node._faders.pending_positions = [0] * MIDI_CHANNEL_COUNT
 
     node._reset_runtime_controls_locked = reset_runtime_controls
     node._connection_state_callback(SimpleNamespace(data=json.dumps({
@@ -1634,7 +1660,7 @@ def test_device_disconnect_does_not_leave_undeliverable_zero_commands():
         'power_reconnect_count': 0,
     })))
 
-    assert node._pending_fader_positions == [None] * MIDI_CHANNEL_COUNT
+    assert node._faders.pending_positions == [None] * MIDI_CHANNEL_COUNT
     assert node._touch == [False] * MIDI_CHANNEL_COUNT
     assert node._physical_touch == [False] * MIDI_CHANNEL_COUNT
     assert node._fader_moving == [False] * MIDI_CHANNEL_COUNT
@@ -1644,11 +1670,12 @@ def test_device_disconnect_does_not_leave_undeliverable_zero_commands():
 def test_studio_recording_zero_status_waits_for_physical_parking_completion():
     node = MidiControlNode.__new__(MidiControlNode)
     node._pickup = PickupPolicy(node)
+    node._faders = FaderStateMachine(node)
     node._device_connected = True
     node._raw_channels = [0] * MIDI_CHANNEL_COUNT
-    node._fader_parking = [False] * MIDI_CHANNEL_COUNT
-    node._fader_parking[2] = True
-    node._fader_park_last_command_at = [0.0] * MIDI_CHANNEL_COUNT
+    node._faders.parking = [False] * MIDI_CHANNEL_COUNT
+    node._faders.parking[2] = True
+    node._faders.park_last_command_at = [0.0] * MIDI_CHANNEL_COUNT
     node._physical_touch = [False] * MIDI_CHANNEL_COUNT
     node._fader_moving = [False] * MIDI_CHANNEL_COUNT
     node._bridge_fader_syncing = [False] * MIDI_CHANNEL_COUNT
@@ -1666,7 +1693,7 @@ def test_studio_recording_zero_status_waits_for_physical_parking_completion():
         'fader_syncing': False,
     }]
 
-    node._fader_parking[2] = False
+    node._faders.parking[2] = False
     ready = node._studio_recording_zero_status_locked()
 
     assert ready['ready'] is True
@@ -1688,6 +1715,7 @@ def test_zero_to_two_hundred_percent_reaches_full_output_at_half_fader():
 def test_mapping_validates_percent_limits_and_forces_min_zero_above_one_hundred():
     node = MidiControlNode.__new__(MidiControlNode)
     node._pickup = PickupPolicy(node)
+    node._faders = FaderStateMachine(node)
     with pytest.raises(ValueError, match='less than'):
         node._validated_mapping([{
             'channel': 0,
@@ -1718,6 +1746,7 @@ def test_mapping_validates_percent_limits_and_forces_min_zero_above_one_hundred(
 def test_mapping_rejects_filter_level_outside_integer_zero_to_thirteen(filter_level):
     node = MidiControlNode.__new__(MidiControlNode)
     node._pickup = PickupPolicy(node)
+    node._faders = FaderStateMachine(node)
     with pytest.raises(ValueError, match='integer 0..13'):
         node._validated_mapping([{
             'channel': 0,
@@ -1765,6 +1794,7 @@ def test_second_order_filter_converges_without_overshoot():
 def test_filter_keeps_converging_after_touch_release_without_accepting_untouched_raw():
     node = MidiControlNode.__new__(MidiControlNode)
     node._pickup = PickupPolicy(node)
+    node._faders = FaderStateMachine(node)
     node._lock = threading.Lock()
     node._banks = MidiBankManager()
     mappings = node._banks.active_bank()['mappings']
@@ -1787,7 +1817,10 @@ def test_filter_keeps_converging_after_touch_release_without_accepting_untouched
     node._confirmed = [False] * MIDI_CHANNEL_COUNT
     node._control_enabled = [False] * MIDI_CHANNEL_COUNT
     node._final_output_values = [0.0] * MIDI_CHANNEL_COUNT
-    node._pending_fader_positions = [None] * MIDI_CHANNEL_COUNT
+    node._faders.pending_positions = [None] * MIDI_CHANNEL_COUNT
+    # 이 시험은 0 복귀가 끝난 뒤의 필터 수렴을 본다 · 예전에는 스텁이
+    # `_ensure_`의 지연 기본값(False)을 우연히 받았다 · 이제 명시한다 (§6-40)
+    node._faders.zero_required = [False] * MIDI_CHANNEL_COUNT
     node._motor_angle_mode = [False] * MIDI_CHANNEL_COUNT
     node._bank_file_dirty = False
     add_motor_control_state(node)
@@ -1831,6 +1864,7 @@ def test_filter_keeps_converging_after_touch_release_without_accepting_untouched
 def test_select_requires_matching_motion_axis_and_dial_updates_filter():
     node = MidiControlNode.__new__(MidiControlNode)
     node._pickup = PickupPolicy(node)
+    node._faders = FaderStateMachine(node)
     node._lock = threading.Lock()
     node._banks = MidiBankManager()
     node._raw_channels = [0] * MIDI_CHANNEL_COUNT
@@ -1850,7 +1884,7 @@ def test_select_requires_matching_motion_axis_and_dial_updates_filter():
     node._confirmed = [False] * MIDI_CHANNEL_COUNT
     node._control_enabled = [False] * MIDI_CHANNEL_COUNT
     node._final_output_values = [0.0] * MIDI_CHANNEL_COUNT
-    node._pending_fader_positions = [None] * MIDI_CHANNEL_COUNT
+    node._faders.pending_positions = [None] * MIDI_CHANNEL_COUNT
     node._motor_angle_mode = [False] * MIDI_CHANNEL_COUNT
     node._bank_file_dirty = False
     add_motor_control_state(node)
@@ -1886,7 +1920,7 @@ def test_select_requires_matching_motion_axis_and_dial_updates_filter():
 
     node._midi_callback(message(select=True))
     assert node._control_enabled[0] is True
-    assert node._pending_fader_positions[0] == MIDI_VALUE_MAX
+    assert node._faders.pending_positions[0] == MIDI_VALUE_MAX
     # An immediate SELECT LED echo must not toggle the channel back OFF.
     node._midi_callback(message(select=False))
     node._midi_callback(message(select=True))
@@ -1896,7 +1930,7 @@ def test_select_requires_matching_motion_axis_and_dial_updates_filter():
     node._last_select_toggle_at[0] = time.monotonic() - 1.0
     node._midi_callback(message(select=True, dial=4))
     assert node._control_enabled[0] is False
-    assert node._pending_fader_positions[0] == 0
+    assert node._faders.pending_positions[0] == 0
     node._midi_callback(message(select=False, dial=4, value=8000))
 
     # A rapid re-press cancels normal SELECT-off parking and performs a fresh
@@ -1905,8 +1939,8 @@ def test_select_requires_matching_motion_axis_and_dial_updates_filter():
     node._last_select_toggle_at[0] = time.monotonic() - 1.0
     node._midi_callback(message(select=True, dial=4, value=8000))
     assert node._control_enabled[0] is True
-    assert node._fader_parking[0] is False
-    assert node._pending_fader_positions[0] == MIDI_VALUE_MAX
+    assert node._faders.parking[0] is False
+    assert node._faders.pending_positions[0] == MIDI_VALUE_MAX
 
     node._midi_callback(message(select=False, dial=4, value=8000))
     node._last_select_toggle_at[0] = time.monotonic() - 1.0
@@ -1917,12 +1951,13 @@ def test_select_requires_matching_motion_axis_and_dial_updates_filter():
     node._last_select_toggle_at[0] = time.monotonic() - 1.0
     node._midi_callback(message(select=True, dial=4))
     assert node._control_enabled[0] is False
-    assert node._pending_fader_positions[0] == 0
+    assert node._faders.pending_positions[0] == 0
 
 
 def test_hand_movement_commands_only_after_soft_takeover_pickup():
     node = MidiControlNode.__new__(MidiControlNode)
     node._pickup = PickupPolicy(node)
+    node._faders = FaderStateMachine(node)
     node._lock = threading.Lock()
     node._banks = MidiBankManager()
     mappings = node._banks.active_bank()['mappings']
@@ -1945,7 +1980,7 @@ def test_hand_movement_commands_only_after_soft_takeover_pickup():
     node._confirmed = [False] * MIDI_CHANNEL_COUNT
     node._control_enabled = [False] * MIDI_CHANNEL_COUNT
     node._final_output_values = [0.0] * MIDI_CHANNEL_COUNT
-    node._pending_fader_positions = [None] * MIDI_CHANNEL_COUNT
+    node._faders.pending_positions = [None] * MIDI_CHANNEL_COUNT
     node._motor_angle_mode = [False] * MIDI_CHANNEL_COUNT
     node._bank_file_dirty = False
     add_motor_control_state(node)
@@ -1975,11 +2010,11 @@ def test_hand_movement_commands_only_after_soft_takeover_pickup():
         )
 
     node._midi_callback(message(select=True))
-    assert node._awaiting_fader_sync[0] is True
+    assert node._faders.awaiting_sync[0] is True
     node._midi_callback(message(select=False, touched=True, value=12000))
 
-    assert node._awaiting_fader_sync[0] is False
-    assert node._pending_fader_positions[0] is None
+    assert node._faders.awaiting_sync[0] is False
+    assert node._faders.pending_positions[0] is None
     assert node._raw_channels[0] == 12000
     assert node._pickup.pending[0] is True
     assert node._motor_follow_active[0] is False
@@ -2003,6 +2038,7 @@ def test_hand_movement_commands_only_after_soft_takeover_pickup():
 def test_only_one_selected_midi_line_can_own_the_same_motion_axis():
     node = MidiControlNode.__new__(MidiControlNode)
     node._pickup = PickupPolicy(node)
+    node._faders = FaderStateMachine(node)
     node._lock = threading.Lock()
     node._banks = MidiBankManager()
     mappings = node._banks.active_bank()['mappings']
@@ -2026,7 +2062,7 @@ def test_only_one_selected_midi_line_can_own_the_same_motion_axis():
     node._confirmed = [False] * MIDI_CHANNEL_COUNT
     node._control_enabled = [False] * MIDI_CHANNEL_COUNT
     node._final_output_values = [0.0] * MIDI_CHANNEL_COUNT
-    node._pending_fader_positions = [None] * MIDI_CHANNEL_COUNT
+    node._faders.pending_positions = [None] * MIDI_CHANNEL_COUNT
     node._motor_angle_mode = [False] * MIDI_CHANNEL_COUNT
     node._bank_file_dirty = False
     add_motor_control_state(node)
@@ -2066,12 +2102,13 @@ def test_only_one_selected_midi_line_can_own_the_same_motion_axis():
 
     assert node._control_enabled[0] is False
     assert node._control_enabled[4] is True
-    assert node._pending_fader_positions[0] == 0
+    assert node._faders.pending_positions[0] == 0
 
 
 def test_unsafe_same_axis_handover_keeps_existing_line_selected():
     node = MidiControlNode.__new__(MidiControlNode)
     node._pickup = PickupPolicy(node)
+    node._faders = FaderStateMachine(node)
     node._lock = threading.Lock()
     node._banks = MidiBankManager()
     mappings = node._banks.active_bank()['mappings']
@@ -2097,7 +2134,7 @@ def test_unsafe_same_axis_handover_keeps_existing_line_selected():
     node._confirmed = [False] * MIDI_CHANNEL_COUNT
     node._control_enabled = [False] * MIDI_CHANNEL_COUNT
     node._final_output_values = [0.0] * MIDI_CHANNEL_COUNT
-    node._pending_fader_positions = [None] * MIDI_CHANNEL_COUNT
+    node._faders.pending_positions = [None] * MIDI_CHANNEL_COUNT
     node._motor_angle_mode = [False] * MIDI_CHANNEL_COUNT
     node._bank_file_dirty = False
     add_motor_control_state(node)
@@ -2150,12 +2187,13 @@ def test_unsafe_same_axis_handover_keeps_existing_line_selected():
     assert node._control_enabled[4] is False
     assert node._motor_command_state[4] == 'activation_rejected'
     assert '제어 범위' in node._motor_command_message[4]
-    assert node._pending_fader_positions[0] != 0
+    assert node._faders.pending_positions[0] != 0
 
 
 def test_selected_mapping_context_is_used_when_no_run_mapping_is_active(tmp_path):
     node = MidiControlNode.__new__(MidiControlNode)
     node._pickup = PickupPolicy(node)
+    node._faders = FaderStateMachine(node)
     node._lock = threading.Lock()
     node._mappings_dir = tmp_path
     node._project_id = 'project-1'
@@ -2204,6 +2242,7 @@ def test_selected_mapping_context_is_used_when_no_run_mapping_is_active(tmp_path
 def test_reset_live_values_keeps_bank_settings_but_clears_runtime_state():
     node = MidiControlNode.__new__(MidiControlNode)
     node._pickup = PickupPolicy(node)
+    node._faders = FaderStateMachine(node)
     node._raw_channels = [1234] * MIDI_CHANNEL_COUNT
     node._channels = [1200.0] * MIDI_CHANNEL_COUNT
     node._filter_stage1 = [1200.0] * MIDI_CHANNEL_COUNT
@@ -2215,7 +2254,7 @@ def test_reset_live_values_keeps_bank_settings_but_clears_runtime_state():
     node._previous_dial = [2] * MIDI_CHANNEL_COUNT
     node._control_enabled = [True] * MIDI_CHANNEL_COUNT
     node._final_output_values = [999.0] * MIDI_CHANNEL_COUNT
-    node._pending_fader_positions = [None] * MIDI_CHANNEL_COUNT
+    node._faders.pending_positions = [None] * MIDI_CHANNEL_COUNT
     node._motor_angle_mode = [True] * MIDI_CHANNEL_COUNT
     node._last_feedback = [('old',)] * MIDI_CHANNEL_COUNT
 
@@ -2226,5 +2265,5 @@ def test_reset_live_values_keeps_bank_settings_but_clears_runtime_state():
     assert node._confirmed == [False] * MIDI_CHANNEL_COUNT
     assert node._control_enabled == [False] * MIDI_CHANNEL_COUNT
     assert node._final_output_values == [0.0] * MIDI_CHANNEL_COUNT
-    assert node._pending_fader_positions == [0] * MIDI_CHANNEL_COUNT
+    assert node._faders.pending_positions == [0] * MIDI_CHANNEL_COUNT
     assert node._previous_dial == node._dial

@@ -24,6 +24,11 @@ from midi_control.bank_manager import (
 )
 from midi_control.config_store import load_midi_banks
 from midi_control.motion_axis_registry import MotionAxisRegistry
+from midi_control.fader_state import (
+    FADER_PARK_TOLERANCE_RAW,
+    FADER_SYNC_MIN_DURATION_SEC,
+    FaderStateMachine,
+)
 from midi_control.pickup_policy import (
     PICKUP_FEEDBACK_CONSISTENCY_DEG,
     PICKUP_TOLERANCE_DEG,
@@ -50,10 +55,6 @@ from motion_common.timing import CONTROL_PERIOD_SEC
 
 MIDI_COMMAND_PERIOD_SEC = CONTROL_PERIOD_SEC
 MIDI_COMMAND_DEADBAND_DEG = 0.01
-FADER_SYNC_MIN_DURATION_SEC = 0.10
-FADER_PARK_RETRY_SEC = 0.15
-FADER_PARK_TOLERANCE_RAW = 16
-FADER_PARK_TIMEOUT_SEC = 2.0
 PLAYBACK_FADER_RESUME_DELAY_SEC = 0.35
 SELECT_TOGGLE_DEBOUNCE_SEC = 0.08
 
@@ -184,7 +185,8 @@ class MidiControlNode(Node):
         self._physical_touch = [False] * MIDI_CHANNEL_COUNT
         self._fader_moving = [False] * MIDI_CHANNEL_COUNT
         self._bridge_fader_syncing = [False] * MIDI_CHANNEL_COUNT
-        self._fader_input_generation = [0] * MIDI_CHANNEL_COUNT
+        # 페이더 파킹·동기화 대기는 별도 객체가 맡는다 (§6-40)
+        self._faders = FaderStateMachine(self)
         self._dial = [0] * MIDI_CHANNEL_COUNT
         self._btn0 = [False] * MIDI_CHANNEL_COUNT
         self._btn1 = [False] * MIDI_CHANNEL_COUNT
@@ -209,15 +211,6 @@ class MidiControlNode(Node):
         ] * MIDI_CHANNEL_COUNT
         self._studio_zero_fader_targets = [0] * MIDI_CHANNEL_COUNT
         self._final_output_values = [0.0] * MIDI_CHANNEL_COUNT
-        # Runtime always starts with SELECT OFF, so park all physical faders.
-        self._pending_fader_positions: List[int | None] = [0] * MIDI_CHANNEL_COUNT
-        self._pending_fader_input_generations = [0] * MIDI_CHANNEL_COUNT
-        self._fader_sync_targets: List[int | None] = [None] * MIDI_CHANNEL_COUNT
-        self._awaiting_fader_sync = [False] * MIDI_CHANNEL_COUNT
-        self._fader_sync_not_before = [0.0] * MIDI_CHANNEL_COUNT
-        self._fader_parking = [False] * MIDI_CHANNEL_COUNT
-        self._fader_park_last_command_at = [0.0] * MIDI_CHANNEL_COUNT
-        self._fader_zero_required = [True] * MIDI_CHANNEL_COUNT
         self._last_select_toggle_at = [0.0] * MIDI_CHANNEL_COUNT
         self._last_motor_command_at = [0.0] * MIDI_CHANNEL_COUNT
         self._last_motor_target: List[float | None] = [None] * MIDI_CHANNEL_COUNT
@@ -400,139 +393,6 @@ class MidiControlNode(Node):
                 {} for _ in range(MIDI_CHANNEL_COUNT)
             ]
 
-    def _ensure_fader_parking_state_locked(self) -> None:
-        if not hasattr(self, '_fader_parking'):
-            self._fader_parking = [False] * MIDI_CHANNEL_COUNT
-        if not hasattr(self, '_fader_park_last_command_at'):
-            self._fader_park_last_command_at = [0.0] * MIDI_CHANNEL_COUNT
-        if not hasattr(self, '_fader_park_started_at'):
-            self._fader_park_started_at = [0.0] * MIDI_CHANNEL_COUNT
-        if not hasattr(self, '_fader_zero_required'):
-            self._fader_zero_required = [False] * MIDI_CHANNEL_COUNT
-
-    def _ensure_fader_input_generation_locked(self) -> None:
-        if not hasattr(self, '_fader_input_generation'):
-            self._fader_input_generation = [0] * MIDI_CHANNEL_COUNT
-        if not hasattr(self, '_pending_fader_input_generations'):
-            self._pending_fader_input_generations = list(
-                self._fader_input_generation
-            )
-
-    def _queue_fader_position_locked(
-        self, channel: int, position: int | None
-    ) -> None:
-        self._ensure_fader_input_generation_locked()
-        self._pending_fader_positions[channel] = position
-        self._pending_fader_input_generations[channel] = int(
-            self._fader_input_generation[channel]
-        )
-
-    def _start_fader_parking_locked(self, channel: int, now: float) -> None:
-        self._ensure_fader_parking_state_locked()
-        if not hasattr(self, '_last_feedback'):
-            self._last_feedback = [None] * MIDI_CHANNEL_COUNT
-        self._fader_zero_required[channel] = True
-        self._fader_parking[channel] = True
-        self._fader_park_started_at[channel] = now
-        self._fader_park_last_command_at[channel] = now
-        self._queue_fader_position_locked(channel, 0)
-        self._fader_sync_targets[channel] = 0
-        self._awaiting_fader_sync[channel] = True
-        self._fader_sync_not_before[channel] = now + FADER_SYNC_MIN_DURATION_SEC
-        self._last_feedback[channel] = None
-        self._motor_command_state[channel] = 'parking_fader'
-        self._motor_command_message[channel] = 'SELECT 해제 · 페이더 0 복귀 중'
-
-    def _queue_normal_fader_zero_locked(self, channel: int, now: float) -> None:
-        """Send a best-effort zero command without blocking the next SELECT."""
-        self._ensure_fader_parking_state_locked()
-        if not hasattr(self, '_last_feedback'):
-            self._last_feedback = [None] * MIDI_CHANNEL_COUNT
-        self._fader_zero_required[channel] = True
-        self._fader_parking[channel] = False
-        self._fader_park_started_at[channel] = 0.0
-        self._fader_park_last_command_at[channel] = 0.0
-        self._queue_fader_position_locked(channel, 0)
-        self._fader_sync_targets[channel] = 0
-        self._awaiting_fader_sync[channel] = True
-        self._fader_sync_not_before[channel] = now + FADER_SYNC_MIN_DURATION_SEC
-        self._last_feedback[channel] = None
-        self._motor_command_state[channel] = 'inactive'
-        self._motor_command_message[channel] = (
-            'SELECT 사용 가능 · 페이더 0 이동 명령 전송(도착 피드백 없음)'
-        )
-
-    def _update_fader_parking_locked(
-        self, channel: int, raw: int, now: float
-    ) -> bool:
-        """Advance one mandatory SELECT-off park and return its prior state."""
-        self._ensure_fader_parking_state_locked()
-        was_parking = self._fader_parking[channel]
-        if not was_parking:
-            return False
-        self._raw_channels[channel] = raw
-        self._channels[channel] = float(raw)
-        self._filter_stage1[channel] = float(raw)
-        self._filter_stage2[channel] = float(raw)
-        physically_busy = (
-            self._physical_touch[channel]
-            or self._fader_moving[channel]
-            or self._bridge_fader_syncing[channel]
-        )
-        if raw <= FADER_PARK_TOLERANCE_RAW and not physically_busy:
-            self._fader_parking[channel] = False
-            self._fader_park_started_at[channel] = 0.0
-            self._fader_park_last_command_at[channel] = 0.0
-            self._fader_sync_targets[channel] = None
-            self._awaiting_fader_sync[channel] = False
-            self._fader_sync_not_before[channel] = 0.0
-            self._raw_channels[channel] = 0
-            self._channels[channel] = 0.0
-            self._filter_stage1[channel] = 0.0
-            self._filter_stage2[channel] = 0.0
-            self._motor_command_state[channel] = 'inactive'
-            self._motor_command_message[channel] = (
-                'SELECT 사용 가능 · 페이더 0 이동 명령 전송'
-                '(물리 도착 피드백 없음)'
-            )
-            return True
-        if (
-            not bool(getattr(self, '_studio_select_locked', False))
-            and self._fader_park_started_at[channel] > 0.0
-            and now - self._fader_park_started_at[channel]
-            >= FADER_PARK_TIMEOUT_SEC
-        ):
-            # A failed motorized-fader return must not permanently lock the
-            # physical SELECT button. Motor ownership is already released;
-            # stop retrying and let the next SELECT perform a fresh pickup
-            # from the logical Motion ID value before motor commands resume.
-            self._fader_parking[channel] = False
-            self._fader_park_started_at[channel] = 0.0
-            self._fader_park_last_command_at[channel] = 0.0
-            self._queue_fader_position_locked(channel, None)
-            self._fader_sync_targets[channel] = None
-            self._awaiting_fader_sync[channel] = False
-            self._fader_sync_not_before[channel] = 0.0
-            self._last_feedback[channel] = None
-            self._motor_command_state[channel] = 'fader_park_failed'
-            self._motor_command_message[channel] = (
-                f'페이더 0 복귀 실패(현재 {raw}) · SELECT 재시도 가능'
-            )
-            return False
-        if (
-            not self._physical_touch[channel]
-            and not self._fader_moving[channel]
-            and now - self._fader_park_last_command_at[channel]
-            >= FADER_PARK_RETRY_SEC
-        ):
-            self._queue_fader_position_locked(channel, 0)
-            self._fader_sync_targets[channel] = 0
-            self._awaiting_fader_sync[channel] = True
-            self._fader_sync_not_before[channel] = now + FADER_SYNC_MIN_DURATION_SEC
-            self._fader_park_last_command_at[channel] = now
-            self._last_feedback[channel] = None
-        return True
-
     def _request_motor_hold_locked(self, channel: int, axes: List[int]) -> None:
         publisher = getattr(self, '_motor_request_publisher', None)
         if publisher is None or not axes:
@@ -562,7 +422,7 @@ class MidiControlNode(Node):
         motor_request_payload = None
         with self._lock:
             self._pickup._ensure_pickup_state_locked()
-            self._ensure_fader_parking_state_locked()
+            self._faders._ensure_fader_parking_state_locked()
             select_lock_reason = self._select_lock_reason_locked()
             if not hasattr(self, '_observed_raw_channels'):
                 self._observed_raw_channels = list(self._raw_channels)
@@ -584,14 +444,14 @@ class MidiControlNode(Node):
                     # as if it started moving again, so initialization can
                     # wait forever.
                     if (
-                        not self._fader_parking[channel]
+                        not self._faders.parking[channel]
                         and raw > FADER_PARK_TOLERANCE_RAW
                     ):
-                        self._start_fader_parking_locked(channel, now)
+                        self._faders._start_fader_parking_locked(channel, now)
                 elif (
                     not self._control_enabled[channel]
-                    and self._fader_zero_required[channel]
-                    and not self._fader_parking[channel]
+                    and self._faders.zero_required[channel]
+                    and not self._faders.parking[channel]
                     and raw > FADER_PARK_TOLERANCE_RAW
                     and input_valid
                     and self._motor_command_state[channel] != 'fader_park_failed'
@@ -600,17 +460,17 @@ class MidiControlNode(Node):
                     # non-zero physical report proves the earlier zero did not
                     # hold. Send zero once more, expose the failure, and stop
                     # automatic retries instead of cycling on assumed success.
-                    self._queue_normal_fader_zero_locked(channel, now)
-                    self._awaiting_fader_sync[channel] = False
-                    self._fader_sync_targets[channel] = None
-                    self._fader_sync_not_before[channel] = 0.0
+                    self._faders._queue_normal_fader_zero_locked(channel, now)
+                    self._faders.awaiting_sync[channel] = False
+                    self._faders.sync_targets[channel] = None
+                    self._faders.sync_not_before[channel] = 0.0
                     self._motor_command_state[channel] = 'fader_park_failed'
                     self._motor_command_message[channel] = (
                         f'페이더 0 복귀 실패(현재 {raw}) · 0 재명령 후 정지'
                     )
                     input_valid = False
                     self._touch[channel] = False
-                was_parking = self._update_fader_parking_locked(channel, raw, now)
+                was_parking = self._faders._update_fader_parking_locked(channel, raw, now)
                 if self._studio_select_locked and not was_parking:
                     # Even a channel that was already parked must reflect its
                     # latest physical position. Otherwise a stale pre-lock raw
@@ -623,15 +483,15 @@ class MidiControlNode(Node):
                     input_valid = False
                     self._touch[channel] = False
                 bridge_syncing = self._bridge_fader_syncing[channel]
-                if input_valid and self._awaiting_fader_sync[channel]:
+                if input_valid and self._faders.awaiting_sync[channel]:
                     # A real hand input takes ownership immediately.  Waiting
                     # for the previously commanded pickup/park position here
                     # drops the first movement made just after SELECT and can
                     # leave the motor at its old position.
-                    self._queue_fader_position_locked(channel, None)
-                    self._fader_sync_targets[channel] = None
-                    self._awaiting_fader_sync[channel] = False
-                    self._fader_sync_not_before[channel] = 0.0
+                    self._faders._queue_fader_position_locked(channel, None)
+                    self._faders.sync_targets[channel] = None
+                    self._faders.awaiting_sync[channel] = False
+                    self._faders.sync_not_before[channel] = 0.0
                     if self._pickup.pending[channel]:
                         self._motor_command_state[channel] = 'waiting_pickup'
                         self._motor_command_message[channel] = (
@@ -641,15 +501,15 @@ class MidiControlNode(Node):
                         self._motor_command_state[channel] = 'ready'
                         self._motor_command_message[channel] = '사용자 페이더 조작 감지'
                 if (
-                    not self._fader_parking[channel]
+                    not self._faders.parking[channel]
                     and
-                    self._awaiting_fader_sync[channel]
-                    and now >= self._fader_sync_not_before[channel]
+                    self._faders.awaiting_sync[channel]
+                    and now >= self._faders.sync_not_before[channel]
                     and not bridge_syncing
                 ):
-                    self._awaiting_fader_sync[channel] = False
-                    self._fader_sync_targets[channel] = None
-                    self._fader_sync_not_before[channel] = 0.0
+                    self._faders.awaiting_sync[channel] = False
+                    self._faders.sync_targets[channel] = None
+                    self._faders.sync_not_before[channel] = 0.0
                     if self._pickup.pending[channel]:
                         self._motor_command_state[channel] = 'waiting_pickup'
                         self._motor_command_message[channel] = (
@@ -663,7 +523,7 @@ class MidiControlNode(Node):
                         self._motor_command_message[channel] = 'SELECT 사용 가능'
                 # input_valid is physical touch OR user fader movement. The
                 # bridge excludes only target-matched motor synchronization.
-                if input_valid and not self._awaiting_fader_sync[channel]:
+                if input_valid and not self._faders.awaiting_sync[channel]:
                     self._raw_channels[channel] = raw
                 # Keep advancing toward the last hand-touched target after
                 # release. Untouched device/motor position changes never
@@ -703,20 +563,20 @@ class MidiControlNode(Node):
                     select_rising
                     and select_allowed
                     and not select_lock_reason
-                    and self._fader_parking[channel]
+                    and self._faders.parking[channel]
                 ):
                     # SELECT-OFF has already released/held the robot motor.
                     # A new SELECT press is therefore a request to take the
                     # line back. Cancel the physical-zero park and perform a
                     # fresh pickup from the current logical Motion ID value instead of
                     # consuming this press as "still parking".
-                    self._fader_parking[channel] = False
-                    self._fader_park_started_at[channel] = 0.0
-                    self._fader_park_last_command_at[channel] = 0.0
-                    self._queue_fader_position_locked(channel, None)
-                    self._fader_sync_targets[channel] = None
-                    self._awaiting_fader_sync[channel] = False
-                    self._fader_sync_not_before[channel] = 0.0
+                    self._faders.parking[channel] = False
+                    self._faders.park_started_at[channel] = 0.0
+                    self._faders.park_last_command_at[channel] = 0.0
+                    self._faders._queue_fader_position_locked(channel, None)
+                    self._faders.sync_targets[channel] = None
+                    self._faders.awaiting_sync[channel] = False
+                    self._faders.sync_not_before[channel] = 0.0
                     was_parking = False
                 self._ensure_playback_follow_state_locked()
                 if (
@@ -800,17 +660,17 @@ class MidiControlNode(Node):
                                 ):
                                     self._deactivate_control_channel_locked(other_channel)
                             self._control_enabled[channel] = True
-                            self._fader_zero_required[channel] = False
+                            self._faders.zero_required[channel] = False
                             self._pickup.pending[channel] = True
                             self._pickup.reference_motion[channel] = motion_value
                             self._pickup.previous_motion[channel] = None
                             self._pickup.reference_source[channel] = pickup_source
-                            self._queue_fader_position_locked(
+                            self._faders._queue_fader_position_locked(
                                 channel, fader_target
                             )
-                            self._fader_sync_targets[channel] = fader_target
-                            self._awaiting_fader_sync[channel] = True
-                            self._fader_sync_not_before[channel] = (
+                            self._faders.sync_targets[channel] = fader_target
+                            self._faders.awaiting_sync[channel] = True
+                            self._faders.sync_not_before[channel] = (
                                 now + FADER_SYNC_MIN_DURATION_SEC
                             )
                             self._motor_command_state[channel] = 'waiting_pickup'
@@ -885,7 +745,7 @@ class MidiControlNode(Node):
                     input_valid
                     and self._control_enabled[channel]
                     and self._pickup.pending[channel]
-                    and not self._awaiting_fader_sync[channel]
+                    and not self._faders.awaiting_sync[channel]
                 ):
                     try:
                         group = self._mapping_group_locked(mappings[channel])
@@ -947,7 +807,7 @@ class MidiControlNode(Node):
                 if (
                     self._motor_follow_active[channel]
                     and self._control_enabled[channel]
-                    and not self._awaiting_fader_sync[channel]
+                    and not self._faders.awaiting_sync[channel]
                 ):
                     final_output = self._filtered_output_14bit(
                         self._channels[channel], mappings[channel]
@@ -1094,7 +954,7 @@ class MidiControlNode(Node):
         # hand movement active. The bridge deliberately drops fader commands
         # during that short protection window, so SELECT OFF must use the
         # retrying park path instead of a one-shot zero command.
-        self._start_fader_parking_locked(channel, time.monotonic())
+        self._faders._start_fader_parking_locked(channel, time.monotonic())
 
     def _select_lock_reason_locked(self) -> str:
         if bool(getattr(self, '_studio_select_locked', False)):
@@ -1142,8 +1002,8 @@ class MidiControlNode(Node):
             self._playback_follow_resume_not_before[channel] = 0.0
             self._clear_pending_channel_locked(channel)
             self._motor_follow_active[channel] = False
-            if was_selected and not self._fader_parking[channel]:
-                self._start_fader_parking_locked(channel, now)
+            if was_selected and not self._faders.parking[channel]:
+                self._faders._start_fader_parking_locked(channel, now)
             if was_selected:
                 self._motor_command_state[channel] = 'playback_select_off'
                 self._motor_command_message[channel] = message
@@ -1227,7 +1087,7 @@ class MidiControlNode(Node):
             self._playback_follow_enabled[channel] = False
             self._playback_follow_targets[channel] = None
             self._playback_follow_resume_not_before[channel] = 0.0
-            self._start_fader_parking_locked(channel, now)
+            self._faders._start_fader_parking_locked(channel, now)
             self._motor_command_state[channel] = 'playback_follow_off'
             self._motor_command_message[channel] = (
                 '재생 위치 추종 OFF · 페이더 0 복귀 중'
@@ -1236,10 +1096,10 @@ class MidiControlNode(Node):
         if mapping.get('enabled') is False:
             raise ValueError('현재 뱅크에서 이 라인의 사용이 꺼져 있습니다')
         target = self._playback_follow_target_locked(channel, mapping)
-        self._fader_parking[channel] = False
-        self._fader_zero_required[channel] = False
-        self._fader_park_started_at[channel] = 0.0
-        self._fader_park_last_command_at[channel] = 0.0
+        self._faders.parking[channel] = False
+        self._faders.zero_required[channel] = False
+        self._faders.park_started_at[channel] = 0.0
+        self._faders.park_last_command_at[channel] = 0.0
         self._control_enabled[channel] = False
         self._pickup._clear_pickup_state_locked(channel)
         self._clear_pending_channel_locked(channel)
@@ -1247,7 +1107,7 @@ class MidiControlNode(Node):
         self._playback_follow_enabled[channel] = True
         self._playback_follow_targets[channel] = target
         self._playback_follow_resume_not_before[channel] = 0.0
-        self._queue_fader_position_locked(channel, target)
+        self._faders._queue_fader_position_locked(channel, target)
         self._motor_command_state[channel] = 'playback_follow'
         self._motor_command_message[channel] = '재생 모션값 읽기 전용 추종 중'
         self._last_feedback[channel] = None
@@ -1274,7 +1134,7 @@ class MidiControlNode(Node):
                 or self._fader_moving[channel]
             )
             if busy:
-                self._queue_fader_position_locked(channel, None)
+                self._faders._queue_fader_position_locked(channel, None)
                 self._playback_follow_resume_not_before[channel] = max(
                     self._playback_follow_resume_not_before[channel],
                     now + PLAYBACK_FADER_RESUME_DELAY_SEC,
@@ -1285,10 +1145,10 @@ class MidiControlNode(Node):
                 continue
             if now < self._playback_follow_resume_not_before[channel]:
                 continue
-            pending = self._pending_fader_positions[channel]
+            pending = self._faders.pending_positions[channel]
             observed = self._observed_raw_channels[channel]
             if pending != target and abs(int(observed) - target) > 1:
-                self._queue_fader_position_locked(channel, target)
+                self._faders._queue_fader_position_locked(channel, target)
             self._motor_command_state[channel] = 'playback_follow'
             self._motor_command_message[channel] = '재생 모션값 읽기 전용 추종 중'
 
@@ -1312,14 +1172,14 @@ class MidiControlNode(Node):
                 bool(self._array_value(payload.get('fader_syncing', []), channel, False))
                 for channel in range(MIDI_CHANNEL_COUNT)
             ]
-            self._ensure_fader_input_generation_locked()
-            self._fader_input_generation = [
+            self._faders._ensure_fader_input_generation_locked()
+            self._faders.input_generation = [
                 max(
-                    int(self._fader_input_generation[channel]),
+                    int(self._faders.input_generation[channel]),
                     int(self._array_value(
                         payload.get('fader_input_generation', []),
                         channel,
-                        self._fader_input_generation[channel],
+                        self._faders.input_generation[channel],
                     )),
                 )
                 for channel in range(MIDI_CHANNEL_COUNT)
@@ -1383,11 +1243,11 @@ class MidiControlNode(Node):
                 if connected:
                     now = time.monotonic()
                     for channel in range(MIDI_CHANNEL_COUNT):
-                        self._start_fader_parking_locked(channel, now)
+                        self._faders._start_fader_parking_locked(channel, now)
                 else:
-                    self._pending_fader_positions = [None] * MIDI_CHANNEL_COUNT
-                    self._pending_fader_input_generations = list(
-                        self._fader_input_generation
+                    self._faders.pending_positions = [None] * MIDI_CHANNEL_COUNT
+                    self._faders.pending_input_generations = list(
+                        self._faders.input_generation
                     )
                     self._touch = [False] * MIDI_CHANNEL_COUNT
                     self._physical_touch = [False] * MIDI_CHANNEL_COUNT
@@ -1516,7 +1376,7 @@ class MidiControlNode(Node):
                 if all(item.get('operation') == 'hold' for item in channel_results):
                     self._approved_motion_values[channel] = {}
                     self._approved_motor_targets[channel] = {}
-                    if self._fader_parking[channel]:
+                    if self._faders.parking[channel]:
                         self._motor_command_state[channel] = 'parking_fader'
                         hold_message = str(channel_results[-1].get('message') or '')
                         self._motor_command_message[channel] = (
@@ -1802,7 +1662,7 @@ class MidiControlNode(Node):
     def _snapshot(self) -> Dict[str, Any]:
         now_monotonic = time.monotonic()
         with self._lock:
-            self._ensure_fader_parking_state_locked()
+            self._faders._ensure_fader_parking_state_locked()
             self._service_playback_follow_locked(now_monotonic)
             self._refresh_axis_registry_locked(now_monotonic)
             if self._execution_context_ready and self._bank_config_file is not None:
@@ -1838,8 +1698,8 @@ class MidiControlNode(Node):
             physical_touch = list(self._physical_touch)
             fader_moving = list(self._fader_moving)
             bridge_fader_syncing = list(self._bridge_fader_syncing)
-            self._ensure_fader_input_generation_locked()
-            fader_input_generation = list(self._fader_input_generation)
+            self._faders._ensure_fader_input_generation_locked()
+            fader_input_generation = list(self._faders.input_generation)
             dial = list(self._dial)
             buttons = [
                 [self._btn0[index], self._btn1[index], self._btn2[index], self._btn3[index]]
@@ -1954,9 +1814,9 @@ class MidiControlNode(Node):
             final_output_values = list(self._final_output_values)
             motor_command_states = list(self._motor_command_state)
             motor_command_messages = list(self._motor_command_message)
-            awaiting_fader_sync = list(self._awaiting_fader_sync)
-            fader_sync_targets = list(self._fader_sync_targets)
-            fader_parking = list(self._fader_parking)
+            awaiting_fader_sync = list(self._faders.awaiting_sync)
+            fader_sync_targets = list(self._faders.sync_targets)
+            fader_parking = list(self._faders.parking)
             select_lock_reason = self._select_lock_reason_locked()
             self._ensure_approved_command_state_locked()
             self._ensure_current_motion_state_locked()
@@ -2229,12 +2089,12 @@ class MidiControlNode(Node):
             )
             index = int(channel['channel'])
             with self._lock:
-                self._ensure_fader_input_generation_locked()
-                fader_position = self._pending_fader_positions[index]
+                self._faders._ensure_fader_input_generation_locked()
+                fader_position = self._faders.pending_positions[index]
                 fader_input_generation = int(
-                    self._pending_fader_input_generations[index]
+                    self._faders.pending_input_generations[index]
                 )
-                self._queue_fader_position_locked(index, None)
+                self._faders._queue_fader_position_locked(index, None)
             # A consumed one-shot fader target must not make the following
             # cycle look like a UI-state change. Otherwise every retry emits
             # a second LED/LCD-only packet immediately after the fader packet.
@@ -2260,18 +2120,7 @@ class MidiControlNode(Node):
         ] * MIDI_CHANNEL_COUNT
         self._final_output_values = [0.0] * MIDI_CHANNEL_COUNT
         self._observed_raw_channels = [0] * MIDI_CHANNEL_COUNT
-        self._pending_fader_positions = [0] * MIDI_CHANNEL_COUNT
-        self._ensure_fader_input_generation_locked()
-        self._pending_fader_input_generations = list(
-            self._fader_input_generation
-        )
-        self._fader_sync_targets = [None] * MIDI_CHANNEL_COUNT
-        self._awaiting_fader_sync = [False] * MIDI_CHANNEL_COUNT
-        self._fader_sync_not_before = [0.0] * MIDI_CHANNEL_COUNT
-        self._fader_parking = [False] * MIDI_CHANNEL_COUNT
-        self._fader_park_last_command_at = [0.0] * MIDI_CHANNEL_COUNT
-        self._fader_park_started_at = [0.0] * MIDI_CHANNEL_COUNT
-        self._fader_zero_required = [True] * MIDI_CHANNEL_COUNT
+        self._faders.reset()
         self._last_select_toggle_at = [0.0] * MIDI_CHANNEL_COUNT
         self._last_motor_command_at = [0.0] * MIDI_CHANNEL_COUNT
         self._last_motor_target = [None] * MIDI_CHANNEL_COUNT
@@ -2298,7 +2147,7 @@ class MidiControlNode(Node):
         self._reset_live_values_locked()
         now = time.monotonic()
         for channel in range(MIDI_CHANNEL_COUNT):
-            self._queue_normal_fader_zero_locked(channel, now)
+            self._faders._queue_normal_fader_zero_locked(channel, now)
         self._previous_btn3 = list(self._btn3)
 
     @staticmethod
@@ -2397,10 +2246,10 @@ class MidiControlNode(Node):
             self._channels[channel] = float(fader_target)
             self._filter_stage1[channel] = float(fader_target)
             self._filter_stage2[channel] = float(fader_target)
-            self._queue_fader_position_locked(channel, fader_target)
-            self._fader_sync_targets[channel] = fader_target
-            self._awaiting_fader_sync[channel] = True
-            self._fader_sync_not_before[channel] = now + FADER_SYNC_MIN_DURATION_SEC
+            self._faders._queue_fader_position_locked(channel, fader_target)
+            self._faders.sync_targets[channel] = fader_target
+            self._faders.awaiting_sync[channel] = True
+            self._faders.sync_not_before[channel] = now + FADER_SYNC_MIN_DURATION_SEC
             self._motor_command_state[channel] = 'syncing_fader'
             self._motor_command_message[channel] = '현재 모션값으로 페이더 재동기화 중'
             logical_targets = {
@@ -2477,7 +2326,7 @@ class MidiControlNode(Node):
             self._deactivate_control_channel_locked(
                 channel, request_motor_hold=False
             )
-            self._start_fader_parking_locked(channel, now)
+            self._faders._start_fader_parking_locked(channel, now)
             motion_ids = mapping_motion_ids(mapping)
             mapped = all(
                 self._axis_registry.mapping(motion_id) is not None
@@ -2491,10 +2340,10 @@ class MidiControlNode(Node):
             self._filter_stage1[channel] = float(fader_target)
             self._filter_stage2[channel] = float(fader_target)
             self._filter_last_at[channel] = now
-            self._queue_fader_position_locked(channel, fader_target)
-            self._fader_sync_targets[channel] = fader_target
-            self._awaiting_fader_sync[channel] = True
-            self._fader_sync_not_before[channel] = now + FADER_SYNC_MIN_DURATION_SEC
+            self._faders._queue_fader_position_locked(channel, fader_target)
+            self._faders.sync_targets[channel] = fader_target
+            self._faders.awaiting_sync[channel] = True
+            self._faders.sync_not_before[channel] = now + FADER_SYNC_MIN_DURATION_SEC
             self._motor_command_state[channel] = 'studio_initializing'
             self._motor_command_message[channel] = (
                 '녹화 초기화 중 · SELECT 잠금 · 페이더 물리 0 이동'
@@ -2515,7 +2364,7 @@ class MidiControlNode(Node):
 
     def _studio_recording_zero_status_locked(self) -> Dict[str, Any]:
         """Report whether every physical MIDI fader has finished parking at zero."""
-        self._ensure_fader_parking_state_locked()
+        self._faders._ensure_fader_parking_state_locked()
         pending = []
         for channel in range(MIDI_CHANNEL_COUNT):
             raw = int(self._raw_channels[channel])
@@ -2524,11 +2373,11 @@ class MidiControlNode(Node):
                 or self._fader_moving[channel]
                 or self._bridge_fader_syncing[channel]
             )
-            if self._fader_parking[channel] or raw > FADER_PARK_TOLERANCE_RAW or busy:
+            if self._faders.parking[channel] or raw > FADER_PARK_TOLERANCE_RAW or busy:
                 pending.append({
                     'channel': channel + 1,
                     'raw': raw,
-                    'parking': bool(self._fader_parking[channel]),
+                    'parking': bool(self._faders.parking[channel]),
                     'busy': busy,
                     'physical_touch': bool(self._physical_touch[channel]),
                     'fader_moving': bool(self._fader_moving[channel]),
@@ -2549,7 +2398,7 @@ class MidiControlNode(Node):
             self._control_enabled[channel] = False
             self._clear_pending_channel_locked(channel)
             self._motor_follow_active[channel] = False
-            if self._fader_parking[channel]:
+            if self._faders.parking[channel]:
                 self._motor_command_state[channel] = 'parking_fader'
                 self._motor_command_message[channel] = '페이더 0 복귀 확인 중'
             else:
@@ -2874,9 +2723,9 @@ class MidiControlNode(Node):
         """MIDI 장치 연결·해제를 요청한다."""
         with self._lock:
             self._reset_runtime_controls_locked()
-            self._pending_fader_positions = [None] * MIDI_CHANNEL_COUNT
-            self._pending_fader_input_generations = list(
-                self._fader_input_generation
+            self._faders.pending_positions = [None] * MIDI_CHANNEL_COUNT
+            self._faders.pending_input_generations = list(
+                self._faders.input_generation
             )
         connection_command = String()
         connection_command.data = (

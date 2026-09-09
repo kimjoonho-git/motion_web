@@ -8,6 +8,7 @@ import json
 
 import pytest
 
+from midi_control.fader_state import FaderStateMachine
 from midi_control.pickup_policy import PickupPolicy
 from midi_control.midi_control_node import MidiControlNode
 
@@ -44,6 +45,7 @@ ALIASES = [
 def _node() -> MidiControlNode:
     node = MidiControlNode.__new__(MidiControlNode)
     node._pickup = PickupPolicy(node)
+    node._faders = FaderStateMachine(node)
     return node
 
 
