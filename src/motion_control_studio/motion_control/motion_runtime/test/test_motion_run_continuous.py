@@ -8,6 +8,7 @@ from unittest import mock
 import pytest
 
 from motion_runtime.motion_mapping_manager import MotionMappingManager
+from motion_runtime.plan_builder import PlanBuilder
 from motion_runtime import motion_run_rules
 from motion_runtime.motion_run_manager import (
     CONTINUOUS_LOOP_TOLERANCE_DEG,
@@ -47,6 +48,8 @@ def test_runtime_ignores_optional_studio_editor_metadata_in_motion_header():
 
 def test_motion_run_confirmation_returns_standard_context_acknowledgement():
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._plan_builder = PlanBuilder(manager)
+    manager._plan_builder = PlanBuilder(manager)
     manager._run_lock = threading.RLock()
     manager._execution_context_ready = False
     manager._execution_context = {
@@ -91,6 +94,10 @@ def test_motion_run_publishes_final_control_motion_values():
             self.messages.append(message)
 
     manager = MotionRunManager.__new__(MotionRunManager)
+
+    manager._plan_builder = PlanBuilder(manager)
+
+    manager._plan_builder = PlanBuilder(manager)
     manager._execution_context = {
         'project_id': 'project-1',
         'project_generation': 9,
@@ -123,6 +130,8 @@ def test_continuous_loop_tolerance_is_five_degrees():
 
 def test_synchronized_stop_after_cycle_is_distinct_from_immediate_stop():
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._plan_builder = PlanBuilder(manager)
+    manager._plan_builder = PlanBuilder(manager)
     manager._graceful_stop_event = threading.Event()
     manager.status = lambda: {
         'state': 'running', 'synchronized_repeat_count': 3,
@@ -134,6 +143,8 @@ def test_synchronized_stop_after_cycle_is_distinct_from_immediate_stop():
 
 def test_past_synchronized_start_is_rejected_instead_of_running_late():
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._plan_builder = PlanBuilder(manager)
+    manager._plan_builder = PlanBuilder(manager)
     manager._stop_event = threading.Event()
     captured = []
     _patch_rule(
@@ -250,6 +261,8 @@ def test_interpolation_uses_precomputed_time_index_for_irregular_samples():
 
 def _initialization_only_manager(mapping):
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._plan_builder = PlanBuilder(manager)
+    manager._plan_builder = PlanBuilder(manager)
     manager.period_sec = 0.02
     manager._mapping_file_path = lambda _file_id: None
     manager._load_mapping = lambda _path: mapping
@@ -276,7 +289,7 @@ def test_first_frame_initialization_without_motion_file_uses_motion_zero():
         }],
     })
 
-    plan = manager._build_plan(
+    plan = manager._plan_builder.build(
         {'motion_file_id': '', 'mapping_file_id': 'mapping.yaml'},
         initialization_only=True,
     )
@@ -293,7 +306,7 @@ def test_motion_playback_without_motion_file_remains_blocked():
     manager = _initialization_only_manager({'motion_file_id': '', 'mappings': []})
 
     with pytest.raises(ValueError, match='motion file_id is required'):
-        manager._build_plan({
+        manager._plan_builder.build({
             'motion_file_id': '',
             'mapping_file_id': 'mapping.yaml',
         })
@@ -301,6 +314,8 @@ def test_motion_playback_without_motion_file_remains_blocked():
 
 def test_motion_run_initialization_uses_every_enabled_mapping_axis():
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._plan_builder = PlanBuilder(manager)
+    manager._plan_builder = PlanBuilder(manager)
     manager.period_sec = 0.02
     manager._motion_file_path = lambda _file_id: None
     manager._mapping_file_path = lambda _file_id: None
@@ -331,7 +346,7 @@ def test_motion_run_initialization_uses_every_enabled_mapping_axis():
     _patch_rule('_target_range_limit_error', lambda _motor, _low, _high: '')
     _patch_rule('_motor_type', lambda _motor: 'ac_servo')
 
-    plan = manager._build_plan({
+    plan = manager._plan_builder.build({
         'request_source': 'motion_run',
         'motion_file_id': 'motion.json',
         'mapping_file_id': 'mapping.yaml',
@@ -348,6 +363,8 @@ def test_motion_run_initialization_uses_every_enabled_mapping_axis():
 
 def test_plan_uses_motion_state_captured_before_slow_motion_file_processing():
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._plan_builder = PlanBuilder(manager)
+    manager._plan_builder = PlanBuilder(manager)
     manager.period_sec = 0.02
     manager._motion_file_path = lambda _file_id: None
     manager._mapping_file_path = lambda _file_id: None
@@ -379,7 +396,7 @@ def test_plan_uses_motion_state_captured_before_slow_motion_file_processing():
     _patch_rule('_target_range_limit_error', lambda _motor, _low, _high: '')
     _patch_rule('_motor_type', lambda _motor: 'ac_servo')
 
-    plan = manager._build_plan({
+    plan = manager._plan_builder.build({
         'motion_file_id': 'motion.json',
         'mapping_file_id': 'mapping.yaml',
     })
@@ -407,6 +424,8 @@ def test_runtime_streams_line_motion_file_without_reading_whole_text(
 
     monkeypatch.setattr(Path, 'read_text', reject_whole_file_read)
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._plan_builder = PlanBuilder(manager)
+    manager._plan_builder = PlanBuilder(manager)
 
     records = manager._load_motion_records(path)
 
@@ -416,6 +435,8 @@ def test_runtime_streams_line_motion_file_without_reading_whole_text(
 
 def test_initialization_waits_for_fresh_motion_state_after_plan_processing():
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._plan_builder = PlanBuilder(manager)
+    manager._plan_builder = PlanBuilder(manager)
     manager.period_sec = 0.001
     manager._stop_event = threading.Event()
     motors = [{'controller_index': 0}]
@@ -433,6 +454,8 @@ def test_initialization_waits_for_fresh_motion_state_after_plan_processing():
 
 def test_motion_run_initialization_fails_when_any_mapping_axis_is_not_ready():
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._plan_builder = PlanBuilder(manager)
+    manager._plan_builder = PlanBuilder(manager)
     manager.period_sec = 0.02
     manager._motion_file_path = lambda _file_id: None
     manager._mapping_file_path = lambda _file_id: None
@@ -460,7 +483,7 @@ def test_motion_run_initialization_fails_when_any_mapping_axis_is_not_ready():
     _patch_rule('_motor_type', lambda _motor: 'ac_servo')
 
     with pytest.raises(ValueError, match='Motion ID 1-2: Axis 1 servo is off'):
-        manager._build_plan({
+        manager._plan_builder.build({
             'request_source': 'motion_run',
             'motion_file_id': 'motion.json',
             'mapping_file_id': 'mapping.yaml',
@@ -469,6 +492,8 @@ def test_motion_run_initialization_fails_when_any_mapping_axis_is_not_ready():
 
 def test_motion_run_playback_uses_only_motion_ids_present_in_file():
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._plan_builder = PlanBuilder(manager)
+    manager._plan_builder = PlanBuilder(manager)
     manager.period_sec = 0.02
     manager._motion_file_path = lambda _file_id: None
     manager._mapping_file_path = lambda _file_id: None
@@ -490,7 +515,7 @@ def test_motion_run_playback_uses_only_motion_ids_present_in_file():
     _patch_rule('_target_range_limit_error', lambda _motor, _low, _high: '')
     _patch_rule('_motor_type', lambda _motor: 'ac_servo')
 
-    plan = manager._build_plan({
+    plan = manager._plan_builder.build({
         'request_source': 'motion_run',
         'motion_file_id': 'motion.json',
         'mapping_file_id': 'mapping.yaml',
@@ -503,6 +528,8 @@ def test_motion_run_playback_uses_only_motion_ids_present_in_file():
 
 def test_auto_start_runs_motion_only_after_initialization_completes():
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._plan_builder = PlanBuilder(manager)
+    manager._plan_builder = PlanBuilder(manager)
     manager._stop_event = threading.Event()
     current = {'state': 'idle'}
     calls = []
@@ -529,6 +556,8 @@ def test_auto_start_runs_motion_only_after_initialization_completes():
 
 def test_auto_start_does_not_run_motion_when_initialization_fails():
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._plan_builder = PlanBuilder(manager)
+    manager._plan_builder = PlanBuilder(manager)
     manager._stop_event = threading.Event()
     current = {'state': 'idle'}
     calls = []
@@ -549,6 +578,8 @@ def test_auto_start_does_not_run_motion_when_initialization_fails():
 
 def test_start_routes_one_owned_initialization_and_motion_sequence(monkeypatch):
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._plan_builder = PlanBuilder(manager)
+    manager._plan_builder = PlanBuilder(manager)
     manager._run_lock = threading.RLock()
     manager._run_thread = None
     manager._stop_event = threading.Event()
@@ -569,7 +600,7 @@ def test_start_routes_one_owned_initialization_and_motion_sequence(monkeypatch):
             'summary': {},
         }
 
-    manager._build_plan = build_plan
+    manager._plan_builder.build = build_plan
     _patch_rule('_motion_auto_start_guard_error', lambda _plan: '')
     calls = []
     manager._run_initialization_then_motion = lambda initialization, motion: calls.append(
@@ -599,6 +630,8 @@ def test_start_routes_one_owned_initialization_and_motion_sequence(monkeypatch):
 
 def test_start_acknowledges_before_motion_plan_processing(monkeypatch):
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._plan_builder = PlanBuilder(manager)
+    manager._plan_builder = PlanBuilder(manager)
     manager._run_lock = threading.RLock()
     manager._run_thread = None
     manager._stop_event = threading.Event()
@@ -609,7 +642,7 @@ def test_start_acknowledges_before_motion_plan_processing(monkeypatch):
     manager.status = lambda: dict(current)
     manager._set_status = lambda status: (current.clear(), current.update(status))
     plan_calls = []
-    manager._build_plan = lambda *_args, **_kwargs: plan_calls.append(True)
+    manager._plan_builder.build = lambda *_args, **_kwargs: plan_calls.append(True)
 
     class DeferredThread:
         def __init__(self, *, target, args, daemon):
@@ -640,9 +673,11 @@ def test_start_acknowledges_before_motion_plan_processing(monkeypatch):
 
 def test_stop_during_plan_preparation_never_starts_motion():
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._plan_builder = PlanBuilder(manager)
+    manager._plan_builder = PlanBuilder(manager)
     manager._stop_event = threading.Event()
     manager._stop_event.set()
-    manager._build_plan = lambda *_args, **_kwargs: {
+    manager._plan_builder.build = lambda *_args, **_kwargs: {
         'run_mode': 'once',
         'summary': {},
     }
@@ -656,6 +691,8 @@ def test_stop_during_plan_preparation_never_starts_motion():
 
 def test_owned_sequence_runs_countdown_between_initialization_and_motion():
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._plan_builder = PlanBuilder(manager)
+    manager._plan_builder = PlanBuilder(manager)
     manager._stop_event = threading.Event()
     current = {'state': 'idle'}
     calls = []
@@ -676,6 +713,8 @@ def test_owned_sequence_runs_countdown_between_initialization_and_motion():
 
 def test_countdown_stop_prevents_motion_start():
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._plan_builder = PlanBuilder(manager)
+    manager._plan_builder = PlanBuilder(manager)
     manager._run_lock = threading.RLock()
     manager._status = motion_run_rules._empty_status()
     manager._publish_status = lambda: None
@@ -724,7 +763,7 @@ def test_zero_fallback_outside_motion_range_blocks_initialization():
     })
 
     with pytest.raises(ValueError, match='초기 모션값 0.000°가 모션 설정 범위 밖'):
-        manager._build_plan(
+        manager._plan_builder.build(
             {'motion_file_id': '', 'mapping_file_id': 'mapping.yaml'},
             initialization_only=True,
         )
@@ -732,6 +771,8 @@ def test_zero_fallback_outside_motion_range_blocks_initialization():
 
 def test_plan_keeps_single_run_available_when_continuous_seam_fails():
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._plan_builder = PlanBuilder(manager)
+    manager._plan_builder = PlanBuilder(manager)
     manager.period_sec = 0.02
     manager._motion_file_path = lambda _file_id: None
     manager._mapping_file_path = lambda _file_id: None
@@ -754,7 +795,7 @@ def test_plan_keeps_single_run_available_when_continuous_seam_fails():
     _patch_rule('_motor_ready_error', lambda _motor: '')
     _patch_rule('_target_range_limit_error', lambda _motor, _low, _high: '')
     _patch_rule('_motor_type', lambda _motor: 'ac_servo')
-    plan = manager._build_plan({
+    plan = manager._plan_builder.build({
         'motion_file_id': 'motion.json',
         'mapping_file_id': 'mapping.yaml',
     })
@@ -773,6 +814,8 @@ def test_plan_keeps_single_run_available_when_continuous_seam_fails():
 
 def test_plan_resolves_current_axis_from_stable_alias_instead_of_saved_axis():
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._plan_builder = PlanBuilder(manager)
+    manager._plan_builder = PlanBuilder(manager)
     manager.period_sec = 0.02
     manager._motion_file_path = lambda _file_id: None
     manager._mapping_file_path = lambda _file_id: None
@@ -797,7 +840,7 @@ def test_plan_resolves_current_axis_from_stable_alias_instead_of_saved_axis():
     _patch_rule('_motor_ready_error', lambda _motor: '')
     _patch_rule('_target_range_limit_error', lambda _motor, _low, _high: '')
 
-    plan = manager._build_plan({
+    plan = manager._plan_builder.build({
         'motion_file_id': 'motion.json',
         'mapping_file_id': 'mapping.yaml',
     })
@@ -854,6 +897,8 @@ def test_motor_ref_matching_is_scoped_by_ethercat_master_and_serial_port():
 
 def test_plan_runs_with_out_of_range_data_and_clamps_every_command():
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._plan_builder = PlanBuilder(manager)
+    manager._plan_builder = PlanBuilder(manager)
     manager.period_sec = 0.5
     manager._motion_file_path = lambda _file_id: None
     manager._mapping_file_path = lambda _file_id: None
@@ -880,7 +925,7 @@ def test_plan_runs_with_out_of_range_data_and_clamps_every_command():
     _patch_rule('_target_range_limit_error', lambda _motor, _low, _high: '')
     _patch_rule('_motor_type', lambda _motor: 'ac_servo')
 
-    plan = manager._build_plan({
+    plan = manager._plan_builder.build({
         'motion_file_id': 'motion.json',
         'mapping_file_id': 'mapping.yaml',
     })
@@ -900,6 +945,8 @@ def test_plan_runs_with_out_of_range_data_and_clamps_every_command():
 
 def test_motion_studio_can_use_read_only_mapping_with_generated_preview_file():
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._plan_builder = PlanBuilder(manager)
+    manager._plan_builder = PlanBuilder(manager)
     manager.period_sec = 0.02
     manager._motion_file_path = lambda _file_id: None
     manager._mapping_file_path = lambda _file_id: None
@@ -921,7 +968,7 @@ def test_motion_studio_can_use_read_only_mapping_with_generated_preview_file():
     _patch_rule('_target_range_limit_error', lambda _motor, _low, _high: '')
     _patch_rule('_motor_type', lambda _motor: 'dynamixel')
 
-    plan = manager._build_plan({
+    plan = manager._plan_builder.build({
         'request_source': 'motion_studio',
         'motion_file_id': '__studio_preview.json',
         'mapping_file_id': 'mapping.yaml',
@@ -935,6 +982,8 @@ def test_motion_studio_can_use_read_only_mapping_with_generated_preview_file():
 
 def test_normal_motion_run_still_rejects_mapping_file_mismatch():
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._plan_builder = PlanBuilder(manager)
+    manager._plan_builder = PlanBuilder(manager)
     manager.period_sec = 0.02
     manager._motion_file_path = lambda _file_id: None
     manager._mapping_file_path = lambda _file_id: None
@@ -948,7 +997,7 @@ def test_normal_motion_run_still_rejects_mapping_file_mismatch():
     manager._current_motors = lambda: []
 
     try:
-        manager._build_plan({
+        manager._plan_builder.build({
             'motion_file_id': 'different.json',
             'mapping_file_id': 'mapping.yaml',
         })
@@ -973,6 +1022,10 @@ def test_run_manager_resolves_assets_only_inside_requested_project(tmp_path):
         )
 
     manager = MotionRunManager.__new__(MotionRunManager)
+
+    manager._plan_builder = PlanBuilder(manager)
+
+    manager._plan_builder = PlanBuilder(manager)
     manager.motion_projects_dir = root
     first = manager._project_asset_dirs({'project_id': 'first'})
     second = manager._project_asset_dirs({'project_id': 'second'})

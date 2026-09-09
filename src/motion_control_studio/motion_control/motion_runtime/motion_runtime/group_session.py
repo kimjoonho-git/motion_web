@@ -271,7 +271,7 @@ class GroupSession:
                     ) else 'once'
                 ),
             }
-            validation_plan = self.manager._build_plan(
+            validation_plan = self.manager._plan_builder.build(
                 validation_payload, motors_snapshot=motors_snapshot,
             )
             guard_error = motion_run_rules._motion_auto_start_guard_error(validation_plan)
@@ -287,8 +287,8 @@ class GroupSession:
                 'synchronized_cycle_sec': 0.0,
                 'synchronized_repeat_count': 0,
             }
-            plan = self.manager._build_plan(motion_payload, motors_snapshot=motors_snapshot)
-            initialization_plan = self.manager._build_plan(
+            plan = self.manager._plan_builder.build(motion_payload, motors_snapshot=motors_snapshot)
+            initialization_plan = self.manager._plan_builder.build(
                 motion_payload,
                 initialization_only=True,
                 motors_snapshot=motors_snapshot,
