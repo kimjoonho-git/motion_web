@@ -1750,6 +1750,54 @@ motor_service_restored True
 **값이 §6-13·§6-18·§6-26의 스캔과 동일하다.** alias·vendor·product·serial 네 가지가
 같은 값으로 다시 읽혔다 · 물리 검색 경로가 그대로라는 뜻이다.
 
+### 6-33. `DynamixelScanner` 신설 · 검색과 제원을 가른다
+
+`MotionStateMonitor` 2,131 → **1,675줄** · 메서드 65 → 50
+
+§5 `monitor_node` 분해 목표 둘째다 · §6-32 `EthercatScanner`와 대칭이다.
+
+#### 불변조건을 그대로 지켰다
+
+- 실제 직렬 포트를 열고 Protocol 2.0 **Broadcast Ping**과 ID `0~252` **개별 보조
+  Ping**을 수행한다
+- 포트 탐색 경로 `/dev/serial/by-id` · `/dev/ttyUSB*` · `/dev/ttyACM*` · YAML 그대로
+- 물리 응답이 없으면 이전 값을 쓰지 않고 실패로 남긴다
+- 명령도 순서도 판정도 바꾸지 않았다
+
+#### 경계를 개념으로 그었다 · 검색 15개만
+
+`grep dynamixel`로 걸리는 것은 19개 · 그중 **4개는 남겼다.**
+
+| 남긴 것 | 이유 |
+| --- | --- |
+| `_dynamixel_raw_model_info` · `_read_dynamixel_model_file` | 제원 파일 읽기 · 검색이 아니라 메타데이터다 |
+| `_calculated_dynamixel_position_raw` · `_dynamixel_statusword_text` | 상태 발행이 쓰는 값 해석이다 |
+
+**이름이 같다고 개념이 같지 않다.** 넷을 끌고 왔으면 `DynamixelScanner`가
+검색·제원·상태해석 셋을 겸했을 것이다. 78 + 27줄을 덜 옮겨 개념 하나를 지켰다.
+
+#### 상수도 같이 옮겼다
+
+`DYNAMIXEL_SCAN_BAUDRATES` · `DYNAMIXEL_SCAN_MAX_ID` · `DYNAMIXEL_SCAN_PROTOCOL` ·
+프로토콜 규약이므로 프로토콜 모듈에 둔다 · 노드는 `scan_contract`와 파라미터
+기본값에 쓰려고 되가져온다.
+
+#### §6-32의 교훈을 절차로 썼다
+
+데코레이터 소실을 이번엔 **원본과 기계 대조**로 막았다 · `git show HEAD:...`의
+`decorator_list`와 신규 모듈의 것을 이름별로 비교 · 불일치 0 · `staticmethod` 6개 보존.
+
+미사용이 된 `import os` · `select` · `termios`도 같이 걷어냈다.
+
+#### 검증
+
+- 코드 검증 · `ruff check src` 55건 유지 · 신규 0건 · 데코레이터 대조 불일치 0
+- 실행 검증 · `pytest` 1,013건 통과 · 실패 0
+- 실물 검증 · **부분 완료** · 아래
+
+Dynamixel 장치가 없어 응답 경로는 **검증 불가**다. 다만 전체 스캔이 매번 타는
+**실패 경로는 실물로 확인 가능**하다 · 아래 별도 기록.
+
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
 - 파일 1,000줄 이하 · 함수 60줄 이하 · `Node` 서브클래스 500줄 이하

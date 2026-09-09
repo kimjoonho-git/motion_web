@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from motion_state_monitor.dynamixel_scanner import DynamixelScanner
 from motion_state_monitor.ethercat_scanner import EthercatScanner
 from motion_state_monitor.monitor_node import MotionStateMonitor
 
@@ -14,6 +15,8 @@ class ConnectionStateTest(unittest.TestCase):
         self.monitor = object.__new__(MotionStateMonitor)
         # EtherCAT 스캔은 별도 객체가 맡는다 (§6-32)
         self.monitor._ethercat = EthercatScanner(self.monitor)
+        # Dynamixel 검색도 별도 객체가 맡는다 (§6-33)
+        self.monitor._dynamixel = DynamixelScanner(self.monitor)
         self.monitor.connection_loss_confirm_sec = 1.0
         self.monitor.connection_recovery_confirm_sec = 0.5
         self.monitor._communication_health = {}
@@ -194,9 +197,9 @@ class ConnectionStateTest(unittest.TestCase):
         self.assertFalse(self.monitor._physical_section_success(partial, 'slaves_count'))
 
     def test_dynamixel_scan_never_injects_runtime_devices(self):
-        self.monitor._dynamixel_scan_targets = lambda: []
+        self.monitor._dynamixel._dynamixel_scan_targets = lambda: []
 
-        result = self.monitor._scan_dynamixel_motors()
+        result = self.monitor._dynamixel._scan_dynamixel_motors()
 
         self.assertEqual(result['mode'], 'direct_ping')
         self.assertFalse(result['available'])
@@ -205,11 +208,11 @@ class ConnectionStateTest(unittest.TestCase):
     def test_dynamixel_targets_cover_all_valid_ids(self):
         self.monitor.motor_config_file = ''
         self.monitor.dynamixel_scan_max_id = 252
-        self.monitor._dynamixel_serial_ports = lambda _config: [{
+        self.monitor._dynamixel._dynamixel_serial_ports = lambda _config: [{
             'port': '/dev/ttyUSB0', 'source': 'test', 'resolved': '/dev/ttyUSB0'
         }]
 
-        targets = self.monitor._dynamixel_scan_targets()
+        targets = self.monitor._dynamixel._dynamixel_scan_targets()
 
         self.assertEqual(targets[0]['ids'][0], 0)
         self.assertEqual(targets[0]['ids'][-1], 252)
@@ -242,7 +245,7 @@ class ConnectionStateTest(unittest.TestCase):
             'available': False, 'complete': False, 'skipped': True,
             'slaves_count': 0, 'slaves': [], 'scanned_at': now,
         }
-        self.monitor._skipped_dynamixel_scan = lambda now: {
+        self.monitor._dynamixel._skipped_dynamixel_scan = lambda now: {
             'available': False, 'complete': False, 'skipped': True,
             'devices_count': 0, 'devices': [], 'scanned_at': now,
         }
@@ -750,6 +753,7 @@ class MotorScanActionTest(unittest.TestCase):
     def _monitor(self):
         monitor = MotionStateMonitor.__new__(MotionStateMonitor)
         monitor._ethercat = EthercatScanner(monitor)
+        monitor._dynamixel = DynamixelScanner(monitor)
         monitor._scan_sequence = 0
         monitor._active_scan_id = ''
         monitor._scan_progress_publisher = None
@@ -767,10 +771,10 @@ class MotorScanActionTest(unittest.TestCase):
         monitor._ethercat._safe_scan_ethercat_slaves = lambda: (
             calls.append('ethercat') or {'available': True, 'complete': True, 'slaves_count': 1}
         )
-        monitor._safe_scan_dynamixel_motors = lambda: (
+        monitor._dynamixel._safe_scan_dynamixel_motors = lambda: (
             calls.append('dynamixel') or {'available': True, 'complete': True, 'devices_count': 1}
         )
-        monitor._skipped_dynamixel_scan = lambda now: {'skipped': True}
+        monitor._dynamixel._skipped_dynamixel_scan = lambda now: {'skipped': True}
         monitor._ethercat._current_ethercat_status = lambda now: {}
         monitor._current_motor_list = lambda now: []
         monitor._configured_axis_list = lambda motors: []
@@ -794,7 +798,7 @@ class MotorScanActionTest(unittest.TestCase):
         monitor._ethercat._safe_scan_ethercat_slaves = lambda: (
             calls.append('ethercat') or {'available': True, 'complete': True, 'slaves_count': 1}
         )
-        monitor._safe_scan_dynamixel_motors = lambda: (
+        monitor._dynamixel._safe_scan_dynamixel_motors = lambda: (
             calls.append('dynamixel') or {'available': True, 'complete': True, 'devices_count': 1}
         )
         monitor._ethercat._current_ethercat_status = lambda now: {}
