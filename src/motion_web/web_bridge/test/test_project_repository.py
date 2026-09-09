@@ -22,6 +22,7 @@ from motion_web_bridge.project_repository import (
 from motion_web_bridge.motor_config_service import MotorConfigService
 from motion_web_bridge.execution_context_service import ExecutionContextService
 from motion_web_bridge.motor_runtime_service import MotorRuntimeService
+from motion_web_bridge.project_service import ProjectService
 from motion_web_bridge.bridge_node import (
     MotionWebBridge,
     _project_tree_category_signature,
@@ -40,12 +41,32 @@ MOTION_TEXT = '\n'.join([
 ])
 
 
+def _project_of(bridge):
+    """노드 스텁에 프로젝트 서비스를 붙인다 · §6-23으로 노드에서 떨어져 나왔다."""
+    service = getattr(bridge, '_project', None)
+    if service is None:
+        service = ProjectService(
+            bridge,
+            repository=getattr(bridge, 'project_repository', None),
+            motion_projects_dir=getattr(bridge, 'motion_projects_dir', Path('.')),
+        )
+        bridge._project = service
+    repository = getattr(bridge, 'project_repository', None)
+    if repository is not None:
+        service.repository = repository
+    projects_dir = getattr(bridge, 'motion_projects_dir', None)
+    if projects_dir is not None:
+        service.motion_projects_dir = projects_dir
+    return service
+
+
 def _runtime_of(bridge):
     """노드 스텁에 모터 런타임 서비스를 붙인다 · §6-22로 노드에서 떨어져 나왔다."""
     service = getattr(bridge, '_motor_runtime', None)
     if service is None:
         service = MotorRuntimeService(
             bridge,
+            project=_project_of(bridge),
             repository=getattr(bridge, 'project_repository', None),
             workspace_root=getattr(bridge, 'workspace_root', Path('.')),
         )
@@ -62,6 +83,7 @@ def _execution_context_of(bridge, **overrides):
     if service is None:
         service = ExecutionContextService(
             bridge,
+            project=_project_of(bridge),
             repository=getattr(bridge, 'project_repository', None),
             workspace_root=getattr(bridge, 'workspace_root', Path('.')),
         )
@@ -80,6 +102,7 @@ def _motor_config_of(bridge, **overrides):
     if service is None:
         service = MotorConfigService(
             bridge,
+            project=_project_of(bridge),
             runtime=_runtime_of(bridge),
             lifecycle_lock=getattr(
                 bridge, '_motor_lifecycle_lock', None
@@ -785,7 +808,7 @@ def test_project_without_saved_motor_file_clears_stale_editor_path(tmp_path):
     bridge.project_repository = repository
     _motor_config_of(bridge).selected = stale_path
 
-    bridge._bind_selected_project_sources()
+    _project_of(bridge).bind_selected_sources()
     loaded = _motor_config_of(bridge).load()
 
     assert _motor_config_of(bridge).selected == Path()
@@ -803,7 +826,7 @@ def test_no_selected_project_clears_stale_editor_path(tmp_path):
     bridge.project_repository = repository
     _motor_config_of(bridge).selected = tmp_path / 'old-project' / 'motor_axes.yaml'
 
-    bridge._bind_selected_project_sources()
+    _project_of(bridge).bind_selected_sources()
 
     assert _motor_config_of(bridge).selected == Path()
 
@@ -1083,7 +1106,7 @@ def test_runtime_owner_remains_visible_when_another_project_is_selected(tmp_path
         tmp_path / 'projects' / runtime_id / 'runtime' / 'applied_motor_config.yaml'
     )
 
-    listed = bridge.list_motion_projects()
+    listed = _project_of(bridge).list_projects()
 
     assert listed['selected_project_id'] == selected_id
     assert listed['runtime_project_id'] == runtime_id
@@ -2583,7 +2606,7 @@ def test_project_change_is_blocked_during_motion_operations(run_state, studio_st
     bridge._motion_studio_session.status = {'state': studio_state}
 
     with pytest.raises(ValueError, match='프로젝트를 변경할 수 없습니다'):
-        bridge._ensure_project_change_allowed()
+        _project_of(bridge).ensure_change_allowed()
 
 
 def test_project_change_is_blocked_during_motor_lifecycle_operation():
@@ -2597,7 +2620,7 @@ def test_project_change_is_blocked_during_motor_lifecycle_operation():
     bridge._motor_lifecycle_lock.acquire()
 
     with pytest.raises(ValueError, match='모터 설정·검색·재시작 작업'):
-        bridge._ensure_project_change_allowed()
+        _project_of(bridge).ensure_change_allowed()
 
 
 def test_project_change_is_blocked_by_persisted_motor_operation():
@@ -2617,7 +2640,7 @@ def test_project_change_is_blocked_by_persisted_motor_operation():
     })()
 
     with pytest.raises(ValueError, match='모터 설정·검색·재시작 작업'):
-        bridge._ensure_project_change_allowed()
+        _project_of(bridge).ensure_change_allowed()
 
 
 def test_copy_file_between_projects_is_a_physical_independent_copy(tmp_path):
@@ -2712,7 +2735,7 @@ def test_clear_motor_runtime_application_stops_and_allows_delete(
     _motor_config_of(bridge).applied = Path(runtime_file).resolve()
     _motor_config_of(bridge).selected = Path(runtime_file).resolve()
     bridge.snapshot = lambda: {}
-    bridge.list_motion_projects = lambda: {
+    _project_of(bridge).list_projects = lambda: {
         'projects': [],
         'runtime_project_id': '',
         'selected_project_id': project_id,
@@ -2741,7 +2764,7 @@ def test_clear_motor_runtime_application_stops_and_allows_delete(
     _execution_context_of(bridge).invalidate_nodes = lambda *_args, **_kwargs: None
     monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
 
-    assert bridge._runtime_project_id() == project_id
+    assert _project_of(bridge).runtime_project_id() == project_id
     result = _motor_config_of(bridge).clear_runtime_application()
 
     assert result['success'] is True
@@ -2749,11 +2772,11 @@ def test_clear_motor_runtime_application_stops_and_allows_delete(
     assert result['previous_project_id'] == project_id
     assert result['runtime_project_id'] == ''
     assert _motor_config_of(bridge).applied == Path()
-    assert bridge._runtime_project_id() == ''
+    assert _project_of(bridge).runtime_project_id() == ''
     assert bridge._motion_run_status['state'] == 'stopped'
     assert bridge._motion_studio_session.status['state'] == 'idle'
     assert repository.motor_runtime_state().get('target_project_id') in ('', None)
-    deleted = bridge.delete_motion_project(project_id)
+    deleted = _project_of(bridge).delete_project(project_id)
     assert deleted['permanently_deleted'] is True
 
 
@@ -2767,12 +2790,12 @@ def test_project_change_blocker_allows_stopping_only_when_requested(tmp_path):
     bridge._motion_run_lock = threading.Lock()
     bridge._motion_studio_session.lock = threading.Lock()
 
-    assert 'stopping' in bridge._project_change_blocker()
-    assert bridge._project_change_blocker(allow_studio_stopping=True) == ''
+    assert 'stopping' in _project_of(bridge).change_blocker()
+    assert _project_of(bridge).change_blocker(allow_studio_stopping=True) == ''
 
     bridge._motion_studio_session.status = {'state': 'playing'}
 
-    assert 'playing' in bridge._project_change_blocker(
+    assert 'playing' in _project_of(bridge).change_blocker(
         allow_studio_stopping=True
     )
 
@@ -2971,9 +2994,9 @@ def test_web_file_read_rejects_non_selected_project(tmp_path):
     bridge.project_repository = repository
 
     with pytest.raises(ValueError, match='현재 선택한 프로젝트'):
-        bridge.load_motion_project_file(other_id, 'motions', 'other.json')
+        _project_of(bridge).load_file(other_id, 'motions', 'other.json')
     with pytest.raises(ValueError, match='현재 선택한 프로젝트'):
-        bridge.download_motion_project_file(other_id, 'motions', 'other.json')
+        _project_of(bridge).download_file(other_id, 'motions', 'other.json')
 
 
 def test_read_only_project_files_can_be_viewed_but_managed_paths_are_rejected(tmp_path):
@@ -3011,4 +3034,4 @@ def test_web_read_only_file_rejects_non_selected_project(tmp_path):
     bridge.project_repository = repository
 
     with pytest.raises(ValueError, match='현재 선택한 프로젝트'):
-        bridge.load_read_only_project_file(other_id, 'project.json')
+        _project_of(bridge).load_read_only_file(other_id, 'project.json')

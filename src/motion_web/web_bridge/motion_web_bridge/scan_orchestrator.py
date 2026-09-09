@@ -36,6 +36,7 @@ class ScanOrchestrator:
         self,
         bridge: Any,
         *,
+        project: Any,
         runtime: Any,
         lifecycle_lock: threading.Lock,
         repository: Any,
@@ -48,6 +49,8 @@ class ScanOrchestrator:
         load_motor_config: Any,
     ) -> None:
         self.bridge = bridge
+        #: 프로젝트 서비스 협력자 (§6-23)
+        self.project = project
         #: 모터 런타임 수명주기 협력자 (§6-22)
         self.runtime = runtime
         #: 설정 적용·재시작과 공유한다 · 노드가 소유
@@ -619,7 +622,7 @@ class ScanOrchestrator:
             ).strip()
         if not runtime_project_id:
             runtime_project_id = str(
-                self.bridge._runtime_project_id_from_path(selected_project_id) or ''
+                self.project.runtime_project_id_from_path(selected_project_id) or ''
             ).strip()
         return {
             'required': bool(

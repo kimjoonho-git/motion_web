@@ -1,6 +1,8 @@
+from pathlib import Path
 from motion_web_bridge import motion_file_analysis
 import pytest
 
+from motion_web_bridge.project_service import ProjectService
 from motion_web_bridge.bridge_node import MotionWebBridge, create_app
 from motion_web_bridge.project_repository import ProjectRepository
 
@@ -9,6 +11,25 @@ MOTION_CONTENT = '\n'.join([
     '{"type":"motion_header","rotation_unit":"deg"}',
     '[1,0.02,"1-1",0.0]',
 ])
+
+
+def _project_of(bridge):
+    """노드 스텁에 프로젝트 서비스를 붙인다 · §6-23으로 노드에서 떨어져 나왔다."""
+    service = getattr(bridge, '_project', None)
+    if service is None:
+        service = ProjectService(
+            bridge,
+            repository=getattr(bridge, 'project_repository', None),
+            motion_projects_dir=getattr(bridge, 'motion_projects_dir', Path('.')),
+        )
+        bridge._project = service
+    repository = getattr(bridge, 'project_repository', None)
+    if repository is not None:
+        service.repository = repository
+    projects_dir = getattr(bridge, 'motion_projects_dir', None)
+    if projects_dir is not None:
+        service.motion_projects_dir = projects_dir
+    return service
 
 
 def motion_file_bridge(tmp_path, registered_motion_file_id=''):
@@ -80,13 +101,13 @@ def test_project_file_tools_cannot_import_or_copy_motion_files(tmp_path):
     bridge._ensure_project_mutation_allowed = lambda _project_id: None
 
     with pytest.raises(ValueError, match='외부 모션 JSON'):
-        bridge.import_motion_project_file(target_id, {
+        _project_of(bridge).import_file(target_id, {
             'category': 'motions',
             'file_name': 'external.json',
             'content': MOTION_CONTENT,
         })
     with pytest.raises(ValueError, match='프로젝트 복사'):
-        bridge.copy_motion_project_file(target_id, {
+        _project_of(bridge).copy_file(target_id, {
             'source_project_id': source_id,
             'category': 'motions',
             'file_name': 'show.json',

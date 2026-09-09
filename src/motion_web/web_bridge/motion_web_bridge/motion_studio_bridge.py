@@ -15,8 +15,12 @@ from std_msgs.msg import String
 
 
 class MotionStudioRosBridge:
-    def __init__(self, bridge: Any, session: Any, context_id: Any = None) -> None:
+    def __init__(
+        self, bridge: Any, session: Any, context_id: Any = None, project: Any = None
+    ) -> None:
         self.bridge = bridge
+        #: 프로젝트 서비스 · 노드를 거치지 않는다 (§6-23)
+        self.project = project
         self.session = session
         #: 실행 컨텍스트 식별자를 돌려주는 콜러블 (§6-20)
         self.context_id = context_id or (lambda: '')
@@ -32,7 +36,7 @@ class MotionStudioRosBridge:
             return
         if (
             isinstance(payload, dict)
-            and bridge._payload_matches_selected_project(payload)
+            and self.project.payload_matches_selected(payload)
         ):
             self.session.replace_status(payload)
 

@@ -14,6 +14,7 @@ from motion_web_bridge.motor_config_service import MotorConfigService
 from motion_web_bridge.execution_context_service import ExecutionContextService
 from motion_web_bridge.manual_motor_commands import ManualMotorCommandService
 from motion_web_bridge.motor_runtime_service import MotorRuntimeService
+from motion_web_bridge.project_service import ProjectService
 from motion_web_bridge.bridge_node import MotionWebBridge, create_app
 from motion_web_bridge.motion_studio_session import MotionStudioSession
 from motion_web_bridge.motor_event_log import MotorEventLog
@@ -23,12 +24,32 @@ from motion_common import rpc
 from motion_web_bridge import ethercat_project_compat, motor_config_rules
 
 
+def _project_of(bridge):
+    """노드 스텁에 프로젝트 서비스를 붙인다 · §6-23으로 노드에서 떨어져 나왔다."""
+    service = getattr(bridge, '_project', None)
+    if service is None:
+        service = ProjectService(
+            bridge,
+            repository=getattr(bridge, 'project_repository', None),
+            motion_projects_dir=getattr(bridge, 'motion_projects_dir', Path('.')),
+        )
+        bridge._project = service
+    repository = getattr(bridge, 'project_repository', None)
+    if repository is not None:
+        service.repository = repository
+    projects_dir = getattr(bridge, 'motion_projects_dir', None)
+    if projects_dir is not None:
+        service.motion_projects_dir = projects_dir
+    return service
+
+
 def _runtime_of(bridge):
     """노드 스텁에 모터 런타임 서비스를 붙인다 · §6-22로 노드에서 떨어져 나왔다."""
     service = getattr(bridge, '_motor_runtime', None)
     if service is None:
         service = MotorRuntimeService(
             bridge,
+            project=_project_of(bridge),
             repository=getattr(bridge, 'project_repository', None),
             workspace_root=getattr(bridge, 'workspace_root', Path('.')),
         )
@@ -74,6 +95,7 @@ def _execution_context_of(bridge, **overrides):
     if service is None:
         service = ExecutionContextService(
             bridge,
+            project=_project_of(bridge),
             repository=getattr(bridge, 'project_repository', None),
             workspace_root=getattr(bridge, 'workspace_root', Path('.')),
         )
@@ -92,6 +114,7 @@ def _motor_config_of(bridge, **overrides):
     if service is None:
         service = MotorConfigService(
             bridge,
+            project=_project_of(bridge),
             runtime=_runtime_of(bridge),
             lifecycle_lock=getattr(
                 bridge, '_motor_lifecycle_lock', None
@@ -146,6 +169,7 @@ def _scan_of(bridge, **overrides):
     if scan is None:
         scan = ScanOrchestrator(
             bridge,
+            project=_project_of(bridge),
             runtime=_runtime_of(bridge),
             lifecycle_lock=getattr(
                 bridge, '_motor_lifecycle_lock', None
@@ -295,7 +319,7 @@ def make_bridge():
         'success': True,
         'request_id': request_id,
     }
-    bridge._runtime_project_id = lambda: 'project-1'
+    _project_of(bridge).runtime_project_id = lambda: 'project-1'
     _patch_runtime_service_status(
         {'phase': 'ready', 'message': 'motor runtime ready'}
     )
@@ -561,7 +585,7 @@ def test_snapshot_reads_motor_operation_without_reconciling_it(tmp_path):
     _execution_context_of(bridge).status = lambda **_kwargs: {'ready': True}
     bridge._safety_adjusted_midi_status = lambda status, **_kwargs: status
     bridge._current_project_generation = lambda: 1
-    bridge._runtime_project_id_from_path = lambda _selected='': 'project-a'
+    _project_of(bridge).runtime_project_id_from_path = lambda _selected='': 'project-a'
     _runtime_of(bridge).reconcile_operation_status = lambda *_args: (
         pytest.fail('snapshot must be read-only')
     )
@@ -618,8 +642,8 @@ def test_high_frequency_runtime_owner_check_is_independent_from_selection(tmp_pa
         AssertionError('high-frequency status path must not parse project files')
     )
 
-    assert bridge._runtime_project_id_from_path('project-1') == 'project-1'
-    assert bridge._runtime_project_id_from_path('project-2') == 'project-1'
+    assert _project_of(bridge).runtime_project_id_from_path('project-1') == 'project-1'
+    assert _project_of(bridge).runtime_project_id_from_path('project-2') == 'project-1'
 
 
 def test_status_websocket_reads_disconnect_and_finishes():
@@ -831,7 +855,7 @@ def test_project_change_deletes_previous_project_values_from_bridge_memory():
     bridge._motion_studio_session.editor_store = rpc.ResultStore()
     bridge._motion_studio_session.editor_store.store('old', {'project_id': 'old-project'})
 
-    bridge._clear_project_scoped_memory()
+    _project_of(bridge).clear_scoped_memory()
 
     assert bridge._motion_state is None
     assert bridge._motion_state_received_at is None
@@ -858,7 +882,7 @@ def test_previous_runtime_motor_state_is_not_cached_after_project_change():
     bridge.project_repository = type('Repository', (), {
         'selected_project_id': lambda _self: 'new-project',
     })()
-    bridge._selected_project_owns_runtime = lambda: True
+    _project_of(bridge).selected_owns_runtime = lambda: True
     bridge._record_motor_error_transitions = lambda _payload: None
 
     bridge._motion_state_callback(String(data=json.dumps({

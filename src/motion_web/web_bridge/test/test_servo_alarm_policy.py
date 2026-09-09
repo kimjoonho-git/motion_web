@@ -1,5 +1,7 @@
+from pathlib import Path
 import pytest
 
+from motion_web_bridge.project_service import ProjectService
 from motion_web_bridge.bridge_node import MotionWebBridge
 from motion_web_bridge.project_repository import ProjectRepository
 from motion_web_bridge.servo_alarm_policy import (
@@ -9,6 +11,25 @@ from motion_web_bridge.servo_alarm_policy import (
     normalize_overrides,
     policy_revision,
 )
+
+
+def _project_of(bridge):
+    """노드 스텁에 프로젝트 서비스를 붙인다 · §6-23으로 노드에서 떨어져 나왔다."""
+    service = getattr(bridge, '_project', None)
+    if service is None:
+        service = ProjectService(
+            bridge,
+            repository=getattr(bridge, 'project_repository', None),
+            motion_projects_dir=getattr(bridge, 'motion_projects_dir', Path('.')),
+        )
+        bridge._project = service
+    repository = getattr(bridge, 'project_repository', None)
+    if repository is not None:
+        service.repository = repository
+    projects_dir = getattr(bridge, 'motion_projects_dir', None)
+    if projects_dir is not None:
+        service.motion_projects_dir = projects_dir
+    return service
 
 
 def test_catalog_contains_panasonic_main_alarm_families_and_default_grades():
@@ -79,7 +100,7 @@ def test_policy_is_not_saved_when_supervisor_does_not_acknowledge(tmp_path):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge.project_repository = repository
     bridge._project_generation = 1
-    bridge._ensure_project_change_allowed = lambda: None
+    _project_of(bridge).ensure_change_allowed = lambda: None
     bridge.publish_servo_alarm_policy = lambda _policy=None: {
         'success': False,
         'message': 'no acknowledgement',
@@ -98,7 +119,7 @@ def test_policy_save_returns_the_revision_acknowledged_by_supervisor(tmp_path):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge.project_repository = repository
     bridge._project_generation = 1
-    bridge._ensure_project_change_allowed = lambda: None
+    _project_of(bridge).ensure_change_allowed = lambda: None
     applied = []
     bridge.publish_servo_alarm_policy = lambda policy=None: (
         applied.append(dict(policy or {}))

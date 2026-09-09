@@ -20,8 +20,17 @@ from motion_web_bridge import motor_config_rules
 
 
 class ExecutionContextService:
-    def __init__(self, bridge: Any, *, repository: Any, workspace_root: Path) -> None:
+    def __init__(
+        self,
+        bridge: Any,
+        *,
+        project: Any,
+        repository: Any,
+        workspace_root: Path,
+    ) -> None:
         self.bridge = bridge
+        #: 프로젝트 서비스 협력자 (§6-23)
+        self.project = project
         self.repository = repository
         self.workspace_root = workspace_root
         self._lock = threading.RLock()
@@ -81,7 +90,7 @@ class ExecutionContextService:
         self.bridge._request_midi_monitor('invalidate_context', payload, timeout_sec=0.5)
         self.bridge._request_motion_run('invalidate_context', payload, timeout_sec=0.5)
         self.bridge._motion_studio_transport().request('invalidate_context', payload, timeout_sec=0.5)
-        self.bridge._clear_project_scoped_memory()
+        self.project.clear_scoped_memory()
 
     def _ack_matches(
         self, result: Dict[str, Any], context_id: str, project_id: str
@@ -274,10 +283,10 @@ class ExecutionContextService:
             )
             motor_runtime.update({
                 'success': (
-                    self.bridge._runtime_project_id() == project_id
+                    self.project.runtime_project_id() == project_id
                     and motor_runtime.get('phase') == 'ready'
                 ),
-                'project_id': self.bridge._runtime_project_id(),
+                'project_id': self.project.runtime_project_id(),
                 'context_id': context_id,
             })
             nodes['motor_runtime'] = motor_runtime

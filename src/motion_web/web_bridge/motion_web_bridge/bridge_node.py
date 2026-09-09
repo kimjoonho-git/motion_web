@@ -22,16 +22,13 @@ from .ethercat_alias_manager import EthercatAliasError, EthercatAliasManager
 from .coordination_bridge import (
     CoordinationWebBridge, local_motion_control, local_motion_readiness,
 )
-from . import (
-    motion_studio_session,
-    motion_file_analysis,
-    motor_config_rules,
-)
+from . import motion_file_analysis, motor_config_rules
 from .motion_studio_bridge import MotionStudioRosBridge
 from .motion_studio_session import MotionStudioSession
 from .execution_context_service import ExecutionContextService
 from .manual_motor_commands import ManualMotorCommandService
 from .motor_runtime_service import MotorRuntimeService
+from .project_service import ProjectService
 from .motor_config_service import MotorConfigService
 from .motor_event_log import MotorEventLog
 from .scan_orchestrator import ScanOrchestrator
@@ -192,18 +189,26 @@ class MotionWebBridge(Node):
         self._motor_lifecycle_lock = threading.Lock()
         # 기동 시점의 파일과 선택 프로젝트의 편집 파일을 분리해 둔다. 적용·재시작
         # 전까지는 실행 중인 모터 스택이 기동 시점 파일을 물고 있다.
+        self._project = ProjectService(
+            self,
+            repository=self.project_repository,
+            motion_projects_dir=self.motion_projects_dir,
+        )
         self._motor_runtime = MotorRuntimeService(
             self,
+            project=self._project,
             repository=self.project_repository,
             workspace_root=self.workspace_root,
         )
         self._execution_context = ExecutionContextService(
             self,
+            project=self._project,
             repository=self.project_repository,
             workspace_root=self.workspace_root,
         )
         self._motor_config = MotorConfigService(
             self,
+            project=self._project,
             runtime=self._motor_runtime,
             lifecycle_lock=self._motor_lifecycle_lock,
             repository=self.project_repository,
@@ -212,7 +217,7 @@ class MotionWebBridge(Node):
             applied=launch_motor_config_file.resolve(),
             restart_script=restart_script,
         )
-        self._bind_selected_project_sources()
+        self._project.bind_selected_sources()
         default_event_log_dir = self.workspace_root / 'log' / 'motor_events'
         self.event_log_dir = Path(
             str(self.declare_parameter('event_log_dir', str(default_event_log_dir)).value)
@@ -242,7 +247,7 @@ class MotionWebBridge(Node):
             max_files=self.event_log_max_files,
             repository=self.project_repository,
             workspace_root=self.workspace_root,
-            runtime_project_id=lambda: self._runtime_project_id(),
+            runtime_project_id=lambda: self._project.runtime_project_id(),
             logger=self.get_logger,
         )
         self.web_publish_hz = float(self.declare_parameter('web_publish_hz', 10.0).value)
@@ -272,7 +277,10 @@ class MotionWebBridge(Node):
         self._midi_monitor_store = rpc.ResultStore()
         self._motion_studio_session = MotionStudioSession()
         self._motion_studio_ros_bridge = MotionStudioRosBridge(
-            self, self._motion_studio_session, self._execution_context.context_id
+            self,
+            self._motion_studio_session,
+            self._execution_context.context_id,
+            self._project,
         )
         self._motion_studio_sync_service = MotionStudioSync(
             self, self._motion_studio_session, self._motion_studio_ros_bridge
@@ -317,6 +325,7 @@ class MotionWebBridge(Node):
         self._scan_dynamixel_client = self.create_client(Trigger, self.scan_dynamixel_service)
         self._scan = ScanOrchestrator(
             self,
+            project=self._project,
             runtime=self._motor_runtime,
             lifecycle_lock=self._motor_lifecycle_lock,
             repository=self.project_repository,
@@ -471,8 +480,8 @@ class MotionWebBridge(Node):
             return
 
         if (
-            not self._selected_project_owns_runtime()
-            or not self._payload_matches_selected_project(
+            not self._project.selected_owns_runtime()
+            or not self._project.payload_matches_selected(
                 payload, require_generation=False
             )
         ):
@@ -566,9 +575,9 @@ class MotionWebBridge(Node):
         self._motion_run_store.store(request_id, payload)
         status = payload.get('status')
         with self._motion_run_lock:
-            if isinstance(status, dict) and self._payload_matches_selected_project(status):
+            if isinstance(status, dict) and self._project.payload_matches_selected(status):
                 self._motion_run_status = status
-        if isinstance(status, dict) and self._payload_matches_selected_project(status):
+        if isinstance(status, dict) and self._project.payload_matches_selected(status):
             self._motor_event_log.record_motion_run_transition(status)
 
     def _motion_run_status_callback(self, msg: String) -> None:
@@ -579,7 +588,7 @@ class MotionWebBridge(Node):
             return
         if not isinstance(payload, dict):
             return
-        if not self._payload_matches_selected_project(payload):
+        if not self._project.payload_matches_selected(payload):
             return
         with self._motion_run_lock:
             self._motion_run_status = payload
@@ -593,7 +602,7 @@ class MotionWebBridge(Node):
             return
         if not isinstance(payload, dict):
             return
-        if not self._payload_matches_selected_project(payload):
+        if not self._project.payload_matches_selected(payload):
             return
         payload['_bridge_received_at'] = time.time()
         with self._midi_monitor_lock:
@@ -615,7 +624,7 @@ class MotionWebBridge(Node):
             if (
                 payload.get('success')
                 and isinstance(payload.get('channels'), list)
-                and self._payload_matches_selected_project(payload)
+                and self._project.payload_matches_selected(payload)
             ):
                 self._midi_monitor_status = dict(payload)
 
@@ -695,7 +704,7 @@ class MotionWebBridge(Node):
         execution_context = self._execution_context.status(validate_files=False)
         motor_operation = self.project_repository.motor_operation_status()
         selected_project_id = self.project_repository.selected_project_id()
-        runtime_project_id = self._runtime_project_id_from_path(selected_project_id)
+        runtime_project_id = self._project.runtime_project_id_from_path(selected_project_id)
         stored_context = execution_context.get('context')
         motor_config_applied = bool(
             isinstance(stored_context, dict)
@@ -1200,51 +1209,6 @@ class MotionWebBridge(Node):
 
 
 
-    def list_motion_projects(self) -> Dict[str, Any]:
-        result = self.project_repository.list_projects()
-        result['project_generation'] = self._current_project_generation()
-        runtime_project_id = self._runtime_project_id()
-        result['runtime_project_id'] = runtime_project_id
-        for project in result.get('projects') or []:
-            project['runtime_active'] = project.get('project_id') == runtime_project_id
-        return result
-
-    def _runtime_project_id(self) -> str:
-        project_id = self._runtime_project_id_from_path()
-        if not project_id:
-            return ''
-        try:
-            self.project_repository.get_project(project_id)
-        except (OSError, ValueError, json.JSONDecodeError):
-            return ''
-        return project_id
-
-    def _runtime_project_id_from_path(self, selected_project_id: str = '') -> str:
-        """Resolve launch-time runtime ownership without parsing project YAML.
-
-        This helper is used only on high-frequency, read-only status paths.
-        Project mutation and execution-context paths continue to call
-        ``_runtime_project_id`` and perform the full repository validation.
-        """
-        try:
-            relative = self._motor_config.applied.relative_to(
-                self.motion_projects_dir.resolve()
-            )
-        except (AttributeError, ValueError):
-            return ''
-        parts = relative.parts
-        if len(parts) < 2:
-            return ''
-        project_id = str(parts[0])
-        return project_id
-
-    def _selected_project_owns_runtime(self) -> bool:
-        selected = self.project_repository.selected_project_id()
-        return bool(
-            selected
-            and selected == self._runtime_project_id_from_path()
-        )
-
     def _current_project_generation(self) -> int:
         lock = getattr(self, '_project_generation_lock', None)
         if lock is None:
@@ -1265,248 +1229,9 @@ class MotionWebBridge(Node):
     def _response_matches_current_generation(self, payload: Any) -> bool:
         return generation.response_matches(payload, self._current_project_generation())
 
-    def _payload_matches_selected_project(
-        self, payload: Any, *, require_generation: bool = True
-    ) -> bool:
-        """Reject status belonging to any project other than the selected one."""
-        if not isinstance(payload, dict):
-            return False
-        nested = payload.get('execution_context')
-        if not isinstance(nested, dict):
-            nested = {}
-        project_id = str(
-            payload.get('project_id')
-            or payload.get('workspace_project_id')
-            or nested.get('project_id')
-            or ''
-        ).strip()
-        selected = self.project_repository.selected_project_id()
-        generation = payload.get('project_generation')
-        if generation is None:
-            generation = nested.get('project_generation')
-        if not require_generation:
-            generation_matches = True
-        else:
-            try:
-                generation_matches = int(generation) == self._current_project_generation()
-            except (TypeError, ValueError):
-                generation_matches = False
-        return bool(
-            selected and project_id and project_id == selected and generation_matches
-        )
-
-    def _clear_project_scoped_memory(self) -> None:
-        """Permanently discard every cached value owned by the old project."""
-        with self._lock:
-            self._motion_state = None
-            self._motion_state_received_at = None
-        self._motor_event_log.clear_project_memory()
-        self._manual.clear_pending()
-        self._motion_mapping_store.clear()
-        self._motion_run_store.clear()
-        self._midi_monitor_store.clear()
-        with self._motion_run_lock:
-            self._motion_run_status = {}
-            self._automation_triggered_context_id = None
-        with self._midi_monitor_lock:
-            self._midi_monitor_status = {}
-        self._motion_studio_sync().clear_project_memory()
-        scan = getattr(self, '_scan', None)
-        if scan is not None:
-            scan.clear_progress()
-
-    def _project_change_blocker(
-        self,
-        *,
-        ignore_motor_lifecycle: bool = False,
-        allow_run_stopping: bool = False,
-        allow_studio_stopping: bool = False,
-    ) -> str:
-        lifecycle_lock = getattr(self, '_motor_lifecycle_lock', None)
-        if (
-            not ignore_motor_lifecycle
-            and lifecycle_lock is not None
-            and lifecycle_lock.locked()
-        ):
-            return '모터 설정·검색·재시작 작업이 진행 중이므로 프로젝트를 변경할 수 없습니다'
-        repository = getattr(self, 'project_repository', None)
-        if (
-            not ignore_motor_lifecycle
-            and repository is not None
-            and hasattr(repository, 'motor_operation_status')
-        ):
-            operation = repository.motor_operation_status()
-            if operation.get('status') == 'running':
-                return '모터 설정·검색·재시작 작업이 진행 중이므로 프로젝트를 변경할 수 없습니다'
-        run_lock = getattr(self, '_motion_run_lock', None)
-        if run_lock is None:
-            run_status = getattr(self, '_motion_run_status', {})
-        else:
-            with run_lock:
-                run_status = dict(getattr(self, '_motion_run_status', {}) or {})
-        studio_session = motion_studio_session.session_of(self)
-        studio_status = (
-            studio_session.snapshot_status() if studio_session is not None else {}
-        )
-        run_state = str((run_status or {}).get('state') or 'idle')
-        studio_state = str((studio_status or {}).get('state') or 'idle')
-        blocked_run_states = {
-            'initializing',
-            'initialized',
-            'running',
-            'waiting',
-            'verifying',
-            'stopping',
-        }
-        if allow_run_stopping:
-            blocked_run_states.discard('stopping')
-        if run_state in blocked_run_states:
-            return f'모션 동작 상태가 {run_state}이므로 프로젝트를 변경할 수 없습니다'
-        blocked_studio_states = {
-            'initializing', 'countdown', 'recording', 'playing', 'stopping',
-        }
-        if allow_studio_stopping:
-            blocked_studio_states.discard('stopping')
-        if studio_state in blocked_studio_states:
-            return f'모션 스튜디오 상태가 {studio_state}이므로 프로젝트를 변경할 수 없습니다'
-        return ''
-
-    def _ensure_project_change_allowed(self) -> None:
-        blocker = self._project_change_blocker()
-        if blocker:
-            raise ValueError(blocker)
-
     def _ensure_project_mutation_allowed(self, project_id: Any) -> None:
-        self._ensure_selected_project(project_id)
-        self._ensure_project_change_allowed()
-
-    def _ensure_selected_project(self, project_id: Any) -> None:
-        if str(project_id or '') != self.project_repository.selected_project_id():
-            raise ValueError('현재 선택한 프로젝트 파일만 사용할 수 있습니다')
-
-    def create_motion_project(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        self._ensure_project_change_allowed()
-        previous_generation = self._current_project_generation()
-        self._execution_context._apply_lock.acquire()
-        try:
-            self._advance_project_generation()
-            self._execution_context.invalidate_nodes()
-            created = self.project_repository.create_project(payload.get('name'))
-        finally:
-            self._execution_context._apply_lock.release()
-        result = self.select_motion_project(created['project']['project_id'])
-        result['previous_project_generation'] = previous_generation
-        result['project_generation'] = self._current_project_generation()
-        return result
-
-    def delete_motion_project(self, project_id: Any) -> Dict[str, Any]:
-        self._ensure_project_mutation_allowed(project_id)
-        if str(project_id or '') == self._runtime_project_id():
-            raise ValueError(
-                '현재 모터에 적용된 프로젝트는 삭제할 수 없습니다. '
-                '「전체 동작 정지」 후 「실행 적용 해제」를 실행하거나, '
-                '다른 프로젝트를 적용한 뒤 삭제하세요'
-            )
-        previous_generation = self._current_project_generation()
-        self._execution_context._apply_lock.acquire()
-        try:
-            self._advance_project_generation()
-            self._execution_context.invalidate_nodes()
-            result = self.project_repository.delete_project(project_id)
-        finally:
-            self._execution_context._apply_lock.release()
-        result['previous_project_generation'] = previous_generation
-        result['project_generation'] = self._current_project_generation()
-        if not self.project_repository.selected_project_id():
-            self._motor_config.selected = Path()
-        return result
-
-    def update_motion_project(self, project_id: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
-        self._ensure_selected_project(project_id)
-        return self.project_repository.update_project_memo(project_id, payload.get('memo'))
-
-    def copy_motion_project_file(
-        self, project_id: Any, payload: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        self._ensure_project_mutation_allowed(project_id)
-        if str(payload.get('category') or '').strip() == 'motions':
-            raise ValueError(
-                '모션 파일은 프로젝트 복사로 전달할 수 없습니다. '
-                '모션 파일 화면의 스튜디오 내보내기를 사용하세요'
-            )
-        return self.project_repository.copy_file_from_project(
-            project_id,
-            payload.get('source_project_id'),
-            payload.get('category'),
-            payload.get('file_name'),
-            payload.get('new_name'),
-        )
-
-    def _bind_selected_project_sources(self) -> None:
-        project_id = self.project_repository.selected_project_id()
-        if not project_id:
-            self._motor_config.selected = Path()
-            return
-        try:
-            detail = self.project_repository.get_project(project_id)
-            active = detail.get('project', {}).get('active_files') or {}
-            motor_name = str(active.get('motor_axes') or '')
-            if motor_name:
-                self._motor_config.selected = self.project_repository.export_path(
-                    project_id, 'motor_axes', motor_name
-                )
-            else:
-                self._motor_config.selected = Path()
-        except (OSError, ValueError, json.JSONDecodeError):
-            self._motor_config.selected = Path()
-            return
-
-    def _initialize_selected_project_context(self) -> None:
-        self._execution_context.reconcile()
-
-    def load_motion_project(self, project_id: Any) -> Dict[str, Any]:
-        result = self.project_repository.get_project(project_id)
-        result['project_generation'] = self._current_project_generation()
-        return result
-
-    def select_motion_project(self, project_id: Any) -> Dict[str, Any]:
-        previous_generation = self._current_project_generation()
-        changing_project = (
-            str(project_id or '') != self.project_repository.selected_project_id()
-        )
-        if changing_project:
-            self._ensure_project_change_allowed()
-            self._execution_context._apply_lock.acquire()
-        try:
-            if changing_project:
-                self._advance_project_generation()
-                self._execution_context.invalidate_nodes()
-            result = self.project_repository.select_project(project_id)
-            result['previous_project_generation'] = previous_generation
-            result['project_generation'] = self._current_project_generation()
-            active = result.get('project', {}).get('active_files') or {}
-            motor_name = str(active.get('motor_axes') or '')
-            if motor_name:
-                self._motor_config.selected = self.project_repository.export_path(
-                    project_id, 'motor_axes', motor_name
-                )
-            else:
-                self._motor_config.selected = Path()
-            self._execution_context._set_status(
-                state='selected', ready=False, project_id=str(project_id), context_id='',
-                message='프로젝트 선택 완료 · 실행 컨텍스트 적용 대기 중', nodes={},
-            )
-        finally:
-            if changing_project:
-                self._execution_context._apply_lock.release()
-        policy_result = self.publish_servo_alarm_policy()
-        if policy_result.get('success') is not True:
-            raise ValueError(
-                '선택 프로젝트의 서보 에러 정책을 적용하지 못했습니다: '
-                f'{policy_result.get("message") or "응답 없음"}'
-            )
-        result['execution_context'] = self._execution_context.reconcile()
-        return result
+        self._project.ensure_selected(project_id)
+        self._project.ensure_change_allowed()
 
     def servo_alarm_policy(self) -> Dict[str, Any]:
         project_id = self.project_repository.selected_project_id()
@@ -1541,7 +1266,7 @@ class MotionWebBridge(Node):
         project_id = self.project_repository.selected_project_id()
         if not project_id:
             raise ValueError('서보 에러 등급을 저장할 프로젝트를 먼저 선택하세요')
-        self._ensure_project_change_allowed()
+        self._project.ensure_change_allowed()
         overrides = normalize_overrides(payload.get('overrides'))
         previous = self.servo_alarm_policy()
         candidate = self._servo_alarm_policy_payload(project_id, overrides)
@@ -1597,147 +1322,6 @@ class MotionWebBridge(Node):
             'request_id': request_id,
         }
 
-    def import_motion_project_file(
-        self, project_id: Any, payload: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        self._ensure_project_mutation_allowed(project_id)
-        if str(payload.get('category') or '').strip() == 'motions':
-            raise ValueError(
-                '외부 모션 JSON 파일 가져오기는 지원하지 않습니다. '
-                '모션 스튜디오에서 실행 파일을 저장하세요'
-            )
-        return self.project_repository.import_text(
-            project_id,
-            payload.get('category'),
-            payload.get('file_name'),
-            payload.get('content'),
-        )
-
-    def load_motion_project_file(
-        self, project_id: Any, category: Any, file_name: Any
-    ) -> Dict[str, Any]:
-        self._ensure_selected_project(project_id)
-        return self.project_repository.read_file(project_id, category, file_name)
-
-    def load_read_only_project_file(
-        self, project_id: Any, relative_path: Any
-    ) -> Dict[str, Any]:
-        self._ensure_selected_project(project_id)
-        return self.project_repository.read_read_only_file(project_id, relative_path)
-
-    def download_motion_project_file(
-        self, project_id: Any, category: Any, file_name: Any
-    ) -> Path:
-        self._ensure_selected_project(project_id)
-        return self.project_repository.export_path(project_id, category, file_name)
-
-    def save_motion_project_file(
-        self, project_id: Any, category: Any, file_name: Any, payload: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        self._ensure_project_mutation_allowed(project_id)
-        return self.project_repository.save_file(
-            project_id, category, file_name, payload.get('content')
-        )
-
-    def rename_motion_project_file(
-        self, project_id: Any, category: Any, file_name: Any, payload: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        self._ensure_project_mutation_allowed(project_id)
-        return self.project_repository.rename_file(
-            project_id, category, file_name, payload.get('new_name')
-        )
-
-    def delete_motion_project_file(
-        self, project_id: Any, category: Any, file_name: Any
-    ) -> Dict[str, Any]:
-        self._ensure_project_mutation_allowed(project_id)
-        result = self.project_repository.delete_file(project_id, category, file_name)
-        if self.project_repository.selected_project_id() == str(project_id):
-            replacement = str(result.get('replacement_active_file') or '')
-            if str(category) == 'motor_axes':
-                if replacement:
-                    self.open_motion_project_file_for_editing(
-                        project_id, category, replacement
-                    )
-                    motor_config_rules.write_motor_config_selection(self.project_repository, self._motor_config.selected)
-                else:
-                    self._motor_config.selected = Path()
-                    motor_config_rules.clear_motor_config_selection(self.project_repository)
-        return result
-
-    def activate_motion_project_file(
-        self, project_id: Any, category: Any, file_name: Any
-    ) -> Dict[str, Any]:
-        self._ensure_project_mutation_allowed(project_id)
-        # This only selects a file in project metadata.  It does not apply a
-        # motor configuration or publish a motion command.
-        result = self.project_repository.set_active(project_id, category, file_name)
-        if str(category) in {'motor_axes', 'motion_axis_matching', 'motions'}:
-            result['editor_link'] = self.open_motion_project_file_for_editing(
-                project_id, category, file_name
-            )
-        return result
-
-    def _selected_project_published_names(self, category: str) -> set[str]:
-        project_id = self.project_repository.selected_project_id()
-        if not project_id:
-            return set()
-        detail = self.project_repository.get_project(project_id)
-        names = set()
-        for folder in detail.get('tree') or []:
-            if folder.get('category') != category:
-                continue
-            for file_info in folder.get('children') or []:
-                names.add(str(file_info.get('name') or ''))
-        return names
-
-    def open_motion_project_file_for_editing(
-        self, project_id: Any, category: Any, file_name: Any
-    ) -> Dict[str, Any]:
-        self._ensure_project_mutation_allowed(project_id)
-        path = self.project_repository.export_path(project_id, category, file_name)
-        category_text = str(category)
-        if category_text == 'motor_axes':
-            self._motor_config.selected = path
-            return {
-                'success': True,
-                'workspace': 'config',
-                'category': category_text,
-                'file_name': path.name,
-                'message': '모터축 설정 편집기에 연결했습니다 · 설정 적용은 실행하지 않았습니다',
-            }
-        if category_text in {'motion_axis_matching', 'motions'}:
-            return {
-                'success': True,
-                'workspace': 'project',
-                'category': category_text,
-                'motion_tab': 'mapping' if category_text == 'motion_axis_matching' else 'files',
-                'file_name': path.name,
-                'path': str(path),
-                'message': '현재 프로젝트 파일을 기능 탭에서 직접 사용합니다 · 모션 실행은 시작하지 않았습니다',
-            }
-        return {
-            'success': True,
-            'workspace': 'studio',
-            'category': category_text,
-            'file_name': path.name,
-            'message': '레이어는 왼쪽 프로젝트 파일에서 관리하고 모션 스튜디오에서 합성합니다',
-        }
-
-    def _sync_project_file(
-        self, result: Dict[str, Any], category: str, path: Path
-    ) -> Dict[str, Any]:
-        repository = getattr(self, 'project_repository', None)
-        if repository is None:
-            return result
-        try:
-            sync = repository.sync_project_file(category, path)
-        except (OSError, UnicodeDecodeError, ValueError, yaml.YAMLError) as exc:
-            result['project_sync_warning'] = str(exc)
-            return result
-        result['project_sync'] = sync
-        return result
-
 
     def list_motion_mappings(self) -> Dict[str, Any]:
         result = self._request_motion_mapping('list', {})
@@ -1761,7 +1345,7 @@ class MotionWebBridge(Node):
         return result
 
     def save_motion_mapping(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        blocker = self._project_change_blocker()
+        blocker = self._project.change_blocker()
         if blocker:
             return {'success': False, 'message': blocker, 'files': []}
         result = self._request_motion_mapping('save', payload)
@@ -1771,7 +1355,7 @@ class MotionWebBridge(Node):
         saved_file_id = motion_file_analysis.motion_mapping_file_id(result)
         if saved_file_id and getattr(self, 'project_repository', None) is not None:
             project_id = self.project_repository.selected_project_id()
-            result = self._sync_project_file(
+            result = self._project.sync_file(
                 result,
                 'motion_axis_matching',
                 self.project_repository.export_path(
@@ -1834,7 +1418,7 @@ class MotionWebBridge(Node):
         project_id = self.project_repository.selected_project_id()
         if not project_id:
             return {'success': False, 'message': '통합 프로젝트를 먼저 선택하세요', 'files': []}
-        blocker = self._project_change_blocker()
+        blocker = self._project.change_blocker()
         if blocker:
             return {'success': False, 'message': blocker, 'files': []}
         try:
@@ -2208,6 +1792,7 @@ class MotionWebBridge(Node):
                 self,
                 self._motion_studio_session,
                 context.context_id if context is not None else None,
+                getattr(self, '_project', None),
             )
             self._motion_studio_ros_bridge = service
         return service

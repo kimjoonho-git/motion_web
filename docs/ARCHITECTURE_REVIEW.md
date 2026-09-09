@@ -127,13 +127,21 @@ motion_system(C++)  모터 단일 통로                 유지 · 스캐너만 
 | 1 | `motion_common` 신설 · 순수 함수 이관(파서·값·경로) | 최저 | **완료** · 목표 6모듈 전부 · 911테스트 통과 |
 | 2 | `RequestChannel` 단일화 · 5곳 교체 · 토픽명·페이로드 형식 유지 | 낮음 | **완료** · `rpc.ResultStore` 4곳 · 전송 계약 불변 · 실물 미검증 |
 | 3 | 토픽 상수 단일화 · `motor_command_topic` 명칭 정정 | 낮음 | **완료** · `topics.py` 27종 · 리터럴 잔여 0 · launch 7개 로드 확인 |
-| 4 | `bridge_node` 분해 · 서비스 6개 | 중간 | **진행 중** · 7,407 → 2,452줄(-67%) · 서비스 6개 신설(§6-15·17~22) · 가변 상태 이관 완료(§6-19) · 잔여 82메서드 1,871줄 · `ProjectService`만 미착수 |
+| 4 | `bridge_node` 분해 · 서비스 6개 | 중간 | **완료**(기준 A · §6-23) · 7,407 → 2,037줄(-73%) · 목표안 서비스 6개 + 추가 3개 신설 · 잔여 1,537줄은 노드 고유(구성·상태 취합·전송) |
 | 5 | 영속 계층 통합 · 단일 저장 API + 파일락 · 다중 writer 제거 | 중간 | **부분 완료** · `store.py` 5종 통합 · 직접 기록 모듈 잔존 · 2개 프로젝트 격리 미검증 |
 | 6 | 장기작업 Action 전환 · 스캔·초기화·모션 실행 | 중간 | 진행률·취소 실물 검증 |
 | 7 | 프런트엔드 빌드 도입(해시 파일명) · CSS·HTML 분할 | 중간 | 브라우저 캐시 확인 |
 | 8 | 하드웨어 스캐너 분리 · `motion_system` 범위 협의 후 | 높음 | 모터 스캔 계약 + 실물 검증 |
 
 분해 목표안
+
+**4단계 완료 기준 · A** (2026-09-09 확정)
+
+아래 서비스 목록을 다 세우면 4단계를 완료로 본다. `Node` 서브클래스 500줄 이하
+(§7 규칙)는 **별도 항목**으로 분리한다 · 거기까지 가려면 콜백 계층과 상태 취합까지
+손봐야 하고, 그것은 "신 노드 해소"와 성격이 다른 작업이다.
+
+- 미달 잔여는 §7 지표로 계속 추적한다 · 현재 `MotionWebBridge` 2,141줄
 
 - `bridge_node` → `ExecutionContextService` · `MotorConfigService` · `ScanOrchestrator` · `MotorEventLog` · `MotionFileService` · `ProjectService`
 - `motion_run_manager` → `PlanBuilder` · `MotionPlayer` · `GroupSession` · `StatusStore`
@@ -1134,6 +1142,54 @@ motion_studio_confirm True
 - 실물 미검증 · `recover_interrupted_scan` · 스캔이 중단된 상태를 만들어야 한다
 - 실물 미검증 · `ethercat_scan_safety_blocker`의 차단 분기 · 축이 움직이는 중에
   스캔을 걸어야 한다
+
+### 6-23. `ProjectService` 신설 · **4단계 완료 (기준 A)**
+
+`MotionWebBridge` 2,452 → **2,037줄** · 메서드 111 → 83 · 락 관여 1,871 → **1,537줄**
+
+§5가 적어둔 서비스 6개가 모두 섰다 · **4단계 완료 기준 A 충족.**
+
+#### 옮긴 것 · 28메서드 397줄
+
+프로젝트 생성·전환·삭제 · 프로젝트 파일 조작(불러오기·저장·이름변경·복사·가져오기·
+활성화·삭제·편집열기) · 선택 프로젝트 판정(`change_blocker` · `payload_matches_selected` ·
+`runtime_project_id` · `selected_owns_runtime` 등).
+
+#### 노드에 남긴 것 · 세대 번호
+
+`_current_project_generation`(외부 24곳) · `_advance_project_generation` ·
+`_ensure_project_mutation_allowed`. §6-20에서 정한 대로 **세대는 노드 전역 개념**이다.
+
+#### 서비스 간 참조를 또 인자로
+
+`MotorConfigService` · `MotorRuntimeService` · `ExecutionContextService` ·
+`ScanOrchestrator` · `MotionStudioRosBridge` 다섯이 노드를 거쳐 프로젝트 판정을
+쓰고 있었다. `project=`으로 직접 받게 했다 · §6-22와 같은 규칙.
+
+`ProjectService`는 반대 방향(설정·스캔·로그 서비스)을 **노드를 통해** 본다.
+그쪽은 자기보다 늦게 만들어지기 때문이다 · 늦게 묶이는 협력자는 노드가 중개한다.
+
+#### 이동 중 잡은 버그 1건 · 같은 종류가 반복됐다
+
+`getattr(self, 'project_repository', None)` **문자열 형태**가 치환되지 않아
+`change_blocker`가 저장소를 못 찾고 항상 빈 문자열을 돌려줬다 · 프로젝트 변경
+차단이 통째로 무력화될 뻔했다. 테스트가 잡았다.
+
+§6-19의 `session_of(self)`와 같은 종류다. 이름 치환은 세 형태를 모두 봐야 한다.
+
+```
+self.___              ← 속성 접근
+getattr(self, '___')  ← 문자열 접근   ← 두 번 놓쳤다
+f(self)               ← self 통째로 넘기기
+```
+
+`scripts/bridge_state_map.py`가 이 셋을 모두 세도록 만들어 둔 이유가 이것이다.
+
+#### 검증
+
+- 코드 검증 · `ruff check src` 55건 유지 · 신규 0건
+- 실행 검증 · `pytest` 1,005건 통과 · 실패 0
+- 실물 검증 · 아래 별도 기록
 
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 

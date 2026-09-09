@@ -40,6 +40,7 @@ class MotorConfigService:
         self,
         bridge: Any,
         *,
+        project: Any,
         runtime: Any,
         lifecycle_lock: threading.Lock,
         repository: Any,
@@ -49,6 +50,8 @@ class MotorConfigService:
         restart_script: Path,
     ) -> None:
         self.bridge = bridge
+        #: 프로젝트 서비스 협력자 (§6-23)
+        self.project = project
         #: 모터 런타임 수명주기 협력자 (§6-22)
         self.runtime = runtime
         #: `ScanOrchestrator`와 공유 · 노드가 소유 (§6-18)
@@ -268,7 +271,7 @@ class MotorConfigService:
         # active_files.motor_axes until sync finishes, and an empty registry
         # response would wipe the UI axis list (names/aliases) and leave
         # "설정 적용 및 재시작" disabled until a manual reload.
-        synced = self.bridge._sync_project_file({}, 'motor_axes', target_file)
+        synced = self.project.sync_file({}, 'motor_axes', target_file)
         result = self._payload_from_path(
             target_file,
             message=(
@@ -308,7 +311,7 @@ class MotorConfigService:
             }
         try:
             current_path = motor_config_rules.selected_motor_config_path(self.repository)
-            deleted = self.bridge.delete_motion_project_file(
+            deleted = self.project.delete_file(
                 project_id, 'motor_axes', current_path.name
             )
         except (OSError, ValueError) as exc:
@@ -345,7 +348,7 @@ class MotorConfigService:
             }
 
         try:
-            self.bridge._ensure_project_change_allowed()
+            self.project.ensure_change_allowed()
         except ValueError as exc:
             return {
                 'success': False,
@@ -526,7 +529,7 @@ class MotorConfigService:
                 ),
                 **self.bridge.snapshot(),
             }
-        self.bridge._ensure_project_change_allowed()
+        self.project.ensure_change_allowed()
         restart_services = [managed_service]
         coordination_service = str(
             os.environ.get('MOTION_COORDINATION_SERVICE_UNIT') or ''
@@ -587,7 +590,7 @@ class MotorConfigService:
                 'message': '현재 모터 실행 설정에서 대상 축을 확인할 수 없습니다',
                 **self.bridge.snapshot(),
             }
-        self.bridge._ensure_project_change_allowed()
+        self.project.ensure_change_allowed()
         lifecycle_lock = getattr(self, 'lifecycle_lock', None)
         if lifecycle_lock is None:
             lifecycle_lock = threading.Lock()
@@ -661,7 +664,7 @@ class MotorConfigService:
                 'runtime_project_id': '',
                 **self.bridge.snapshot(),
             }
-        project_blocker = self.bridge._project_change_blocker(
+        project_blocker = self.project.change_blocker(
             allow_run_stopping=True,
             allow_studio_stopping=True,
         )
@@ -776,6 +779,6 @@ class MotorConfigService:
             ),
             'runtime_project_id': '',
             'motor_operation': self.repository.motor_operation_status(),
-            **self.bridge.list_motion_projects(),
+            **self.project.list_projects(),
             **self.bridge.snapshot(),
         }

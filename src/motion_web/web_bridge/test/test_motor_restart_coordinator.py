@@ -3,9 +3,29 @@ import subprocess
 
 import pytest
 
+from motion_web_bridge.project_service import ProjectService
 from motion_web_bridge.motor_restart_coordinator import MotorRestartCoordinator
 from motion_web_bridge.motor_runtime_service import MotorRuntimeService
 from motion_web_bridge.project_repository import ProjectRepository
+
+
+def _project_of(bridge):
+    """노드 스텁에 프로젝트 서비스를 붙인다 · §6-23으로 노드에서 떨어져 나왔다."""
+    service = getattr(bridge, '_project', None)
+    if service is None:
+        service = ProjectService(
+            bridge,
+            repository=getattr(bridge, 'project_repository', None),
+            motion_projects_dir=getattr(bridge, 'motion_projects_dir', Path('.')),
+        )
+        bridge._project = service
+    repository = getattr(bridge, 'project_repository', None)
+    if repository is not None:
+        service.repository = repository
+    projects_dir = getattr(bridge, 'motion_projects_dir', None)
+    if projects_dir is not None:
+        service.motion_projects_dir = projects_dir
+    return service
 
 
 def _runtime_of(bridge):
@@ -14,6 +34,7 @@ def _runtime_of(bridge):
     if service is None:
         service = MotorRuntimeService(
             bridge,
+            project=_project_of(bridge),
             repository=getattr(bridge, 'project_repository', None),
             workspace_root=getattr(bridge, 'workspace_root', Path('.')),
         )

@@ -37,11 +37,14 @@ class MotorRuntimeService:
         self,
         bridge: Any,
         *,
+        project: Any,
         repository: Any,
         workspace_root: Path,
         restart_coordinator: Any = None,
     ) -> None:
         self.bridge = bridge
+        #: 프로젝트 서비스 협력자 (§6-23)
+        self.project = project
         self.repository = repository
         self.workspace_root = workspace_root
         self._restart_coordinator = restart_coordinator
@@ -94,7 +97,7 @@ class MotorRuntimeService:
         allow_run_stopping: bool = False,
         allow_studio_stopping: bool = False,
     ) -> str:
-        blocker = self.bridge._project_change_blocker(
+        blocker = self.project.change_blocker(
             ignore_motor_lifecycle=True,
             allow_run_stopping=allow_run_stopping,
             allow_studio_stopping=allow_studio_stopping,
