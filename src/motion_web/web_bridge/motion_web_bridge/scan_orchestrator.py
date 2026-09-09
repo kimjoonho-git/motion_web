@@ -44,6 +44,7 @@ class ScanOrchestrator:
         scan_service: str,
         scan_ac_servo_service: str,
         scan_dynamixel_service: str,
+        load_motor_config: Any,
     ) -> None:
         self.bridge = bridge
         #: 설정 적용·재시작과 공유한다 · 노드가 소유
@@ -55,6 +56,8 @@ class ScanOrchestrator:
         self.scan_service = scan_service
         self.scan_ac_servo_service = scan_ac_servo_service
         self.scan_dynamixel_service = scan_dynamixel_service
+        #: 프로젝트 설정을 읽어오는 콜러블 · `MotorConfigService.load` (§6-19)
+        self.load_motor_config = load_motor_config
         self._scan_request_lock = threading.Lock()
         #: 노드에서 그대로 옮겼다 · 진행 이벤트를 락 안에서 다시 읽는다
         self._progress_lock = threading.RLock()
@@ -314,7 +317,7 @@ class ScanOrchestrator:
             self.bridge.get_logger().warn('Invalid scan JSON received.')
         if isinstance(scan, dict):
             ethercat_project_compat.annotate_ethercat_project_compatibility(
-                scan, self.bridge.load_motor_config
+                scan, self.load_motor_config
             )
         message = motor_config_rules.scan_result_message(
             bool(response.success),

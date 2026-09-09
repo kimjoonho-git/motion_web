@@ -33,22 +33,22 @@ def register_motor_routes(app: FastAPI, bridge, project_call) -> None:
 
     @app.get('/api/motor-config')
     async def motor_config():
-        return bridge.load_motor_config()
+        return bridge._motor_config.load()
 
     @app.put('/api/motor-config')
     async def save_motor_config(request: Request):
         body = await request.json()
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail='request body must be an object')
-        return bridge.save_motor_config(body)
+        return bridge._motor_config.save(body)
 
     @app.delete('/api/motor-config')
     async def delete_motor_config():
-        return project_call(bridge.delete_motor_config)
+        return project_call(bridge._motor_config.delete)
 
     @app.post('/api/motor-config/apply')
     async def apply_motor_config():
-        return await asyncio.to_thread(bridge.apply_motor_config)
+        return await asyncio.to_thread(bridge._motor_config.apply)
 
     @app.get('/api/motor-events')
     async def motor_events(

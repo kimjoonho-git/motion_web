@@ -10,6 +10,7 @@ import time
 import pytest
 from std_msgs.msg import String
 
+from motion_web_bridge.motor_config_service import MotorConfigService
 from motion_web_bridge.bridge_node import MotionWebBridge, create_app
 from motion_web_bridge.motion_studio_session import MotionStudioSession
 from motion_web_bridge.motor_event_log import MotorEventLog
@@ -17,6 +18,33 @@ from motion_web_bridge.scan_orchestrator import ScanOrchestrator
 from motion_web_bridge.motion_studio_sync import MotionStudioSync
 from motion_common import rpc
 from motion_web_bridge import ethercat_project_compat, motor_config_rules
+
+
+def _motor_config_of(bridge, **overrides):
+    """노드 스텁에 모터 설정 서비스를 붙인다 · §6-19로 노드에서 떨어져 나왔다."""
+    service = getattr(bridge, '_motor_config', None)
+    if service is None:
+        service = MotorConfigService(
+            bridge,
+            lifecycle_lock=getattr(
+                bridge, '_motor_lifecycle_lock', None
+            ) or threading.Lock(),
+            repository=getattr(bridge, 'project_repository', None),
+            workspace_root=getattr(bridge, 'workspace_root', Path('.')),
+            selected=Path(),
+            applied=Path(),
+            restart_script=Path('restart_motion_monitor.sh'),
+        )
+        bridge._motor_config = service
+    repository = getattr(bridge, 'project_repository', None)
+    if repository is not None:
+        service.repository = repository
+    workspace_root = getattr(bridge, 'workspace_root', None)
+    if workspace_root is not None:
+        service.workspace_root = workspace_root
+    for name, value in overrides.items():
+        setattr(service, name, value)
+    return service
 
 
 @pytest.fixture(autouse=True)
@@ -61,6 +89,7 @@ def _scan_of(bridge, **overrides):
             scan_service='/scan_motors',
             scan_ac_servo_service='/scan_ac_servo_motors',
             scan_dynamixel_service='/scan_dynamixel_motors',
+            load_motor_config=lambda: _motor_config_of(bridge).load(),
         )
         bridge._scan = scan
     #: 스텁은 저장소를 나중에 꽂기도 한다 · 매번 최신 값을 따라간다
@@ -514,7 +543,7 @@ def test_motor_operation_coordinator_is_the_reconcile_writer():
 def test_high_frequency_runtime_owner_check_is_independent_from_selection(tmp_path):
     bridge = make_bridge()
     bridge.motion_projects_dir = tmp_path
-    bridge.applied_motor_config_file = (
+    _motor_config_of(bridge).applied = (
         tmp_path / 'project-1' / 'runtime' / 'applied_motor_config.yaml'
     )
     bridge.project_repository.get_project = lambda _project_id: (_ for _ in ()).throw(
@@ -911,7 +940,7 @@ def test_scan_result_message_preserves_partial_outcome():
 def test_scan_result_marks_unused_disconnected_master_as_project_compatible_partial():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge._motion_studio_session = MotionStudioSession()
-    bridge.load_motor_config = lambda: {
+    _motor_config_of(bridge).load = lambda: {
         'success': True,
         'registry': {
             'motors': [
@@ -972,7 +1001,7 @@ def test_scan_result_marks_unused_disconnected_master_as_project_compatible_part
     }
 
     ethercat_project_compat.annotate_ethercat_project_compatibility(
-        scan, bridge.load_motor_config
+        scan, _motor_config_of(bridge).load
     )
 
     comparison = scan['project_comparison']['ethercat_project']
@@ -1151,7 +1180,7 @@ def test_scan_result_keeps_failure_when_no_requested_device_is_detected():
 def test_scan_result_keeps_failure_when_required_project_master_is_missing():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge._motion_studio_session = MotionStudioSession()
-    bridge.load_motor_config = lambda: {
+    _motor_config_of(bridge).load = lambda: {
         'success': True,
         'registry': {
             'motors': [{
@@ -1188,7 +1217,7 @@ def test_scan_result_keeps_failure_when_required_project_master_is_missing():
     }
 
     ethercat_project_compat.annotate_ethercat_project_compatibility(
-        scan, bridge.load_motor_config
+        scan, _motor_config_of(bridge).load
     )
 
     assert scan['project_comparison']['ethercat_project']['compatible'] is False

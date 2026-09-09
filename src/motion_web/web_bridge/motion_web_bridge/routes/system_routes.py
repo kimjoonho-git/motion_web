@@ -130,7 +130,7 @@ def register_system_routes(app: FastAPI, bridge, project_call) -> None:
 
     @app.post('/api/system/program/restart')
     async def restart_managed_program():
-        return await asyncio.to_thread(project_call, bridge.restart_managed_program)
+        return await asyncio.to_thread(project_call, bridge._motor_config.restart_managed_program)
 
     @app.post('/api/system/desktop-shortcut')
     async def create_desktop_shortcut():
@@ -142,14 +142,14 @@ def register_system_routes(app: FastAPI, bridge, project_call) -> None:
     async def restart_motor_control_system():
         return await asyncio.to_thread(
             project_call,
-            bridge.restart_motor_control_system,
+            bridge._motor_config.restart_motor_control,
         )
 
     @app.post('/api/system/motor-runtime/clear')
     async def clear_motor_runtime_application():
         return await asyncio.to_thread(
             project_call,
-            bridge.clear_motor_runtime_application,
+            bridge._motor_config.clear_runtime_application,
         )
 
     @app.post('/api/monitoring/enabled')

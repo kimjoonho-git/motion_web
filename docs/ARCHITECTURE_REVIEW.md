@@ -932,6 +932,63 @@ project_comparison: compatible true · required [0] · unused [1]
 - 실물 미검증 · Dynamixel 스캔 · 포트 부재
 - 실물 미검증 · `scan_all`(전체 검색) · AC Servo·Dynamixel 동시 경로
 
+### 6-19. `MotorConfigService` 신설 · 가변 상태 소유 이전 · ① 항목 해소
+
+`MotionWebBridge` 4,430 → **3,722줄** · 메서드 152 → 140 · 락 관여 3,635 → **3,069줄**
+
+§5 분해 목표안의 세 번째 서비스이자, §6-13이 **"계약을 어디로 옮길지 먼저 정해야
+한다"** 고 남겨둔 가변 상태 문제의 답이다.
+
+#### 가변 상태 두 개의 소유자를 정했다
+
+| 옛 이름 | 새 이름 | 뜻 |
+|---|---|---|
+| `motor_config_file` | `MotorConfigService.selected` | 지금 고른 모터축 설정 파일 |
+| `applied_motor_config_file` | `MotorConfigService.applied` | Motor Manager가 실제로 물고 있는 파일 |
+
+§6-13은 "`motor_config_file`은 파생 캐시처럼 보이지만 프로젝트 전환 시 `Path()`로
+비워지는 것을 테스트가 격리 보장으로 검증하므로 계약의 일부"라고 적었다.
+**그 계약이 이제 이 객체 안에 있다** · `clear_selection()`.
+
+노드에 남은 프로젝트 전환 메서드들(`select_motion_project` ·
+`_bind_selected_project_sources` · `delete_motion_project` 등)은
+`self._motor_config.selected`를 통해 같은 소유자를 갱신한다.
+
+#### 옮긴 것 · 12메서드 703줄
+
+`clear_runtime_application` 142 · `apply` 140 · `save` 96 · `restart_motor_control` 84 ·
+`_payload_from_path` 51 · `restart_managed_program` 48 · `delete` 38 ·
+`_file_from_payload` 27 · `clear_stopping_release_state` 26 · `load` 23 · `_write` 16 ·
+`_read_current` 12
+
+#### 락은 여전히 노드가 소유한다
+
+`lifecycle_lock`은 `ScanOrchestrator`와 **같은 객체**다. 노드가 만들고 두 서비스에
+넘긴다 · §6-18에 적은 이유 그대로다.
+
+#### `ScanOrchestrator`의 설정 의존을 인자로 바꿨다
+
+스캔이 프로젝트 설정을 읽을 때 `self.bridge.load_motor_config`를 부르고 있었다.
+설정이 서비스로 옮겨가면서 `self.bridge._motor_config.load`가 될 뻔했는데, 그러면
+스캔이 노드를 거쳐 다른 서비스를 아는 꼴이다. `load_motor_config` 콜러블을
+생성자 인자로 받게 했다.
+
+#### 이동 중 잡은 버그 1건
+
+`clear_stopping_release_state`가 `motion_studio_session.session_of(self)`를 부른다.
+`self`가 노드일 때는 맞았지만 서비스로 옮기니 **서비스에서 스튜디오 세션을 찾게
+됐고**, 세션이 없어 `stopping` 상태가 정리되지 않았다. `session_of(self.bridge)`로
+고쳤다 · 테스트가 잡았다.
+
+`self.___` 형태만 기계적으로 바꾸면 이런 것을 놓친다. **`self`를 통째로 넘기는
+호출**(`f(self)`)도 함께 봐야 한다.
+
+#### 검증
+
+- 코드 검증 · `ruff check src` 55건 유지 · 신규 0건
+- 실행 검증 · `pytest` 1,005건 통과 · 실패 0
+- 실물 검증 · 아래 별도 기록
+
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
 - 파일 1,000줄 이하 · 함수 60줄 이하 · `Node` 서브클래스 500줄 이하

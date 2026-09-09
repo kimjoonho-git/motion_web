@@ -19,6 +19,7 @@ from motion_web_bridge.project_repository import (
     ProjectRepository,
     _text_limit,
 )
+from motion_web_bridge.motor_config_service import MotorConfigService
 from motion_web_bridge.bridge_node import (
     MotionWebBridge,
     _project_tree_category_signature,
@@ -35,6 +36,33 @@ MOTION_TEXT = '\n'.join([
     json.dumps({'type': 'motion_header', 'rotation_unit': 'deg'}),
     json.dumps([1, 0.0, '1-1', 0.0]),
 ])
+
+
+def _motor_config_of(bridge, **overrides):
+    """노드 스텁에 모터 설정 서비스를 붙인다 · §6-19로 노드에서 떨어져 나왔다."""
+    service = getattr(bridge, '_motor_config', None)
+    if service is None:
+        service = MotorConfigService(
+            bridge,
+            lifecycle_lock=getattr(
+                bridge, '_motor_lifecycle_lock', None
+            ) or threading.Lock(),
+            repository=getattr(bridge, 'project_repository', None),
+            workspace_root=getattr(bridge, 'workspace_root', Path('.')),
+            selected=Path(),
+            applied=Path(),
+            restart_script=Path('restart_motion_monitor.sh'),
+        )
+        bridge._motor_config = service
+    repository = getattr(bridge, 'project_repository', None)
+    if repository is not None:
+        service.repository = repository
+    workspace_root = getattr(bridge, 'workspace_root', None)
+    if workspace_root is not None:
+        service.workspace_root = workspace_root
+    for name, value in overrides.items():
+        setattr(service, name, value)
+    return service
 
 
 def test_motion_files_have_a_separate_large_file_limit():
@@ -327,7 +355,7 @@ def test_unconfirmed_ac_servo_can_be_saved_but_not_applied(tmp_path):
     bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
     bridge.workspace_root = tmp_path
-    bridge.motor_config_file = (
+    _motor_config_of(bridge).selected = (
         tmp_path / 'projects' / project_id / 'motor_axes' / 'motor_axes.yaml'
     )
     config = yaml.safe_load(
@@ -345,7 +373,7 @@ def test_unconfirmed_ac_servo_can_be_saved_but_not_applied(tmp_path):
         '  profile_deceleration: 180000\n'
     )
 
-    result = bridge.save_motor_config({
+    result = _motor_config_of(bridge).save({
         'registry': motor_config_rules.registry_from_motor_config(config),
         'file_name': 'motor_axes.yaml',
         'base_revision': '',
@@ -374,7 +402,7 @@ def test_first_motor_config_save_returns_persisted_axes_before_apply(tmp_path):
     bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
     bridge.workspace_root = tmp_path
-    bridge.motor_config_file = (
+    _motor_config_of(bridge).selected = (
         tmp_path / 'projects' / project_id / 'motor_axes' / 'motor_axes.yaml'
     )
     config = yaml.safe_load(
@@ -393,7 +421,7 @@ def test_first_motor_config_save_returns_persisted_axes_before_apply(tmp_path):
     )
     registry = motor_config_rules.registry_from_motor_config(config)
 
-    result = bridge.save_motor_config({
+    result = _motor_config_of(bridge).save({
         'registry': registry,
         'file_name': 'motor_axes.yaml',
         'base_revision': '',
@@ -414,7 +442,7 @@ def test_first_motor_config_save_returns_persisted_axes_before_apply(tmp_path):
     renamed = motor_config_rules.registry_from_motor_config(config)
     renamed['motors'][0]['name'] = '왼쪽 서보'
     renamed['motors'][0]['identity']['ethercat_alias'] = 101
-    second = bridge.save_motor_config({
+    second = _motor_config_of(bridge).save({
         'registry': renamed,
         'file_name': 'motor_axes.yaml',
         'base_revision': result['config_revision'],
@@ -424,7 +452,7 @@ def test_first_motor_config_save_returns_persisted_axes_before_apply(tmp_path):
     assert int(second['registry']['motors'][0]['identity']['ethercat_alias']) == 101
     assert second['config_revision'] != result['config_revision']
 
-    reloaded = bridge.load_motor_config()
+    reloaded = _motor_config_of(bridge).load()
     assert reloaded['success'] is True
     assert len(reloaded['registry'].get('motors') or []) == 1
     assert reloaded['registry']['motors'][0]['name'] == '왼쪽 서보'
@@ -694,11 +722,11 @@ def test_motor_config_load_ignores_stale_path_from_another_project(tmp_path):
 
     bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
-    bridge.motor_config_file = repository.export_path(
+    _motor_config_of(bridge).selected = repository.export_path(
         first_id, 'motor_axes', 'motor_axes.yaml'
     )
 
-    loaded = bridge.load_motor_config()
+    loaded = _motor_config_of(bridge).load()
 
     assert loaded['success'] is True
     assert Path(loaded['config_file']).parent.parent.name == second_id
@@ -718,16 +746,16 @@ def test_project_without_saved_motor_file_clears_stale_editor_path(tmp_path):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
-    bridge.motor_config_file = stale_path
+    _motor_config_of(bridge).selected = stale_path
 
     bridge._bind_selected_project_sources()
-    loaded = bridge.load_motor_config()
+    loaded = _motor_config_of(bridge).load()
 
-    assert bridge.motor_config_file == Path()
+    assert _motor_config_of(bridge).selected == Path()
     assert loaded['success'] is True
     assert loaded['saved'] is False
     assert loaded['config_file'] == ''
-    target = bridge._motor_config_file_from_payload({})
+    target = _motor_config_of(bridge)._file_from_payload({})
     assert target == tmp_path / 'projects' / second_id / 'motor_axes' / 'motor_axes.yaml'
 
 
@@ -736,11 +764,11 @@ def test_no_selected_project_clears_stale_editor_path(tmp_path):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
-    bridge.motor_config_file = tmp_path / 'old-project' / 'motor_axes.yaml'
+    _motor_config_of(bridge).selected = tmp_path / 'old-project' / 'motor_axes.yaml'
 
     bridge._bind_selected_project_sources()
 
-    assert bridge.motor_config_file == Path()
+    assert _motor_config_of(bridge).selected == Path()
 
 
 def test_delete_motor_config_only_moves_selected_project_file_to_its_trash(tmp_path):
@@ -758,18 +786,18 @@ def test_delete_motor_config_only_moves_selected_project_file_to_its_trash(tmp_p
 
     bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
-    bridge.motor_config_file = selected_path
+    _motor_config_of(bridge).selected = selected_path
     motor_config_rules.write_motor_config_selection(
         bridge.project_repository, selected_path
     )
 
-    result = bridge.delete_motor_config()
+    result = _motor_config_of(bridge).delete()
 
     assert result['success'] is True
     assert result['deleted_file'] == 'selected.yaml'
     assert result['replacement_active_file'] == ''
     assert result['config_file'] == ''
-    assert bridge.motor_config_file == Path()
+    assert _motor_config_of(bridge).selected == Path()
     assert not selected_path.exists()
     assert other_path.is_file()
     assert repository.selected_project_id() == selected_id
@@ -795,13 +823,13 @@ def test_motor_config_save_rejects_stale_browser_revision(tmp_path):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
-    bridge.motor_config_file = repository.export_path(
+    _motor_config_of(bridge).selected = repository.export_path(
         project_id, 'motor_axes', 'motor_axes.yaml'
     )
-    loaded = bridge.load_motor_config()
-    bridge.motor_config_file.write_text(content.replace('1000000', '2000000'), encoding='utf-8')
+    loaded = _motor_config_of(bridge).load()
+    _motor_config_of(bridge).selected.write_text(content.replace('1000000', '2000000'), encoding='utf-8')
 
-    result = bridge.save_motor_config({
+    result = _motor_config_of(bridge).save({
         'registry': loaded['registry'],
         'file_name': 'motor_axes.yaml',
         'base_revision': loaded['config_revision'],
@@ -809,7 +837,7 @@ def test_motor_config_save_rejects_stale_browser_revision(tmp_path):
 
     assert result['success'] is False
     assert '현재 파일 보호를 위해 저장을 거부' in result['message']
-    assert 'period: 2000000' in bridge.motor_config_file.read_text(encoding='utf-8')
+    assert 'period: 2000000' in _motor_config_of(bridge).selected.read_text(encoding='utf-8')
 
 
 def test_motor_config_save_rejects_zero_axis_overwrite(tmp_path):
@@ -824,12 +852,12 @@ def test_motor_config_save_rejects_zero_axis_overwrite(tmp_path):
     bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
     bridge.workspace_root = tmp_path
-    bridge.motor_config_file = repository.export_path(
+    _motor_config_of(bridge).selected = repository.export_path(
         project_id, 'motor_axes', 'motor_axes.yaml'
     )
-    loaded = bridge.load_motor_config()
+    loaded = _motor_config_of(bridge).load()
 
-    result = bridge.save_motor_config({
+    result = _motor_config_of(bridge).save({
         'registry': {'version': 1, 'motors': []},
         'file_name': 'motor_axes.yaml',
         'base_revision': loaded['config_revision'],
@@ -837,7 +865,7 @@ def test_motor_config_save_rejects_zero_axis_overwrite(tmp_path):
 
     assert result['success'] is False
     assert '0축 모터 설정은 저장할 수 없습니다' in result['message']
-    assert bridge.load_motor_config()['registry']['motors']
+    assert _motor_config_of(bridge).load()['registry']['motors']
 
 
 def test_runtime_motor_config_rejects_unusable_ac_profile(tmp_path):
@@ -1014,7 +1042,7 @@ def test_runtime_owner_remains_visible_when_another_project_is_selected(tmp_path
     bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
     bridge.motion_projects_dir = tmp_path / 'projects'
-    bridge.applied_motor_config_file = (
+    _motor_config_of(bridge).applied = (
         tmp_path / 'projects' / runtime_id / 'runtime' / 'applied_motor_config.yaml'
     )
 
@@ -1753,7 +1781,7 @@ def test_runtime_status_reports_disabled_motor_manager_without_runtime_config(
 
     status = motor_config_rules.runtime_service_status(
         {'generated_at': 100.0, 'motors': []},
-        applied_motor_config_file=getattr(bridge, 'applied_motor_config_file', None),
+        applied_motor_config_file=_motor_config_of(bridge).applied,
         repository=getattr(bridge, 'project_repository', None),
         workspace_root=getattr(bridge, 'workspace_root', Path()),
     )
@@ -1769,7 +1797,7 @@ def test_runtime_status_reports_ready_motor_feedback(tmp_path, monkeypatch):
     bridge.workspace_root = tmp_path
     runtime = tmp_path / 'runtime.yaml'
     runtime.write_text('masters: []\n', encoding='utf-8')
-    bridge.applied_motor_config_file = runtime
+    _motor_config_of(bridge).applied = runtime
     bridge.project_repository = type('Repository', (), {
         'motor_runtime_state': lambda _self: {
             'valid': True,
@@ -1783,7 +1811,7 @@ def test_runtime_status_reports_ready_motor_feedback(tmp_path, monkeypatch):
             'last_motor_status_at': 99.8,
             'motors': [{'controller_index': 0}],
         },
-        applied_motor_config_file=getattr(bridge, 'applied_motor_config_file', None),
+        applied_motor_config_file=_motor_config_of(bridge).applied,
         repository=getattr(bridge, 'project_repository', None),
         workspace_root=getattr(bridge, 'workspace_root', Path()),
     )
@@ -1803,7 +1831,7 @@ def test_runtime_status_rejects_process_and_target_config_mismatch(tmp_path):
     target.parent.mkdir(parents=True)
     running.write_text('masters: []\n', encoding='utf-8')
     target.write_text('masters: []\n', encoding='utf-8')
-    bridge.applied_motor_config_file = running
+    _motor_config_of(bridge).applied = running
     bridge.project_repository = type('Repository', (), {
         'motor_runtime_state': lambda _self: {
             'valid': True,
@@ -1817,7 +1845,7 @@ def test_runtime_status_rejects_process_and_target_config_mismatch(tmp_path):
             'last_motor_status_at': 99.9,
             'motors': [{'controller_index': 0}],
         },
-        applied_motor_config_file=getattr(bridge, 'applied_motor_config_file', None),
+        applied_motor_config_file=_motor_config_of(bridge).applied,
         repository=getattr(bridge, 'project_repository', None),
         workspace_root=getattr(bridge, 'workspace_root', Path()),
     )
@@ -2215,7 +2243,7 @@ def test_runtime_status_reports_ethercat_start_block_instead_of_waiting_forever(
 
     status = motor_config_rules.runtime_service_status(
         {'generated_at': 100.0, 'motors': []},
-        applied_motor_config_file=getattr(bridge, 'applied_motor_config_file', None),
+        applied_motor_config_file=_motor_config_of(bridge).applied,
         repository=getattr(bridge, 'project_repository', None),
         workspace_root=getattr(bridge, 'workspace_root', Path()),
     )
@@ -2249,7 +2277,7 @@ def test_web_apply_requests_managed_service_restart_without_second_launch(
 
     bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
-    bridge.restart_script = restart_script
+    _motor_config_of(bridge).restart_script = restart_script
     bridge.workspace_root = workspace
     bridge.snapshot = lambda: {}
     commands = []
@@ -2260,7 +2288,7 @@ def test_web_apply_requests_managed_service_restart_without_second_launch(
         lambda command, **kwargs: commands.append((command, kwargs)),
     )
 
-    result = bridge.apply_motor_config()
+    result = _motor_config_of(bridge).apply()
 
     assert result['success'] is True
     assert result['restart_mode'] == 'split_managed_services'
@@ -2305,7 +2333,7 @@ def test_web_apply_schedule_failure_restores_previous_runtime(
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge._motion_studio_session = MotionStudioSession()
     bridge.project_repository = repository
-    bridge.restart_script = restart_script
+    _motor_config_of(bridge).restart_script = restart_script
     bridge.workspace_root = workspace
     bridge.snapshot = lambda: {}
     monkeypatch.setenv('MOTION_CONTROL_SERVICE_UNIT', 'motion-control.service')
@@ -2315,7 +2343,7 @@ def test_web_apply_schedule_failure_restores_previous_runtime(
         lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError('schedule failed')),
     )
 
-    result = bridge.apply_motor_config()
+    result = _motor_config_of(bridge).apply()
 
     assert result['success'] is False
     assert repository.motor_runtime_state()['target_project_id'] == previous_id
@@ -2340,7 +2368,7 @@ def test_user_can_request_managed_program_restart_from_web(monkeypatch):
         lambda command, **kwargs: commands.append((command, kwargs)),
     )
 
-    result = bridge.restart_managed_program()
+    result = _motor_config_of(bridge).restart_managed_program()
 
     assert result['success'] is True
     assert commands[0][0][-2:] == [
@@ -2357,7 +2385,7 @@ def test_program_restart_button_requires_installed_service(monkeypatch):
     bridge.snapshot = lambda: {}
     monkeypatch.delenv('MOTION_CONTROL_SERVICE_UNIT', raising=False)
 
-    result = bridge.restart_managed_program()
+    result = _motor_config_of(bridge).restart_managed_program()
 
     assert result['success'] is False
     assert '최초 설치' in result['message']
@@ -2419,7 +2447,7 @@ def test_user_can_restart_only_motor_control_service_from_web(monkeypatch):
     bridge.motor_restart_coordinator = Coordinator()
     monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
 
-    result = bridge.restart_motor_control_system()
+    result = _motor_config_of(bridge).restart_motor_control()
 
     assert result['success'] is True
     assert result['restart_mode'] == 'motor_service'
@@ -2496,7 +2524,7 @@ def test_motor_control_restart_rejects_project_without_applied_motor_config(monk
         lambda command, **kwargs: commands.append((command, kwargs)),
     )
 
-    result = bridge.restart_motor_control_system()
+    result = _motor_config_of(bridge).restart_motor_control()
 
     assert result['success'] is False
     assert '설정 적용·재시작' in result['message']
@@ -2644,8 +2672,8 @@ def test_clear_motor_runtime_application_stops_and_allows_delete(
     bridge.project_repository = repository
     bridge.workspace_root = workspace
     bridge.motion_projects_dir = workspace / 'motion_projects'
-    bridge.applied_motor_config_file = Path(runtime_file).resolve()
-    bridge.motor_config_file = Path(runtime_file).resolve()
+    _motor_config_of(bridge).applied = Path(runtime_file).resolve()
+    _motor_config_of(bridge).selected = Path(runtime_file).resolve()
     bridge.snapshot = lambda: {}
     bridge.list_motion_projects = lambda: {
         'projects': [],
@@ -2677,13 +2705,13 @@ def test_clear_motor_runtime_application_stops_and_allows_delete(
     monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
 
     assert bridge._runtime_project_id() == project_id
-    result = bridge.clear_motor_runtime_application()
+    result = _motor_config_of(bridge).clear_runtime_application()
 
     assert result['success'] is True
     assert result['cleared'] is True
     assert result['previous_project_id'] == project_id
     assert result['runtime_project_id'] == ''
-    assert bridge.applied_motor_config_file == Path()
+    assert _motor_config_of(bridge).applied == Path()
     assert bridge._runtime_project_id() == ''
     assert bridge._motion_run_status['state'] == 'stopped'
     assert bridge._motion_studio_session.status['state'] == 'idle'
