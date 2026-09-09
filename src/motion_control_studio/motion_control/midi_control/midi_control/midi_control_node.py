@@ -24,13 +24,30 @@ from midi_control.bank_manager import (
 )
 from midi_control.config_store import load_midi_banks
 from midi_control.motion_axis_registry import MotionAxisRegistry
-from motion_common import command_router, generation as generation_mod, topics, values
+from midi_control.pickup_policy import (
+    PICKUP_FEEDBACK_CONSISTENCY_DEG,
+    PICKUP_TOLERANCE_DEG,
+    PickupPolicy,
+)
+from midi_control.motion_value_map import (
+    FILTER_MAX_TIME_CONSTANT_SEC,
+    FILTER_ORDER,
+    LINKED_MOTION_VALUE_TOLERANCE_DEG,
+    LinkedMotionRangeMismatch,
+    _finite_float,
+    motion_value_display,
+    motion_value_from_output,
+    motor_target_from_motion,
+    raw_fader_for_motion,
+    require_motion_value_within_limits,
+    require_same_motion_ranges,
+    safe_motion_range_for_group,
+    second_order_low_pass,
+)
+from motion_common import command_router, generation as generation_mod, topics
 from motion_common.timing import CONTROL_PERIOD_SEC
 
 
-FILTER_ORDER = 2
-FILTER_MAX_TIME_CONSTANT_SEC = 0.5
-FILTER_MAX_STEP_SEC = 0.05
 MIDI_COMMAND_PERIOD_SEC = CONTROL_PERIOD_SEC
 MIDI_COMMAND_DEADBAND_DEG = 0.01
 FADER_SYNC_MIN_DURATION_SEC = 0.10
@@ -39,275 +56,6 @@ FADER_PARK_TOLERANCE_RAW = 16
 FADER_PARK_TIMEOUT_SEC = 2.0
 PLAYBACK_FADER_RESUME_DELAY_SEC = 0.35
 SELECT_TOGGLE_DEBOUNCE_SEC = 0.08
-SELECT_RANGE_TOLERANCE_PERCENT = 0.25
-LINKED_RANGE_TOLERANCE_DEG = 1e-6
-LINKED_MOTION_VALUE_TOLERANCE_DEG = 1e-6
-PICKUP_TOLERANCE_DEG = 0.5
-PICKUP_FEEDBACK_CONSISTENCY_DEG = 1.0
-
-
-class LinkedMotionRangeMismatch(ValueError):
-    """Raised when one MIDI fader links Motion IDs with different ranges."""
-
-
-def motion_value_display(
-    motion_ids: List[str],
-    source_values: Dict[str, float],
-    *,
-    control_enabled: bool = False,
-    estimated_value: float | None = None,
-) -> tuple[float | None, str, str]:
-    """Prefer confirmed source values, then an explicitly marked SELECT preview."""
-    if not motion_ids:
-        return None, 'NO DATA', 'missing'
-    values = []
-    for motion_id in motion_ids:
-        value = _finite_float(source_values.get(str(motion_id)))
-        if value is None:
-            values = []
-            break
-        values.append(value)
-    if values:
-        if max(values) - min(values) > LINKED_MOTION_VALUE_TOLERANCE_DEG:
-            return None, 'DIFF', 'different'
-        value = sum(values) / len(values)
-        return value, _motion_lcd_number(value), 'confirmed'
-    preview = _finite_float(estimated_value)
-    if control_enabled and preview is not None:
-        return preview, _motion_lcd_number(preview, prefix='~'), 'estimated'
-    return None, 'NO DATA', 'missing'
-
-
-def _motion_lcd_number(value: float, prefix: str = '') -> str:
-    for decimals in (3, 2, 1, 0):
-        text = f'{value:.{decimals}f}'
-        if len(prefix) + len(text) <= 7:
-            return prefix + text
-    return (prefix + f'{value:.1e}')[:7]
-
-
-def second_order_low_pass(
-    input_value: float,
-    filter_level: float,
-    dt_sec: float,
-    stage1_previous: float,
-    stage2_previous: float,
-) -> tuple[float, float, float]:
-    """Apply two cascaded first-order sections as a stable second-order LPF."""
-    level = max(0, min(FILTER_LEVEL_MAX, int(filter_level)))
-    if level <= 0:
-        value = float(input_value)
-        return value, value, value
-    normalized_level = level / FILTER_LEVEL_MAX
-    tau_sec = normalized_level * FILTER_MAX_TIME_CONSTANT_SEC
-    dt_sec = max(1e-6, min(float(dt_sec), FILTER_MAX_STEP_SEC))
-    alpha = 1.0 - math.exp(-dt_sec / tau_sec)
-    stage1 = stage1_previous + alpha * (input_value - stage1_previous)
-    stage2 = stage2_previous + alpha * (stage1 - stage2_previous)
-    return stage2, stage1, stage2
-
-
-def _finite_float(value: Any) -> float | None:
-    return values.finite_float(value)
-
-
-def motion_value_from_output(
-    output_14bit: float,
-    row: Dict[str, Any],
-    motion_range: tuple[float, float] | None = None,
-) -> float:
-    """Convert the final 14-bit MIDI output into motion-space degrees."""
-    lower = _finite_float(row.get('motion_lower_deg'))
-    upper = _finite_float(row.get('motion_upper_deg'))
-    if motion_range is not None:
-        lower, upper = motion_range
-    if lower is None or upper is None or upper <= lower:
-        raise ValueError('motion-axis Min/Max angle is invalid')
-    normalized = max(0.0, min(1.0, float(output_14bit) / MIDI_VALUE_MAX))
-    return lower + ((upper - lower) * normalized)
-
-
-def motor_target_from_motion(motion_value: float, row: Dict[str, Any]) -> float:
-    """Use the same mapping equation as motion_runtime."""
-    sign = -1.0 if bool(row.get('invert')) else 1.0
-    reference = _finite_float(row.get('reference_position_deg')) or 0.0
-    if row.get('reference_enabled') is False:
-        reference = 0.0
-    offset = _finite_float(row.get('offset_deg')) or 0.0
-    scale = _finite_float(row.get('scale')) or 1.0
-    gear_ratio = _finite_float(row.get('gear_ratio')) or 1.0
-    return reference + ((float(motion_value) + offset) * scale * sign * gear_ratio)
-
-
-def motion_value_from_motor(motor_position: float, row: Dict[str, Any]) -> float:
-    """Invert actual motor feedback into the configured logical motion value."""
-    sign = -1.0 if bool(row.get('invert')) else 1.0
-    reference = _finite_float(row.get('reference_position_deg')) or 0.0
-    if row.get('reference_enabled') is False:
-        reference = 0.0
-    offset = _finite_float(row.get('offset_deg')) or 0.0
-    scale = _finite_float(row.get('scale')) or 1.0
-    gear_ratio = _finite_float(row.get('gear_ratio')) or 1.0
-    factor = scale * sign * gear_ratio
-    if math.isclose(factor, 0.0, abs_tol=1e-12):
-        raise ValueError('motion-axis scale/gear ratio is zero')
-    return ((float(motor_position) - reference) / factor) - offset
-
-
-def raw_fader_for_motion(
-    motion_value: float,
-    row: Dict[str, Any],
-    bank_mapping: Dict[str, Any],
-    motion_range: tuple[float, float] | None = None,
-) -> int:
-    """Invert motion range and bank Min/Max/reverse into a physical fader value."""
-    lower = _finite_float(row.get('motion_lower_deg'))
-    upper = _finite_float(row.get('motion_upper_deg'))
-    if motion_range is not None:
-        lower, upper = motion_range
-    if lower is None or upper is None or upper <= lower:
-        raise ValueError('motion-axis Min/Max angle is invalid')
-    output_percent = 100.0 * ((motion_value - lower) / (upper - lower))
-    minimum = float(bank_mapping['min_percent'])
-    maximum = float(bank_mapping['max_percent'])
-    span = maximum - minimum
-    if span <= 0.0:
-        raise ValueError('MIDI Min/Max percent is invalid')
-    representable_min = max(0.0, min(100.0, minimum))
-    representable_max = max(0.0, min(100.0, maximum))
-    if (
-        output_percent < representable_min - SELECT_RANGE_TOLERANCE_PERCENT
-        or output_percent > representable_max + SELECT_RANGE_TOLERANCE_PERCENT
-    ):
-        allowed_lower = lower + ((upper - lower) * representable_min / 100.0)
-        allowed_upper = lower + ((upper - lower) * representable_max / 100.0)
-        raise ValueError(
-            f'활성화 불가: 현재 위치 {motion_value:.2f}°가 '
-            f'이 라인의 제어 범위 {allowed_lower:.2f}°~{allowed_upper:.2f}° 밖입니다'
-        )
-    output_percent = max(representable_min, min(representable_max, output_percent))
-    normalized = max(0.0, min(1.0, (output_percent - minimum) / span))
-    if bank_mapping['reversed']:
-        normalized = 1.0 - normalized
-    return int(round(MIDI_VALUE_MAX * normalized))
-
-
-def require_same_motion_ranges(rows: List[Dict[str, Any]]) -> tuple[float, float]:
-    """Return the shared range, rejecting linked axes with different ranges."""
-    if not rows:
-        raise ValueError('모션축 설정을 확인할 수 없습니다')
-    ranges = []
-    for row in rows:
-        lower = _finite_float(row.get('motion_lower_deg'))
-        upper = _finite_float(row.get('motion_upper_deg'))
-        if lower is None or upper is None or upper <= lower:
-            raise ValueError('모션축 Min/Max 각도를 확인하세요')
-        ranges.append((lower, upper))
-    first_lower, first_upper = ranges[0]
-    if any(
-        abs(lower - first_lower) > LINKED_RANGE_TOLERANCE_DEG
-        or abs(upper - first_upper) > LINKED_RANGE_TOLERANCE_DEG
-        for lower, upper in ranges[1:]
-    ):
-        raise LinkedMotionRangeMismatch(
-            '연동 Motion ID의 모션 범위가 서로 다릅니다'
-        )
-    return first_lower, first_upper
-
-
-def safe_motion_range_for_motor(
-    row: Dict[str, Any],
-    motor: Dict[str, Any],
-) -> tuple[float, float]:
-    """Return the configured motion range intersected with motor limits."""
-    motion_lower = _finite_float(row.get('motion_lower_deg'))
-    motion_upper = _finite_float(row.get('motion_upper_deg'))
-    if (
-        motion_lower is None
-        or motion_upper is None
-        or motion_upper <= motion_lower
-    ):
-        raise ValueError('모션축 Min/Max 각도를 확인하세요')
-
-    motor_lower = _finite_float(motor.get('lower'))
-    motor_upper = _finite_float(motor.get('upper'))
-    if motor_lower is None or motor_upper is None:
-        raise ValueError('모터축 Lower/Upper 제한을 확인할 수 없습니다')
-    if motor_upper < motor_lower:
-        raise ValueError('모터축 Lower/Upper 설정을 확인하세요')
-
-    safe_from_motor = sorted((
-        motion_value_from_motor(motor_lower, row),
-        motion_value_from_motor(motor_upper, row),
-    ))
-    safe_lower = max(motion_lower, safe_from_motor[0])
-    safe_upper = min(motion_upper, safe_from_motor[1])
-    if safe_upper < safe_lower:
-        raise ValueError(
-            f'모션범위 {motion_lower:.3f}°~{motion_upper:.3f}°와 '
-            f'모터범위 {motor_lower:.3f}°~{motor_upper:.3f}°가 겹치지 않습니다'
-        )
-    return safe_lower, safe_upper
-
-
-def require_motion_value_within_limits(
-    motion_id: Any,
-    motion_value: float,
-    row: Dict[str, Any],
-    motor: Dict[str, Any],
-) -> float:
-    """Return a motor target only when one motion command passes both limits."""
-    motion_lower = _finite_float(row.get('motion_lower_deg'))
-    motion_upper = _finite_float(row.get('motion_upper_deg'))
-    if motion_lower is None or motion_upper is None:
-        raise ValueError('모션축 Min/Max 각도를 확인하세요')
-    tolerance = 1e-6
-    value = float(motion_value)
-    if value < motion_lower - tolerance or value > motion_upper + tolerance:
-        raise ValueError(
-            f'{motion_id}: 모션 명령 {value:.3f}°가 모션범위 '
-            f'{motion_lower:.3f}°~{motion_upper:.3f}°를 벗어납니다'
-        )
-    target = motor_target_from_motion(value, row)
-    motor_lower = _finite_float(motor.get('lower'))
-    motor_upper = _finite_float(motor.get('upper'))
-    if motor_lower is not None and target < motor_lower - tolerance:
-        raise ValueError(
-            f'{motion_id}: 모터 목표 {target:.3f}°가 Lower '
-            f'{motor_lower:.3f}°보다 작습니다'
-        )
-    if motor_upper is not None and target > motor_upper + tolerance:
-        axis = motor.get('controller_index')
-        raise ValueError(
-            f'{motion_id}: 모터축 {axis} 목표 {target:.3f}°가 Upper '
-            f'{motor_upper:.3f}°보다 큽니다'
-        )
-    return target
-
-
-def safe_motion_range_for_group(
-    group: List[Dict[str, Any]],
-) -> tuple[float, float]:
-    """Return one shared MIDI range safe for every linked motor axis."""
-    safe_ranges = []
-    for item in group:
-        row = item['row']
-        motor = item.get('motor')
-        if isinstance(motor, dict):
-            safe_ranges.append(safe_motion_range_for_motor(row, motor))
-        else:
-            lower = _finite_float(row.get('motion_lower_deg'))
-            upper = _finite_float(row.get('motion_upper_deg'))
-            if lower is None or upper is None:
-                raise ValueError('모션축 Min/Max 각도를 확인하세요')
-            safe_ranges.append((lower, upper))
-    if not safe_ranges:
-        raise ValueError('안전범위를 계산할 모션축이 없습니다')
-    safe_lower = max(item[0] for item in safe_ranges)
-    safe_upper = min(item[1] for item in safe_ranges)
-    if safe_upper <= safe_lower:
-        raise ValueError('연동 축이 함께 사용할 수 있는 안전 모션범위가 없습니다')
-    return safe_lower, safe_upper
 
 
 class MidiControlNode(Node):
@@ -494,10 +242,8 @@ class MidiControlNode(Node):
         self._source_motion_value_context: tuple[str, int] = ('', 0)
         self._pending_motor_requests: Dict[Any, Dict[str, Any]] = {}
         self._motor_follow_active = [False] * MIDI_CHANNEL_COUNT
-        self._pickup_pending = [False] * MIDI_CHANNEL_COUNT
-        self._pickup_reference_motion = [None] * MIDI_CHANNEL_COUNT
-        self._pickup_previous_motion = [None] * MIDI_CHANNEL_COUNT
-        self._pickup_reference_source = [''] * MIDI_CHANNEL_COUNT
+        # Pickup 판정은 별도 객체가 맡는다 (§6-39)
+        self._pickup = PickupPolicy(self)
         self._motor_command_state = ['inactive'] * MIDI_CHANNEL_COUNT
         self._motor_command_message = [''] * MIDI_CHANNEL_COUNT
         self._request_sequence = 0
@@ -653,23 +399,6 @@ class MidiControlNode(Node):
             self._last_group_motor_targets = [
                 {} for _ in range(MIDI_CHANNEL_COUNT)
             ]
-
-    def _ensure_pickup_state_locked(self) -> None:
-        if not hasattr(self, '_pickup_pending'):
-            self._pickup_pending = [False] * MIDI_CHANNEL_COUNT
-        if not hasattr(self, '_pickup_reference_motion'):
-            self._pickup_reference_motion = [None] * MIDI_CHANNEL_COUNT
-        if not hasattr(self, '_pickup_previous_motion'):
-            self._pickup_previous_motion = [None] * MIDI_CHANNEL_COUNT
-        if not hasattr(self, '_pickup_reference_source'):
-            self._pickup_reference_source = [''] * MIDI_CHANNEL_COUNT
-
-    def _clear_pickup_state_locked(self, channel: int) -> None:
-        self._ensure_pickup_state_locked()
-        self._pickup_pending[channel] = False
-        self._pickup_reference_motion[channel] = None
-        self._pickup_previous_motion[channel] = None
-        self._pickup_reference_source[channel] = ''
 
     def _ensure_fader_parking_state_locked(self) -> None:
         if not hasattr(self, '_fader_parking'):
@@ -832,7 +561,7 @@ class MidiControlNode(Node):
         now = time.monotonic()
         motor_request_payload = None
         with self._lock:
-            self._ensure_pickup_state_locked()
+            self._pickup._ensure_pickup_state_locked()
             self._ensure_fader_parking_state_locked()
             select_lock_reason = self._select_lock_reason_locked()
             if not hasattr(self, '_observed_raw_channels'):
@@ -903,7 +632,7 @@ class MidiControlNode(Node):
                     self._fader_sync_targets[channel] = None
                     self._awaiting_fader_sync[channel] = False
                     self._fader_sync_not_before[channel] = 0.0
-                    if self._pickup_pending[channel]:
+                    if self._pickup.pending[channel]:
                         self._motor_command_state[channel] = 'waiting_pickup'
                         self._motor_command_message[channel] = (
                             '사용자 페이더 조작 감지 · Pickup 기준 위치 대기'
@@ -921,7 +650,7 @@ class MidiControlNode(Node):
                     self._awaiting_fader_sync[channel] = False
                     self._fader_sync_targets[channel] = None
                     self._fader_sync_not_before[channel] = 0.0
-                    if self._pickup_pending[channel]:
+                    if self._pickup.pending[channel]:
                         self._motor_command_state[channel] = 'waiting_pickup'
                         self._motor_command_message[channel] = (
                             'Pickup 기준 위치로 페이더를 이동하세요'
@@ -1037,7 +766,7 @@ class MidiControlNode(Node):
                         try:
                             group = self._mapping_group_locked(mappings[channel])
                             motion_value, pickup_source = (
-                                self._pickup_reference_for_group_locked(group)
+                                self._pickup._pickup_reference_for_group_locked(group)
                             )
                             safe_range = safe_motion_range_for_group(group)
                             fader_target = raw_fader_for_motion(
@@ -1048,7 +777,7 @@ class MidiControlNode(Node):
                             )
                         except ValueError as exc:
                             self._control_enabled[channel] = False
-                            self._clear_pickup_state_locked(channel)
+                            self._pickup._clear_pickup_state_locked(channel)
                             self._motor_command_state[channel] = 'activation_rejected'
                             self._motor_command_message[channel] = f'활성화 불가: {exc}'
                             self._clear_pending_channel_locked(channel)
@@ -1072,10 +801,10 @@ class MidiControlNode(Node):
                                     self._deactivate_control_channel_locked(other_channel)
                             self._control_enabled[channel] = True
                             self._fader_zero_required[channel] = False
-                            self._pickup_pending[channel] = True
-                            self._pickup_reference_motion[channel] = motion_value
-                            self._pickup_previous_motion[channel] = None
-                            self._pickup_reference_source[channel] = pickup_source
+                            self._pickup.pending[channel] = True
+                            self._pickup.reference_motion[channel] = motion_value
+                            self._pickup.previous_motion[channel] = None
+                            self._pickup.reference_source[channel] = pickup_source
                             self._queue_fader_position_locked(
                                 channel, fader_target
                             )
@@ -1155,7 +884,7 @@ class MidiControlNode(Node):
                 if (
                     input_valid
                     and self._control_enabled[channel]
-                    and self._pickup_pending[channel]
+                    and self._pickup.pending[channel]
                     and not self._awaiting_fader_sync[channel]
                 ):
                     try:
@@ -1168,7 +897,7 @@ class MidiControlNode(Node):
                             pickup_output, group[0]['row'], safe_range
                         )
                         reference = float(
-                            self._pickup_reference_motion[channel]
+                            self._pickup.reference_motion[channel]
                         )
                     except (TypeError, ValueError) as exc:
                         self._motor_follow_active[channel] = False
@@ -1176,15 +905,15 @@ class MidiControlNode(Node):
                         self._motor_command_state[channel] = 'pickup_rejected'
                         self._motor_command_message[channel] = str(exc)
                     else:
-                        previous = self._pickup_previous_motion[channel]
-                        if self._pickup_reached(
+                        previous = self._pickup.previous_motion[channel]
+                        if self._pickup._pickup_reached(
                             previous,
                             pickup_motion,
                             reference,
-                            self._pickup_tolerance(),
+                            self._pickup._pickup_tolerance(),
                         ):
-                            self._pickup_pending[channel] = False
-                            self._pickup_previous_motion[channel] = pickup_motion
+                            self._pickup.pending[channel] = False
+                            self._pickup.previous_motion[channel] = pickup_motion
                             self._raw_channels[channel] = raw
                             self._channels[channel] = float(raw)
                             self._filter_stage1[channel] = float(raw)
@@ -1198,7 +927,7 @@ class MidiControlNode(Node):
                             )
                             pickup_completed_now = True
                         else:
-                            self._pickup_previous_motion[channel] = pickup_motion
+                            self._pickup.previous_motion[channel] = pickup_motion
                             self._motor_follow_active[channel] = False
                             self._clear_pending_channel_locked(channel)
                             self._motor_command_state[channel] = 'waiting_pickup'
@@ -1210,7 +939,7 @@ class MidiControlNode(Node):
                 if (
                     input_valid
                     and self._control_enabled[channel]
-                    and not self._pickup_pending[channel]
+                    and not self._pickup.pending[channel]
                     and not pickup_completed_now
                 ):
                     self._motor_follow_active[channel] = True
@@ -1348,7 +1077,7 @@ class MidiControlNode(Node):
     ) -> None:
         """Release one MIDI line and park its motorized fader at zero."""
         self._ensure_linked_runtime_state_locked()
-        self._clear_pickup_state_locked(channel)
+        self._pickup._clear_pickup_state_locked(channel)
         axes = list(self._last_group_motor_targets[channel])
         if request_motor_hold:
             self._request_motor_hold_locked(channel, axes)
@@ -1512,7 +1241,7 @@ class MidiControlNode(Node):
         self._fader_park_started_at[channel] = 0.0
         self._fader_park_last_command_at[channel] = 0.0
         self._control_enabled[channel] = False
-        self._clear_pickup_state_locked(channel)
+        self._pickup._clear_pickup_state_locked(channel)
         self._clear_pending_channel_locked(channel)
         self._motor_follow_active[channel] = False
         self._playback_follow_enabled[channel] = True
@@ -1754,137 +1483,8 @@ class MidiControlNode(Node):
     def _logical_motion_value_for_group_locked(
         self, group: List[Dict[str, Any]]
     ) -> float:
-        value, _source = self._pickup_reference_for_group_locked(group)
+        value, _source = self._pickup._pickup_reference_for_group_locked(group)
         return value
-
-    def _pickup_reference_for_group_locked(
-        self, group: List[Dict[str, Any]]
-    ) -> tuple[float, str]:
-        """Prefer the latest accepted logical value, then invert live feedback."""
-        if not group:
-            raise ValueError('연결할 Motion ID가 없습니다')
-        self._ensure_current_motion_state_locked()
-        motion_ids = [str(item['motion_id']) for item in group]
-        context = (
-            str(getattr(self, '_project_id', '') or ''),
-            int(getattr(self, '_execution_context', {}).get('project_generation') or 0),
-        )
-        source_values = (
-            getattr(self, '_source_motion_values', {})
-            if getattr(self, '_source_motion_value_context', ('', 0)) == context
-            else {}
-        )
-        candidates = (
-            ('source_topic', source_values),
-            ('midi_approved', self._current_motion_values),
-        )
-        for source, values_by_id in candidates:
-            values = [
-                _finite_float(values_by_id.get(motion_id))
-                for motion_id in motion_ids
-            ]
-            if any(value is None for value in values):
-                continue
-            logical_values = [float(value) for value in values if value is not None]
-            if (
-                max(logical_values) - min(logical_values)
-                > LINKED_MOTION_VALUE_TOLERANCE_DEG
-            ):
-                continue
-            candidate = sum(logical_values) / len(logical_values)
-            if self._logical_value_matches_feedback(group, candidate):
-                return candidate, source
-
-        feedback_values = []
-        for item in group:
-            if not self._motor_feedback_ready_for_pickup(item.get('motor')):
-                raise ValueError(
-                    f"{item['motion_id']}: Pickup에 사용할 최신 모터 피드백이 없습니다"
-                )
-            position = self._position_from_motor(item.get('motor'))
-            if position is None:
-                raise ValueError(
-                    f"{item['motion_id']}: Pickup 기준을 계산할 실제 모터 위치가 없습니다"
-                )
-            feedback_values.append(
-                motion_value_from_motor(position, item['row'])
-            )
-        tolerance = self._pickup_feedback_consistency_tolerance()
-        if max(feedback_values) - min(feedback_values) > tolerance:
-            raise ValueError(
-                '연동 축의 실제 위치를 같은 모션값으로 환산할 수 없습니다. '
-                '초기 위치 정렬 후 다시 SELECT 하세요'
-            )
-        return sum(feedback_values) / len(feedback_values), 'motor_feedback'
-
-    def _logical_value_matches_feedback(
-        self, group: List[Dict[str, Any]], motion_value: float
-    ) -> bool:
-        tolerance = self._pickup_feedback_consistency_tolerance()
-        for item in group:
-            if not self._motor_feedback_ready_for_pickup(item.get('motor')):
-                return False
-            position = self._position_from_motor(item.get('motor'))
-            if position is None:
-                return False
-            try:
-                target = require_motion_value_within_limits(
-                    item['motion_id'], motion_value, item['row'], item['motor']
-                )
-            except ValueError:
-                return False
-            if abs(position - target) > tolerance:
-                return False
-        return True
-
-    def _motor_feedback_ready_for_pickup(self, motor: Any) -> bool:
-        if not isinstance(motor, dict):
-            return False
-        connection_state = str(motor.get('connection_state') or '').strip().lower()
-        if connection_state and connection_state != 'online':
-            return False
-        runtime_state = str(motor.get('state') or '').strip().lower()
-        if runtime_state and runtime_state != 'detected':
-            return False
-        age = _finite_float(motor.get('age_sec'))
-        if age is not None and age > max(
-            float(getattr(self, 'stale_timeout_sec', 0.5)), 0.1
-        ):
-            return False
-        if bool(motor.get('fault')):
-            return False
-        return self._position_from_motor(motor) is not None
-
-    def _pickup_tolerance(self) -> float:
-        return max(
-            0.0,
-            float(getattr(self, 'pickup_tolerance_deg', PICKUP_TOLERANCE_DEG)),
-        )
-
-    def _pickup_feedback_consistency_tolerance(self) -> float:
-        return max(
-            0.0,
-            float(
-                getattr(
-                    self,
-                    'pickup_feedback_consistency_deg',
-                    PICKUP_FEEDBACK_CONSISTENCY_DEG,
-                )
-            ),
-        )
-
-    @staticmethod
-    def _pickup_reached(
-        previous: float | None,
-        current: float,
-        reference: float,
-        tolerance: float,
-    ) -> bool:
-        if abs(current - reference) <= tolerance:
-            return True
-        if previous is None:
-            return False
-        return (previous <= reference <= current) or (current <= reference <= previous)
 
     def _set_group_motion_value_locked(
         self, group: List[Dict[str, Any]], motion_value: float
@@ -2360,11 +1960,11 @@ class MidiControlNode(Node):
             select_lock_reason = self._select_lock_reason_locked()
             self._ensure_approved_command_state_locked()
             self._ensure_current_motion_state_locked()
-            self._ensure_pickup_state_locked()
+            self._pickup._ensure_pickup_state_locked()
             current_motion_values = dict(self._current_motion_values)
-            pickup_pending = list(self._pickup_pending)
-            pickup_reference_motion = list(self._pickup_reference_motion)
-            pickup_reference_source = list(self._pickup_reference_source)
+            pickup_pending = list(self._pickup.pending)
+            pickup_reference_motion = list(self._pickup.reference_motion)
+            pickup_reference_source = list(self._pickup.reference_source)
             approved_motion_values = [
                 dict(values) for values in self._approved_motion_values
             ]
@@ -2687,10 +2287,7 @@ class MidiControlNode(Node):
         self._approved_command_stamp = [0.0] * MIDI_CHANNEL_COUNT
         self._pending_motor_requests = {}
         self._motor_follow_active = [False] * MIDI_CHANNEL_COUNT
-        self._pickup_pending = [False] * MIDI_CHANNEL_COUNT
-        self._pickup_reference_motion = [None] * MIDI_CHANNEL_COUNT
-        self._pickup_previous_motion = [None] * MIDI_CHANNEL_COUNT
-        self._pickup_reference_source = [''] * MIDI_CHANNEL_COUNT
+        self._pickup.reset()
         self._motor_command_state = ['inactive'] * MIDI_CHANNEL_COUNT
         self._motor_command_message = [''] * MIDI_CHANNEL_COUNT
         self._motor_angle_mode = [False] * MIDI_CHANNEL_COUNT

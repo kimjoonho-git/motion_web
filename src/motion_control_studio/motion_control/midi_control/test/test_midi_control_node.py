@@ -6,9 +6,13 @@ from types import SimpleNamespace
 import pytest
 
 from midi_control.bank_manager import MIDI_CHANNEL_COUNT, MidiBankManager
+from midi_control.pickup_policy import PickupPolicy
 from midi_control.midi_control_node import (
     MIDI_VALUE_MAX,
     MidiControlNode,
+)
+# 순수 변환은 별도 모듈이 갖는다 (§6-38)
+from midi_control.motion_value_map import (
     motion_value_display,
     motion_value_from_motor,
     motion_value_from_output,
@@ -69,6 +73,7 @@ def test_motion_value_preview_is_available_only_while_select_is_enabled():
 
 def test_motion_value_topic_cache_accepts_only_current_project_generation():
     node = MidiControlNode.__new__(MidiControlNode)
+    node._pickup = PickupPolicy(node)
     node._lock = threading.Lock()
     node._project_id = 'project-1'
     node._execution_context = {'project_generation': 3}
@@ -94,6 +99,7 @@ def test_motion_value_topic_cache_accepts_only_current_project_generation():
 
 def test_rec_mode_sends_source_motion_text_and_off_mode_keeps_14bit_text():
     node = MidiControlNode.__new__(MidiControlNode)
+    node._pickup = PickupPolicy(node)
     node._state_publisher = CapturePublisher()
     node._feedback_publisher = CapturePublisher()
     node._lock = threading.Lock()
@@ -139,6 +145,7 @@ def test_rec_mode_sends_source_motion_text_and_off_mode_keeps_14bit_text():
 
 def test_midi_node_rejects_previous_project_generation():
     node = MidiControlNode.__new__(MidiControlNode)
+    node._pickup = PickupPolicy(node)
     node._project_generation = 6
 
     with pytest.raises(ValueError, match='이전 프로젝트 세대'):
@@ -184,6 +191,7 @@ def add_motor_control_state(node):
 
 def test_input_state_keeps_physical_touch_movement_and_sync_separate():
     node = MidiControlNode.__new__(MidiControlNode)
+    node._pickup = PickupPolicy(node)
     node._lock = threading.Lock()
     node._physical_touch = [False] * MIDI_CHANNEL_COUNT
     node._fader_moving = [False] * MIDI_CHANNEL_COUNT
@@ -211,6 +219,7 @@ def test_input_state_keeps_physical_touch_movement_and_sync_separate():
 
 def test_old_generation_motor_result_and_motion_state_are_discarded():
     node = MidiControlNode.__new__(MidiControlNode)
+    node._pickup = PickupPolicy(node)
     node._lock = threading.Lock()
     node._project_id = 'project-1'
     node._execution_context = {'project_generation': 4}
@@ -243,6 +252,7 @@ def test_old_generation_motor_result_and_motion_state_are_discarded():
 
 def test_bank_change_clears_select_and_parks_all_faders_at_zero():
     node = MidiControlNode.__new__(MidiControlNode)
+    node._pickup = PickupPolicy(node)
     node._control_enabled = [True] * MIDI_CHANNEL_COUNT
     node._final_output_values = [1234.0] * MIDI_CHANNEL_COUNT
     node._pending_fader_positions = [4321] * MIDI_CHANNEL_COUNT
@@ -284,6 +294,7 @@ def test_bank_change_clears_select_and_parks_all_faders_at_zero():
 
 def test_filter_only_bank_change_keeps_select_and_fader_ownership():
     node = MidiControlNode.__new__(MidiControlNode)
+    node._pickup = PickupPolicy(node)
     node._banks = MidiBankManager()
     node._control_enabled = [True] + [False] * (MIDI_CHANNEL_COUNT - 1)
     node._pending_fader_positions = [2345] + [None] * (MIDI_CHANNEL_COUNT - 1)
@@ -307,6 +318,7 @@ def test_filter_only_bank_change_keeps_select_and_fader_ownership():
 
 def test_non_filter_bank_change_requires_select_reset():
     node = MidiControlNode.__new__(MidiControlNode)
+    node._pickup = PickupPolicy(node)
     node._banks = MidiBankManager()
     previous = node._banks.snapshot()
     mappings = node._banks.active_bank()['mappings']
@@ -329,6 +341,8 @@ def test_repeated_same_project_context_does_not_release_select(tmp_path):
     (mappings_dir / mapping_name).write_text('mappings: []\n', encoding='utf-8')
 
     node = MidiControlNode.__new__(MidiControlNode)
+
+    node._pickup = PickupPolicy(node)
     node._lock = threading.Lock()
     node._motion_projects_dir = tmp_path
     node._project_id = project_id
@@ -400,6 +414,7 @@ def test_repeated_same_project_context_does_not_release_select(tmp_path):
 
 def test_pending_motor_targets_are_published_as_one_batch():
     node = MidiControlNode.__new__(MidiControlNode)
+    node._pickup = PickupPolicy(node)
     node._lock = threading.Lock()
     node._pending_motor_requests = {
         1: {'channel': 1, 'axis': 1, 'target_deg': 10.0},
@@ -422,6 +437,7 @@ def test_pending_motor_targets_are_published_as_one_batch():
 
 def test_only_supervisor_approved_motion_values_become_recording_source():
     node = MidiControlNode.__new__(MidiControlNode)
+    node._pickup = PickupPolicy(node)
     node._lock = threading.Lock()
     node._banks = MidiBankManager()
     node._axis_registry = SimpleNamespace(file_id='selected.yaml')
@@ -470,6 +486,7 @@ def test_only_supervisor_approved_motion_values_become_recording_source():
 
 def test_linked_targets_mark_the_channel_as_atomic():
     node = MidiControlNode.__new__(MidiControlNode)
+    node._pickup = PickupPolicy(node)
     node._lock = threading.Lock()
     node._pending_motor_requests = {
         (0, 1): {'channel': 0, 'axis': 1, 'target_deg': 10.0},
@@ -502,6 +519,7 @@ def test_linked_axes_current_version_requires_identical_motion_ranges():
 
 def test_linked_select_uses_logical_motion_values_not_motor_positions():
     node = MidiControlNode.__new__(MidiControlNode)
+    node._pickup = PickupPolicy(node)
     node._current_motion_values = {'1-1': 4.0, '1-2': 4.0}
     row = {
         'motion_lower_deg': -180.0,
@@ -533,6 +551,7 @@ def test_linked_select_uses_logical_motion_values_not_motor_positions():
 
 def test_unknown_logical_motion_value_falls_back_to_motor_feedback():
     node = MidiControlNode.__new__(MidiControlNode)
+    node._pickup = PickupPolicy(node)
     group = [{
         'motion_id': '1-1',
         'row': {
@@ -555,6 +574,7 @@ def test_unknown_logical_motion_value_falls_back_to_motor_feedback():
 
 def test_pickup_prefers_current_source_value_but_rejects_feedback_mismatch():
     node = MidiControlNode.__new__(MidiControlNode)
+    node._pickup = PickupPolicy(node)
     node._project_id = 'project-1'
     node._execution_context = {'project_generation': 3}
     node._source_motion_value_context = ('project-1', 3)
@@ -578,10 +598,10 @@ def test_pickup_prefers_current_source_value_but_rejects_feedback_mismatch():
     }
     group = [{'motion_id': '1-1', 'row': row, 'motor': motor}]
 
-    assert node._pickup_reference_for_group_locked(group) == (5.0, 'source_topic')
+    assert node._pickup._pickup_reference_for_group_locked(group) == (5.0, 'source_topic')
 
     motor['position_deg'] = 10.0
-    assert node._pickup_reference_for_group_locked(group) == (
+    assert node._pickup._pickup_reference_for_group_locked(group) == (
         10.0,
         'motor_feedback',
     )
@@ -589,6 +609,7 @@ def test_pickup_prefers_current_source_value_but_rejects_feedback_mismatch():
 
 def test_mapping_change_recalculates_fader_from_feedback_with_new_ratio_and_range():
     node = MidiControlNode.__new__(MidiControlNode)
+    node._pickup = PickupPolicy(node)
     node._project_id = 'project-1'
     node._execution_context = {'project_generation': 3}
     node._source_motion_value_context = ('project-1', 3)
@@ -621,7 +642,7 @@ def test_mapping_change_recalculates_fader_from_feedback_with_new_ratio_and_rang
         'reversed': False,
     }
 
-    motion_value, source = node._pickup_reference_for_group_locked(group)
+    motion_value, source = node._pickup._pickup_reference_for_group_locked(group)
     new_raw = raw_fader_for_motion(motion_value, row, bank_mapping)
     old_raw = raw_fader_for_motion(5.0, row, bank_mapping)
 
@@ -634,6 +655,7 @@ def test_mapping_change_recalculates_fader_from_feedback_with_new_ratio_and_rang
 
 def test_pickup_rejects_stale_feedback_and_detects_crossing():
     node = MidiControlNode.__new__(MidiControlNode)
+    node._pickup = PickupPolicy(node)
     node._project_id = 'project-1'
     node._execution_context = {'project_generation': 3}
     node._source_motion_value_context = ('project-1', 3)
@@ -659,14 +681,15 @@ def test_pickup_rejects_stale_feedback_and_detects_crossing():
     }]
 
     with pytest.raises(ValueError, match='최신 모터 피드백'):
-        node._pickup_reference_for_group_locked(group)
+        node._pickup._pickup_reference_for_group_locked(group)
 
-    assert node._pickup_reached(-2.0, 2.0, 0.0, 0.1) is True
-    assert node._pickup_reached(None, 2.0, 0.0, 0.1) is False
+    assert node._pickup._pickup_reached(-2.0, 2.0, 0.0, 0.1) is True
+    assert node._pickup._pickup_reached(None, 2.0, 0.0, 0.1) is False
 
 
 def parking_node():
     node = MidiControlNode.__new__(MidiControlNode)
+    node._pickup = PickupPolicy(node)
     node._control_enabled = [False] * MIDI_CHANNEL_COUNT
     node._control_enabled[0] = True
     node._pending_fader_positions = [None] * MIDI_CHANNEL_COUNT
@@ -773,10 +796,10 @@ def playback_follow_node():
     node._last_select_toggle_at = [0.0] * MIDI_CHANNEL_COUNT
     node._last_received_monotonic = None
     node._last_received_wall = None
-    node._pickup_pending = [False] * MIDI_CHANNEL_COUNT
-    node._pickup_reference_motion = [None] * MIDI_CHANNEL_COUNT
-    node._pickup_previous_motion = [None] * MIDI_CHANNEL_COUNT
-    node._pickup_reference_source = [''] * MIDI_CHANNEL_COUNT
+    node._pickup.pending = [False] * MIDI_CHANNEL_COUNT
+    node._pickup.reference_motion = [None] * MIDI_CHANNEL_COUNT
+    node._pickup.previous_motion = [None] * MIDI_CHANNEL_COUNT
+    node._pickup.reference_source = [''] * MIDI_CHANNEL_COUNT
     node._source_motion_values = {'1-1': 0.0}
     node._source_motion_value_stamps = {'1-1': 1.0}
     node._source_motion_value_context = ('project-1', 4)
@@ -1178,6 +1201,7 @@ def test_studio_select_is_ignored_without_restarting_zero_fader_command():
 
 def test_one_selected_fader_creates_same_motion_value_for_two_linked_axes():
     node = MidiControlNode.__new__(MidiControlNode)
+    node._pickup = PickupPolicy(node)
     node._lock = threading.Lock()
     node._banks = MidiBankManager()
     mappings = node._banks.active_bank()['mappings']
@@ -1240,7 +1264,7 @@ def test_one_selected_fader_creates_same_motion_value_for_two_linked_axes():
     node._midi_callback(message())
     node._awaiting_fader_sync[0] = False
     node._midi_callback(message(touch=True, value=round(MIDI_VALUE_MAX / 2)))
-    assert node._pickup_pending[0] is False
+    assert node._pickup.pending[0] is False
     assert node._pending_motor_requests == {}
     node._midi_callback(message(touch=True, value=MIDI_VALUE_MAX))
 
@@ -1380,6 +1404,8 @@ def test_studio_recording_prepare_clears_select_and_parks_at_physical_zero():
             return 0 if motion_id == '1-1' else None
 
     node = MidiControlNode.__new__(MidiControlNode)
+
+    node._pickup = PickupPolicy(node)
     node._banks = Banks()
     node._axis_registry = Registry()
     node._preferred_mapping_file_id = ''
@@ -1506,6 +1532,7 @@ def test_studio_recording_prepare_skips_linked_channel_with_mismatched_ranges():
 
 def test_connection_state_keeps_midi_power_reconnect_timestamps():
     node = MidiControlNode.__new__(MidiControlNode)
+    node._pickup = PickupPolicy(node)
     node._lock = threading.Lock()
     node._device_connected = True
     node._device_connection_message = ''
@@ -1535,6 +1562,7 @@ def test_connection_state_keeps_midi_power_reconnect_timestamps():
 
 def test_device_reconnect_parks_every_select_off_fader_at_zero():
     node = MidiControlNode.__new__(MidiControlNode)
+    node._pickup = PickupPolicy(node)
     node._lock = threading.Lock()
     node._device_connected = False
     node._device_connection_message = ''
@@ -1578,6 +1606,7 @@ def test_device_reconnect_parks_every_select_off_fader_at_zero():
 
 def test_device_disconnect_does_not_leave_undeliverable_zero_commands():
     node = MidiControlNode.__new__(MidiControlNode)
+    node._pickup = PickupPolicy(node)
     node._lock = threading.Lock()
     node._device_connected = True
     node._device_connection_message = ''
@@ -1614,6 +1643,7 @@ def test_device_disconnect_does_not_leave_undeliverable_zero_commands():
 
 def test_studio_recording_zero_status_waits_for_physical_parking_completion():
     node = MidiControlNode.__new__(MidiControlNode)
+    node._pickup = PickupPolicy(node)
     node._device_connected = True
     node._raw_channels = [0] * MIDI_CHANNEL_COUNT
     node._fader_parking = [False] * MIDI_CHANNEL_COUNT
@@ -1657,6 +1687,7 @@ def test_zero_to_two_hundred_percent_reaches_full_output_at_half_fader():
 
 def test_mapping_validates_percent_limits_and_forces_min_zero_above_one_hundred():
     node = MidiControlNode.__new__(MidiControlNode)
+    node._pickup = PickupPolicy(node)
     with pytest.raises(ValueError, match='less than'):
         node._validated_mapping([{
             'channel': 0,
@@ -1686,6 +1717,7 @@ def test_mapping_validates_percent_limits_and_forces_min_zero_above_one_hundred(
 @pytest.mark.parametrize('filter_level', [-1, 14, 1.5])
 def test_mapping_rejects_filter_level_outside_integer_zero_to_thirteen(filter_level):
     node = MidiControlNode.__new__(MidiControlNode)
+    node._pickup = PickupPolicy(node)
     with pytest.raises(ValueError, match='integer 0..13'):
         node._validated_mapping([{
             'channel': 0,
@@ -1732,6 +1764,7 @@ def test_second_order_filter_converges_without_overshoot():
 
 def test_filter_keeps_converging_after_touch_release_without_accepting_untouched_raw():
     node = MidiControlNode.__new__(MidiControlNode)
+    node._pickup = PickupPolicy(node)
     node._lock = threading.Lock()
     node._banks = MidiBankManager()
     mappings = node._banks.active_bank()['mappings']
@@ -1797,6 +1830,7 @@ def test_filter_keeps_converging_after_touch_release_without_accepting_untouched
 
 def test_select_requires_matching_motion_axis_and_dial_updates_filter():
     node = MidiControlNode.__new__(MidiControlNode)
+    node._pickup = PickupPolicy(node)
     node._lock = threading.Lock()
     node._banks = MidiBankManager()
     node._raw_channels = [0] * MIDI_CHANNEL_COUNT
@@ -1888,6 +1922,7 @@ def test_select_requires_matching_motion_axis_and_dial_updates_filter():
 
 def test_hand_movement_commands_only_after_soft_takeover_pickup():
     node = MidiControlNode.__new__(MidiControlNode)
+    node._pickup = PickupPolicy(node)
     node._lock = threading.Lock()
     node._banks = MidiBankManager()
     mappings = node._banks.active_bank()['mappings']
@@ -1946,12 +1981,12 @@ def test_hand_movement_commands_only_after_soft_takeover_pickup():
     assert node._awaiting_fader_sync[0] is False
     assert node._pending_fader_positions[0] is None
     assert node._raw_channels[0] == 12000
-    assert node._pickup_pending[0] is True
+    assert node._pickup.pending[0] is True
     assert node._motor_follow_active[0] is False
     assert (0, 2) not in node._pending_motor_requests
 
     node._midi_callback(message(select=False, touched=True, value=8192))
-    assert node._pickup_pending[0] is False
+    assert node._pickup.pending[0] is False
     assert node._motor_follow_active[0] is False
     assert (0, 2) not in node._pending_motor_requests
 
@@ -1967,6 +2002,7 @@ def test_hand_movement_commands_only_after_soft_takeover_pickup():
 
 def test_only_one_selected_midi_line_can_own_the_same_motion_axis():
     node = MidiControlNode.__new__(MidiControlNode)
+    node._pickup = PickupPolicy(node)
     node._lock = threading.Lock()
     node._banks = MidiBankManager()
     mappings = node._banks.active_bank()['mappings']
@@ -2035,6 +2071,7 @@ def test_only_one_selected_midi_line_can_own_the_same_motion_axis():
 
 def test_unsafe_same_axis_handover_keeps_existing_line_selected():
     node = MidiControlNode.__new__(MidiControlNode)
+    node._pickup = PickupPolicy(node)
     node._lock = threading.Lock()
     node._banks = MidiBankManager()
     mappings = node._banks.active_bank()['mappings']
@@ -2118,6 +2155,7 @@ def test_unsafe_same_axis_handover_keeps_existing_line_selected():
 
 def test_selected_mapping_context_is_used_when_no_run_mapping_is_active(tmp_path):
     node = MidiControlNode.__new__(MidiControlNode)
+    node._pickup = PickupPolicy(node)
     node._lock = threading.Lock()
     node._mappings_dir = tmp_path
     node._project_id = 'project-1'
@@ -2165,6 +2203,7 @@ def test_selected_mapping_context_is_used_when_no_run_mapping_is_active(tmp_path
 
 def test_reset_live_values_keeps_bank_settings_but_clears_runtime_state():
     node = MidiControlNode.__new__(MidiControlNode)
+    node._pickup = PickupPolicy(node)
     node._raw_channels = [1234] * MIDI_CHANNEL_COUNT
     node._channels = [1200.0] * MIDI_CHANNEL_COUNT
     node._filter_stage1 = [1200.0] * MIDI_CHANNEL_COUNT

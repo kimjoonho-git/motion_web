@@ -8,6 +8,7 @@ import json
 
 import pytest
 
+from midi_control.pickup_policy import PickupPolicy
 from midi_control.midi_control_node import MidiControlNode
 
 
@@ -41,7 +42,9 @@ ALIASES = [
 
 
 def _node() -> MidiControlNode:
-    return MidiControlNode.__new__(MidiControlNode)
+    node = MidiControlNode.__new__(MidiControlNode)
+    node._pickup = PickupPolicy(node)
+    return node
 
 
 def _router(node=None):
