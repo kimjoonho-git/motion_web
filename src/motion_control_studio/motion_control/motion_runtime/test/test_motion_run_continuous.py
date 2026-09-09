@@ -8,10 +8,13 @@ from unittest import mock
 import pytest
 
 from motion_runtime.motion_mapping_manager import MotionMappingManager
+from motion_runtime.motion_player import MotionPlayer
 from motion_runtime.plan_builder import PlanBuilder
 from motion_runtime import motion_run_rules
-from motion_runtime.motion_run_manager import (
+from motion_runtime.motion_run_constants import (
     CONTINUOUS_LOOP_TOLERANCE_DEG,
+)
+from motion_runtime.motion_run_manager import (
     MotionRunManager,
 )
 
@@ -48,6 +51,7 @@ def test_runtime_ignores_optional_studio_editor_metadata_in_motion_header():
 
 def test_motion_run_confirmation_returns_standard_context_acknowledgement():
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._player = MotionPlayer(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager._run_lock = threading.RLock()
@@ -95,6 +99,8 @@ def test_motion_run_publishes_final_control_motion_values():
 
     manager = MotionRunManager.__new__(MotionRunManager)
 
+    manager._player = MotionPlayer(manager)
+
     manager._plan_builder = PlanBuilder(manager)
 
     manager._plan_builder = PlanBuilder(manager)
@@ -104,7 +110,7 @@ def test_motion_run_publishes_final_control_motion_values():
     }
     manager._motion_value_pub = CapturePublisher()
 
-    manager._publish_motion_values({'2-1': 3.5, 'bad': float('nan')})
+    manager._player._publish_motion_values({'2-1': 3.5, 'bad': float('nan')})
 
     payload = json.loads(manager._motion_value_pub.messages[-1].data)
     assert payload['source'] == 'motion_run'
@@ -130,6 +136,7 @@ def test_continuous_loop_tolerance_is_five_degrees():
 
 def test_synchronized_stop_after_cycle_is_distinct_from_immediate_stop():
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._player = MotionPlayer(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager._graceful_stop_event = threading.Event()
@@ -143,6 +150,7 @@ def test_synchronized_stop_after_cycle_is_distinct_from_immediate_stop():
 
 def test_past_synchronized_start_is_rejected_instead_of_running_late():
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._player = MotionPlayer(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager._stop_event = threading.Event()
@@ -152,7 +160,7 @@ def test_past_synchronized_start_is_rejected_instead_of_running_late():
         lambda state, message, _plan: {'state': state, 'message': message},
     )
     manager._set_status = captured.append
-    result = manager._run_countdown({
+    result = manager._player._run_countdown({
         'scheduled_start_at': time.time() - 0.1,
         'countdown_sec': 0.0,
     })
@@ -261,6 +269,7 @@ def test_interpolation_uses_precomputed_time_index_for_irregular_samples():
 
 def _initialization_only_manager(mapping):
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._player = MotionPlayer(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager.period_sec = 0.02
@@ -314,6 +323,7 @@ def test_motion_playback_without_motion_file_remains_blocked():
 
 def test_motion_run_initialization_uses_every_enabled_mapping_axis():
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._player = MotionPlayer(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager.period_sec = 0.02
@@ -363,6 +373,7 @@ def test_motion_run_initialization_uses_every_enabled_mapping_axis():
 
 def test_plan_uses_motion_state_captured_before_slow_motion_file_processing():
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._player = MotionPlayer(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager.period_sec = 0.02
@@ -424,6 +435,7 @@ def test_runtime_streams_line_motion_file_without_reading_whole_text(
 
     monkeypatch.setattr(Path, 'read_text', reject_whole_file_read)
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._player = MotionPlayer(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager._plan_builder = PlanBuilder(manager)
 
@@ -435,6 +447,7 @@ def test_runtime_streams_line_motion_file_without_reading_whole_text(
 
 def test_initialization_waits_for_fresh_motion_state_after_plan_processing():
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._player = MotionPlayer(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager.period_sec = 0.001
@@ -448,12 +461,13 @@ def test_initialization_waits_for_fresh_motion_state_after_plan_processing():
 
     manager._current_motors = current_motors
 
-    assert manager._wait_for_current_motors(timeout_sec=0.1) == motors
+    assert manager._player._wait_for_current_motors(timeout_sec=0.1) == motors
     assert calls['count'] == 3
 
 
 def test_motion_run_initialization_fails_when_any_mapping_axis_is_not_ready():
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._player = MotionPlayer(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager.period_sec = 0.02
@@ -492,6 +506,7 @@ def test_motion_run_initialization_fails_when_any_mapping_axis_is_not_ready():
 
 def test_motion_run_playback_uses_only_motion_ids_present_in_file():
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._player = MotionPlayer(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager.period_sec = 0.02
@@ -528,6 +543,7 @@ def test_motion_run_playback_uses_only_motion_ids_present_in_file():
 
 def test_auto_start_runs_motion_only_after_initialization_completes():
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._player = MotionPlayer(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager._stop_event = threading.Event()
@@ -539,11 +555,11 @@ def test_auto_start_runs_motion_only_after_initialization_completes():
         calls.append(('initialize', plan['name']))
         current['state'] = 'initialized'
 
-    manager._run_initialization = initialize
-    manager._run_countdown = lambda _plan: True
-    manager._run_motion = lambda plan: calls.append(('motion', plan['name']))
+    manager._player._run_initialization = initialize
+    manager._player._run_countdown = lambda _plan: True
+    manager._player._run_motion = lambda plan: calls.append(('motion', plan['name']))
 
-    manager._run_initialization_then_motion(
+    manager._player._run_initialization_then_motion(
         {'name': 'all-mapping-axes'},
         {'name': 'file-motion-axes'},
     )
@@ -556,6 +572,7 @@ def test_auto_start_runs_motion_only_after_initialization_completes():
 
 def test_auto_start_does_not_run_motion_when_initialization_fails():
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._player = MotionPlayer(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager._stop_event = threading.Event()
@@ -567,17 +584,18 @@ def test_auto_start_does_not_run_motion_when_initialization_fails():
         calls.append('initialize')
         current['state'] = 'error'
 
-    manager._run_initialization = initialize
-    manager._run_countdown = lambda _plan: True
-    manager._run_motion = lambda _plan: calls.append('motion')
+    manager._player._run_initialization = initialize
+    manager._player._run_countdown = lambda _plan: True
+    manager._player._run_motion = lambda _plan: calls.append('motion')
 
-    manager._run_initialization_then_motion({}, {})
+    manager._player._run_initialization_then_motion({}, {})
 
     assert calls == ['initialize']
 
 
 def test_start_routes_one_owned_initialization_and_motion_sequence(monkeypatch):
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._player = MotionPlayer(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager._run_lock = threading.RLock()
@@ -603,7 +621,7 @@ def test_start_routes_one_owned_initialization_and_motion_sequence(monkeypatch):
     manager._plan_builder.build = build_plan
     _patch_rule('_motion_auto_start_guard_error', lambda _plan: '')
     calls = []
-    manager._run_initialization_then_motion = lambda initialization, motion: calls.append(
+    manager._player._run_initialization_then_motion = lambda initialization, motion: calls.append(
         ('initialize_then_motion', initialization['name'], motion['name'])
     )
 
@@ -630,6 +648,7 @@ def test_start_routes_one_owned_initialization_and_motion_sequence(monkeypatch):
 
 def test_start_acknowledges_before_motion_plan_processing(monkeypatch):
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._player = MotionPlayer(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager._run_lock = threading.RLock()
@@ -673,6 +692,7 @@ def test_start_acknowledges_before_motion_plan_processing(monkeypatch):
 
 def test_stop_during_plan_preparation_never_starts_motion():
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._player = MotionPlayer(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager._stop_event = threading.Event()
@@ -682,15 +702,16 @@ def test_stop_during_plan_preparation_never_starts_motion():
         'summary': {},
     }
     started = []
-    manager._run_initialization_then_motion = lambda *_args: started.append(True)
+    manager._player._run_initialization_then_motion = lambda *_args: started.append(True)
 
-    manager._prepare_and_run('run', {}, [{'axis': 0}])
+    manager._player._prepare_and_run('run', {}, [{'axis': 0}])
 
     assert started == []
 
 
 def test_owned_sequence_runs_countdown_between_initialization_and_motion():
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._player = MotionPlayer(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager._stop_event = threading.Event()
@@ -702,17 +723,18 @@ def test_owned_sequence_runs_countdown_between_initialization_and_motion():
         calls.append('initialize')
         current['state'] = 'initialized'
 
-    manager._run_initialization = initialize
-    manager._run_countdown = lambda _plan: calls.append('countdown') or True
-    manager._run_motion = lambda _plan: calls.append('motion')
+    manager._player._run_initialization = initialize
+    manager._player._run_countdown = lambda _plan: calls.append('countdown') or True
+    manager._player._run_motion = lambda _plan: calls.append('motion')
 
-    manager._run_initialization_then_motion({}, {})
+    manager._player._run_initialization_then_motion({}, {})
 
     assert calls == ['initialize', 'countdown', 'motion']
 
 
 def test_countdown_stop_prevents_motion_start():
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._player = MotionPlayer(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager._run_lock = threading.RLock()
@@ -721,7 +743,7 @@ def test_countdown_stop_prevents_motion_start():
     manager._stop_event = threading.Event()
     manager._stop_event.set()
 
-    result = manager._run_countdown({
+    result = manager._player._run_countdown({
         'countdown_sec': 3.0,
         'axes': [],
     })
@@ -771,6 +793,7 @@ def test_zero_fallback_outside_motion_range_blocks_initialization():
 
 def test_plan_keeps_single_run_available_when_continuous_seam_fails():
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._player = MotionPlayer(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager.period_sec = 0.02
@@ -814,6 +837,7 @@ def test_plan_keeps_single_run_available_when_continuous_seam_fails():
 
 def test_plan_resolves_current_axis_from_stable_alias_instead_of_saved_axis():
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._player = MotionPlayer(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager.period_sec = 0.02
@@ -897,6 +921,7 @@ def test_motor_ref_matching_is_scoped_by_ethercat_master_and_serial_port():
 
 def test_plan_runs_with_out_of_range_data_and_clamps_every_command():
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._player = MotionPlayer(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager.period_sec = 0.5
@@ -945,6 +970,7 @@ def test_plan_runs_with_out_of_range_data_and_clamps_every_command():
 
 def test_motion_studio_can_use_read_only_mapping_with_generated_preview_file():
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._player = MotionPlayer(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager.period_sec = 0.02
@@ -982,6 +1008,7 @@ def test_motion_studio_can_use_read_only_mapping_with_generated_preview_file():
 
 def test_normal_motion_run_still_rejects_mapping_file_mismatch():
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._player = MotionPlayer(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager.period_sec = 0.02
@@ -1023,6 +1050,8 @@ def test_run_manager_resolves_assets_only_inside_requested_project(tmp_path):
 
     manager = MotionRunManager.__new__(MotionRunManager)
 
+    manager._player = MotionPlayer(manager)
+
     manager._plan_builder = PlanBuilder(manager)
 
     manager._plan_builder = PlanBuilder(manager)
@@ -1050,6 +1079,7 @@ def test_plan_builder_reads_project_dirs_from_the_manager(tmp_path):
     이 시험은 반대쪽 분기를 고정한다.
     """
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._player = MotionPlayer(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager.motion_projects_dir = tmp_path
     manager.period_sec = 0.02

@@ -111,7 +111,7 @@ class GroupSession:
             })
             self.manager._set_status(status)
             self.manager._run_thread = threading.Thread(
-                target=self._prepare_and_run_group,
+                target=self._run,
                 args=(dict(payload), list(motors_snapshot)),
                 name=f'group-motion-{execution_id[:24]}',
                 daemon=True,
@@ -303,7 +303,7 @@ class GroupSession:
             )
             initialize_triggered_at = time.time()
             initialize_triggered_monotonic = time.monotonic()
-            self.manager._run_initialization(initialization_plan)
+            self.manager._player._run_initialization(initialization_plan)
             if self.manager._stop_event.is_set() or self.manager.status().get('state') != 'initialized':
                 return
             with self.condition:
@@ -343,7 +343,7 @@ class GroupSession:
                 plan['group_execution'] = True
                 plan['execution_id'] = execution_id
                 plan['group_cycle_number'] = cycle_number
-                self.manager._run_motion(plan)
+                self.manager._player._run_motion(plan)
                 result = self.manager.status()
                 if result.get('state') == 'error' or self.manager._stop_event.is_set():
                     break
@@ -391,7 +391,7 @@ class GroupSession:
                 )
                 if self.manager._stop_event.is_set():
                     break
-                self.manager._run_initialization(initialization_plan)
+                self.manager._player._run_initialization(initialization_plan)
                 if self.manager._stop_event.is_set() or self.manager.status().get('state') != 'initialized':
                     break
                 with self.condition:

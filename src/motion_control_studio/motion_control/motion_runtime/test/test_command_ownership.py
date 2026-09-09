@@ -3,14 +3,18 @@ import time
 
 import pytest
 
-from motion_runtime.motion_run_manager import (
+from motion_runtime.motion_player import MotionPlayer
+from motion_runtime.motion_run_constants import (
     SAFETY_STATUS_TIMEOUT_SEC,
+)
+from motion_runtime.motion_run_manager import (
     MotionRunManager,
 )
 
 
 def run_manager_with_safety_status(status=None, age_sec=0.0):
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._player = MotionPlayer(manager)
     manager._safety_status_lock = threading.Lock()
     manager._latest_safety_status = status
     manager._latest_safety_status_at = (
@@ -83,4 +87,4 @@ def test_runtime_stream_guard_raises_before_publishing_for_midi_owner():
     })
 
     with pytest.raises(RuntimeError, match='MIDI 제어'):
-        manager._require_playback_command_allowed()
+        manager._player._require_playback_command_allowed()

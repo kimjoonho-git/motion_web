@@ -1629,6 +1629,65 @@ f(self)               §6-19에서 놓쳤다
 `scripts/bridge_state_map.py`는 이 넷을 모두 센다. **옮길 때도 그 넷을 모두
 바꿔야 한다.**
 
+### 6-31. `MotionPlayer` 신설 · §5 목표안 셋째 · 상수 단일화
+
+`MotionRunManager` 2,362 → **1,435줄** · 메서드 73 → 49
+
+§5의 `motion_run_manager` 분해 목표 넷 중 셋째다. **모터를 실제로 움직이는
+코드**이므로 계산도 순서도 바꾸지 않았다 · 같은 값을 같은 차례로 보낸다.
+최종 출력은 여전히 `motion_supervisor`가 단독 발행한다(§2).
+
+#### 옮긴 것 · 24메서드 899줄
+
+`_run_motion` 222 · `_run_initialization` 111 · `_prepare_and_run` 71 ·
+`_wait_between_cycles` 63 · `_run_initial_position_stream` 50 · `_run_countdown` 50 ·
+`_wait_for_targets` 42 · `_wait_synchronized_boundary` 38 · `_finish_cycle_stop` 31 ·
+발행 계층 6개 104 · 그 외
+
+노드에 남긴 것 · 실행 락과 정지 신호 · 상태 저장·발행 · 자동 반복 · 현재 모터
+목록 · 계획 수립기. 플레이어는 그것들을 `self.manager`로 본다.
+
+#### 상수를 한 곳으로 · `motion_run_constants`
+
+분해하면서 상수를 양쪽에 복사하면 **언젠가 갈라진다** · §6-16에서 Dynamixel 스캔
+제한시간이 그렇게 갈라져 40초가 20초로 돌았다. 13개를 모듈 하나에 모으고
+노드·플레이어·계획 수립기·규칙이 모두 거기서 본다.
+
+#### 이름 치환에서 놓치는 형태 · 네 번째와 다섯 번째
+
+```python
+target=self._prepare_and_run        # 호출이 아닌 속성 참조 · 스레드 대상
+self.manager._run_motion(...)       # 이미 옮긴 것을 또 옮길 때
+```
+
+`target=self.X`는 **호출 괄호가 없어** `self.X(` 치환에 걸리지 않는다.
+`GroupSession`(§6-29)에도 같은 버그가 있었다 · `target=self._prepare_and_run_group`이
+이름 변경 뒤에도 남아 있었고, **시험이 잡지 못했다**(그룹 실행은 다른 PC가 필요하다).
+이번에 함께 고쳤다.
+
+그리고 `GroupSession`이 `self.manager._run_motion`으로 부르던 것을 플레이어로
+옮겼으니 `self.manager._player._run_motion`이 됐다 · **분해가 겹치면 앞서 옮긴
+것의 참조도 따라가야 한다.**
+
+정리하면 이름을 옮길 때 볼 형태는 다섯이다.
+
+```
+self.X(...)             호출
+self.X                  속성 참조 · target= · 콜백 등록
+getattr(self, 'X')      문자열 접근
+hasattr(self, 'X')      문자열 존재 확인
+f(self)                 self를 통째로 넘기기
+```
+
+#### 검증
+
+- 코드 검증 · `ruff check src` 55건 유지 · 신규 0건
+- 실행 검증 · `pytest` 1,013건 통과 · 실패 0
+- 실물 검증 · 재시작 · 실행 컨텍스트 `ready` · 노드 확인 8건 · 모터 `Operation enabled`
+- 실물 검증 · 계획 수립 · `axis_count 1` · `duration_sec 3.26` · `sample_count 164` ·
+  `initialization_duration_sec 5.0` · `clamped_axis_count 0`
+- 실물 미검증 · **실제 재생** · 모터가 움직인다 · 별도 확인 필요
+
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
 - 파일 1,000줄 이하 · 함수 60줄 이하 · `Node` 서브클래스 500줄 이하

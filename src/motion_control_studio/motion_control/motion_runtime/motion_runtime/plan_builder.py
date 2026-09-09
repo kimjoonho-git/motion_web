@@ -20,9 +20,7 @@ from motion_common.values import finite_float, optional_int
 
 from . import motion_run_rules
 from .motion_automation_store import REPEAT_MODES
-
-#: 연속 재생 이음매 허용 오차 · 노드와 같은 값을 쓴다
-CONTINUOUS_LOOP_TOLERANCE_DEG = 5.0
+from .motion_run_constants import CONTINUOUS_LOOP_TOLERANCE_DEG
 
 
 class PlanBuilder:

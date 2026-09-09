@@ -2,6 +2,7 @@ import threading
 import time
 
 from motion_runtime.motion_run_manager import MotionRunManager
+from motion_runtime.motion_player import MotionPlayer
 from motion_runtime.plan_builder import PlanBuilder
 from motion_runtime.group_session import GroupSession
 from motion_runtime import motion_run_rules
@@ -18,6 +19,7 @@ def _wait_until(predicate, timeout=1.0):
 
 def _group_manager():
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._player = MotionPlayer(manager)
     manager._plan_builder = PlanBuilder(manager)
     manager._run_lock = threading.RLock()
     # 그룹 세션은 별도 객체가 갖는다 (§6-29)
@@ -49,7 +51,7 @@ def test_one_start_at_runs_exactly_one_motion_then_waits_for_next_cycle():
         'capabilities': {'continuous_run': {'available': True}},
     }
     manager._wait_group_deadline = lambda *_args, **_kwargs: None
-    manager._run_initialization = lambda _plan: manager._status.update({
+    manager._player._run_initialization = lambda _plan: manager._status.update({
         'state': 'initialized', 'phase': 'initialized',
     })
     calls = []
@@ -64,7 +66,7 @@ def test_one_start_at_runs_exactly_one_motion_then_waits_for_next_cycle():
             },
         })
 
-    manager._run_motion = run_motion
+    manager._player._run_motion = run_motion
     worker = threading.Thread(target=manager._group._run, args=({
         'execution_id': 'exec-a',
         'initialize_monotonic': time.monotonic() + 1.0,

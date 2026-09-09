@@ -5,6 +5,7 @@ import threading
 import time
 
 from motion_runtime.motion_automation_store import default_automation_state
+from motion_runtime.motion_player import MotionPlayer
 from motion_runtime import motion_run_rules
 from motion_runtime.motion_run_manager import MotionRunManager
 
@@ -31,6 +32,7 @@ class _Logger:
 
 def _manager():
     manager = MotionRunManager.__new__(MotionRunManager)
+    manager._player = MotionPlayer(manager)
     manager.period_sec = 0.001
     manager._run_lock = threading.RLock()
     manager._stop_event = threading.Event()
@@ -51,12 +53,12 @@ def _manager():
     }
     manager._automation_project_id = 'project'
     manager._publish_status = lambda: None
-    manager._require_playback_command_allowed = lambda: None
+    manager._player._require_playback_command_allowed = lambda: None
     manager._current_motors = lambda: []
-    manager._prepare_motion_stream = lambda _motors, _axes: None
-    manager._publish_motion_setpoints = lambda *_args, **_kwargs: None
+    manager._player._prepare_motion_stream = lambda _motors, _axes: None
+    manager._player._publish_motion_setpoints = lambda *_args, **_kwargs: None
     _patch_rule('_sleep_until', lambda _deadline: None)
-    manager._current_servo_alarm_grade = lambda: 0
+    manager._player._current_servo_alarm_grade = lambda: 0
     manager.get_logger = lambda: _Logger()
     return manager
 
@@ -94,11 +96,11 @@ def test_direct_repeat_finishes_current_cycle_after_graceful_stop_request():
         publishes.append('sample')
         manager._graceful_stop_event.set()
 
-    manager._publish_motion_setpoints = publish
+    manager._player._publish_motion_setpoints = publish
     plan = _plan()
     plan['samples'][0]['positions'] = {0: 0.0}
 
-    manager._run_motion(plan)
+    manager._player._run_motion(plan)
 
     assert publishes == ['sample']
     assert manager.status()['state'] == 'stopped'
@@ -109,11 +111,11 @@ def test_direct_repeat_finishes_current_cycle_after_graceful_stop_request():
 def test_dwell_repeat_uses_one_transition_handler_between_cycles():
     manager = _manager()
     transitions = []
-    manager._wait_between_cycles = lambda _plan, _started, cycle, seconds: (
+    manager._player._wait_between_cycles = lambda _plan, _started, cycle, seconds: (
         transitions.append((cycle, seconds)) or False
     )
 
-    manager._run_motion(_plan('dwell'))
+    manager._player._run_motion(_plan('dwell'))
 
     assert transitions == [(1, 0.1)]
 
@@ -129,12 +131,12 @@ def test_dwell_status_holds_motion_progress_at_file_end():
         },
     ]
     waiting_status = {}
-    manager._finish_cycle_stop = lambda *_args, **_kwargs: waiting_status.update(
+    manager._player._finish_cycle_stop = lambda *_args, **_kwargs: waiting_status.update(
         manager.status()
     )
     manager._graceful_stop_event.set()
 
-    completed = manager._wait_between_cycles(
+    completed = manager._player._wait_between_cycles(
         plan,
         time.time(),
         1,
@@ -150,7 +152,7 @@ def test_next_cycle_status_uses_new_phase_start_time(monkeypatch):
     manager = _manager()
     monkeypatch.setattr(time, 'time', lambda: 200.0)
 
-    manager._restore_running_status(_plan('dwell'), 100.0, 1)
+    manager._player._restore_running_status(_plan('dwell'), 100.0, 1)
 
     status = manager.status()
     assert status['phase_started_at'] == 200.0
@@ -170,8 +172,8 @@ def test_reinitialize_repeat_moves_to_initial_position_between_cycles():
         }
         manager._graceful_stop_event.set()
 
-    manager._run_initialization = initialize
-    manager._run_motion(_plan('reinitialize'), {'name': 'all-enabled-axes'})
+    manager._player._run_initialization = initialize
+    manager._player._run_motion(_plan('reinitialize'), {'name': 'all-enabled-axes'})
 
     assert calls == ['all-enabled-axes']
     assert manager.status()['state'] == 'stopped'
@@ -181,10 +183,10 @@ def test_reinitialize_repeat_moves_to_initial_position_between_cycles():
 def test_grade_one_alarm_allows_current_cycle_then_blocks_next_cycle():
     manager = _manager()
     failures = []
-    manager._current_servo_alarm_grade = lambda: 1
+    manager._player._current_servo_alarm_grade = lambda: 1
     manager._automation_failure = failures.append
 
-    manager._run_motion(_plan())
+    manager._player._run_motion(_plan())
 
     assert failures == ['1등급 서보 에러 · 나머지 축의 현재 회차 완료 후 자동 반복 중단']
     assert manager.status()['state'] == 'error'
@@ -208,14 +210,14 @@ def test_reinitialize_repeat_does_not_require_direct_loop_seam():
 
 def test_disable_during_first_initialization_does_not_start_motion():
     manager = _manager()
-    manager._run_initialization = lambda _plan: (
+    manager._player._run_initialization = lambda _plan: (
         manager._update_status({'state': 'initialized'})
     )
     manager._graceful_stop_event.set()
     calls = []
-    manager._run_motion = lambda *_args: calls.append('motion')
+    manager._player._run_motion = lambda *_args: calls.append('motion')
 
-    manager._run_initialization_then_motion(
+    manager._player._run_initialization_then_motion(
         {'automation_run': True},
         _plan(),
     )

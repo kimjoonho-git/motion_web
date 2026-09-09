@@ -22,8 +22,7 @@ from std_msgs.msg import Int8MultiArray
 from motion_common import motion_table
 from motion_common.values import finite_float, optional_int
 
-#: 초기 위치 이동 시간 후보 · 노드와 같은 값을 쓴다
-INITIAL_MOVE_TIME_OPTIONS_SEC = (5.0, 7.0, 10.0)
+from .motion_run_constants import INITIAL_MOVE_TIME_OPTIONS_SEC
 
 
 def _status_from_plan(state: str, message: str, plan: Dict[str, Any]) -> Dict[str, Any]:
