@@ -1686,7 +1686,8 @@ f(self)                 self를 통째로 넘기기
 - 실물 검증 · 재시작 · 실행 컨텍스트 `ready` · 노드 확인 8건 · 모터 `Operation enabled`
 - 실물 검증 · 계획 수립 · `axis_count 1` · `duration_sec 3.26` · `sample_count 164` ·
   `initialization_duration_sec 5.0` · `clamped_axis_count 0`
-- 실물 미검증 · **실제 재생** · 모터가 움직인다 · 별도 확인 필요
+- 실물 검증 · **실제 재생 확인** · 작업자가 화면에서 돌렸고 정상 동작 ·
+  899줄을 옮긴 재생 경로가 그대로 산다
 
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
