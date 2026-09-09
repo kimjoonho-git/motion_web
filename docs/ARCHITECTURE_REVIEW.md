@@ -1821,6 +1821,51 @@ scan_contract  version 3 · dynamixel_protocol 2.0 · baudrate 1000000
 **여전히 미검증** · 실제 Ping 응답 해석 · CRC 검사 · 상태 패킷 분해 ·
 **Dynamixel 실물 연결 시 재확인 필요** · §6-16의 40초 시한 확인도 함께 밀려 있다.
 
+#### 실물 Dynamixel 연결 검증 · 2026-09-09
+
+사용자가 Dynamixel을 물리 연결했다 · 위에서 미룬 것을 전부 확인했다.
+
+```
+포트           FTDI FT232H (0403:6014)
+               /dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FTAAMMJV-if00-port0
+               → /dev/ttyUSB0 · port_source auto:/dev/serial/by-id
+검색           available true · complete true · direct true · error 없음
+               baudrate 1000000 · protocol 2.0 · attempts 2 · id_fallback true
+장치 2대       ID 3 · model_number 1130 · XM540-W150 · fw 50 · packet_error 0
+               ID 5 · model_number 1120 · XM540-W270 · fw 50 · packet_error 0
+               둘 다 source broadcast_ping
+소요           단독 스캔 11.5초 · 전체 스캔 14.0초
+```
+
+**해소된 미검증**
+
+| 항목 | 근거 |
+| --- | --- |
+| Broadcast Ping | 두 대 모두 `source broadcast_ping`으로 검출 |
+| CRC 검사 | CRC 불일치는 폐기되므로 검출 자체가 통과 근거 |
+| 상태 패킷 분해 | `model_number`·`firmware_version`·`packet_error`가 바르게 뽑힘 |
+| 모델명 매핑 | 1130 → XM540-W150 · 1120 → XM540-W270 · 실제 제품과 일치 |
+| 포트 자동 탐색 | `/dev/serial/by-id` 경로를 잡았다 |
+| ID 보조 Ping 경로 | 미검출 251개 × 2회 시도 · 소요 시간이 이를 뒷받침 |
+| **매번 새로 물리 검색** | 2회 연속 스캔 · 장치 동일 · `scanned_at` 매번 갱신 |
+| §6-16 40초 시한 | `scan_orchestrator.scan_dynamixel(timeout_sec=40.0)` 단일 경로 확인 · 중복 계층 없음 |
+
+**아직 남은 것** · `_ping_dynamixel_id`의 **성공** 반환 · Broadcast에 응답하지
+않는 개체가 있어야 탄다 · 지금 두 대는 모두 Broadcast로 잡힌다.
+
+#### 함께 관측한 것 · 매칭표는 EtherCAT 전용이다 · 이번 변경과 무관
+
+물리 Dynamixel 2대가 요약 문구에는 `Dynamixel 2축`으로 나오지만 **매칭표에는
+행이 없다** · `matching_summary`는 `total 1 · matched 1 · unregistered 0`이다.
+
+`_build_matching_rows(ethercat_scan['slaves'], configured_axes)` · 입력이 EtherCAT
+Slave뿐이라 그렇다. **이번 분해 이전부터 그랬다**(`git log -S`로 확인) · 리팩터링
+회귀가 아니다.
+
+프로젝트에 Dynamixel이 등록되어 있지 않은 현 상태에서는 표시 누락이 문제로
+드러나지 않는다. 등록 후에는 `미등록`/`누락` 판정이 필요해진다 · **별도 항목으로
+남긴다** · 이번 범위 밖이다.
+
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
 - 파일 1,000줄 이하 · 함수 60줄 이하 · `Node` 서브클래스 500줄 이하
