@@ -2104,6 +2104,81 @@ FULL_SCAN_TIMEOUT_SEC = AC_SERVO_SCAN_TIMEOUT_SEC + DYNAMIXEL_SCAN_TIMEOUT_SEC
 - 실물 검증 · 전체 검색 1회 · `scan_id 1788934167105-1` · EtherCAT 1 ·
   Dynamixel 2(ID 3·5) · 노드 소요 11.6초 · 왕복 15.1초 · 결과 이전과 동일
 
+### 6-38. `motion_value_map` 신설 · 순수 변환을 먼저 뗀다
+
+`midi_control_node` 3,354 → **3,100줄**
+
+§5 `midi_control_node` 목표안 넷 중 `MotionValueMapper`에 해당한다.
+
+이미 **모듈 수준**에 있던 순수 함수 13개와 상수 6개를 옮겼다 · 클래스는 그대로다 ·
+파일 크기만 줄었다. 다음 분해를 위한 자리 정리다.
+
+- 페이더 원시값 ↔ 모션값 ↔ 모터 목표각 변환
+- 링크된 Motion ID들의 범위·값이 어긋났는지 보는 검사
+- 2차 저역통과 필터 · LCD 표기
+
+**상태도 노드 참조도 없다** · 옮기기 전부터 순수했다.
+
+#### 시험 통로도 같이 옮겼다
+
+`test_midi_control_node.py`가 `from midi_control.midi_control_node import
+motion_value_display, ...`로 쓰고 있었다. 노드에서 되내보내면 통로는 유지되지만
+**어디에 사는 코드인지 흐려진다** · 시험 import를 새 모듈로 바꿨다.
+
+되내보내기를 택했다면 `ruff` F401이 나거나, 그것을 피하려고 `__all__`을 붙여
+껍데기를 하나 더 만들었을 것이다.
+
+#### `values` 이름 충돌이 드러났다
+
+노드가 `from motion_common import ... values`를 쓰고 있었고, 클래스 안에는
+`_array_value(values, ...)` 같은 지역 이름이 있었다. 함수를 옮기고 나니
+`motion_common.values`가 미사용이 되어 `F811`이 10건 떴다.
+
+가려진 import를 걷어냈다 · **가려져 있었을 뿐 원래 있던 문제다.**
+
+### 6-39. `PickupPolicy` 신설 · 튐 방지 판정을 뗀다
+
+`midi_control_node` 3,100 → **2,951줄** · 클래스 3,025 → **2,874줄** · 메서드 88 → 80
+
+물리 페이더 위치와 실제 모션값이 어긋난 채로 SELECT를 켜면 축이 튄다. 페이더가
+기준값을 지나갈 때까지 기다렸다가 그때부터 명령을 낸다 · 그 판정 8개를 모았다.
+
+채널별 대기 상태 **넷이 같이 갔다** · `pending` · `reference_motion` ·
+`previous_motion` · `reference_source`.
+
+#### 락은 노드가 계속 갖는다
+
+이름 끝의 `_locked`가 "노드의 `_lock` 아래에서만 부른다"는 약속이다. `_lock`은
+`_midi_callback`을 비롯한 노드 전체가 공유하므로 옮기지 않았다 · §6-29에서
+`GroupSession`에 `run_lock`을 넘긴 것과 같은 판단이다.
+
+#### 이번에 겪은 것 · 초기화 자리와 재설정 자리
+
+네 리스트를 만드는 코드가 **두 곳**에 있었다 · `__init__`과
+`_reset_runtime_controls_locked`. 앞줄이 똑같아
+(`self._motor_follow_active = [False] * MIDI_CHANNEL_COUNT`) 일괄 치환이
+**생성 자리까지 `reset()`으로** 바꿔버렸다 · 객체가 없는데 `reset()`을 불렀다.
+
+시험이 잡았다. 재설정은 객체를 새로 만들지 않고 제자리에서 되돌린다 ·
+새로 만들면 참조를 쥔 곳이 낡은 객체를 보게 된다.
+
+#### 검증
+
+- 코드 검증 · `ruff check src` 55건 유지 · 데코레이터 원본 대조 불일치 0 ·
+  잔여 참조 0
+- 실행 검증 · `pytest` 1,016건 통과 · MIDI 시험 2,191줄이 그대로 통과
+- 실물 검증 · **부분** · 노드는 기동하고 스냅샷을 정상 발행한다
+
+```
+midi_monitor   bridge_publish_age_sec 0.004 (갱신 중)
+채널 0         pickup_pending false · pickup_reference_source ''
+               pickup_complete · pickup_reference_motion_deg 존재
+connected      false · "X-Touch MIDI input port not found"
+```
+
+**Pickup 판정 자체는 검증 불가** · 물리 페이더 입력이 있어야 탄다 ·
+X-Touch가 연결되면 재확인이 필요하다.
+
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
 - 파일 1,000줄 이하 · 함수 60줄 이하 · `Node` 서브클래스 500줄 이하
