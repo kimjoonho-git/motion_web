@@ -770,10 +770,29 @@ SHM 매핑 0      motion_supervisor · motion_state_monitor
 | --- | --- | --- |
 | `check_dds_shm.sh` 즉시 실행 | 없음 · 이미 있음 | 고아 목록과 시각 |
 | 노드별 SHM 매핑 수 기록 | 없음 · 위 명령 | 사건 당시 SHM을 탔는지 |
-| Fast DDS 경고 로그 켜기 | 환경변수 1개 | `Port … not OK` 직접 증거 |
+| ~~Fast DDS 경고 로그 켜기~~ | — | **불가** · 아래 |
 
-재발 시 **재시작하기 전에** 위 셋을 먼저 뜬다 · 지난번에는 재시작이 증거를
-함께 지웠다.
+**Fast DDS 2.6.11에는 로그 수준 환경변수가 없다.** `Log::SetVerbosity`는 C++
+API 전용이고, XML 프로필의 `<log>`는 소비자(consumer)만 정한다 ·
+`librmw_fastrtps_shared_cpp`가 읽는 환경변수도 `RMW_FASTRTPS_PUBLICATION_MODE` ·
+`RMW_FASTRTPS_USE_QOS_FROM_XML` 둘뿐이다.
+
+그래서 같은 목적을 **한 번에 뜨는 명령**으로 대신한다.
+
+```bash
+./scripts/check_dds_shm.sh --capture
+```
+
+`docs/metrics/dds-capture-<시각>.txt`로 남긴다 · 담기는 것 ·
+
+- 세그먼트 전체와 고아 여부 · 각 시각
+- **노드별 SHM 매핑 수** · 0이면 그 노드는 SHM 경로를 타지 않는다
+- 프로세스 상태와 스레드 수
+- 브리지의 `project_generation` · `motion_state_age_sec` · `safety_status` ·
+  `execution_context`
+
+재발 시 **재시작하기 전에 이 한 줄을 먼저 실행한다** · 지난번에는 재시작이
+증거를 함께 지웠다.
 
 ### 6-15. 상태 동반 이동 1차 · 모션 스튜디오 · 순환 절단
 
