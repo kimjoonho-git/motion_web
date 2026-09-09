@@ -2789,6 +2789,76 @@ C로 가려면 먼저 `motion_system`을 upstream에 맞추는 일이 선행이�
 - `motion_system`이 upstream과 **동기화**되어 변경을 얹기 쉬워진다
 - `ethercat` CLI 출력 변경으로 파싱이 **실제로 깨진다**
 
+### 6-46. `project_repository` 분해 1차 · 검증 · 트리 · 경로
+
+`project_repository.py` **2,100 → 1,652줄** · 클래스 1,987 → **1,569줄** · 메서드 69 → 64
+
+#### 공용 층을 먼저 만들었다
+
+`_local_directory` · `_sha256` · `_sha256_file` · `_is_user_file` · `_safe_stem` ·
+`PROJECT_CATEGORIES` · `DISPLAY_NAMES`를 트리 쪽으로 끌고 가면
+`project_repository`가 다시 그것을 부르며 **순환 참조**가 된다.
+
+그래서 `project_paths.py`를 먼저 세웠다 · 아무것도 import하지 않는 바닥이다.
+
+```
+project_paths              → (없음)
+project_tree               → project_paths
+motor_profile_validation   → motor_identity
+project_repository         → project_tree · project_paths · motor_profile_validation
+```
+
+#### 떼어낸 것
+
+| 모듈 | 줄 | 내용 |
+| --- | --- | --- |
+| `motor_profile_validation` | 245 | `validate_runtime_motor_profiles` · **워크스페이스 최장 함수 227줄이었다** |
+| `project_tree` | 192 | 파일 트리 · 읽기 전용 하위 트리 · MIDI 뱅크 요약 |
+| `project_paths` | 66 | 경로 안전 검사 · 해시 · 분류 상수 |
+
+`validate_runtime_motor_profiles`는 원래도 `@staticmethod`였고 `self`를 하나도
+쓰지 않았다 · **클래스 안에 있을 이유가 없던 227줄**이다.
+
+#### 겪은 것 · 여러 줄 서명의 `self`
+
+```python
+def read_only_directory_tree(
+    self,                      # ← `(self, ` 치환으로는 안 지워진다
+    directory: Path,
+```
+
+인자 하나가 밀려 `category`가 사라졌다 · 시험이 잡았다.
+§6-35의 `(self, ` 함정과 **같은 뿌리, 다른 모양**이다.
+
+#### 시험이 하나 가벼워졌다
+
+`test_runtime_rejects_duplicate_ethercat_master_index`가 `ProjectRepository(tmp_path)`를
+세우고 있었다 · 검증이 순수 함수가 되면서 **저장소가 필요 없어졌다** ·
+`ruff`의 `F841`이 그것을 알려줬다.
+
+#### 검증
+
+- 코드 검증 · `ruff check src` 55건 유지 · **계층 순환 0**
+- 실행 검증 · `pytest` **1,028건** 통과
+- 실물 검증 · 재시작 후 프로젝트 6개 조회 · 트리 8구획 전수
+
+```
+project_root          project.json                      sha d5af6878ec
+motor_axes            motor_axes.yaml        active     sha 385fe47a3f
+motion_axis_matching  ㄴㅇㄹ.yaml            active     sha 6f0eb73e07
+                      midi_banks {stored false, count 0}
+motions               ㄴㅇㄹ.json            active     sha 2f282f3eda
+layers                연동2-…__layer_….json  active     sha c25737348d
+logs                  2건 · runtime 7건 · trash 0건   ← 읽기 전용 하위 트리
+```
+
+#### 남은 군집
+
+| 군집 | 줄 | 성격 |
+| --- | --- | --- |
+| 모터 런타임 상태·조작 기록 | ~305 | **`motor_runtime_file`과 그 락을 갖는다** · 다음 차례 |
+| 기동 시 마이그레이션 4종 | ~181 | 한 번만 도는 코드 |
+
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
 - 파일 1,000줄 이하 · 함수 60줄 이하 · `Node` 서브클래스 500줄 이하
