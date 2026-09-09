@@ -21,8 +21,11 @@ import threading
 import time
 from typing import Any, Dict, List
 
+from rclpy.action import ActionClient
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
+
+from motion_coordination_interfaces.action import MotorScan
 
 from motion_web_bridge import (
     ethercat_project_compat,
@@ -64,6 +67,11 @@ class ScanOrchestrator:
         self.scan_dynamixel_service = scan_dynamixel_service
         #: 프로젝트 설정을 읽어오는 콜러블 · `MotorConfigService.load` (§6-19)
         self.load_motor_config = load_motor_config
+        #: 장기 작업 Action · 진행 상황과 취소를 같은 통로로 (§6-26)
+        #: 실제 노드가 있을 때만 만든다 · 노드 없는 시험 스텁도 이 클래스를 쓴다
+        self._action_client = None
+        self._active_goal_handle = None
+        self._goal_lock = threading.Lock()
         self._scan_request_lock = threading.Lock()
         #: 노드에서 그대로 옮겼다 · 진행 이벤트를 락 안에서 다시 읽는다
         self._progress_lock = threading.RLock()
@@ -89,6 +97,14 @@ class ScanOrchestrator:
         except json.JSONDecodeError:
             self.bridge.get_logger().warn(f'Invalid {self.scan_progress_topic} JSON received.')
             return
+        self.record_progress_event(event)
+
+    def record_progress_event(self, event: Any) -> None:
+        """진행 이벤트 하나를 기록한다.
+
+        토픽으로도 오고 Action feedback으로도 온다 · 같은 항목이므로 같은 곳에
+        쌓는다 · §6-26
+        """
         if not isinstance(event, dict) or not str(event.get('scan_id') or ''):
             return
         now = time.time()
@@ -272,6 +288,116 @@ class ScanOrchestrator:
             scan_lock.release()
             lifecycle_lock.release()
 
+    # ------------------------------------------------------------------ #
+    # 장기 작업 Action · §6-26
+    # ------------------------------------------------------------------ #
+
+    #: 서비스 이름 → Action 목표의 검색 종류
+    TRANSPORT_BY_SERVICE = {
+        'scan_motors': 'all',
+        'scan_ac_servo_motors': 'ac_servo',
+        'scan_dynamixel_motors': 'dynamixel',
+    }
+
+    def _scan_action_client(self) -> Any:
+        """Action 클라이언트를 처음 쓸 때 만든다.
+
+        `ActionClient`는 진짜 ROS 노드를 요구한다. 노드 없이 세우는 시험 스텁도
+        이 클래스를 쓰므로 생성자에서 만들지 않는다.
+        """
+        if self._action_client is not None:
+            return self._action_client
+        try:
+            self._action_client = ActionClient(self.bridge, MotorScan, 'motor_scan')
+        except (AttributeError, TypeError):
+            return None
+        return self._action_client
+
+    def _run_scan(self, client: Any, service_name: str, timeout_sec: float) -> Any:
+        """Action으로 스캔을 돌리고 결과를 돌려준다.
+
+        Action 서버가 없으면 기존 `Trigger` 서비스로 돌아간다 · 구버전 노드가
+        떠 있는 동안에도 검색이 멈추지 않아야 한다.
+        """
+        transport = self.TRANSPORT_BY_SERVICE.get(
+            str(service_name).lstrip('/'), 'all'
+        )
+        action_client = self._scan_action_client()
+        if action_client is None or not action_client.wait_for_server(timeout_sec=0.5):
+            self.bridge.get_logger().warn(
+                'motor_scan action server unavailable · Trigger 서비스로 진행한다'
+            )
+            return self._run_scan_via_service(client, timeout_sec)
+
+        goal = MotorScan.Goal()
+        goal.transport = transport
+        send_future = action_client.send_goal_async(
+            goal, feedback_callback=self._on_scan_feedback
+        )
+        handle = self._await(send_future, 5.0)
+        if handle is None or not handle.accepted:
+            self.bridge.get_logger().warn('motor_scan goal rejected · Trigger로 진행한다')
+            return self._run_scan_via_service(client, timeout_sec)
+
+        with self._goal_lock:
+            self._active_goal_handle = handle
+        try:
+            result_wrapper = self._await(handle.get_result_async(), timeout_sec)
+        finally:
+            with self._goal_lock:
+                self._active_goal_handle = None
+        if result_wrapper is None:
+            return None
+        return result_wrapper.result
+
+    def _run_scan_via_service(self, client: Any, timeout_sec: float) -> Any:
+        """예전 경로 · 진행 상황은 토픽으로만 오고 취소는 없다."""
+        if client is None:
+            return None
+        future = client.call_async(Trigger.Request())
+        return self._await(future, timeout_sec)
+
+    @staticmethod
+    def _await(future: Any, timeout_sec: float) -> Any:
+        deadline = time.time() + timeout_sec
+        while not future.done() and time.time() < deadline:
+            time.sleep(0.02)
+        return future.result() if future.done() else None
+
+    def _on_scan_feedback(self, message: Any) -> None:
+        feedback = getattr(message, 'feedback', None)
+        if feedback is None:
+            return
+        try:
+            details = json.loads(feedback.details or '{}')
+        except json.JSONDecodeError:
+            details = {}
+        self.record_progress_event({
+            'scan_id': feedback.scan_id,
+            'phase': feedback.phase,
+            'transport': feedback.transport,
+            'message': feedback.message,
+            'details': details,
+            'timestamp': feedback.timestamp,
+        })
+
+    def cancel(self) -> Dict[str, Any]:
+        """진행 중인 검색을 취소한다.
+
+        **이미 시작한 물리 검색은 끝까지 간다.** 취소는 다음 장치 종류로 넘어가기
+        전에 확인된다 · 모터 스캔 불변조건이 물리 검색을 중간에 끊는 것을 허락하지
+        않기 때문이다.
+        """
+        with self._goal_lock:
+            handle = self._active_goal_handle
+        if handle is None:
+            return {'success': False, 'message': '진행 중인 모터 검색이 없습니다'}
+        handle.cancel_goal_async()
+        return {
+            'success': True,
+            'message': '모터 검색 취소를 요청했습니다 · 진행 중인 장치 검색은 끝난 뒤 중단됩니다',
+        }
+
     def _call_service_locked(
         self,
         client,
@@ -289,12 +415,8 @@ class ScanOrchestrator:
                 **self.bridge.snapshot(),
             }
 
-        future = client.call_async(Trigger.Request())
-        deadline = time.time() + timeout_sec
-        while not future.done() and time.time() < deadline:
-            time.sleep(0.02)
-
-        if not future.done():
+        response = self._run_scan(client, service_name, timeout_sec)
+        if response is None:
             return {
                 'success': False,
                 'message': 'scan service timeout',
@@ -302,8 +424,6 @@ class ScanOrchestrator:
                 'project_generation': scan_generation,
                 **self.bridge.snapshot(),
             }
-
-        response = future.result()
         if (
             self.repository.selected_project_id() != scan_project_id
             or self.bridge._current_project_generation() != scan_generation

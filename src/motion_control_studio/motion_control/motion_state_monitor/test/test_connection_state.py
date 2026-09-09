@@ -735,3 +735,78 @@ Identity:
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class MotorScanActionTest(unittest.TestCase):
+    """모터 검색 Action의 계약 · §6-26
+
+    물리 검색 자체는 검사하지 않는다 · 그것은 실물 장비가 필요하다.
+    여기서는 **취소가 어디서 듣는가**와 **결과에 그 사실이 실리는가**를 본다.
+    """
+
+    def _monitor(self):
+        monitor = MotionStateMonitor.__new__(MotionStateMonitor)
+        monitor._scan_sequence = 0
+        monitor._active_scan_id = ''
+        monitor._scan_progress_publisher = None
+        monitor.monitoring_enabled = True
+        monitor.input_topic = '/motion_control/motor_status'
+        monitor.ethercat_status_topic = '/ethercat_status'
+        monitor._count_values = lambda motors, key: {}
+        monitor._matching_summary = lambda rows: {}
+        monitor._connection_summary = lambda rows: {}
+        return monitor
+
+    def test_cancel_between_transports_skips_the_remaining_one(self):
+        monitor = self._monitor()
+        calls = []
+        monitor._safe_scan_ethercat_slaves = lambda: (
+            calls.append('ethercat') or {'available': True, 'complete': True, 'slaves_count': 1}
+        )
+        monitor._safe_scan_dynamixel_motors = lambda: (
+            calls.append('dynamixel') or {'available': True, 'complete': True, 'devices_count': 1}
+        )
+        monitor._skipped_dynamixel_scan = lambda now: {'skipped': True}
+        monitor._current_ethercat_status = lambda now: {}
+        monitor._current_motor_list = lambda now: []
+        monitor._configured_axis_list = lambda motors: []
+        monitor._build_matching_rows = lambda slaves, axes: []
+        monitor._build_scan_connection_rows = lambda *a, **k: []
+
+        result = monitor._build_scan_result(
+            scan_ethercat=True,
+            scan_dynamixel=True,
+            cancel_requested=lambda: True,
+        )
+
+        # EtherCAT은 이미 시작했으므로 끝까지 간다 · Dynamixel만 중단된다
+        self.assertEqual(calls, ['ethercat'])
+        self.assertTrue(result['cancelled'])
+        self.assertTrue(result['dynamixel_scan'].get('skipped'))
+
+    def test_without_cancel_both_transports_run(self):
+        monitor = self._monitor()
+        calls = []
+        monitor._safe_scan_ethercat_slaves = lambda: (
+            calls.append('ethercat') or {'available': True, 'complete': True, 'slaves_count': 1}
+        )
+        monitor._safe_scan_dynamixel_motors = lambda: (
+            calls.append('dynamixel') or {'available': True, 'complete': True, 'devices_count': 1}
+        )
+        monitor._current_ethercat_status = lambda now: {}
+        monitor._current_motor_list = lambda now: []
+        monitor._configured_axis_list = lambda motors: []
+        monitor._build_matching_rows = lambda slaves, axes: []
+        monitor._build_scan_connection_rows = lambda *a, **k: []
+
+        result = monitor._build_scan_result(scan_ethercat=True, scan_dynamixel=True)
+
+        self.assertEqual(calls, ['ethercat', 'dynamixel'])
+        self.assertFalse(result['cancelled'])
+
+    def test_transport_map_covers_every_scan_kind(self):
+        """검색 종류 세 가지가 모두 Action 목표로 표현된다."""
+        self.assertEqual(
+            MotionStateMonitor.SCAN_TRANSPORTS,
+            {'all': (True, True), 'ac_servo': (True, False), 'dynamixel': (False, True)},
+        )

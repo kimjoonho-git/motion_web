@@ -1,0 +1,30 @@
+# 모터 물리 검색 · 장기 작업 Action
+#
+# 기존 `std_srvs/Trigger` 서비스는 결과만 돌려주고 진행 상황은 별도 토픽으로
+# 흘렸다. 호출 측은 응답이 올 때까지 워커 스레드를 붙잡고 있어야 했다.
+# Action은 진행 상황을 같은 통로로 보내고 취소를 받는다 · §6-26
+#
+# 물리 검색 자체는 바뀌지 않는다. `전체 모터 검색`은 여전히 AC Servo와
+# Dynamixel을 각각 새로 물리 검색하고, EtherCAT은 `ethercat rescan`으로
+# 기존 열거정보를 폐기한 뒤 다시 열거한다.
+
+# --- 목표 ---
+# 검색할 장치 종류 · 'all' | 'ac_servo' | 'dynamixel'
+string transport
+---
+# --- 결과 ---
+bool success
+# 스캔 결과 JSON · 기존 Trigger 응답과 같은 형식이다
+string message
+# 취소로 끝났는가
+bool cancelled
+---
+# --- 진행 ---
+# 진행 이벤트 · 기존 scan_progress 토픽과 같은 항목이다
+string scan_id
+string phase
+string transport
+string message
+# 이벤트 상세 JSON
+string details
+float64 timestamp

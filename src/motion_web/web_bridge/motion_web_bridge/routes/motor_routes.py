@@ -20,6 +20,11 @@ def register_motor_routes(app: FastAPI, bridge, project_call) -> None:
     async def motor_scan_progress():
         return bridge._scan.progress()
 
+    @app.post('/api/motors/scan/cancel')
+    async def cancel_motor_scan():
+        # 진행 중인 물리 검색은 끝까지 간다 · 다음 장치 종류부터 중단된다 (§6-26)
+        return await asyncio.to_thread(bridge._scan.cancel)
+
     @app.get('/api/motors/ethercat-aliases')
     async def read_ethercat_aliases():
         return await asyncio.to_thread(bridge.read_ethercat_aliases)

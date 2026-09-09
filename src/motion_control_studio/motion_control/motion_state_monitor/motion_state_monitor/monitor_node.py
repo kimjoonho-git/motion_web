@@ -5,10 +5,11 @@ import re
 import select
 import subprocess
 import termios
+import threading
 import time
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import rclpy
 import yaml
@@ -17,6 +18,11 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 from std_srvs.srv import SetBool, Trigger
+from rclpy.action import ActionServer, CancelResponse
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
+
+from motion_coordination_interfaces.action import MotorScan
 from motion_common import topics
 
 
@@ -148,6 +154,20 @@ class MotionStateMonitor(Node):
             'scan_dynamixel_motors',
             self._scan_dynamixel_motors_service,
         )
+        # 장기 작업 Action · 진행 상황을 같은 통로로 보내고 취소를 받는다 (§6-26)
+        # 기존 Trigger 서비스는 그대로 둔다 · 구코드 호출자가 남아 있을 수 있다
+        self._scan_action_group = ReentrantCallbackGroup()
+        self._scan_action_server = ActionServer(
+            self,
+            MotorScan,
+            'motor_scan',
+            execute_callback=self._execute_scan_goal,
+            cancel_callback=self._accept_scan_cancel,
+            callback_group=self._scan_action_group,
+        )
+        #: 실행 중인 Action 목표 · 진행 이벤트를 여기로도 보낸다
+        self._active_scan_goal = None
+        self._scan_goal_lock = threading.Lock()
         self._load_motor_metadata()
 
         if self.monitoring_enabled:
@@ -395,11 +415,79 @@ class MotionStateMonitor(Node):
             self.get_logger().warn('Dynamixel scan requested while monitoring is disabled.')
         return response
 
+    # ------------------------------------------------------------------ #
+    # 모터 검색 Action · §6-26
+    # ------------------------------------------------------------------ #
+
+    #: 취소를 받아들이는 지점 · 물리 검색 한 종류가 끝난 뒤
+    SCAN_TRANSPORTS = {
+        'all': (True, True),
+        'ac_servo': (True, False),
+        'dynamixel': (False, True),
+    }
+
+    def _accept_scan_cancel(self, goal_handle) -> CancelResponse:
+        """취소 요청을 받아들인다.
+
+        **진행 중인 물리 검색을 중간에 끊지는 않는다.** `ethercat rescan`과
+        Dynamixel Ping은 시작하면 끝까지 간다 · 모터 스캔 불변조건이 요구하는
+        바다. 취소는 **다음 장치 종류로 넘어가기 전**에 확인한다.
+        """
+        del goal_handle
+        self.get_logger().info('motor scan cancel requested')
+        return CancelResponse.ACCEPT
+
+    def _execute_scan_goal(self, goal_handle):
+        transport = str(goal_handle.request.transport or 'all').strip().lower()
+        if transport not in self.SCAN_TRANSPORTS:
+            goal_handle.abort()
+            result = MotorScan.Result()
+            result.success = False
+            result.message = json.dumps(
+                {'error': f'지원하지 않는 검색 종류입니다: {transport}'},
+                ensure_ascii=False,
+            )
+            return result
+
+        scan_ethercat, scan_dynamixel = self.SCAN_TRANSPORTS[transport]
+        with self._scan_goal_lock:
+            self._active_scan_goal = goal_handle
+        try:
+            payload = self._build_scan_result(
+                scan_ethercat=scan_ethercat,
+                scan_dynamixel=scan_dynamixel,
+                cancel_requested=goal_handle.is_cancel_requested,
+            )
+        finally:
+            with self._scan_goal_lock:
+                self._active_scan_goal = None
+
+        result = MotorScan.Result()
+        result.message = json.dumps(payload, ensure_ascii=False, separators=(',', ':'))
+        result.cancelled = bool(payload.get('cancelled'))
+        if result.cancelled:
+            goal_handle.canceled()
+            result.success = False
+            return result
+        if transport == 'all':
+            result.success = bool(payload.get('scan_complete'))
+        elif transport == 'ac_servo':
+            result.success = self._physical_section_success(
+                payload.get('ethercat_scan'), 'slaves_count'
+            )
+        else:
+            result.success = self._physical_section_success(
+                payload.get('dynamixel_scan'), 'devices_count'
+            )
+        goal_handle.succeed()
+        return result
+
     def _build_scan_result(
         self,
         *,
         scan_ethercat: bool,
         scan_dynamixel: bool,
+        cancel_requested: Optional[Callable[[], bool]] = None,
     ) -> Dict[str, Any]:
         self._scan_sequence = int(getattr(self, '_scan_sequence', 0)) + 1
         self._active_scan_id = f'{int(time.time() * 1000)}-{self._scan_sequence}'
@@ -424,6 +512,15 @@ class MotionStateMonitor(Node):
         )
         if scan_ethercat:
             self._last_ethercat_physical_scan = deepcopy(ethercat_scan)
+        # 장치 종류 사이에서만 취소를 본다 · 진행 중인 물리 검색은 끊지 않는다
+        cancelled = bool(cancel_requested()) if callable(cancel_requested) else False
+        if cancelled and scan_dynamixel:
+            self._publish_scan_progress(
+                'cancelled',
+                'EtherCAT 검색 후 취소 요청을 확인해 Dynamixel 검색을 중단합니다',
+                transport='dynamixel',
+            )
+            scan_dynamixel = False
         dynamixel_scan = (
             self._safe_scan_dynamixel_motors()
             if scan_dynamixel
@@ -484,6 +581,8 @@ class MotionStateMonitor(Node):
             'connection_summary': self._connection_summary(connection_rows),
             'connected_axes': connected_axes,
             'known_axes': configured_axes,
+            # 취소로 남은 장치 종류를 건너뛰었는가 (§6-26)
+            'cancelled': cancelled,
         }
         requested_sections = []
         if scan_ethercat:
@@ -593,6 +692,34 @@ class MotionStateMonitor(Node):
         msg = String()
         msg.data = json.dumps(event, ensure_ascii=False, separators=(',', ':'))
         publisher.publish(msg)
+        self._send_scan_feedback(event)
+
+    def _send_scan_feedback(self, event: Dict[str, Any]) -> None:
+        """같은 진행 이벤트를 Action 목표에도 보낸다 (§6-26).
+
+        토픽은 그대로 둔다 · 화면과 구코드 호출자가 아직 그것을 본다.
+        """
+        lock = getattr(self, '_scan_goal_lock', None)
+        if lock is None:
+            # Action 서버 없이 세운 시험 스텁 · 토픽 발행만 한다
+            return
+        with lock:
+            goal = self._active_scan_goal
+        if goal is None:
+            return
+        feedback = MotorScan.Feedback()
+        feedback.scan_id = str(event.get('scan_id') or '')
+        feedback.phase = str(event.get('phase') or '')
+        feedback.transport = str(event.get('transport') or '')
+        feedback.message = str(event.get('message') or '')
+        feedback.details = json.dumps(
+            event.get('details') or {}, ensure_ascii=False, separators=(',', ':')
+        )
+        feedback.timestamp = float(event.get('timestamp') or 0.0)
+        try:
+            goal.publish_feedback(feedback)
+        except Exception as exc:  # noqa: BLE001 - 진행 알림 실패가 스캔을 막으면 안 된다
+            self.get_logger().warn(f'scan feedback publish failed: {exc}')
 
     @staticmethod
     def _physical_section_success(section: Any, count_key: str) -> bool:
@@ -2739,11 +2866,15 @@ class MotionStateMonitor(Node):
 def main(args=None) -> None:
     rclpy.init(args=args)
     node = MotionStateMonitor()
+    # 스캔이 도는 동안에도 상태 발행과 취소 요청을 받아야 한다 (§6-26)
+    executor = MultiThreadedExecutor(num_threads=2)
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
+        executor.shutdown()
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

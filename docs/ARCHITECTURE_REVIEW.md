@@ -129,7 +129,7 @@ motion_system(C++)  모터 단일 통로                 유지 · 스캐너만 
 | 3 | 토픽 상수 단일화 · `motor_command_topic` 명칭 정정 | 낮음 | **완료** · `topics.py` 27종 · 리터럴 잔여 0 · launch 7개 로드 확인 |
 | 4 | `bridge_node` 분해 · 서비스 6개 | 중간 | **완료**(기준 A · §6-23) · 7,407 → 2,037줄(-73%) · 목표안 서비스 6개 + 추가 3개 신설 · 잔여 1,537줄은 노드 고유(구성·상태 취합·전송) |
 | 5 | 영속 계층 통합 · 단일 저장 API + 파일락 · 다중 writer 제거 | 중간 | **완료**(§6-24) · 직접 기록 잔여 0 · 재진입 락 · 다중 writer 4곳 잠금 · mtime 폴링은 6단계에서 |
-| 6 | 장기작업 Action 전환 · 스캔·초기화·모션 실행 | 중간 | 진행률·취소 실물 검증 |
+| 6 | 장기작업 Action 전환 · 스캔·초기화·모션 실행 | 중간 | **진행 중** · 스캔 완료(§6-26) · 초기화·모션 실행 미착수 |
 | 7 | 프런트엔드 빌드 도입(해시 파일명) · CSS·HTML 분할 | 중간 | 브라우저 캐시 확인 |
 | 8 | 하드웨어 스캐너 분리 · `motion_system` 범위 협의 후 | 높음 | 모터 스캔 계약 + 실물 검증 |
 
@@ -1371,6 +1371,71 @@ initial_move_time_sec None · continuous_available False · clamped_axis_count 0
 `None`인 것은 요청에 재정의가 없었다는 뜻이다 · 둘 다 정상 결과다.
 
 - 실물 미검증 · 실제 모션 재생 · 모터가 움직인다
+
+### 6-26. 6단계 착수 · 모터 검색 Action 전환
+
+§5 6단계(장기작업 Action 전환) 셋 중 **스캔**을 먼저 옮겼다.
+
+#### 무엇이 문제였나
+
+스캔은 `std_srvs/Trigger` 서비스였다.
+
+- 결과만 돌려준다 · 진행 상황은 **별도 토픽**(`scan_progress`)으로 흘렀다
+- 취소 수단이 없다
+- 호출 측이 응답까지 워커 스레드를 붙잡는다 · §3-2가 지적한 그 문제
+
+#### 무엇을 했나
+
+`motion_coordination_interfaces/action/MotorScan.action` 신설.
+
+```
+# 목표
+string transport            # all | ac_servo | dynamixel
+---
+# 결과
+bool success · string message(스캔 JSON) · bool cancelled
+---
+# 진행
+string scan_id · phase · transport · message · details · float64 timestamp
+```
+
+진행 항목은 **기존 토픽 이벤트와 같은 형태**로 맞췄다. 서버는 같은 이벤트를
+토픽과 Action 양쪽으로 보낸다 · 화면과 구코드 호출자가 아직 토픽을 본다.
+
+| 층 | 변경 |
+|---|---|
+| `monitor_node` | `ActionServer('motor_scan')` · `ReentrantCallbackGroup` · `MultiThreadedExecutor(2)` |
+| `scan_orchestrator` | `ActionClient` · feedback → 진행 상태 · 취소 API |
+| 라우트 | `POST /api/motors/scan/cancel` 신설 |
+
+`Trigger` 서비스는 **그대로 남겼다.** Action 서버가 없으면 그쪽으로 되돌아간다 ·
+구버전 노드가 떠 있는 동안에도 검색이 멈추면 안 된다.
+
+노드 실행기를 `MultiThreadedExecutor(2)`로 바꿨다. 예전에는 스캔 3초 동안 모니터
+노드 전체가 멈췄다 · 이제 상태 발행과 취소 요청을 그동안에도 받는다.
+
+#### 취소는 어디까지 듣는가 · 정직하게
+
+**진행 중인 물리 검색은 끊지 않는다.** `ethercat rescan`과 Dynamixel Ping은
+시작하면 끝까지 간다 · 모터 스캔 영구 불변조건이 물리 검색을 반쪽으로 만드는 것을
+허락하지 않는다.
+
+취소는 **장치 종류 사이**에서 확인한다.
+
+```
+전체 검색 중 취소 → EtherCAT은 끝까지 → Dynamixel은 시작하지 않음
+                  → 결과에 cancelled: true · dynamixel_scan.skipped: true
+```
+
+취소 API의 응답 문구도 그렇게 적었다 ·
+`모터 검색 취소를 요청했습니다 · 진행 중인 장치 검색은 끝난 뒤 중단됩니다`.
+
+#### 검증
+
+- 코드 검증 · `ruff check src` 55건 유지 · 신규 0건
+- 실행 검증 · `pytest` **1,011건 통과** · 실패 0 · Action 계약 3건 신규
+  (장치 종류 사이 취소 · 취소 없을 때 둘 다 실행 · 종류 표 완전성)
+- 실물 검증 · 아래 별도 기록
 
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 

@@ -4,6 +4,7 @@ project(motion_coordination_interfaces)
 find_package(ament_cmake REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
+find_package(action_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/GroupCommand.msg"
@@ -12,7 +13,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/GroupTimeSync.msg"
   "msg/GroupAlarm.msg"
   "msg/GroupSystemInfo.msg"
-  DEPENDENCIES builtin_interfaces
+  "action/MotorScan.action"
+  DEPENDENCIES builtin_interfaces action_msgs
 )
 
 ament_export_dependencies(rosidl_default_runtime)
