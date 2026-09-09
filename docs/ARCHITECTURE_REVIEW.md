@@ -127,7 +127,7 @@ motion_system(C++)  모터 단일 통로                 유지 · 스캐너만 
 | 1 | `motion_common` 신설 · 순수 함수 이관(파서·값·경로) | 최저 | **완료** · 목표 6모듈 전부 · 911테스트 통과 |
 | 2 | `RequestChannel` 단일화 · 5곳 교체 · 토픽명·페이로드 형식 유지 | 낮음 | **완료** · `rpc.ResultStore` 4곳 · 전송 계약 불변 · 실물 미검증 |
 | 3 | 토픽 상수 단일화 · `motor_command_topic` 명칭 정정 | 낮음 | **완료** · `topics.py` 27종 · 리터럴 잔여 0 · launch 7개 로드 확인 |
-| 4 | `bridge_node` 분해 · 서비스 6개 | 중간 | **진행 중** · 7,407 → 2,902줄(-61%) · 서비스 5개 신설(§6-15·17·18·19·20·21) · 가변 상태 이관 완료(§6-19) · 잔여 88메서드 2,273줄 |
+| 4 | `bridge_node` 분해 · 서비스 6개 | 중간 | **진행 중** · 7,407 → 2,452줄(-67%) · 서비스 6개 신설(§6-15·17~22) · 가변 상태 이관 완료(§6-19) · 잔여 82메서드 1,871줄 · `ProjectService`만 미착수 |
 | 5 | 영속 계층 통합 · 단일 저장 API + 파일락 · 다중 writer 제거 | 중간 | **부분 완료** · `store.py` 5종 통합 · 직접 기록 모듈 잔존 · 2개 프로젝트 격리 미검증 |
 | 6 | 장기작업 Action 전환 · 스캔·초기화·모션 실행 | 중간 | 진행률·취소 실물 검증 |
 | 7 | 프런트엔드 빌드 도입(해시 파일명) · CSS·HTML 분할 | 중간 | 브라우저 캐시 확인 |
@@ -1125,7 +1125,15 @@ motion_studio_confirm True
 
 - 코드 검증 · `ruff check src` 55건 유지 · 신규 0건
 - 실행 검증 · `pytest` 1,005건 통과 · 실패 0
-- 실물 검증 · 아래 별도 기록
+- 실물 검증 · `colcon build` · 재시작 · 실행 컨텍스트 `ready` · 노드 확인 8건 성공 ·
+  엔드포인트 10종 HTTP 200
+- 실물 검증 · `reconcile_callback`(0.2초 주기 타이머)과 `reconcile_operation_status`가
+  서비스 안에서 돌며 직전 스캔 결과를 보고한다 · `motor_operation: partial` ·
+  `모터 검색 부분 완료 · AC Servo 1축`
+- 실물 검증 · `managed_service_active` · `service_management.motor_managed: True`
+- 실물 미검증 · `recover_interrupted_scan` · 스캔이 중단된 상태를 만들어야 한다
+- 실물 미검증 · `ethercat_scan_safety_blocker`의 차단 분기 · 축이 움직이는 중에
+  스캔을 걸어야 한다
 
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
