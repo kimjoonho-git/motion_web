@@ -1261,6 +1261,26 @@ f(self)               ← self 통째로 넘기기
 
 기존 `schedule_store.json.lock`은 고아가 된다 · 무해하며 지워도 된다.
 
+#### 손으로 만든 재진입 락도 흡수했다
+
+`project_repository._motor_runtime_locked`가 **재진입 `flock`을 직접 구현**하고
+있었다 · 스레드 지역 깊이 계수까지 손으로 셌다. 공용 API가 같은 일을 하게 됐으므로
+20줄을 지우고 `store.file_lock(self.motor_runtime_file)` 한 줄로 바꿨다.
+
+락 파일도 규약에 맞춰 옮겨졌다 · `.motor_runtime.lock` → `..motor_runtime.json.lock`.
+구 파일은 재시작 후 지웠다.
+
+#### 확인 도구 · `scripts/check_locks.sh`
+
+락 파일이 **있다**는 것과 **지금 잠겨 있다**는 것은 다르다. 파일은 한 번 쓰면
+계속 남고, 잠금 여부는 커널만 안다(`/proc/locks`). 스크립트가 둘을 갈라 보여준다.
+
+```bash
+bash scripts/check_locks.sh          # 락 파일 목록 + 현재 점유
+bash scripts/check_locks.sh --held   # 지금 잡혀 있는 것만
+bash scripts/check_locks.sh --stale  # 대상 파일이 없는 잔재
+```
+
 #### 남은 것
 
 `check_and_reload()` mtime 폴링은 그대로다. 웹이 바꾼 것을 노드가 알아채는

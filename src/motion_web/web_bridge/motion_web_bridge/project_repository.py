@@ -10,10 +10,8 @@ from __future__ import annotations
 import hashlib
 import io
 import json
-import fcntl
 import re
 import shutil
-import threading
 import time
 import uuid
 from functools import wraps
@@ -100,27 +98,15 @@ def _text_limit(category: str) -> tuple[int, str]:
 
 
 def _motor_runtime_locked(method):
+    """모터 실행 상태 파일 갱신을 프로세스 간 락으로 감싼다.
+
+    예전에는 재진입 `flock`을 여기서 직접 구현했다 · 스레드 지역 깊이 계수까지
+    손으로 세고 있었다. 지금은 `store.file_lock`이 같은 일을 한다 · §6-24
+    """
     @wraps(method)
     def guarded(self, *args, **kwargs):
-        with self._motor_runtime_lock:
-            depth = int(getattr(self._motor_runtime_lock_state, 'depth', 0))
-            if depth > 0:
-                self._motor_runtime_lock_state.depth = depth + 1
-                try:
-                    return method(self, *args, **kwargs)
-                finally:
-                    self._motor_runtime_lock_state.depth = depth
-            self._motor_runtime_lock_state.depth = 1
-            lock_file = self.root / '.motor_runtime.lock'
-            try:
-                with lock_file.open('a+', encoding='utf-8') as handle:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-                    try:
-                        return method(self, *args, **kwargs)
-                    finally:
-                        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-            finally:
-                self._motor_runtime_lock_state.depth = 0
+        with store.file_lock(self.motor_runtime_file):
+            return method(self, *args, **kwargs)
 
     return guarded
 
@@ -133,8 +119,6 @@ class ProjectRepository:
         self.root.mkdir(parents=True, exist_ok=True)
         self.selection_file = self.root / '.selected_project.json'
         self.motor_runtime_file = self.root / '.motor_runtime.json'
-        self._motor_runtime_lock = threading.RLock()
-        self._motor_runtime_lock_state = threading.local()
         self._migrate_generated_empty_mappings()
         self._migrate_generated_empty_motor_configs()
         self._migrate_internal_backups()

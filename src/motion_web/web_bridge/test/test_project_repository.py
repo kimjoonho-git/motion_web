@@ -22,6 +22,7 @@ from motion_web_bridge.project_repository import (
 from motion_web_bridge.motor_config_service import MotorConfigService
 from motion_web_bridge.execution_context_service import ExecutionContextService
 from motion_web_bridge.motor_runtime_service import MotorRuntimeService
+from motion_common import store as common_store
 from motion_web_bridge.project_service import ProjectService
 from motion_web_bridge.bridge_node import (
     MotionWebBridge,
@@ -1321,12 +1322,12 @@ def test_motor_operation_mutations_share_repository_runtime_lock(tmp_path):
         )
         finished.set()
 
-    repository._motor_runtime_lock.acquire()
+    # 락은 이제 공용 저장 API가 갖는다 · 같은 락 파일에서 만난다 (§6-24)
     worker = threading.Thread(target=begin)
-    worker.start()
-    assert started.wait(timeout=1.0)
-    assert finished.wait(timeout=0.05) is False
-    repository._motor_runtime_lock.release()
+    with common_store.file_lock(repository.motor_runtime_file):
+        worker.start()
+        assert started.wait(timeout=1.0)
+        assert finished.wait(timeout=0.05) is False
     worker.join(timeout=1.0)
 
     assert finished.is_set()
