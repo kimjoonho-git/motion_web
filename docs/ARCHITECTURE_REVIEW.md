@@ -2419,9 +2419,33 @@ MIDI 전 경로 근거 · `raw_value 5820` → `pickup_reference_source motor_fe
 
 | 항목 | 내용 |
 |---|---|
-| 매칭표가 EtherCAT 전용 | 물리 Dynamixel 2대가 매칭표에 행으로 뜨지 않는다 · 분해 이전부터 · §6-33 |
-| `connected_axes` 물리 필드 누락 | `_build_scan_result`가 `_current_motor_list`를 스캔 갱신보다 먼저 부른다 · §6-35 |
+| **매칭표가 화면에 쓰이지 않는다** | `matching_rows`·`matching_summary`는 프런트에서 병합만 되고 **렌더링되지 않는다** · 아래 |
+| **`connected_axes` 물리 필드 누락도 화면 영향 없음** | 화면은 발행 토픽의 `motors`를 읽는다 · 아래 |
 | 미사용 함수 2건 | `pulse_per_revolution` · `counts_to_degrees` · 호출부 없음 · §6-34 |
+
+#### 정정 · 앞서 '결함'으로 적은 두 건은 화면 영향이 없다
+
+2026-09-09 · 우선순위를 세우며 프런트 소비처를 확인한 결과다.
+
+**매칭표** · `motor_config.js`의 `mergeAcServoScan`·`mergeDynamixelScan`이
+`matching_rows`를 `latestScan`에 실어 나르기만 한다 · 읽어서 표를 그리는 곳이
+없다. 화면의 `matching-table` 클래스는 설정값·마스터·축 표에 쓰이는 다른
+테이블이다.
+
+→ 따라서 §6-33에 적은 "Dynamixel 2대가 매칭표에 안 뜬다"는 **표시 결함이 아니다** ·
+애초에 표가 없다. 실제 성격은 **쓰이지 않는 payload**다.
+
+**`connected_axes`** · 화면(`monitoring.js`)이 읽는 `physical_connection_state`는
+스캔 응답이 아니라 **발행 토픽 `/motion_control/motion_state`의 `motors`**에서
+온다 · 그쪽에는 값이 정상으로 실린다(§6-35에서 실물 확인).
+
+→ §6-35에 적은 "호출 순서 때문에 물리 판정이 안 실린다"도 **화면 영향이 없다.**
+
+**판단** · 둘 다 고칠 이유가 약하다. 매칭표는 **쓰는 곳이 생길 때** 통합 형태를
+정하는 편이 낫고, 지금 Dynamixel 행을 넣으면 아무도 읽지 않는 데이터만 늘어난다.
+`connected_axes`도 같다. **정리 대상 목록에만 남긴다.**
+
+이 정정은 우선순위 판단을 바꿨다 · 3순위였던 두 항목을 **5순위로 내린다**.
 
 ### 배포 잔여
 
