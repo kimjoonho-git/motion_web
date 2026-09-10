@@ -2,7 +2,7 @@ import {
   fetchCoordinationStatus,
   sendCoordinationControl,
   saveCoordinationSettings,
-} from './api.js?v=20260821-api-single-1';
+} from './api.js?v=20260910-api-table-1';
 import { showAlert, showConfirm, dismissAllDialogs } from './ui_dialogs.js?v=20260727-popup-common-3';
 
 function text(value) {

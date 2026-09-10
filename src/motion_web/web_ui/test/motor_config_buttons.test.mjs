@@ -153,8 +153,7 @@ test('project-compatible physical scan gaps are displayed as partial, not failur
 });
 
 test('motor configuration file deletion uses the matching DELETE endpoint', () => {
-  assert.match(api, /function deleteMotorConfig\(\)/);
-  assert.match(api, /projectFetch\('\/api\/motor-config', \{ method: 'DELETE' \}\)/);
+  assert.match(api, /deleteMotorConfig = \(\) => request\('DELETE', '\/api\/motor-config'\)/);
   assert.match(controller, /const payload = await deleteMotorConfig\(\)/);
 });
 

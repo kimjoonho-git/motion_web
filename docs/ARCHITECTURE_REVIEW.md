@@ -3949,6 +3949,58 @@ JS 69줄이다. `if (el.X)` 로 감싸여 있어 조용히 아무 일도 하지 
 나머지 25개는 다음 정리 대상 · 실행 경로가 이제 이어졌으므로 안전하게 걷어낼 수
 있다. 재발 방지 검사(등록부의 모든 id 가 HTML 에 있을 것)를 그때 함께 넣는다.
 
+### 6-60. `api.js` 표로 · 683 → 337줄
+
+검증 · `node --test` **257건** · `pytest src/` **1078건** · `ui_smoke` 통과 ·
+브라우저 실측(모션 파일 3행 · 실행 대상 · 상태 8행 정상 적재)
+
+74개 함수가 거의 같은 여섯 줄을 반복했다.
+
+```js
+export async function saveMotorConfig(payload) {
+  const response = await projectFetch('/api/motor-config', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return readJson(response);
+}
+```
+→
+```js
+export const saveMotorConfig = (payload) => request('PUT', '/api/motor-config', { body: payload });
+```
+
+**이 파일 안에 이미 같은 꼴이 있었다** · `motionStudioRequest` 기반 한 줄 내보내기
+8개. 새 관례를 들이는 것이 아니라 있던 것을 파일 전체로 넓혔다.
+
+72개가 한 줄이 됐고, 질의 문자열을 만드는 둘(`fetchMotorEvents` ·
+`fetchReadOnlyProjectFile`)만 함수로 남았다. 정의만 있고 쓰이지 않던
+`globalJson` 23줄도 걷어냈다.
+
+#### 손으로 옮기지 않았다
+
+74개를 손으로 옮기면 경로 하나를 조용히 틀린다. 변환기를 만들어 옮기고,
+**원본과 새 파일에서 (함수 이름 → 메서드 · 경로)를 각각 추출해 대조**했다.
+
+그 대조가 실제로 둘을 잡았다.
+
+| 결함 | 원인 |
+|---|---|
+| `deleteMotorEventLogFile` 이 **DELETE → GET** | 원본이 여러 줄이라 옵션 인식이 어긋났다 |
+| `fetchStatusSnapshot` 이 **시간 제한을 잃음** | 원본이 축약형 `{ timeoutMs }` 이라 `키: 값` 만 보던 정규식이 놓쳤다 |
+
+둘째는 눈으로 보면 통과처럼 보인다 · 기본값 `timeoutMs = 5000` 이 서명에 그대로
+남아 있고 호출만 사라졌다. **대조가 없었으면 상태 조회가 영영 안 끝나는 경우를
+나중에 겪었을 것이다.** 축약형은 파일 전체에서 그 한 곳뿐임을 확인했다.
+
+#### 테스트 단언 3곳을 옮겼다
+
+`api.js` 의 **호출 모양**을 대조하던 단언이 셋 있었다. 봉투가 바뀌었으므로 검사
+항목은 그대로 두고 모양만 새것으로 옮겼다 · 경로와 메서드는 여전히 확인한다.
+`fetchStatusSnapshot` 에는 **시간 제한이 실제로 전달되는지** 보는 단언을 더했다 ·
+이번에 놓친 것이 그것이다.
+
 ### 배포 잔여
 
 **다른 PC 2대는 `colcon build` 필수** · `motion_common` 외 신규 패키지 다수 ·

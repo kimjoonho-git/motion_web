@@ -144,7 +144,10 @@ test('motor-control restart requires the selected project motor config to be app
 });
 
 test('restart status polling has an HTTP deadline and can stop completion monitoring', () => {
-  assert.match(api, /fetchStatusSnapshot\(timeoutMs = 5000\)/);
+  assert.match(api, /fetchStatusSnapshot = \(timeoutMs = 5000\)/);
+  // 표로 옮기면서 축약 옵션 `{ timeoutMs }` 를 놓쳐 시간 제한이 사라진 적이 있다 ·
+  // 기본값만 보지 말고 실제로 전달되는지 확인한다 · §6-60
+  assert.match(api, /request\('GET', '\/api\/status', \{ timeoutMs \}\)/);
   assert.match(api, /controller\.abort\(\)/);
   assert.match(main, /cancelable: true/);
   assert.match(main, /onCancel: cancelRestartCompletionCheck/);

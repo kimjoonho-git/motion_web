@@ -46,8 +46,11 @@ test('revert does not save and deletion uses the recoverable project DELETE path
   const resetBody = controller.slice(resetStart, resetEnd);
   assert.doesNotMatch(resetBody, /saveCurrentMapping\(/);
   assert.match(resetBody, /selectMapping\(selectedMappingId\)/);
-  assert.match(api, /projectFetch\(`\/api\/motion-mappings\/\$\{encodeURIComponent\(fileId\)\}`/);
-  assert.match(api, /method: 'DELETE'/);
+  // 봉투는 `request` 로 모였다 · 확인할 것은 여전히 경로와 메서드다 · §6-60
+  assert.match(
+    api,
+    /deleteMotionMapping = \(fileId\) =>\s*\n?\s*request\('DELETE', `\/api\/motion-mappings\/\$\{encodeURIComponent\(fileId\)\}`\)/,
+  );
 });
 
 test('reference use is editable and project file explorer refresh is wired after changes', () => {
