@@ -18,10 +18,11 @@ export function createMotionFileManager({
   let selectedFile = null;
   let fileLoadToken = 0;
 
-  async function loadFiles(targetFileId = selectedFileId) {
+  async function loadFiles(targetFileId = selectedFileId, { retried = false } = {}) {
     const loadToken = ++fileLoadToken;
     setLoading(true);
     setMessage('파일 목록 불러오는 중');
+    let staleRetry = false;
     try {
       const payload = await fetchMotionFiles();
       if (loadToken !== fileLoadToken) return;
@@ -36,12 +37,22 @@ export function createMotionFileManager({
       }
       setMessage(payload.message || '파일 목록 갱신 완료');
     } catch (error) {
-      if (loadToken !== fileLoadToken || error?.staleProjectResponse) return;
+      if (loadToken !== fileLoadToken) return;
+      if (error?.staleProjectResponse) {
+        // 세대가 바뀌는 순간의 응답은 버린다. 그런데 버리기만 하면 목록이 옛
+        // 상태로 굳는다 · 내보내기 직후 새 파일이 안 보이던 원인이다 · §6-54
+        // 세대가 정해진 뒤 한 번만 다시 읽는다.
+        staleRetry = !retried;
+        if (!staleRetry) setMessage('파일 목록을 다시 읽지 못했습니다. 새로고침하세요');
+        return;
+      }
       setMessage(`파일 목록 실패: ${error?.message || error}`);
     } finally {
-      if (loadToken !== fileLoadToken) return;
-      setLoading(false);
-      onFilesChanged(files);
+      if (loadToken === fileLoadToken) {
+        setLoading(false);
+        onFilesChanged(files);
+        if (staleRetry) void loadFiles(targetFileId, { retried: true });
+      }
     }
   }
 
