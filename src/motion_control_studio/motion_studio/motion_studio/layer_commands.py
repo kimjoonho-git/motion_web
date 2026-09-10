@@ -268,7 +268,6 @@ class StudioLayerCommands:
                 source_ids,
                 name=payload.get('name') or payload['layer'].get('name') or '합친 레이어',
                 append_layer_id=payload.get('append_layer_id'),
-                motion_ranges_deg=studio._motion_ranges(mapping),
                 initial_motion_values_deg=studio._manual_initial_values(mapping),
             )
             merge_report = dict(merged.get('merge_report') or {})

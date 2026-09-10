@@ -29,7 +29,6 @@ class StudioExportService:
             mapping = studio._store.mapping_check(project)
             frames = render_project(
                 project,
-                motion_ranges_deg=studio._motion_ranges(mapping),
                 initial_motion_values_deg=studio._manual_initial_values(mapping),
             )
             requested_file_id = str(

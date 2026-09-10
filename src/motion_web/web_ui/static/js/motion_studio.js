@@ -318,9 +318,6 @@ export function createMotionStudioController({
     const conflictLayers = new Set((state.composition?.conflicts || []).flatMap((item) => (
       [item.first_layer_id, item.second_layer_id]
     )));
-    const transitionLayers = new Set((state.composition?.transition_warnings || []).flatMap((item) => (
-      [item.first_layer_id, item.second_layer_id]
-    )));
     el.studioLayerRows.innerHTML = layers.map((layer) => {
       const metrics = layerMetrics(layer);
       const selected = layer.layer_id === state.selectedLayerId;
@@ -331,7 +328,6 @@ export function createMotionStudioController({
           <span>${metrics.frameCount}프레임</span><span>${metrics.duration.toFixed(3)}초</span><span>${metrics.motionIds.length}축</span>
           ${layer.locked ? '<span class="status-chip off">잠금</span>' : ''}
           ${conflictLayers.has(layer.layer_id) ? '<span class="status-chip warn">충돌</span>' : ''}
-          ${transitionLayers.has(layer.layer_id) ? '<span class="status-chip warn">급변</span>' : ''}
         </div></td></tr>`;
     }).join('');
   }
@@ -418,12 +414,11 @@ export function createMotionStudioController({
     });
   }
 
-  function drawLayerGraph(tracks, warnings = [], playback = playbackView()) {
+  function drawLayerGraph(tracks, playback = playbackView()) {
     drawMotionStudioLayerGraph({
       canvas: el.studioLayerGraph,
       playhead: el.studioLayerPlayhead,
       tracks,
-      warnings,
       playback,
       updatePlayhead: updatePlaybackPlayhead,
       devicePixelRatio: window.devicePixelRatio || 1,
@@ -552,15 +547,9 @@ export function createMotionStudioController({
       ? composition.duration
       : (frames.length ? Number(frames[frames.length - 1].time_sec || 0) : 0);
     const frameCount = compositionMode ? composition.sampleCount : frames.length;
-    const layerWarnings = compositionMode
-      ? (state.composition?.transition_warnings || [])
-      : (state.composition?.transition_warnings || []).filter((warning) => (
-        warning.first_layer_id === layer?.layer_id || warning.second_layer_id === layer?.layer_id
-      ));
     const conflicts = state.composition?.conflicts || [];
     state.detailGraph = {
       tracks,
-      warnings: layerWarnings,
       duration,
       enabledLayerCount: composition.enabledLayers.length,
       compositionMode,
@@ -577,7 +566,7 @@ export function createMotionStudioController({
           ? `재생 선택 ${composition.enabledLayers.length}개 / 전체 ${layers.length}개 · ${
             !composition.enabledLayers.length
               ? '재생 선택 레이어 없음'
-              : (conflicts.length || layerWarnings.length ? '검증 필요' : '합성 가능')
+              : (conflicts.length ? '검증 필요' : '합성 가능')
           }`
           : `${layer.enabled !== false ? '재생 선택' : '재생 미선택'} · ${layer.locked ? '잠금' : '잠금 안 함'}`;
     }
@@ -602,8 +591,7 @@ export function createMotionStudioController({
     if (el.studioLayerGraphLegend) {
       el.studioLayerGraphLegend.innerHTML = [...tracks.keys()].map((motionId, index) => (
         `<span><i style="background:${colors[index % colors.length]}"></i>${escapeHtml(motionId)}</span>`
-      )).join('') + (layerWarnings.length
-        ? `<span class="danger"><i></i>급변 경고 ${layerWarnings.length}건</span>` : '');
+      )).join('');
     }
     if (el.studioLayerAxisDetailRows) {
       el.studioLayerAxisDetailRows.innerHTML = tracks.size
@@ -624,8 +612,7 @@ export function createMotionStudioController({
         ['재생 선택', `${composition.enabledLayers.length}개`],
         ['전체 레이어', `${layers.length}개`],
         ['시간 충돌', `${conflicts.length}건`],
-        ['급변 경고', `${layerWarnings.length}건`],
-        ['재생 가능', conflicts.length || layerWarnings.length
+        ['재생 가능', conflicts.length
           ? '불가'
           : (composition.enabledLayers.length ? '가능' : '데이터 없음')],
       ] : [
@@ -634,14 +621,13 @@ export function createMotionStudioController({
         ['재생 상태', layer?.enabled !== false ? '선택' : '미선택'],
         ['잠금 상태', layer?.locked ? '잠금' : '잠금 안 함'],
         ['원본 모션 파일', layer?.source_motion_file_id || '-'],
-        ['급변 경고', `${layerWarnings.length}건`],
       ];
       el.studioLayerInfoRows.innerHTML = infoRows.map(([label, value]) => (
         `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`
       )).join('');
     }
     const playback = renderPlaybackMonitor(duration);
-    drawLayerGraph(tracks, layerWarnings, playback);
+    drawLayerGraph(tracks, playback);
     state.lastPlaybackDisplayState = playback.displayState;
   }
 
@@ -665,7 +651,6 @@ export function createMotionStudioController({
     state.activeLayerDetailTab = 'graph';
     state.detailGraph = {
       tracks,
-      warnings: [],
       duration,
       enabledLayerCount: Number(state.status?.playback_layer_count || 0),
       compositionMode: true,
@@ -700,30 +685,17 @@ export function createMotionStudioController({
       )).join('');
     }
     const view = renderPlaybackMonitor(duration);
-    drawLayerGraph(tracks, [], view);
+    drawLayerGraph(tracks, view);
     return true;
   }
 
   function renderConflicts() {
     if (!el.studioConflictInfo) return;
     const conflicts = state.composition?.conflicts || [];
-    const transitions = state.composition?.transition_warnings || [];
     const curveMismatches = state.composition?.point_curve_mismatches || [];
     const issues = conflicts.map((item) => (
       `${item.motion_id}: ${item.first_layer_name}/${item.second_layer_name} 시간 충돌`
     ));
-    issues.push(...transitions.map((item) => (
-      `${item.motion_id}: ${({
-        manual_initial: '초기값 급변',
-        late_start: '늦은 시작 급변',
-        frame_step: '프레임 급변',
-        gap_to_zero: '빈 구간 진입 급변',
-        gap_from_zero: '빈 구간 이탈 급변',
-        segment_transition: '레이어 전환 급변',
-        early_end: '종료 급변',
-      })[item.kind] || '모션값 급변'} ${Number(item.jump_deg).toFixed(2)}°`
-      + `(허용 ${Number(item.limit_deg).toFixed(2)}°)`
-    )));
     issues.push(...curveMismatches.map((item) => (
       `${item.layer_name}/${item.motion_id}: 포인트 곡선과 20ms 프레임 불일치`
     )));
@@ -792,9 +764,8 @@ export function createMotionStudioController({
       state.project?.layers?.some((layer) => layer.enabled !== false),
     );
     const hasConflicts = Boolean(state.composition?.conflicts?.length);
-    const hasTransitionWarnings = Boolean(state.composition?.transition_warnings?.length);
     const hasCurveMismatches = Boolean(state.composition?.point_curve_mismatches?.length);
-    const hasCompositionErrors = hasConflicts || hasTransitionWarnings || hasCurveMismatches;
+    const hasCompositionErrors = hasConflicts || hasCurveMismatches;
     const exportSelection = motionStudioExportSelection(state.project?.layers);
     const enabledLayerCount = exportSelection.count;
     const hasSingleExportLayer = enabledLayerCount === 1;
@@ -802,16 +773,6 @@ export function createMotionStudioController({
     if (el.studioState) el.studioState.textContent = state.status?.message || '대기';
     if (el.studioElapsed) el.studioElapsed.textContent = timeText(state.status?.elapsed_sec);
     if (el.studioFrameCount) el.studioFrameCount.textContent = `${state.status?.recorded_frames || 0}프레임 · 20ms`;
-    if (el.studioTransitionSafetyLevel && state.project) {
-      const level = Number(state.project.transition_safety_level || 4);
-      el.studioTransitionSafetyLevel.value = String(level);
-      el.studioTransitionSafetyLevel.disabled = state.busy || running || !hasProject;
-      if (el.studioTransitionRuleInfo) {
-        el.studioTransitionRuleInfo.textContent = `${level}단계: ${level}° 또는 축 모션 범위의 ${level}% 중 큰 값을 허용`;
-      }
-    } else if (el.studioTransitionSafetyLevel) {
-      el.studioTransitionSafetyLevel.disabled = true;
-    }
     if (el.studioImportButton) {
       el.studioImportButton.disabled = (
         state.busy
@@ -834,7 +795,7 @@ export function createMotionStudioController({
       el.studioPlayButton.disabled = state.busy || running || !hasEnabledLayer || hasCompositionErrors || Boolean(motorBlockReason);
       el.studioPlayButton.title = motorBlockReason
         || (hasCurveMismatches ? '포인트 곡선과 20ms 프레임 불일치를 먼저 정리하세요' : '')
-        || (hasCompositionErrors ? '레이어 충돌 또는 모션값 급변을 해결하세요' : '');
+        || (hasCompositionErrors ? '레이어 충돌 또는 곡선 불일치를 해결하세요' : '');
     }
     // 정지는 다른 스튜디오 요청 처리 중에도 항상 우선 입력할 수 있어야 한다.
     if (el.studioStopButton) {
@@ -848,7 +809,7 @@ export function createMotionStudioController({
         ? '최종 모션 파일은 재생 선택 레이어가 정확히 1개일 때만 저장할 수 있습니다'
         : hasCurveMismatches
         ? '포인트 곡선과 20ms 프레임 불일치를 먼저 정리하세요'
-        : (hasCompositionErrors ? '레이어 충돌 또는 모션값 급변을 해결한 뒤 내보낼 수 있습니다' : '');
+        : (hasCompositionErrors ? '레이어 충돌 또는 곡선 불일치를 해결한 뒤 내보낼 수 있습니다' : '');
     }
     if (el.studioExportTarget) {
       const exportLayer = exportSelection.layer;
@@ -966,7 +927,7 @@ export function createMotionStudioController({
       state.motionFiles = result.motion_files || [];
       state.workspaceProject = result.workspace_project || null;
       state.composition = result.composition || {
-        conflicts: [], transition_warnings: [], point_curve_mismatches: [], conflict_free: true,
+        conflicts: [], point_curve_mismatches: [], conflict_free: true,
       };
       setProject(result.project || null);
       if (result.status) state.status = result.status;
@@ -1070,9 +1031,6 @@ export function createMotionStudioController({
     });
     bindMotionStudioProjectTransportEvents(el, {
       // Capture the selection before run() redraws the control from saved state.
-      onTransitionSafetyChange: (transitionSafetyLevel) => run(() => saveMotionStudioProject({
-        transition_safety_level: transitionSafetyLevel,
-      })),
       onImportSelectionChange: renderControls,
       onImport: (motionFileId) => run(() => importMotionStudioFile({
         motion_file_id: motionFileId,
@@ -1468,7 +1426,6 @@ export function createMotionStudioController({
         layer.layer_id, layer.enabled !== false, Boolean(layer.locked),
       ]),
       state.composition?.conflicts?.length || 0,
-      state.composition?.transition_warnings?.length || 0,
       state.composition?.point_curve_mismatches?.length || 0,
       motorActionBlockReason(),
     ]);
@@ -1490,7 +1447,7 @@ export function createMotionStudioController({
       && playback.displayState !== state.lastPlaybackDisplayState
       && now - state.playbackGraphRenderedAt > 80
     ) {
-      drawLayerGraph(state.detailGraph.tracks, state.detailGraph.warnings, playback);
+      drawLayerGraph(state.detailGraph.tracks, playback);
       state.playbackGraphRenderedAt = now;
       state.lastPlaybackDisplayState = playback.displayState;
     }

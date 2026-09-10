@@ -18,7 +18,7 @@ from .layer_editor import (
 from .layer_validation import point_curve_frame_mismatches, validate_ranges
 from .mapping_model import manual_initial_values, motion_ranges
 from .motion_model import layer_motion_ids
-from .timeline import layer_conflicts, layer_transition_warnings
+from .timeline import layer_conflicts
 from motion_common import topics
 
 
@@ -102,12 +102,6 @@ class MotionStudioEditorNode(Node):
             conflicts = layer_conflicts(
                 project, motion_ids=affected_motion_ids
             ) if project else []
-            warnings = layer_transition_warnings(
-                project,
-                ranges,
-                self._manual_values(payload),
-                motion_ids=affected_motion_ids,
-            ) if project else []
             curve_mismatches = point_curve_frame_mismatches(layer)
             return {
                 'success': True,
@@ -116,10 +110,9 @@ class MotionStudioEditorNode(Node):
                 'operation_report': operation_report,
                 'validation': {
                     'conflicts': conflicts,
-                    'transition_warnings': warnings,
                     'range_warnings': range_issues,
                     'point_curve_mismatches': curve_mismatches,
-                    'playable': not conflicts and not warnings and not curve_mismatches,
+                    'playable': not conflicts and not curve_mismatches,
                     'scope': 'affected_motion_ids',
                     'motion_ids': sorted(affected_motion_ids),
                 },
@@ -142,7 +135,6 @@ class MotionStudioEditorNode(Node):
                 payload.get('project') or {}, payload.get('layer_ids') or [],
                 name=payload.get('name'),
                 append_layer_id=payload.get('append_layer_id'),
-                motion_ranges_deg=ranges,
                 initial_motion_values_deg=self._manual_values(payload),
             )
             return {'success': True, 'message': '레이어 합성 결과를 만들었습니다', 'layer': layer}

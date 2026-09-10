@@ -70,7 +70,6 @@ export function drawMotionStudioLayerGraph({
   canvas,
   playhead,
   tracks,
-  warnings = [],
   playback,
   updatePlayhead = () => {},
   devicePixelRatio = globalThis.devicePixelRatio || 1,
@@ -135,20 +134,6 @@ export function drawMotionStudioLayerGraph({
       context.stroke();
     });
   });
-  context.save();
-  context.strokeStyle = '#d33b3b';
-  context.fillStyle = '#d33b3b';
-  context.setLineDash([4, 3]);
-  warnings.forEach((warning) => {
-    const timeSec = Number(warning.second_time_sec);
-    if (!Number.isFinite(timeSec)) return;
-    const x = padding.left + ((Math.min(maxTime, Math.max(0, timeSec)) / maxTime) * plotWidth);
-    context.beginPath();
-    context.moveTo(x, padding.top);
-    context.lineTo(x, padding.top + plotHeight);
-    context.stroke();
-  });
-  context.restore();
   updatePlayhead(playback);
   return true;
 }

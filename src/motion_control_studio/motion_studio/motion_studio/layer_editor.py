@@ -585,7 +585,6 @@ def merge_layers(
     *,
     name: Any = '합친 레이어',
     append_layer_id: Any = '',
-    motion_ranges_deg: Mapping[str, Sequence[float]] | None = None,
     initial_motion_values_deg: Mapping[str, float] | None = None,
 ) -> Dict[str, Any]:
     selected_ids = {str(value) for value in layer_ids if str(value)}
@@ -637,7 +636,6 @@ def merge_layers(
         )
     temporary = {
         'period_sec': DEFAULT_PERIOD_SEC,
-        'transition_safety_level': project.get('transition_safety_level', 4),
         'layers': selected_layers,
     }
     conflicts = layer_conflicts(temporary)
@@ -651,9 +649,7 @@ def merge_layers(
         )
     frames = render_project(
         temporary,
-        motion_ranges_deg=motion_ranges_deg,
         initial_motion_values_deg=initial_motion_values_deg,
-        require_safe_transitions=False,
     )
     merged_point_curves = collect_merged_point_curves(selected_layers)
     merged = normalize_layer({

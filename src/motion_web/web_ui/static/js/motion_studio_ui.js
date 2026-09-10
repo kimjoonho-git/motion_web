@@ -8,7 +8,7 @@ export function createMotionStudioState() {
   return {
     mappings: [], motionFiles: [], project: null, workspaceProject: null,
     status: {}, midi: {}, composition: {
-      conflicts: [], transition_warnings: [], point_curve_mismatches: [], conflict_free: true,
+      conflicts: [], point_curve_mismatches: [], conflict_free: true,
     }, busy: false,
     axisRenderKey: '', selectedLayerId: '', layerDetailMode: 'composition',
     activeLayerDetailTab: 'graph',
@@ -32,7 +32,7 @@ export function resetMotionStudioProjectState(state) {
   state.status = {};
   state.midi = {};
   state.composition = {
-    conflicts: [], transition_warnings: [], point_curve_mismatches: [], conflict_free: true,
+    conflicts: [], point_curve_mismatches: [], conflict_free: true,
   };
   state.busy = false;
   state.axisRenderKey = '';
@@ -119,9 +119,6 @@ export function bindMotionStudioProjectTransportEvents(el, handlers = {}) {
   const bind = (target, type, handler) => {
     unbind.push(bindMotionStudioEvent(target, type, handler));
   };
-  bind(el.studioTransitionSafetyLevel, 'change', (event) => {
-    handlers.onTransitionSafetyChange?.(Number(event.currentTarget?.value || 4));
-  });
   bind(el.studioImportFileSelect, 'change', () => handlers.onImportSelectionChange?.());
   bind(el.studioImportButton, 'click', () => {
     handlers.onImport?.(String(el.studioImportFileSelect?.value || ''));

@@ -905,7 +905,7 @@ export function createMotionStudioEditorController({
     editor.redo = [];
     editor.working = clone(editor.preview);
     editor.validation = clone(
-      editor.previewValidation || { conflicts: [], transition_warnings: [], playable: true },
+      editor.previewValidation || { conflicts: [], playable: true },
     );
     editor.preview = null;
     editor.previewValidation = null;
@@ -989,7 +989,7 @@ export function createMotionStudioEditorController({
       editor.preview = clone(result.layer);
       refreshEditorTimeline(editor.preview, editor.working);
       editor.previewValidation = result.validation
-        || { conflicts: [], transition_warnings: [], playable: true };
+        || { conflicts: [], playable: true };
       refreshEditorAxisControls(new Set([motionId]), editor.preview);
       if (el.studioEditorSubtitle) {
         el.studioEditorSubtitle.textContent = '축 추가 미리보기 · 편집 반영 전';
@@ -1039,7 +1039,7 @@ export function createMotionStudioEditorController({
       editor.preview = clone(result.layer);
       refreshEditorTimeline(editor.preview, editor.working);
       editor.previewValidation = result.validation
-        || { conflicts: [], transition_warnings: [], playable: true };
+        || { conflicts: [], playable: true };
       refreshEditorAxisControls(new Set([targetMotionId]), editor.preview);
       if (el.studioEditorSubtitle) {
         el.studioEditorSubtitle.textContent = '축 복사 미리보기 · 편집 반영 전';
@@ -1094,7 +1094,7 @@ export function createMotionStudioEditorController({
       editor.preview = clone(result.layer);
       refreshEditorTimeline(editor.preview, editor.working);
       editor.previewValidation = result.validation
-        || { conflicts: [], transition_warnings: [], range_warnings: [], playable: true };
+        || { conflicts: [], range_warnings: [], playable: true };
       const remainingIds = new Set(editorMotionIds(editor.preview));
       refreshEditorAxisControls(remainingIds, editor.preview);
       if (el.studioEditorSubtitle) {
@@ -1179,12 +1179,11 @@ export function createMotionStudioEditorController({
         if (calculated) loadPointDraft(calculated, editor.selectedPointId);
       }
       editor.previewValidation = result.validation
-        || { conflicts: [], transition_warnings: [], playable: true };
+        || { conflicts: [], playable: true };
       if (el.studioEditorSubtitle) {
         el.studioEditorSubtitle.textContent = '결과 미리보기 · 편집 반영 전';
       }
-      const issueCount = (editor.previewValidation.conflicts?.length || 0)
-        + (editor.previewValidation.transition_warnings?.length || 0);
+      const issueCount = editor.previewValidation.conflicts?.length || 0;
       const rangeWarningCount = editor.previewValidation.range_warnings?.length || 0;
       const rangeWarningText = rangeWarningCount
         ? ` · 축 설정 범위 초과 경고 ${rangeWarningCount}건 (계속 진행 가능)`
@@ -1201,7 +1200,7 @@ export function createMotionStudioEditorController({
         );
       } else {
         const previewMessage = issueCount
-          ? `결과 미리보기 · 충돌 또는 급변 ${issueCount}건 · 확인 후 값을 바꾸거나 편집 반영하세요${rangeWarningText}`
+          ? `결과 미리보기 · 충돌 ${issueCount}건 · 확인 후 값을 바꾸거나 편집 반영하세요${rangeWarningText}`
           : `결과 미리보기 완료 · 결과가 맞으면 편집 반영을 누르세요.${rangeWarningText}`;
         setEditorMessage(
           previewMessage,

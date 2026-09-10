@@ -11,7 +11,7 @@ from .layer_validation import (
     validate_ranges,
 )
 from .project_store import ProjectStore
-from .timeline import layer_conflicts, layer_transition_warnings
+from .timeline import layer_conflicts
 
 
 class StudioWorkspaceSession:
@@ -174,7 +174,6 @@ class StudioWorkspaceSession:
         studio = self.studio
         project_id = str(project.get('project_id') or '')
         motion_ranges = studio._motion_ranges(mapping)
-        manual_values = studio._manual_initial_values(mapping)
         selected_motion_ids = {
             str(value) for value in affected_motion_ids or set() if str(value)
         }
@@ -198,16 +197,6 @@ class StudioWorkspaceSession:
             conflicts.extend(layer_conflicts(
                 project, motion_ids=selected_motion_ids
             ))
-            transition_warnings = [
-                item for item in cached.get('transition_warnings') or []
-                if str(item.get('motion_id') or '') not in selected_motion_ids
-            ]
-            transition_warnings.extend(layer_transition_warnings(
-                project,
-                motion_ranges,
-                manual_values,
-                motion_ids=selected_motion_ids,
-            ))
             range_warnings = [
                 item for item in cached.get('range_warnings') or []
                 if str(item.get('layer_id') or '') not in selected_layer_ids
@@ -225,9 +214,6 @@ class StudioWorkspaceSession:
             ]
         else:
             conflicts = layer_conflicts(project)
-            transition_warnings = layer_transition_warnings(
-                project, motion_ranges, manual_values
-            )
             range_warnings = []
             curve_mismatches = []
             target_layers = [
@@ -248,12 +234,10 @@ class StudioWorkspaceSession:
         ))
         composition = {
             'conflicts': conflicts,
-            'transition_warnings': transition_warnings,
             'range_warnings': range_warnings,
             'point_curve_mismatches': curve_mismatches,
             'conflict_free': (
                 not conflicts
-                and not transition_warnings
                 and not curve_mismatches
             ),
         }

@@ -51,7 +51,6 @@ export function createMotionStudioEditorSession({
     pointModeReturnOperation: '',
     validation: {
       conflicts: [],
-      transition_warnings: [],
       range_warnings: clone(rangeWarnings),
       playable: true,
     },

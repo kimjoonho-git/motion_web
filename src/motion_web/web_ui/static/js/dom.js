@@ -336,7 +336,6 @@ export function getElements() {
     studioMappingInfo: document.getElementById('studioMappingInfo'),
     studioRecordMode: document.getElementById('studioRecordMode'),
     studioInitialMoveTime: document.getElementById('studioInitialMoveTime'),
-    studioTransitionSafetyLevel: document.getElementById('studioTransitionSafetyLevel'),
     studioTransitionRuleInfo: document.getElementById('studioTransitionRuleInfo'),
     studioRecordButton: document.getElementById('studioRecordButton'),
     studioInitializeButton: document.getElementById('studioInitializeButton'),

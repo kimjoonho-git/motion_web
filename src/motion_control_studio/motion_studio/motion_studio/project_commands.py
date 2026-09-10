@@ -254,14 +254,6 @@ class StudioProjectCommands:
                 project['name'] = (
                     str(payload.get('name') or '').strip() or project['name']
                 )
-            if 'transition_safety_level' in payload:
-                try:
-                    level = int(payload.get('transition_safety_level'))
-                except (TypeError, ValueError) as exc:
-                    raise ValueError('급변 기준 단계는 1~10이어야 합니다') from exc
-                if level < 1 or level > 10:
-                    raise ValueError('급변 기준 단계는 1~10이어야 합니다')
-                project['transition_safety_level'] = level
             project = studio._store.save_project(
                 project, upsert_layer_ids=[]
             )

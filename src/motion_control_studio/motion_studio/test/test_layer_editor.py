@@ -734,7 +734,7 @@ def test_merge_creates_one_layer_and_preserves_sources():
     ]
     first = create_all_axis_points(first)
     second = create_all_axis_points(second)
-    project = {'period_sec': 0.02, 'transition_safety_level': 10, 'layers': [first, second]}
+    project = {'period_sec': 0.02, 'layers': [first, second]}
 
     merged = merge_layers(project, ['a', 'b'], name='하나')
 
@@ -936,7 +936,7 @@ def test_merge_requires_points_and_rejects_exact_time_overlap_but_allows_jump():
     }
     jump = create_all_axis_points(jump)
     merged = merge_layers(
-        {'transition_safety_level': 4, 'layers': [first, jump]},
+        {'layers': [first, jump]},
         ['a', 'c'],
     )
     assert values(merged) == [0.0, 1.0, 20.0, 21.0]

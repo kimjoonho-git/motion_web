@@ -135,7 +135,6 @@ function eventTarget(value = '') {
 
 test('project and transport events pass stable UI values and can be unbound', () => {
   const el = {
-    studioTransitionSafetyLevel: eventTarget('3'),
     studioImportFileSelect: eventTarget('motion-a'),
     studioImportButton: eventTarget(),
     studioRecordButton: eventTarget(),
@@ -150,7 +149,6 @@ test('project and transport events pass stable UI values and can be unbound', ()
   };
   const calls = [];
   const unbind = bindMotionStudioProjectTransportEvents(el, {
-    onTransitionSafetyChange: (value) => calls.push(['transition', value]),
     onImport: (value) => calls.push(['import', value]),
     onRecord: (value) => calls.push(['record', value]),
     onStop: () => calls.push(['stop']),
@@ -158,14 +156,12 @@ test('project and transport events pass stable UI values and can be unbound', ()
     onExport: (value) => calls.push(['export', value]),
   });
 
-  el.studioTransitionSafetyLevel.emit('change');
   el.studioImportButton.emit('click');
   el.studioRecordButton.emit('click');
   el.studioStopButton.emit('click');
   el.studioExportButton.emit('click');
 
   assert.deepEqual(calls, [
-    ['transition', 3],
     ['import', 'motion-a'],
     ['record', { mode: 'append', initialMoveTimeSec: 2.5 }],
     ['stop'],

@@ -148,9 +148,6 @@ export function motionStudioEditorIssueTimes(validation = {}, selectedMotionIds 
   const selected = new Set(selectedMotionIds.map(String));
   return [
     ...(validation?.conflicts || []).map((item) => Number(item.start_sec)),
-    ...(validation?.transition_warnings || []).map((item) => (
-      Number(item.second_time_sec)
-    )),
     ...(validation?.range_warnings || [])
       .filter((item) => selected.has(String(item.motion_id || '')))
       .map((item) => Number(item.time_sec)),

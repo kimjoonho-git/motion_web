@@ -35,14 +35,6 @@ PROJECT_VERSION = 1
 MOTION_FILE_SIZE_LIMIT_BYTES = 256 * 1024 * 1024
 
 
-def _transition_safety_level(value: Any) -> int:
-    try:
-        level = int(value)
-    except (TypeError, ValueError):
-        level = 4
-    return max(1, min(10, level))
-
-
 def _mapping_rows(root: Any) -> List[Dict[str, Any]]:
     rows = root.get('mappings') if isinstance(root, dict) else None
     if not isinstance(rows, list):
@@ -288,7 +280,6 @@ class ProjectStore:
             'mapping_file_id': mapping['file_id'],
             'mapping_sha256': mapping['sha256'],
             'period_sec': DEFAULT_PERIOD_SEC,
-            'transition_safety_level': 4,
             'created_at': now,
             'updated_at': now,
             'layers': [],
@@ -504,9 +495,6 @@ class ProjectStore:
             'mapping_file_id': mapping_file_id,
             'mapping_sha256': str(project.get('mapping_sha256') or ''),
             'period_sec': DEFAULT_PERIOD_SEC,
-            'transition_safety_level': _transition_safety_level(
-                project.get('transition_safety_level', 4)
-            ),
             'created_at': _finite_float(project.get('created_at'), time.time()),
             'updated_at': _finite_float(project.get('updated_at'), time.time()),
             'layers': layers,

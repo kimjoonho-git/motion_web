@@ -77,7 +77,6 @@ class StudioPlaybackSession:
             frames = render_project(
                 project,
                 motion_ids=motion_ids,
-                motion_ranges_deg=studio._motion_ranges(mapping),
                 initial_motion_values_deg=studio._manual_initial_values(mapping),
             )
             file_id = studio._store.write_motion_file(
