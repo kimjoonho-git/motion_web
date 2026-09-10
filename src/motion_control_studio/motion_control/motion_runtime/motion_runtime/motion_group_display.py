@@ -80,20 +80,6 @@ def resolve_display_step(status: Mapping[str, Any]) -> str:
     return '확인 중'
 
 
-def resolve_display_progress(status: Mapping[str, Any]) -> str:
-    phase = _text(status.get('phase'))
-    state = _text(status.get('state'))
-    progress = status.get('progress')
-    progress = progress if isinstance(progress, Mapping) else {}
-    duration = float(progress.get('duration_sec') or 0.0)
-    elapsed = float(progress.get('elapsed_sec') or 0.0)
-    ratio = float(progress.get('ratio') or 0.0)
-    show = phase in _PROGRESS_PHASES or state in _PROGRESS_STATES
-    if not show or duration <= 0.0:
-        return '-'
-    return f'{elapsed:.2f} / {duration:.2f}초 · {round(ratio * 100.0)}%'
-
-
 def apply_group_display(status: Dict[str, Any]) -> Dict[str, Any]:
     """Attach display_cycle, display_step, and keep cycle fields aligned."""
     result = dict(status)

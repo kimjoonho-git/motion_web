@@ -162,19 +162,6 @@ class ProjectService:
             and selected == self.runtime_project_id_from_path()
         )
 
-    def selected_published_names(self, category: str) -> set[str]:
-        project_id = self.repository.selected_project_id()
-        if not project_id:
-            return set()
-        detail = self.repository.get_project(project_id)
-        names = set()
-        for folder in detail.get('tree') or []:
-            if folder.get('category') != category:
-                continue
-            for file_info in folder.get('children') or []:
-                names.add(str(file_info.get('name') or ''))
-        return names
-
     def bind_selected_sources(self) -> None:
         project_id = self.repository.selected_project_id()
         if not project_id:

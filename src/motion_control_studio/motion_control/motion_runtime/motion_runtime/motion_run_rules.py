@@ -399,12 +399,6 @@ def _duplicate_axis_text(axes: List[Dict[str, Any]]) -> str:
     duplicates = [str(axis) for axis, count in counts.items() if count > 1]
     return ', '.join(duplicates)
 
-def _is_terminal_action_result(payload: Dict[str, Any]) -> bool:
-    if not bool(payload.get('success')):
-        return True
-    message = str(payload.get('message') or '').lower()
-    return 'completed' in message or 'did not reach target' in message
-
 def _sleep_until(deadline: float) -> None:
     delay = deadline - time.monotonic()
     if delay > 0.0:

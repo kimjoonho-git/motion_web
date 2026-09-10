@@ -49,22 +49,6 @@ def frame_time(value: Any) -> float:
     ) * DEFAULT_PERIOD_SEC
 
 
-def linear_sample(points: Sequence[tuple[float, float]], time_sec: float) -> float:
-    if len(points) == 1:
-        return float(points[0][1])
-    for index, point in enumerate(points):
-        if time_sec <= point[0] + EPSILON:
-            if index == 0:
-                return float(point[1])
-            before = points[index - 1]
-            span = point[0] - before[0]
-            if span <= EPSILON:
-                return float(point[1])
-            ratio = (time_sec - before[0]) / span
-            return float(before[1] + ((point[1] - before[1]) * ratio))
-    return float(points[-1][1])
-
-
 def interpolation_ratio(progress: float, order: int) -> float:
     progress = max(0.0, min(1.0, float(progress)))
     if order == 1:
@@ -78,55 +62,6 @@ def interpolation_ratio(progress: float, order: int) -> float:
             + (6.0 * (progress ** 5))
         )
     raise ValueError('보간 그래프는 1차, 3차, 5차 중 하나여야 합니다')
-
-
-def interpolate_range(
-    points: Sequence[tuple[float, float]],
-    start_sec: float,
-    end_sec: float,
-    order: int,
-) -> List[tuple[float, float]]:
-    if end_sec - start_sec < DEFAULT_PERIOD_SEC - EPSILON:
-        raise ValueError('보간 구간은 최소 20ms 이상이어야 합니다')
-    boundaries = {
-        round(point_time, 9): float(value) for point_time, value in points
-    }
-    start_value = boundaries.get(round(start_sec, 9))
-    end_value = boundaries.get(round(end_sec, 9))
-    if start_value is None or end_value is None:
-        raise ValueError('보간 시작점과 끝점에는 실제 모션 데이터가 있어야 합니다')
-    count = int(round((end_sec - start_sec) / DEFAULT_PERIOD_SEC))
-    result = []
-    for index in range(count + 1):
-        time_sec = round(start_sec + (index * DEFAULT_PERIOD_SEC), 9)
-        ratio = interpolation_ratio(index / count, order)
-        result.append((time_sec, start_value + ((end_value - start_value) * ratio)))
-    result[0] = (start_sec, start_value)
-    result[-1] = (end_sec, end_value)
-    return result
-
-
-def scale_time_segment(
-    points: Sequence[tuple[float, float]], anchor: float, factor: float
-) -> List[tuple[float, float]]:
-    if factor <= 0.0 or factor > MAX_TIME_SCALE:
-        raise ValueError(f'시간 배율은 0보다 크고 {MAX_TIME_SCALE:g} 이하여야 합니다')
-    transformed = [
-        (anchor + ((time_sec - anchor) * factor), value)
-        for time_sec, value in points
-    ]
-    start = frame_time(transformed[0][0])
-    end = frame_time(transformed[-1][0])
-    count = max(0, int(round((end - start) / DEFAULT_PERIOD_SEC)))
-    result = []
-    for index in range(count + 1):
-        time_sec = round(start + (index * DEFAULT_PERIOD_SEC), 9)
-        original_time = anchor + ((time_sec - anchor) / factor)
-        result.append((time_sec, linear_sample(points, original_time)))
-    if result:
-        result[0] = (result[0][0], float(points[0][1]))
-        result[-1] = (result[-1][0], float(points[-1][1]))
-    return result
 
 
 def _automatic_slope(points: Sequence[Dict[str, Any]], index: int) -> float:

@@ -255,6 +255,12 @@ class MotionRunManager(Node):
             self._latest_safety_status_at = time.monotonic()
 
     def _action_result_callback(self, msg: String) -> None:
+        """Action 결과를 60초 창으로 모아둔다.
+
+        **지금은 읽는 곳이 없다** · 결과를 기다리던 초기 이동 대기 코드가
+        §6-49에서 죽은 코드로 판명되어 함께 사라졌다. 구독을 떼는 것은 이 노드가
+        토픽에서 빠지는 일이라 별도 판단으로 남긴다 · 모으는 양은 60초로 제한된다.
+        """
         try:
             payload = json.loads(msg.data)
         except json.JSONDecodeError:
@@ -1057,117 +1063,6 @@ class MotionRunManager(Node):
             'message': '현재 동기 반복 회차 완료 후 정지 요청',
             'status': self.status(),
         }
-
-    def _publish_initial_action_request(
-        self,
-        axis_plan: Dict[str, Any],
-        target_position: float,
-        duration_sec: float,
-    ) -> str:
-        motor_axis = int(axis_plan['motor_axis'])
-        motor_type = str(axis_plan.get('motor_type') or '')
-        if motor_type == 'ac_servo':
-            command = 'ac_servo_absolute_move'
-        elif motor_type == 'dynamixel':
-            command = 'dynamixel_absolute_move'
-        else:
-            raise RuntimeError(f'Axis {motor_axis} unsupported motor type for initialization: {motor_type}')
-
-        generation = int(self._execution_context.get('project_generation') or 0)
-        request_id = generation_mod.new_request_id(
-            'motion-init', generation, f'{motor_axis}-{time.time_ns()}'
-        )
-        payload = {
-            'request_id': request_id,
-            'project_generation': generation,
-            'command': command,
-            'axis': motor_axis,
-            'target_deg': float(target_position),
-            'duration_sec': float(duration_sec),
-        }
-        self._clear_action_results(request_id)
-        self._action_request_pub.publish(
-            String(data=json.dumps(payload, ensure_ascii=False, separators=(',', ':')))
-        )
-        return request_id
-
-    def _wait_for_initial_action_start(
-        self,
-        requests: List[Dict[str, Any]],
-    ) -> Dict[str, Dict[str, Any]]:
-        pending: Dict[str, Dict[str, Any]] = {}
-        deadline = time.monotonic() + 3.0
-        for request in requests:
-            request_id = str(request['request_id'])
-            result = self._wait_for_action_result(request_id, deadline, terminal_only=False)
-            if result is None:
-                raise RuntimeError(f'Axis {request["axis"]} 초기 위치 동작 시작 응답이 없습니다')
-            if not bool(result.get('success')):
-                raise RuntimeError(str(result.get('message') or f'Axis {request["axis"]} 초기 위치 동작 시작 실패'))
-            if not motion_run_rules._is_terminal_action_result(result):
-                pending[request_id] = request
-        return pending
-
-    def _wait_for_initial_action_completion(
-        self,
-        pending: Dict[str, Dict[str, Any]],
-        duration_sec: float,
-    ) -> None:
-        start_time = time.monotonic()
-        duration = max(float(duration_sec), self.period_sec)
-        step = 0
-        while True:
-            if self._stop_event.is_set():
-                raise InterruptedError()
-            elapsed = max(time.monotonic() - start_time, 0.0)
-            self._update_progress(
-                'initializing',
-                min(elapsed, duration),
-                duration,
-                step,
-                len(pending),
-            )
-            if elapsed >= duration:
-                return
-            step += 1
-            time.sleep(min(max(self.period_sec, 0.02), 0.1))
-
-    def _clear_action_results(self, request_id: str) -> None:
-        with self._action_result_lock:
-            self._action_results.pop(request_id, None)
-
-    def _wait_for_action_result(
-        self,
-        request_id: str,
-        deadline: float,
-        terminal_only: bool,
-    ) -> Optional[Dict[str, Any]]:
-        while time.monotonic() < deadline:
-            result = self._take_action_result(request_id, terminal_only=terminal_only)
-            if result is not None:
-                return result
-            if self._stop_event.is_set():
-                return None
-            time.sleep(min(max(self.period_sec, 0.01), 0.05))
-        return None
-
-    def _take_action_result(
-        self,
-        request_id: str,
-        terminal_only: bool,
-    ) -> Optional[Dict[str, Any]]:
-        with self._action_result_lock:
-            values = self._action_results.get(request_id)
-            if not values:
-                return None
-            for index, payload in enumerate(values):
-                if terminal_only and not motion_run_rules._is_terminal_action_result(payload):
-                    continue
-                result = values.pop(index)
-                if not values:
-                    self._action_results.pop(request_id, None)
-                return result
-        return None
 
     def _playback_ownership_error(self) -> str:
         """Return why runtime commands cannot currently own motor output."""
