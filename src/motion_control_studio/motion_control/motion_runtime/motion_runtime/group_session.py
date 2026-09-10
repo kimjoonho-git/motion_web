@@ -64,27 +64,27 @@ class GroupSession:
         if initialize_monotonic is None or initialize_monotonic <= time.monotonic():
             raise ValueError('그룹 초기 위치 이동 예약 트리거가 이미 지났습니다')
         with self.manager._run_lock:
-            if self.manager._run_thread is not None and self.manager._run_thread.is_alive():
-                if self.session.get('execution_id') == execution_id:
-                    return {
-                        'success': True,
-                        'duplicate': True,
-                        'message': '이미 준비 중인 그룹 실행 세션',
-                        'status': self.manager.status(),
-                    }
+            # 같은 execution_id의 재요청은 슬롯 경쟁이 아니라 중복 전달이다 ·
+            # 그룹 명령은 여러 PC가 같은 트리거를 받으므로 재전송이 정상이다.
+            if (
+                self.manager._run_thread is not None
+                and self.manager._run_thread.is_alive()
+                and self.session.get('execution_id') == execution_id
+            ):
                 return {
-                    'success': False,
-                    'message': 'previous motion run task is still running',
+                    'success': True,
+                    'duplicate': True,
+                    'message': '이미 준비 중인 그룹 실행 세션',
                     'status': self.manager.status(),
                 }
-            ownership_error = self.manager._playback_ownership_error()
-            if ownership_error:
-                return {'success': False, 'message': ownership_error, 'status': self.manager.status()}
-            motors_snapshot = self.manager._current_motors()
-            if not motors_snapshot:
-                raise ValueError('current motion_state is unavailable')
-            self.manager._stop_event.clear()
-            self.manager._graceful_stop_event.clear()
+            try:
+                motors_snapshot = self.manager._claim_run_slot()
+            except motion_run_rules.RunSlotUnavailable as exc:
+                return {
+                    'success': False,
+                    'message': str(exc),
+                    'status': self.manager.status(),
+                }
             self.session = {
                 'active': True,
                 'execution_id': execution_id,

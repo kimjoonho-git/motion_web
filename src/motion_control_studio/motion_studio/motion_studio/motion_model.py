@@ -7,6 +7,8 @@ import re
 import time
 from typing import Any, Dict, Iterable, List, Mapping
 
+from motion_common import values
+
 from .constants import DEFAULT_PERIOD_SEC
 
 
@@ -23,11 +25,12 @@ def safe_name(value: Any, fallback: str = 'motion_project') -> str:
 
 
 def finite_float(value: Any, default: float = 0.0) -> float:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return default
-    return number if math.isfinite(number) else default
+    """`values.optional_float`와 같되 기본값이 ``0.0``이다.
+
+    호출부가 기본값을 생략한 채 쓰는 곳이 있어(`project_store`) 이 기본값이
+    계약의 일부다 · 공용 구현의 기본값(``None``)으로 바꾸면 그곳이 깨진다.
+    """
+    return values.optional_float(value, default)
 
 
 def nonnegative_int(value: Any) -> int:

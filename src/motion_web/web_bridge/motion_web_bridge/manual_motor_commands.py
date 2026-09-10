@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 
 from std_msgs.msg import String
 
-from motion_common import generation, rpc
+from motion_common import generation, motor_readiness, rpc
 from motion_common.values import optional_float, optional_int
 
 from motion_web_bridge import motor_config_rules
@@ -113,6 +113,28 @@ class ManualMotorCommandService:
                 return motor
         return None
 
+    @staticmethod
+    def _readiness_error(
+        motor: Dict[str, Any],
+        axis: Any,
+        *,
+        is_ac_servo: bool = True,
+    ) -> str:
+        """화면 명령의 선검사 · `motion_supervisor`와 같은 규칙을 쓴다.
+
+        최종 판단은 supervisor가 한다. 여기서 먼저 보는 것은 왕복을 기다리지
+        않고 사람에게 사유를 돌려주기 위해서다. 두 곳이 같은 단일 구현을
+        경유해야 "화면은 통과했는데 supervisor가 막는" 어긋남이 없다.
+
+        조그·절대이동이므로 내부리밋은 보지 않는다 · `MANUAL_ORDER` 참조.
+        """
+        return motor_readiness.readiness_error(
+            motor,
+            order=motor_readiness.MANUAL_ORDER,
+            axis=axis,
+            is_ac_servo=is_ac_servo,
+        )
+
     def ac_servo_jog(self, axis: Any, relative_deg: Any) -> Dict[str, Any]:
         axis_value = optional_int(axis, None)
         relative_value = optional_float(relative_deg, None)
@@ -142,22 +164,11 @@ class ManualMotorCommandService:
                 'message': f'Axis {axis_value} is not AC Servo',
                 **self.bridge.snapshot(),
             }
-        if str(motor.get('state') or '') != 'detected':
+        ready_error = self._readiness_error(motor, axis_value)
+        if ready_error:
             return {
                 'success': False,
-                'message': f'Axis {axis_value} is not detected',
-                **self.bridge.snapshot(),
-            }
-        if motor.get('servo_on') is not True:
-            return {
-                'success': False,
-                'message': f'Axis {axis_value} servo is OFF',
-                **self.bridge.snapshot(),
-            }
-        if bool(motor.get('fault', False)):
-            return {
-                'success': False,
-                'message': f'Axis {axis_value} has error',
+                'message': ready_error,
                 **self.bridge.snapshot(),
             }
 
@@ -225,16 +236,11 @@ class ManualMotorCommandService:
                 'message': f'Axis {axis_value} is not Dynamixel',
                 **self.bridge.snapshot(),
             }
-        if str(motor.get('state') or '') != 'detected':
+        ready_error = self._readiness_error(motor, axis_value, is_ac_servo=False)
+        if ready_error:
             return {
                 'success': False,
-                'message': f'Axis {axis_value} is not detected',
-                **self.bridge.snapshot(),
-            }
-        if bool(motor.get('fault', False)):
-            return {
-                'success': False,
-                'message': f'Axis {axis_value} has error',
+                'message': ready_error,
                 **self.bridge.snapshot(),
             }
 
@@ -315,22 +321,11 @@ class ManualMotorCommandService:
                 'message': f'Axis {axis_value} is not AC Servo',
                 **self.bridge.snapshot(),
             }
-        if str(motor.get('state') or '') != 'detected':
+        ready_error = self._readiness_error(motor, axis_value)
+        if ready_error:
             return {
                 'success': False,
-                'message': f'Axis {axis_value} is not detected',
-                **self.bridge.snapshot(),
-            }
-        if motor.get('servo_on') is not True:
-            return {
-                'success': False,
-                'message': f'Axis {axis_value} servo is OFF',
-                **self.bridge.snapshot(),
-            }
-        if bool(motor.get('fault', False)):
-            return {
-                'success': False,
-                'message': f'Axis {axis_value} has error',
+                'message': ready_error,
                 **self.bridge.snapshot(),
             }
 
@@ -411,16 +406,11 @@ class ManualMotorCommandService:
                 'message': f'Axis {axis_value} is not Dynamixel',
                 **self.bridge.snapshot(),
             }
-        if str(motor.get('state') or '') != 'detected':
+        ready_error = self._readiness_error(motor, axis_value, is_ac_servo=False)
+        if ready_error:
             return {
                 'success': False,
-                'message': f'Axis {axis_value} is not detected',
-                **self.bridge.snapshot(),
-            }
-        if bool(motor.get('fault', False)):
-            return {
-                'success': False,
-                'message': f'Axis {axis_value} has error',
+                'message': ready_error,
                 **self.bridge.snapshot(),
             }
 

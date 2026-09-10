@@ -3579,6 +3579,127 @@ MIDI 전 경로 근거 · `raw_value 5820` → `pickup_reference_source motor_fe
 
 이 정정은 우선순위 판단을 바꿨다 · 3순위였던 두 항목을 **5순위로 내린다**.
 
+### 6-55. 모터 준비 검사 단일화 · 열 곳이 서로 다르게 검사하고 있었다
+
+검증 · `colcon build` 4패키지 통과 · pytest **1077건 통과**(신규 7건 포함) · ruff 통과
+
+#### 무엇이 갈라져 있었나
+
+"이 축에 명령을 보내도 되는가" 판정이 **열 곳에 복사**돼 있었고, 복사본마다
+검사 항목과 **순서**가 달랐다.
+
+| 위치 | detected | fault | servo_on | 알람코드 | 내부리밋 |
+|---|:-:|:-:|:-:|:-:|:-:|
+| `motion_run_rules._motor_ready_error` | ✅ | ✅ | ✅ | **✅** | ❌ |
+| supervisor `_handle_midi_position_batch` · `_request` | ✅ | ✅ | ✅ | ❌ | **✅** |
+| supervisor `_handle_ac_servo_jog` · `_absolute_move` | ✅ | ✅ | ✅ | ❌ | ❌ |
+| supervisor `_handle_dynamixel_jog` · `_absolute_move` | ✅ | ✅ | – | ❌ | – |
+| `manual_motor_commands` × 4 | ✅ | ✅ | 일부 | ❌ | ❌ |
+
+순서도 갈라져 있었다 · MIDI는 `fault → servo_on` · 조그는 `servo_on → fault` ·
+같은 고장에 **다른 메시지**가 나왔다.
+
+`manual_motor_commands`는 자기가 검사한 뒤 supervisor로 보내고 supervisor가
+**다시** 검사한다. 선검사 자체는 타당하다(왕복을 기다리지 않고 사유를 준다).
+문제는 두 검사가 일치해야 하는데 달랐다는 것이다.
+
+#### 흡수하지 않은 차이 · 세 가지 모두 의도다
+
+| 차이 | 이유 |
+|---|---|
+| 조그·절대이동이 **내부리밋을 안 본다** | 리밋에 걸린 축을 빼내는 수단이 조그다 · 여기서 막으면 복구 방법이 사라진다 · **사용자 확인 완료** |
+| MIDI의 `hold` 명령이 **리밋 검사를 건너뛴다** | 이미 걸린 축을 그 자리에 붙잡아 두는 명령이다 |
+| **알람코드 검사가 실행 경로에만 있다** | 파일 재생은 사람이 지켜보지 않는 동안에도 돈다 · **사용자 확인 완료** |
+
+세 번째는 코드만으로 판별할 수 없어 통합 전 동작을 그대로 옮긴 뒤 확인을 받았다 ·
+**모션 실행에만 제한을 두는 것이 맞다**(2026-09-10 확정).
+
+이유가 검사 항목이 아니라 **감시자의 유무**에 있다. 조그·MIDI는 사람이 화면을
+보며 축 하나를 움직이는 중이고, 알람이 떠 있으면 그 자리에서 보인다. 파일 재생은
+사람이 자리를 뜬 동안에도 여러 축이 동시에 돈다 · 여기서만 사전에 막는다.
+
+같은 이유로 알람 축을 조그로 빼내는 길이 열려 있어야 한다 · 내부리밋 예외와
+**같은 판단**이다.
+
+#### 형태 · 순서를 인자로 받는다
+
+```python
+MOTION_RUN_ORDER = ('detected', 'alarm', 'fault', 'servo_on')
+MIDI_ORDER       = ('detected', 'fault', 'servo_on', 'internal_limit')
+MANUAL_ORDER     = ('detected', 'servo_on', 'fault')
+```
+
+`order`가 검사 항목과 순서를 **모두** 정한다 · 목록에 없으면 검사하지 않는다 ·
+조그가 `internal_limit`을 빼는 방식이 이것이다. 차이를 주석이 아니라 **코드가
+읽히는 형태로** 남겼다.
+
+모터 종류 판정과 내부리밋 판정은 **호출부가 한다** · 노드마다 판정 근거가 다르고
+(`_is_ac_servo` · `motor_config_rules.is_ac_servo_motor` · 매핑의 `motor_type`),
+그것까지 끌어오면 `motion_common`이 모터 모델을 알아야 한다.
+
+#### 동치 검증
+
+메시지 문구가 한 글자라도 달라지면 화면과 기존 테스트가 깨진다. 통합 전 원본을
+그대로 옮겨 적은 참조 구현과 **상태 조합 전수**(state 3 × fault 2 × servo_on 3 ×
+errorcode 2 × 모터종류 2 × 리밋 2)로 대조했다 · `test_motor_readiness.py`.
+
+기존 테스트 1077건이 문구를 바꾸지 않았음을 다시 확인한다.
+
+#### 남긴 것
+
+`_collect_servo_action_axes`(supervisor:2100)는 `detected`만 보고 `fault`를 보지
+않는다 · **의도다** · 알람 축에 `fault_reset`을 걸어야 하므로 fault를 막으면
+복구가 안 된다. 검사가 하나뿐이라 단일화 대상이 아니다.
+
+### 6-56. 실행 슬롯 점유 단일화 · 값 변환 잔여 중복 흡수
+
+검증 · `colcon build` 5패키지 통과 · pytest **1077건 통과** · ruff **기준선 55건 유지**
+
+#### 실행 슬롯 · 두 진입점이 같은 관문을 각자 지키고 있었다
+
+단일 실행(`_start_thread`)과 그룹 실행(`GroupSession.prepare`)은 **슬롯 하나**를
+두고 다툰다. 둘 다 같은 세 관문을 통과시키는데 코드가 따로였다.
+
+```
+앞선 실행 중인가  →  재생 소유권을 잡을 수 있나  →  모터 상태가 있나
+                                                     → 정지 이벤트 초기화
+```
+
+관문이 하나 늘 때 한쪽만 고치면 **그쪽으로만 빠져나간다** · §6-55의 준비 검사와
+같은 성격의 위험이다.
+
+`MotionRunManager._claim_run_slot()`으로 모았다 · 막히면
+`motion_run_rules.RunSlotUnavailable`을 올리고 **응답 모양은 호출부가 만든다**
+(그룹 응답은 `execution_id`를 붙인다).
+
+흡수하지 않은 것 둘 · 성격이 다르다.
+
+| 남긴 것 | 이유 |
+|---|---|
+| 그룹의 **중복 요청 판정** | 같은 `execution_id` 재요청은 슬롯 경쟁이 아니라 중복 전달이다 · 여러 PC가 같은 트리거를 받으므로 재전송이 정상 · 슬롯 판정보다 **먼저** 와야 한다 |
+| 단일 실행의 **자동 반복 상태 초기화** | 그룹 실행에는 자동 반복이 없다 |
+
+`ValueError('current motion_state is unavailable')`는 그대로 뒀다 · 명령 라우터가
+오류 응답으로 바꾸는 기존 계약이다.
+
+#### 값 변환 · §6-5가 남긴 목록 밖의 완전중복 3곳
+
+§6-5는 **의미가 다른 3곳**을 의도적으로 남겼다. 그 목록에 없으면서 동작이 같은
+것이 3곳 더 있었다.
+
+| 위치 | 성격 |
+|---|---|
+| `motor_config_rules`의 중첩 `optional_int` | 모듈 상단이 이미 가져온 `values.optional_int`를 **가리고 있었다** · 글자까지 같음 |
+| `motor_identity.optional_int` | `values.optional_int(v, None)`과 동일 |
+| `motion_model.finite_float` | `values.optional_float`와 동일 · **기본값 `0.0`은 계약이라 유지** |
+
+세 번째가 함정이었다 · `project_store:597`이 기본값을 생략한 채 부른다. 공용
+구현의 기본값(`None`)으로 갈아끼우면 그곳이 깨진다. 그래서 이름과 기본값을 남긴
+채 안쪽만 위임한다.
+
+교체 전 **20종 입력 × 기본값 조합**으로 원본과 대조해 불일치 0건을 확인했다
+(`None` · `''` · `'0x10'` · `'3.7'` · `inf` · `nan` · `True` · `b'5'` 등).
+
 ### 배포 잔여
 
 **다른 PC 2대는 `colcon build` 필수** · `motion_common` 외 신규 패키지 다수 ·

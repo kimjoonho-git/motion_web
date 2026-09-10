@@ -18,7 +18,7 @@ from std_msgs.msg import Int8MultiArray, String
 
 from motion_supervisor.command_arbiter import CommandArbiter, CommandOwner
 from motion_supervisor.servo_alarm_guard import ServoAlarmGuard
-from motion_common import values, topics
+from motion_common import motor_readiness, values, topics
 
 
 ID_CONTROLWORD = 0
@@ -474,27 +474,24 @@ class MotionSupervisor(Node):
                 error = f'Axis {axis} is duplicated in MIDI batch'
             elif motor is None:
                 error = f'Axis {axis} not found in current motion_state'
-            elif str(motor.get('state') or '') != 'detected':
-                error = f'Axis {axis} is not detected'
-            elif bool(motor.get('fault', False)):
-                error = f'Axis {axis} has error'
             elif self._is_ac_servo(motor):
-                if motor.get('servo_on') is not True:
-                    error = f'Axis {axis} servo is OFF'
-                elif (
-                    target.get('operation') != 'hold'
-                    and self._ac_servo_internal_limit_active(motor)
-                ):
-                    error = (
-                        f'Axis {axis} internal limit is active; '
-                        'check POT/NOT, emergency stop, torque limit, and software limit'
-                    )
-                else:
+                error = self._midi_readiness_error(
+                    motor,
+                    axis,
+                    # 유지 명령은 이미 리밋에 걸린 축을 그 자리에 붙잡아 두는
+                    # 것이라 리밋 검사를 건너뛴다.
+                    check_internal_limit=target.get('operation') != 'hold',
+                )
+                if not error:
                     controlword = CW_NEW_SET_POINT_MINAS
             elif self._is_dynamixel(motor):
-                controlword = DYNAMIXEL_TORQUE_ENABLE
+                error = self._midi_readiness_error(motor, axis, is_ac_servo=False)
+                if not error:
+                    controlword = DYNAMIXEL_TORQUE_ENABLE
             else:
-                error = f'Axis {axis} motor type is unsupported for MIDI control'
+                error = self._midi_readiness_error(motor, axis, is_ac_servo=False)
+                if not error:
+                    error = f'Axis {axis} motor type is unsupported for MIDI control'
 
             if (
                 not error
@@ -643,23 +640,20 @@ class MotionSupervisor(Node):
         motor = self._motor_for_axis(axis, motors)
         if motor is None:
             return False, f'Axis {axis} not found in current motion_state'
-        if str(motor.get('state') or '') != 'detected':
-            return False, f'Axis {axis} is not detected'
-        if bool(motor.get('fault', False)):
-            return False, f'Axis {axis} has error'
-
         if self._is_ac_servo(motor):
-            if motor.get('servo_on') is not True:
-                return False, f'Axis {axis} servo is OFF'
-            if self._ac_servo_internal_limit_active(motor):
-                return False, (
-                    f'Axis {axis} internal limit is active; '
-                    'check POT/NOT, emergency stop, torque limit, and software limit'
-                )
+            error = self._midi_readiness_error(motor, axis)
+            if error:
+                return False, error
             controlword = CW_NEW_SET_POINT_MINAS
         elif self._is_dynamixel(motor):
+            error = self._midi_readiness_error(motor, axis, is_ac_servo=False)
+            if error:
+                return False, error
             controlword = DYNAMIXEL_TORQUE_ENABLE
         else:
+            error = self._midi_readiness_error(motor, axis, is_ac_servo=False)
+            if error:
+                return False, error
             return False, f'Axis {axis} motor type is unsupported for MIDI control'
 
         acquired, owner_error = self._acquire_command_owner(
@@ -949,12 +943,9 @@ class MotionSupervisor(Node):
             return False, f'Axis {axis} not found in motion_state'
         if not self._is_ac_servo(motor):
             return False, f'Axis {axis} is not AC Servo'
-        if str(motor.get('state') or '') != 'detected':
-            return False, f'Axis {axis} is not detected'
-        if motor.get('servo_on') is not True:
-            return False, f'Axis {axis} servo is OFF'
-        if bool(motor.get('fault', False)):
-            return False, f'Axis {axis} has error'
+        ready_error = self._manual_readiness_error(motor, axis)
+        if ready_error:
+            return False, ready_error
 
         current_position = self._optional_float(
             motor.get('position_deg', motor.get('position'))
@@ -1035,10 +1026,9 @@ class MotionSupervisor(Node):
             return False, f'Axis {axis} not found in motion_state'
         if not self._is_dynamixel(motor):
             return False, f'Axis {axis} is not Dynamixel'
-        if str(motor.get('state') or '') != 'detected':
-            return False, f'Axis {axis} is not detected'
-        if bool(motor.get('fault', False)):
-            return False, f'Axis {axis} has error'
+        ready_error = self._manual_readiness_error(motor, axis, is_ac_servo=False)
+        if ready_error:
+            return False, ready_error
 
         current_position = self._optional_float(
             motor.get('position_deg', motor.get('position'))
@@ -1102,12 +1092,9 @@ class MotionSupervisor(Node):
             return False, f'Axis {axis} not found in motion_state'
         if not self._is_ac_servo(motor):
             return False, f'Axis {axis} is not AC Servo'
-        if str(motor.get('state') or '') != 'detected':
-            return False, f'Axis {axis} is not detected'
-        if motor.get('servo_on') is not True:
-            return False, f'Axis {axis} servo is OFF'
-        if bool(motor.get('fault', False)):
-            return False, f'Axis {axis} has error'
+        ready_error = self._manual_readiness_error(motor, axis)
+        if ready_error:
+            return False, ready_error
         current_position = self._optional_float(
             motor.get('position_deg', motor.get('position'))
         )
@@ -1219,10 +1206,9 @@ class MotionSupervisor(Node):
             return False, f'Axis {axis} not found in motion_state'
         if not self._is_dynamixel(motor):
             return False, f'Axis {axis} is not Dynamixel'
-        if str(motor.get('state') or '') != 'detected':
-            return False, f'Axis {axis} is not detected'
-        if bool(motor.get('fault', False)):
-            return False, f'Axis {axis} has error'
+        ready_error = self._manual_readiness_error(motor, axis, is_ac_servo=False)
+        if ready_error:
+            return False, ready_error
         current_position = self._optional_float(
             motor.get('position_deg', motor.get('position'))
         )
@@ -2391,6 +2377,49 @@ class MotionSupervisor(Node):
         ]
         text = ' '.join(str(value or '').lower() for value in values)
         return 'minas' in text or 'ac servo' in text or 'ac_servo' in text
+
+    def _midi_readiness_error(
+        self,
+        motor: Dict[str, Any],
+        axis: Any,
+        *,
+        is_ac_servo: bool = True,
+        check_internal_limit: bool = True,
+    ) -> str:
+        """MIDI 실시간 제어의 준비 검사 · 내부리밋까지 본다.
+
+        MIDI는 사람이 페이더를 잡고 있는 동안 50Hz로 명령이 나가므로, 리밋에
+        걸린 축을 계속 밀어붙이지 않도록 여기서 막는다.
+        """
+        return motor_readiness.readiness_error(
+            motor,
+            order=motor_readiness.MIDI_ORDER,
+            axis=axis,
+            is_ac_servo=is_ac_servo,
+            internal_limit_active=(
+                check_internal_limit
+                and self._ac_servo_internal_limit_active(motor)
+            ),
+        )
+
+    @staticmethod
+    def _manual_readiness_error(
+        motor: Dict[str, Any],
+        axis: Any,
+        *,
+        is_ac_servo: bool = True,
+    ) -> str:
+        """수동 조그·절대이동의 준비 검사 · 내부리밋을 **일부러** 보지 않는다.
+
+        리밋에 걸린 축을 빼내는 수단이 조그다. 여기서 리밋을 막으면 복구
+        방법이 사라진다.
+        """
+        return motor_readiness.readiness_error(
+            motor,
+            order=motor_readiness.MANUAL_ORDER,
+            axis=axis,
+            is_ac_servo=is_ac_servo,
+        )
 
     @staticmethod
     def _ac_servo_internal_limit_active(motor: Dict[str, Any]) -> bool:

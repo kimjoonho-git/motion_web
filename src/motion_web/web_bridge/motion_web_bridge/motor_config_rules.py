@@ -16,7 +16,7 @@ import subprocess
 import time
 from pathlib import Path
 from urllib.parse import quote
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from motion_common import store
 from motion_common.values import optional_float, optional_int
@@ -71,14 +71,9 @@ def normalize_motor_entry(motor: Dict[str, Any], index: int) -> Dict[str, Any]:
         profile['model_source'] = 'user_nameplate'
     config = dict(motor.get('config')) if isinstance(motor.get('config'), dict) else {}
 
-    def optional_int(value: Any, default: Optional[int]) -> Optional[int]:
-        if value is None or value == '':
-            return default
-        try:
-            return int(str(value), 0)
-        except (TypeError, ValueError):
-            return default
-
+    # 여기 있던 `optional_int`는 모듈 상단이 이미 가져온
+    # `motion_common.values.optional_int`와 글자까지 같으면서 그것을 가리고
+    # 있었다 · 지우면 임포트한 단일 구현이 그대로 쓰인다.
     axis = optional_int(
         config.get('controller_index'),
         optional_int(motor.get('axis'), None),

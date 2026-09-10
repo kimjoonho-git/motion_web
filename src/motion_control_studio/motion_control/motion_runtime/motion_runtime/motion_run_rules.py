@@ -19,10 +19,19 @@ from urllib.parse import quote
 from motion_control_msgs.msg import MotorStatus
 from std_msgs.msg import Int8MultiArray
 
-from motion_common import motion_table
+from motion_common import motion_table, motor_readiness
 from motion_common.values import finite_float, optional_int
 
 from .motion_run_constants import INITIAL_MOVE_TIME_OPTIONS_SEC
+
+
+class RunSlotUnavailable(RuntimeError):
+    """실행 슬롯을 잡지 못한 사유.
+
+    단일 실행과 그룹 실행이 같은 슬롯 하나를 두고 다툰다. 막힌 사유는 같지만
+    응답 모양은 서로 다르므로(그룹은 `execution_id`를 붙인다), 사유만 올려보내고
+    응답은 호출부가 만든다.
+    """
 
 
 def _status_from_plan(state: str, message: str, plan: Dict[str, Any]) -> Dict[str, Any]:
@@ -215,20 +224,16 @@ def _empty_motor_command(
     return command
 
 def _motor_ready_error(motor: Dict[str, Any]) -> str:
-    axis = optional_int(motor.get('controller_index'))
-    if str(motor.get('state') or '') != 'detected':
-        return f'Axis {axis} is not detected'
-    errorcode = optional_int(motor.get('errorcode')) or 0
-    if errorcode:
-        error_hex = str(motor.get('errorcode_hex') or f'0x{errorcode & 0xFFFF:04X}')
-        error_text = str(motor.get('error_text') or '').strip()
-        detail = f' ({error_text})' if error_text else ''
-        return f'Axis {axis} motor alarm {error_hex}{detail}'
-    if bool(motor.get('fault', False)):
-        return f'Axis {axis} has error'
-    if _motor_type(motor) == 'ac_servo' and motor.get('servo_on') is not True:
-        return f'Axis {axis} servo is OFF'
-    return ''
+    """모션 실행·초기화가 요구하는 준비 상태 · `motor_readiness` 단일 구현 경유.
+
+    실행 경로만 알람코드까지 본다. 파일 재생은 사람이 지켜보지 않는 동안에도
+    돌기 때문이다.
+    """
+    return motor_readiness.readiness_error(
+        motor,
+        order=motor_readiness.MOTION_RUN_ORDER,
+        is_ac_servo=_motor_type(motor) == 'ac_servo',
+    )
 
 def _motor_position_deg(motor: Optional[Dict[str, Any]]) -> Optional[float]:
     if motor is None:

@@ -847,26 +847,41 @@ class MotionRunManager(Node):
             'summary': plan['summary'],
         }
 
+    def _claim_run_slot(self) -> List[Dict[str, Any]]:
+        """실행 슬롯을 잡고 모터 스냅샷을 돌려준다 · `_run_lock`을 잡은 채 부른다.
+
+        단일 실행(`_start_thread`)과 그룹 실행(`GroupSession.prepare`)이 각자
+        같은 세 관문을 통과시키고 있었다 · 앞선 실행 · 재생 소유권 · 모터 상태.
+        관문이 하나 늘 때 한쪽만 고치면 그쪽으로만 빠져나간다.
+
+        막혀 있으면 :class:`RunSlotUnavailable`, 모터 상태가 없으면
+        ``ValueError``를 올린다 · 후자는 호출부 위의 명령 라우터가 오류 응답으로
+        바꾸므로 통합 전 계약 그대로다.
+        """
+        if self._run_thread is not None and self._run_thread.is_alive():
+            raise motion_run_rules.RunSlotUnavailable(
+                'previous motion run task is still running'
+            )
+        ownership_error = self._playback_ownership_error()
+        if ownership_error:
+            raise motion_run_rules.RunSlotUnavailable(ownership_error)
+        motors_snapshot = self._current_motors()
+        if not motors_snapshot:
+            raise ValueError('current motion_state is unavailable')
+        self._stop_event.clear()
+        self._graceful_stop_event.clear()
+        return motors_snapshot
+
     def _start_thread(self, mode: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         with self._run_lock:
-            if self._run_thread is not None and self._run_thread.is_alive():
+            try:
+                motors_snapshot = self._claim_run_slot()
+            except motion_run_rules.RunSlotUnavailable as exc:
                 return {
                     'success': False,
-                    'message': 'previous motion run task is still running',
+                    'message': str(exc),
                     'status': self.status(),
                 }
-            ownership_error = self._playback_ownership_error()
-            if ownership_error:
-                return {
-                    'success': False,
-                    'message': ownership_error,
-                    'status': self.status(),
-                }
-            motors_snapshot = self._current_motors()
-            if not motors_snapshot:
-                raise ValueError('current motion_state is unavailable')
-            self._stop_event.clear()
-            self._graceful_stop_event.clear()
             self._automation_resume_pending = False
             if hasattr(self, '_automation_runtime') and isinstance(self._automation_runtime, dict):
                 self._automation_runtime['resume_pending'] = False

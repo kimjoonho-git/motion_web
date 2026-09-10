@@ -6,6 +6,8 @@ nameplate model or a motion profile: those are separate user/project facts.
 
 from typing import Any, Dict, Optional
 
+from motion_common import values
+
 
 PHYSICAL_IDENTITY_FIELDS = (
     'vendor_id',
@@ -24,12 +26,8 @@ PHYSICAL_SII_IDENTITY_SOURCES = frozenset({
 
 
 def optional_int(value: Any) -> Optional[int]:
-    if value in (None, ''):
-        return None
-    try:
-        return int(str(value), 0)
-    except (TypeError, ValueError):
-        return None
+    """Identity fields are always optional: absent stays absent, never 0."""
+    return values.optional_int(value, None)
 
 
 def missing_ethercat_identity(identity: Dict[str, Any]) -> list[str]:
