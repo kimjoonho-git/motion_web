@@ -978,10 +978,12 @@ export function createMotionStudioController({
       },
     );
     if (!confirmed) return null;
+    let failed = null;
     const result = await run(
       () => exportMotionStudio(name),
       {
         onError: (error) => {
+          failed = error;
           void showAlert(motionStudioExportResultMessage(null, error), {
             title: '모션 실행 파일 저장 실패',
             confirmLabel: '확인',
@@ -990,7 +992,13 @@ export function createMotionStudioController({
         },
       },
     );
-    if (!result) return null;
+    if (!result) {
+      // 실패해도 목록은 새로 읽는다 · §6-53
+      // 파일을 쓴 뒤에 실패하면 화면만 옛 목록으로 남아, 저장 안 됐다는 안내와
+      // 실제 디스크가 어긋난다. 서버가 진실이므로 다시 물어본다.
+      if (failed) await onMotionFilesChange(null);
+      return null;
+    }
     await onMotionFilesChange(result);
     await showAlert(motionStudioExportResultMessage(result), {
       title: '모션 실행 파일 저장 완료',

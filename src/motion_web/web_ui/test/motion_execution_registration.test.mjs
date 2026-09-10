@@ -176,7 +176,10 @@ test('motion file list refreshes from successful Studio exports without manual p
   assert.doesNotMatch(dom, /refreshMotionFilesButton/);
   assert.doesNotMatch(controller, /refreshMotionFilesButton/);
   assert.match(controller, /refreshMotionFiles: \(\) => loadFiles\(\)/);
-  assert.match(studio, /if \(!result\) return null;\s*await onMotionFilesChange\(result\)/);
+  // 성공하면 목록을 새로 읽는다
+  assert.match(studio, /await onMotionFilesChange\(result\)/);
+  // 실패해도 새로 읽는다 · 파일을 쓴 뒤 실패하면 화면만 옛 목록으로 남는다 · §6-53
+  assert.match(studio, /if \(failed\) await onMotionFilesChange\(null\)/);
   assert.match(main, /onMotionFilesChange: async \(\) => \{\s*await motionData\.refreshMotionFiles\(\);\s*await projectExplorer\.refresh\(true\)/);
 });
 
