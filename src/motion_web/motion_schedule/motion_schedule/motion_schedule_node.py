@@ -10,7 +10,11 @@ from typing import Dict, Any
 
 from pathlib import Path
 
-from motion_common.coordination import coordination_settings_path, resolve_master_role
+from motion_common.coordination import (
+    coordination_settings_path,
+    load_coordination_settings,
+    resolve_master_role,
+)
 from motion_common.paths import motion_projects_dir, workspace_root
 from motion_common import topics
 
@@ -86,6 +90,22 @@ class MotionScheduleNode(Node):
         if previous is None or previous.is_master != role.is_master:
             self.get_logger().info(f"마스터 판정 · {role.is_master} · {role.reason}")
         return role.is_master
+
+    def _coordination_enabled(self) -> bool:
+        """연동을 쓰는 PC 인가 · 아니면 단독으로 돈다.
+
+        스케줄은 그룹 전용이었다 · `start_group` 만 보내서, 연동을 쓰지 않는
+        PC 에서는 발화는 하는데 "먼저 DDS 그룹에 참가하세요" 로 매번 실패했다.
+        `resolve_master_role` 이 연동 미사용을 "단독 동작으로 간주" 하며 마스터
+        판정을 통과시키기 때문에 조용히 실패했다 · §6-68
+        """
+        path = Path(self.coordination_file)
+        if not path.is_file():
+            return False
+        settings = load_coordination_settings(path)
+        if settings is None:
+            return False
+        return bool(settings.get('enabled', False))
 
     def _load_active_project_from_file(self):
         project_id = None
@@ -197,23 +217,39 @@ class MotionScheduleNode(Node):
         except (OSError, ValueError) as exc:
             self.get_logger().warning(f"Failed to read motion_automation.json: {exc}")
             
+        if self._coordination_enabled():
+            payload = {
+                "command": "start_group",
+                "run_mode": "continuous",
+                "repeat_mode": req_repeat_mode,
+                "dwell_sec": req_dwell_sec,
+                "target_cycle_count": 0,
+                "schedule_id": item.schedule_id,
+            }
+            self._send_http_request("/api/coordination/control", payload)
+            return
+
+        # 단독 · 모션·매핑 파일은 브리지가 프로젝트의 활성 파일로 채운다
         payload = {
-            "command": "start_group",
             "run_mode": "continuous",
             "repeat_mode": req_repeat_mode,
             "dwell_sec": req_dwell_sec,
             "target_cycle_count": 0,
-            "schedule_id": item.schedule_id
+            "schedule_id": item.schedule_id,
         }
-        self._send_http_request("/api/coordination/control", payload)
+        self._send_http_request("/api/motion-run/start", payload)
 
     def _execute_stop_after_cycle(self, item: ScheduleItem):
         self.get_logger().info(f"[SCHEDULE TRIGGER] STOP-AFTER-CYCLE -> '{item.schedule_name}' (ID: {item.schedule_id})")
-        payload = {
-            "command": "stop_after_cycle",
-            "schedule_id": item.schedule_id
-        }
-        self._send_http_request("/api/coordination/control", payload)
+        if self._coordination_enabled():
+            self._send_http_request("/api/coordination/control", {
+                "command": "stop_after_cycle",
+                "schedule_id": item.schedule_id,
+            })
+            return
+        self._send_http_request("/api/motion-run/stop-after-cycle", {
+            "schedule_id": item.schedule_id,
+        })
 
     def _publish_status(self, now: datetime):
         status = {

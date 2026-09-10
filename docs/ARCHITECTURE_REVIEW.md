@@ -4356,6 +4356,53 @@ for f in static/js/*.js; do node -e "import('./$f').catch(e=>console.log('$f', e
 (`startCurrentMotionAutomation` · `reserveCurrentMotionAutomation`)가 살아 있고
 시험도 있다 · **접어 둔 기능이지 죽은 코드가 아니다** · 사용자 판단 대기.
 
+### 6-68. 스케줄이 단독 실행에도 적용된다
+
+검증 · `pytest src/` **1082건**(신규 4건) · `colcon build` 2패키지 ·
+`node --test` 265건
+
+#### 조용히 실패하고 있었다
+
+스케줄 노드는 `start_group` 과 `stop_after_cycle` 을
+`/api/coordination/control` 로만 보냈다 · **그룹 전용이었다.**
+
+연동을 쓰지 않는 PC 에서도 스케줄은 **발화한다** ·
+`resolve_master_role` 이 연동 미사용을 "단독 동작으로 간주" 하며 마스터 판정을
+통과시키기 때문이다(`coordination.py:72`). 그리고 그룹 명령이
+**"먼저 DDS 그룹에 참가하세요"** 로 매번 실패했다.
+
+화면에는 아무 표시가 없다 · 로그를 보지 않으면 "스케줄이 안 돈다"는 것만 알 수
+있었다.
+
+#### 범위로 갈라 보낸다
+
+```
+연동 사용 (enabled)   → /api/coordination/control  start_group / stop_after_cycle
+단독                  → /api/motion-run/start · /api/motion-run/stop-after-cycle
+```
+
+판정은 연동 설정 파일의 `enabled` 하나다 · 파일이 없거나 읽지 못하면 **단독으로
+본다** · 그룹 명령이 실패하는 것보다 낫다.
+
+#### 화면 없는 호출자를 위해 서버가 채운다
+
+로컬 실행은 `motion_file_id` · `mapping_file_id` 를 요구한다. 화면은 무엇을
+재생할지 알고 보내지만 **스케줄러는 모른다.**
+
+`motion_automation_configure` 가 이미 프로젝트의 활성 파일을 채우고 있었다 ·
+그 부분을 `_with_active_project_files()` 로 떼어 `motion_run_start` 도 쓰게 했다.
+프로젝트가 "재생 등록" 으로 정해 둔 값을 그대로 쓴다.
+
+빠진 값만 채우므로 화면에서 오는 요청은 그대로다.
+
+#### 시험
+
+노드를 띄우려면 `rclpy` 가 필요하므로 **어느 엔드포인트로 나가는지**를 소스에서
+확인한다(`motion_schedule/test/`) · 두 경로가 모두 있는지 · 연동 경로가 먼저
+갈라지는지 · 설정을 못 읽으면 단독으로 보는지 · 브리지가 활성 파일을 채우는지.
+
+단독 경로를 지워 보고 실제로 잡히는 것을 확인했다.
+
 ### 배포 잔여
 
 **다른 PC 2대는 `colcon build` 필수** · `motion_common` 외 신규 패키지 다수 ·

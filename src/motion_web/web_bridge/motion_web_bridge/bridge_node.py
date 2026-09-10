@@ -1501,11 +1501,18 @@ class MotionWebBridge(Node):
         blocker = self._motor_runtime_control_blocker()
         if blocker:
             return {'success': False, 'message': f'모션 실행 불가: {blocker}'}
-        return self._request_motion_run('start', payload, timeout_sec=2.0)
+        # 스케줄러처럼 화면 없는 호출자는 무엇을 재생할지 모른다 ·
+        # 프로젝트가 정해 둔 활성 파일로 채운다 · §6-68
+        return self._request_motion_run(
+            'start', self._with_active_project_files(payload), timeout_sec=2.0,
+        )
 
-    def motion_automation_configure(
-        self, payload: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    def _with_active_project_files(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """빠진 모션·매핑 파일을 현재 프로젝트의 활성 파일로 채운다.
+
+        화면은 무엇을 재생할지 알고 보내지만, 스케줄러 같은 화면 없는 호출자는
+        모른다. 프로젝트가 이미 "재생 등록" 으로 정해 둔 값을 서버가 채운다 · §6-68
+        """
         with self._lock:
             project_id = self.project_repository.selected_project_id()
             context = self.project_repository.execution_context(project_id) if project_id else {}
@@ -1514,15 +1521,21 @@ class MotionWebBridge(Node):
             mapping = files.get('motion_axis_matching') if isinstance(files.get('motion_axis_matching'), dict) else {}
             active_motion = str(motions.get('name') or '').strip()
             active_mapping = str(mapping.get('name') or '').strip()
-        
-        request_payload = dict(payload if payload is not None else {})
-        if not str(request_payload.get('motion_file_id') or '').strip():
-            request_payload['motion_file_id'] = active_motion
-        if not str(request_payload.get('mapping_file_id') or '').strip():
-            request_payload['mapping_file_id'] = active_mapping
 
+        filled = dict(payload if payload is not None else {})
+        if not str(filled.get('motion_file_id') or '').strip():
+            filled['motion_file_id'] = active_motion
+        if not str(filled.get('mapping_file_id') or '').strip():
+            filled['mapping_file_id'] = active_mapping
+        return filled
+
+    def motion_automation_configure(
+        self, payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
         return self._request_motion_run(
-            'automation_configure', request_payload, timeout_sec=2.0
+            'automation_configure',
+            self._with_active_project_files(payload),
+            timeout_sec=2.0,
         )
 
     def motion_automation_start(
