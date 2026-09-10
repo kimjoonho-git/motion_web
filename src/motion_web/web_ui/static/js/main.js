@@ -12,11 +12,11 @@ import {
   setProjectGeneration,
   fetchSystemVersion,
 } from './api.js?v=20260910-api-table-1';
-import { getElements } from './dom.js?v=20260910-run-group-2';
+import { getElements } from './dom.js?v=20260910-overdub-1';
 import { createMotorEventLogController } from './event_log.js?v=20260727-popup-common-3';
 import { createMidiMonitorController } from './midi_monitor.js?v=20260806-midi-pickup-reconnect-1';
 import { createMotionDataController } from './motion_data.js?v=20260910-roles-1';
-import { createMotionStudioController } from './motion_studio.js?v=20260804-point-actions-range-1';
+import { createMotionStudioController } from './motion_studio.js?v=20260910-overdub-1';
 import { createMotionTestController } from './motion_test.js?v=20260728-servo-alarm-2';
 import { createMotorConfigController } from './motor_config.js?v=20260731-project-compatible-scan-1';
 import { createProjectExplorerController } from './project_explorer.js?v=20260807-runtime-clear-1';

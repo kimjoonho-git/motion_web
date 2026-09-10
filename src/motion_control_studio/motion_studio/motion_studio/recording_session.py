@@ -10,7 +10,7 @@ from typing import Any, Dict
 from .constants import DEFAULT_PERIOD_SEC
 from .layer_commands import next_numbered_layer_name
 from .motion_model import layer_motion_ids
-from .timeline import motion_file_text, recording_values
+from .timeline import motion_file_text, project_motion_ids, recording_values
 
 
 class StudioRecordingSession:
@@ -21,6 +21,27 @@ class StudioRecordingSession:
     def mode_label(mode: str) -> str:
         return {'overdub': '오버더빙', 'append': '이어 녹화'}.get(mode, '녹화')
 
+    def overdub_candidates_locked(self) -> list:
+        """추가 녹화로 녹화할 수 있는 축 · 활성 레이어가 쓰는 축을 뺀 나머지.
+
+        녹화를 시작하고 나서야 "녹화된 축이 없습니다" 로 끝나면 한 번을 헛돌린다 ·
+        누를 수 있는지 화면이 먼저 알려 준다 · §6-71
+        """
+        studio = self.studio
+        project = studio._current_project
+        if not project:
+            return []
+        try:
+            mapping = studio._store.mapping_check(project)
+        except Exception:
+            return []
+        taken = set(project_motion_ids(project))
+        return [
+            str(motion_id)
+            for motion_id in (mapping.get('motion_ids') or [])
+            if str(motion_id) not in taken
+        ]
+
     def start(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         studio = self.studio
         mode = str(payload.get('mode') or 'record').strip().lower()
@@ -30,14 +51,32 @@ class StudioRecordingSession:
             studio._require_idle_locked()
             project = studio._require_project_locked()
             mapping = studio._validate_mapping_locked(project)
-            if mode in {'overdub', 'append'} and project.get('layers'):
+            # 이어 녹화(append)는 레이어에 시작 시각 개념이 있어야 한다 ·
+            # 지금 레이어는 모두 0초에서 시작한다 · 아직 막아 둔다 · §6-71
+            if mode == 'append' and project.get('layers'):
                 raise ValueError(
-                    '오버더빙/이어 녹화는 축별 충돌 중재가 완성된 뒤 활성화됩니다. '
-                    '현재는 안전을 위해 일반 모션 녹화만 허용합니다'
+                    '이어 녹화는 레이어 시작 시각을 다룰 수 있게 된 뒤 활성화됩니다. '
+                    '지금은 추가 녹화로 다른 축을 녹화하세요'
                 )
             motion_ids = list(mapping.get('motion_ids') or [])
             if not motion_ids:
                 raise ValueError('모션축 설정에 녹화 가능한 Motion ID가 없습니다')
+
+            # 추가 녹화 · 이미 녹화된 축은 대상에서 뺀다.
+            #
+            # 재생을 함께 돌리지 않으므로(모터는 새 축만 움직인다) 축이 겹치면
+            # 두 레이어가 같은 축·같은 시간을 갖게 되어 `layer_conflicts` 가
+            # 합성을 거절한다 · 녹화가 끝난 뒤에 알면 늦으므로 시작할 때 막는다.
+            if mode == 'overdub':
+                taken = set(project_motion_ids(project))
+                motion_ids = [
+                    motion_id for motion_id in motion_ids if str(motion_id) not in taken
+                ]
+                if not motion_ids:
+                    raise ValueError(
+                        '추가 녹화할 축이 없습니다 · 활성 레이어가 모든 모션축을 '
+                        '이미 쓰고 있습니다. 레이어를 끄거나 새 녹화를 하세요'
+                    )
             studio._record_mode = mode
             studio._record_frames = []
             studio._record_eligible_motion_ids = set(motion_ids)

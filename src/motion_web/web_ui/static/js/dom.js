@@ -313,6 +313,8 @@ export function getElements() {
     studioState: document.getElementById('studioState'),
     studioMappingInfo: document.getElementById('studioMappingInfo'),
     studioInitialMoveTime: document.getElementById('studioInitialMoveTime'),
+    studioOverdubButton: document.getElementById('studioOverdubButton'),
+    studioOverdubHint: document.getElementById('studioOverdubHint'),
     studioRecordButton: document.getElementById('studioRecordButton'),
     studioInitializeButton: document.getElementById('studioInitializeButton'),
     studioPlayButton: document.getElementById('studioPlayButton'),

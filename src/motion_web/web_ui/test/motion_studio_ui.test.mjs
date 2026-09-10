@@ -138,7 +138,9 @@ test('project and transport events pass stable UI values and can be unbound', ()
   // 모션 실행 화면의 [스튜디오로] 버튼이 쓴다(`addMotionFile`) · §6-62
   const el = {
     studioRecordButton: eventTarget(),
-    studioRecordMode: eventTarget('append'),
+    // 녹화 모드 선택은 화면에서 사라졌다 · 버튼이 모드를 정한다 ·
+    // [● 녹화]는 record, [● 추가 녹화]는 overdub · §6-71
+    studioOverdubButton: eventTarget(),
     studioInitialMoveTime: eventTarget('2.5'),
     studioInitializeButton: eventTarget(),
     studioPlayButton: eventTarget(),
@@ -156,11 +158,13 @@ test('project and transport events pass stable UI values and can be unbound', ()
   });
 
   el.studioRecordButton.emit('click');
+  el.studioOverdubButton.emit('click');
   el.studioStopButton.emit('click');
   el.studioExportButton.emit('click');
 
   assert.deepEqual(calls, [
-    ['record', { mode: 'append', initialMoveTimeSec: 2.5 }],
+    ['record', { mode: 'record', initialMoveTimeSec: 2.5 }],
+    ['record', { mode: 'overdub', initialMoveTimeSec: 2.5 }],
     ['stop'],
     ['export', 'project-name'],
   ]);

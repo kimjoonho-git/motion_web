@@ -712,3 +712,15 @@ button[aria-disabled="true"] {
   font-size: 13px;
 }
 
+
+/* 추가 녹화 · 어느 축을 녹화할 수 있는지 누르기 전에 알린다.
+   녹화를 시작하고 나서야 "녹화된 축이 없습니다"로 끝나면 한 번을 헛돌린다 · §6-71 */
+.studio-overdub-hint {
+  margin: 6px 0 0;
+  padding: 6px 10px;
+  border: 1px solid #d7e2ee;
+  border-radius: 6px;
+  background: #f4f8fc;
+  color: #4a5666;
+  font-size: 12px;
+}

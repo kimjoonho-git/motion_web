@@ -92,7 +92,12 @@ export function bindMotionStudioProjectTransportEvents(el, handlers = {}) {
     unbind.push(bindMotionStudioEvent(target, type, handler));
   };
   bind(el.studioRecordButton, 'click', () => handlers.onRecord?.({
-    mode: el.studioRecordMode?.value || 'record',
+    mode: 'record',
+    initialMoveTimeSec: Number(el.studioInitialMoveTime?.value || 5),
+  }));
+  // 추가 녹화 · 기존 레이어가 쓰지 않는 축만 새 레이어로 녹화한다 · §6-71
+  bind(el.studioOverdubButton, 'click', () => handlers.onRecord?.({
+    mode: 'overdub',
     initialMoveTimeSec: Number(el.studioInitialMoveTime?.value || 5),
   }));
   bind(el.studioInitializeButton, 'click', () => handlers.onInitialize?.({

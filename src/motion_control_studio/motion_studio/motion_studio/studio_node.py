@@ -602,6 +602,8 @@ class MotionStudioNode(Node):
         self._status['selected_motion_ids'] = list(self._selected_motion_values_locked())
         self._status['recording_motion_ids'] = sorted(self._recorded_motion_ids)
         self._status['record_mode'] = self._record_mode if state == 'recording' else None
+        # 추가 녹화로 어느 축을 녹화할 수 있는지 · 화면이 미리 알려 준다 · §6-71
+        self._status['overdub_motion_ids'] = self._recording().overdub_candidates_locked()
 
     def snapshot(self) -> Dict[str, Any]:
         with self._lock:
