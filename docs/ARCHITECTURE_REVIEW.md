@@ -3880,6 +3880,75 @@ node tools/ui_smoke.mjs --shots /tmp/shots       # 화면별 png 저장
 - 색·간격 같은 시각 품질은 판단하지 않는다 · 스크린샷은 사람이 본다
 - 모터가 도는 중의 화면(실행 중 상태 전이)은 다루지 않는다
 
+### 6-59. 프런트엔드 테스트를 실행 경로에 올리고, 남은 6건을 정리했다
+
+검증 · `node --test` **257건 전부 통과**(이전 251/6실패) · `pytest src/` **1078건**
+· `ui_smoke` 1680/1280px 통과
+
+#### 실행 경로 · `test_frontend_js.py`
+
+`.mjs` 257건이 `colcon` 에도 `pytest` 에도 걸려 있지 않았다. **아무도 돌리지 않으니
+UI 를 고치고도 깨진 줄 몰랐다** · §6-57 커밋이 7건을 깨뜨린 채 올라간 것이 그
+결과다. 도구를 아무리 만들어도 이 구멍은 그대로다.
+
+같은 디렉터리에 이미 `test_css_parts.py` 가 있다 · 옆에 감싸개 하나를 두어
+`pytest src/` 한 번에 딸려 오게 했다. 테스트를 옮기지 않는다 · `.mjs` 는 그대로
+두고 실행 경로만 잇는다. 실패하면 `not ok` 줄과 재현 명령을 함께 보여준다.
+
+감싸개가 실제로 잡는지 확인했다 · `workspaceForProjectCategory` 를 옛 경로로
+되돌리자 `not ok 256` 을 잡았고, 복원하니 다시 통과한다.
+
+#### 남은 6건 · **5건은 낡은 단언, 1건은 실제 결함**
+
+| 실패 | 성격 | 처리 |
+|---|---|---|
+| `coordination_ui` × 2 | **실제** · `coordination.js:144` 만 전역 `document` 를 잡았다 | 등록부 경유로 한 줄 수정 |
+| `motion_automation_ui` × 1 | 화면에서 사라진 `motionAutomationStatus` 를 기대 | 죽은 코드 제거 + 단언 갱신 |
+| `motion_execution_registration` × 3 | 코드가 `motion_file_manager.js` 로 옮겨감 | 소유자 기준으로 단언 이동 |
+
+`coordination.js` 는 다른 요소를 모두 주입받은 등록부로 쓰는데 **그 한 줄만**
+전역 `document.getElementById` 였다. 그래서 노드 없이 렌더를 검증할 수 없었다.
+
+#### 그러다 실제 퇴행 둘을 찾았다
+
+`motion_execution_registration` 의 단언을 옮기려다, 옛 단언이 요구하던 것 중
+**지금 코드에 없는 것**이 있었다. 통과시키려고 단언을 지우는 대신 코드를 확인했고
+둘 다 진짜 누락이었다 · `motion_file_manager.js` 추출 때 빠졌다.
+
+**① 서버 거절을 무시한다.** 삭제 엔드포인트는 등록된 파일을 **HTTP 200 에
+`success: False`** 로 거절한다(`bridge_node.py:1860`). 예외가 아니므로 `catch` 에
+걸리지 않는다. 그런데 코드는 검사 없이 선택을 해제했다.
+
+```js
+const payload = await deleteMotionFile(selectedFileId);
+selectedFileId = null;          // ← 삭제 안 됐는데 선택이 풀린다
+```
+
+클라이언트 선검사가 보통 막아주지만, **다른 브라우저가 방금 등록한 경우** 서버
+경로로 간다 · §6-53·§6-54 와 같은 화면 갱신 계열이다.
+
+**② 삭제 후 프로젝트 트리가 갱신되지 않는다.** `onProjectFilesChange` 가
+추출된 관리자에 전달되지 않아, 지운 파일이 왼쪽 트리에 남았다.
+
+셋째로 실패 알림이 대화상자에서 메시지 줄로 내려가 있었다 · 놓치기 쉬워 되돌렸다.
+
+#### 실행 경로 정리 결과
+
+```
+pytest src/                    1078건 · .mjs 257건 포함
+node --test test/              257건 · 개별 실행용
+node tools/ui_smoke.mjs        화면 · 수동 (웹 브리지 + 크롬 필요)
+```
+
+#### 함께 발견 · `dom.js` 의 허공 등록 25개
+
+화면에서 사라진 요소를 등록부가 계속 가리키는 것이 `motionAutomationStatus`
+하나가 아니었다 · **26개**였고 그중 하나를 이번에 지웠다. 딸린 죽은 코드가
+JS 69줄이다. `if (el.X)` 로 감싸여 있어 조용히 아무 일도 하지 않는다.
+
+나머지 25개는 다음 정리 대상 · 실행 경로가 이제 이어졌으므로 안전하게 걷어낼 수
+있다. 재발 방지 검사(등록부의 모든 id 가 HTML 에 있을 것)를 그때 함께 넣는다.
+
 ### 배포 잔여
 
 **다른 PC 2대는 `colcon build` 필수** · `motion_common` 외 신규 패키지 다수 ·

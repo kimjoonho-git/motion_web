@@ -12,6 +12,12 @@ const controller = readFileSync(
   new URL('../static/js/motion_data.js', import.meta.url),
   'utf8',
 );
+// 목록 적재·선택·삭제·스튜디오 내보내기는 `motion_file_manager.js` 가 소유한다.
+// 소스를 대조하는 단언은 실제 소유자를 봐야 코드가 옮겨갈 때 함께 따라간다.
+const fileManager = readFileSync(
+  new URL('../static/js/motion_file_manager.js', import.meta.url),
+  'utf8',
+);
 const html = indexHtml;
 const dom = readFileSync(new URL('../static/js/dom.js', import.meta.url), 'utf8');
 const main = readFileSync(new URL('../static/js/main.js', import.meta.url), 'utf8');
@@ -62,11 +68,11 @@ test('motion file list does not arbitrarily select the first file', () => {
 });
 
 test('late motion file list responses are discarded by request token', () => {
-  const loadStart = controller.indexOf('async function loadFiles(');
-  const loadEnd = controller.indexOf('async function selectFile(', loadStart);
-  const loadBody = controller.slice(loadStart, loadEnd);
-  const selectEnd = controller.indexOf('async function exportSelectedFileToStudio()', loadEnd);
-  const selectBody = controller.slice(loadEnd, selectEnd);
+  const loadStart = fileManager.indexOf('async function loadFiles(');
+  const loadEnd = fileManager.indexOf('async function selectFile(', loadStart);
+  const loadBody = fileManager.slice(loadStart, loadEnd);
+  const selectEnd = fileManager.indexOf('async function exportSelectedFileToStudio()', loadEnd);
+  const selectBody = fileManager.slice(loadEnd, selectEnd);
 
   assert.match(loadBody, /const loadToken = \+\+fileLoadToken/);
   assert.match(loadBody, /if \(loadToken !== fileLoadToken\) return/);
@@ -128,29 +134,33 @@ test('original motion file view prefers the complete file content without trunca
 });
 
 test('registered motion file deletion is blocked with an alert before delete request', () => {
-  const helperStart = controller.indexOf('async function showMotionFileDeleteFailure(');
-  const deleteStart = controller.indexOf('async function deleteSelectedFile()');
-  const deleteEnd = controller.indexOf('async function refreshMotionRunStatus()', deleteStart);
-  const helperBody = controller.slice(helperStart, deleteStart);
-  const deleteBody = controller.slice(deleteStart, deleteEnd);
-  const registrationGuard = deleteBody.indexOf('selectedFileId === registeredMotionFileIdValue');
+  const helperStart = fileManager.indexOf('async function showMotionFileDeleteFailure(');
+  const deleteStart = fileManager.indexOf('async function deleteSelectedFile()');
+  const deleteEnd = fileManager.length;
+  const helperBody = fileManager.slice(helperStart, deleteStart);
+  const deleteBody = fileManager.slice(deleteStart, deleteEnd);
+  // 등록 여부 판정은 주입받는다 · 소유자가 갈라져도 순서 보증은 그대로여야 한다
+  const registrationGuard = deleteBody.indexOf('checkIsFileRegistered(selectedFileId)');
   const alertCall = deleteBody.indexOf('showMotionFileDeleteFailure(', registrationGuard);
   const confirmCall = deleteBody.indexOf('showConfirm(', registrationGuard);
   const deleteCall = deleteBody.indexOf('deleteMotionFile(selectedFileId)', registrationGuard);
-  const clearSelection = deleteBody.indexOf('selectedFileId = null', deleteCall);
+  const serverGuard = deleteBody.indexOf('payload.success === false', deleteCall);
+  const clearSelection = deleteBody.indexOf('selectedFileId = null', serverGuard);
   const projectRefresh = deleteBody.indexOf('await onProjectFilesChange?.()', clearSelection);
 
-  assert.ok(helperStart >= 0);
+  assert.ok(helperStart >= 0, '삭제 불가 알림 헬퍼가 있어야 한다');
   assert.match(helperBody, /showAlert\(/);
   assert.match(helperBody, /title: '모션 파일 삭제 불가'/);
-  assert.ok(registrationGuard >= 0);
-  assert.ok(alertCall > registrationGuard);
-  assert.ok(confirmCall > alertCall);
-  assert.ok(deleteCall > confirmCall);
-  assert.ok(clearSelection > deleteCall);
-  assert.ok(projectRefresh > clearSelection);
+  assert.ok(registrationGuard >= 0, '등록 파일 선검사가 있어야 한다');
+  assert.ok(alertCall > registrationGuard, '막았으면 알린다');
+  assert.ok(confirmCall > alertCall, '확인은 선검사를 통과한 뒤');
+  assert.ok(deleteCall > confirmCall, '삭제 요청은 확인 뒤');
+  // 서버도 등록 여부를 검사한다 · 200 + success:false 로 오므로 예외가 아니다.
+  // 이 검사를 빼면 삭제되지 않았는데 선택이 풀린다.
+  assert.ok(serverGuard > deleteCall, '서버 거절을 검사해야 한다');
+  assert.ok(clearSelection > serverGuard, '선택 해제는 성공을 확인한 뒤');
+  assert.ok(projectRefresh > clearSelection, '삭제 후 프로젝트 트리를 갱신한다');
   assert.match(deleteBody, /재생 등록된 모션 파일은 삭제할 수 없습니다/);
-  assert.match(deleteBody, /if \(payload\.success === false\)/);
   assert.match(
     deleteBody,
     /catch \(error\) \{[\s\S]*?await showMotionFileDeleteFailure\(message\)/,
@@ -161,7 +171,8 @@ test('motion file screen exports the selected file to Studio without project-tre
   assert.match(html, /id="exportMotionFileToStudioButton"/);
   assert.match(dom, /exportMotionFileToStudioButton: document\.getElementById\('exportMotionFileToStudioButton'\)/);
   assert.match(controller, /exportMotionFileToStudioButton\?\.addEventListener\('click', exportSelectedFileToStudio\)/);
-  assert.match(controller, /onExportMotionFileToStudio\(file\.id\)/);
+  assert.match(fileManager, /onExportToStudio\(file\.id\)/);
+  assert.match(controller, /onExportMotionFileToStudio\(id\)/);
   assert.match(main, /onExportMotionFileToStudio: \(fileName\) => motionStudio\.addMotionFile\(fileName\)/);
   assert.doesNotMatch(projectExplorer, /data-project-add-layer/);
   assert.doesNotMatch(projectExplorer, /onAddMotionLayer/);

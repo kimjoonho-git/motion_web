@@ -1321,23 +1321,6 @@ export function createMotionDataController({
     )).join('');
   }
 
-  function motionAutomationStateText(state) {
-    const labels = {
-      off: '사용 안 함',
-      ready: '시작 대기',
-      checking: '검사 중',
-      starting: '시작 중',
-      initializing: '초기 위치 이동 중',
-      initialized: '초기 위치 이동 완료',
-      running: '반복 중',
-      waiting: '회차 사이 대기',
-      stop_requested: '현재 단계 후 정지',
-      stopped: '정지',
-      blocked: '실행 차단',
-    };
-    const key = String(state || 'off');
-    return labels[key] || key;
-  }
 
   function renderMotionAutomation() {
     const automation = motionRunStatus?.automation || {};
@@ -1376,14 +1359,6 @@ export function createMotionDataController({
       el.motionAutomationReserveButton.disabled = (
         motionRunLoading || !enabled || !hasFiles || !contextReady
       );
-    }
-    if (el.motionAutomationStatus) {
-      el.motionAutomationStatus.textContent = motionAutomationStateText(
-        automation.state,
-      );
-      el.motionAutomationStatus.className = automation.state === 'blocked'
-        ? 'bad-text'
-        : (armed ? 'warning-text' : '');
     }
     if (el.motionAutomationDetail) {
       const fileName = motionRunSelectedMotionFile()?.filename
@@ -2584,6 +2559,7 @@ export function createMotionDataController({
       await onProjectFilesChange?.();
       return result;
     },
+    onProjectFilesChange: () => onProjectFilesChange?.(),
     setMessage: setMessage,
     setLoading: (l) => { loading = l; render(); },
     checkIsFileRegistered: (id) => id === registeredMotionFileIdValue,

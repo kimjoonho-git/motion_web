@@ -18,14 +18,16 @@ test('automatic repeat has explicit enable policy and start controls', () => {
     'motionAutomationRepeatMode',
     'motionAutomationDwellSec',
     'motionAutomationStartButton',
-    'motionAutomationStatus',
   ]) {
     assert.match(html, new RegExp(`id="${id}"`));
     assert.match(dom, new RegExp(`${id}: document\\.getElementById\\('${id}'\\)`));
   }
-  assert.match(html, /value="direct">바로 반복/);
-  assert.match(html, /value="dwell">정지 후 반복/);
-  assert.match(html, /value="reinitialize">초기 위치 이동 후 반복/);
+  // 화면에서 사라진 요소를 등록부가 계속 가리키면 갱신 코드가 조용히 죽는다 ·
+  // motionAutomationStatus 가 그랬다 · §6-59
+  assert.doesNotMatch(dom, /motionAutomationStatus/);
+  assert.match(html, /value="direct">바로 다음 모션/);
+  assert.match(html, /value="dwell">대기 후 다음 모션/);
+  assert.match(html, /value="reinitialize" selected>초기 위치 이동 후 다음/);
 });
 
 test('automatic repeat uses runtime APIs instead of browser timers', () => {

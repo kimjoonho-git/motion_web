@@ -141,7 +141,9 @@ export function createCoordinationController({ el }) {
     const configured = config.enabled === true && Boolean(config.group_id);
     renderSettings(config);
     
-    const rosterBanner = document.getElementById('coordinationConfirmedRosterBanner');
+    // 이 모듈의 다른 요소는 모두 주입받은 등록부를 쓴다 · 여기만 전역
+    // `document` 를 잡고 있어서 노드 없이 렌더를 검증할 수 없었다.
+    const rosterBanner = el.coordinationConfirmedRosterBanner;
     if (rosterBanner) {
       if (requiredPeersList.length > 0) {
         rosterBanner.innerHTML = `<span style="color: var(--color-primary);">✅ 현재 그룹 필수 참가 명단:</span> ${requiredPeersList.join(', ')}`;
