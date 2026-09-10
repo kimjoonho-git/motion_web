@@ -56,3 +56,42 @@ def test_local_run_fills_active_project_files():
     start = bridge.index('def motion_run_start(')
     body = bridge[start:bridge.index('\n    def ', start)]
     assert '_with_active_project_files(payload)' in body
+
+
+def test_slave_pc_cannot_own_schedules():
+    """연동 슬레이브는 스케줄을 만들 수 없다 · §6-69
+
+    슬레이브는 스케줄을 저장해도 발화하지 않는다 · `_on_timer_tick` 이 마스터가
+    아니면 바로 돌아간다. 그런데 API 와 화면은 저장을 받아 줬다 · 돌지 않는
+    스케줄이 조용히 쌓이고 마스터의 목록과도 따로 놀았다.
+    """
+    routes = (
+        Path(__file__).resolve().parents[2]
+        / 'web_bridge' / 'motion_web_bridge' / 'routes' / 'schedule_routes.py'
+    ).read_text(encoding='utf-8')
+
+    assert 'def _require_schedule_owner()' in routes
+
+    def handler_body(name: str) -> str:
+        start = routes.index(f'async def {name}(')
+        nxt = routes.find('\n    @app.', start)
+        return routes[start:nxt if nxt > 0 else len(routes)]
+
+    # 쓰기 네 곳이 모두 관문을 지난다 · 읽기는 열어 둔다
+    for handler in ('save_schedule', 'delete_schedule', 'enable_schedule', 'disable_schedule'):
+        assert '_require_schedule_owner()' in handler_body(handler), f'{handler} 에 관문이 없다'
+    for reader in ('get_schedule_list', 'get_schedule_status'):
+        assert '_require_schedule_owner()' not in handler_body(reader), (
+            f'{reader} 는 열려 있어야 한다 · 슬레이브도 무엇이 걸려 있는지 볼 수 있어야 한다'
+        )
+
+
+def test_schedule_button_is_disabled_on_a_slave():
+    manager = (
+        Path(__file__).resolve().parents[2]
+        / 'web_ui' / 'static' / 'js' / 'schedule_manager.js'
+    ).read_text(encoding='utf-8')
+    start = manager.index('updateStatusBadge()')
+    body = manager[start:start + 1400]
+    assert 'button.disabled = !owner' in body, '슬레이브에서 버튼이 잠기지 않는다'
+    assert '마스터 PC 에서 설정' in body, '왜 못 쓰는지 알려주지 않는다'

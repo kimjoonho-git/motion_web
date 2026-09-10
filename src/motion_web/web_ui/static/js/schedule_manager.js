@@ -86,10 +86,20 @@ const ScheduleManager = {
         const badge = document.getElementById('scheduleStatusBadge');
         const badgeCoord = document.getElementById('scheduleStatusBadgeCoord');
         if (this.status) {
-            const text = this.status.is_master
+            // 연동 슬레이브는 스케줄을 만들어도 발화하지 않는다 · 노드가 마스터가
+            // 아니면 타이머를 건너뛴다. "대기"로 읽히면 나중에 도는 줄 안다 · §6-69
+            const owner = this.status.is_master;
+            const text = owner
                 ? `스케줄러: 마스터 (${this.status.schedule_count || 0}개 등록)`
-                : '스케줄러: 슬레이브 대기';
-            const cls = this.status.is_master ? 'badge bg-success me-2' : 'badge bg-secondary me-2';
+                : '스케줄러: 슬레이브 · 마스터 PC 에서 설정';
+            const cls = owner ? 'badge bg-success me-2' : 'badge bg-secondary me-2';
+            const blockedTitle = '이 PC 는 연동 슬레이브라 스케줄을 설정할 수 없습니다 · 마스터 PC 에서 설정하세요';
+            ['btnScheduleModal', 'btnScheduleModalCoord'].forEach((id) => {
+                const button = document.getElementById(id);
+                if (!button) return;
+                button.disabled = !owner;
+                button.title = owner ? '' : blockedTitle;
+            });
 
             if (badge) {
                 badge.className = cls;
