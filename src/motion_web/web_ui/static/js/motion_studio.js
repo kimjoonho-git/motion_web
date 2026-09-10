@@ -42,7 +42,6 @@ import {
   bindMotionStudioEvent,
   bindMotionStudioProjectTransportEvents,
   createMotionStudioState,
-  renderMotionStudioWorkspace,
   motionStudioExportSelection,
   motionStudioExportResultMessage,
   resetMotionStudioProjectState,
@@ -241,7 +240,6 @@ export function createMotionStudioController({
   }
 
   function renderLists() {
-    renderMotionStudioWorkspace(el, state);
   }
 
   function renderMapping() {
@@ -773,14 +771,6 @@ export function createMotionStudioController({
     if (el.studioState) el.studioState.textContent = state.status?.message || '대기';
     if (el.studioElapsed) el.studioElapsed.textContent = timeText(state.status?.elapsed_sec);
     if (el.studioFrameCount) el.studioFrameCount.textContent = `${state.status?.recorded_frames || 0}프레임 · 20ms`;
-    if (el.studioImportButton) {
-      el.studioImportButton.disabled = (
-        state.busy
-        || running
-        || !hasProject
-        || !el.studioImportFileSelect?.value
-      );
-    }
     if (el.studioRecordButton) {
       el.studioRecordButton.disabled = state.busy || running || !hasProject || !hasMotionAxes || Boolean(motorBlockReason);
       el.studioRecordButton.title = motorBlockReason || '';
@@ -1039,10 +1029,6 @@ export function createMotionStudioController({
     });
     bindMotionStudioProjectTransportEvents(el, {
       // Capture the selection before run() redraws the control from saved state.
-      onImportSelectionChange: renderControls,
-      onImport: (motionFileId) => run(() => importMotionStudioFile({
-        motion_file_id: motionFileId,
-      })),
       onRecord: ({ mode, initialMoveTimeSec }) => {
         if (!requireMotorActionReady('녹화')) return;
         showLayerGraph({ composition: true });

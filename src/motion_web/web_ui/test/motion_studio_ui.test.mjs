@@ -134,9 +134,9 @@ function eventTarget(value = '') {
 }
 
 test('project and transport events pass stable UI values and can be unbound', () => {
+  // 스튜디오 안의 "가져올 모션 파일 선택" 입구는 없어졌다 · 같은 API 를
+  // 모션 실행 화면의 [스튜디오로] 버튼이 쓴다(`addMotionFile`) · §6-62
   const el = {
-    studioImportFileSelect: eventTarget('motion-a'),
-    studioImportButton: eventTarget(),
     studioRecordButton: eventTarget(),
     studioRecordMode: eventTarget('append'),
     studioInitialMoveTime: eventTarget('2.5'),
@@ -149,20 +149,17 @@ test('project and transport events pass stable UI values and can be unbound', ()
   };
   const calls = [];
   const unbind = bindMotionStudioProjectTransportEvents(el, {
-    onImport: (value) => calls.push(['import', value]),
     onRecord: (value) => calls.push(['record', value]),
     onStop: () => calls.push(['stop']),
     defaultExportName: () => 'project-name',
     onExport: (value) => calls.push(['export', value]),
   });
 
-  el.studioImportButton.emit('click');
   el.studioRecordButton.emit('click');
   el.studioStopButton.emit('click');
   el.studioExportButton.emit('click');
 
   assert.deepEqual(calls, [
-    ['import', 'motion-a'],
     ['record', { mode: 'append', initialMoveTimeSec: 2.5 }],
     ['stop'],
     ['export', 'project-name'],

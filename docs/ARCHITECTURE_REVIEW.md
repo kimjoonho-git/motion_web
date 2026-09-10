@@ -4050,6 +4050,56 @@ export const saveMotorConfig = (payload) => request('PUT', '/api/motor-config', 
 빠지면서 정보가 사라진 것**이다. 코드를 지운 것은 죽어 있었기 때문이고, 그 정보가
 필요하면 화면과 함께 되살려야 한다 · 사용자 판단 대기.
 
+### 6-62. 스튜디오 안의 옛 "모션 파일 가져오기" 입구 제거
+
+검증 · `node --test` 259건 · `pytest src/` 1078건 · `ui_smoke` 통과
+
+§6-61에서 판단을 미뤄 둔 항목이다. 확인해 보니 **기능은 살아 있고 입구만 옮겨간
+것**이었다.
+
+```
+옛 입구 (죽음)    스튜디오 화면의 "가져올 모션 파일 선택" ▾ + [가져오기]
+                     ↓ onImport
+                  importMotionStudioFile({ motion_file_id })
+                     ↓
+현 입구 (살아있음) 모션 실행 화면의 [스튜디오로] 버튼
+                     ↓ addMotionFile (motion_studio.js:1380)
+                  importMotionStudioFile({ motion_file_id })   ← 같은 함수
+                     ↓
+                  POST /api/motion-studio/import               ← 살아 있음
+```
+
+HTML 만 `09-panel-studio.html` 에서 사라졌고 뒤쪽은 그대로였다. 새 입구가 더
+낫다 · 파일 목록·검증·그래프가 모두 있는 모션 실행 화면에서 고르는 편이,
+스튜디오 안 드롭다운에서 이름만 보고 고르는 것보다 낫다.
+
+옛 입구의 죽은 코드 **36줄**을 지웠다 · `renderMotionStudioWorkspace` ·
+가져오기 버튼 활성 판정 · 핸들러 연결 · 두 개의 bind.
+
+테스트는 `import` 검증만 빼고 `record` · `stop` · `export` 는 그대로 뒀다 ·
+그 함수가 검증하는 것은 "버튼을 누르면 값이 핸들러로 넘어가는가" 이고 나머지
+셋은 여전히 화면에 있다.
+
+#### 이번에 배운 것 · `node --check` 는 ESM 문법 오류를 놓친다
+
+블록을 잘라내면서 `});` 의 `);` 가 남았는데 `node --check` 가 통과시켰다.
+`.mjs` 테스트 3개가 모듈 적재 단계에서 실패해 잡혔다.
+
+**ESM 은 `node --check` 가 아니라 실제 `import()` 로 확인해야 한다.**
+
+```
+node -e "import('./static/js/X.js').then(()=>console.log('OK')).catch(e=>console.log(e.message))"
+```
+
+#### 남긴 것 · 녹화 모드 선택
+
+`studioRecordMode` 도 화면에서 사라졌다. 백엔드는 셋을 받는다
+(`recording_session.py:27`) · `record` · `overdub`(오버더빙) ·
+`append`(이어 녹화). 선택 UI 가 없어 지금은 **`record` 고정**이고 오버더빙과
+이어 녹화를 화면에서 쓸 수 없다.
+
+이번 범위에서 제외했다 · 사용자 판단 대기.
+
 ### 배포 잔여
 
 **다른 PC 2대는 `colcon build` 필수** · `motion_common` 외 신규 패키지 다수 ·

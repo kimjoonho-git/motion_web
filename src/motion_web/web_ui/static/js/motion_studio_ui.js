@@ -84,19 +84,6 @@ export function motionStudioExportSelection(layers = []) {
   };
 }
 
-export function renderMotionStudioWorkspace(el, state) {
-  if (el.studioImportFileSelect) {
-    const selected = el.studioImportFileSelect.value;
-    el.studioImportFileSelect.innerHTML = (
-      '<option value="">가져올 모션 파일 선택</option>'
-      + state.motionFiles.map((item) => (
-        `<option value="${escapeHtml(item.file_id)}" ${item.valid ? '' : 'disabled'}>${escapeHtml(item.title || item.file_id)} · ${item.frame_count}프레임${item.valid ? '' : ' · 오류'}</option>`
-      )).join('')
-    );
-    el.studioImportFileSelect.value = selected;
-  }
-}
-
 export function bindMotionStudioEvent(target, type, handler, options) {
   if (!target) return () => {};
   target.addEventListener(type, handler, options);
@@ -108,10 +95,6 @@ export function bindMotionStudioProjectTransportEvents(el, handlers = {}) {
   const bind = (target, type, handler) => {
     unbind.push(bindMotionStudioEvent(target, type, handler));
   };
-  bind(el.studioImportFileSelect, 'change', () => handlers.onImportSelectionChange?.());
-  bind(el.studioImportButton, 'click', () => {
-    handlers.onImport?.(String(el.studioImportFileSelect?.value || ''));
-  });
   bind(el.studioRecordButton, 'click', () => handlers.onRecord?.({
     mode: el.studioRecordMode?.value || 'record',
     initialMoveTimeSec: Number(el.studioInitialMoveTime?.value || 5),
