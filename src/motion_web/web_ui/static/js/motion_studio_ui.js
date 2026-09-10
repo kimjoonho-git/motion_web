@@ -1,8 +1,4 @@
-function escapeHtml(value) {
-  return String(value ?? '').replace(/[&<>"]/g, (character) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;',
-  }[character]));
-}
+import { escapeHtml } from './format.js?v=20260718-korean-ui';
 
 export function createMotionStudioState() {
   return {

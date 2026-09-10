@@ -1,3 +1,4 @@
+import { escapeHtml } from './format.js?v=20260718-korean-ui';
 import {
   activateProjectFile,
   clearMotorRuntimeApplication,
@@ -17,12 +18,6 @@ import {
   selectProject,
 } from './api.js?v=20260910-api-table-1';
 import { showAlert, showConfirm, showPrompt } from './ui_dialogs.js?v=20260727-popup-common-3';
-
-function escapeHtml(value) {
-  return String(value ?? '').replace(/[&<>"']/g, (character) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-  }[character]));
-}
 
 function formatBytes(value) {
   const bytes = Number(value) || 0;

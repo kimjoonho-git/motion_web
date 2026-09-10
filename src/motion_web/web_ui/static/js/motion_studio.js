@@ -1,3 +1,4 @@
+import { escapeHtml } from './format.js?v=20260718-korean-ui';
 import {
   commitMotionStudioMerge,
   createMotionStudioLayer,
@@ -89,12 +90,6 @@ export {
   motionStudioShouldProtectPointAxisSelection, motionStudioSnapFrameTime,
   resolveMotionStudioSelectedLayerId, synchronizeMotionStudioEditorTimeline,
 };
-function escapeHtml(value) {
-  return String(value ?? '').replace(/[&<>"]/g, (character) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;',
-  }[character]));
-}
-
 function timeText(seconds) {
   const value = Math.max(0, Number(seconds) || 0);
   const minutes = Math.floor(value / 60);
