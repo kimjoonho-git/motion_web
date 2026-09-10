@@ -30,9 +30,10 @@ test('workspace routes resolve their group and shared motion panel', () => {
   assert.equal(workspaceGroupFor('config'), 'setup');
   assert.equal(workspaceGroupFor('servo-errors'), 'setup');
   assert.equal(workspaceGroupFor('motion-midi'), 'creation');
-  assert.equal(workspaceGroupFor('motion-files'), 'execution');
   assert.equal(workspaceGroupFor('motion-run'), 'execution');
-  assert.equal(workspacePanelFor('motion-files'), 'motion');
+  assert.equal(workspacePanelFor('motion-run'), 'motion');
+  // 파일 관리는 모션 실행 화면으로 합쳐졌다 · 옛 경로는 더 이상 없다
+  assert.equal(normalizeWorkspaceRoute('motion-files'), 'monitoring');
   assert.equal(workspacePanelFor('studio'), 'studio');
   assert.equal(motionTabForWorkspace('motion-mapping'), 'mapping');
 });
@@ -43,14 +44,16 @@ test('workspace defaults and legacy motion navigation are deterministic', () => 
   assert.equal(normalizeWorkspaceRoute('unknown'), 'monitoring');
   assert.equal(workspaceForLegacyNavigation('motion', 'midi'), 'motion-midi');
   assert.equal(workspaceForLegacyNavigation('project', 'mapping'), 'motion-mapping');
-  assert.equal(workspaceForLegacyNavigation('motion', 'unknown'), 'motion-files');
+  assert.equal(workspaceForLegacyNavigation('motion', 'unknown'), 'motion-run');
+  // 옛 'files' 탭 요청도 통합된 실행 화면으로 보낸다 · 북마크·탐색기 대비
+  assert.equal(workspaceForLegacyNavigation('motion', 'files'), 'motion-run');
   assert.equal(workspaceForLegacyNavigation('config'), 'config');
 });
 
 test('project categories navigate directly to their feature screen', () => {
   assert.equal(workspaceForProjectCategory('motor_axes'), 'config');
   assert.equal(workspaceForProjectCategory('motion_axis_matching'), 'motion-mapping');
-  assert.equal(workspaceForProjectCategory('motions'), 'motion-files');
+  assert.equal(workspaceForProjectCategory('motions'), 'motion-run');
   assert.equal(workspaceForProjectCategory('layers'), 'studio');
   assert.equal(workspaceForProjectCategory('logs'), 'log');
 });

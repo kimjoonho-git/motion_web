@@ -18,7 +18,7 @@ test('two-level workspace navigation exposes every defined group and route', () 
   }
   for (const route of [
     'monitoring', 'log', 'system', 'config',
-    'motion-files', 'motion-mapping', 'motion-midi', 'studio',
+    'motion-mapping', 'motion-midi', 'studio',
     'manual', 'motion-run',
   ]) {
     assert.match(html, new RegExp(`data-workspace-tab=["']${route}["']`));
@@ -28,23 +28,28 @@ test('two-level workspace navigation exposes every defined group and route', () 
   assert.doesNotMatch(main, /tab\?\.click\(\)/);
 });
 
-test('motion files are shown under execution and test, not motion creation', () => {
+test('motion files are managed inside the execution screen, not a separate tab', () => {
   const creationPanel = html.match(
     /data-workspace-group-panel="creation"[\s\S]*?<\/div>/,
   )?.[0] || '';
   const executionPanel = html.match(
     /data-workspace-group-panel="execution"[\s\S]*?<\/div>/,
   )?.[0] || '';
-  assert.doesNotMatch(creationPanel, /data-workspace-tab="motion-files"/);
-  assert.match(executionPanel, /data-workspace-tab="motion-files"/);
+  assert.doesNotMatch(creationPanel, /data-workspace-tab="motion-run"/);
+  assert.match(executionPanel, /data-workspace-tab="motion-run"/);
+  // 파일 관리가 실행 화면으로 합쳐졌으므로 별도 탭은 어디에도 없어야 한다
+  assert.doesNotMatch(html, /data-workspace-tab="motion-files"/);
 });
 
 test('motion screens use workspace routes without obsolete internal tab controls', () => {
   assert.doesNotMatch(html, /id=["']motionTabs["']/);
   assert.doesNotMatch(html, /data-motion-tab=/);
-  for (const panel of ['files', 'mapping', 'midi', 'run']) {
+  for (const panel of ['mapping', 'midi', 'run']) {
     assert.match(html, new RegExp(`data-motion-panel=["']${panel}["']`));
   }
+  // 'files' 패널은 'run' 으로 합쳐졌다 · 목록과 실행이 같은 화면에 뜬다
+  assert.doesNotMatch(html, /data-motion-panel=["']files["']/);
+  assert.equal((html.match(/data-motion-panel="run"/g) || []).length, 1);
 });
 
 test('header status and controls share one compact row with separators', () => {

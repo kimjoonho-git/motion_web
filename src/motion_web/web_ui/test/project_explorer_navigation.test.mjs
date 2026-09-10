@@ -25,7 +25,7 @@ test('MIDI bank entry opens its mapping and then navigates to MIDI input', () =>
 });
 
 test('motion controller owns active panel state without hidden DOM tabs', () => {
-  assert.match(motionData, /let activeMotionPanel = 'files'/);
+  assert.match(motionData, /let activeMotionPanel = 'run'/);
   assert.match(motionData, /panel\.dataset\.motionPanel !== activeMotionPanel/);
   assert.doesNotMatch(motionData, /el\.motionTabs/);
 });
