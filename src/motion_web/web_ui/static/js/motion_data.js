@@ -516,7 +516,7 @@ export function createMotionDataController({
   let mappingLoadToken = 0;
   let mappingRevision = '';
   let mappingRevisionConflict = false;
-  let activeMotionPanel = 'files';
+  let activeMotionPanel = 'run';
   let motionRunStatus = null;
   let motionRunLastResult = null;
   let motionRunLoading = false;
@@ -1206,10 +1206,20 @@ export function createMotionDataController({
     const mismatch = selectedFileId
       && mappingDraft.motion_file_id
       && selectedFileId !== mappingDraft.motion_file_id;
-    el.motionRunSummary.innerHTML = valueGridHtml([
-      { label: '모션 파일', value: runFile?.filename || payload.motion_file_id || '-' },
-      { label: '매핑 파일', value: mappingFile?.filename || payload.mapping_file_id || '-' },
+    // 아홉 칸을 같은 크기로 늘어놓으면 정작 알아야 할 "무엇이 재생되는가"가
+    // 묻힌다. 실행 대상 셋을 크게 두고, 나머지 수치는 아래에 작게 붙인다.
+    const targets = [
+      { label: '재생 파일', value: runFile?.filename || payload.motion_file_id || '등록된 파일 없음', missing: !runFile && !payload.motion_file_id },
+      { label: '모션축 설정', value: mappingFile?.filename || payload.mapping_file_id || '선택 안 됨', missing: !mappingFile && !payload.mapping_file_id },
       { label: '상태', value: motionRunStateText(status.state) },
+    ].map((item) => (
+      `<div class="motion-run-target-item${item.missing ? ' missing' : ''}">`
+      + `<span>${displayText(item.label)}</span>`
+      + `<strong title="${displayText(item.value)}">${displayText(item.value)}</strong>`
+      + '</div>'
+    )).join('');
+
+    const metrics = [
       {
         label: '초기 이동',
         value: payload.initial_move_time_sec === null
@@ -1225,8 +1235,21 @@ export function createMotionDataController({
           : '검사 전',
       },
       { label: '주기', value: `${formatNumber(summary.period_sec, 3)} s` },
-      { label: '주의', value: mismatch ? '매핑 파일의 모션 파일 기준으로 실행' : '-' },
-    ]);
+    ].map((item) => (
+      `<div class="motion-run-metric"><span>${displayText(item.label)}</span>`
+      + `<strong>${displayText(item.value)}</strong></div>`
+    )).join('');
+
+    // 고른 파일과 등록된 파일이 다르면 실행 결과가 어긋난다 · 그 자리에서 알린다.
+    const notice = mismatch
+      ? '<div class="motion-run-notice">선택한 파일은 재생 등록되어 있지 않습니다 ·'
+        + ' 재생 등록된 파일 기준으로 실행됩니다</div>'
+      : '';
+
+    el.motionRunSummary.innerHTML =
+      `<div class="motion-run-targets">${targets}</div>`
+      + `<div class="motion-run-metrics">${metrics}</div>`
+      + notice;
   }
 
   function renderMotionRunStatus() {
@@ -1492,10 +1515,10 @@ export function createMotionDataController({
   }
 
   function renderMotionTabs(active = null) {
-    const next = String(active || activeMotionPanel || 'files');
-    activeMotionPanel = ['files', 'mapping', 'midi', 'run'].includes(next)
-      ? next
-      : 'files';
+    // 'files'는 'run'에 합쳐졌다 · 옛 값이 들어와도 실행 화면을 연다
+    const requested = String(active || activeMotionPanel || 'run');
+    const next = requested === 'files' ? 'run' : requested;
+    activeMotionPanel = ['mapping', 'midi', 'run'].includes(next) ? next : 'run';
     if (el.motionPanels) {
       el.motionPanels.forEach((panel) => {
         panel.classList.toggle('hidden', panel.dataset.motionPanel !== activeMotionPanel);
@@ -1504,22 +1527,31 @@ export function createMotionDataController({
   }
 
   function renderFileRows() {
+    if (el.motionFileCount) {
+      el.motionFileCount.textContent = files.length ? `${files.length}개` : '';
+    }
     if (!el.motionFileRows) return;
     if (!files.length) {
-      el.motionFileRows.innerHTML = emptyRow(5, '저장된 모션 파일이 없습니다');
+      el.motionFileRows.innerHTML = emptyRow(3, '저장된 모션 파일이 없습니다');
       return;
     }
     el.motionFileRows.innerHTML = files.map((file) => {
       const analysis = analysisOf(file);
       const selected = file.id === selectedFileId;
-      const duration = analysis.time?.duration_sec;
+      // 재생 등록된 파일은 목록에서 바로 구분돼야 한다. 등록 여부를 알려면
+      // 모션축 설정을 열어봐야 했던 것이 가장 흔한 혼란이었다.
+      const registered = Boolean(registeredMotionFileIdValue)
+        && file.id === registeredMotionFileIdValue;
+      const rowClass = [selected ? 'selected' : '', registered ? 'registered' : '']
+        .filter(Boolean).join(' ');
+      const badge = registered
+        ? '<span class="motion-registered-badge" title="이 파일이 재생 등록되어 있습니다">재생</span>'
+        : '';
       return (
-        `<tr class="${selected ? 'selected' : ''}" data-motion-file-id="${displayText(file.id)}">
-          <td><button type="button" class="link-button" data-motion-file-id="${displayText(file.id)}">${displayText(file.filename)}</button></td>
+        `<tr class="${rowClass}" data-motion-file-id="${displayText(file.id)}">
+          <td class="motion-file-name-cell"><div class="motion-file-name-inner">${badge}<button type="button" class="link-button" data-motion-file-id="${displayText(file.id)}">${displayText(file.filename)}</button></div></td>
           <td><span class="motion-state-pill ${statusClass(file)}">${statusText(file)}</span></td>
-          <td>${formatNumber(duration, 3)} s</td>
-          <td>${formatInt(analysis.motion_id_count)}</td>
-          <td>${bytesText(file.size_bytes)}</td>
+          <td>${formatNumber(analysis.time?.duration_sec, 3)} s</td>
         </tr>`
       );
     }).join('');
@@ -1627,6 +1659,8 @@ export function createMotionDataController({
         { label: '총 시간', value: `${formatNumber(analysis.time?.duration_sec, 3)} s` },
         { label: '모션 ID', value: formatInt(analysis.motion_id_count) },
         { label: '보간', value: interpolation.required ? '20ms 선형보간 필요' : '20ms 기준 통과' },
+        // 목록을 좁혀 뺀 항목 · 여기로 옮겼다
+        { label: '크기', value: bytesText(file.size_bytes) },
       ]);
     }
     if (el.motionFileValidation) el.motionFileValidation.innerHTML = validationHtml(analysis);

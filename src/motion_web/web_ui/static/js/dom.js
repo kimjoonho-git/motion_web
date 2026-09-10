@@ -249,6 +249,7 @@ export function getElements() {
     unregisterMotionFileButton: document.getElementById('unregisterMotionFileButton'),
     deleteMotionFileButton: document.getElementById('deleteMotionFileButton'),
     motionFileMessage: document.getElementById('motionFileMessage'),
+    motionFileCount: document.getElementById('motionFileCount'),
     motionFileRows: document.getElementById('motionFileRows'),
     motionFileSummary: document.getElementById('motionFileSummary'),
     motionFileValidation: document.getElementById('motionFileValidation'),

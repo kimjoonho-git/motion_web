@@ -6,7 +6,7 @@ export const WORKSPACE_GROUPS = Object.freeze({
     'motion-midi',
     'studio',
   ]),
-  execution: Object.freeze(['manual', 'motion-files', 'motion-run']),
+  execution: Object.freeze(['manual', 'motion-run']),
 });
 
 export const WORKSPACE_DEFAULTS = Object.freeze({
@@ -17,17 +17,12 @@ export const WORKSPACE_DEFAULTS = Object.freeze({
 });
 
 export const MOTION_WORKSPACE_TABS = Object.freeze({
-  'motion-files': 'files',
   'motion-mapping': 'mapping',
   'motion-midi': 'midi',
   'motion-run': 'run',
 });
 
 export const MOTION_WORKSPACE_DETAILS = Object.freeze({
-  'motion-files': Object.freeze([
-    '모션 파일',
-    '현재 프로젝트의 모션 데이터를 확인하고 분석합니다',
-  ]),
   'motion-mapping': Object.freeze([
     '모션축 설정',
     '모션 ID를 프로젝트 모터축에 연결하고 실행 변환값을 설정합니다',
@@ -38,7 +33,7 @@ export const MOTION_WORKSPACE_DETAILS = Object.freeze({
   ]),
   'motion-run': Object.freeze([
     '모션 실행',
-    '초기 위치 이동과 모션 재생 상태를 확인하고 제어합니다',
+    '모션 파일을 고르고 재생 등록한 뒤 초기 위치 이동과 재생을 제어합니다',
   ]),
 });
 
@@ -75,9 +70,10 @@ export function defaultWorkspaceForGroup(group) {
 
 export function workspaceForLegacyNavigation(workspace, motionTab = '') {
   if (!['motion', 'project'].includes(workspace)) return normalizeWorkspaceRoute(workspace);
-  const tab = String(motionTab || 'files');
+  // 파일 관리는 모션 실행 화면으로 합쳐졌다 · 옛 'files' 요청도 그리로 보낸다
+  const tab = String(motionTab || 'run') === 'files' ? 'run' : String(motionTab || 'run');
   return Object.entries(MOTION_WORKSPACE_TABS)
-    .find(([, value]) => value === tab)?.[0] || 'motion-files';
+    .find(([, value]) => value === tab)?.[0] || 'motion-run';
 }
 
 export function workspaceForProjectCategory(
@@ -88,7 +84,7 @@ export function workspaceForProjectCategory(
   const routes = {
     motor_axes: 'config',
     motion_axis_matching: 'motion-mapping',
-    motions: 'motion-files',
+    motions: 'motion-run',
     layers: 'studio',
     logs: 'log',
   };
