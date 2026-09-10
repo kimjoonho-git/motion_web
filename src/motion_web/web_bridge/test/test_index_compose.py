@@ -38,10 +38,12 @@ def test_provenance_comments_stay_in_the_source():
 
 
 def test_composed_html_contains_every_panel():
+    # 연동은 별도 패널이 아니다 · 모션 실행 화면에서 "연동" 범위를 고르면
+    # 나온다 · 실행과 연동이 갈라져 있으면 어느 쪽으로 나가는지 두 화면을
+    # 오가며 맞춰야 했다 · §6-66
     html, _etag = _composer().compose()
     for panel in (
         'data-workspace-panel="system"',
-        'data-workspace-panel="coordination"',
         'data-workspace-panel="monitoring"',
         'data-workspace-panel="motion"',
         'data-workspace-panel="studio"',

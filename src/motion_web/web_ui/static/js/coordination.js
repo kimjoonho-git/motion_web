@@ -494,7 +494,6 @@ export function createCoordinationController({ el }) {
   }
 
   function bindEvents() {
-    el.coordinationRefreshButton?.addEventListener('click', refresh);
     el.coordinationSaveButton?.addEventListener('click', save);
     el.coordinationJoinButton?.addEventListener('click', () => control('join'));
     el.coordinationLeaveButton?.addEventListener('click', () => control('leave'));
@@ -612,8 +611,25 @@ export function createCoordinationController({ el }) {
   }
 
   /** 실행 화면이 "그룹" 범위를 골랐을 때 쓰는 창구 · §6-65 */
+  /** 이 PC 의 역할과 현재 마스터 · 실행 화면이 알린다 · §6-66 */
+  function groupRole() {
+    const config = snapshot?.config || {};
+    const runtime = snapshot?.runtime || {};
+    const peers = Array.isArray(runtime.peers) ? runtime.peers : [];
+    const masterPeer = peers.find((peer) => peer.is_master);
+    return {
+      isMaster: config.is_master === true,
+      joined: runtime.joined === true,
+      peerCount: peers.length + 1,
+      master: config.is_master === true
+        ? (config.display_name || config.pc_id || '이 PC')
+        : (masterPeer?.display_name || masterPeer?.pc_id || ''),
+    };
+  }
+
   const groupRun = {
     availability: groupRunAvailability,
+    role: groupRole,
     initialize: initializeGroup,
     start: (options) => control('start_group', groupRunOptions('once', options)),
     startContinuous: (options) => control('start_group', groupRunOptions('continuous', options)),

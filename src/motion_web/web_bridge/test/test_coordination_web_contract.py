@@ -8,7 +8,7 @@ UI = WORKSPACE / 'src/motion_web/web_ui/static'
 BRIDGE = WORKSPACE / 'src/motion_web/web_bridge/motion_web_bridge/bridge_node.py'
 
 
-def test_coordination_screen_keeps_settings_and_roster_only():
+def test_coordination_lives_inside_the_run_screen():
     """연동 화면은 설정·명단·진단만 갖는다 · 실행은 모션 실행 화면이 갖는다.
 
     "1회 시작"이 연동 화면과 모션 실행 화면에 두 벌 있었고, 한쪽은 전체 PC,
@@ -37,6 +37,12 @@ def test_coordination_screen_keeps_settings_and_roster_only():
         assert moved not in html, f'{moved} 가 연동 화면에 남아 있다'
     for scope in ('id="motionRunScopeLocal"', 'id="motionRunScopeGroup"'):
         assert scope in html
+
+    # 연동 탭과 패널은 없어졌고 내용은 실행 화면 안에 있다 · §6-66
+    assert 'data-workspace-tab="coordination"' not in html
+    assert 'data-workspace-panel="coordination"' not in html
+    assert 'id="motionRunGroupDetails"' in html
+    assert 'id="motionRunRoleBadge"' in html
 
     for obsolete in (
         'coordinationPairingStartButton', 'coordinationRoleSelect',

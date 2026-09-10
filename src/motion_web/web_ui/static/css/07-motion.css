@@ -1334,3 +1334,55 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* 연동 역할 줄 · "연동" 범위를 골랐을 때만 나온다.
+   전에는 별도 탭이었다 · 실행과 연동이 갈라져 있으면 "지금 어느 쪽으로
+   나가는가"를 두 화면을 오가며 맞춰야 했다 · §6-66 */
+.motion-run-group-role {
+  margin-bottom: 8px;
+  padding: 8px 12px;
+  border: 1px solid #d7e2ee;
+  border-radius: 6px;
+  background: #f4f8fc;
+}
+
+.motion-run-group-role .motion-run-role {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: baseline;
+  margin-bottom: 0;
+}
+
+/* 역할은 잠그는 것이 아니라 알리는 것이다 · 정지는 어디서든 되어야 한다. */
+.motion-run-role-badge {
+  padding: 3px 10px;
+  border: 1px solid #cfd8e3;
+  border-radius: 999px;
+  background: #eef2f6;
+  color: #4a5666;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.motion-run-role-badge.is-master {
+  border-color: #9fc3e8;
+  background: #e8f2fc;
+  color: #1c5b96;
+}
+
+.motion-run-group-role .motion-run-role > span:last-child {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+#motionRunGroupDetails .coordination-overview-layout {
+  gap: 10px;
+}
+
+/* 그룹 실행은 아직 실물 검증 전이다 · 연동 범위를 고를 때마다 보여야 한다. */
+.motion-run-role-caveat {
+  flex-basis: 100%;
+  color: #8a6412;
+  font-size: 12px;
+}

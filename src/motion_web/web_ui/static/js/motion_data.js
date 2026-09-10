@@ -1426,6 +1426,12 @@ export function createMotionDataController({
       : (!contextReady || !hasRequiredFiles);
     const blockReason = scope === 'group' ? (group.reason || '') : contextMessage;
 
+    // 연동 상세는 접어 둔다 · 매번 보는 것은 역할 한 줄이면 충분하다
+    el.motionRunGroupRole?.classList.toggle('hidden', scope !== 'group');
+    el.motionRunGroupDetails?.classList.toggle('hidden', scope !== 'group');
+    // 같은 이름의 자동 재생이 둘이었다 · 범위마다 자기 것만 보인다 · §6-66
+    el.motionAutomationToggleWrap?.classList.toggle('hidden', scope === 'group');
+    if (scope === 'group') renderMotionRunRole();
     if (el.motionRunScopeGroupHint) {
       el.motionRunScopeGroupHint.textContent = group
         ? (group.ok ? `참가 PC ${group.peerCount}대에 동시 전달` : group.reason)
@@ -2654,6 +2660,26 @@ export function createMotionDataController({
    * 브리지가 거절한다(`coordination_bridge.local_execution_blocker`). 그래서
    * 화면에서도 하나만 고르게 한다 · 같은 이름의 버튼을 두 벌 두지 않는다 · §6-65
    */
+  /** 이 PC 의 역할을 알린다 · 마스터는 부팅 자동 재생을 몰고 다중 마스터를
+   * 감지한다. 그룹 시작 자체는 참가한 PC면 가능하고 **정지는 어디서든 되어야**
+   * 하므로 역할로 버튼을 잠그지 않는다 · 어디서 몰아야 하는지만 알린다 · §6-66
+   */
+  function renderMotionRunRole() {
+    if (!el.motionRunRoleBadge) return;
+    const state = groupRun?.role?.() || {};
+    const isMaster = state.isMaster === true;
+    el.motionRunRoleBadge.textContent = isMaster ? '이 PC · 마스터' : '이 PC · 슬레이브';
+    el.motionRunRoleBadge.classList.toggle('is-master', isMaster);
+    if (!el.motionRunRoleDetail) return;
+    if (!state.joined) {
+      el.motionRunRoleDetail.textContent = '그룹에 참가하지 않았습니다';
+      return;
+    }
+    el.motionRunRoleDetail.textContent = isMaster
+      ? `현재 마스터입니다 · 참가 ${state.peerCount}대 · 부팅 자동 재생을 이 PC가 몹니다`
+      : `현재 마스터는 ${state.master || '미정'} 입니다 · 보통 마스터에서 시작합니다`;
+  }
+
   function motionRunScope() {
     return el.motionRunScopeGroup?.checked ? 'group' : 'local';
   }

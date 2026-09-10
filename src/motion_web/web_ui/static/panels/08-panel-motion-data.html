@@ -252,6 +252,14 @@
                 </label>
               </div>
 
+              <div id="motionRunGroupRole" class="motion-run-group-role hidden">
+                <div class="motion-run-role">
+                  <span class="motion-run-role-badge" id="motionRunRoleBadge">역할 확인 중</span>
+                  <span id="motionRunRoleDetail">연동 상태를 받아오는 중입니다</span>
+                  <span class="motion-run-role-caveat">PC별 프로젝트는 유지하고 시작·완료·오류 트리거만 공유합니다 · 실물 미검증</span>
+                </div>
+              </div>
+
               <div id="motionRunSummary" class="motion-run-summary">
                 <div class="empty">선택된 모션 파일과 매핑 파일 기준으로 실행합니다</div>
               </div>
@@ -301,9 +309,9 @@
                       <button id="motionRunStopAfterButton" class="warning-button" type="button" disabled>현재 회차 후 정지</button>
                       <button id="motionRunRefreshButton" type="button">상태 새로고침</button>
                     </div>
-                    <label class="motion-automation-toggle">
+                    <label class="motion-automation-toggle" id="motionAutomationToggleWrap">
                       <input id="motionAutomationEnabled" type="checkbox">
-                      <span>부팅 시 자동 재생 예약</span>
+                      <span>이 PC 부팅 시 자동 재생</span>
                     </label>
                   </div>
                 </div>
@@ -377,6 +385,148 @@
                   <canvas id="motionRunGraphCanvas" class="motion-run-graph"></canvas>
                   <div id="motionRunGraphAxisToggles" class="motion-run-graph-axis-toggles" aria-label="그래프 축 표시 선택"></div>
                 </section>
+
+            <details id="motionRunGroupDetails" class="motion-run-more hidden">
+              <summary><strong>연동 상세</strong><span>설정 · 세션 · 자동 재생 · 참가 PC 명단</span></summary>
+              <div class="motion-run-more-body">
+            <div class="coordination-overview-layout">
+              <details class="coordination-settings-details">
+                <summary class="section-head compact">
+                  <strong>이 PC 연동 설정</strong>
+                  <span id="coordinationNodeState">연동 노드 확인 중</span>
+                </summary>
+                <div class="coordination-settings-fields">
+                  <label class="compact-field"><span>이 PC ID</span>
+                    <input id="coordinationPcId" type="text" readonly>
+                  </label>
+                  <label class="compact-field"><span>표시 이름</span>
+                    <input id="coordinationDisplayName" type="text" maxlength="128" placeholder="예: 무대 왼쪽 PC">
+                  </label>
+                  <label class="compact-field"><span>그룹 ID</span>
+                    <input id="coordinationGroupId" type="text" maxlength="128" placeholder="예: stage-a">
+                  </label>
+                  <label class="compact-field"><span>DDS Domain ID</span>
+                    <input id="coordinationDomainId" type="number" min="0" max="101" value="21">
+                  </label>
+                  <label class="compact-field"><span>연동 설정</span>
+                    <select id="coordinationEnabled" class="compact-select">
+                      <option value="false">사용 안 함</option>
+                      <option value="true">사용</option>
+                    </select>
+                  </label>
+                  <label class="compact-field"><span>역할</span>
+                    <select id="coordinationIsMaster" class="compact-select">
+                      <option value="false">참가자 (슬레이브)</option>
+                      <option value="true">마스터</option>
+                    </select>
+                  </label>
+                  <label class="compact-field span-2"><span>필수 참가 명단</span>
+                    <input id="coordinationRequiredPeers" type="text" placeholder="예: pc-1, pc-2">
+                  </label>
+                </div>
+                <div class="coordination-settings-actions">
+                  <button id="coordinationSaveButton" class="primary" type="button">설정 저장·연동 재시작</button>
+                </div>
+                <div id="coordinationConfigMessage" class="registry-message">전역 연동 설정을 확인하고 있습니다.</div>
+              </details>
+
+              <section class="motion-file-subsection coordination-summary-card" aria-label="연동 상태 요약 및 제어">
+                <div class="section-head compact">
+                  <strong>연동 요약 및 제어</strong>
+                  <span id="coordinationUpdatedAt">-</span>
+                </div>
+            
+                <div class="coordination-dashboard">
+                  <div class="coord-badge" id="coordJoinBadge">
+                    <div class="coord-badge-icon"></div>
+                    <div class="coord-badge-info">
+                      <span>그룹 참가</span>
+                      <strong id="coordinationJoinState">나감</strong>
+                    </div>
+                  </div>
+                  <div class="coord-badge coord-badge-master" id="coordMasterBadge" style="display: none;">
+                    <div class="coord-badge-info">
+                      <span>👑 현재 마스터</span>
+                      <strong id="coordinationMasterName">-</strong>
+                    </div>
+                  </div>
+                  <div class="coord-badge coord-badge-peers">
+                    <div class="coord-badge-info">
+                      <span>연결 PC</span>
+                      <strong id="coordinationPeerCount">0대</strong>
+                    </div>
+                  </div>
+                  <div class="coord-badge coord-badge-context">
+                    <div class="coord-badge-info">
+                      <span>이 PC ID</span>
+                      <strong id="coordinationMachineId">-</strong>
+                    </div>
+                  </div>
+                  <div class="coord-badge coord-badge-context">
+                    <div class="coord-badge-info">
+                      <span>그룹·Domain</span>
+                      <strong id="coordinationGroupDomain">-</strong>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="coordination-control-panel" aria-label="네트워크 모션 실행">
+                  <div class="coord-control-groups">
+                    <div class="coord-group session-group">
+                      <span class="coord-group-label">세션 관리</span>
+                      <div class="coord-group-buttons">
+                        <button id="coordinationJoinButton" type="button" disabled>그룹 참가</button>
+                        <button id="coordinationLeaveButton" type="button" disabled>그룹 나가기</button>
+                        <button id="coordinationTemporaryDisableButton" type="button" disabled>연동 일시 해제</button>
+                      </div>
+                    </div>
+
+                    <div class="coord-group autoplay-group" id="coordinationAutoPlayGroup" style="display: none;">
+                      <span class="coord-group-label">그룹 자동 재생 · 스케줄 (마스터)</span>
+                      <div class="coord-group-buttons" style="display: flex; align-items: center; gap: 10px;">
+                        <label class="motion-automation-toggle">
+                          <input id="coordinationAutoPlayToggle" type="checkbox">
+                          <span>그룹 부팅 시 자동 재생</span>
+                        </label>
+                        <span id="scheduleStatusBadgeCoord" class="badge bg-secondary" style="font-size: 11px; padding: 4px 8px; border-radius: 4px; background-color: #4a5568; color: #fff;">스케줄러: 확인 중</span>
+                        <button id="btnScheduleModalCoord" type="button" class="primary" style="background-color: #2b6cb0; color: #fff; border: none; padding: 5px 12px; border-radius: 4px; cursor: pointer; font-weight: bold;">📅 모션 스케줄</button>
+                      </div>
+                    </div>
+
+                    <div class="coord-group safety-group">
+                      <span class="coord-group-label">그룹 실행</span>
+                      <div class="coord-group-buttons">
+                        <span id="coordinationRunAvailability" class="registry-message">그룹 실행 상태 확인 중</span>
+                        <button id="coordinationAcknowledgeErrorButton" type="button" disabled>그룹 오류 확인</button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="coord-state-footer">
+                    <strong id="coordinationExecutionState">그룹 실행 · 대기</strong>
+                    <span id="coordinationControlSummary">제어 명령 대기</span>
+                  </div>
+                  <div id="coordinationErrorSummary" class="registry-message hidden" role="alert"></div>
+                </div>
+              </section>
+            </div>
+
+            <section class="motion-file-subsection" aria-label="연결 PC 상태">
+              <div id="coordinationConfirmedRosterBanner" class="registry-message" style="margin-bottom: 12px; font-size: 14px; font-weight: bold;"></div>
+              <div class="section-head compact">
+                <strong>그룹 참가 PC 상태</strong>
+                <span style="margin-left: auto;">경고 1.5초 · 통신 단절 3초 · 실행 참가 목록은 시작 시 고정</span>
+                <button type="button" id="coordinationConfirmRosterButton" class="secondary" style="margin-left: 10px;">현재 접속 PC로 명단 확정</button>
+              </div>
+              <div class="table-wrap">
+                <table class="coordination-peer-table">
+                  <thead><tr><th>PC</th><th>통신</th><th>실행 참가</th><th>모션 회차</th><th>모션 단계</th><th>진행</th><th>트리거 동기화</th><th>추정 불확실성</th><th>알람 등급</th><th>버전 (Git)</th><th>명단 관리</th></tr></thead>
+                  <tbody id="coordinationPeerRows"><tr><td colspan="11" class="empty">그룹 상태 수신 대기</td></tr></tbody>
+                </table>
+              </div>
+            </section>
+              </div>
+            </details>
 
             <details class="motion-run-more">
               <summary><strong>선택 파일 상세</strong><span>검사 · 그래프 · 모션 ID · 원본</span></summary>

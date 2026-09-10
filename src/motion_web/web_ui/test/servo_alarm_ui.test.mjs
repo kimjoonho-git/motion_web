@@ -23,7 +23,8 @@ test('서보 에러 관리는 모터 관리와 같은 상위 설정 탭이다', 
   assert.match(index, /data-workspace-panel="servo-errors"/);
   assert.match(
     navigation,
-    /setup: Object\.freeze\(\['system', 'coordination', 'config', 'servo-errors'\]\)/,
+    // 연동은 모션 실행 화면으로 합쳐졌다 · 별도 탭이 아니다 · §6-66
+    /setup: Object\.freeze\(\['system', 'config', 'servo-errors'\]\)/,
   );
 });
 

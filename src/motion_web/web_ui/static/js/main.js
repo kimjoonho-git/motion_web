@@ -12,10 +12,10 @@ import {
   setProjectGeneration,
   fetchSystemVersion,
 } from './api.js?v=20260910-api-table-1';
-import { getElements } from './dom.js?v=20260910-run-scope-1';
+import { getElements } from './dom.js?v=20260910-run-group-2';
 import { createMotorEventLogController } from './event_log.js?v=20260727-popup-common-3';
 import { createMidiMonitorController } from './midi_monitor.js?v=20260806-midi-pickup-reconnect-1';
-import { createMotionDataController } from './motion_data.js?v=20260910-run-scope-1';
+import { createMotionDataController } from './motion_data.js?v=20260910-run-group-2';
 import { createMotionStudioController } from './motion_studio.js?v=20260804-point-actions-range-1';
 import { createMotionTestController } from './motion_test.js?v=20260728-servo-alarm-2';
 import { createMotorConfigController } from './motor_config.js?v=20260731-project-compatible-scan-1';
@@ -36,10 +36,10 @@ import {
   workspaceGroupFor,
   workspacePanelFor,
   workspaceForProjectCategory,
-} from './workspace_navigation.js?v=20260910-motion-run-merge-1';
+} from './workspace_navigation.js?v=20260910-run-group-1';
 import { installFeedbackPresentation } from './ui_feedback.js?v=20260724-ui-finish-1';
 import { createServoAlarmController } from './servo_alarm.js?v=20260728-servo-alarm-2';
-import { createCoordinationController } from './coordination.js?v=20260910-run-scope-1';
+import { createCoordinationController } from './coordination.js?v=20260910-run-group-2';
 
 const el = getElements();
 const operationProgress = createOperationProgressManager({ el });
@@ -1612,7 +1612,7 @@ if (el.workspaceTabs) {
       if (target === 'studio') motionStudio.refresh(false);
       if (target === 'config') motorConfig.fetchRegistry();
       if (target === 'servo-errors') servoAlarm.refresh();
-      if (target === 'coordination') coordination.refresh();
+      if (target === 'motion-run') coordination.refresh();
       projectExplorer.refresh(true);
       return;
     }
@@ -1625,7 +1625,7 @@ if (el.workspaceTabs) {
     if (target === 'studio') motionStudio.refresh(false);
     if (target === 'config') motorConfig.fetchRegistry();
     if (target === 'servo-errors') servoAlarm.refresh();
-    if (target === 'coordination') coordination.refresh();
+    if (target === 'motion-run') coordination.refresh();
     projectExplorer.refresh(true);
   });
 }
