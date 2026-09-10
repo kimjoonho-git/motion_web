@@ -4001,6 +4001,55 @@ export const saveMotorConfig = (payload) => request('PUT', '/api/motor-config', 
 `fetchStatusSnapshot` 에는 **시간 제한이 실제로 전달되는지** 보는 단언을 더했다 ·
 이번에 놓친 것이 그것이다.
 
+### 6-61. `dom.js` 의 허공 등록 26개 · 죽은 코드 162줄
+
+검증 · `node --test` **259건**(신규 2건) · `pytest src/` 1078건 · `ui_smoke` 통과
+
+화면에서 사라진 요소를 등록부가 계속 가리키고 있었다 · **26개**. `el.X` 는
+`undefined` 가 되고, 그것을 갱신하는 코드는 `if (el.X)` 안에서 **조용히 아무 일도
+하지 않는다.** 오류도 안 난다.
+
+`motionAutomationStatus` 가 그랬다 · 자동 반복 상태 문구를 계산해서 버리고 있었다
+(§6-59에서 하나 제거). 나머지 25개를 이번에 정리했다.
+
+#### 지운 것 · 화면과 함께 사라진 기능들
+
+| 사슬 | 내용 |
+|---|---|
+| 작업 맥락 표시줄 | `updateWorkContext` + `workContextStatus` + `basename` + 양쪽 모듈의 `getWorkContext` · `onWorkContextChange` 통지 5곳 |
+| 등록 탭 | `renderRegistrationTabs` · `activeRegistrationTab` · 클릭 처리 · `registrationPanels` |
+| 설정 요약 · 파일명 입력 | `registrySummary` · `motorConfigFileNameInput` |
+| 프로젝트 상태 표시 | `projectSelectedStatus` · `projectRuntimeStatus` |
+| 스튜디오 통합 프로젝트 표시 | `studioWorkspaceName` · `studioWorkspaceFiles` |
+
+합계 **162줄**. `registrationPanels` 도 화면에 없어 `renderRegistrationTabs` 는
+첫 줄에서 반환했다 · 뒤따르는 패널 전환까지 막혀 있었지만 그 마크업도 함께
+사라진 상태라 숨은 버그는 아니었다.
+
+#### 지우지 않은 것 · **테스트가 지키고 있다**
+
+`studioImportFileSelect` · `studioImportButton` · `studioRecordMode` 셋은 화면
+요소만 없고 **JS 와 테스트가 살아 있다**(`motion_studio_ui.test.mjs` 가 클릭까지
+검증한다). 스튜디오의 "모션 파일 가져오기" 기능이다.
+
+기능을 지우려고 테스트를 지우는 것은 앞뒤가 바뀐 일이다. **HTML 이 실수로 빠진
+것인지, 기능을 접은 것인지는 코드가 답하지 못한다** · 판단이 필요한 항목으로
+남긴다. 등록부에서는 뺐으므로 되살릴 때 함께 복구해야 한다.
+
+#### 재발 방지 · `dom_registry.test.mjs`
+
+등록부의 모든 id 가 조립된 HTML 에 있어야 한다. 없으면 어느 것인지 이름을 대고
+**"요소를 되살리거나, 등록과 그것을 쓰는 코드를 함께 지우세요"** 라고 알린다.
+중복 등록도 함께 본다.
+
+가짜 등록(`ghostElement`)을 넣어 실제로 잡는지 확인했다.
+
+#### 남은 판단 · 조용히 사라진 표시 둘
+
+`motionAutomationStatus`(자동 반복 상태)와 작업 맥락 표시줄은 **화면에서 요소가
+빠지면서 정보가 사라진 것**이다. 코드를 지운 것은 죽어 있었기 때문이고, 그 정보가
+필요하면 화면과 함께 되살려야 한다 · 사용자 판단 대기.
+
 ### 배포 잔여
 
 **다른 PC 2대는 `colcon build` 필수** · `motion_common` 외 신규 패키지 다수 ·

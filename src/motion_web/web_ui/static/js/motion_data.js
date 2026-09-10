@@ -495,7 +495,6 @@ export function createMotionDataController({
   el,
   getLatestState = () => null,
   getConfiguredMotors = null,
-  onWorkContextChange,
   onProjectFilesChange,
   onExportMotionFileToStudio = async () => null,
 }) {
@@ -539,7 +538,6 @@ export function createMotionDataController({
 
   function markMappingDirty() {
     mappingDirty = true;
-    onWorkContextChange?.();
   }
 
   function isMappingRevisionConflict(message) {
@@ -814,20 +812,6 @@ export function createMotionDataController({
 
   function selectedMappingFile() {
     return mappingFiles.find((file) => file.id === selectedMappingId) || null;
-  }
-
-  function getWorkContext() {
-    const mappingFile = selectedMappingFile();
-    return {
-      motionFile: selectedFile?.filename || '',
-      motionFileSelected: Boolean(selectedFile),
-      motionFileValid: Boolean(selectedFile && analysisOf(selectedFile).valid),
-      mappingFile: mappingFile?.filename || selectedMappingId || '',
-      mappingFileSelected: Boolean(selectedMappingId),
-      mappingValid: Boolean(mappingValidation?.valid),
-      mappingValidated: Boolean(mappingValidation),
-      mappingChanged: mappingDirty,
-    };
   }
 
   function motionRunPayload() {
@@ -1915,7 +1899,6 @@ export function createMotionDataController({
     if (el.motionMappingRawText) {
       el.motionMappingRawText.textContent = mappingRawText || '매핑 파일을 선택하거나 저장하면 YAML 원본이 표시됩니다';
     }
-    onWorkContextChange?.();
   }
 
   function renderRuntimeMappingState() {
@@ -1951,7 +1934,6 @@ export function createMotionDataController({
     renderSelectedFile();
     renderMappingPanel();
     renderMotionRunPanel();
-    onWorkContextChange?.();
   }
 
   function mappingRowsFromMotionFile(file, previousRows = []) {
@@ -3035,7 +3017,6 @@ export function createMotionDataController({
     },
     refreshMappingAfterReconnect,
     syncMappingFileRevision,
-    getWorkContext,
     render,
     renderRuntimeState,
     showTab: (tab) => {

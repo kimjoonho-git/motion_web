@@ -85,17 +85,6 @@ export function motionStudioExportSelection(layers = []) {
 }
 
 export function renderMotionStudioWorkspace(el, state) {
-  if (el.studioWorkspaceName) {
-    el.studioWorkspaceName.textContent = (
-      state.workspaceProject?.name || '통합 프로젝트 미선택'
-    );
-  }
-  if (el.studioWorkspaceFiles) {
-    const active = state.workspaceProject?.active_files || {};
-    el.studioWorkspaceFiles.textContent = state.workspaceProject
-      ? `모터축: ${active.motor_axes || '미선택'} · 매칭: ${active.motion_axis_matching || '미선택'} · 모션: ${active.motions || '미선택'}`
-      : '왼쪽에서 프로젝트와 현재 파일을 선택하세요';
-  }
   if (el.studioImportFileSelect) {
     const selected = el.studioImportFileSelect.value;
     el.studioImportFileSelect.innerHTML = (

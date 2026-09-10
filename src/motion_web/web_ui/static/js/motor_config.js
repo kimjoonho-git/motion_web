@@ -139,14 +139,12 @@ export function createMotorConfigController({
   operationProgress,
   getLatestState,
   renderLatestState,
-  onWorkContextChange,
   onProjectFilesChange,
   onConfigApplyStart,
   onConfigApplyComplete,
   onIdentityStatusChange,
   onAcServoControl,
 }) {
-  let activeRegistrationTab = 'ac_servo';
   let latestScan = null;
   let savedRegistry = normalizeAxisRegistry({});
   let axisConfig = normalizeAxisRegistry({});
@@ -339,19 +337,9 @@ export function createMotorConfigController({
     return hasAxisChanges() || hasMotorConfigTableSaveChanges();
   }
 
-  function getWorkContext() {
-    return {
-      motorConfigFile: motorConfigFilePath,
-      motorConfigLoaded: Boolean(motorConfigFilePath),
-      motorConfigChanged: hasAnyConfigChanges(),
-      motorConfigApplyPending: configApplyPending,
-    };
-  }
-
   function setStatusMessage(message) {
     if (el.motorConfigState) el.motorConfigState.textContent = message;
     if (el.configState) el.configState.textContent = message;
-    onWorkContextChange?.();
   }
 
   function setAxisMessage(message, error = false) {
@@ -359,29 +347,12 @@ export function createMotorConfigController({
       el.axisActionMessage.textContent = message;
       el.axisActionMessage.classList.toggle('error-text', error);
     }
-    if (el.registrySummary) {
-      el.registrySummary.textContent = message;
-      el.registrySummary.classList.toggle('error-text', error);
-    }
   }
 
   function uiMessage(message, fallback) {
     return String(message || fallback || '')
       .replace(/YAML/gi, '설정 파일')
       .replace(/yaml/gi, '설정 파일');
-  }
-
-  function renderRegistrationTabs() {
-    if (!el.registrationTabs) return;
-    el.registrationTabs.querySelectorAll('[data-registration-tab]').forEach((button) => {
-      const active = button.dataset.registrationTab === activeRegistrationTab;
-      button.classList.toggle('active', active);
-      button.setAttribute('aria-selected', active ? 'true' : 'false');
-    });
-    if (!el.registrationPanels) return;
-    el.registrationPanels.forEach((panel) => {
-      panel.classList.toggle('hidden', panel.dataset.registrationPanel !== activeRegistrationTab);
-    });
   }
 
   function renderAxisSettingsTabs() {
@@ -1396,9 +1367,6 @@ export function createMotorConfigController({
     if (!el.motorConfigTableRows) return;
     if (el.motorConfigTablePath) {
       el.motorConfigTablePath.textContent = `현재 프로젝트 파일: ${pathBasename(motorConfigFilePath) || '-'}`;
-    }
-    if (el.motorConfigFileNameInput && document.activeElement !== el.motorConfigFileNameInput) {
-      el.motorConfigFileNameInput.value = motorConfigFileNameDraft || pathBasename(motorConfigFilePath);
     }
     const rows = yamlScalarRows();
     const motors = configAxisMotors(rows);
@@ -2848,7 +2816,6 @@ export function createMotorConfigController({
       setStatusMessage(message);
       setAxisMessage(message);
       await onProjectFilesChange?.();
-      onWorkContextChange?.();
       return true;
     } catch (error) {
       if (error?.staleProjectResponse || expectedToken !== projectLoadToken) return false;
@@ -3907,15 +3874,6 @@ export function createMotorConfigController({
   }
 
   function bindEvents() {
-    if (el.registrationTabs) {
-      el.registrationTabs.addEventListener('click', (event) => {
-        const button = event.target.closest('button[data-registration-tab]');
-        if (!button) return;
-        activeRegistrationTab = button.dataset.registrationTab || 'ac_servo';
-        renderRegistrationTabs();
-      });
-    }
-
     if (el.axisSettingsTabs) {
       el.axisSettingsTabs.addEventListener('click', (event) => {
         const button = event.target.closest('button[data-axis-settings-tab]');
@@ -3998,13 +3956,6 @@ export function createMotorConfigController({
     if (el.saveAxisConfigButton) el.saveAxisConfigButton.addEventListener('click', saveAxisConfig);
     if (el.applyAxisConfigButton) el.applyAxisConfigButton.addEventListener('click', applyConfigRestart);
     if (el.updateConfigTableButton) el.updateConfigTableButton.addEventListener('click', applyConfigTableUpdates);
-    if (el.motorConfigFileNameInput) {
-      el.motorConfigFileNameInput.addEventListener('input', (event) => {
-        motorConfigFileNameDraft = event.target.value || '';
-        setAxisMessage('파일명 변경값은 설정 파일 저장을 누르면 적용됩니다.');
-        renderAxisSettings();
-      });
-    }
     if (el.reloadMotorConfigButton) {
       el.reloadMotorConfigButton.addEventListener('click', () => fetchRegistry());
     }
@@ -4021,12 +3972,10 @@ export function createMotorConfigController({
     fetchRegistry,
     loadProjectRegistry,
     getDiscoverySummary,
-    getWorkContext,
     getRegistryCount: () => activeVisibleAxisMotors().length,
     getConfiguredMotors: () => clone(activeVisibleAxisMotors()),
     renderAfterDisplayModeChange,
     renderRuntimeState,
-    renderRegistrationTabs,
     shouldShowMonitoringMotor,
   };
 }

@@ -121,20 +121,6 @@ export function createProjectExplorerController({
       (project) => project.project_id === state.runtimeProjectId,
     );
     const runtimeConfigCurrent = Boolean(runtimeProject?.setup_status?.motor_applied);
-    if (el.projectSelectedStatus) {
-      el.projectSelectedStatus.textContent = state.project?.name || '선택 없음';
-    }
-    if (el.projectRuntimeStatus) {
-      el.projectRuntimeStatus.textContent = runtimeProject
-        ? `${runtimeProject.name}${runtimeConfigCurrent ? '' : ' · 재적용 필요'}`
-        : '적용 정보 없음';
-      el.projectRuntimeStatus.classList.toggle(
-        'warning-text',
-        Boolean((runtimeProject && !runtimeConfigCurrent)
-          || (state.project && state.runtimeProjectId
-            && state.project.project_id !== state.runtimeProjectId)),
-      );
-    }
     if (!el.projectExplorerSelect) return;
     const selected = state.project?.project_id || el.projectExplorerSelect.value;
     el.projectExplorerSelect.innerHTML = '<option value="">프로젝트 선택</option>' + state.projects.map((project) => (

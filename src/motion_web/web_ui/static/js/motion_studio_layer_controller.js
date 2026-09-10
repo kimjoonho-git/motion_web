@@ -49,7 +49,6 @@ export function createMotionStudioLayerController({ el, handlers = {} }) {
     events.bind(el.studioSelectedLayerEditButton, 'click', handlers.onEdit);
     events.bind(el.studioSelectedLayerLockButton, 'click', handlers.onLock);
     events.bind(el.studioSelectedLayerDeleteButton, 'click', handlers.onDelete);
-    events.bind(el.studioPlaybackGraphButton, 'click', handlers.onPlaybackGraph);
     events.bind(el.studioCompositionDetailButton, 'click', handlers.onCompositionDetail);
     events.bind(el.studioLayerDetailTabs, 'click', handlers.onDetailTab);
     events.bind(el.studioMergeButton, 'click', handlers.onMerge);

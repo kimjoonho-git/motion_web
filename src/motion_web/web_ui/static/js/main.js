@@ -176,39 +176,6 @@ function setActiveWorkspace(workspace, motionTab = '') {
   return target;
 }
 
-function basename(path) {
-  return String(path || '').split(/[\\/]/).filter(Boolean).pop() || '';
-}
-
-function workContextStatus(configContext, motionContext) {
-  if (!configContext.motorConfigLoaded) return '모터축 설정 미로드';
-  if (configContext.motorConfigChanged) return '모터축 설정 변경 있음';
-  if (configContext.motorConfigApplyPending) return '설정 적용 대기';
-  if (!motionContext.motionFileSelected) return '모션 파일 미선택';
-  if (!motionContext.motionFileValid) return '모션 파일 확인 필요';
-  if (!motionContext.mappingFileSelected) return '매핑 파일 미선택';
-  if (motionContext.mappingChanged) return '모션축 설정 변경 있음';
-  if (!motionContext.mappingValidated) return '매핑 검증 필요';
-  return motionContext.mappingValid ? '검증 완료' : '매핑 검증 오류';
-}
-
-function updateWorkContext() {
-  const configContext = motorConfig?.getWorkContext?.() || {};
-  const motionContext = motionData?.getWorkContext?.() || {};
-  if (el.workContextMotorConfig) {
-    el.workContextMotorConfig.textContent = basename(configContext.motorConfigFile);
-  }
-  if (el.workContextMotionFile) {
-    el.workContextMotionFile.textContent = motionContext.motionFile || '';
-  }
-  if (el.workContextMappingFile) {
-    el.workContextMappingFile.textContent = basename(motionContext.mappingFile);
-  }
-  if (el.workContextState) {
-    el.workContextState.textContent = workContextStatus(configContext, motionContext);
-  }
-}
-
 function renderLatestState(nextState = null) {
   if (nextState) {
     const generation = Number(nextState.project_generation);
@@ -233,7 +200,6 @@ function renderLatestState(nextState = null) {
   motionData.renderRuntimeState();
   servoAlarm?.renderRuntimeState();
   renderMotorActivity(appState.latestState.motor_activity);
-  updateWorkContext();
   updateMotorErrorPopup(appState.latestState);
   enforceEmergencyUi();
 }
@@ -295,7 +261,6 @@ function acceptProjectPayload(payload) {
       await motionData.fetchFiles();
       await motionStudio.refresh(false);
       await servoAlarm?.refresh();
-      updateWorkContext();
     }).catch(() => {});
   }
   return generation === appState.projectGeneration;
@@ -1087,7 +1052,6 @@ const motorConfig = createMotorConfigController({
   getRawMode: () => appState.rawMode,
   getLatestState: () => appState.latestState,
   renderLatestState,
-  onWorkContextChange: updateWorkContext,
   onProjectFilesChange: () => projectExplorer.refresh(true),
   onConfigApplyStart: () => {
     appState.configApplyInProgress = true;
@@ -1125,7 +1089,6 @@ const motionData = createMotionDataController({
   el,
   getLatestState: () => appState.latestState,
   getConfiguredMotors: () => motorConfig.getConfiguredMotors(),
-  onWorkContextChange: updateWorkContext,
   onProjectFilesChange: () => projectExplorer.refresh(true),
   onExportMotionFileToStudio: (fileName) => motionStudio.addMotionFile(fileName),
 });
@@ -1177,7 +1140,6 @@ projectExplorer = createProjectExplorerController({
     await motionData.fetchFiles();
     await motionStudio.refresh(false);
     await servoAlarm?.refresh();
-    updateWorkContext();
   },
   onNavigate: (workspace, motionTab) => {
     setActiveWorkspace(workspace || 'monitoring', motionTab);
@@ -1673,9 +1635,7 @@ projectExplorer.bindEvents();
 motorEventLog.bindEvents();
 servoAlarm.bindEvents();
 coordination.start();
-motorConfig.renderRegistrationTabs();
 renderWorkspacePanel();
-updateWorkContext();
 connectSocket();
 fetchStatus();
 motorConfig.fetchRegistry();
