@@ -3291,8 +3291,42 @@ return bridge._sync_project_file(...)   # ← 노드에 없는 이름
 
 - 코드 검증 · `ruff check src` 55건 유지 · 신규 감사 0건
 - 실행 검증 · `pytest` **1,070건** 통과 · 신규 3건 · 되돌림 실패 확인
-- 실물 검증 · **화면에서 재확인 필요** · 재시작 후 스튜디오에 프로젝트가 열려
-  있지 않아 명령줄로는 끝까지 못 탄다
+- 실물 검증 · **통과** · 아래
+
+```
+POST /api/motion-studio/export     HTTP 200
+success true · file_id 진단_비3.json · frame_count 446
+project_sync {synced: true, category: motions}
+```
+
+#### 고쳤는데 한 번 더 실패했다 · 낡은 `__pycache__` 때문
+
+고친 뒤 빌드·재시작했는데 사용자가 화면에서 다시 500을 받았다.
+
+시간 순서가 원인이었다.
+
+```
+10:06  콜콘 빌드
+10:07  서비스 재시작   ← 이때 build/**/__pycache__ 에 옛 바이트코드가 남아 있었다
+10:13  캐시 정리       ← 시험은 여기서 통과하기 시작
+```
+
+**재시작이 캐시 정리보다 먼저였다.** 실행 중인 프로세스는 옛 코드를 메모리에
+물고 있었고, 소스·빌드본은 이미 새것이라 어디를 봐도 원인이 안 보였다.
+
+캐시를 지운 뒤 다시 재시작하니 곧바로 200이 나왔다.
+
+**규칙으로 남긴다 · 고친 코드가 반영되지 않으면 순서를 의심한다.**
+
+```bash
+find build install -name __pycache__ -exec rm -rf {} +
+colcon build --symlink-install --packages-select <패키지>
+systemctl --user restart motion-control.service
+```
+
+`--symlink-install`은 소스를 되가리키므로 대개 문제가 없지만, **시험이 옛 소스를
+잠깐 컴파일한 적이 있으면** 그 흔적이 남는다 · 이번이 그 경우다(회귀 확인을
+위해 옛 이름으로 되돌렸다가 복원했다).
 
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
