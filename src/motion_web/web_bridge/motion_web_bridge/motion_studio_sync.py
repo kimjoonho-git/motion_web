@@ -143,7 +143,9 @@ class MotionStudioSync:
         file_id = str(result.get('file_id') or '').strip()
         if result.get('success') is not False and file_id:
             project_id = bridge.project_repository.selected_project_id()
-            return bridge._sync_project_file(
+            # 프로젝트 반영은 ProjectService 가 맡는다 (§6-23) ·
+            # 분리 때 이 호출부만 옛 이름으로 남아 있었다 · §6-52
+            return bridge._project.sync_file(
                 result,
                 'motions',
                 bridge.project_repository.export_path(
