@@ -348,7 +348,8 @@ def test_standalone_initial_position_uses_zero_when_project_has_no_layers(monkey
     node._store = Store()
     node._require_idle_locked = lambda: None
     node._require_project_locked = lambda: project
-    node._validate_mapping_locked = lambda _project: None
+    # 검증이 확인한 매핑을 돌려준다 · 부른 쪽이 다시 읽지 않는다 (§6-51)
+    node._validate_mapping_locked = lambda project: Store.mapping_check(project)
     node._set_status_locked = lambda state, message: node._status.update({
         'state': state,
         'message': message,

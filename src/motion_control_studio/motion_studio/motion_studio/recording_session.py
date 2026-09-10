@@ -29,13 +29,12 @@ class StudioRecordingSession:
         with studio._lock:
             studio._require_idle_locked()
             project = studio._require_project_locked()
-            studio._validate_mapping_locked(project)
+            mapping = studio._validate_mapping_locked(project)
             if mode in {'overdub', 'append'} and project.get('layers'):
                 raise ValueError(
                     '오버더빙/이어 녹화는 축별 충돌 중재가 완성된 뒤 활성화됩니다. '
                     '현재는 안전을 위해 일반 모션 녹화만 허용합니다'
                 )
-            mapping = studio._store.mapping_check(project)
             motion_ids = list(mapping.get('motion_ids') or [])
             if not motion_ids:
                 raise ValueError('모션축 설정에 녹화 가능한 Motion ID가 없습니다')

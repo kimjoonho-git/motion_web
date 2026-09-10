@@ -3163,6 +3163,68 @@ Err 24  '위치·속도 편차 과대'  ·  2등급  ·  전체 모션 종료
   (Node 실패 6건은 기준선과 동일)
 - 실물 검증 · 재빌드·재시작 후 스튜디오 `idle` · 브리지 `ok` · 오류 로그 0
 
+### 6-51. 주인 없는 데이터 점검 · 매핑을 두 번 읽던 곳
+
+§6-50 뒤에 "기능별 정리가 안 된 것 아니냐"는 물음이 나와, **같은 값을 두 번
+구하는 자리**를 찾아봤다.
+
+#### 먼저 · 앞서 지목한 `layer_conflicts`는 문제가 아니었다
+
+`transition_warnings`와 같은 부류로 짚었는데, 재보니 아니다.
+
+| | `transition_warnings` (제거됨) | `layer_conflicts` |
+| --- | --- | --- |
+| 결과의 주인 | **없음** · 3곳에서 계산해 12곳으로 흘렀다 | `workspace_session` 캐시 하나 |
+| 호출 6곳의 성격 | 같은 값 재계산 | **목적이 다 다르다** · 화면 갱신 · 렌더 직전 방어 · 초기 위치 · 합치기 검사 |
+| 다른 프로세스 | — | `editor_node`는 별도 노드다 |
+
+렌더 직전에 다시 세는 것은 **경계에서 한 번 더 확인하는 것**이라 중복이 아니다 ·
+그대로 둔다. **지목이 틀렸으면 고치지 않는 것이 맞다.**
+
+#### 진짜 중복 · 한 요청에 매핑 파일을 두 번 읽었다
+
+```
+studio._validate_mapping_locked(project)   → mapping_check() → 읽기+파싱+해시
+studio._store.mapping_check(project)       → 또 읽기+파싱+해시
+```
+
+검증한 쪽이 이미 읽어둔 것을 **버리고**, 부른 쪽이 다시 읽고 있었다.
+
+네 경로가 그랬다 · 재생 · 초기 위치 이동 · 녹화 시작 · 모션 파일 내보내기.
+
+#### 고친 방법 · 검증이 결과를 돌려준다
+
+```python
+def _validate_mapping_locked(self, project) -> Dict[str, Any]:
+    check = self._store.mapping_check(project)
+    if not check['matches_project']:
+        raise ValueError('모션축 설정 파일이 변경되었습니다 …')
+    return check          # ← 확인한 것을 넘긴다
+```
+
+부른 쪽은 `mapping = studio._validate_mapping_locked(project)` 한 줄이 된다.
+
+| | 이전 | 지금 |
+| --- | --- | --- |
+| 요청당 파일 읽기 | 2회 | **1회** |
+| 1회 비용 | 1.90 ms (읽기+YAML 파싱+SHA-256) | — |
+
+파일이 494 B인데 1.9 ms인 것은 YAML 파싱과 해시 때문이다 · 모션축이 늘면
+더 커진다.
+
+#### 시험 이음매
+
+스텁이 `_validate_mapping_locked = lambda _project: None`이었다 · 이제 매핑을
+돌려줘야 하므로 `lambda project: Store.mapping_check(project)`로 바꿨다 ·
+시험이 곧바로 잡았다(`'NoneType' object has no attribute 'get'`).
+
+#### 검증
+
+- 코드 검증 · `ruff check src` 55건 유지
+- 실행 검증 · `pytest` **1,067건** 통과
+- 구조 검증 · 스튜디오 노드 전 함수 대상 · **요청당 매핑 읽기 1회** 확인
+- 실물 검증 · 재빌드·재시작 후 스튜디오 `idle` · 브리지 `ok` · 오류 0
+
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
 - 파일 1,000줄 이하 · 함수 60줄 이하

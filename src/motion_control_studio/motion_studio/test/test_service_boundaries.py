@@ -109,7 +109,8 @@ def test_export_service_preserves_motion_file_contract():
     studio._workspace_catalog_cache = {'motion_files': ['old.json']}
     studio._require_idle_locked = lambda: None
     studio._require_project_locked = lambda: project
-    studio._validate_mapping_locked = lambda _project: None
+    # 검증이 확인한 매핑을 돌려준다 (§6-51)
+    studio._validate_mapping_locked = lambda project: Store.mapping_check(project)
     studio._require_point_curve_consistency = lambda _project, _action: None
     studio._motion_ranges = lambda _mapping: {}
     studio._manual_initial_values = lambda _mapping: {}

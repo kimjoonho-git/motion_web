@@ -544,10 +544,16 @@ class MotionStudioNode(Node):
     def _selected_motion_values_locked(self) -> Dict[str, float]:
         return self._recording().selected_motion_values_locked()
 
-    def _validate_mapping_locked(self, project: Dict[str, Any]) -> None:
+    def _validate_mapping_locked(self, project: Dict[str, Any]) -> Dict[str, Any]:
+        """모션축 설정이 프로젝트와 같은지 보고 **그 결과를 돌려준다** · §6-51.
+
+        `mapping_check`는 파일을 읽고 해시까지 낸다. 부른 쪽이 같은 것을 또
+        읽으면 한 요청에 두 번 읽는다 · 검증한 쪽이 값을 넘긴다.
+        """
         check = self._store.mapping_check(project)
         if not check['matches_project']:
             raise ValueError('모션축 설정 파일이 변경되었습니다. 통합 프로젝트를 다시 여세요')
+        return check
 
     def _require_project_locked(self) -> Dict[str, Any]:
         if self._current_project is None:

@@ -21,12 +21,11 @@ class StudioExportService:
         with studio._lock:
             studio._require_idle_locked()
             project = studio._require_project_locked()
-            studio._validate_mapping_locked(project)
+            mapping = studio._validate_mapping_locked(project)
             studio._require_point_curve_consistency(
                 project, '모션 파일 내보내기'
             )
             export_layer = final_export_layer(project)
-            mapping = studio._store.mapping_check(project)
             frames = render_project(
                 project,
                 initial_motion_values_deg=studio._manual_initial_values(mapping),

@@ -68,12 +68,11 @@ class StudioPlaybackSession:
         with studio._lock:
             studio._require_idle_locked()
             project = studio._require_project_locked()
-            studio._validate_mapping_locked(project)
+            mapping = studio._validate_mapping_locked(project)
             studio._require_point_curve_consistency(project, '합성 미리보기')
             motion_ids = project_motion_ids(project)
             if not motion_ids:
                 raise ValueError('재생할 모션 데이터가 없습니다')
-            mapping = studio._store.mapping_check(project)
             frames = render_project(
                 project,
                 motion_ids=motion_ids,
@@ -143,9 +142,8 @@ class StudioPlaybackSession:
         with studio._lock:
             studio._require_idle_locked()
             project = studio._require_project_locked()
-            studio._validate_mapping_locked(project)
+            mapping = studio._validate_mapping_locked(project)
             studio._require_point_curve_consistency(project, '초기 위치 이동')
-            mapping = studio._store.mapping_check(project)
             motion_ids = project_motion_ids(project)
             if motion_ids:
                 conflicts = layer_conflicts(project)
