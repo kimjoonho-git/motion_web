@@ -1,6 +1,6 @@
 import { normalizeMotor } from './motor_registry.js';
 
-export const DYNAMIXEL_BAUDRATE = 1000000;
+const DYNAMIXEL_BAUDRATE = 1000000;
 
 export function runtimeIsDynamixel(motor) {
   const value = [
@@ -18,7 +18,7 @@ export function firstDefined(...values) {
   return values.find((value) => value !== null && value !== undefined && value !== '') ?? null;
 }
 
-export function normalizedModelName(value) {
+function normalizedModelName(value) {
   return String(value || '').trim().toLowerCase();
 }
 
@@ -86,27 +86,6 @@ export function dynamixelScanDeviceToMotor(device, baseMotor = null, options = {
   });
 }
 
-export function dynamixelDeviceFromButton(button) {
-  if (!button) return null;
-  const rawId = button.dataset.deviceId;
-  if (rawId === null || rawId === undefined || rawId === '') return null;
-  const id = Number(rawId);
-  if (!Number.isFinite(id)) return null;
-  const baudrate = Number(button.dataset.deviceBaudrate || DYNAMIXEL_BAUDRATE);
-  const modelNumberRaw = button.dataset.deviceModelNumber;
-  const modelNumber = modelNumberRaw === null || modelNumberRaw === undefined || modelNumberRaw === ''
-    ? null
-    : Number(modelNumberRaw);
-  return {
-    id,
-    port: button.dataset.devicePort || '',
-    baudrate: Number.isFinite(baudrate) ? baudrate : DYNAMIXEL_BAUDRATE,
-    model_name: button.dataset.deviceModel || '',
-    model_number: Number.isFinite(modelNumber) ? modelNumber : null,
-    source: 'button',
-  };
-}
-
 export function dynamixelScanDeviceForValues(values, devices) {
   const nodeId = values.nodeId === null || values.nodeId === undefined
     ? null
@@ -120,28 +99,8 @@ export function dynamixelScanDeviceForValues(values, devices) {
   return matches.length === 1 ? matches[0] : null;
 }
 
-export function dynamixelScanDeviceForRow(row, values, devices) {
+function dynamixelScanDeviceForRow(row, values, devices) {
   if (row.scanDevice) return row.scanDevice;
   return dynamixelScanDeviceForValues(values, devices);
 }
 
-export function dynamixelScanMismatch(row, values, devices) {
-  const device = dynamixelScanDeviceForRow(row, values, devices);
-  if (!row.motor || !device) return false;
-  const yamlBaudrate = firstDefined(row.motor.identity?.serial_baudrate, row.motor.config?.serial_baudrate);
-  if (
-    yamlBaudrate !== null &&
-    yamlBaudrate !== undefined &&
-    device.baudrate !== null &&
-    device.baudrate !== undefined &&
-    Number(yamlBaudrate) !== Number(device.baudrate)
-  ) {
-    return true;
-  }
-  const yamlModel = normalizedModelName(row.motor.profile?.driver_model);
-  const scanModel = normalizedModelName(modelTextFromDevice(device));
-  if (yamlModel && scanModel && !yamlModel.includes(scanModel) && !scanModel.includes(yamlModel)) {
-    return true;
-  }
-  return false;
-}

@@ -1,17 +1,11 @@
 import { escapeHtml } from './format.js';
 import { normalizeMotor } from './motor_registry.js';
 
-export function yamlRegisteredScanRow(row) {
-  if (!row) return false;
-  if (row.match_state === 'unregistered') return false;
-  return row.controller_index !== null && row.controller_index !== undefined;
-}
-
 export function detectedScanRow(row) {
   return Boolean(row && row.slave_position !== null && row.slave_position !== undefined);
 }
 
-export function motorIdFromScan(row) {
+function motorIdFromScan(row) {
   const masterIndex = Number(row?.master_index ?? 0);
   if (isAssignedAlias(row.ethercat_alias)) {
     return `ac_servo_ethercat_master_${masterIndex}_alias_${row.ethercat_alias}`;
@@ -55,7 +49,7 @@ export function scanKey(row) {
   return `master:${row.master_index ?? 0}:slave:${row.slave_position ?? '-'}`;
 }
 
-export function configuredEthercatMasterIndex(motor) {
+function configuredEthercatMasterIndex(motor) {
   const value = motor?.config?.ethercat_master_index
     ?? motor?.identity?.ethercat_master_index
     ?? 0;
@@ -268,46 +262,9 @@ export function scanRowToMotor(row, nextAvailableAxis) {
   });
 }
 
-export function datasetNumber(value, fallback = null) {
+function datasetNumber(value, fallback = null) {
   if (value === null || value === undefined || value === '') return fallback;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-export function scanRowButtonAttrs(row) {
-  if (!row) return '';
-  return [
-    `data-scan-master-index="${escapeHtml(String(row.master_index ?? 0))}"`,
-    `data-scan-controller-index="${escapeHtml(String(row.controller_index ?? ''))}"`,
-    `data-scan-ethercat-alias="${escapeHtml(String(row.ethercat_alias ?? ''))}"`,
-    `data-scan-rotary-alias="${escapeHtml(String(row.rotary_alias ?? ''))}"`,
-    `data-scan-slave-position="${escapeHtml(String(row.slave_position ?? ''))}"`,
-    `data-scan-sii-order-number="${escapeHtml(String(row.sii_order_number || row.order_number || ''))}"`,
-    `data-scan-sii-device-name="${escapeHtml(String(row.sii_device_name || row.device_name || ''))}"`,
-    `data-scan-vendor-id="${escapeHtml(String(row.vendor_id ?? ''))}"`,
-    `data-scan-product-code="${escapeHtml(String(row.product_code ?? ''))}"`,
-    `data-scan-revision-number="${escapeHtml(String(row.revision_number ?? ''))}"`,
-    `data-scan-serial-number="${escapeHtml(String(row.serial_number ?? ''))}"`,
-    `data-scan-identity-source="${escapeHtml(String(row.identity_source || ''))}"`,
-    `data-scan-match-state="${escapeHtml(String(row.match_state || ''))}"`,
-  ].join(' ');
-}
-
-export function scanRowFromButton(button) {
-  if (!button || button.dataset.scanSlavePosition === undefined) return null;
-  return {
-    master_index: datasetNumber(button.dataset.scanMasterIndex, 0),
-    controller_index: datasetNumber(button.dataset.scanControllerIndex),
-    ethercat_alias: datasetNumber(button.dataset.scanEthercatAlias),
-    rotary_alias: datasetNumber(button.dataset.scanRotaryAlias),
-    slave_position: datasetNumber(button.dataset.scanSlavePosition),
-    sii_order_number: button.dataset.scanSiiOrderNumber || '',
-    sii_device_name: button.dataset.scanSiiDeviceName || '',
-    vendor_id: datasetNumber(button.dataset.scanVendorId),
-    product_code: datasetNumber(button.dataset.scanProductCode),
-    revision_number: datasetNumber(button.dataset.scanRevisionNumber),
-    serial_number: datasetNumber(button.dataset.scanSerialNumber),
-    identity_source: button.dataset.scanIdentitySource || '',
-    match_state: button.dataset.scanMatchState || '',
-  };
-}

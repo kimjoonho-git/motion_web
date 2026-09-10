@@ -152,8 +152,6 @@ async function motionStudioRequest(path = '', method = 'GET', payload = null) {
 }
 
 export const fetchMotionStudio = () => motionStudioRequest();
-export const createMotionStudioProject = (payload) => motionStudioRequest('/projects', 'POST', payload);
-export const loadMotionStudioProject = (projectId) => motionStudioRequest('/projects/load', 'POST', { project_id: projectId });
 export const importMotionStudioFile = (payload) => motionStudioRequest('/import', 'POST', payload);
 export const saveMotionStudioProject = (payload) => motionStudioRequest('/project', 'PUT', payload);
 export const createMotionStudioLayer = (payload = {}) => motionStudioRequest('/layers', 'POST', payload);
@@ -239,9 +237,6 @@ export async function fetchReadOnlyProjectFile(projectId, relativePath) {
   return readJson(response);
 }
 
-export const saveProjectFile = (projectId, category, fileName, content) =>
-  request('PUT', projectFileUrl(projectId, category, fileName), { body: { content } });
-
 export const renameProjectFile = (projectId, category, fileName, newName) =>
   request('POST', `${projectFileUrl(projectId, category, fileName)}/rename`, { body: { new_name: newName } });
 
@@ -303,7 +298,6 @@ export const requestEmergencySafetyStop = () => request('POST', '/api/safety/eme
 
 export const fetchMidiMonitor = () => request('GET', '/api/midi-monitor');
 
-export const saveMidiMapping = (payload) => request('PUT', '/api/midi-monitor/mapping', { body: payload });
 
 export const createMidiBank = (payload = {}) => request('POST', '/api/midi-monitor/banks', { body: payload });
 

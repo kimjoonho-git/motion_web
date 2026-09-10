@@ -4132,6 +4132,48 @@ node -e "import('./static/js/X.js').then(()=>console.log('OK')).catch(e=>console
 
 `monitoring.js` 에 가짜 사본을 넣어 실제로 잡는지 확인했다.
 
+### 6-64. 죽은 함수 14개 · 불필요한 `export` 14개
+
+검증 · `node --test` **262건**(신규 1건) · `pytest src/` 1078건 ·
+`ui_smoke` 1680/1280px 통과
+
+내보내기만 하고 아무 데서도 쓰지 않는 것이 28개였다. 성격이 둘로 갈렸다.
+
+**A · 완전히 죽은 함수 14개** — 자기 파일 안에서도 안 쓴다 · 지웠다.
+
+| 파일 | 지운 것 |
+|---|---|
+| `api.js` | `createMotionStudioProject` · `loadMotionStudioProject` · `saveMidiMapping` · `saveProjectFile` |
+| `format.js` | `countBy` · `formatHexByte` · `formatRotarySwitch` · `formatYamlHex` · `parseIntegerField` |
+| `motor_type_ac_servo.js` | `scanRowButtonAttrs` · `scanRowFromButton` · `yamlRegisteredScanRow` |
+| `motor_type_dynamixel.js` | `dynamixelDeviceFromButton` · `dynamixelScanMismatch` |
+
+`api.js` 의 넷은 백엔드 엔드포인트가 살아 있는데 프런트가 안 부른다 · 필요해지면
+표에 한 줄 다시 넣으면 된다(§6-60).
+
+**B · 내부 전용인데 `export` 만 붙은 것 14개** — `export` 키워드만 뗐다 ·
+`WORKSPACE_DEFAULTS` · `motorFilterKey` · `datasetNumber` 등.
+
+#### 재발 방지 · `no_unused_exports.test.mjs`
+
+쓰이지 않는 `export` 는 둘 중 하나다 · 지울 죽은 코드이거나, 내부 전용인데
+`export` 만 붙은 것. 어느 쪽이든 남겨두면 "누군가 쓰겠지" 하고 계속 늘어난다 ·
+실제로 28개가 그렇게 쌓였다.
+
+이름을 대고 **"내부 전용이면 export 를 떼고, 아무도 안 쓰면 지우세요"** 라고
+알린다. 가짜 export 를 넣어 잡히는 것을 확인했다.
+
+#### 다시 배운 것 · 잘라내기는 기계로 하되 적재로 확인한다
+
+§6-62 와 같은 실수를 또 했다 · 두 줄짜리 화살표 형태를 한 줄 정규식으로 잘라
+`);` 가 남았고 `api.js` 가 깨졌다. 이번에도 **`import()` 적재 검사**가 즉시 잡았다.
+
+모든 모듈을 적재해 보는 한 줄을 정리 작업의 기본 절차로 둔다.
+
+```
+for f in static/js/*.js; do node -e "import('./$f').catch(e=>console.log('$f', e.message))"; done
+```
+
 ### 배포 잔여
 
 **다른 PC 2대는 `colcon build` 필수** · `motion_common` 외 신규 패키지 다수 ·

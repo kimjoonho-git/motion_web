@@ -9,14 +9,14 @@ export const WORKSPACE_GROUPS = Object.freeze({
   execution: Object.freeze(['manual', 'motion-run']),
 });
 
-export const WORKSPACE_DEFAULTS = Object.freeze({
+const WORKSPACE_DEFAULTS = Object.freeze({
   operations: 'monitoring',
   setup: 'system',
   creation: 'studio',
   execution: 'manual',
 });
 
-export const MOTION_WORKSPACE_TABS = Object.freeze({
+const MOTION_WORKSPACE_TABS = Object.freeze({
   'motion-mapping': 'mapping',
   'motion-midi': 'midi',
   'motion-run': 'run',
@@ -38,7 +38,7 @@ export const MOTION_WORKSPACE_DETAILS = Object.freeze({
 });
 
 const WORKSPACE_ROUTES = new Set(Object.values(WORKSPACE_GROUPS).flat());
-export const PROJECT_SELECTION_WORKSPACE = 'system';
+const PROJECT_SELECTION_WORKSPACE = 'system';
 
 export function normalizeWorkspaceRoute(route) {
   const value = String(route || '').trim();

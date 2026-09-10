@@ -273,7 +273,7 @@ function currentHeaderText(rawMode) {
   return rawMode ? '원시 전류' : '전류 (A)';
 }
 
-export function motorFilterKey(motor) {
+function motorFilterKey(motor) {
   const value = [
     motor.motor_type,
     motor.motor_type_label,

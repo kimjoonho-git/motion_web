@@ -79,7 +79,7 @@ export function motionStudioStoredCurveForDraft(editor) {
   ) || null;
 }
 
-export function motionStudioSelectedRangeCurve(editor) {
+function motionStudioSelectedRangeCurve(editor) {
   const curveId = String(editor?.rangeSelection?.start?.curveId || '');
   const motionId = String(editor?.rangeSelection?.start?.motionId || '');
   if (!curveId || !motionId) return null;

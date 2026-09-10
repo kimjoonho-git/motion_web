@@ -1,4 +1,4 @@
-export const motorTypeFilters = [
+const motorTypeFilters = [
   { key: 'all', label: '전체' },
   { key: 'ac_servo', label: 'AC 서보' },
   { key: 'dynamixel', label: '다이나믹셀' },
@@ -38,33 +38,11 @@ export function formatHex(value) {
   return `0x${Number(value).toString(16).toUpperCase().padStart(4, '0')}`;
 }
 
-export function formatHexByte(value) {
-  if (value === null || value === undefined || Number.isNaN(Number(value))) return '-';
-  return `0x${(Number(value) & 0xFF).toString(16).toUpperCase().padStart(2, '0')}`;
-}
-
-export function formatYamlHex(value) {
-  if (value === null || value === undefined || value === '' || Number.isNaN(Number(value))) return '';
-  return `0x${Number(value).toString(16).toUpperCase().padStart(8, '0')}`;
-}
-
-export function formatRotarySwitch(value) {
-  if (value === null || value === undefined || Number.isNaN(Number(value))) return '-';
-  const byte = Number(value) & 0xFF;
-  const high = byte >> 4;
-  const low = byte & 0x0F;
-  return `${high}-${low}`;
-}
-
-export function parseIntegerValue(value, fallback = null) {
+function parseIntegerValue(value, fallback = null) {
   const text = String(value ?? '').trim();
   if (!text) return fallback;
   const parsed = Number(text);
   return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-export function parseIntegerField(field, fallback = null) {
-  return parseIntegerValue(field?.value, fallback);
 }
 
 export function formatTime(epochSeconds) {
@@ -93,14 +71,6 @@ export function formatCounts(counts) {
   return Object.entries(counts)
     .map(([name, count]) => `${name} ${formatInt(count)}`)
     .join(', ');
-}
-
-export function countBy(items, key) {
-  return items.reduce((counts, item) => {
-    const value = item[key] || '확인 불가';
-    counts[value] = (counts[value] || 0) + 1;
-    return counts;
-  }, {});
 }
 
 export function normalizeMotorTypeKey(type, label) {

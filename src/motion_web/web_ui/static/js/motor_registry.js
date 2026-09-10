@@ -65,7 +65,7 @@ export function normalizeMotor(motor, index = 0) {
   };
 }
 
-export function stableRegistry(value) {
+function stableRegistry(value) {
   const copy = normalizeRegistry(value || {});
   delete copy.updated_at;
   copy.motors = copy.motors
