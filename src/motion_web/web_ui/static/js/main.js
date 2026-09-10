@@ -36,7 +36,7 @@ import {
   workspaceGroupFor,
   workspacePanelFor,
   workspaceForProjectCategory,
-} from './workspace_navigation.js?v=20260910-run-group-1';
+} from './workspace_navigation.js?v=20260910-tabs-1';
 import { installFeedbackPresentation } from './ui_feedback.js?v=20260724-ui-finish-1';
 import { createServoAlarmController } from './servo_alarm.js?v=20260728-servo-alarm-2';
 import { createCoordinationController } from './coordination.js?v=20260910-run-group-2';
@@ -1128,7 +1128,8 @@ projectExplorer = createProjectExplorerController({
     if (target === 'studio') await motionStudio.refresh(false);
   },
   onManageFile: () => {
-    setActiveWorkspace('system');
+    // 편집기는 프로젝트 관리 화면에 있다 · 시스템 정보에서 갈라 나왔다 · §6-67
+    setActiveWorkspace('project');
     document.getElementById('projectFileManager')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   },
   onProjectChange: async (project, projectGeneration) => {

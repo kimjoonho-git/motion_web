@@ -1,0 +1,64 @@
+<!-- 프로젝트 관리 · "시스템 정보"가 운영 상태·프로그램 재시작·프로젝트 관리
+     셋을 담고 있어 탭 이름과 내용이 어긋났다 · 프로젝트 쪽을 갈랐다 · §6-67 -->
+      <section class="system-panel workspace-panel hidden" data-workspace-panel="project" aria-label="프로젝트 관리">
+        <div class="section-head workspace-page-head">
+          <div><strong>프로젝트 관리</strong><small>프로젝트를 만들고 파일을 가져오거나 복사합니다</small></div>
+        </div>
+
+        <div class="system-project-grid">
+          <section class="project-system-manager system-project-tools" aria-label="프로젝트 생성 및 파일 관리">
+            <div class="section-head compact">
+              <strong>프로젝트 관리 도구</strong>
+            </div>
+            <div class="system-project-tools-body">
+              <div class="project-sidebar-actions">
+                <button id="projectCreateButton" type="button">새 프로젝트</button>
+                <button id="projectUsbRescanButton" type="button">프로젝트 목록 갱신</button>
+                <button id="clearMotorRuntimeButton" type="button" disabled title="Motor Manager 실행 적용을 해제해 프로젝트 삭제가 가능하게 합니다">실행 적용 해제</button>
+                <button id="projectDeleteButton" class="danger" type="button" disabled>현재 프로젝트 삭제</button>
+              </div>
+              <div id="projectUsbHelp" class="project-usb-help">프로젝트 저장 위치 확인 중</div>
+              <div class="project-import-row">
+                <select id="projectImportCategory" class="compact-select" aria-label="가져올 파일 종류">
+                  <option value="motor_axes">모터축 설정</option><option value="motion_axis_matching">모션축 설정</option><option value="layers">레이어</option>
+                </select>
+                <button id="projectImportFileButton" type="button" disabled>파일 가져오기</button>
+                <input id="projectImportFileInput" type="file" class="hidden" accept=".yaml,.yml,.json">
+              </div>
+              <div class="project-copy-box">
+                <strong>다른 프로젝트에서 복사</strong>
+                <select id="projectCopySourceProject" class="wide-select" aria-label="원본 프로젝트"><option value="">원본 프로젝트 선택</option></select>
+                <select id="projectCopySourceFile" class="wide-select" aria-label="복사할 파일" disabled><option value="">파일 선택</option></select>
+                <button id="projectCopyFileButton" type="button" disabled>현재 프로젝트로 복사</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="project-system-manager system-project-memo" aria-label="프로젝트 메모">
+            <div class="section-head compact">
+              <strong>프로젝트 메모</strong>
+              <span id="projectMemoCount">0 / 4000</span>
+            </div>
+            <textarea id="projectMemoInput" maxlength="4000" rows="6" placeholder="프로젝트 메모" disabled></textarea>
+            <div class="system-project-memo-footer">
+              <span id="projectMemoStatus">프로젝트 선택 필요</span>
+              <button id="projectMemoSaveButton" class="primary" type="button" disabled>메모 저장</button>
+            </div>
+          </section>
+        </div>
+
+        <section id="projectFileManager" class="project-explorer-panel system-project-info-file" aria-label="프로젝트 정보 파일">
+          <div class="section-head compact system-project-info-head">
+            <div>
+              <strong>프로젝트 정보 파일</strong>
+              <span id="projectFileEditorTitle">project.json</span>
+            </div>
+            <span id="projectFileInfo">프로젝트 선택 필요</span>
+          </div>
+          <div class="project-file-manager-layout">
+            <section class="project-file-editor-panel">
+              <textarea id="projectFileEditor" class="project-file-editor" spellcheck="false" readonly disabled></textarea>
+            </section>
+          </div>
+        </section>
+      </section>

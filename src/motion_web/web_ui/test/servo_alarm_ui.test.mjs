@@ -17,14 +17,15 @@ const main = fs.readFileSync(
   'utf8',
 );
 
-test('서보 에러 관리는 모터 관리와 같은 상위 설정 탭이다', () => {
+// 서보 에러 관리는 설정이 아니라 운영 중 대응이다 · [운영]으로 옮겼다 · §6-67
+test('서보 에러 관리는 운영 그룹에 있다', () => {
   assert.match(index, /data-workspace-tab="config">모터 관리/);
   assert.match(index, /data-workspace-tab="servo-errors">서보 에러 관리/);
   assert.match(index, /data-workspace-panel="servo-errors"/);
   assert.match(
     navigation,
     // 연동은 모션 실행 화면으로 합쳐졌다 · 별도 탭이 아니다 · §6-66
-    /setup: Object\.freeze\(\['system', 'config', 'servo-errors'\]\)/,
+    /operations: Object\.freeze\(\['monitoring', 'servo-errors', 'log', 'btop'\]\)/,
   );
 });
 
