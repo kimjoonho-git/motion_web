@@ -1467,6 +1467,8 @@ export function createMotionDataController({
           ? blockReason
           : '전체 모션축 초기 위치 이동 완료 후 정지할 때까지 모션을 반복합니다');
     }
+    // 시작은 마스터만이지만 정지는 누구나 · 그룹이 도는 동안이면 슬레이브에서도
+    // 세울 수 있어야 한다 · §6-70
     const stoppable = scope === 'group' ? groupActive : running;
     if (el.motionRunStopButton) {
       el.motionRunStopButton.disabled = motionRunLoading || !stoppable;

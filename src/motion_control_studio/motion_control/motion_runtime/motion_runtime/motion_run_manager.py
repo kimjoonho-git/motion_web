@@ -13,6 +13,10 @@ from typing import Any, Dict, List, Optional
 import rclpy
 import yaml
 from motion_common import command_router, generation as generation_mod, motion_table, topics
+from motion_common.coordination import (
+    coordination_settings_path,
+    load_coordination_settings,
+)
 from motion_common.values import finite_float, optional_int
 from motion_control_msgs.msg import MotorStatus
 from rclpy.node import Node
@@ -443,6 +447,22 @@ class MotionRunManager(Node):
             **self._execution_context,
         }
 
+    def _coordination_enabled(self) -> bool:
+        """이 PC 가 연동을 쓰는가 · 부팅 자동 재생 되살리기 판단에 쓴다 · §6-70
+
+        읽지 못하면 **연동을 쓰는 것으로 본다** · 되살리지 않는 쪽이 안전하다.
+        """
+        try:
+            settings = load_coordination_settings(
+                coordination_settings_path('motion_runtime')
+            )
+        except Exception:
+            self.get_logger().warning('연동 설정을 읽지 못했습니다 · 자동 재생을 되살리지 않습니다')
+            return True
+        if settings is None:
+            return False
+        return bool(settings.get('enabled', False))
+
     def _confirm_execution_context(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         context_id = str(payload.get('context_id') or '').strip()
         with self._run_lock:
@@ -452,7 +472,14 @@ class MotionRunManager(Node):
             automation = dict(
                 getattr(self, '_automation_state', default_automation_state())
             )
-            if automation.get('enabled') and automation.get('armed'):
+            # 연동 중이면 부팅 재생은 그룹이 몬다(`_drive_auto_play`) · 여기서
+            # 로컬을 되살리면 실행 슬롯을 먼저 차지해 그룹 시작이
+            # "previous motion run task is still running" 으로 막힌다 · §6-70
+            if (
+                automation.get('enabled')
+                and automation.get('armed')
+                and not self._coordination_enabled()
+            ):
                 self._automation_resume_pending = True
                 self._automation_resume_started_at = time.monotonic()
                 self._automation_runtime = {

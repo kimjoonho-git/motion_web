@@ -339,6 +339,21 @@ export function createCoordinationController({ el }) {
 
   async function save(customSuccessMessage = null, customSuccessTitle = null) {
     if (loading) return;
+    // 마스터를 켜는데 그룹에 이미 마스터가 있으면 저장 뒤에야 MULTIPLE_MASTERS
+    // 오류로 알게 된다 · 실행 중이면 그 자리에서 멈춘다. 저장 전에 묻는다 · §6-70
+    const turningMaster = el.coordinationIsMaster?.value === 'true'
+      && (snapshot?.config || {}).is_master !== true;
+    const otherMaster = (snapshot?.runtime?.peers || []).find((peer) => peer.is_master);
+    if (turningMaster && otherMaster) {
+      const name = otherMaster.display_name || otherMaster.pc_id;
+      const confirmed = await showConfirm(
+        `그룹에 이미 마스터가 있습니다 · ${name}\n`
+        + '마스터가 둘이면 그룹 오류로 실행이 멈춥니다.\n'
+        + `계속하려면 먼저 ${name} 의 마스터를 해제하세요.`,
+        { title: '마스터가 이미 있습니다', confirmLabel: '그래도 저장', tone: 'danger' },
+      );
+      if (!confirmed) return;
+    }
     loading = true;
     render();
     try {
@@ -482,6 +497,10 @@ export function createCoordinationController({ el }) {
     };
     if (loading) return { ...state, ok: false, reason: '명령 전달 중' };
     if (runtime.joined !== true) return { ...state, ok: false, reason: '그룹에 참가하지 않았습니다' };
+    // 시작은 마스터만 · 정지는 누구나 · §6-70
+    if ((snapshot?.config || {}).is_master !== true) {
+      return { ...state, ok: false, reason: '이 PC 는 슬레이브입니다 · 마스터 PC 에서 시작하세요' };
+    }
     if (active) return { ...state, ok: false, reason: '그룹 실행이 진행 중입니다' };
     if (peers.length < 1) return { ...state, ok: false, reason: '연결된 다른 PC가 없습니다' };
     if (peers.some((peer) => peer.state !== 'online' || Number(peer.servo_alarm_grade || 0) > 0)) {

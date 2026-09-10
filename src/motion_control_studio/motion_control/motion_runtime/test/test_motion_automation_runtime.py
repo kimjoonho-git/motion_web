@@ -239,6 +239,8 @@ def test_confirmed_context_schedules_only_armed_automation_for_restart():
     })
     manager._automation_resume_pending = False
     manager._automation_resume_started_at = None
+    # 단독 PC · 연동을 쓰지 않으면 부팅 자동 재생을 되살린다
+    manager._coordination_enabled = lambda: False
 
     result = manager._confirm_execution_context({'context_id': 'context-1'})
 
@@ -246,6 +248,29 @@ def test_confirmed_context_schedules_only_armed_automation_for_restart():
     assert manager._execution_context_ready is True
     assert manager._automation_resume_pending is True
     assert manager._automation_runtime['resume_pending'] is True
+
+
+def test_coordinated_pc_does_not_revive_local_automation_at_boot():
+    """연동 중이면 부팅 재생은 그룹이 몬다 · 로컬을 되살리면 안 된다 · §6-70
+
+    로컬 자동 재생이 실행 슬롯을 먼저 차지하면 그룹 시작이
+    "previous motion run task is still running" 으로 막힌다 · 마스터 화면에는
+    그 PC 가 왜 빠졌는지 나오지 않아 원인을 찾기 어렵다.
+    """
+    manager = _manager()
+    manager._execution_context = {
+        'context_id': 'context-1',
+        'project_id': 'project',
+    }
+    manager._automation_state.update({'enabled': True, 'armed': True})
+    manager._automation_resume_pending = False
+    manager._coordination_enabled = lambda: True
+
+    result = manager._confirm_execution_context({'context_id': 'context-1'})
+
+    assert result['success'] is True
+    assert manager._execution_context_ready is True
+    assert manager._automation_resume_pending is False
 
 
 def test_confirmed_context_does_not_start_enabled_but_unarmed_automation():

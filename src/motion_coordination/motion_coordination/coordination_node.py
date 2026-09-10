@@ -1306,6 +1306,17 @@ class MotionCoordinationNode(Node):
     ) -> Dict[str, Any]:
         if not self._joined:
             raise ValueError('먼저 DDS 그룹에 참가하세요')
+        # 시작은 마스터만 · 정지는 누구나 · §6-70
+        #
+        # 스케줄로 시작하는 길은 마스터만 열려 있었는데(노드가 마스터가 아니면
+        # 타이머를 건너뛴다) 손으로 시작하는 길은 참가한 PC 면 누구나였다.
+        # 같은 일인데 경로에 따라 권한이 달랐다. 여러 사람이 각자 앞의 PC 에서
+        # 시작을 누르면 그룹이 어느 명령을 따르는지 알 수 없다.
+        if not self._config.is_master:
+            raise ValueError(
+                '이 PC 는 연동 슬레이브라 그룹 실행을 시작할 수 없습니다 · '
+                '마스터 PC 에서 시작하세요'
+            )
         request = request or {}
         run_mode = str(request.get('run_mode') or 'continuous').strip().lower()
         repeat_mode = str(request.get('repeat_mode') or 'reinitialize').strip().lower()
