@@ -197,8 +197,8 @@ XM540-W150(ID 3) · XM540-W270(ID 5) 2대 검출. Broadcast Ping · CRC ·
 | 1 | **원격 푸시** | 61커밋이 이 PC에만 있다 · 유실 위험 |
 | 2 | **§6-14 근본 원인** | 유일한 미해결 결함 · 재발 판별법만 존재 |
 | 3 | **슬레이브 2대 재빌드** | 미빌드 시 노드 기동 실패 · 아래 ① |
-| 4 | `MotionSupervisor` 2,378줄 | 현재 최대 Node · 모터 명령 경로라 위험 |
-| 5 | `MidiDecoder` | `_midi_callback` 459줄 루프 국면 분해 선행 필요 |
+| 4 | ~~`MotionSupervisor` 2,378줄~~ | **분해 안 함** · 줄 수는 나눌 이유가 아니다(§7-1) |
+| 5 | ~~`MidiDecoder`~~ | **보류** · 필요해질 때만(§7-1) |
 | 6 | `project_repository` 2,100줄 | 저장 경로 · 실물 검증 가능 |
 
 매칭표 Dynamixel 포함·`connected_axes` 물리 필드는 **화면에 쓰이지 않는
