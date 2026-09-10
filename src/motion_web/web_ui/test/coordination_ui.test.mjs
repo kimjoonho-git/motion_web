@@ -25,8 +25,7 @@ function fixture() {
     'coordinationMachineId', 'coordinationGroupDomain',
     'coordinationJoinState', 'coordinationPeerCount',
     'coordinationExecutionState', 'coordinationJoinButton',
-    'coordinationLeaveButton', 'coordinationInitializeButton', 'coordinationStartButton',
-    'coordinationStopAfterButton', 'coordinationStopNowButton',
+    'coordinationLeaveButton', 'coordinationRunAvailability',
     'coordinationAcknowledgeErrorButton', 'coordinationErrorSummary',
     'coordinationPeerRows',
   ];
@@ -52,7 +51,9 @@ function snapshot(peer, coordinationError = {}) {
   };
 }
 
-test('online participant enables start and warning participant blocks it', () => {
+// 실행 버튼은 모션 실행 화면으로 옮겼다 · 여기서 지키는 것은 버튼이 아니라
+// "그룹 실행을 지금 시작해도 되는가" 규칙이다 · §6-65
+test('online participant allows a group run and a warning participant blocks it', () => {
   const el = fixture();
   const controller = createCoordinationController({ el });
   const peer = {
@@ -63,13 +64,17 @@ test('online participant enables start and warning participant blocks it', () =>
 
   controller.renderSnapshot(snapshot(peer));
   assert.equal(el.coordinationPeerCount.textContent, '2대');
-  assert.equal(el.coordinationStartButton.disabled, false);
-  assert.equal(el.coordinationInitializeButton.disabled, false);
+  assert.deepEqual(controller.groupRun.availability(), {
+    ok: true, reason: '', active: false, peerCount: 2, state: 'idle',
+  });
+  assert.match(el.coordinationRunAvailability.textContent, /그룹 실행 준비됨/);
   assert.match(el.coordinationPeerRows.innerHTML, /PC B/);
 
   controller.renderSnapshot(snapshot({ ...peer, state: 'warning' }));
-  assert.equal(el.coordinationStartButton.disabled, true);
-  assert.equal(el.coordinationInitializeButton.disabled, true);
+  const blocked = controller.groupRun.availability();
+  assert.equal(blocked.ok, false);
+  assert.match(blocked.reason, /통신 이상이나 알람/);
+  assert.match(el.coordinationRunAvailability.textContent, /그룹 실행 불가/);
   assert.match(el.coordinationPeerRows.innerHTML, /지연/);
 });
 
@@ -87,7 +92,9 @@ test('coordination error is visible and blocks start until acknowledgement', () 
     message: '같은 PC ID가 있습니다',
   }));
 
-  assert.equal(el.coordinationStartButton.disabled, true);
+  const availability = controller.groupRun.availability();
+  assert.equal(availability.ok, false);
+  assert.match(availability.reason, /그룹 오류/);
   assert.equal(el.coordinationAcknowledgeErrorButton.disabled, false);
   assert.match(el.coordinationErrorSummary.textContent, /DUPLICATE_PC_ID/);
   assert.equal(el.coordinationErrorSummary.classList.contains('hidden'), false);

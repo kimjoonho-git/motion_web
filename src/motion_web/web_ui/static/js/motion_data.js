@@ -496,6 +496,7 @@ export function createMotionDataController({
   getLatestState = () => null,
   getConfiguredMotors = null,
   onProjectFilesChange,
+  groupRun = null,
   onExportMotionFileToStudio = async () => null,
 }) {
   let files = [];
@@ -1415,34 +1416,63 @@ export function createMotionDataController({
       if (repeatMode === 'reinitialize' || repeatMode === 'dwell_reinitialize') return false;
       return true;
     })();
+    // 범위에 따라 판정하는 규칙이 다르다 · 로컬은 실행 설정과 파일, 그룹은
+    // 연동 상태(참가·통신·알람)가 정한다. 버튼은 한 벌이고 판정만 갈린다 · §6-65
+    const scope = motionRunScope();
+    const group = scope === 'group' ? groupRunAvailability() : null;
+    const groupActive = Boolean(group?.active);
+    const blocked = scope === 'group'
+      ? (!group.ok && !groupActive)
+      : (!contextReady || !hasRequiredFiles);
+    const blockReason = scope === 'group' ? (group.reason || '') : contextMessage;
+
+    if (el.motionRunScopeGroupHint) {
+      el.motionRunScopeGroupHint.textContent = group
+        ? (group.ok ? `참가 PC ${group.peerCount}대에 동시 전달` : group.reason)
+        : (groupRunAvailability().reason || '연동 상태 확인 중');
+    }
     if (el.motionRunCheckButton) {
-      el.motionRunCheckButton.disabled = motionRunLoading || !contextReady || !hasRequiredFiles || running;
-      el.motionRunCheckButton.title = contextReady ? '' : contextMessage;
+      // 실행 준비 검사는 이 PC 기준이다 · 그룹 범위에서는 쓰지 않는다
+      el.motionRunCheckButton.disabled = motionRunLoading || !contextReady
+        || !hasRequiredFiles || running || scope === 'group';
+      el.motionRunCheckButton.title = scope === 'group'
+        ? '실행 준비 검사는 이 PC 단독 범위에서만 사용합니다'
+        : (contextReady ? '' : contextMessage);
     }
     if (el.motionRunInitializeButton) {
-      el.motionRunInitializeButton.disabled = motionRunLoading || !contextReady || !hasMappingFile || running;
-      el.motionRunInitializeButton.title = contextReady ? '' : contextMessage;
+      el.motionRunInitializeButton.disabled = motionRunLoading || running
+        || (scope === 'group' ? !group.ok : (!contextReady || !hasMappingFile));
+      el.motionRunInitializeButton.title = blocked ? blockReason : '';
     }
     if (el.motionRunStartButton) {
-      el.motionRunStartButton.disabled = motionRunLoading || !contextReady || !hasRequiredFiles || running;
-      el.motionRunStartButton.title = contextReady
-        ? '전체 모션축 초기 위치 이동 완료 후 모션을 1회 실행합니다'
-        : contextMessage;
+      el.motionRunStartButton.disabled = motionRunLoading || running || blocked;
+      el.motionRunStartButton.title = blocked
+        ? blockReason
+        : (scope === 'group'
+          ? `참가 PC ${group.peerCount}대를 같은 시각에 1회 실행합니다`
+          : '전체 모션축 초기 위치 이동 완료 후 모션을 1회 실행합니다');
     }
     if (el.motionRunContinuousStartButton) {
-      el.motionRunContinuousStartButton.disabled = motionRunLoading
-        || !contextReady || !hasRequiredFiles || running || continuousUnavailable;
+      el.motionRunContinuousStartButton.disabled = motionRunLoading || running
+        || blocked || continuousUnavailable;
       el.motionRunContinuousStartButton.title = continuousUnavailable
         ? (continuousCapability?.reason || '연속 모션 안전조건을 통과하지 못했습니다')
-        : (contextReady
-          ? '전체 모션축 초기 위치 이동 완료 후 정지할 때까지 모션을 반복합니다'
-          : contextMessage);
+        : (blocked
+          ? blockReason
+          : '전체 모션축 초기 위치 이동 완료 후 정지할 때까지 모션을 반복합니다');
     }
+    const stoppable = scope === 'group' ? groupActive : running;
     if (el.motionRunStopButton) {
-      el.motionRunStopButton.disabled = motionRunLoading || !running;
+      el.motionRunStopButton.disabled = motionRunLoading || !stoppable;
+      el.motionRunStopButton.title = scope === 'group'
+        ? '참가 PC 전체를 즉시 정지합니다'
+        : '이 PC의 모션을 즉시 정지합니다';
     }
     if (el.motionRunStopAfterButton) {
-      el.motionRunStopAfterButton.disabled = motionRunLoading || !running;
+      el.motionRunStopAfterButton.disabled = motionRunLoading || !stoppable;
+      el.motionRunStopAfterButton.title = scope === 'group'
+        ? '참가 PC 전체를 현재 회차까지 마친 뒤 정지합니다'
+        : '이 PC의 모션을 현재 회차까지 마친 뒤 정지합니다';
     }
     if (el.motionRunRefreshButton) {
       el.motionRunRefreshButton.disabled = motionRunLoading;
@@ -2618,6 +2648,50 @@ export function createMotionDataController({
     }
   }
 
+  /** 실행 범위 · 'local'(이 PC) 또는 'group'(참가한 전체 PC).
+   *
+   * 둘은 같은 모터 경로를 쓰는 배타 관계다 · 그룹이 도는 동안 로컬 실행은
+   * 브리지가 거절한다(`coordination_bridge.local_execution_blocker`). 그래서
+   * 화면에서도 하나만 고르게 한다 · 같은 이름의 버튼을 두 벌 두지 않는다 · §6-65
+   */
+  function motionRunScope() {
+    return el.motionRunScopeGroup?.checked ? 'group' : 'local';
+  }
+
+  function groupRunAvailability() {
+    return groupRun?.availability?.() || { ok: false, reason: '연동 정보를 받지 못했습니다' };
+  }
+
+  /** 그룹 실행에 넘길 반복 옵션 · 화면의 입력값을 그대로 쓴다. */
+  function groupRunOverrides() {
+    return {
+      repeat_mode: String(el.motionAutomationRepeatMode?.value || 'reinitialize'),
+      dwell_sec: Number(el.motionAutomationDwellSec?.value || 0),
+      target_cycle_count: Math.max(0, parseInt(el.motionRunTargetCycle?.value || '0', 10)),
+    };
+  }
+
+  /** 그룹 명령을 보내고 화면 메시지를 맞춘다. */
+  async function runGroupCommand(action, busyMessage) {
+    motionRunLoading = true;
+    setMotionRunMessage(busyMessage);
+    renderMotionRunPanel();
+    try {
+      const result = await action();
+      if (result && result.success === false) {
+        await showMotionRunFailure(result.message, '그룹 실행 실패');
+      }
+      setMotionRunMessage(result?.message || '그룹 명령 전달 완료');
+    } catch (error) {
+      const message = error?.message || String(error);
+      setMotionRunMessage(`그룹 명령 실패: ${message}`);
+      await showMotionRunFailure(message, '그룹 실행 실패');
+    } finally {
+      motionRunLoading = false;
+      renderMotionRunPanel();
+    }
+  }
+
   async function startCurrentMotionRun(runMode = 'once') {
     const continuous = runMode === 'continuous';
     const confirmed = await showConfirm(
@@ -2837,20 +2911,43 @@ export function createMotionDataController({
     if (el.motionRunCheckButton) {
       el.motionRunCheckButton.addEventListener('click', checkCurrentMotionRun);
     }
+    [el.motionRunScopeLocal, el.motionRunScopeGroup].forEach((input) => {
+      input?.addEventListener('change', () => renderMotionRunPanel());
+    });
     if (el.motionRunInitializeButton) {
-      el.motionRunInitializeButton.addEventListener('click', initializeCurrentMotionRun);
+      el.motionRunInitializeButton.addEventListener('click', () => (
+        motionRunScope() === 'group'
+          ? runGroupCommand(() => groupRun.initialize(), '그룹 초기 위치 이동 요청 중')
+          : initializeCurrentMotionRun()
+      ));
     }
     if (el.motionRunStartButton) {
-      el.motionRunStartButton.addEventListener('click', () => startCurrentMotionRun('once'));
+      el.motionRunStartButton.addEventListener('click', () => (
+        motionRunScope() === 'group'
+          ? runGroupCommand(() => groupRun.start(groupRunOverrides()), '그룹 모션 1회 시작 요청 중')
+          : startCurrentMotionRun('once')
+      ));
     }
     if (el.motionRunContinuousStartButton) {
-      el.motionRunContinuousStartButton.addEventListener('click', () => startCurrentMotionRun('continuous'));
+      el.motionRunContinuousStartButton.addEventListener('click', () => (
+        motionRunScope() === 'group'
+          ? runGroupCommand(() => groupRun.startContinuous(groupRunOverrides()), '그룹 연속 모션 시작 요청 중')
+          : startCurrentMotionRun('continuous')
+      ));
     }
     if (el.motionRunStopButton) {
-      el.motionRunStopButton.addEventListener('click', stopCurrentMotionRun);
+      el.motionRunStopButton.addEventListener('click', () => (
+        motionRunScope() === 'group'
+          ? runGroupCommand(() => groupRun.stopNow(), '그룹 즉시 정지 요청 중')
+          : stopCurrentMotionRun()
+      ));
     }
     if (el.motionRunStopAfterButton) {
-      el.motionRunStopAfterButton.addEventListener('click', stopCurrentMotionRunAfterCycle);
+      el.motionRunStopAfterButton.addEventListener('click', () => (
+        motionRunScope() === 'group'
+          ? runGroupCommand(() => groupRun.stopAfterCycle(), '그룹 회차 후 정지 요청 중')
+          : stopCurrentMotionRunAfterCycle()
+      ));
     }
     if (el.motionRunRefreshButton) {
       el.motionRunRefreshButton.addEventListener('click', refreshMotionRunStatus);

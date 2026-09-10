@@ -12,10 +12,10 @@ import {
   setProjectGeneration,
   fetchSystemVersion,
 } from './api.js?v=20260910-api-table-1';
-import { getElements } from './dom.js?v=20260910-motion-run-merge-1';
+import { getElements } from './dom.js?v=20260910-run-scope-1';
 import { createMotorEventLogController } from './event_log.js?v=20260727-popup-common-3';
 import { createMidiMonitorController } from './midi_monitor.js?v=20260806-midi-pickup-reconnect-1';
-import { createMotionDataController } from './motion_data.js?v=20260910-motion-run-merge-1';
+import { createMotionDataController } from './motion_data.js?v=20260910-run-scope-1';
 import { createMotionStudioController } from './motion_studio.js?v=20260804-point-actions-range-1';
 import { createMotionTestController } from './motion_test.js?v=20260728-servo-alarm-2';
 import { createMotorConfigController } from './motor_config.js?v=20260731-project-compatible-scan-1';
@@ -39,7 +39,7 @@ import {
 } from './workspace_navigation.js?v=20260910-motion-run-merge-1';
 import { installFeedbackPresentation } from './ui_feedback.js?v=20260724-ui-finish-1';
 import { createServoAlarmController } from './servo_alarm.js?v=20260728-servo-alarm-2';
-import { createCoordinationController } from './coordination.js?v=20260818-roster-remove-1';
+import { createCoordinationController } from './coordination.js?v=20260910-run-scope-1';
 
 const el = getElements();
 const operationProgress = createOperationProgressManager({ el });
@@ -1091,6 +1091,9 @@ const motionData = createMotionDataController({
   getConfiguredMotors: () => motorConfig.getConfiguredMotors(),
   onProjectFilesChange: () => projectExplorer.refresh(true),
   onExportMotionFileToStudio: (fileName) => motionStudio.addMotionFile(fileName),
+  // 실행 화면이 "그룹" 범위를 고르면 이 창구로 나간다 · 버튼은 한 벌이고
+  // 어디로 나갈지만 범위가 정한다 · §6-65
+  groupRun: coordination.groupRun,
 });
 
 const midiMonitor = createMidiMonitorController({

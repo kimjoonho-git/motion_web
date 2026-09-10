@@ -241,36 +241,13 @@ export function createCoordinationController({ el }) {
         ? '이 PC와 다른 PC의 그룹 모션을 즉시 정지한 뒤 이 PC의 연동을 해제합니다'
         : '이 PC의 연동을 해제해 단독 모션·모션 스튜디오를 사용합니다';
     }
-    const releasePending = Boolean(execution.execution_id);
-    const startDisabled = loading || !joined || active || releasePending || peers.length < 1 || unhealthyPeer || groupErrorActive;
-
-    let continuousUnavailable = false;
-    let continuousReason = '';
-    const globalState = typeof getLatestState === 'function' ? getLatestState() : null;
-    const continuousCapability = globalState?.motion_run_status?.capabilities?.continuous_run;
-    if (continuousCapability && continuousCapability.available === false) {
-      const repeatMode = String(el.coordinationRepeatMode?.value || 'reinitialize');
-      if (repeatMode !== 'reinitialize' && repeatMode !== 'dwell_reinitialize') {
-        continuousUnavailable = true;
-        continuousReason = continuousCapability.reason || '단차 5도 초과';
-      }
-    }
-
-    if (el.coordinationInitializeButton) el.coordinationInitializeButton.disabled = startDisabled;
-    if (el.coordinationStartButton) el.coordinationStartButton.disabled = startDisabled;
-    if (el.coordinationContinuousStartButton) {
-      el.coordinationContinuousStartButton.disabled = startDisabled || continuousUnavailable;
-      el.coordinationContinuousStartButton.title = continuousUnavailable 
-        ? `연속 모션 불가: ${continuousReason}` 
-        : '';
-    }
-    if (el.coordinationRepeatMode) el.coordinationRepeatMode.disabled = loading || active;
-    if (el.coordinationDwellSec) el.coordinationDwellSec.disabled = loading || active;
-    if (el.coordinationStopAfterButton) el.coordinationStopAfterButton.disabled = loading || !active;
-    if (el.coordinationStopNowButton) el.coordinationStopNowButton.disabled = loading || !active;
-    
-    if (el.coordinationTargetStopCycle) {
-      el.coordinationTargetStopCycle.disabled = loading || active;
+    // 실행 제어는 모션 실행 화면으로 옮겼다 · 여기서는 왜 못 하는지만 알린다 · §6-65
+    if (el.coordinationRunAvailability) {
+      const availability = groupRunAvailability();
+      el.coordinationRunAvailability.textContent = availability.ok
+        ? '그룹 실행 준비됨 · 모션 실행 화면에서 시작하세요'
+        : `그룹 실행 불가 · ${availability.reason}`;
+      el.coordinationRunAvailability.classList.toggle('warning-text', !availability.ok);
     }
 
     if (el.coordinationAcknowledgeErrorButton) el.coordinationAcknowledgeErrorButton.disabled = loading || !groupErrorActive;
@@ -475,16 +452,45 @@ export function createCoordinationController({ el }) {
     await control('temporarily_disable');
   }
 
-  function groupRunOptions(runMode) {
-    const repeatMode = String(el.coordinationRepeatMode?.value || 'direct');
-    const dwellSec = Number(el.coordinationDwellSec?.value);
-    const targetCycleCount = Math.max(0, parseInt(el.coordinationTargetStopCycle?.value || '0', 10));
+  function groupRunOptions(runMode, overrides = {}) {
+    const dwellSec = Number(overrides.dwell_sec);
+    const targetCycleCount = Number(overrides.target_cycle_count);
     return {
       run_mode: runMode,
-      repeat_mode: repeatMode,
+      repeat_mode: String(overrides.repeat_mode || 'direct'),
       dwell_sec: Number.isFinite(dwellSec) && dwellSec >= 0 ? dwellSec : 0,
-      target_cycle_count: Number.isFinite(targetCycleCount) ? targetCycleCount : 0,
+      target_cycle_count: Number.isFinite(targetCycleCount) && targetCycleCount >= 0
+        ? targetCycleCount
+        : 0,
     };
+  }
+
+  /** 그룹 실행을 지금 시작할 수 있는가 · 못 하면 이유를 함께 준다.
+   *
+   * 판정을 버튼에서 떼어냈다 · 실행 화면이 "이 PC / 그룹" 중 그룹을 고를 때
+   * 같은 규칙을 그대로 써야 하고, 규칙만 따로 시험할 수 있어야 한다 · §6-65
+   */
+  function groupRunAvailability() {
+    const runtime = snapshot?.runtime || {};
+    const execution = runtime.execution || {};
+    const peers = Array.isArray(runtime.peers) ? runtime.peers : [];
+    const active = Boolean(execution.execution_id);
+    const state = {
+      active,
+      peerCount: peers.length + 1,
+      state: String(execution.state || 'idle'),
+    };
+    if (loading) return { ...state, ok: false, reason: '명령 전달 중' };
+    if (runtime.joined !== true) return { ...state, ok: false, reason: '그룹에 참가하지 않았습니다' };
+    if (active) return { ...state, ok: false, reason: '그룹 실행이 진행 중입니다' };
+    if (peers.length < 1) return { ...state, ok: false, reason: '연결된 다른 PC가 없습니다' };
+    if (peers.some((peer) => peer.state !== 'online' || Number(peer.servo_alarm_grade || 0) > 0)) {
+      return { ...state, ok: false, reason: '참가 PC 중 통신 이상이나 알람이 있습니다' };
+    }
+    if ((runtime.coordination_error || {}).active === true) {
+      return { ...state, ok: false, reason: '그룹 오류를 확인해야 합니다' };
+    }
+    return { ...state, ok: true, reason: '' };
   }
 
   function bindEvents() {
@@ -493,18 +499,6 @@ export function createCoordinationController({ el }) {
     el.coordinationJoinButton?.addEventListener('click', () => control('join'));
     el.coordinationLeaveButton?.addEventListener('click', () => control('leave'));
     el.coordinationTemporaryDisableButton?.addEventListener('click', temporarilyDisable);
-    el.coordinationInitializeButton?.addEventListener('click', initializeGroup);
-    el.coordinationStartButton?.addEventListener('click', () => control('start_group', groupRunOptions('once')));
-    el.coordinationContinuousStartButton?.addEventListener('click', () => control('start_group', groupRunOptions('continuous')));
-    el.coordinationStopAfterButton?.addEventListener('click', () => {
-      const state = snapshot?.execution?.state;
-      if (['preparing', 'initializing', 'armed', 'start_scheduled'].includes(state)) {
-        control('stop_now');
-      } else {
-        control('stop_after_cycle');
-      }
-    });
-    el.coordinationStopNowButton?.addEventListener('click', () => control('stop_now'));
 
     el.coordinationAcknowledgeErrorButton?.addEventListener('click', () => control('acknowledge_group_error'));
     [el.coordinationDisplayName, el.coordinationGroupId, el.coordinationDomainId, el.coordinationEnabled, el.coordinationIsMaster, el.coordinationRequiredPeers]
@@ -617,5 +611,21 @@ export function createCoordinationController({ el }) {
     render();
   }
 
-  return { start, refresh, render, renderSnapshot };
+  /** 실행 화면이 "그룹" 범위를 골랐을 때 쓰는 창구 · §6-65 */
+  const groupRun = {
+    availability: groupRunAvailability,
+    initialize: initializeGroup,
+    start: (options) => control('start_group', groupRunOptions('once', options)),
+    startContinuous: (options) => control('start_group', groupRunOptions('continuous', options)),
+    stopAfterCycle: () => {
+      // 아직 모션이 돌기 전이면 "회차 후"가 의미가 없다 · 바로 세운다
+      const state = snapshot?.runtime?.execution?.state;
+      return ['preparing', 'initializing', 'armed', 'start_scheduled'].includes(state)
+        ? control('stop_now')
+        : control('stop_after_cycle');
+    },
+    stopNow: () => control('stop_now'),
+  };
+
+  return { start, refresh, render, renderSnapshot, groupRun };
 }
