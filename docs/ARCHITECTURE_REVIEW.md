@@ -3008,6 +3008,77 @@ motor_operation    operation_id motor-4ec1c8a6… · status partial
 **직접 시험이 없는 신규 모듈 2건** · `motor_runtime_store`(420줄) ·
 `motor_values`(157줄) · 간접 커버는 된다.
 
+### 6-49. 죽은 코드 209줄 삭제 · 빈 시험 자리 메우기
+
+§6-48이 남긴 두 항목을 처리했다.
+
+#### 죽은 코드 · 연쇄를 세 번 따라갔다
+
+지우면 **그 함수만 부르던 것이 다시 죽는다.** 한 번에 끝나지 않았다.
+
+| 차수 | 줄 | 지운 것 |
+| --- | --- | --- |
+| 1차 | 150 | `_publish_initial_action_request` · `_wait_for_initial_action_start` · `_wait_for_initial_action_completion` · `interpolate_range` · `scale_time_segment` · `resolve_display_progress` · `selected_published_names` |
+| 2차 | 31 | `linear_sample` · `_wait_for_action_result` |
+| 3차 | 28 | `_take_action_result` · `_clear_action_results` · `_is_terminal_action_result` |
+
+**삭제 전에 문자열 디스패치를 확인했다.** 이 저장소는 명령을 문자열로 라우팅하는
+곳이 있어서(`command_router`) 이름 참조만 세면 살아 있는 것을 지울 수 있다 ·
+7건 모두 `'이름'` 형태 0건.
+
+#### 남긴 것 · 구독은 떼지 않았다
+
+`_action_result_callback`은 계속 `action_result` 토픽을 구독한다. 읽는 곳이
+없어졌으니 **쓰기만 하는 버퍼**가 됐지만, 구독을 떼는 것은 **이 노드가 토픽에서
+빠지는 일**이라 성격이 다르다 · 주석으로 사실을 남기고 별도 판단으로 둔다 ·
+모으는 양은 60초로 제한된다.
+
+작은 공개 API 8건(`mark_cycle_ready` · `discover_usb_projects` ·
+`clear_selection` 등)도 남겼다 · `clear_selection`은 §8에 계약으로 적혀 있다.
+
+#### 빈 시험 자리 · 1,031 → 1,063건
+
+| 모듈 | 신규 | 무엇을 지키나 |
+| --- | --- | --- |
+| `motor_values` | 21 | 화면에 그대로 나가는 값 |
+| `motor_runtime_store` | 19 | 한 번에 하나만 · 죽은 작업은 시한으로 풀림 |
+
+`motor_values`는 실기에서 관측한 `0x0637`을 그대로 시험값으로 썼다 ·
+MINAS 상위 바이트 표식 제거 · Dynamixel 위치 환산의 범위 자르기 ·
+그리고 **`unchecked_float`이 `optional_float`과 다른 것**(`inf` 통과)을
+붙잡아 둔다 · 합치면 조용히 `None`이 되는 자리다(§6-34).
+
+#### 락 시험을 두 번 고쳤다
+
+처음 쓴 시험은 `common_store.file_lock`을 감시했는데, **저장소 쪽 락에 가려**
+데코레이터를 떼어도 통과했다 · 아래로 흐르는 호출이 어차피 락을 잡기 때문이다.
+
+지금은 두 형태를 각각 잡는다.
+
+| 무엇을 떼면 | 무엇이 잡나 |
+| --- | --- |
+| `@_motor_runtime_locked` 데코레이터 | 구조 시험 · `functools.wraps` 흔적 |
+| `with store.file_lock(...)` 본체 | 네 스레드 동시 갱신 · 세부 20개 중 하나도 잃지 않아야 한다 |
+
+둘 다 실제로 떼어 실패를 확인했다.
+
+**감시 대상이 진짜 그 코드인지 봐야 한다** · 아래로 흐르는 호출이 같은 일을
+하고 있으면 시험은 통과하고 결함만 남는다.
+
+#### 검증
+
+- 코드 검증 · `ruff check src` 55건 유지 · 미사용 import 0
+- 실행 검증 · `pytest` **1,071건** 통과
+- 실물 검증 · 4패키지 재빌드·재시작 후
+
+```
+실행 컨텍스트  ready
+모터 조작      직전 검색 기록 유지
+스튜디오       idle · MIDI ok · device_connected true
+서보           11.47 deg · Operation enabled · online
+오류 로그      없음
+```
+
 ## 7. 유지보수 지표 · 신규 코드 규칙안
 
 - 파일 1,000줄 이하 · 함수 60줄 이하 · `Node` 서브클래스 500줄 이하
