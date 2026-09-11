@@ -30,7 +30,6 @@ from midi_control.fader_state import (
     FADER_SYNC_MIN_DURATION_SEC,
     FaderStateMachine,
 )
-from midi_control.overdub_handoff import OverdubHandoff
 from midi_control.pickup_policy import (
     PICKUP_FEEDBACK_CONSISTENCY_DEG,
     PICKUP_TOLERANCE_DEG,
@@ -197,8 +196,6 @@ class MidiControlNode(Node):
         self._confirmed = [False] * MIDI_CHANNEL_COUNT
         self._control_enabled = [False] * MIDI_CHANNEL_COUNT
         self._studio_select_locked = False
-        #: 추가 녹화 중 SELECT 이어받기 · §6-86
-        self._overdub = OverdubHandoff()
         self._motion_run_state = 'idle'
         self._motion_run_request_source = ''
         self._motion_studio_state = 'idle'
@@ -976,8 +973,6 @@ class MidiControlNode(Node):
             self._motion_studio_state = 'idle'
         if not hasattr(self, '_playback_phase'):
             self._playback_phase = 'idle'
-        if not hasattr(self, '_overdub'):
-            self._overdub = OverdubHandoff()
         if not hasattr(self, '_playback_follow_enabled'):
             self._playback_follow_enabled = [False] * MIDI_CHANNEL_COUNT
         if not hasattr(self, '_playback_follow_targets'):
@@ -1015,63 +1010,6 @@ class MidiControlNode(Node):
             self, '_btn3', [False] * MIDI_CHANNEL_COUNT
         ))
 
-    def _service_overdub_handoff_locked(self) -> None:
-        """재생이 쥔 축의 라인을 붙잡아 둔다 · §6-86
-
-        SELECT 는 켜진 채로 둔다 · 대신 Pickup 을 걸어 페이더가 모터를 따라
-        움직이게 하고 그동안 명령을 막는다. 구간이 끝나면 페이더는 이미 모터
-        자리에 있으니 그대로 이어서 녹화된다 · 튀지 않는다.
-        """
-        if not self._overdub.active:
-            return
-        mappings = self._banks.active_bank()['mappings']
-        owned = self._overdub.owned_channels(
-            [mapping_motion_ids(mapping) for mapping in mappings]
-        )
-        for channel in owned:
-            if not self._control_enabled[channel]:
-                continue
-            self._rearm_pickup_locked(
-                channel, mappings[channel], '재생 중 · 페이더가 모터를 따라갑니다',
-            )
-
-    def _rearm_pickup_locked(
-        self, channel: int, mapping: Dict[str, Any], message: str,
-    ) -> None:
-        """페이더를 지금 모터 위치로 몰고 가 맞을 때까지 명령을 막는다.
-
-        SELECT 를 누를 때와 **같은 절차**다 · 다른 라인의 소유를 뺏는 부분만
-        빠진다. 이미 이 라인이 쥐고 있기 때문이다.
-        """
-        try:
-            group = self._mapping_group_locked(mapping)
-            motion_value, pickup_source = (
-                self._pickup._pickup_reference_for_group_locked(group)
-            )
-            safe_range = safe_motion_range_for_group(group)
-            fader_target = raw_fader_for_motion(
-                motion_value, group[0]['row'], mapping, safe_range,
-            )
-        except ValueError as exc:
-            self._motor_command_state[channel] = 'activation_rejected'
-            self._motor_command_message[channel] = f'이어받기 불가: {exc}'
-            return
-        self._set_group_motion_value_locked(group, motion_value)
-        self._pickup.pending[channel] = True
-        self._pickup.reference_motion[channel] = motion_value
-        self._pickup.previous_motion[channel] = None
-        self._pickup.reference_source[channel] = pickup_source
-        self._faders._queue_fader_position_locked(channel, fader_target)
-        self._faders.sync_targets[channel] = fader_target
-        self._faders.awaiting_sync[channel] = True
-        self._faders.sync_not_before[channel] = (
-            time.monotonic() + FADER_SYNC_MIN_DURATION_SEC
-        )
-        self._motor_command_state[channel] = 'waiting_pickup'
-        self._motor_command_message[channel] = (
-            f'{message} · 기준 {motion_value:.3f}°'
-        )
-
     def _combined_playback_phase_locked(self) -> str:
         """Combine general-motion and Motion Studio into one MIDI lifecycle."""
         self._ensure_playback_follow_state_locked()
@@ -1101,13 +1039,6 @@ class MidiControlNode(Node):
         if current == previous:
             return
         self._playback_phase = current
-        if self._motion_studio_state == 'recording':
-            # 녹화 테이크 중에는 끄지 않는다 · §6-86
-            #
-            # 실행 노드가 끝나는 순간 SELECT 를 모두 껐다 · 하필 사용자가 이어서
-            # 녹화하려는 바로 그 지점이라, 다시 눌러야 했다. 축이 풀리는 순간
-            # Pickup 을 다시 거는 것으로 안전을 지킨다.
-            return
         if current == 'initializing':
             message = '초기 위치 이동 시작 · SELECT OFF 및 잠금'
         elif current == 'playing':
@@ -1592,9 +1523,7 @@ class MidiControlNode(Node):
         with self._lock:
             self._ensure_playback_follow_state_locked()
             self._motion_studio_state = str(payload.get('state') or 'idle')
-            self._overdub.update(payload)
             self._update_playback_phase_locked()
-            self._service_overdub_handoff_locked()
 
     def _motion_mapping_response_callback(self, msg: String) -> None:
         try:
@@ -2061,8 +1990,6 @@ class MidiControlNode(Node):
 
     def _finish_studio_recording_initialization_locked(self) -> None:
         self._studio_select_locked = False
-        #: 추가 녹화 중 SELECT 이어받기 · §6-86
-        self._overdub = OverdubHandoff()
         self._previous_btn3 = list(self._btn3)
         for channel in range(MIDI_CHANNEL_COUNT):
             self._control_enabled[channel] = False
