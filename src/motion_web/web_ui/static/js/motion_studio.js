@@ -1,4 +1,4 @@
-import { escapeHtml } from './format.js?v=20260911121056';
+import { escapeHtml } from './format.js?v=20260911122020';
 import {
   commitMotionStudioMerge,
   createMotionStudioLayer,
@@ -16,7 +16,7 @@ import {
   startMotionStudioRecord,
   stopMotionStudio,
   updateMotionStudioLayer,
-} from './api.js?v=20260911121056';
+} from './api.js?v=20260911122020';
 import {
   applyMotionStudioProjectPatch, motionStudioCanCreatePointCurve,
   motionStudioCanSwitchPointDraftCurve, motionStudioCanvasEventPoint,
@@ -33,13 +33,13 @@ import {
   motionStudioPointRangeTargetsMatch, motionStudioRuntimeStatusMessage,
   motionStudioShouldProtectPointAxisSelection, motionStudioSnapFrameTime,
   resolveMotionStudioSelectedLayerId, synchronizeMotionStudioEditorTimeline,
-} from './motion_studio_calculations.js?v=20260911121056';
-import { createMotionStudioGraphPainter } from './motion_studio_graph_render.js?v=20260911121056';
-import { createMotionStudioRecordingPreview } from './motion_studio_recording_preview.js?v=20260911121056';
+} from './motion_studio_calculations.js?v=20260911122020';
+import { createMotionStudioGraphPainter } from './motion_studio_graph_render.js?v=20260911122020';
+import { createMotionStudioRecordingPreview } from './motion_studio_recording_preview.js?v=20260911122020';
 import {
   motionStudioCompositionTracks as compositionTracks,
   motionStudioLayerTracks as layerTracks,
-} from './motion_studio_graph.js?v=20260911121056';
+} from './motion_studio_graph.js?v=20260911122020';
 import {
   bindMotionStudioEvent,
   bindMotionStudioProjectTransportEvents,
@@ -48,32 +48,32 @@ import {
   motionStudioExportResultMessage,
   resetMotionStudioProjectState,
   setMotionStudioMessage,
-} from './motion_studio_ui.js?v=20260911121056';
+} from './motion_studio_ui.js?v=20260911122020';
 import {
   motionStudioEditorAxisLabel,
-} from './motion_studio_editor_ui.js?v=20260911121056';
+} from './motion_studio_editor_ui.js?v=20260911122020';
 import {
   createMotionStudioPlaybackController,
-} from './motion_studio_playback.js?v=20260911121056';
+} from './motion_studio_playback.js?v=20260911122020';
 import {
   renderMotionStudioLayerManager,
-} from './motion_studio_layer_manager.js?v=20260911121056';
+} from './motion_studio_layer_manager.js?v=20260911122020';
 import {
   MOTION_STUDIO_PERIOD_SEC,
-} from './motion_studio_constants.js?v=20260911121056';
+} from './motion_studio_constants.js?v=20260911122020';
 import {
   createMotionStudioLayerController, closeMotionStudioLayerManager, openMotionStudioLayerManager,
   selectMotionStudioLayer,
   updateMotionStudioMergeSelection,
-} from './motion_studio_layer_controller.js?v=20260911121056';
+} from './motion_studio_layer_controller.js?v=20260911122020';
 import {
   createMotionStudioEditorController,
-} from './motion_studio_editor_controller.js?v=20260911121056';
-import { motionStudioEditorPointCurves } from './motion_studio_editor_state.js?v=20260911121056';
+} from './motion_studio_editor_controller.js?v=20260911122020';
+import { motionStudioEditorPointCurves } from './motion_studio_editor_state.js?v=20260911122020';
 import {
   createMotionStudioRequestFence,
-} from './motion_studio_controller_events.js?v=20260911121056';
-import { showAlert, showConfirm } from './ui_dialogs.js?v=20260911121056';
+} from './motion_studio_controller_events.js?v=20260911122020';
+import { showAlert, showConfirm } from './ui_dialogs.js?v=20260911122020';
 export {
   applyMotionStudioProjectPatch, motionStudioCanCreatePointCurve,
   motionStudioCanSwitchPointDraftCurve, motionStudioCanvasEventPoint,
@@ -331,6 +331,14 @@ export function createMotionStudioController({
     return `${metrics.frameCount}프레임 · ${metrics.duration.toFixed(3)}초 · ${metrics.motionIds.length}축`;
   }
 
+  /** 포인트 곡선으로 덮이지 **않은** 축 · 편집기가 묻는 질문이다 · §6-90
+   *
+   * "이 축을 포인트로 편집할 수 있나" 를 판정한다.
+   *
+   * **합치기의 판정이 아니다** · 한때 합치기가 이것을 썼고, 그래서 곡선이 없는
+   * 녹화 레이어는 영영 합칠 수 없었다 · 합치기는 `layerMergeBlockReason` 을
+   * 쓴다.
+   */
   function layerPointCoverageIssues(layer) {
     if (!layer || typeof layer !== 'object') return ['모션 데이터 없음'];
     const frames = Array.isArray(layer.frames) ? layer.frames : [];
@@ -371,13 +379,32 @@ export function createMotionStudioController({
     return motionStudioMergePreviewProject(state.project, layerIds);
   }
 
+  /** 이 레이어가 합치기를 막는 이유 · 없으면 빈 문자열 · §6-90
+   *
+   * 나머지 시스템과 **같은 규칙**을 쓴다 · "곡선이 **있으면** 프레임과 맞아야
+   * 한다". 전에는 "모든 축이 포인트 곡선으로 덮여 있어야 한다" 고 요구해서,
+   * 곡선이 없는 녹화 레이어는 영영 합칠 수 없었다.
+   *
+   * 판정은 서버가 낸 것을 그대로 쓴다 · 화면이 따로 셈하면 합치기 버튼과 실제
+   * 결과가 갈린다.
+   */
+  function layerMergeBlockReason(layer) {
+    if (layer?.locked) return '잠금';
+    const mismatched = (state.composition?.point_curve_mismatches || [])
+      .filter((item) => String(item.layer_id || '') === String(layer?.layer_id || ''))
+      .map((item) => String(item.motion_id || ''));
+    if (mismatched.length) return `포인트 곡선 불일치 · ${[...new Set(mismatched)].join(', ')}`;
+    if (!cachedLayerTracks(layer).size) return '모션 데이터 없음';
+    return '';
+  }
+
   function renderLayerManager() {
     renderMotionStudioLayerManager({
       state,
       el,
       escapeHtml,
       layerSummary,
-      layerPointCoverageIssues,
+      layerMergeBlockReason,
     });
   }
 

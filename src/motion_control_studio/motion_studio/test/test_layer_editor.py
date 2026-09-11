@@ -901,42 +901,74 @@ def test_merge_append_requires_the_moved_layer_to_be_selected():
         )
 
 
-def test_merge_requires_points_and_rejects_exact_time_overlap_but_allows_jump():
+def _recorded(layer_id, name, samples):
+    """녹화가 내놓는 레이어 · 20ms 프레임만 있고 포인트 곡선은 없다."""
+    return {
+        'layer_id': layer_id, 'name': name,
+        'frames': [
+            {'frame': i + 1, 'time_sec': t, 'values': {'1-1': v}}
+            for i, (t, v) in enumerate(samples)
+        ],
+    }
+
+
+def test_recorded_layers_can_be_merged():
+    """녹화한 레이어는 포인트 곡선이 없다 · 스튜디오가 만들어 내는 것이 바로
+    그것인데, 합치기만 "모든 축이 포인트로 덮여야 한다" 고 요구해서 **영영 합칠
+    수 없었다** · §6-90
+
+    재생·내보내기·초기 위치가 지키는 불변식은 "곡선이 **있으면** 프레임과 맞아야
+    한다" 이다 · 합치기도 같은 규칙을 쓴다.
+    """
+    first = _recorded('a', '녹화 1', [(0.02, 0.0), (0.04, 1.0)])
+    second = _recorded('c', '추가 녹화 1', [(0.06, 20.0), (0.08, 21.0)])
+
+    merged = merge_layers({'layers': [first, second]}, ['a', 'c'])
+
+    assert values(merged) == [0.0, 1.0, 20.0, 21.0]
+    assert merged['point_curves'] == [], '없던 곡선이 생겼다'
+
+
+def test_merging_a_recorded_layer_with_a_point_backed_one_keeps_both():
+    """한쪽만 포인트 곡선이 있어도 된다 · 합친 레이어는 곡선이 있는 축만
+    곡선을 물려받고, 나머지는 프레임 그대로 남는다."""
+    recorded = _recorded('a', '녹화 1', [(0.02, 0.0), (0.04, 1.0)])
+    edited = create_all_axis_points(
+        _recorded('c', '편집한 레이어', [(0.06, 20.0), (0.08, 21.0)])
+    )
+
+    merged = merge_layers({'layers': [recorded, edited]}, ['a', 'c'])
+
+    assert values(merged) == [0.0, 1.0, 20.0, 21.0]
+    assert len(merged['point_curves']) == 1
+    # 합친 결과도 시스템의 불변식을 지킨다 · 다시 합칠 수 있다
+    assert point_curve_frame_mismatches(merged) == []
+
+
+def test_merge_still_refuses_curves_that_disagree_with_their_frames():
+    """곡선이 **있는데** 프레임과 다르면 막는다 · 그게 진짜 위험한 경우다."""
+    edited = create_all_axis_points(
+        _recorded('a', '편집한 레이어', [(0.02, 0.0), (0.04, 1.0)])
+    )
+    # 프레임만 몰래 바꾼다 · 곡선은 그대로다
+    edited['frames'][1]['values']['1-1'] = 99.0
+    other = _recorded('c', '녹화 1', [(0.06, 20.0), (0.08, 21.0)])
+
+    with pytest.raises(ValueError, match='포인트 곡선이 20ms 프레임과 어긋납니다'):
+        merge_layers({'layers': [edited, other]}, ['a', 'c'])
+
+
+def test_merge_refuses_layers_with_no_motion_data():
     with pytest.raises(ValueError, match='모션 데이터 없음'):
         merge_layers({'layers': [
             {'layer_id': 'empty-a', 'name': '빈 레이어 A', 'frames': []},
             {'layer_id': 'empty-b', 'name': '빈 레이어 B', 'frames': []},
         ]}, ['empty-a', 'empty-b'])
 
-    first = {
-        'layer_id': 'a', 'name': '앞 레이어', 'frames': [
-            {'frame': 1, 'time_sec': 0.02, 'values': {'1-1': 0.0}},
-            {'frame': 2, 'time_sec': 0.04, 'values': {'1-1': 1.0}},
-        ],
-    }
-    overlap = {
-        'layer_id': 'b', 'name': '겹친 레이어', 'frames': [
-            {'frame': 1, 'time_sec': 0.04, 'values': {'1-1': 1.0}},
-            {'frame': 2, 'time_sec': 0.06, 'values': {'1-1': 2.0}},
-        ],
-    }
-    with pytest.raises(ValueError, match='전체 모션축에 포인트를 먼저 생성'):
-        merge_layers({'layers': [first, overlap]}, ['a', 'b'])
 
-    first = create_all_axis_points(first)
-    overlap = create_all_axis_points(overlap)
+def test_merge_rejects_exact_time_overlap():
+    first = _recorded('a', '앞 레이어', [(0.02, 0.0), (0.04, 1.0)])
+    overlap = _recorded('b', '겹친 레이어', [(0.04, 1.0), (0.06, 2.0)])
+
     with pytest.raises(ValueError, match=r'합치기 중단 · 시간 충돌.*1-1.*0\.040~0\.040초'):
         merge_layers({'layers': [first, overlap]}, ['a', 'b'])
-
-    jump = {
-        'layer_id': 'c', 'name': '뒤 레이어', 'frames': [
-            {'frame': 3, 'time_sec': 0.06, 'values': {'1-1': 20.0}},
-            {'frame': 4, 'time_sec': 0.08, 'values': {'1-1': 21.0}},
-        ],
-    }
-    jump = create_all_axis_points(jump)
-    merged = merge_layers(
-        {'layers': [first, jump]},
-        ['a', 'c'],
-    )
-    assert values(merged) == [0.0, 1.0, 20.0, 21.0]

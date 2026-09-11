@@ -13,6 +13,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Sequence
 
 from .axis_operations import apply_axis_operation
 from .constants import DEFAULT_PERIOD_SEC
+from .layer_validation import point_curve_frame_mismatches
 from .curve_engine import (
     EPSILON,
     MAX_TIME_SCALE,
@@ -525,7 +526,16 @@ def collect_merged_point_curves(
 
 
 def layer_point_coverage_issues(layer: Mapping[str, Any]) -> List[str]:
-    """Return Motion IDs whose stored 20 ms samples are not fully point-backed."""
+    """포인트 곡선으로 덮이지 **않은** 축 · 편집기가 묻는 질문이다 · §6-90
+
+    "이 축을 포인트로 편집할 수 있나" 를 판정한다 · 덮여 있지 않다면 먼저
+    포인트를 만들어야 한다.
+
+    **합치기의 판정이 아니다.** 한때 합치기가 이것을 썼고, 그래서 곡선이 없는
+    녹화 레이어는 영영 합칠 수 없었다 · 스튜디오가 만들어 내는 것이 바로 그
+    레이어인데도. 합치기·재생·내보내기가 지키는 불변식은 따로 있다 ·
+    `point_curve_frame_mismatches` · "곡선이 **있으면** 프레임과 맞아야 한다".
+    """
     normalized = normalize_layer(copy.deepcopy(dict(layer)))
     tracks = _tracks(normalized)
     if not tracks:
@@ -599,12 +609,29 @@ def merge_layers(
         raise ValueError('선택한 레이어 일부를 찾을 수 없습니다')
     for layer in selected_layers:
         layer['enabled'] = True
-        uncovered = layer_point_coverage_issues(layer)
-        if uncovered:
+        # 나머지 시스템과 **같은 규칙**을 쓴다 · §6-90
+        #
+        # 전에는 "모든 축이 포인트 곡선으로 덮여 있어야 한다" 고 요구했다 ·
+        # 그런데 녹화 레이어는 20ms 프레임만 있고 곡선이 없다 · 스튜디오가
+        # 만들어 내는 것이 바로 그것인데, 그래서 **녹화한 레이어는 영영 합칠
+        # 수 없었다**.
+        #
+        # 재생·내보내기·초기 위치가 지키는 불변식은 그게 아니다 · "곡선이
+        # **있으면** 프레임과 맞아야 한다" 이다. 합치기만 혼자 더 센 규칙을
+        # 만들어 쓰고 있었다.
+        if not _tracks(normalize_layer(copy.deepcopy(layer))):
+            raise ValueError(
+                f"레이어 합치기 중단 · '{layer.get('name') or layer.get('layer_id')}'에 "
+                '모션 데이터 없음'
+            )
+        mismatches = point_curve_frame_mismatches(layer)
+        if mismatches:
+            axes = ', '.join(sorted({
+                str(item.get('motion_id') or '') for item in mismatches
+            }))
             raise ValueError(
                 f"레이어 합치기 중단 · '{layer.get('name') or layer.get('layer_id')}'의 "
-                '전체 모션축에 포인트를 먼저 생성하세요: '
-                + ', '.join(uncovered)
+                f'포인트 곡선이 20ms 프레임과 어긋납니다: {axes}'
             )
     append_id = str(append_layer_id or '')
     append_offset_sec = 0.0

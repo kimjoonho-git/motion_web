@@ -1,13 +1,13 @@
 export function reconcileMotionStudioLayerManagerSelection(
   state,
   layers,
-  layerPointCoverageIssues,
+  layerMergeBlockReason,
 ) {
   const layerIds = new Set(layers.map((layer) => String(layer.layer_id || '')));
   if (state.selectedLayerId && !layerIds.has(state.selectedLayerId)) state.selectedLayerId = '';
   if (state.layerManagerTab !== 'merge') return;
   const mergeableLayerIds = new Set(layers
-    .filter((layer) => !layer.locked && layerPointCoverageIssues(layer).length === 0)
+    .filter((layer) => !layerMergeBlockReason(layer))
     .map((layer) => String(layer.layer_id || '')));
   state.mergeLayerIds = new Set(
     [...state.mergeLayerIds].filter((layerId) => mergeableLayerIds.has(layerId)),
@@ -20,10 +20,10 @@ export function renderMotionStudioLayerManager({
   el,
   escapeHtml,
   layerSummary,
-  layerPointCoverageIssues,
+  layerMergeBlockReason,
 }) {
   const layers = state.project?.layers || [];
-  reconcileMotionStudioLayerManagerSelection(state, layers, layerPointCoverageIssues);
+  reconcileMotionStudioLayerManagerSelection(state, layers, layerMergeBlockReason);
 
   el.studioLayerManagerTabs?.querySelectorAll('[data-layer-manager-tab]').forEach((button) => {
     const active = button.dataset.layerManagerTab === state.layerManagerTab;
@@ -48,12 +48,12 @@ export function renderMotionStudioLayerManager({
   if (el.studioManagerMergeRows && state.layerManagerTab === 'merge') {
     el.studioManagerMergeRows.innerHTML = layers.length ? layers.map((layer) => {
       const checked = state.mergeLayerIds.has(layer.layer_id);
-      const pointIssues = layerPointCoverageIssues(layer);
-      const disabled = layer.locked || pointIssues.length > 0;
+      // 합치기를 막는 이유는 한 곳에서 낸다 · §6-90
+      const blocked = layerMergeBlockReason(layer);
       return `<tr data-manager-merge-layer-id="${escapeHtml(layer.layer_id)}">
-        <td><input type="checkbox" data-manager-layer-merge ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''} aria-label="합칠 레이어 선택"></td>
+        <td><input type="checkbox" data-manager-layer-merge ${checked ? 'checked' : ''} ${blocked ? 'disabled' : ''} aria-label="합칠 레이어 선택"></td>
         <td><strong>${escapeHtml(layer.name)}</strong></td>
-        <td><span>${layerSummary(layer)}</span>${layer.locked ? ' <span class="status-chip off">잠금</span>' : ''}${pointIssues.length ? ` <span class="status-chip warn">포인트 필요 · ${escapeHtml(pointIssues.join(', '))}</span>` : ''}</td>
+        <td><span>${layerSummary(layer)}</span>${blocked ? ` <span class="status-chip warn">${escapeHtml(blocked)}</span>` : ''}</td>
       </tr>`;
     }).join('') : '<tr><td colspan="3" class="empty">레이어가 없습니다</td></tr>';
   }
