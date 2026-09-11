@@ -47,34 +47,22 @@ function parseIntegerValue(value, fallback = null) {
 
 /** 언제였는지 · 레이어·모션 파일이 마지막으로 바뀐 시각 · §6-91
  *
- * 레이어가 쌓이면 어느 것이 방금 만든 것인지 알 수 없다 · 목록 한 줄에 들어가야
- * 하므로 짧게 쓴다 · 오늘이면 시각만, 올해면 날짜까지, 그 밖이면 연도까지.
+ * **언제든 같은 모양이다** · `2026-09-10 09:18`
+ *
+ * 처음에는 오늘이면 시각만, 올해면 날짜까지, 그 밖이면 연도까지 줄여 썼다 ·
+ * 목록에 섞여 나오니 `09. 10. 09:18` 과 `13:09` 가 나란히 서서 무엇과 무엇을
+ * 견주는지 알 수 없었다 · 짧은 것보다 **같은 것**이 낫다.
+ *
+ * 자리 수를 직접 맞춘다 · `toLocaleDateString` 은 지역 설정에 따라 모양이
+ * 달라져서 "일괄되게" 를 지킬 수 없다.
  */
 export function formatMoment(epochSeconds) {
   const seconds = Number(epochSeconds);
   if (!Number.isFinite(seconds) || seconds <= 0) return '-';
   const at = new Date(seconds * 1000);
-  const now = new Date();
-  const clock = at.toLocaleTimeString('ko-KR', {
-    hour: '2-digit', minute: '2-digit', hour12: false,
-  });
-  const sameDay = at.toDateString() === now.toDateString();
-  if (sameDay) return clock;
-  const day = at.toLocaleDateString('ko-KR', { month: '2-digit', day: '2-digit' });
-  if (at.getFullYear() === now.getFullYear()) return `${day} ${clock}`;
-  return `${at.getFullYear()}. ${day} ${clock}`;
-}
-
-/** 얼마나 됐는지 · "방금", "3분 전" · 시각과 함께 쓰면 가장 알아보기 쉽다. */
-export function formatSince(epochSeconds) {
-  const seconds = Number(epochSeconds);
-  if (!Number.isFinite(seconds) || seconds <= 0) return '';
-  const elapsed = (Date.now() / 1000) - seconds;
-  if (elapsed < 0) return '';
-  if (elapsed < 60) return '방금';
-  if (elapsed < 3600) return `${Math.floor(elapsed / 60)}분 전`;
-  if (elapsed < 86400) return `${Math.floor(elapsed / 3600)}시간 전`;
-  return `${Math.floor(elapsed / 86400)}일 전`;
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`
+    + ` ${pad(at.getHours())}:${pad(at.getMinutes())}`;
 }
 
 export function formatTime(epochSeconds) {

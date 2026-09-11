@@ -3,19 +3,19 @@ import {
   motionStudioDeletePointRange,
   motionStudioPointCurveOrder,
   motionStudioPointCurveViewEnd,
-} from './motion_studio_point_model.js?v=20260911130855';
+} from './motion_studio_point_model.js?v=20260911131630';
 import {
   motionStudioSnapFrameTime,
-} from './motion_studio_editor_math.js?v=20260911130855';
+} from './motion_studio_editor_math.js?v=20260911131630';
 import {
   MOTION_STUDIO_PERIOD_SEC,
   MOTION_STUDIO_TIME_EPSILON,
-} from './motion_studio_constants.js?v=20260911130855';
+} from './motion_studio_constants.js?v=20260911131630';
 import {
   motionStudioRangeSelectionActive,
   motionStudioRangeSelectionBounds,
   motionStudioResetRangeSelection,
-} from './motion_studio_editor_state.js?v=20260911130855';
+} from './motion_studio_editor_state.js?v=20260911131630';
 
 export function updateMotionStudioDraftPoint(editor, point, {
   timeSec,
