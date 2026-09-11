@@ -21,6 +21,7 @@ from .layer_commands import (
     next_numbered_layer_name,  # noqa: F401
 )
 from .operation_state import StudioOperationStateMachine
+from .take import StudioTake, StudioTakeBoard, take_status_fields
 from .constants import DEFAULT_PERIOD_SEC
 from .mapping_model import manual_initial_values, motion_ranges
 from .playback_session import (
@@ -96,9 +97,7 @@ class MotionStudioNode(Node):
         self._record_frames: List[Dict[str, Any]] = []
         self._record_eligible_motion_ids: set[str] = set()
         #: 추가 녹화 중 재생이 쥔 축·시간 · {motion_id: [(시작, 끝), ...]} · §6-74
-        self._record_ownership: Dict[str, list] = {}
         self._recorded_motion_ids: set[str] = set()
-        self._record_mode = 'record'
         self._operation_state = StudioOperationStateMachine()
         self._status = self._empty_status()
         self._project_commands = StudioProjectCommands(self)
@@ -525,17 +524,37 @@ class MotionStudioNode(Node):
     def _operation_generation(self, value: int) -> None:
         self._operation_state = StudioOperationStateMachine(value)
 
-    def _set_status_locked(self, state: str, message: str) -> None:
+    def _takes(self) -> StudioTakeBoard:
+        board = getattr(self, '_take_board', None)
+        if board is None:
+            board = StudioTakeBoard(self)
+            self._take_board = board
+        return board
+
+    @property
+    def _take(self) -> Optional[StudioTake]:
+        return self._takes().take
+
+    def _state_locked(self) -> str:
+        return self._takes().state
+
+    def _project_status_locked(self, message: str) -> None:
+        """테이크를 화면이 읽는 모양으로 비춘다 · 상태를 **받지 않는다**.
+
+        전에는 상태 문자열을 인자로 받았다 · 그래서 어디서든 "지금부터 재생"
+        이라고 말할 수 있었고, 실제로 녹화 중에 그런 일이 났다 · §6-76
+        """
+        state = self._state_locked()
+        phase = self._take.phase if self._take else state
         self._status.update({
             'state': state,
-            'phase': state,
+            'phase': 'countdown' if phase == 'countdown' else state,
             'message': message,
             'updated_at': time.time(),
         })
         if state not in {'recording'}:
             self._status['elapsed_sec'] = 0.0
         if state in {'idle', 'error'}:
-            self._recording().clear_take_locked()
             self._status['runtime_progress'] = {}
             self._status['initialization_progress'] = {}
             self._status['countdown_progress'] = {}
@@ -547,9 +566,8 @@ class MotionStudioNode(Node):
         )
         self._status['selected_motion_ids'] = list(self._selected_motion_values_locked())
         self._status['recording_motion_ids'] = sorted(self._recorded_motion_ids)
-        self._status['record_mode'] = self._record_mode if state == 'recording' else None
-        # 추가 녹화 중 재생이 쥔 구간 · 그래프가 잠금 띠로 그린다 · §6-79
-        self._status['overdub_spans'] = self._recording().take_spans_locked()
+        # 녹화 모드와 잠금 구간은 테이크가 낸다 · §6-80
+        self._status.update(take_status_fields(self._take))
 
     def snapshot(self) -> Dict[str, Any]:
         with self._lock:

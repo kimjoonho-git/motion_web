@@ -17,6 +17,7 @@ from motion_runtime.motion_run_constants import INITIAL_MOVE_TIME_OPTIONS_SEC
 from motion_runtime.motion_run_rules import _initial_move_time_override_sec
 from motion_studio.recording_session import StudioRecordingSession
 from motion_studio.studio_node import MotionStudioNode
+from motion_studio.take import StudioTake, StudioTakeBoard
 
 
 def _source():
@@ -46,7 +47,7 @@ def test_recording_drops_axes_owned_at_that_moment():
     source = _source()
     start = source.index('def drop_owned_values(')
     body = source[start:source.index('\n    def ', start)]
-    assert '_record_ownership' in body
+    assert 'take.ownership' in body
     assert 'owned_at(' in body, '재생과 같은 판정을 쓰지 않는다'
 
     tick = source[source.index('def record_tick('):]
@@ -54,10 +55,10 @@ def test_recording_drops_axes_owned_at_that_moment():
 
 
 class _OwningStudio:
-    """`drop_owned_values` 만 보기 위한 최소 대역 · §6-74"""
+    """`drop_owned_values` 만 보기 위한 최소 대역 · 소유는 테이크가 쥔다 · §6-80"""
 
     def __init__(self, ownership):
-        self._record_ownership = ownership
+        self._take = StudioTake('overdub', 'running', 1, '', ownership or {})
 
 
 def _drop(ownership, values, time_sec):
@@ -104,7 +105,7 @@ def test_overdub_starts_playback_with_the_same_spans_recording_uses():
     start = source.index('def start_overdub_playback(')
     body = source[start:source.index('\n    def ', start)]
 
-    assert "studio._record_mode != 'overdub'" in body, '일반 녹화에서도 재생한다'
+    assert 'take.overdub' in body, '일반 녹화에서도 재생한다'
     assert 'render_project(' in body, '레이어를 합성하지 않는다'
     assert "'start', payload" in body, '재생을 시작하지 않는다'
     assert "'axis_playback_spans'" in body, '축별 소유 구간을 주지 않는다'
@@ -175,34 +176,16 @@ def test_recording_clock_stops_waiting_when_the_operation_is_replaced():
     session.wait_for_playback_running(7, 5.0)
 
 
-def test_a_finished_take_stops_being_an_overdub_take():
-    """녹화 모드가 남아 있으면 다음 합성 미리보기가 추가 녹화로 오인돼
-    상태 전이를 통째로 잃는다."""
-    node = MotionStudioNode.__new__(MotionStudioNode)
-    node._record_mode = 'overdub'
-    node._record_ownership = {'1-1': [(0.0, 8.92)]}
-    session = StudioRecordingSession(node)
+def test_a_finished_take_takes_its_ownership_with_it():
+    """소유 구간을 테이크 밖에 따로 두면 다음 작업까지 남아 새는 길이 생긴다 ·
+    테이크가 쥐고 있으면 끝나는 순간 함께 사라진다 · §6-80"""
+    board = StudioTakeBoard(_BoardStudio())
+    board.begin('overdub', '준비', {'1-1': [(0.0, 8.92)]})
+    assert board.take.overdub is True
+    assert board.take.ownership
 
-    assert session.overdub_take_locked() is True
-    session.clear_take_locked()
-    assert session.overdub_take_locked() is False
-    assert node._record_ownership == {}
-
-
-def test_the_recording_clock_gate_is_actually_wired_into_prepare():
-    """`wait_for_playback_running` 은 있으나 마나가 되기 쉽다 · 호출 한 줄만
-    지워도 함수 자체의 검사는 그대로 통과한다 · 그래서 호출 지점을 못 박는다.
-
-    모터가 걸린 확인은 사용자가 직접 한다 · 여기서는 순서만 본다.
-    """
-    source = (
-        Path(__file__).resolve().parents[1]
-        / 'motion_studio' / 'recording_session.py'
-    ).read_text(encoding='utf-8')
-
-    gate = source.index('self.wait_for_playback_running(')
-    clock = source.index('studio._record_started = time.monotonic()')
-    assert gate < clock, '녹화 시계가 재생보다 먼저 출발한다'
+    board.finish('완료')
+    assert board.take is None
 
 
 # --------------------------------------------------------------------- #
@@ -214,8 +197,9 @@ class _PayloadStudio:
 
     def __init__(self, move_time):
         self._lock = threading.RLock()
-        self._record_mode = 'overdub'
-        self._record_ownership = {'1-1': [(0.02, 8.92)]}
+        self._take = StudioTake(
+            'overdub', 'preparing', 1, '', {'1-1': [(0.02, 8.92)]},
+        )
         self._move_time = move_time
         self.sent = None
         self._store = self
@@ -273,3 +257,23 @@ def test_the_run_node_rejects_a_zero_move_time():
     """이 규칙 때문에 추가 녹화가 막혔다 · 규칙 쪽을 못 박아 둔다."""
     with pytest.raises(ValueError, match='initial_move_time_sec'):
         _initial_move_time_override_sec({'initial_move_time_sec': 0.0})
+
+
+class _BoardStudio:
+    """테이크 판만 돌리기 위한 최소 대역."""
+
+    def __init__(self):
+        self._generation = 0
+
+    def _operation_machine(self):
+        studio = self
+
+        class _Machine:
+            def begin(self, state):
+                studio._generation += 1
+                return studio._generation
+
+        return _Machine()
+
+    def _project_status_locked(self, message):
+        pass

@@ -83,10 +83,9 @@ class StudioPlaybackSession:
                 motion_file_text(project, frames),
                 hidden=True,
             )
-            operation_generation = studio._operation_machine().begin(
-                str(studio._status.get('state') or '')
+            operation_generation = studio._takes().begin(
+                'preview', '합성 미리보기 초기 위치 이동 중',
             )
-            studio._set_status_locked('initializing', '합성 미리보기 초기 위치 이동 중')
             studio._status.update({
                 'elapsed_sec': 0.0,
                 'playback_duration_sec': max(
@@ -135,19 +134,22 @@ class StudioPlaybackSession:
         except Exception as exc:
             with studio._lock:
                 if operation_generation == studio._operation_generation:
-                    studio._set_status_locked('error', str(exc))
+                    studio._takes().fail(str(exc))
 
     def mirror_run_status_locked(self, payload: Dict[str, Any]) -> None:
         """실행 노드 상태를 스튜디오 상태에 비춘다 · 잠금 안에서 부른다.
 
-        추가 녹화는 여기서 빠진다 · 오버더빙도 같은 실행 노드로 재생하기 때문에
-        아래 전이가 그대로 걸리면 녹화가 "미리보기 재생"으로 뒤집히고, 재생이
-        끝나는 순간 녹화까지 함께 끝나 버린다 · 추가 녹화 중에는 실행 상태를
-        받아 두기만 한다 · §6-76
+        **실행 노드가 이끄는 테이크만** 비춘다 · §6-80
+
+        녹화와 추가 녹화는 스튜디오가 이끈다 · 추가 녹화도 같은 실행 노드로
+        재생하기 때문에, 이끄는 쪽을 가리지 않으면 재생이 끝나는 순간 녹화까지
+        함께 끝난다 · 녹화된 구간 뒤가 추가 녹화의 본무대인데 그게 사라진다 ·
+        §6-76
         """
         studio = self.studio
         studio._motion_run_status = payload
-        if studio._recording().overdub_take_locked():
+        take = studio._take
+        if take is not None and not take.run_led:
             return
         studio_state = str(studio._status.get('state') or '')
         run_state = str(payload.get('state') or '')
@@ -157,19 +159,16 @@ class StudioPlaybackSession:
             and studio_state == 'initializing'
             and run_state in {'running', 'verifying'}
         ):
-            studio._set_status_locked(
-                'playing',
-                '레이어 합성 미리보기 재생 중',
-            )
-            studio_state = 'playing'
+            # 단계만 옮긴다 · 종류는 테이크가 쥐고 있다 · §6-80
+            studio._takes().advance('running', '레이어 합성 미리보기 재생 중')
+            studio_state = studio._state_locked()
         elif (
             payload.get('request_source') == 'motion_studio'
             and studio_state == 'initializing'
             and run_state == 'countdown'
         ):
-            studio._status['phase'] = 'countdown'
-            studio._status['message'] = str(
-                payload.get('message') or '모션 시작 대기'
+            studio._takes().advance(
+                'countdown', str(payload.get('message') or '모션 시작 대기'),
             )
         if (
             payload.get('request_source') == 'motion_studio'
@@ -195,10 +194,11 @@ class StudioPlaybackSession:
             and payload.get('state') in {'completed', 'error', 'stopped'}
         ):
             final_progress = dict(progress) if isinstance(progress, dict) else {}
-            studio._set_status_locked(
-                'idle' if payload.get('state') != 'error' else 'error',
-                str(payload.get('message') or '합성 미리보기 종료'),
-            )
+            message = str(payload.get('message') or '합성 미리보기 종료')
+            if payload.get('state') == 'error':
+                studio._takes().fail(message)
+            else:
+                studio._takes().finish(message)
             studio._status['runtime_progress'] = final_progress
             studio._status['elapsed_sec'] = float(final_progress.get('elapsed_sec') or 0.0)
             studio._status['playback_duration_sec'] = float(
@@ -235,10 +235,9 @@ class StudioPlaybackSession:
                 hidden=True,
             )
             move_time = float(payload.get('initial_move_time_sec') or 5.0)
-            operation_generation = studio._operation_machine().begin(
-                str(studio._status.get('state') or '')
+            operation_generation = studio._takes().begin(
+                'initialize', '초기 위치 이동 중',
             )
-            studio._set_status_locked('initializing', '초기 위치 이동 중')
             studio._status.update({
                 'elapsed_sec': 0.0,
                 'runtime_progress': {},
@@ -285,7 +284,7 @@ class StudioPlaybackSession:
                 if state == 'initialized':
                     with studio._lock:
                         if operation_generation == studio._operation_generation:
-                            studio._set_status_locked('idle', '초기 위치 이동 완료')
+                            studio._takes().finish('초기 위치 이동 완료')
                     return
                 if state == 'error':
                     raise ValueError(run_message or '초기 위치 이동 실패')
@@ -294,21 +293,22 @@ class StudioPlaybackSession:
         except Exception as exc:
             with studio._lock:
                 if operation_generation == studio._operation_generation:
-                    studio._set_status_locked('error', str(exc))
+                    studio._takes().fail(str(exc))
 
     def stop(self) -> Dict[str, Any]:
         studio = self.studio
         with studio._lock:
-            state = studio._status.get('state')
+            recording = bool(studio._take and studio._take.records)
+            # 정지 중임을 먼저 세운다 · 종류는 그대로 남는다 · §6-80
+            studio._takes().begin_stop('정지 명령 전달 중')
             stop_generation = studio._operation_machine().cancel()
             project = None
             completion_message = '모션 스튜디오 정지 완료'
             recorded_layer_id = ''
-            if state == 'recording':
+            if recording:
                 recorded_layer_id = studio._finish_record_locked()
                 completion_message = studio._status['message']
                 project = studio._current_project
-            studio._set_status_locked('stopping', '정지 명령 전달 중')
             status = studio.snapshot()
         threading.Thread(
             target=self.finish_stop,
@@ -339,8 +339,8 @@ class StudioPlaybackSession:
             if stop_generation != studio._operation_generation:
                 return
             if not run_result.get('success'):
-                studio._set_status_locked(
-                    'error', str(run_result.get('message') or '모션 정지 명령 확인 실패')
+                studio._takes().fail(
+                    str(run_result.get('message') or '모션 정지 명령 확인 실패')
                 )
                 return
             if not midi_result.get('success'):
@@ -348,4 +348,4 @@ class StudioPlaybackSession:
                     f'{completion_message} · MIDI 제어 복구 확인 필요: '
                     f'{midi_result.get("message") or "응답 없음"}'
                 )
-            studio._set_status_locked('idle', completion_message)
+            studio._takes().finish(completion_message)

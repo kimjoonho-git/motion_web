@@ -4,6 +4,7 @@ import threading
 import pytest
 
 import motion_studio.studio_node as studio_module
+from motion_studio.take import StudioTake
 from motion_studio.studio_node import MotionStudioNode
 from std_msgs.msg import String
 
@@ -53,6 +54,8 @@ def test_playback_graph_waits_for_actual_runtime_running_state():
     node._lock = threading.RLock()
     node._workspace_project_id = 'project-1'
     node._execution_context = {'project_generation': 1}
+    # 미리보기 테이크가 서 있어야 실행 노드 상태를 비춘다 · §6-80
+    node._takes().take = StudioTake('preview', 'countdown', 1, '모션 시작 대기')
     node._status = {
         'state': 'initializing',
         'phase': 'countdown',
@@ -60,9 +63,9 @@ def test_playback_graph_waits_for_actual_runtime_running_state():
         'playback_duration_sec': 7.84,
     }
     node._motion_run_status = {}
-    node._set_status_locked = lambda state, message: node._status.update({
-        'state': state,
-        'phase': state,
+    node._project_status_locked = lambda message: node._status.update({
+        'state': node._state_locked(),
+        'phase': node._take.phase if node._take else node._state_locked(),
         'message': message,
     })
 
@@ -141,7 +144,6 @@ def test_recording_snapshot_contains_bounded_live_graph_preview():
     node._current_project = None
     node._midi_state = {'channels': []}
     node._recorded_motion_ids = {'1-1'}
-    node._record_mode = 'record'
     node._record_frames = [
         {'time_sec': index * 0.02, 'values': {'1-1': float(index)}}
         for index in range(1000)
@@ -161,8 +163,8 @@ def test_stop_returns_immediately_and_defers_acknowledgement_waits(monkeypatch):
     node._status = {'state': 'playing', 'message': '재생 중'}
     node._operation_generation = 7
     node._current_project = None
-    node._set_status_locked = lambda state, message: node._status.update({
-        'state': state,
+    node._project_status_locked = lambda message: node._status.update({
+        'state': node._state_locked(),
         'message': message,
     })
     node.snapshot = lambda: dict(node._status)
@@ -189,6 +191,8 @@ def test_stop_returns_immediately_and_defers_acknowledgement_waits(monkeypatch):
 def test_recording_stop_reports_only_the_new_layer_for_sync(monkeypatch):
     node = MotionStudioNode.__new__(MotionStudioNode)
     node._lock = threading.RLock()
+    # 녹화 테이크를 세운다 · 정지가 "녹화였는가" 를 테이크에게 묻는다 · §6-80
+    node._takes().take = StudioTake('record', 'running', 2, '녹화 중')
     node._status = {'state': 'recording', 'message': '녹화 중'}
     node._operation_generation = 2
     node._current_project = {'project_id': 'studio', 'layers': []}
@@ -196,8 +200,8 @@ def test_recording_stop_reports_only_the_new_layer_for_sync(monkeypatch):
         node._status.update({'message': '녹화 완료'})
         or 'layer-new'
     )
-    node._set_status_locked = lambda state, message: node._status.update({
-        'state': state,
+    node._project_status_locked = lambda message: node._status.update({
+        'state': node._state_locked(),
         'message': message,
     })
     node.snapshot = lambda: dict(node._status)
@@ -231,8 +235,8 @@ def test_stop_sends_motion_stop_before_midi_cleanup():
     node._request_midi = lambda command, payload, timeout: (
         calls.append(('midi', command)) or {'success': True}
     )
-    node._set_status_locked = lambda state, message: node._status.update({
-        'state': state,
+    node._project_status_locked = lambda message: node._status.update({
+        'state': node._state_locked(),
         'message': message,
     })
 
@@ -266,8 +270,8 @@ def test_standalone_initial_position_finishes_without_starting_playback():
     node._request_run_for_operation = lambda command, *_args: (
         commands.append(command) or {'success': True}
     )
-    node._set_status_locked = lambda state, message: node._status.update({
-        'state': state,
+    node._project_status_locked = lambda message: node._status.update({
+        'state': node._state_locked(),
         'message': message,
     })
 
@@ -295,8 +299,8 @@ def test_playback_sends_one_runtime_owned_sequence_request():
         return {'success': True}
 
     node._request_run_for_operation = request
-    node._set_status_locked = lambda state, message: node._status.update({
-        'state': state,
+    node._project_status_locked = lambda message: node._status.update({
+        'state': node._state_locked(),
         'message': message,
     })
 
@@ -350,8 +354,8 @@ def test_standalone_initial_position_uses_zero_when_project_has_no_layers(monkey
     node._require_project_locked = lambda: project
     # 검증이 확인한 매핑을 돌려준다 · 부른 쪽이 다시 읽지 않는다 (§6-51)
     node._validate_mapping_locked = lambda project: Store.mapping_check(project)
-    node._set_status_locked = lambda state, message: node._status.update({
-        'state': state,
+    node._project_status_locked = lambda message: node._status.update({
+        'state': node._state_locked(),
         'message': message,
     })
     node.snapshot = lambda: dict(node._status)
@@ -393,7 +397,8 @@ def _overdub_node(state='recording'):
     node._lock = threading.RLock()
     node._workspace_project_id = 'project-1'
     node._execution_context = {'project_generation': 1}
-    node._record_mode = 'overdub'
+    phase = 'running' if state == 'recording' else 'preparing'
+    node._takes().take = StudioTake('overdub', phase, 1, '')
     node._status = {
         'state': state,
         'phase': state,

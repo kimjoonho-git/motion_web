@@ -28,33 +28,6 @@ class StudioRecordingSession:
     def mode_label(mode: str) -> str:
         return '추가 녹화' if mode == 'overdub' else '녹화'
 
-    def overdub_take_locked(self) -> bool:
-        """지금 추가 녹화 테이크가 도는 중인가 · 잠금 안에서 부른다."""
-        return getattr(self.studio, '_record_mode', 'record') == 'overdub'
-
-    def take_spans_locked(self) -> dict:
-        """추가 녹화 중 재생이 쥔 구간 · 화면이 그대로 그린다 · §6-79
-
-        화면에서 다시 계산하면 재생·녹화와 세 번째 판정이 생긴다 · 서버가
-        쥔 그대로 내려보내야 그래프의 잠금 띠와 실제 동작이 어긋나지 않는다.
-        """
-        if not self.overdub_take_locked():
-            return {}
-        ownership = getattr(self.studio, '_record_ownership', None) or {}
-        return {
-            str(motion_id): [[float(start), float(end)] for start, end in spans]
-            for motion_id, spans in ownership.items() if spans
-        }
-
-    def clear_take_locked(self) -> None:
-        """테이크를 끝낸다 · 스튜디오가 idle/error 로 갈 때 부른다.
-
-        녹화 모드가 남아 있으면 다음 합성 미리보기가 추가 녹화로 오인돼 상태
-        전이를 통째로 잃는다 · §6-76
-        """
-        self.studio._record_mode = 'record'
-        self.studio._record_ownership = {}
-
     def start(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         studio = self.studio
         mode = str(payload.get('mode') or 'record').strip().lower()
@@ -79,17 +52,16 @@ class StudioRecordingSession:
                     raise ValueError(
                         '추가 녹화는 녹화된 레이어가 있어야 합니다 · 먼저 녹화하세요'
                     )
-                studio._record_ownership = playback_ownership(project)
+                ownership = playback_ownership(project)
             else:
-                studio._record_ownership = {}
-            studio._record_mode = mode
+                ownership = {}
             studio._record_frames = []
             studio._record_eligible_motion_ids = set(motion_ids)
             studio._recorded_motion_ids = set()
-            operation_generation = studio._operation_machine().begin(
-                str(studio._status.get('state') or '')
+            # 소유 구간은 테이크가 쥔다 · 따로 두면 둘이 어긋난다 · §6-80
+            operation_generation = studio._takes().begin(
+                mode, '초기 위치 이동 준비 중', ownership,
             )
-            studio._set_status_locked('initializing', '초기 위치 이동 준비 중')
         threading.Thread(
             target=self.prepare,
             args=(
@@ -182,8 +154,8 @@ class StudioRecordingSession:
                 studio._record_started = time.monotonic()
                 studio._record_frames = []
                 studio._recorded_motion_ids = set()
-                studio._set_status_locked(
-                    'recording',
+                studio._takes().advance(
+                    'running',
                     '추가 녹화 중 · 녹화된 축은 재생되고 나머지는 MIDI로 기록합니다'
                     if overdub
                     else '모션 녹화 중 · MIDI SELECT로 움직이는 축을 자동 기록합니다',
@@ -191,7 +163,7 @@ class StudioRecordingSession:
         except Exception as exc:
             with studio._lock:
                 if operation_generation == studio._operation_generation:
-                    studio._set_status_locked('error', str(exc))
+                    studio._takes().fail(str(exc))
         finally:
             if midi_locked:
                 studio._request_midi('studio_recording_ready', {}, 2.0)
@@ -233,8 +205,9 @@ class StudioRecordingSession:
         """
         studio = self.studio
         with studio._lock:
-            ownership = dict(getattr(studio, '_record_ownership', {}) or {})
-            if studio._record_mode != 'overdub' or not ownership:
+            take = studio._take
+            ownership = dict(take.ownership if take else {})
+            if take is None or not take.overdub or not ownership:
                 return False
             project = dict(studio._require_project_locked())
             mapping = studio._validate_mapping_locked(project)
@@ -363,7 +336,8 @@ class StudioRecordingSession:
         같은 축이라도 기록한다 · "축 1-1 이 10초에 끝나면 10초 이후부터 녹화" 가
         이 규칙이다.
         """
-        ownership = getattr(self.studio, '_record_ownership', None)
+        take = self.studio._take
+        ownership = take.ownership if take else None
         if not ownership:
             return values
         return {
@@ -397,18 +371,22 @@ class StudioRecordingSession:
             studio._status['updated_at'] = time.time()
 
     def finish_locked(self, message: str = '모션 녹화 완료') -> str:
+        """녹화된 프레임을 레이어로 남긴다 · **테이크는 닫지 않는다** · §6-80
+
+        닫는 것은 정지 절차의 몫이다 · 여기서 닫아 버리면 정지 중(`stopping`)을
+        표시할 테이크가 남지 않는다.
+        """
         studio = self.studio
         if not studio._record_frames or not studio._recorded_motion_ids:
             studio._record_frames = []
-            studio._set_status_locked(
-                'idle',
-                '기록된 축이 없어 레이어를 만들지 않았습니다 · 녹화 중 MIDI SELECT 축을 움직이세요',
+            studio._status['message'] = (
+                '기록된 축이 없어 레이어를 만들지 않았습니다 · 녹화 중 MIDI SELECT 축을 움직이세요'
             )
             return ''
         project = studio._require_project_locked()
         layers = project.setdefault('layers', [])
         layer_name = next_numbered_layer_name(
-            layers, self.mode_label(studio._record_mode)
+            layers, self.mode_label(studio._take.kind if studio._take else 'record')
         )
         layer = {
             'layer_id': f'layer_{uuid.uuid4().hex[:8]}',
@@ -436,7 +414,7 @@ class StudioRecordingSession:
         motion_id_count = len(studio._recorded_motion_ids)
         studio._record_frames = []
         studio._recorded_motion_ids = set()
-        studio._set_status_locked(
-            'idle', f'{message} · {motion_id_count}개 축 · {count} 프레임 저장'
+        studio._status['message'] = (
+            f'{message} · {motion_id_count}개 축 · {count} 프레임 저장'
         )
         return layer['layer_id']

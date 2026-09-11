@@ -92,7 +92,7 @@ def test_terminal_status_clears_playback_and_progress_metadata():
     node._recorded_motion_ids = set()
     node._record_mode = 'record'
 
-    node._set_status_locked('error', '재생 실패')
+    node._takes().fail('재생 실패')
 
     assert node._status['message'] == '재생 실패'
     assert node._status['runtime_progress'] == {}

@@ -78,7 +78,7 @@ class StudioProjectCommands:
             with studio._lock:
                 studio._current_project = project
                 studio._workspace_catalog_cache = None
-                studio._set_status_locked('idle', '새 모션 프로젝트를 만들었습니다')
+                studio._takes().note_idle('새 모션 프로젝트를 만들었습니다')
             return {
                 'success': True,
                 'project': project,
@@ -93,7 +93,7 @@ class StudioProjectCommands:
             with studio._lock:
                 studio._require_idle_locked()
                 studio._current_project = project
-                studio._set_status_locked('idle', '모션 프로젝트를 불러왔습니다')
+                studio._takes().note_idle('모션 프로젝트를 불러왔습니다')
             return studio._project_result(project)
         if command == 'import_motion_file':
             with studio._lock:
@@ -106,8 +106,7 @@ class StudioProjectCommands:
             with studio._lock:
                 studio._current_project = project
                 studio._workspace_catalog_cache = None
-                studio._set_status_locked(
-                    'idle', '모션 파일을 단일 레이어 프로젝트로 가져왔습니다'
+                studio._takes().note_idle('모션 파일을 단일 레이어 프로젝트로 가져왔습니다'
                 )
             return studio._project_result(
                 project, '모션 파일 가져오기 완료 · 단일 레이어로 변환했습니다'
@@ -125,8 +124,7 @@ class StudioProjectCommands:
                     project, payload.get('motion_file_id')
                 )
                 studio._current_project = project
-                studio._set_status_locked(
-                    'idle', '모션 파일을 현재 프로젝트 레이어로 가져왔습니다'
+                studio._takes().note_idle('모션 파일을 현재 프로젝트 레이어로 가져왔습니다'
                 )
             added_layer_ids = [
                 str(layer.get('layer_id') or '')
@@ -178,7 +176,7 @@ class StudioProjectCommands:
                 studio._store.delete_project(project['project_id'])
                 studio._current_project = None
                 studio._workspace_catalog_cache = None
-                studio._set_status_locked('idle', '프로젝트를 삭제했습니다')
+                studio._takes().note_idle('프로젝트를 삭제했습니다')
             return {'success': True, 'message': '프로젝트 삭제 완료'}
         raise ValueError(f'지원하지 않는 모션 스튜디오 프로젝트 명령: {command}')
 
@@ -221,8 +219,7 @@ class StudioProjectCommands:
         project = studio._store.save_project(project)
         with studio._lock:
             studio._current_project = project
-            studio._set_status_locked(
-                'idle', '통합 프로젝트를 모션 스튜디오에 연결했습니다'
+            studio._takes().note_idle('통합 프로젝트를 모션 스튜디오에 연결했습니다'
             )
         current_summary = studio._store.summary(project)
         catalog_projects = [

@@ -6,16 +6,17 @@
 
 from motion_runtime.motion_player import MotionPlayer
 from motion_studio.recording_session import StudioRecordingSession
+from motion_studio.take import StudioTake
 from motion_studio.timeline import playback_ownership
 
 PERIOD = 0.02
 
 
 class _Studio:
-    """`drop_owned_values` 만 보기 위한 최소 대역."""
+    """`drop_owned_values` 만 보기 위한 최소 대역 · 소유는 테이크가 쥔다."""
 
     def __init__(self, ownership):
-        self._record_ownership = ownership
+        self._take = StudioTake('overdub', 'running', 1, '', ownership or {})
 
 
 def _frames(values_by_time):
