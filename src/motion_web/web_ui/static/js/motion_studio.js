@@ -1,4 +1,4 @@
-import { escapeHtml } from './format.js?v=20260911122020';
+import { escapeHtml, formatMoment, formatSince } from './format.js?v=20260911130855';
 import {
   commitMotionStudioMerge,
   createMotionStudioLayer,
@@ -16,7 +16,7 @@ import {
   startMotionStudioRecord,
   stopMotionStudio,
   updateMotionStudioLayer,
-} from './api.js?v=20260911122020';
+} from './api.js?v=20260911130855';
 import {
   applyMotionStudioProjectPatch, motionStudioCanCreatePointCurve,
   motionStudioCanSwitchPointDraftCurve, motionStudioCanvasEventPoint,
@@ -33,13 +33,13 @@ import {
   motionStudioPointRangeTargetsMatch, motionStudioRuntimeStatusMessage,
   motionStudioShouldProtectPointAxisSelection, motionStudioSnapFrameTime,
   resolveMotionStudioSelectedLayerId, synchronizeMotionStudioEditorTimeline,
-} from './motion_studio_calculations.js?v=20260911122020';
-import { createMotionStudioGraphPainter } from './motion_studio_graph_render.js?v=20260911122020';
-import { createMotionStudioRecordingPreview } from './motion_studio_recording_preview.js?v=20260911122020';
+} from './motion_studio_calculations.js?v=20260911130855';
+import { createMotionStudioGraphPainter } from './motion_studio_graph_render.js?v=20260911130855';
+import { createMotionStudioRecordingPreview } from './motion_studio_recording_preview.js?v=20260911130855';
 import {
   motionStudioCompositionTracks as compositionTracks,
   motionStudioLayerTracks as layerTracks,
-} from './motion_studio_graph.js?v=20260911122020';
+} from './motion_studio_graph.js?v=20260911130855';
 import {
   bindMotionStudioEvent,
   bindMotionStudioProjectTransportEvents,
@@ -48,32 +48,32 @@ import {
   motionStudioExportResultMessage,
   resetMotionStudioProjectState,
   setMotionStudioMessage,
-} from './motion_studio_ui.js?v=20260911122020';
+} from './motion_studio_ui.js?v=20260911130855';
 import {
   motionStudioEditorAxisLabel,
-} from './motion_studio_editor_ui.js?v=20260911122020';
+} from './motion_studio_editor_ui.js?v=20260911130855';
 import {
   createMotionStudioPlaybackController,
-} from './motion_studio_playback.js?v=20260911122020';
+} from './motion_studio_playback.js?v=20260911130855';
 import {
   renderMotionStudioLayerManager,
-} from './motion_studio_layer_manager.js?v=20260911122020';
+} from './motion_studio_layer_manager.js?v=20260911130855';
 import {
   MOTION_STUDIO_PERIOD_SEC,
-} from './motion_studio_constants.js?v=20260911122020';
+} from './motion_studio_constants.js?v=20260911130855';
 import {
   createMotionStudioLayerController, closeMotionStudioLayerManager, openMotionStudioLayerManager,
   selectMotionStudioLayer,
   updateMotionStudioMergeSelection,
-} from './motion_studio_layer_controller.js?v=20260911122020';
+} from './motion_studio_layer_controller.js?v=20260911130855';
 import {
   createMotionStudioEditorController,
-} from './motion_studio_editor_controller.js?v=20260911122020';
-import { motionStudioEditorPointCurves } from './motion_studio_editor_state.js?v=20260911122020';
+} from './motion_studio_editor_controller.js?v=20260911130855';
+import { motionStudioEditorPointCurves } from './motion_studio_editor_state.js?v=20260911130855';
 import {
   createMotionStudioRequestFence,
-} from './motion_studio_controller_events.js?v=20260911122020';
-import { showAlert, showConfirm } from './ui_dialogs.js?v=20260911122020';
+} from './motion_studio_controller_events.js?v=20260911130855';
+import { showAlert, showConfirm } from './ui_dialogs.js?v=20260911130855';
 export {
   applyMotionStudioProjectPatch, motionStudioCanCreatePointCurve,
   motionStudioCanSwitchPointDraftCurve, motionStudioCanvasEventPoint,
@@ -320,6 +320,7 @@ export function createMotionStudioController({
         <td><input class="studio-layer-main-name" type="text" data-layer-main-name maxlength="40" value="${escapeHtml(layer.name)}" ${layer.locked ? 'disabled' : ''} aria-label="레이어 이름"></td>
         <td><div class="studio-layer-info-cell">
           <span>${metrics.frameCount}프레임</span><span>${metrics.duration.toFixed(3)}초</span><span>${metrics.motionIds.length}축</span>
+          <span title="마지막으로 바뀐 시각">${escapeHtml(layerMoment(layer))}</span>
           ${layer.locked ? '<span class="status-chip off">잠금</span>' : ''}
           ${conflictLayers.has(layer.layer_id) ? '<span class="status-chip warn">충돌</span>' : ''}
         </div></td></tr>`;
@@ -328,7 +329,20 @@ export function createMotionStudioController({
 
   function layerSummary(layer) {
     const metrics = layerMetrics(layer);
-    return `${metrics.frameCount}프레임 · ${metrics.duration.toFixed(3)}초 · ${metrics.motionIds.length}축`;
+    return `${metrics.frameCount}프레임 · ${metrics.duration.toFixed(3)}초 · `
+      + `${metrics.motionIds.length}축 · ${layerMoment(layer)}`;
+  }
+
+  /** 레이어가 마지막으로 바뀐 시각 · §6-91
+   *
+   * 레이어가 쌓이면 어느 것이 방금 만든 것인지 알 수 없다 · 목록 한 줄에
+   * 들어가야 하므로 "12:55 · 12분 전" 처럼 짧게 쓴다.
+   */
+  function layerMoment(layer) {
+    const at = Number(layer?.updated_at) || Number(layer?.created_at) || 0;
+    if (!at) return '';
+    const since = formatSince(at);
+    return since ? `${formatMoment(at)} · ${since}` : formatMoment(at);
   }
 
   /** 포인트 곡선으로 덮이지 **않은** 축 · 편집기가 묻는 질문이다 · §6-90
@@ -649,6 +663,9 @@ export function createMotionStudioController({
         ['재생 상태', layer?.enabled !== false ? '선택' : '미선택'],
         ['잠금 상태', layer?.locked ? '잠금' : '잠금 안 함'],
         ['원본 모션 파일', layer?.source_motion_file_id || '-'],
+        // 만든 시각과 마지막으로 바뀐 시각 · 둘 다 보여야 뜻이 통한다 · §6-91
+        ['만든 시각', layer?.created_at ? formatMoment(layer.created_at) : '-'],
+        ['마지막 수정', layerMoment(layer) || '-'],
       ];
       el.studioLayerInfoRows.innerHTML = infoRows.map(([label, value]) => (
         `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`

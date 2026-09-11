@@ -113,6 +113,8 @@ class ProjectStore:
                 motion = self.read_motion_file(path.name)
                 files.append({
                     'file_id': path.name,
+                    # 파일이 마지막으로 바뀐 시각 · 주인은 파일시스템이다 · §6-91
+                    'updated_at': path.stat().st_mtime,
                     'title': motion['title'],
                     'frame_count': len(motion['frames']),
                     'duration_sec': motion['duration_sec'],
@@ -123,6 +125,7 @@ class ProjectStore:
             except (OSError, ValueError, json.JSONDecodeError) as exc:
                 files.append({
                     'file_id': path.name,
+                    'updated_at': path.stat().st_mtime,
                     'title': path.stem,
                     'frame_count': 0,
                     'duration_sec': 0.0,
@@ -327,7 +330,20 @@ class ProjectStore:
             ]
         else:
             normalized = self.normalize_project(project)
-        normalized['updated_at'] = time.time()
+        now = time.time()
+        # 레이어 수정 시각은 **여기서만** 찍는다 · §6-91
+        #
+        # 레이어를 바꾸는 모든 길이 `upsert_layer_ids` 를 들고 이 함수로 들어온다 ·
+        # 그래서 이 한 줄이 유일한 주인이다 · 수정 지점마다 찍게 하면 언젠가
+        # 누가 빠뜨리고, 빠뜨린 줄도 모른다.
+        #
+        # 목록이 `None` 이면 프로젝트 통째로 다시 쓰는 경우다(이름 변경, 작업
+        # 공간 연결) · 레이어를 바꾼 게 아니므로 찍지 않는다.
+        if selected_upserts is not None:
+            for layer in normalized['layers']:
+                if str(layer.get('layer_id') or '') in selected_upserts:
+                    layer['updated_at'] = now
+        normalized['updated_at'] = now
         layer_dir = path.with_suffix('.layers')
         if layer_dir.is_symlink():
             raise ValueError('motion studio layer directory cannot be a link')

@@ -1,7 +1,7 @@
 import {
   fetchServoAlarmPolicy,
   saveServoAlarmPolicy,
-} from './api.js?v=20260911122020';
+} from './api.js?v=20260911130855';
 
 const FALLBACK_GRADE_LABELS = Object.freeze({
   1: '1등급 · 해당 에러축 정지',

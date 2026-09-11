@@ -18,18 +18,20 @@ import {
   stopMotionRunAfterCycle,
   requestMotionSafetyStop,
   validateMotionMapping,
-} from './api.js?v=20260911122020';
+} from './api.js?v=20260911130855';
 import {
   displayText,
   formatInt,
+  formatMoment,
   formatNumber,
+  formatSince,
   normalizeMotorTypeKey,
-} from './format.js?v=20260911122020';
+} from './format.js?v=20260911130855';
 import {
   showAlert,
   showConfirm,
   showPrompt,
-} from './ui_dialogs.js?v=20260911122020';
+} from './ui_dialogs.js?v=20260911130855';
 
 const MOTOR_AXIS_ANGLE_ALERT_DEG = 360.0;
 const MOTION_ID_PATTERN = /^[1-9]\d*-[1-9]\d*$/;
@@ -326,6 +328,17 @@ function exceedsMotorAxisAngleAlert(value) {
 function timeText(epochSeconds) {
   if (!epochSeconds) return '-';
   return new Date(epochSeconds * 1000).toLocaleString();
+}
+
+/** 파일이 마지막으로 바뀐 시각 · "12:55 · 12분 전" · §6-91
+ *
+ * 파일이 여러 개면 어느 것이 최신인지 알 수 없어 헷갈린다.
+ */
+function momentText(epochSeconds) {
+  const at = Number(epochSeconds);
+  if (!Number.isFinite(at) || at <= 0) return '-';
+  const since = formatSince(at);
+  return since ? `${formatMoment(at)} · ${since}` : formatMoment(at);
 }
 
 function analysisOf(file) {
@@ -1529,7 +1542,7 @@ export function createMotionDataController({
     }
     if (!el.motionFileRows) return;
     if (!files.length) {
-      el.motionFileRows.innerHTML = emptyRow(3, '저장된 모션 파일이 없습니다');
+      el.motionFileRows.innerHTML = emptyRow(4, '저장된 모션 파일이 없습니다');
       return;
     }
     el.motionFileRows.innerHTML = files.map((file) => {
@@ -1549,6 +1562,7 @@ export function createMotionDataController({
           <td class="motion-file-name-cell"><div class="motion-file-name-inner">${badge}<button type="button" class="link-button" data-motion-file-id="${displayText(file.id)}">${displayText(file.filename)}</button></div></td>
           <td><span class="motion-state-pill ${statusClass(file)}">${statusText(file)}</span></td>
           <td>${formatNumber(analysis.time?.duration_sec, 3)} s</td>
+          <td class="motion-file-moment" title="마지막으로 바뀐 시각">${displayText(momentText(file.updated_at))}</td>
         </tr>`
       );
     }).join('');
@@ -1658,6 +1672,8 @@ export function createMotionDataController({
         { label: '보간', value: interpolation.required ? '20ms 선형보간 필요' : '20ms 기준 통과' },
         // 목록을 좁혀 뺀 항목 · 여기로 옮겼다
         { label: '크기', value: bytesText(file.size_bytes) },
+        // 어느 파일이 최신인지 알 수 없어 헷갈린다 · §6-91
+        { label: '마지막 수정', value: momentText(file.updated_at) },
       ]);
     }
     if (el.motionFileValidation) el.motionFileValidation.innerHTML = validationHtml(analysis);

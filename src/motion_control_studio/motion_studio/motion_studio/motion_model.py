@@ -170,13 +170,19 @@ def normalize_layer(layer: Any, index: int = 0) -> Dict[str, Any]:
             'interpolation_order': interpolation_order,
             'points': points,
         })
+    created_at = finite_float(layer.get('created_at'), time.time())
     return {
         'layer_id': safe_name(layer.get('layer_id'), f'layer_{index + 1}'),
         'name': str(layer.get('name') or f'레이어 {index + 1}').strip()[:40]
         or f'레이어 {index + 1}',
         'enabled': layer.get('enabled') is not False,
         'locked': bool(layer.get('locked', False)),
-        'created_at': finite_float(layer.get('created_at'), time.time()),
+        'created_at': created_at,
+        # 마지막으로 바뀐 시각 · **저장 길목에서만** 찍는다 · §6-91
+        #
+        # 여기서 `time.time()` 을 쓰면 읽기만 해도 시각이 바뀐다 · 없으면 만든
+        # 시각을 그대로 쓴다 · 옛 프로젝트도 뜻이 통하는 값을 갖는다.
+        'updated_at': finite_float(layer.get('updated_at'), created_at),
         'source_motion_file_id': str(layer.get('source_motion_file_id') or ''),
         'source_layer_ids': [
             str(value) for value in layer.get('source_layer_ids') or [] if str(value)

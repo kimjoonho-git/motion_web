@@ -2,8 +2,8 @@ import {
   fetchMotionFile,
   fetchMotionFiles,
   deleteMotionFile,
-} from './api.js?v=20260911122020';
-import { showAlert, showConfirm } from './ui_dialogs.js?v=20260911122020';
+} from './api.js?v=20260911130855';
+import { showAlert, showConfirm } from './ui_dialogs.js?v=20260911130855';
 
 export function createMotionFileManager({
   onFilesChanged,

@@ -45,6 +45,38 @@ function parseIntegerValue(value, fallback = null) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+/** 언제였는지 · 레이어·모션 파일이 마지막으로 바뀐 시각 · §6-91
+ *
+ * 레이어가 쌓이면 어느 것이 방금 만든 것인지 알 수 없다 · 목록 한 줄에 들어가야
+ * 하므로 짧게 쓴다 · 오늘이면 시각만, 올해면 날짜까지, 그 밖이면 연도까지.
+ */
+export function formatMoment(epochSeconds) {
+  const seconds = Number(epochSeconds);
+  if (!Number.isFinite(seconds) || seconds <= 0) return '-';
+  const at = new Date(seconds * 1000);
+  const now = new Date();
+  const clock = at.toLocaleTimeString('ko-KR', {
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  });
+  const sameDay = at.toDateString() === now.toDateString();
+  if (sameDay) return clock;
+  const day = at.toLocaleDateString('ko-KR', { month: '2-digit', day: '2-digit' });
+  if (at.getFullYear() === now.getFullYear()) return `${day} ${clock}`;
+  return `${at.getFullYear()}. ${day} ${clock}`;
+}
+
+/** 얼마나 됐는지 · "방금", "3분 전" · 시각과 함께 쓰면 가장 알아보기 쉽다. */
+export function formatSince(epochSeconds) {
+  const seconds = Number(epochSeconds);
+  if (!Number.isFinite(seconds) || seconds <= 0) return '';
+  const elapsed = (Date.now() / 1000) - seconds;
+  if (elapsed < 0) return '';
+  if (elapsed < 60) return '방금';
+  if (elapsed < 3600) return `${Math.floor(elapsed / 60)}분 전`;
+  if (elapsed < 86400) return `${Math.floor(elapsed / 3600)}시간 전`;
+  return `${Math.floor(elapsed / 86400)}일 전`;
+}
+
 export function formatTime(epochSeconds) {
   if (!epochSeconds) return '-';
   return new Date(epochSeconds * 1000).toLocaleTimeString();
