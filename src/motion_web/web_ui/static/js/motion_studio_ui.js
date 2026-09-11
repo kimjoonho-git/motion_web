@@ -1,4 +1,4 @@
-import { escapeHtml } from './format.js?v=20260911095307';
+import { escapeHtml } from './format.js?v=20260911102220';
 
 export function createMotionStudioState() {
   return {
@@ -95,7 +95,8 @@ export function bindMotionStudioProjectTransportEvents(el, handlers = {}) {
     mode: 'record',
     initialMoveTimeSec: Number(el.studioInitialMoveTime?.value || 5),
   }));
-  // 추가 녹화 · 기존 레이어가 쓰지 않는 축만 새 레이어로 녹화한다 · §6-71
+  // 추가 녹화 · 녹화된 대로 모터를 돌리면서 그 위에 얹는다 · 녹화된 축은
+  // 그 구간 동안 재생이 몰고, 구간 밖은 같은 축이라도 MIDI 로 기록한다 · §6-77
   bind(el.studioOverdubButton, 'click', () => handlers.onRecord?.({
     mode: 'overdub',
     initialMoveTimeSec: Number(el.studioInitialMoveTime?.value || 5),

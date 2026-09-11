@@ -18,18 +18,18 @@ import {
   stopMotionRunAfterCycle,
   requestMotionSafetyStop,
   validateMotionMapping,
-} from './api.js?v=20260911095307';
+} from './api.js?v=20260911102220';
 import {
   displayText,
   formatInt,
   formatNumber,
   normalizeMotorTypeKey,
-} from './format.js?v=20260911095307';
+} from './format.js?v=20260911102220';
 import {
   showAlert,
   showConfirm,
   showPrompt,
-} from './ui_dialogs.js?v=20260911095307';
+} from './ui_dialogs.js?v=20260911102220';
 
 const MOTOR_AXIS_ANGLE_ALERT_DEG = 360.0;
 const MOTION_ID_PATTERN = /^[1-9]\d*-[1-9]\d*$/;

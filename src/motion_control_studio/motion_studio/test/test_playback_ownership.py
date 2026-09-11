@@ -4,9 +4,18 @@
 주인이 다르다. 여기서 그 판정만 따로 시험한다 · 모터가 없어도 확인할 수 있다.
 """
 
+from motion_runtime.motion_player import MotionPlayer
+from motion_studio.recording_session import StudioRecordingSession
 from motion_studio.timeline import playback_ownership
 
 PERIOD = 0.02
+
+
+class _Studio:
+    """`drop_owned_values` 만 보기 위한 최소 대역."""
+
+    def __init__(self, ownership):
+        self._record_ownership = ownership
 
 
 def _frames(values_by_time):
@@ -95,3 +104,58 @@ def test_selected_motion_ids_narrow_the_result():
     times = [(0.02, {'1-1': 0.0, '1-2': 5.0})]
     owned = playback_ownership(_project(_layer(times)), motion_ids=['1-2'])
     assert set(owned) == {'1-2'}
+
+
+# --------------------------------------------------------------------- #
+# 재생 쪽과 녹화 쪽이 같은 판정을 쓴다 · §6-77
+# --------------------------------------------------------------------- #
+
+def test_playback_and_recording_agree_on_every_moment():
+    """두 쪽이 갈리면 그 축은 두 주인이 동시에 밀거나 아무도 안 민다.
+
+    재생은 `axis_playback_spans` 로, 녹화는 `drop_owned_values` 로 판정한다 ·
+    바닥의 `owned_at` 하나를 함께 쓰는지 실제 시각을 훑어 확인한다.
+    """
+    spans = [(0.02, 8.92), (20.0, 30.0)]
+
+    for step in range(0, 1600):
+        time_sec = round(step * 0.02, 9)
+        playback_drives = MotionPlayer._owned_positions(
+            {'axis_playback_spans': {0: spans}}, {0: 1.0}, time_sec,
+        )
+        recorded = StudioRecordingSession(
+            _Studio({'1-1': spans})
+        ).drop_owned_values({'1-1': 1.0}, time_sec)
+
+        assert bool(playback_drives) != bool(recorded), (
+            f'{time_sec}초 · 재생={bool(playback_drives)} 녹화={bool(recorded)}'
+        )
+
+
+def test_an_axis_whose_data_starts_late_is_free_before_it():
+    """10 초부터 녹화된 축은 그 앞을 MIDI 가 써야 한다 · 이게 "레이어에 없는
+    시간엔 MIDI 로 녹화" 의 절반이다."""
+    project = {
+        'period_sec': 0.02,
+        'layers': [{
+            'enabled': True,
+            'frames': [
+                {'frame': 1, 'time_sec': 10.0, 'values': {'1-1': 0.0}},
+                {'frame': 2, 'time_sec': 20.0, 'values': {'1-1': 5.0}},
+            ],
+        }],
+    }
+    assert playback_ownership(project) == {'1-1': [(10.0, 20.0)]}
+
+
+def test_axes_with_no_layer_data_are_never_owned():
+    """레이어에 없는 축은 전 구간 MIDI 차지다."""
+    project = {
+        'period_sec': 0.02,
+        'layers': [{
+            'enabled': True,
+            'frames': [{'frame': 1, 'time_sec': 0.02, 'values': {'1-1': 0.0}}],
+        }],
+    }
+    ownership = playback_ownership(project)
+    assert '1-2' not in ownership

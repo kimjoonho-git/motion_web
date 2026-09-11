@@ -1,10 +1,10 @@
-"""추가 녹화 · 녹화된 것을 재생하면서 그 위에 얹는다 · §6-71 §6-76
+"""추가 녹화 · 녹화된 것을 재생하면서 그 위에 얹는다 · §6-74 §6-76 §6-77
 
-녹화된 축은 그 구간 동안 재생이 몰고(모터가 실제로 움직인다), 그 구간이 끝난
-뒤나 데이터가 없는 축은 MIDI 로 녹화한다 · 소유는 **축 × 시간**으로 갈린다.
+녹화된 축은 그 구간 동안 재생이 몰고(모터가 실제로 움직인다), 그 구간 **밖**은
+같은 축이라도 MIDI 로 녹화한다 · 소유는 **축 × 시간**으로 갈린다.
 
-여기서는 그 바탕이 되는 두 가지를 본다 · 화면이 미리 알려 주는 녹화 가능 축과,
-녹화 시계가 재생의 0 초에 맞춰 출발하는지.
+재생 쪽과 녹화 쪽이 같은 구간을 봐야 한다 · 한쪽이 "재생 소유" 라고 보고 다른
+쪽이 "MIDI 차례" 라고 보면 그 축은 두 주인이 동시에 밀거나 아무도 안 민다.
 """
 
 import threading
@@ -15,53 +15,6 @@ import pytest
 
 from motion_studio.recording_session import StudioRecordingSession
 from motion_studio.studio_node import MotionStudioNode
-
-
-class FakeStore:
-    def __init__(self, motion_ids):
-        self._motion_ids = motion_ids
-
-    def mapping_check(self, project):
-        return {'matches_project': True, 'motion_ids': list(self._motion_ids)}
-
-
-class FakeStudio:
-    def __init__(self, motion_ids, layers):
-        self._store = FakeStore(motion_ids)
-        self._current_project = {'layers': layers}
-
-
-def _layer(motion_ids, enabled=True):
-    return {
-        'enabled': enabled,
-        'frames': [{'frame': 1, 'time_sec': 0.02,
-                    'values': {mid: 0.0 for mid in motion_ids}}],
-    }
-
-
-def test_candidates_exclude_axes_already_recorded():
-    studio = FakeStudio(['1-1', '1-2', '1-3'], [_layer(['1-1', '1-2'])])
-    session = StudioRecordingSession(studio)
-    assert session.overdub_candidates_locked() == ['1-3']
-
-
-def test_disabled_layers_do_not_reserve_axes():
-    """레이어를 끄면 그 축을 다시 녹화할 수 있어야 한다."""
-    studio = FakeStudio(['1-1', '1-2'], [_layer(['1-1'], enabled=False)])
-    session = StudioRecordingSession(studio)
-    assert session.overdub_candidates_locked() == ['1-1', '1-2']
-
-
-def test_no_candidates_when_every_axis_is_taken():
-    studio = FakeStudio(['1-1'], [_layer(['1-1'])])
-    session = StudioRecordingSession(studio)
-    assert session.overdub_candidates_locked() == []
-
-
-def test_no_project_gives_no_candidates():
-    session = StudioRecordingSession(FakeStudio([], []))
-    session.studio._current_project = None
-    assert session.overdub_candidates_locked() == []
 
 
 def _source():
@@ -92,21 +45,10 @@ def test_recording_drops_axes_owned_at_that_moment():
     start = source.index('def drop_owned_values(')
     body = source[start:source.index('\n    def ', start)]
     assert '_record_ownership' in body
-    assert 'start - 1e-9 <= time_sec <= end + 1e-9' in body, '시간 구간을 보지 않는다'
+    assert 'owned_at(' in body, '재생과 같은 판정을 쓰지 않는다'
 
     tick = source[source.index('def record_tick('):]
     assert 'self.drop_owned_values(values, time_sec)' in tick[:900]
-
-
-def test_append_stays_parked_until_layers_have_a_start_time():
-    """이어 녹화는 레이어 시작 시각 개념이 있어야 한다 · 지금은 모두 0초 시작."""
-    source = _source()
-    start = source.index('def start(')
-    body = source[start:source.index('\n    def ', start)]
-    assert "if mode == 'append'" in body
-    assert '레이어 시작 시각' in body
-    # 추가 녹화는 더 이상 함께 막히지 않는다
-    assert "mode in {'overdub', 'append'}" not in body
 
 
 class _OwningStudio:
@@ -150,8 +92,12 @@ def test_plain_recording_drops_nothing():
     assert _drop(None, {'1-1': 5.0}, 3.0) == {'1-1': 5.0}
 
 
-def test_overdub_starts_playback_with_per_axis_release():
-    """재생과 녹화가 함께 돈다 · 재생은 축이 끝나면 놓는다 · §6-74"""
+def test_overdub_starts_playback_with_the_same_spans_recording_uses():
+    """재생과 녹화가 함께 돌고, **같은 소유 구간**을 본다 · §6-77
+
+    끝 시각만 넘기면 시작 전이 빈다 · 합성은 모든 축을 매 순간 채우므로 10 초부터
+    데이터가 있는 축도 0 초부터 명령돼 그 앞을 MIDI 가 못 쓴다.
+    """
     source = _source()
     start = source.index('def start_overdub_playback(')
     body = source[start:source.index('\n    def ', start)]
@@ -159,9 +105,8 @@ def test_overdub_starts_playback_with_per_axis_release():
     assert "studio._record_mode != 'overdub'" in body, '일반 녹화에서도 재생한다'
     assert 'render_project(' in body, '레이어를 합성하지 않는다'
     assert "'start', payload" in body, '재생을 시작하지 않는다'
-    assert "'axis_release_sec'" in body, '축별 종료 시각을 주지 않는다'
-    # 축마다 마지막 소유 시각까지만 몬다
-    assert 'max(end for _start, end in spans)' in body
+    assert "'axis_playback_spans'" in body, '축별 소유 구간을 주지 않는다'
+    assert 'max(end' not in body, '끝 시각만 넘기면 시작 전 구간이 빈다'
 
 
 def test_plain_recording_does_not_start_playback():

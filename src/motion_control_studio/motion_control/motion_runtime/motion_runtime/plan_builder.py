@@ -23,23 +23,33 @@ from .motion_automation_store import REPEAT_MODES
 from .motion_run_constants import CONTINUOUS_LOOP_TOLERANCE_DEG
 
 
-def _axis_release_sec(
+def _axis_playback_spans(
     payload: Dict[str, Any],
     axes: List[Dict[str, Any]],
-) -> Dict[int, float]:
-    """`{motion_id: 종료초}` 요청을 `{모터축: 종료초}` 로 옮긴다 · §6-73
+) -> Dict[int, List[tuple[float, float]]]:
+    """`{motion_id: [[시작, 끝], ...]}` 요청을 `{모터축: [(시작, 끝), ...]}` 로 옮긴다.
 
     부르는 쪽(스튜디오)은 모션 ID 로 말하고 발행부는 모터축으로 움직인다 ·
-    옮겨 두면 재생 루프가 매 프레임 매핑을 다시 뒤지지 않는다.
+    옮겨 두면 재생 루프가 매 프레임 매핑을 다시 뒤지지 않는다 · §6-73 §6-77
     """
-    requested = payload.get('axis_release_sec')
+    requested = payload.get('axis_playback_spans')
     if not isinstance(requested, Mapping):
         return {}
-    by_motion_id = {}
-    for motion_id, value in requested.items():
-        seconds = finite_float(value)
-        if seconds is not None and seconds >= 0.0:
-            by_motion_id[str(motion_id)] = float(seconds)
+    by_motion_id: Dict[str, List[tuple[float, float]]] = {}
+    for motion_id, spans in requested.items():
+        if not isinstance(spans, (list, tuple)):
+            continue
+        clean = []
+        for span in spans:
+            if not isinstance(span, (list, tuple)) or len(span) != 2:
+                continue
+            start = finite_float(span[0])
+            end = finite_float(span[1])
+            if start is None or end is None or end < start:
+                continue
+            clean.append((max(0.0, float(start)), float(end)))
+        if clean:
+            by_motion_id[str(motion_id)] = clean
     if not by_motion_id:
         return {}
     return {
@@ -442,12 +452,12 @@ class PlanBuilder:
             'motion_file_path': str(motion_file_path) if motion_file_path else '',
             'mapping_path': str(mapping_path),
             'axes': axes,
-            # 축별 재생 종료 시각 · 오버더빙에서 스튜디오가 준다 · §6-73
+            # 축별 재생 소유 구간 · 오버더빙에서 스튜디오가 준다 · §6-77
             #
-            # 이 시각을 지나면 그 축은 더 이상 명령하지 않는다 · 소유권이 풀려
-            # MIDI 가 이어받을 수 있다. 샘플 계산은 그대로 두고 **발행 직전에만**
+            # 이 구간 밖에서는 그 축을 명령하지 않는다 · 소유권이 풀려 MIDI 가
+            # 그 시간을 쓸 수 있다. 샘플 계산은 그대로 두고 **발행 직전에만**
             # 거르므로, 로컬·그룹 실행 경로는 이 값이 없어 아무 영향이 없다.
-            'axis_release_sec': _axis_release_sec(payload, axes),
+            'axis_playback_spans': _axis_playback_spans(payload, axes),
             'samples': samples,
             'warnings': warnings,
             'capabilities': capabilities,

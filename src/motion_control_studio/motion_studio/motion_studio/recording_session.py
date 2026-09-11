@@ -12,6 +12,7 @@ from .layer_commands import next_numbered_layer_name
 from .motion_model import layer_motion_ids
 from .timeline import (
     motion_file_text,
+    owned_at,
     render_project,
     playback_ownership,
     project_motion_ids,
@@ -25,7 +26,7 @@ class StudioRecordingSession:
 
     @staticmethod
     def mode_label(mode: str) -> str:
-        return {'overdub': '오버더빙', 'append': '이어 녹화'}.get(mode, '녹화')
+        return '추가 녹화' if mode == 'overdub' else '녹화'
 
     def overdub_take_locked(self) -> bool:
         """지금 추가 녹화 테이크가 도는 중인가 · 잠금 안에서 부른다."""
@@ -40,43 +41,15 @@ class StudioRecordingSession:
         self.studio._record_mode = 'record'
         self.studio._record_ownership = {}
 
-    def overdub_candidates_locked(self) -> list:
-        """추가 녹화로 녹화할 수 있는 축 · 활성 레이어가 쓰는 축을 뺀 나머지.
-
-        녹화를 시작하고 나서야 "녹화된 축이 없습니다" 로 끝나면 한 번을 헛돌린다 ·
-        누를 수 있는지 화면이 먼저 알려 준다 · §6-71
-        """
-        studio = self.studio
-        project = studio._current_project
-        if not project:
-            return []
-        try:
-            mapping = studio._store.mapping_check(project)
-        except Exception:
-            return []
-        taken = set(project_motion_ids(project))
-        return [
-            str(motion_id)
-            for motion_id in (mapping.get('motion_ids') or [])
-            if str(motion_id) not in taken
-        ]
-
     def start(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         studio = self.studio
         mode = str(payload.get('mode') or 'record').strip().lower()
-        if mode not in {'record', 'overdub', 'append'}:
-            raise ValueError('녹화 모드는 record, overdub, append 중 하나여야 합니다')
+        if mode not in {'record', 'overdub'}:
+            raise ValueError('녹화 모드는 record 또는 overdub 이어야 합니다')
         with studio._lock:
             studio._require_idle_locked()
             project = studio._require_project_locked()
             mapping = studio._validate_mapping_locked(project)
-            # 이어 녹화(append)는 레이어에 시작 시각 개념이 있어야 한다 ·
-            # 지금 레이어는 모두 0초에서 시작한다 · 아직 막아 둔다 · §6-71
-            if mode == 'append' and project.get('layers'):
-                raise ValueError(
-                    '이어 녹화는 레이어 시작 시각을 다룰 수 있게 된 뒤 활성화됩니다. '
-                    '지금은 추가 녹화로 다른 축을 녹화하세요'
-                )
             motion_ids = list(mapping.get('motion_ids') or [])
             if not motion_ids:
                 raise ValueError('모션축 설정에 녹화 가능한 Motion ID가 없습니다')
@@ -184,7 +157,8 @@ class StudioRecordingSession:
             # 추가 녹화는 녹화된 대로 모터를 돌리면서 그 위에 얹는다 · §6-74
             #
             # 재생과 녹화가 같은 20ms 타이머 위에서 돈다 · 재생은 축이 끝나면
-            # `axis_release_sec` 로 그 축을 놓고, 녹화는 소유 구간을 버린다.
+            # 둘 다 같은 소유 구간을 본다 · 재생은 구간 밖에서 그 축을 놓고,
+            # 녹화는 구간 안을 버린다.
             overdub = self.start_overdub_playback(operation_generation)
             if overdub:
                 self.wait_for_playback_running(operation_generation, 20.0)
@@ -261,9 +235,13 @@ class StudioRecordingSession:
         )
         payload = {
             **studio._run_payload(project, file_id, motion_ids, 0.0),
-            # 축마다 마지막 소유 시각 · 이 뒤로는 명령하지 않는다
-            'axis_release_sec': {
-                motion_id: max(end for _start, end in spans)
+            # 축마다 재생이 쥐는 구간 · 이 밖에서는 그 축을 명령하지 않는다.
+            #
+            # 끝 시각만 보내면 **시작 전**이 빈다 · 합성은 모든 축을 매 순간
+            # 채우므로, 10 초부터 데이터가 있는 축도 0 초부터 명령돼 그 앞
+            # 구간을 MIDI 가 못 쓴다 · 구간을 통째로 보낸다 · §6-77
+            'axis_playback_spans': {
+                motion_id: [[start, end] for start, end in spans]
                 for motion_id, spans in ownership.items() if spans
             },
         }
@@ -368,10 +346,7 @@ class StudioRecordingSession:
         return {
             motion_id: value
             for motion_id, value in values.items()
-            if not any(
-                start - 1e-9 <= time_sec <= end + 1e-9
-                for start, end in ownership.get(str(motion_id), ())
-            )
+            if not owned_at(ownership.get(str(motion_id), ()), time_sec)
         }
 
     def record_tick(self) -> None:

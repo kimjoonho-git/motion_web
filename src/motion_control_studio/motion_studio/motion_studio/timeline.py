@@ -303,6 +303,18 @@ def playback_ownership(
     }
 
 
+def owned_at(spans: Iterable[tuple[float, float]], time_sec: float) -> bool:
+    """이 시각이 소유 구간 안인가 · §6-77
+
+    재생과 녹화가 **같은 판정**을 써야 한다. 한쪽이 "재생 소유" 라고 보고 다른
+    쪽이 "MIDI 차례" 라고 보면 그 축은 두 주인이 동시에 밀거나 아무도 안 민다.
+    """
+    return any(
+        start - 1e-9 <= time_sec <= end + 1e-9
+        for start, end in spans
+    )
+
+
 def _merge_ranges(
     spans: List[tuple[float, float]],
     period: float,

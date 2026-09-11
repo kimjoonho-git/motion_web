@@ -2,8 +2,8 @@ import {
   fetchCoordinationStatus,
   sendCoordinationControl,
   saveCoordinationSettings,
-} from './api.js?v=20260911095307';
-import { showAlert, showConfirm, dismissAllDialogs } from './ui_dialogs.js?v=20260911095307';
+} from './api.js?v=20260911102220';
+import { showAlert, showConfirm, dismissAllDialogs } from './ui_dialogs.js?v=20260911102220';
 
 function text(value) {
   return String(value ?? '').replace(/[&<>"']/g, (character) => ({
