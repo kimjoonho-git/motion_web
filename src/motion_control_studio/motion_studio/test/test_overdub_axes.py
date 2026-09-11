@@ -167,6 +167,8 @@ class _PayloadStudio:
         self._take = StudioTake(
             'overdub', 'preparing', 1, '', {'1-1': [(0.02, 8.92)]},
         )
+        # 레이어에 없는 1-2 도 녹화 대상이다 · 0 도로 함께 맞춰야 한다
+        self._record_eligible_motion_ids = {'1-1', '1-2'}
         self._move_time = move_time
         self.sent = None
         self._store = self
@@ -196,7 +198,11 @@ class _PayloadStudio:
         return f'__{name}.json'
 
     def _run_payload(self, project, file_id, motion_ids, move_time):
-        return {'motion_file_id': file_id, 'initial_move_time_sec': move_time}
+        return {
+            'motion_file_id': file_id,
+            'initial_move_time_sec': move_time,
+            'active_motion_ids': list(motion_ids),
+        }
 
     def _request_run_for_operation(self, command, payload, timeout, gen, state):
         self.sent = payload
@@ -218,6 +224,28 @@ def test_overdub_playback_uses_a_move_time_the_run_node_accepts(move_time):
     assert sent['initial_move_time_sec'] == move_time
     # 실행 노드 자신의 규칙으로 확인한다 · 값만 베껴 적으면 규칙이 바뀔 때 갈린다
     assert _initial_move_time_override_sec(sent) == move_time
+
+
+def test_the_overdub_request_carries_the_countdown_so_the_move_happens_once():
+    """전에는 스튜디오가 0 도 이동을 따로 시키고 카운트다운도 직접 돌린 뒤
+    재생을 시켰다 · 실행 노드의 `start` 가 원래 그 셋을 이어서 하므로 **초기
+    이동이 두 번** 일어났다 · §6-87"""
+    studio = _PayloadStudio(5.0)
+    assert StudioRecordingSession(studio).start_overdub_playback(1, 5.0)
+
+    assert studio.sent['countdown_sec'] == 3.0, '카운트다운을 실행 노드에 맡기지 않는다'
+
+
+def test_axes_with_no_layer_data_move_with_the_rest_but_are_never_played():
+    """레이어에 없는 축도 초기 이동에는 나서야 한다 · 0 도로 맞춰야 MIDI
+    절대값이 맞는다 · 그 뒤로는 재생이 건드리면 안 된다."""
+    studio = _PayloadStudio(5.0)
+    assert StudioRecordingSession(studio).start_overdub_playback(1, 5.0)
+
+    assert studio.sent['active_motion_ids'] == ['1-1', '1-2'], '빈 축이 초기 이동에서 빠졌다'
+    spans = studio.sent['axis_playback_spans']
+    assert spans['1-1'] == [[0.02, 8.92]]
+    assert spans['1-2'] == [], '레이어에 없는 축을 재생이 쥐고 있다'
 
 
 def test_the_run_node_rejects_a_zero_move_time():

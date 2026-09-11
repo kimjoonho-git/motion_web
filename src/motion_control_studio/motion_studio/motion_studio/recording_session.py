@@ -8,6 +8,9 @@ import uuid
 from typing import Any, Dict
 
 from .constants import DEFAULT_PERIOD_SEC
+
+#: 실행 노드가 돌리는 카운트다운 · 합성 미리보기와 같은 값
+COUNTDOWN_SEC = 3.0
 from .layer_commands import next_numbered_layer_name
 from .procedure import ProcedureStopped, StudioProcedure
 from .motion_model import layer_motion_ids
@@ -84,6 +87,9 @@ class StudioRecordingSession:
         무엇을 되감는지는 `StudioProcedure` 가 맡는다.
         """
         studio = self.studio
+        with studio._lock:
+            take = studio._take
+            overdub_mode = bool(take and take.overdub)
         steps = StudioProcedure(studio, operation_generation)
         release_midi = lambda: studio._request_midi('studio_recording_ready', {}, 2.0)
         state: Dict[str, Any] = {}
@@ -143,9 +149,12 @@ class StudioRecordingSession:
             )
             if state['overdub']:
                 # 녹화 시계의 0 초는 **재생의 0 초**여야 한다 · §6-76
+                #
+                # 이 한 번의 요청이 초기 이동과 카운트다운까지 한다 · 그만큼
+                # 기다려 준다 · §6-87
                 steps.wait_for_run_state(
                     {'running', 'verifying'},
-                    timeout=max(30.0, move_time + 20.0),
+                    timeout=max(40.0, move_time + COUNTDOWN_SEC + 25.0),
                     timeout_message='추가 녹화 재생 시작 확인',
                 )
 
@@ -161,24 +170,38 @@ class StudioRecordingSession:
                     else '모션 녹화 중 · MIDI SELECT로 움직이는 축을 자동 기록합니다',
                 )
 
+        # 추가 녹화는 실행 노드가 초기 이동·카운트다운·재생을 이어서 한다 ·
+        # 스튜디오가 흉내 내던 앞의 두 단계가 빠진다 · 초기 이동이 두 번
+        # 일어나던 것이 그래서 사라진다 · §6-87
         steps.run([
             ('MIDI 녹화 준비', lock_midi),
             ('MIDI 페이더 0 복귀', lambda: self.wait_for_midi_faders_zero(8.0)),
+        ] + ([
+            ('MIDI SELECT 잠금 해제', unlock_midi),
+            ('추가 녹화 재생 시작', start_playback),
+        ] if overdub_mode else [
             ('초기 위치 이동', move_to_zero),
             ('카운트다운', countdown),
             ('MIDI SELECT 잠금 해제', unlock_midi),
-            ('추가 녹화 재생 시작', start_playback),
+        ]) + [
             ('녹화 시작', begin_recording),
         ])
 
     def start_overdub_playback(
         self, operation_generation: int, move_time: float,
     ) -> bool:
-        """추가 녹화일 때 기존 레이어 재생을 함께 시작한다 · §6-74
+        """추가 녹화 · **요청 한 번**으로 초기 이동·카운트다운·재생을 잇는다 · §6-87
 
-        재생은 `axis_release_sec` 로 **축이 끝나면 그 축을 놓는다** · 놓은 축은
-        `CommandArbiter` 에서 풀려 MIDI 가 이어받는다. 그래서 같은 축이라도
-        재생이 끝난 뒤 구간은 MIDI 로 녹화된다.
+        전에는 스튜디오가 0 도 이동을 따로 시키고, 카운트다운도 직접 돌리고,
+        그 다음 재생을 시켰다 · 그런데 실행 노드의 `start` 는 원래 그 셋을
+        이어서 한다(합성 미리보기가 이미 그렇게 쓴다). 그래서 **초기 이동이 두
+        번** 일어났다 · 0 도로 한 번, 합성 시작 위치로 또 한 번.
+
+        이제 한 번만 움직인다 · 목적지는 합성의 0 초 값이고, 레이어에 없는 축은
+        그 파일 안에서 0 도다.
+
+        재생이 쥐는 구간은 축마다 따로 준다 · 레이어에 없는 축은 **빈 목록**이라
+        초기 이동에는 함께 나서고 그 뒤로는 재생이 건드리지 않는다.
 
         일반 녹화면 아무 일도 하지 않고 거짓을 돌려준다.
         """
@@ -190,7 +213,8 @@ class StudioRecordingSession:
                 return False
             project = dict(studio._require_project_locked())
             mapping = studio._validate_mapping_locked(project)
-            motion_ids = project_motion_ids(project)
+            # 녹화 대상 축 전부 · 레이어에 없는 축도 0 도로 함께 맞춘다
+            motion_ids = sorted(studio._record_eligible_motion_ids)
         if not motion_ids:
             return False
         frames = render_project(
@@ -203,21 +227,17 @@ class StudioRecordingSession:
             motion_file_text(project, frames),
             hidden=True,
         )
-        # 초기 이동 시간은 사용자가 고른 값 그대로 넘긴다 · 실행 노드는 5·7·10
-        # 초만 받는다 · 0 을 주면 "모션 실행 준비 실패" 로 끝난다 · §6-78
-        #
-        # 합성의 0 초 값은 방금 맞춘 0 도와 다를 수 있다 · 여기서 한 번 더
-        # 이동해야 재생 첫 프레임에서 튀지 않는다.
         payload = {
             **studio._run_payload(project, file_id, motion_ids, move_time),
+            'countdown_sec': COUNTDOWN_SEC,
             # 축마다 재생이 쥐는 구간 · 이 밖에서는 그 축을 명령하지 않는다.
             #
             # 끝 시각만 보내면 **시작 전**이 빈다 · 합성은 모든 축을 매 순간
             # 채우므로, 10 초부터 데이터가 있는 축도 0 초부터 명령돼 그 앞
             # 구간을 MIDI 가 못 쓴다 · 구간을 통째로 보낸다 · §6-77
             'axis_playback_spans': {
-                motion_id: [[start, end] for start, end in spans]
-                for motion_id, spans in ownership.items() if spans
+                motion_id: [[start, end] for start, end in ownership.get(motion_id, ())]
+                for motion_id in motion_ids
             },
         }
         response = studio._request_run_for_operation(

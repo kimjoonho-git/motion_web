@@ -402,6 +402,11 @@ def _overdub_node(state='recording'):
         'playback_duration_sec': 0.0,
     }
     node._motion_run_status = {}
+    node._project_status_locked = lambda message: node._status.update({
+        'state': node._state_locked(),
+        'phase': node._take.phase if node._take else node._state_locked(),
+        'message': message,
+    })
     return node
 
 
@@ -455,3 +460,41 @@ def test_overdub_still_records_the_run_status_for_the_start_gate():
     node._run_status_callback(_run_status('running'))
 
     assert node._motion_run_status.get('state') == 'running'
+
+
+def test_overdub_shows_the_run_node_countdown_before_it_starts():
+    """추가 녹화는 초기 이동과 카운트다운을 실행 노드에 맡긴다 · §6-87
+
+    그 진행이 화면에 안 보이면 사용자는 멈춘 화면을 3~10초 동안 본다.
+    """
+    node = _overdub_node(state='initializing')
+
+    node._run_status_callback(_run_status('initializing', progress={
+        'elapsed_sec': 2.0, 'duration_sec': 5.0,
+    }))
+    assert node._status['state'] == 'initializing'
+    assert node._status['phase_elapsed_sec'] == 2.0
+    assert node._status['phase_total_sec'] == 5.0
+
+    node._run_status_callback(_run_status(
+        'countdown', message='녹화 시작 2초 전',
+        progress={'elapsed_sec': 1.0, 'duration_sec': 3.0},
+    ))
+    assert node._status['phase'] == 'countdown'
+    assert node._status['message'] == '녹화 시작 2초 전'
+    assert node._status['state'] == 'initializing', '카운트다운에 상태가 뒤집혔다'
+
+
+def test_the_run_node_cannot_end_an_overdub_take_once_recording_starts():
+    """§6-87 로 앞 단계를 다시 받아 적게 했지만, **시작한 뒤로는** 받으면
+    안 된다 · 재생이 끝났다고 녹화까지 끝내면 녹화된 구간 뒤가 통째로 사라진다 ·
+    그게 §6-76 이었다."""
+    node = _overdub_node(state='recording')
+
+    node._run_status_callback(_run_status('countdown', message='끼어들기'))
+    assert node._status.get('phase') != 'countdown', '녹화 중인데 카운트다운으로 되돌아갔다'
+
+    node._run_status_callback(_run_status('completed', progress={
+        'elapsed_sec': 8.92, 'duration_sec': 8.92,
+    }))
+    assert node._status['state'] != 'idle', '재생이 끝나자 녹화가 함께 멈췄다'

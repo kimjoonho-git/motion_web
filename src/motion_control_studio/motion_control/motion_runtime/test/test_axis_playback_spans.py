@@ -79,8 +79,21 @@ def test_a_missing_or_bad_span_request_is_ignored():
     assert _axis_playback_spans({}, axes) == {}
     assert _axis_playback_spans({'axis_playback_spans': None}, axes) == {}
     assert _axis_playback_spans({'axis_playback_spans': {'1-1': 'x'}}, axes) == {}
-    assert _axis_playback_spans({'axis_playback_spans': {'1-1': [[1.0]]}}, axes) == {}
-    assert _axis_playback_spans(
-        {'axis_playback_spans': {'1-1': [['x', 1.0]]}}, axes) == {}
-    assert _axis_playback_spans(
-        {'axis_playback_spans': {'1-1': [[5.0, 1.0]]}}, axes) == {}, '끝이 시작보다 앞'
+    # 망가진 구간은 버린다 · 남는 것은 "한 번도 안 쥔다" 는 빈 목록이다
+    for broken in ([[1.0]], [['x', 1.0]], [[5.0, 1.0]]):
+        assert _axis_playback_spans(
+            {'axis_playback_spans': {'1-1': broken}}, axes) == {0: []}
+
+
+def test_an_empty_span_list_means_the_axis_is_never_played():
+    """레이어에 없는 축도 초기 이동에는 함께 나서야 한다 · 0도로 맞춰야 MIDI
+    절대값이 맞는다 · 그 뒤로는 재생이 건드리면 안 된다 · §6-87"""
+    axes = [{'motion_id': '1-1', 'motor_axis': 0}, {'motion_id': '1-2', 'motor_axis': 3}]
+    spans = _axis_playback_spans(
+        {'axis_playback_spans': {'1-1': [[2.36, 8.92]], '1-2': []}}, axes,
+    )
+    assert spans == {0: [(2.36, 8.92)], 3: []}
+
+    plan = {'axis_playback_spans': spans}
+    assert _filter(plan, {0: 1.0, 3: 2.0}, 5.0) == {0: 1.0}, '빈 목록인 축을 몰고 있다'
+    assert _filter(plan, {0: 1.0, 3: 2.0}, 0.02) == {}

@@ -150,6 +150,7 @@ class StudioPlaybackSession:
         studio._motion_run_status = payload
         take = studio._take
         if take is not None and not take.run_led:
+            self._mirror_lead_in_locked(take, payload)
             return
         studio_state = str(studio._status.get('state') or '')
         run_state = str(payload.get('state') or '')
@@ -195,6 +196,34 @@ class StudioPlaybackSession:
                 studio._takes().fail(message)
             else:
                 studio._takes().finish(message)
+
+    def _mirror_lead_in_locked(self, take: Any, payload: Dict[str, Any]) -> None:
+        """녹화 테이크가 시작되기 **전까지만** 실행 노드 상태를 받아 적는다 · §6-87
+
+        추가 녹화는 초기 이동과 카운트다운을 실행 노드에 맡긴다 · 그 진행이
+        화면에 안 보이면 사용자는 멈춘 화면을 3~10초 동안 본다.
+
+        시작한 뒤로는 받지 않는다 · 재생이 끝났다고 녹화까지 끝내면 녹화된
+        구간 뒤가 통째로 사라진다 · 그게 §6-76 이었다.
+        """
+        studio = self.studio
+        if take.phase == 'running':
+            return
+        run_state = str(payload.get('state') or '')
+        progress = payload.get('progress')
+        if run_state == 'countdown' and take.phase != 'countdown':
+            studio._takes().advance(
+                'countdown', str(payload.get('message') or '녹화 시작 대기'),
+            )
+        elif run_state == 'initializing' and take.phase == 'preparing':
+            studio._takes().advance(
+                'preparing', str(payload.get('message') or '초기 위치 이동 중'),
+            )
+        if isinstance(progress, dict):
+            studio._takes().phase_tick(
+                float(progress.get('elapsed_sec') or 0.0),
+                float(progress.get('duration_sec') or 0.0),
+            )
 
     def start_initial_position(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         studio = self.studio

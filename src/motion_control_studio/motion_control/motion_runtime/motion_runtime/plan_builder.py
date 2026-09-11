@@ -48,8 +48,11 @@ def _axis_playback_spans(
             if start is None or end is None or end < start:
                 continue
             clean.append((max(0.0, float(start)), float(end)))
-        if clean:
-            by_motion_id[str(motion_id)] = clean
+        # 빈 목록도 뜻이 있다 · "이 축은 재생이 한 번도 쥐지 않는다" · §6-87
+        #
+        # 레이어에 없는 축도 초기 이동에는 함께 나서야 하고(0도로 맞춰야
+        # MIDI 절대값이 맞는다), 그 뒤로는 재생이 건드리면 안 된다.
+        by_motion_id[str(motion_id)] = clean
     if not by_motion_id:
         return {}
     return {
