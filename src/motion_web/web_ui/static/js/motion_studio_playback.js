@@ -1,5 +1,4 @@
-import { MOTION_STUDIO_PERIOD_SEC } from './motion_studio_constants.js?v=20260911110233';
-import { motionStudioGraphTimeSpan } from './motion_studio_graph.js?v=20260911110233';
+import { MOTION_STUDIO_PERIOD_SEC } from './motion_studio_constants.js?v=20260911112527';
 
 export function motionStudioPlaybackView({
   status = {},
@@ -158,13 +157,13 @@ export function createMotionStudioPlaybackController({
     }
     const width = canvas.getBoundingClientRect().width || canvas.clientWidth || 0;
     if (width <= 70) return;
-    // 그래프와 **같은** 시간축을 써야 한다 · 그래프는 녹화가 데이터 끝을
-    // 지나면 축을 늘리는데 여기만 데이터 길이에 묶여 있으면 그 순간부터
-    // 플레이헤드가 오른쪽 끝에 붙어 시간을 알 수 없다 · §6-79
+    // 그래프가 실제로 쓴 시간축을 그대로 쓴다 · §6-83
+    //
+    // 여기서 다시 셈하면 어긋난다 · 캔버스는 5초씩 늘어나는데 여기는 녹화
+    // 시각에 맞춰 놓여, 그릴 때마다 재생 표시가 튀었다.
     const graphDuration = Math.max(
       MOTION_STUDIO_PERIOD_SEC,
-      motionStudioGraphTimeSpan(state.detailGraph.duration, playback)
-        || MOTION_STUDIO_PERIOD_SEC,
+      Number(state.detailGraph.timeSpan) || Number(state.detailGraph.duration) || 0,
     );
     const ratio = Math.min(1, Math.max(0, Number(playback.playheadTime) / graphDuration));
     playhead.style.left = `${52 + (ratio * (width - 70))}px`;

@@ -1,13 +1,13 @@
-import { escapeHtml } from './format.js?v=20260911110233';
-import { motionStudioEditorValueBounds } from './motion_studio_editor_math.js?v=20260911110233';
-import { motionStudioPointCurvePreview } from './motion_studio_point_model.js?v=20260911110233';
-import { MOTION_STUDIO_PERIOD_SEC } from './motion_studio_constants.js?v=20260911110233';
+import { escapeHtml } from './format.js?v=20260911112527';
+import { motionStudioEditorValueBounds } from './motion_studio_editor_math.js?v=20260911112527';
+import { motionStudioPointCurvePreview } from './motion_studio_point_model.js?v=20260911112527';
+import { MOTION_STUDIO_PERIOD_SEC } from './motion_studio_constants.js?v=20260911112527';
 import {
   motionStudioDisplaySegments,
   motionStudioEditorIssueTimes,
   motionStudioLayerTracks,
   motionStudioVisiblePoints,
-} from './motion_studio_tracks.js?v=20260911110233';
+} from './motion_studio_tracks.js?v=20260911112527';
 
 export {
   motionStudioCompositionTracks,
@@ -16,7 +16,7 @@ export {
   motionStudioLayerTracks,
   motionStudioSampleTrack,
   motionStudioVisiblePoints,
-} from './motion_studio_tracks.js?v=20260911110233';
+} from './motion_studio_tracks.js?v=20260911112527';
 
 function pointCurves(layer) {
   return Array.isArray(layer?.point_curves) ? layer.point_curves : [];
@@ -120,8 +120,10 @@ export function drawMotionStudioLayerGraph({
   canvas,
   playhead,
   tracks,
+  baseTracks = null,
   playback,
   ownedSpans = null,
+  timeSpan = 0,
   updatePlayhead = () => {},
   devicePixelRatio = globalThis.devicePixelRatio || 1,
 }) {
@@ -138,8 +140,10 @@ export function drawMotionStudioLayerGraph({
   let maxTime = MOTION_STUDIO_PERIOD_SEC;
   let minValue = 0;
   let maxValue = 0;
-  maxTime = Math.max(maxTime, motionStudioGraphTimeSpan(0, playback));
-  for (const points of tracks.values()) {
+  // 시간축은 **받아서 쓴다** · 여기서 따로 계산하면 플레이헤드와 어긋나
+  // 재생 표시가 튄다 · 부르는 쪽이 한 번만 셈한다 · §6-83
+  maxTime = Math.max(maxTime, Math.max(0, Number(timeSpan) || 0));
+  for (const points of [...tracks.values(), ...(baseTracks?.values() || [])]) {
     pointCount += points.length;
     for (const point of points) {
       maxTime = Math.max(maxTime, Number(point.timeSec) || 0);
@@ -172,14 +176,41 @@ export function drawMotionStudioLayerGraph({
   context.fillText('0초', padding.left, height - 10);
   context.fillText(`${maxTime.toFixed(3)}초`, width - padding.right - 58, height - 10);
   const colors = ['#1f6feb', '#d97706', '#16803c', '#a23ab7', '#d33b3b', '#0f8b8d'];
+  // 바탕 곡선 · 추가 녹화 중 **지금 재생되고 있는 기존 레이어** · §6-83
+  //
+  // 녹화가 시작되면 그래프가 새로 기록되는 것만 보여 주고 기존 모션이 사라졌다 ·
+  // 그런데 추가 녹화는 그 기존 모션을 보면서 얹는 일이다 · 사라지면 언제
+  // 얹어야 할지 알 수가 없다.
+  drawTrackLines({
+    context, padding, plotWidth, plotHeight, maxTime, minValue, maxValue,
+    tracks: baseTracks, colors, dashed: true, alpha: 0.4,
+  });
   drawOwnedSpanLanes({
     context, padding, plotWidth, maxTime, colors,
     motionIds: [...tracks.keys()],
     ownedSpans,
   });
+  drawTrackLines({
+    context, padding, plotWidth, plotHeight, maxTime, minValue, maxValue,
+    tracks, colors, dashed: false, alpha: 1,
+  });
+  updatePlayhead(playback);
+  return true;
+}
+
+
+/** 곡선을 그린다 · 바탕(기존 레이어)은 점선으로 옅게, 새로 녹화되는 것은 실선. */
+function drawTrackLines({
+  context, padding, plotWidth, plotHeight, maxTime, minValue, maxValue,
+  tracks, colors, dashed, alpha,
+}) {
+  if (!tracks || !tracks.size || maxTime <= 0) return;
+  context.save();
+  context.globalAlpha = alpha;
+  if (dashed) context.setLineDash([5, 4]);
   [...tracks.entries()].forEach(([, points], index) => {
     context.strokeStyle = colors[index % colors.length];
-    context.lineWidth = 2;
+    context.lineWidth = dashed ? 1.5 : 2;
     motionStudioDisplaySegments(points, Math.max(400, plotWidth * 2)).forEach((segment) => {
       context.beginPath();
       segment.forEach((point, pointIndex) => {
@@ -191,8 +222,7 @@ export function drawMotionStudioLayerGraph({
       context.stroke();
     });
   });
-  updatePlayhead(playback);
-  return true;
+  context.restore();
 }
 
 export function drawMotionStudioEditorGraph({

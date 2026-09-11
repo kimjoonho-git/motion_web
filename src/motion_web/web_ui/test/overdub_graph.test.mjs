@@ -74,9 +74,12 @@ function fakeCanvas(width = 760) {
   const context = {
     fills,
     setTransform() {}, clearRect() {}, strokeRect() {}, beginPath() {},
-    moveTo() {}, lineTo() {}, stroke() {}, save() {}, restore() {},
+    moveTo() {}, lineTo() {}, save() {}, restore() {},
     fillText() {}, globalAlpha: 1, fillStyle: '', strokeStyle: '', font: '',
     lineWidth: 1,
+    strokes: 0, dashed: false,
+    stroke() { this.strokes += 1; },
+    setLineDash(pattern) { if (pattern?.length) this.dashed = true; },
     fillRect(x, y, w, h) { fills.push({ x, y, w, h, fillStyle: this.fillStyle }); },
   };
   return {
@@ -177,4 +180,114 @@ test('plain recording shows no overdub hint', () => {
   assert.equal(hint(null, 3), '');
   assert.equal(hint({}, 3), '');
   assert.equal(hint({ '1-1': [] }, 3), '');
+});
+
+
+/**
+ * 그래프는 시간축을 **한 번만** 셈한다 · §6-83
+ *
+ * 캔버스와 플레이헤드가 각자 셈하니 서로 어긋났다 · 캔버스는 5초씩 늘어나는데
+ * 플레이헤드는 녹화 시각에 맞춰 놓여, 그릴 때마다 재생 표시가 튀었다.
+ */
+async function paint({ tracks, baseTracks = null, playback, detailGraph }) {
+  const { createMotionStudioGraphPainter } = await import(
+    '../static/js/motion_studio_graph_render.js'
+  );
+  const { canvas, context } = fakeCanvas();
+  const placed = [];
+  const state = { detailGraph, status: {} };
+  const painter = createMotionStudioGraphPainter({
+    state,
+    el: { studioLayerGraph: canvas, studioLayerPlayhead: null },
+    updatePlayhead: (view) => placed.push(view),
+  });
+  painter(tracks, playback, baseTracks);
+  return { state, context, placed };
+}
+
+test('the canvas and the playhead agree on one time span', async () => {
+  const playback = recording(14.0);
+  const { state } = await paint({
+    tracks: TRACKS,
+    playback,
+    detailGraph: { duration: DATA_SEC },
+  });
+
+  // 플레이헤드는 이 값을 읽는다 · 다시 셈하지 않는다
+  assert.equal(state.detailGraph.timeSpan, DATA_SEC * 2);
+  assert.ok(
+    state.detailGraph.timeSpan > 14.0,
+    '플레이헤드가 오른쪽 끝에 붙는다',
+  );
+});
+
+test('the span covers the existing layers from the very first frame', async () => {
+  /** 녹화 시작 직후에는 새로 기록된 게 거의 없다 · 그때 축을 새 데이터에만
+   *  맞추면 0.02초짜리 축이 되고, 프레임이 쌓일 때마다 그래프 전체가 다시
+   *  그려지며 흔들린다. 바탕 레이어가 축을 처음부터 붙잡아 준다. */
+  const fresh = new Map([['1-1', [{ timeSec: 0.02, value: 0 }]]]);
+  const { state } = await paint({
+    tracks: fresh,
+    baseTracks: TRACKS,
+    playback: recording(0.04),
+    detailGraph: { duration: 0.04 },
+  });
+
+  assert.ok(state.detailGraph.timeSpan >= DATA_SEC, '축이 새 데이터만 따라간다');
+});
+
+test('the existing layers are drawn underneath while overdubbing', async () => {
+  const fresh = new Map([['1-1', [
+    { timeSec: 9.0, value: 0 }, { timeSec: 12.0, value: 5 },
+  ]]]);
+  const solidOnly = await paint({
+    tracks: fresh, playback: recording(12.0), detailGraph: { duration: 12.0 },
+  });
+  const withBase = await paint({
+    tracks: fresh, baseTracks: TRACKS,
+    playback: recording(12.0), detailGraph: { duration: 12.0 },
+  });
+
+  assert.ok(
+    withBase.context.strokes > solidOnly.context.strokes,
+    '기존 레이어가 그려지지 않는다 · 언제 얹을지 알 수 없다',
+  );
+  assert.ok(withBase.context.dashed, '기존 레이어가 새 녹화와 구분되지 않는다');
+});
+
+
+test('the playhead reads the span the graph actually used', async () => {
+  /** 여기서 다시 셈하면 캔버스와 어긋난다 · 캔버스는 5초씩 늘어나는데
+   *  플레이헤드만 녹화 시각에 맞춰 놓여, 그릴 때마다 재생 표시가 튀었다. */
+  const { createMotionStudioPlaybackController } = await import(
+    '../static/js/motion_studio_playback.js'
+  );
+  const playhead = {
+    style: {}, classList: { toggle() {}, add() {}, remove() {} },
+    querySelector: () => null,
+  };
+  const el = {
+    studioLayerPlayhead: playhead,
+    studioLayerGraph: { getBoundingClientRect: () => ({ width: 1052 }), clientWidth: 1052 },
+  };
+  const place = (detailGraph) => {
+    const state = {
+      status: { state: 'recording', elapsed_sec: 14.0 },
+      playbackClock: null,
+      detailGraph,
+    };
+    const controller = createMotionStudioPlaybackController({
+      state, el, timeText: String, now: () => 0,
+    });
+    controller.updatePlayhead(controller.view(detailGraph.duration));
+    return parseFloat(playhead.style.left);
+  };
+
+  // 그래프가 쓴 축은 17.84초 · 녹화 시각 14초는 그 안쪽이다
+  const shared = place({ duration: 8.92, timeSpan: 17.84 });
+  // 다시 셈해 8.92초 축을 쓰면 오른쪽 끝(52 + 982)에 붙는다
+  const recomputed = place({ duration: 8.92 });
+
+  assert.ok(shared < recomputed, '플레이헤드가 그래프와 다른 축을 쓴다');
+  assert.ok(shared < 52 + 982 - 1, '플레이헤드가 오른쪽 끝에 붙었다');
 });

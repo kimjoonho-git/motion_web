@@ -1,4 +1,4 @@
-import { escapeHtml } from './format.js?v=20260911110233';
+import { escapeHtml } from './format.js?v=20260911112527';
 import {
   commitMotionStudioMerge,
   createMotionStudioLayer,
@@ -16,7 +16,7 @@ import {
   startMotionStudioRecord,
   stopMotionStudio,
   updateMotionStudioLayer,
-} from './api.js?v=20260911110233';
+} from './api.js?v=20260911112527';
 import {
   applyMotionStudioProjectPatch, motionStudioCanCreatePointCurve,
   motionStudioCanSwitchPointDraftCurve, motionStudioCanvasEventPoint,
@@ -33,12 +33,12 @@ import {
   motionStudioPointRangeTargetsMatch, motionStudioRuntimeStatusMessage,
   motionStudioShouldProtectPointAxisSelection, motionStudioSnapFrameTime,
   resolveMotionStudioSelectedLayerId, synchronizeMotionStudioEditorTimeline,
-} from './motion_studio_calculations.js?v=20260911110233';
+} from './motion_studio_calculations.js?v=20260911112527';
+import { createMotionStudioGraphPainter } from './motion_studio_graph_render.js?v=20260911112527';
 import {
-  drawMotionStudioLayerGraph,
   motionStudioCompositionTracks as compositionTracks,
   motionStudioLayerTracks as layerTracks,
-} from './motion_studio_graph.js?v=20260911110233';
+} from './motion_studio_graph.js?v=20260911112527';
 import {
   bindMotionStudioEvent,
   bindMotionStudioProjectTransportEvents,
@@ -47,32 +47,32 @@ import {
   motionStudioExportResultMessage,
   resetMotionStudioProjectState,
   setMotionStudioMessage,
-} from './motion_studio_ui.js?v=20260911110233';
+} from './motion_studio_ui.js?v=20260911112527';
 import {
   motionStudioEditorAxisLabel,
-} from './motion_studio_editor_ui.js?v=20260911110233';
+} from './motion_studio_editor_ui.js?v=20260911112527';
 import {
   createMotionStudioPlaybackController,
-} from './motion_studio_playback.js?v=20260911110233';
+} from './motion_studio_playback.js?v=20260911112527';
 import {
   renderMotionStudioLayerManager,
-} from './motion_studio_layer_manager.js?v=20260911110233';
+} from './motion_studio_layer_manager.js?v=20260911112527';
 import {
   MOTION_STUDIO_PERIOD_MS,
-} from './motion_studio_constants.js?v=20260911110233';
+} from './motion_studio_constants.js?v=20260911112527';
 import {
   createMotionStudioLayerController, closeMotionStudioLayerManager, openMotionStudioLayerManager,
   selectMotionStudioLayer,
   updateMotionStudioMergeSelection,
-} from './motion_studio_layer_controller.js?v=20260911110233';
+} from './motion_studio_layer_controller.js?v=20260911112527';
 import {
   createMotionStudioEditorController,
-} from './motion_studio_editor_controller.js?v=20260911110233';
-import { motionStudioEditorPointCurves } from './motion_studio_editor_state.js?v=20260911110233';
+} from './motion_studio_editor_controller.js?v=20260911112527';
+import { motionStudioEditorPointCurves } from './motion_studio_editor_state.js?v=20260911112527';
 import {
   createMotionStudioRequestFence,
-} from './motion_studio_controller_events.js?v=20260911110233';
-import { showAlert, showConfirm } from './ui_dialogs.js?v=20260911110233';
+} from './motion_studio_controller_events.js?v=20260911112527';
+import { showAlert, showConfirm } from './ui_dialogs.js?v=20260911112527';
 export {
   applyMotionStudioProjectPatch, motionStudioCanCreatePointCurve,
   motionStudioCanSwitchPointDraftCurve, motionStudioCanvasEventPoint,
@@ -407,17 +407,12 @@ export function createMotionStudioController({
     });
   }
 
-  function drawLayerGraph(tracks, playback = playbackView()) {
-    drawMotionStudioLayerGraph({
-      canvas: el.studioLayerGraph,
-      playhead: el.studioLayerPlayhead,
-      tracks,
-      playback,
-      // 추가 녹화 중 재생이 쥔 구간 · 서버가 쥔 그대로 그린다 · §6-79
-      ownedSpans: state.status?.overdub_spans || null,
-      updatePlayhead: updatePlaybackPlayhead,
-      devicePixelRatio: window.devicePixelRatio || 1,
-    });
+  const paintLayerGraph = createMotionStudioGraphPainter({
+    state, el, updatePlayhead: updatePlaybackPlayhead,
+  });
+
+  function drawLayerGraph(tracks, playback = playbackView(), baseTracks = null) {
+    paintLayerGraph(tracks, playback, baseTracks);
   }
 
   const editorController = createMotionStudioEditorController({
@@ -630,8 +625,17 @@ export function createMotionStudioController({
     if (String(state.status?.state || '') !== 'recording') return false;
     const frames = Array.isArray(state.status?.recording_preview_frames)
       ? state.status.recording_preview_frames : [];
+    // 추가 녹화는 **기존 레이어를 보면서** 얹는 일이다 · §6-83
+    //
+    // 녹화가 시작되면 그래프가 새로 기록되는 것만 보여 주고 기존 모션이
+    // 사라졌다 · 그러면 언제 얹어야 할지 알 수가 없다. 바탕으로 함께 그린다.
+    const overdub = String(state.status?.record_mode || '') === 'overdub';
+    const base = overdub
+      ? cachedCompositionTracks(state.project?.layers || [], activeMapping()?.rows || [])
+      : null;
     const duration = Math.max(
       Number(state.status?.elapsed_sec) || 0,
+      Number(base?.duration) || 0,
       ...frames.map((frame) => Number(frame.time_sec) || 0),
     );
     const previewKey = `${Number(state.status?.recorded_frames || 0)}:${Number(state.status?.recording_preview_stride || 1)}`;
@@ -651,7 +655,11 @@ export function createMotionStudioController({
       compositionMode: true,
       recordingPreview: true,
     };
-    if (el.studioLayerDetailName) el.studioLayerDetailName.textContent = '녹화 중 실시간 그래프';
+    if (el.studioLayerDetailName) {
+      el.studioLayerDetailName.textContent = overdub
+        ? '추가 녹화 중 · 점선은 재생 중인 기존 레이어'
+        : '녹화 중 실시간 그래프';
+    }
     if (el.studioLayerDetailStatus) {
       const stride = Math.max(1, Number(state.status?.recording_preview_stride) || 1);
       el.studioLayerDetailStatus.textContent = tracks.size
@@ -680,7 +688,7 @@ export function createMotionStudioController({
       )).join('');
     }
     const view = renderPlaybackMonitor(duration);
-    drawLayerGraph(tracks, view);
+    drawLayerGraph(tracks, view, base?.tracks || null);
     return true;
   }
 
