@@ -32,6 +32,20 @@ class StudioRecordingSession:
         """지금 추가 녹화 테이크가 도는 중인가 · 잠금 안에서 부른다."""
         return getattr(self.studio, '_record_mode', 'record') == 'overdub'
 
+    def take_spans_locked(self) -> dict:
+        """추가 녹화 중 재생이 쥔 구간 · 화면이 그대로 그린다 · §6-79
+
+        화면에서 다시 계산하면 재생·녹화와 세 번째 판정이 생긴다 · 서버가
+        쥔 그대로 내려보내야 그래프의 잠금 띠와 실제 동작이 어긋나지 않는다.
+        """
+        if not self.overdub_take_locked():
+            return {}
+        ownership = getattr(self.studio, '_record_ownership', None) or {}
+        return {
+            str(motion_id): [[float(start), float(end)] for start, end in spans]
+            for motion_id, spans in ownership.items() if spans
+        }
+
     def clear_take_locked(self) -> None:
         """테이크를 끝낸다 · 스튜디오가 idle/error 로 갈 때 부른다.
 

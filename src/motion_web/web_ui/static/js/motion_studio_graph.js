@@ -1,13 +1,13 @@
-import { escapeHtml } from './format.js?v=20260911102220';
-import { motionStudioEditorValueBounds } from './motion_studio_editor_math.js?v=20260911102220';
-import { motionStudioPointCurvePreview } from './motion_studio_point_model.js?v=20260911102220';
-import { MOTION_STUDIO_PERIOD_SEC } from './motion_studio_constants.js?v=20260911102220';
+import { escapeHtml } from './format.js?v=20260911104111';
+import { motionStudioEditorValueBounds } from './motion_studio_editor_math.js?v=20260911104111';
+import { motionStudioPointCurvePreview } from './motion_studio_point_model.js?v=20260911104111';
+import { MOTION_STUDIO_PERIOD_SEC } from './motion_studio_constants.js?v=20260911104111';
 import {
   motionStudioDisplaySegments,
   motionStudioEditorIssueTimes,
   motionStudioLayerTracks,
   motionStudioVisiblePoints,
-} from './motion_studio_tracks.js?v=20260911102220';
+} from './motion_studio_tracks.js?v=20260911104111';
 
 export {
   motionStudioCompositionTracks,
@@ -16,7 +16,7 @@ export {
   motionStudioLayerTracks,
   motionStudioSampleTrack,
   motionStudioVisiblePoints,
-} from './motion_studio_tracks.js?v=20260911102220';
+} from './motion_studio_tracks.js?v=20260911104111';
 
 function pointCurves(layer) {
   return Array.isArray(layer?.point_curves) ? layer.point_curves : [];
@@ -61,11 +61,67 @@ function drawZeroValueAxis(context, padding, plotWidth, plotHeight, minValue, ma
   context.restore();
 }
 
+/** 그래프가 덮어야 할 시간 · 녹화가 데이터 끝을 지나면 그만큼 늘어난다 · §6-79
+ *
+ * 추가 녹화는 **녹화된 것이 끝난 뒤**가 본무대다 · 시간축을 데이터 길이에
+ * 묶어 두면 그 순간부터 플레이헤드가 오른쪽 끝에 붙어 버리고, 사용자는 지금이
+ * 몇 초인지 알 수 없게 된다.
+ */
+/** 잠금 띠 · 재생이 쥔 구간을 축마다 한 줄로 올린다 · §6-79
+ *
+ * 곡선은 모든 축이 한 판에 겹쳐 그려진다 · 잠금까지 곡선 위에 칠하면 축이 둘만
+ * 돼도 무엇이 잠긴 건지 읽을 수 없다. 축마다 얇은 줄을 따로 주고 곡선과 같은
+ * 색을 쓴다 · 색으로 어느 축인지 잇는다.
+ *
+ * 띠가 있는 구간은 **그 축을 MIDI 로 만져도 기록되지 않는다** · 빈 구간이
+ * 녹화할 수 있는 시간이다.
+ */
+function drawOwnedSpanLanes({
+  context, padding, plotWidth, maxTime, colors, motionIds, ownedSpans,
+}) {
+  if (!ownedSpans || !motionIds.length || maxTime <= 0) return 0;
+  const laneHeight = 5;
+  const laneGap = 2;
+  let drawn = 0;
+  motionIds.forEach((motionId, index) => {
+    const spans = ownedSpans[String(motionId)];
+    if (!Array.isArray(spans) || !spans.length) return;
+    const top = padding.top + (drawn * (laneHeight + laneGap)) + 2;
+    context.save();
+    context.fillStyle = colors[index % colors.length];
+    context.globalAlpha = 0.3;
+    spans.forEach((span) => {
+      const start = Math.max(0, Number(span?.[0]) || 0);
+      const end = Math.max(start, Number(span?.[1]) || 0);
+      const left = padding.left + ((Math.min(start, maxTime) / maxTime) * plotWidth);
+      const right = padding.left + ((Math.min(end, maxTime) / maxTime) * plotWidth);
+      context.fillRect(left, top, Math.max(2, right - left), laneHeight);
+    });
+    context.restore();
+    drawn += 1;
+  });
+  return drawn;
+}
+
+
+export function motionStudioGraphTimeSpan(dataDurationSec, playback = {}) {
+  const data = Math.max(0, Number(dataDurationSec) || 0);
+  if (!playback.showPlayhead) return data;
+  const playheadTime = Math.max(0, Number(playback.playheadTime) || 0);
+  if (playheadTime <= data) return data;
+  // 딱 플레이헤드까지만 늘리면 플레이헤드는 늘 오른쪽 끝에 있다 · 시간이
+  // 흐르는 것이 안 보인다. 한 칸씩 앞질러 늘려 플레이헤드가 칸 안을 지나가게
+  // 한다 · 매 프레임 다시 그리지 않으니 곡선도 덜 흔들린다.
+  const chunk = Math.max(5, data);
+  return data + ((Math.floor((playheadTime - data) / chunk) + 1) * chunk);
+}
+
 export function drawMotionStudioLayerGraph({
   canvas,
   playhead,
   tracks,
   playback,
+  ownedSpans = null,
   updatePlayhead = () => {},
   devicePixelRatio = globalThis.devicePixelRatio || 1,
 }) {
@@ -82,6 +138,7 @@ export function drawMotionStudioLayerGraph({
   let maxTime = MOTION_STUDIO_PERIOD_SEC;
   let minValue = 0;
   let maxValue = 0;
+  maxTime = Math.max(maxTime, motionStudioGraphTimeSpan(0, playback));
   for (const points of tracks.values()) {
     pointCount += points.length;
     for (const point of points) {
@@ -115,6 +172,11 @@ export function drawMotionStudioLayerGraph({
   context.fillText('0초', padding.left, height - 10);
   context.fillText(`${maxTime.toFixed(3)}초`, width - padding.right - 58, height - 10);
   const colors = ['#1f6feb', '#d97706', '#16803c', '#a23ab7', '#d33b3b', '#0f8b8d'];
+  drawOwnedSpanLanes({
+    context, padding, plotWidth, maxTime, colors,
+    motionIds: [...tracks.keys()],
+    ownedSpans,
+  });
   [...tracks.entries()].forEach(([, points], index) => {
     context.strokeStyle = colors[index % colors.length];
     context.lineWidth = 2;

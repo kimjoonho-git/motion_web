@@ -548,6 +548,8 @@ class MotionStudioNode(Node):
         self._status['selected_motion_ids'] = list(self._selected_motion_values_locked())
         self._status['recording_motion_ids'] = sorted(self._recorded_motion_ids)
         self._status['record_mode'] = self._record_mode if state == 'recording' else None
+        # 추가 녹화 중 재생이 쥔 구간 · 그래프가 잠금 띠로 그린다 · §6-79
+        self._status['overdub_spans'] = self._recording().take_spans_locked()
 
     def snapshot(self) -> Dict[str, Any]:
         with self._lock:

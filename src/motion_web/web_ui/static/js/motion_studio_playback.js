@@ -1,4 +1,5 @@
-import { MOTION_STUDIO_PERIOD_SEC } from './motion_studio_constants.js?v=20260911102220';
+import { MOTION_STUDIO_PERIOD_SEC } from './motion_studio_constants.js?v=20260911104111';
+import { motionStudioGraphTimeSpan } from './motion_studio_graph.js?v=20260911104111';
 
 export function motionStudioPlaybackView({
   status = {},
@@ -50,6 +51,49 @@ export function motionStudioPlaybackView({
       : String(status?.message || '합성 미리보기를 시작하면 진행 위치가 그래프에 표시됩니다.'),
   };
 }
+
+/** 추가 녹화 안내 한 줄 · 지금 어느 축이 잠겼고 언제 풀리는지 · §6-79
+ *
+ * 그래프의 잠금 띠는 한눈에 보이지만, 페이더를 잡고 있는 사람은 화면을 계속
+ * 보고 있지 않다 · 글로도 알 수 있어야 한다.
+ *
+ * 축이 여럿이면 **일부만 잠긴다** · "지금 녹화가 되는가" 가 아니라 "어느 축이
+ * 되는가" 를 말해야 한다.
+ */
+export function motionStudioOverdubHint(ownedSpans, elapsedSec) {
+  const entries = Object.entries(ownedSpans || {}).filter(
+    ([, spans]) => Array.isArray(spans) && spans.length,
+  );
+  if (!entries.length) return '';
+  const now = Math.max(0, Number(elapsedSec) || 0);
+  const seconds = (value) => `${(Math.round(value * 10) / 10).toFixed(1)}초`;
+
+  const locked = [];
+  let nextLockAt = Infinity;
+  for (const [motionId, spans] of entries) {
+    const active = spans.find(
+      (span) => now >= (Number(span?.[0]) || 0) - 1e-9
+        && now <= (Number(span?.[1]) || 0) + 1e-9,
+    );
+    if (active) {
+      locked.push(`${motionId}(${seconds(Number(active[1]) || 0)}까지)`);
+      continue;
+    }
+    for (const span of spans) {
+      const start = Number(span?.[0]) || 0;
+      if (start > now) nextLockAt = Math.min(nextLockAt, start);
+    }
+  }
+  if (locked.length) {
+    const rest = entries.length - locked.length;
+    return `재생 중 · ${locked.join(', ')} 잠김`
+      + (rest > 0 ? ` · 나머지 축은 녹화됩니다` : ' · 지금은 녹화되지 않습니다');
+  }
+  return Number.isFinite(nextLockAt)
+    ? `전 축 녹화 가능 · ${seconds(nextLockAt)}부터 재생이 시작됩니다`
+    : '전 축 녹화 가능 · 재생할 구간이 끝났습니다';
+}
+
 
 export function syncMotionStudioPlaybackClock(state, currentTime) {
   const runtimeState = String(state.status?.state || 'idle');
@@ -113,9 +157,13 @@ export function createMotionStudioPlaybackController({
     }
     const width = canvas.getBoundingClientRect().width || canvas.clientWidth || 0;
     if (width <= 70) return;
+    // 그래프와 **같은** 시간축을 써야 한다 · 그래프는 녹화가 데이터 끝을
+    // 지나면 축을 늘리는데 여기만 데이터 길이에 묶여 있으면 그 순간부터
+    // 플레이헤드가 오른쪽 끝에 붙어 시간을 알 수 없다 · §6-79
     const graphDuration = Math.max(
       MOTION_STUDIO_PERIOD_SEC,
-      Number(state.detailGraph.duration) || MOTION_STUDIO_PERIOD_SEC,
+      motionStudioGraphTimeSpan(state.detailGraph.duration, playback)
+        || MOTION_STUDIO_PERIOD_SEC,
     );
     const ratio = Math.min(1, Math.max(0, Number(playback.playheadTime) / graphDuration));
     playhead.style.left = `${52 + (ratio * (width - 70))}px`;
@@ -148,7 +196,12 @@ export function createMotionStudioPlaybackController({
     if (el.studioPlaybackProgressBar) {
       el.studioPlaybackProgressBar.style.width = `${(playback.ratio * 100).toFixed(2)}%`;
     }
-    if (el.studioPlaybackMessage) el.studioPlaybackMessage.textContent = playback.message;
+    // 추가 녹화 중에는 지금 어느 축이 잠겼는지를 앞에 세운다 · §6-79
+    const overdubHint = motionStudioOverdubHint(
+      state.status?.overdub_spans, playback.elapsed,
+    );
+    const message = overdubHint || playback.message;
+    if (el.studioPlaybackMessage) el.studioPlaybackMessage.textContent = message;
     if (el.studioPlaybackQuickPhase) {
       el.studioPlaybackQuickPhase.className = `status-chip ${playback.chip}`;
       el.studioPlaybackQuickPhase.textContent = playback.label;
@@ -156,7 +209,7 @@ export function createMotionStudioPlaybackController({
     if (el.studioPlaybackQuickTime) {
       el.studioPlaybackQuickTime.textContent = `${timeText(playback.elapsed)} / ${timeText(playback.total)}`;
     }
-    if (el.studioPlaybackQuickMessage) el.studioPlaybackQuickMessage.textContent = playback.message;
+    if (el.studioPlaybackQuickMessage) el.studioPlaybackQuickMessage.textContent = message;
     return playback;
   }
 
