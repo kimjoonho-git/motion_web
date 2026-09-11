@@ -770,26 +770,25 @@ export function createMotionStudioController({
       el.studioRecordButton.disabled = state.busy || running || !hasProject || !hasMotionAxes || Boolean(motorBlockReason);
       el.studioRecordButton.title = motorBlockReason || '';
     }
-    // 추가 녹화 · 남은 축이 있어야 누를 수 있다 · 없으면 왜 없는지 알린다 · §6-71
-    const overdubAxes = Array.isArray(state.status?.overdub_motion_ids)
-      ? state.status.overdub_motion_ids
-      : [];
+    // 추가 녹화 · 레이어가 있으면 누를 수 있다 · §6-74
+    //
+    // 축을 빼지 않는다 · 재생이 쥐는 것은 축이 아니라 축×시간이다. 녹화된 축도
+    // 그 구간이 끝나면 같은 축을 MIDI 로 이어 녹화할 수 있다.
     const hasLayers = (state.project?.layers || []).length > 0;
     if (el.studioOverdubButton) {
       const blocked = motorBlockReason
-        || (!hasLayers ? '녹화된 레이어가 있어야 추가 녹화를 할 수 있습니다' : '')
-        || (!overdubAxes.length ? '남은 모션축이 없습니다 · 레이어를 끄거나 새 녹화를 하세요' : '');
+        || (!hasLayers ? '녹화된 레이어가 있어야 추가 녹화를 할 수 있습니다' : '');
       el.studioOverdubButton.disabled = (
         state.busy || running || !hasProject || !hasMotionAxes || Boolean(blocked)
       );
       el.studioOverdubButton.title = blocked
-        || `기존 레이어를 두고 ${overdubAxes.join(', ')} 축을 새 레이어로 녹화합니다`;
+        || '녹화된 레이어를 재생하면서 그 위에 새 모션을 얹습니다';
     }
     if (el.studioOverdubHint) {
       el.studioOverdubHint.classList.toggle('hidden', !hasLayers);
-      el.studioOverdubHint.textContent = overdubAxes.length
-        ? `추가 녹화 가능 축 · ${overdubAxes.join(', ')}`
-        : '추가 녹화 가능 축 없음 · 활성 레이어가 모든 축을 쓰고 있습니다';
+      el.studioOverdubHint.textContent = (
+        '추가 녹화 · 녹화된 축은 재생되고, 재생이 끝난 뒤나 빈 축은 MIDI로 기록됩니다'
+      );
     }
     if (el.studioInitializeButton) {
       el.studioInitializeButton.disabled = state.busy || running || !hasProject || !hasMotionAxes || hasConflicts || hasCurveMismatches || Boolean(motorBlockReason);

@@ -95,6 +95,8 @@ class MotionStudioNode(Node):
         self._record_started = 0.0
         self._record_frames: List[Dict[str, Any]] = []
         self._record_eligible_motion_ids: set[str] = set()
+        #: 추가 녹화 중 재생이 쥔 축·시간 · {motion_id: [(시작, 끝), ...]} · §6-74
+        self._record_ownership: Dict[str, list] = {}
         self._recorded_motion_ids: set[str] = set()
         self._record_mode = 'record'
         self._operation_state = StudioOperationStateMachine()

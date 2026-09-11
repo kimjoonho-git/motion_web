@@ -10,7 +10,13 @@ from typing import Any, Dict
 from .constants import DEFAULT_PERIOD_SEC
 from .layer_commands import next_numbered_layer_name
 from .motion_model import layer_motion_ids
-from .timeline import motion_file_text, project_motion_ids, recording_values
+from .timeline import (
+    motion_file_text,
+    render_project,
+    playback_ownership,
+    project_motion_ids,
+    recording_values,
+)
 
 
 class StudioRecordingSession:
@@ -62,21 +68,20 @@ class StudioRecordingSession:
             if not motion_ids:
                 raise ValueError('모션축 설정에 녹화 가능한 Motion ID가 없습니다')
 
-            # 추가 녹화 · 이미 녹화된 축은 대상에서 뺀다.
+            # 추가 녹화 · 축을 빼지 않는다.
             #
-            # 재생을 함께 돌리지 않으므로(모터는 새 축만 움직인다) 축이 겹치면
-            # 두 레이어가 같은 축·같은 시간을 갖게 되어 `layer_conflicts` 가
-            # 합성을 거절한다 · 녹화가 끝난 뒤에 알면 늦으므로 시작할 때 막는다.
+            # 재생이 소유하는 것은 **축이 아니라 축×시간**이다 · 축 1-1 이 10초에
+            # 끝나면 10초 이후에는 같은 축을 MIDI 로 이어 녹화할 수 있어야 한다 ·
+            # 그래서 대상은 전부로 두고 `record_tick` 이 그 시각의 소유만 버린다 ·
+            # §6-74
             if mode == 'overdub':
-                taken = set(project_motion_ids(project))
-                motion_ids = [
-                    motion_id for motion_id in motion_ids if str(motion_id) not in taken
-                ]
-                if not motion_ids:
+                if not project.get('layers'):
                     raise ValueError(
-                        '추가 녹화할 축이 없습니다 · 활성 레이어가 모든 모션축을 '
-                        '이미 쓰고 있습니다. 레이어를 끄거나 새 녹화를 하세요'
+                        '추가 녹화는 녹화된 레이어가 있어야 합니다 · 먼저 녹화하세요'
                     )
+                studio._record_ownership = playback_ownership(project)
+            else:
+                studio._record_ownership = {}
             studio._record_mode = mode
             studio._record_frames = []
             studio._record_eligible_motion_ids = set(motion_ids)
@@ -163,13 +168,20 @@ class StudioRecordingSession:
                     midi_ready.get('message') or 'MIDI SELECT 잠금 해제 실패'
                 )
             midi_locked = False
+            # 추가 녹화는 녹화된 대로 모터를 돌리면서 그 위에 얹는다 · §6-74
+            #
+            # 재생과 녹화가 같은 20ms 타이머 위에서 돈다 · 재생은 축이 끝나면
+            # `axis_release_sec` 로 그 축을 놓고, 녹화는 소유 구간을 버린다.
+            overdub = self.start_overdub_playback(operation_generation)
             with studio._lock:
                 studio._record_started = time.monotonic()
                 studio._record_frames = []
                 studio._recorded_motion_ids = set()
                 studio._set_status_locked(
                     'recording',
-                    '모션 녹화 중 · MIDI SELECT로 움직이는 축을 자동 기록합니다',
+                    '추가 녹화 중 · 녹화된 축은 재생되고 나머지는 MIDI로 기록합니다'
+                    if overdub
+                    else '모션 녹화 중 · MIDI SELECT로 움직이는 축을 자동 기록합니다',
                 )
         except Exception as exc:
             with studio._lock:
@@ -178,6 +190,50 @@ class StudioRecordingSession:
         finally:
             if midi_locked:
                 studio._request_midi('studio_recording_ready', {}, 2.0)
+
+    def start_overdub_playback(self, operation_generation: int) -> bool:
+        """추가 녹화일 때 기존 레이어 재생을 함께 시작한다 · §6-74
+
+        재생은 `axis_release_sec` 로 **축이 끝나면 그 축을 놓는다** · 놓은 축은
+        `CommandArbiter` 에서 풀려 MIDI 가 이어받는다. 그래서 같은 축이라도
+        재생이 끝난 뒤 구간은 MIDI 로 녹화된다.
+
+        일반 녹화면 아무 일도 하지 않고 거짓을 돌려준다.
+        """
+        studio = self.studio
+        with studio._lock:
+            ownership = dict(getattr(studio, '_record_ownership', {}) or {})
+            if studio._record_mode != 'overdub' or not ownership:
+                return False
+            project = dict(studio._require_project_locked())
+            mapping = studio._validate_mapping_locked(project)
+            motion_ids = project_motion_ids(project)
+        if not motion_ids:
+            return False
+        frames = render_project(
+            project,
+            motion_ids=motion_ids,
+            initial_motion_values_deg=studio._manual_initial_values(mapping),
+        )
+        file_id = studio._store.write_motion_file(
+            f'{project["project_id"]}_overdub',
+            motion_file_text(project, frames),
+            hidden=True,
+        )
+        payload = {
+            **studio._run_payload(project, file_id, motion_ids, 0.0),
+            # 축마다 마지막 소유 시각 · 이 뒤로는 명령하지 않는다
+            'axis_release_sec': {
+                motion_id: max(end for _start, end in spans)
+                for motion_id, spans in ownership.items() if spans
+            },
+        }
+        response = studio._request_run_for_operation(
+            'start', payload, 10.0, operation_generation, 'initializing',
+        )
+        if not response.get('success'):
+            raise ValueError(response.get('message') or '추가 녹화 재생 시작 실패')
+        return True
 
     def wait_for_midi_faders_zero(self, timeout: float) -> None:
         """Block motor initialization until all physical MIDI faders are at zero."""
@@ -259,6 +315,26 @@ class StudioRecordingSession:
         ]
         result['recording_preview_stride'] = stride
 
+    def drop_owned_values(self, values: dict, time_sec: float) -> dict:
+        """그 시각에 재생이 쥔 축을 녹화에서 버린다 · §6-74
+
+        `playback_ownership` 이 낸 ``{motion_id: [(시작, 끝), ...]}`` 를 본다 ·
+        구간 안이면 재생이 주인이므로 MIDI 로 만져도 기록하지 않는다. 구간 밖이면
+        같은 축이라도 기록한다 · "축 1-1 이 10초에 끝나면 10초 이후부터 녹화" 가
+        이 규칙이다.
+        """
+        ownership = getattr(self.studio, '_record_ownership', None)
+        if not ownership:
+            return values
+        return {
+            motion_id: value
+            for motion_id, value in values.items()
+            if not any(
+                start - 1e-9 <= time_sec <= end + 1e-9
+                for start, end in ownership.get(str(motion_id), ())
+            )
+        }
+
     def record_tick(self) -> None:
         studio = self.studio
         with studio._lock:
@@ -266,11 +342,16 @@ class StudioRecordingSession:
                 return
             selected = studio._selected_motion_values_locked()
             values = recording_values(selected, studio._record_eligible_motion_ids)
-            studio._recorded_motion_ids.update(values)
             index = len(studio._record_frames) + 1
+            time_sec = round(index * DEFAULT_PERIOD_SEC, 9)
+            # 이 시각에 재생이 쥔 축은 버린다 · 그 축은 MIDI 가 움직여도 기록하지
+            # 않는다. 소유는 축 × 시간이므로 같은 축이라도 재생이 끝난 뒤에는
+            # 기록된다 · §6-74
+            values = self.drop_owned_values(values, time_sec)
+            studio._recorded_motion_ids.update(values)
             frame = {
                 'frame': index,
-                'time_sec': round(index * DEFAULT_PERIOD_SEC, 9),
+                'time_sec': time_sec,
                 'values': values,
             }
             studio._record_frames.append(frame)

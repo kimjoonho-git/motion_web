@@ -65,14 +65,31 @@ def _source():
     ).read_text(encoding='utf-8')
 
 
-def test_overdub_narrows_the_eligible_set_at_start():
-    """시작할 때 대상 축을 좁힌다 · 끝난 뒤에 알면 한 번을 헛돌린다."""
+def test_overdub_keeps_every_axis_and_owns_by_time():
+    """축을 빼지 않는다 · 재생이 쥐는 것은 축이 아니라 축×시간이다 · §6-74
+
+    축 1-1 이 10초에 끝나면 10초 이후에는 같은 축을 MIDI 로 이어 녹화할 수 있어야
+    한다 · 축을 통째로 빼면 그게 불가능하다.
+    """
     source = _source()
     start = source.index('def start(')
     body = source[start:source.index('\n    def ', start)]
     assert "if mode == 'overdub':" in body
-    assert 'project_motion_ids(project)' in body
-    assert '추가 녹화할 축이 없습니다' in body
+    assert 'playback_ownership(project)' in body
+    assert '녹화된 레이어가 있어야' in body
+    # 축을 통째로 빼던 옛 규칙은 없어야 한다
+    assert 'project_motion_ids(project)' not in body
+
+
+def test_recording_drops_axes_owned_at_that_moment():
+    source = _source()
+    start = source.index('def drop_owned_values(')
+    body = source[start:source.index('\n    def ', start)]
+    assert '_record_ownership' in body
+    assert 'start - 1e-9 <= time_sec <= end + 1e-9' in body, '시간 구간을 보지 않는다'
+
+    tick = source[source.index('def record_tick('):]
+    assert 'self.drop_owned_values(values, time_sec)' in tick[:900]
 
 
 def test_append_stays_parked_until_layers_have_a_start_time():
@@ -84,3 +101,65 @@ def test_append_stays_parked_until_layers_have_a_start_time():
     assert '레이어 시작 시각' in body
     # 추가 녹화는 더 이상 함께 막히지 않는다
     assert "mode in {'overdub', 'append'}" not in body
+
+
+class _OwningStudio:
+    """`drop_owned_values` 만 보기 위한 최소 대역 · §6-74"""
+
+    def __init__(self, ownership):
+        self._record_ownership = ownership
+
+
+def _drop(ownership, values, time_sec):
+    return StudioRecordingSession(_OwningStudio(ownership)).drop_owned_values(
+        values, time_sec,
+    )
+
+
+def test_owned_axis_is_not_recorded_while_playback_holds_it():
+    owned = {'1-1': [(0.02, 10.0)]}
+    assert _drop(owned, {'1-1': 5.0, '1-2': 7.0}, 4.0) == {'1-2': 7.0}
+
+
+def test_the_same_axis_records_again_after_playback_ends():
+    """축 1-1 이 10초에 끝나면 10초 이후부터 MIDI 로 이어 녹화된다."""
+    owned = {'1-1': [(0.02, 10.0)]}
+    assert _drop(owned, {'1-1': 5.0}, 10.02) == {'1-1': 5.0}
+
+
+def test_the_boundary_moment_still_belongs_to_playback():
+    owned = {'1-1': [(0.02, 10.0)]}
+    assert _drop(owned, {'1-1': 5.0}, 10.0) == {}
+
+
+def test_a_gap_between_owned_ranges_is_recordable():
+    owned = {'1-1': [(0.02, 1.0), (5.0, 6.0)]}
+    assert _drop(owned, {'1-1': 5.0}, 3.0) == {'1-1': 5.0}
+    assert _drop(owned, {'1-1': 5.0}, 5.5) == {}
+
+
+def test_plain_recording_drops_nothing():
+    """일반 녹화는 소유가 없다 · 지금과 똑같이 전부 기록한다."""
+    assert _drop({}, {'1-1': 5.0}, 3.0) == {'1-1': 5.0}
+    assert _drop(None, {'1-1': 5.0}, 3.0) == {'1-1': 5.0}
+
+
+def test_overdub_starts_playback_with_per_axis_release():
+    """재생과 녹화가 함께 돈다 · 재생은 축이 끝나면 놓는다 · §6-74"""
+    source = _source()
+    start = source.index('def start_overdub_playback(')
+    body = source[start:source.index('\n    def ', start)]
+
+    assert "studio._record_mode != 'overdub'" in body, '일반 녹화에서도 재생한다'
+    assert 'render_project(' in body, '레이어를 합성하지 않는다'
+    assert "'start', payload" in body, '재생을 시작하지 않는다'
+    assert "'axis_release_sec'" in body, '축별 종료 시각을 주지 않는다'
+    # 축마다 마지막 소유 시각까지만 몬다
+    assert 'max(end for _start, end in spans)' in body
+
+
+def test_plain_recording_does_not_start_playback():
+    source = _source()
+    start = source.index('def prepare(')
+    body = source[start:source.index('\n    def ', start)]
+    assert 'self.start_overdub_playback(operation_generation)' in body
