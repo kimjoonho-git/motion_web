@@ -203,6 +203,10 @@ class StudioPlaybackSession:
         추가 녹화는 초기 이동과 카운트다운을 실행 노드에 맡긴다 · 그 진행이
         화면에 안 보이면 사용자는 멈춘 화면을 3~10초 동안 본다.
 
+        **매번** 받아 적는다 · 단계가 바뀔 때만 적었더니 "모션 시작 3초 전" 에서
+        글이 얼어붙어 2초·1초로 내려가지 않았다 · 멈춘 화면과 다를 바가 없다 ·
+        §6-89
+
         시작한 뒤로는 받지 않는다 · 재생이 끝났다고 녹화까지 끝내면 녹화된
         구간 뒤가 통째로 사라진다 · 그게 §6-76 이었다.
         """
@@ -210,15 +214,15 @@ class StudioPlaybackSession:
         if take.phase == 'running':
             return
         run_state = str(payload.get('state') or '')
+        if run_state in {'running', 'verifying', 'completed', 'stopped', 'error'}:
+            # 재생이 돌기 시작했다 · 여기서부터는 녹화 절차가 이끈다
+            return
+        phase = 'countdown' if run_state == 'countdown' else 'preparing'
+        studio._takes().advance(
+            phase,
+            str(payload.get('message') or take.message),
+        )
         progress = payload.get('progress')
-        if run_state == 'countdown' and take.phase != 'countdown':
-            studio._takes().advance(
-                'countdown', str(payload.get('message') or '녹화 시작 대기'),
-            )
-        elif run_state == 'initializing' and take.phase == 'preparing':
-            studio._takes().advance(
-                'preparing', str(payload.get('message') or '초기 위치 이동 중'),
-            )
         if isinstance(progress, dict):
             studio._takes().phase_tick(
                 float(progress.get('elapsed_sec') or 0.0),

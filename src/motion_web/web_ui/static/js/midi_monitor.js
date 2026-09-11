@@ -8,8 +8,8 @@ import {
   resetMidiRuntimeValues,
   selectMidiBank,
   updateMidiBank,
-} from './api.js?v=20260911120155';
-import { showConfirm } from './ui_dialogs.js?v=20260911120155';
+} from './api.js?v=20260911121056';
+import { showConfirm } from './ui_dialogs.js?v=20260911121056';
 
 const MIDI_MAX = 16383;
 const CHANNEL_COUNT = 8;

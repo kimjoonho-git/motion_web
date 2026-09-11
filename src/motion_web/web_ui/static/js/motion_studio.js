@@ -1,4 +1,4 @@
-import { escapeHtml } from './format.js?v=20260911120155';
+import { escapeHtml } from './format.js?v=20260911121056';
 import {
   commitMotionStudioMerge,
   createMotionStudioLayer,
@@ -16,7 +16,7 @@ import {
   startMotionStudioRecord,
   stopMotionStudio,
   updateMotionStudioLayer,
-} from './api.js?v=20260911120155';
+} from './api.js?v=20260911121056';
 import {
   applyMotionStudioProjectPatch, motionStudioCanCreatePointCurve,
   motionStudioCanSwitchPointDraftCurve, motionStudioCanvasEventPoint,
@@ -33,13 +33,13 @@ import {
   motionStudioPointRangeTargetsMatch, motionStudioRuntimeStatusMessage,
   motionStudioShouldProtectPointAxisSelection, motionStudioSnapFrameTime,
   resolveMotionStudioSelectedLayerId, synchronizeMotionStudioEditorTimeline,
-} from './motion_studio_calculations.js?v=20260911120155';
-import { createMotionStudioGraphPainter } from './motion_studio_graph_render.js?v=20260911120155';
-import { createMotionStudioRecordingPreview } from './motion_studio_recording_preview.js?v=20260911120155';
+} from './motion_studio_calculations.js?v=20260911121056';
+import { createMotionStudioGraphPainter } from './motion_studio_graph_render.js?v=20260911121056';
+import { createMotionStudioRecordingPreview } from './motion_studio_recording_preview.js?v=20260911121056';
 import {
   motionStudioCompositionTracks as compositionTracks,
   motionStudioLayerTracks as layerTracks,
-} from './motion_studio_graph.js?v=20260911120155';
+} from './motion_studio_graph.js?v=20260911121056';
 import {
   bindMotionStudioEvent,
   bindMotionStudioProjectTransportEvents,
@@ -48,32 +48,32 @@ import {
   motionStudioExportResultMessage,
   resetMotionStudioProjectState,
   setMotionStudioMessage,
-} from './motion_studio_ui.js?v=20260911120155';
+} from './motion_studio_ui.js?v=20260911121056';
 import {
   motionStudioEditorAxisLabel,
-} from './motion_studio_editor_ui.js?v=20260911120155';
+} from './motion_studio_editor_ui.js?v=20260911121056';
 import {
   createMotionStudioPlaybackController,
-} from './motion_studio_playback.js?v=20260911120155';
+} from './motion_studio_playback.js?v=20260911121056';
 import {
   renderMotionStudioLayerManager,
-} from './motion_studio_layer_manager.js?v=20260911120155';
+} from './motion_studio_layer_manager.js?v=20260911121056';
 import {
   MOTION_STUDIO_PERIOD_SEC,
-} from './motion_studio_constants.js?v=20260911120155';
+} from './motion_studio_constants.js?v=20260911121056';
 import {
   createMotionStudioLayerController, closeMotionStudioLayerManager, openMotionStudioLayerManager,
   selectMotionStudioLayer,
   updateMotionStudioMergeSelection,
-} from './motion_studio_layer_controller.js?v=20260911120155';
+} from './motion_studio_layer_controller.js?v=20260911121056';
 import {
   createMotionStudioEditorController,
-} from './motion_studio_editor_controller.js?v=20260911120155';
-import { motionStudioEditorPointCurves } from './motion_studio_editor_state.js?v=20260911120155';
+} from './motion_studio_editor_controller.js?v=20260911121056';
+import { motionStudioEditorPointCurves } from './motion_studio_editor_state.js?v=20260911121056';
 import {
   createMotionStudioRequestFence,
-} from './motion_studio_controller_events.js?v=20260911120155';
-import { showAlert, showConfirm } from './ui_dialogs.js?v=20260911120155';
+} from './motion_studio_controller_events.js?v=20260911121056';
+import { showAlert, showConfirm } from './ui_dialogs.js?v=20260911121056';
 export {
   applyMotionStudioProjectPatch, motionStudioCanCreatePointCurve,
   motionStudioCanSwitchPointDraftCurve, motionStudioCanvasEventPoint,
@@ -547,13 +547,21 @@ export function createMotionStudioController({
       enabledLayerCount: composition.enabledLayers.length,
       compositionMode,
     };
+    // 추가 녹화는 누른 뒤 초기 이동과 카운트다운으로 몇 초가 지나간다 · §6-89
+    //
+    // 그동안 머리말이 "재생 선택 레이어 합성 결과" 였다 · 지금 무슨 일이
+    // 벌어지는지도, 화면의 잠금 띠가 무엇인지도 말해 주지 않았다.
+    const overdubLeadIn = String(state.status?.record_mode || '') === 'overdub'
+      && String(state.status?.state || '') === 'initializing';
     if (el.studioLayerDetailName) {
-      el.studioLayerDetailName.textContent = compositionMode
-        ? '재생 선택 레이어 합성 결과'
-        : (layer?.name || '이름 없음');
+      el.studioLayerDetailName.textContent = overdubLeadIn
+        ? '추가 녹화 준비 중'
+        : (compositionMode ? '재생 선택 레이어 합성 결과' : (layer?.name || '이름 없음'));
     }
     if (el.studioLayerDetailStatus) {
-      el.studioLayerDetailStatus.textContent = !layers.length
+      el.studioLayerDetailStatus.textContent = overdubLeadIn
+        ? '초기 위치로 이동한 뒤 재생과 함께 녹화가 시작됩니다 · 띠 구간은 MIDI 잠김'
+        : !layers.length
         ? '레이어를 추가하면 정보가 표시됩니다'
         : compositionMode
           ? `재생 선택 ${composition.enabledLayers.length}개 / 전체 ${layers.length}개 · ${

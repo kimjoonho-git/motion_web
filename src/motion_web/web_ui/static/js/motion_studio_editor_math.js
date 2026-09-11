@@ -1,5 +1,5 @@
-import { MOTION_STUDIO_PERIOD_SEC } from './motion_studio_constants.js?v=20260911120155';
-import { motionStudioLayerDuration } from './motion_studio_project_model.js?v=20260911120155';
+import { MOTION_STUDIO_PERIOD_SEC } from './motion_studio_constants.js?v=20260911121056';
+import { motionStudioLayerDuration } from './motion_studio_project_model.js?v=20260911121056';
 
 export function motionStudioEditorValueBounds(
   minimum,

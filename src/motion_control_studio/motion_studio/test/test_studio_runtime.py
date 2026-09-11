@@ -476,13 +476,16 @@ def test_overdub_shows_the_run_node_countdown_before_it_starts():
     assert node._status['phase_elapsed_sec'] == 2.0
     assert node._status['phase_total_sec'] == 5.0
 
-    node._run_status_callback(_run_status(
-        'countdown', message='녹화 시작 2초 전',
-        progress={'elapsed_sec': 1.0, 'duration_sec': 3.0},
-    ))
-    assert node._status['phase'] == 'countdown'
-    assert node._status['message'] == '녹화 시작 2초 전'
-    assert node._status['state'] == 'initializing', '카운트다운에 상태가 뒤집혔다'
+    for count, elapsed in ((3, 0.2), (2, 1.2), (1, 2.2)):
+        node._run_status_callback(_run_status(
+            'countdown', message=f'녹화 시작 {count}초 전',
+            progress={'elapsed_sec': elapsed, 'duration_sec': 3.0},
+        ))
+        # 단계가 바뀔 때만 적었더니 "3초 전" 에서 얼어붙었다 · §6-89
+        assert node._status['message'] == f'녹화 시작 {count}초 전', '카운트다운이 멈췄다'
+        assert node._status['phase'] == 'countdown'
+        assert node._status['state'] == 'initializing', '카운트다운에 상태가 뒤집혔다'
+        assert node._status['phase_elapsed_sec'] == elapsed
 
 
 def test_the_run_node_cannot_end_an_overdub_take_once_recording_starts():

@@ -1,13 +1,13 @@
-import { escapeHtml } from './format.js?v=20260911120155';
-import { motionStudioEditorValueBounds } from './motion_studio_editor_math.js?v=20260911120155';
-import { motionStudioPointCurvePreview } from './motion_studio_point_model.js?v=20260911120155';
-import { MOTION_STUDIO_PERIOD_SEC } from './motion_studio_constants.js?v=20260911120155';
+import { escapeHtml } from './format.js?v=20260911121056';
+import { motionStudioEditorValueBounds } from './motion_studio_editor_math.js?v=20260911121056';
+import { motionStudioPointCurvePreview } from './motion_studio_point_model.js?v=20260911121056';
+import { MOTION_STUDIO_PERIOD_SEC } from './motion_studio_constants.js?v=20260911121056';
 import {
   motionStudioDisplaySegments,
   motionStudioEditorIssueTimes,
   motionStudioLayerTracks,
   motionStudioVisiblePoints,
-} from './motion_studio_tracks.js?v=20260911120155';
+} from './motion_studio_tracks.js?v=20260911121056';
 
 export {
   motionStudioCompositionTracks,
@@ -16,7 +16,7 @@ export {
   motionStudioLayerTracks,
   motionStudioSampleTrack,
   motionStudioVisiblePoints,
-} from './motion_studio_tracks.js?v=20260911120155';
+} from './motion_studio_tracks.js?v=20260911121056';
 
 function pointCurves(layer) {
   return Array.isArray(layer?.point_curves) ? layer.point_curves : [];
