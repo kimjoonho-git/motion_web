@@ -107,6 +107,11 @@ class MidiControlNode(Node):
                 topics.MOTION_MAPPING_RESPONSE,
             ).value
         )
+        self.midi_motion_values_topic = str(
+            self.declare_parameter(
+                'midi_motion_values_topic', topics.MIDI_MOTION_VALUES
+            ).value
+        )
         self.motor_request_topic = str(
             self.declare_parameter(
                 'motor_request_topic', topics.MIDI_POSITION_REQUEST
@@ -274,6 +279,13 @@ class MidiControlNode(Node):
         )
         self._motor_request_publisher = self.create_publisher(
             String, self.motor_request_topic, 10
+        )
+        # 연동된 PC 로 중계될 모션값 · 깊이 1 · §6-93
+        #
+        # 20ms 마다 새 값이 나온다 · 밀린 값을 쌓아 두면 늦게 도착해 모터가
+        # 지난 자리로 되돌아간다 · 최신 하나만 들고 있으면 된다.
+        self._midi_motion_values_publisher = self.create_publisher(
+            String, self.midi_motion_values_topic, 1
         )
         motion_value_qos = QoSProfile(
             depth=10,
@@ -927,8 +939,42 @@ class MidiControlNode(Node):
     def _publish_motor_request_batch(self) -> None:
         with self._lock:
             payload = self._take_motor_request_batch_locked()
+            values = self._live_motion_values_locked()
         if payload is not None:
             self._publish_json(self._motor_request_publisher, payload)
+        # 모터 명령과 **같은 주기·같은 값**으로 내보낸다 · §6-93
+        #
+        # 상태 토픽(10Hz)에서 긁어 가면 값이 듬성듬성해져 남의 모터가 끊겨
+        # 움직인다 · 여기가 값이 만들어지는 자리다.
+        publisher = getattr(self, '_midi_motion_values_publisher', None)
+        if publisher is not None:
+            self._publish_json(publisher, {
+                'stamp': time.time(),
+                'values': values,
+                'active': bool(values),
+            })
+
+    def _live_motion_values_locked(self) -> Dict[str, float]:
+        """지금 MIDI 가 실제로 몰고 있는 모션값 · 연동된 PC 로 보낼 것 · §6-93
+
+        Pickup 대기 중인 라인은 뺀다 · 물리 페이더가 아직 모터를 못 따라잡은
+        값이라, 그대로 보내면 **받는 PC 의 모터가 튄다**.
+        """
+        control_enabled = getattr(self, '_control_enabled', None)
+        if not control_enabled:
+            return {}
+        self._ensure_approved_command_state_locked()
+        values: Dict[str, float] = {}
+        for channel in range(MIDI_CHANNEL_COUNT):
+            if not control_enabled[channel]:
+                continue
+            if self._pickup.pending[channel]:
+                continue
+            for motion_id, value in (self._approved_motion_values[channel] or {}).items():
+                number = _finite_float(value)
+                if number is not None:
+                    values[str(motion_id)] = float(number)
+        return values
 
     def _deactivate_control_channel_locked(
         self, channel: int, *, request_motor_hold: bool = True
