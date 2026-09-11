@@ -1,5 +1,5 @@
-import { MOTION_STUDIO_PERIOD_SEC } from './motion_studio_constants.js?v=20260911104111';
-import { motionStudioGraphTimeSpan } from './motion_studio_graph.js?v=20260911104111';
+import { MOTION_STUDIO_PERIOD_SEC } from './motion_studio_constants.js?v=20260911110233';
+import { motionStudioGraphTimeSpan } from './motion_studio_graph.js?v=20260911110233';
 
 export function motionStudioPlaybackView({
   status = {},
@@ -14,17 +14,20 @@ export function motionStudioPlaybackView({
   const playing = runtimeState === 'playing';
   const recording = runtimeState === 'recording';
   const stopping = runtimeState === 'stopping';
-  const progress = status?.runtime_progress || {};
-  const initializationProgress = status?.initialization_progress || {};
-  const sourceElapsed = playing || stopping
-    ? Math.max(0, Number(progress.elapsed_sec ?? status?.elapsed_sec) || 0)
-    : recording ? Math.max(0, Number(status?.elapsed_sec) || 0) : 0;
+  // 시간은 테이크 하나에서 온다 · §6-81
+  //
+  // 전에는 `runtime_progress` · `initialization_progress` · `elapsed_sec` ·
+  // `playback_duration_sec` 중 **어느 게 진짜인지가 상태에 달려 있었고**,
+  // 여기서 그 퍼즐을 매번 다시 풀었다 · 녹화 중의 축 길이를 놓쳐 플레이헤드가
+  // 멈춘 것이 그 대가였다 · §6-79
+  const sourceElapsed = Math.max(0, Number(status?.elapsed_sec) || 0);
   const elapsed = clock && clock.runtimeState === runtimeState
     ? Math.max(0, clock.sourceElapsed + ((now() - clock.receivedAt) / 1000))
     : sourceElapsed;
-  const total = recording
-    ? Math.max(elapsed, Number(duration) || 0)
-    : Math.max(0, Number(status?.playback_duration_sec) || Number(duration) || 0);
+  const total = Math.max(
+    recording ? elapsed : 0,
+    Number(status?.total_sec) || Number(duration) || 0,
+  );
   let label = '대기'; let chip = 'off'; let displayState = 'idle';
   if (runtimeState === 'error') {
     label = '오류'; chip = 'danger'; displayState = 'error';
@@ -39,18 +42,46 @@ export function motionStudioPlaybackView({
   } else if (recording) {
     label = '녹화 중'; chip = 'on'; displayState = 'recording';
   }
-  const initElapsed = Math.max(0, Number(initializationProgress.elapsed_sec) || 0);
-  const initDuration = Math.max(0, Number(initializationProgress.duration_sec) || 0);
+  // 단계 진행은 테이크 시계와 별개다 · 초기 이동 3.2 / 5.0 초 같은 것
+  const phaseElapsed = Math.max(0, Number(status?.phase_elapsed_sec) || 0);
+  const phaseTotal = Math.max(0, Number(status?.phase_total_sec) || 0);
   return {
     runtimeState, displayState, label, chip, elapsed, total,
     ratio: total > 0 ? Math.min(1, elapsed / total) : 0,
     showPlayhead: initializing || playing || stopping || recording,
     playheadTime: playing || stopping || recording ? Math.min(total, elapsed) : 0,
-    message: initializing && phase !== 'countdown' && initDuration > 0
-      ? `초기 위치 이동 ${timeText(initElapsed)} / ${timeText(initDuration)} · 완료 후 3초 준비 뒤 재생합니다.`
+    message: initializing && phase !== 'countdown' && phaseTotal > 0
+      ? `초기 위치 이동 ${timeText(phaseElapsed)} / ${timeText(phaseTotal)} · 완료 후 3초 준비 뒤 재생합니다.`
       : String(status?.message || '합성 미리보기를 시작하면 진행 위치가 그래프에 표시됩니다.'),
   };
 }
+
+export function syncMotionStudioPlaybackClock(state, currentTime) {
+  const runtimeState = String(state.status?.state || 'idle');
+  const sourceElapsed = Math.max(0, Number(state.status?.elapsed_sec) || 0);
+  const running = ['playing', 'recording'].includes(runtimeState);
+  const previous = state.playbackClock;
+  if (!running) {
+    state.playbackClock = null;
+    return null;
+  }
+  if (
+    !previous
+    || previous.runtimeState !== runtimeState
+    || Math.abs(previous.sourceElapsed - sourceElapsed) > 0.0005
+  ) {
+    const previousEstimate = previous && previous.runtimeState === runtimeState
+      ? previous.sourceElapsed + ((currentTime - previous.receivedAt) / 1000)
+      : sourceElapsed;
+    state.playbackClock = {
+      runtimeState,
+      sourceElapsed: Math.max(sourceElapsed, previousEstimate),
+      receivedAt: currentTime,
+    };
+  }
+  return state.playbackClock;
+}
+
 
 /** 추가 녹화 안내 한 줄 · 지금 어느 축이 잠겼고 언제 풀리는지 · §6-79
  *
@@ -95,36 +126,6 @@ export function motionStudioOverdubHint(ownedSpans, elapsedSec) {
 }
 
 
-export function syncMotionStudioPlaybackClock(state, currentTime) {
-  const runtimeState = String(state.status?.state || 'idle');
-  const progress = state.status?.runtime_progress || {};
-  const sourceElapsed = runtimeState === 'playing' || runtimeState === 'stopping'
-    ? Math.max(0, Number(progress.elapsed_sec ?? state.status?.elapsed_sec) || 0)
-    : runtimeState === 'recording'
-      ? Math.max(0, Number(state.status?.elapsed_sec) || 0)
-      : 0;
-  const running = ['playing', 'recording'].includes(runtimeState);
-  const previous = state.playbackClock;
-  if (!running) {
-    state.playbackClock = null;
-    return null;
-  }
-  if (
-    !previous
-    || previous.runtimeState !== runtimeState
-    || Math.abs(previous.sourceElapsed - sourceElapsed) > 0.0005
-  ) {
-    const previousEstimate = previous && previous.runtimeState === runtimeState
-      ? previous.sourceElapsed + ((currentTime - previous.receivedAt) / 1000)
-      : sourceElapsed;
-    state.playbackClock = {
-      runtimeState,
-      sourceElapsed: Math.max(sourceElapsed, previousEstimate),
-      receivedAt: currentTime,
-    };
-  }
-  return state.playbackClock;
-}
 
 export function createMotionStudioPlaybackController({
   state,

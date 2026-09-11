@@ -44,6 +44,14 @@ class StudioTake:
     message: str
     ownership: Mapping[str, Any] = field(default_factory=dict)
 
+    #: 이 테이크의 시계 · 진행 단계에서만 뜻이 있다 · §6-81
+    elapsed_sec: float = 0.0
+    total_sec: float = 0.0
+
+    #: 지금 단계의 진행 · 초기 이동 3.2/5.0 초 같은 것 · 테이크 시계와 다르다
+    phase_elapsed_sec: float = 0.0
+    phase_total_sec: float = 0.0
+
     def __post_init__(self) -> None:
         if self.kind not in KINDS:
             raise ValueError(f'알 수 없는 테이크 종류: {self.kind}')
@@ -92,13 +100,41 @@ class StudioTake:
     def with_message(self, message: str) -> 'StudioTake':
         return replace(self, message=message)
 
+    def timed(self, elapsed_sec: float, total_sec: float) -> 'StudioTake':
+        return replace(
+            self,
+            elapsed_sec=max(0.0, float(elapsed_sec)),
+            total_sec=max(0.0, float(total_sec)),
+        )
+
+    def phase_timed(self, elapsed_sec: float, total_sec: float) -> 'StudioTake':
+        return replace(
+            self,
+            phase_elapsed_sec=max(0.0, float(elapsed_sec)),
+            phase_total_sec=max(0.0, float(total_sec)),
+        )
+
 
 def take_status_fields(take: Optional[StudioTake]) -> Dict[str, Any]:
-    """화면으로 나가는 테이크 관련 필드 · 테이크 하나에서만 나온다."""
+    """화면으로 나가는 테이크 관련 필드 · 테이크 하나에서만 나온다 · §6-81
+
+    시간도 여기서 나온다 · 전에는 `elapsed_sec` · `playback_duration_sec` ·
+    `runtime_progress` · `initialization_progress` · `countdown_progress` 다섯
+    군데에 흩어져 있었고, **어느 게 진짜인지가 상태에 달려 있었다** · 화면이
+    그걸 다시 조립하다 녹화 중의 축 길이를 놓쳐 플레이헤드가 멈췄다 · §6-79
+    """
     if take is None:
-        return {'record_mode': None, 'overdub_spans': {}}
+        return {
+            'record_mode': None, 'overdub_spans': {},
+            'elapsed_sec': 0.0, 'total_sec': 0.0,
+            'phase_elapsed_sec': 0.0, 'phase_total_sec': 0.0,
+        }
     return {
         'record_mode': take.kind if take.records else None,
+        'elapsed_sec': round(take.elapsed_sec, 3),
+        'total_sec': round(take.total_sec, 3),
+        'phase_elapsed_sec': round(take.phase_elapsed_sec, 3),
+        'phase_total_sec': round(take.phase_total_sec, 3),
         'overdub_spans': {
             str(motion_id): [[float(start), float(end)] for start, end in spans]
             for motion_id, spans in (take.ownership or {}).items() if spans
@@ -162,6 +198,22 @@ class StudioTakeBoard:
         self.take = None
         self.resting_state = 'error'
         self.studio._project_status_locked(message)
+
+    def tick(self, elapsed_sec: float, total_sec: float) -> None:
+        """테이크 시계를 옮긴다 · 50Hz 로 불리므로 상태 전체를 다시 세우지 않는다."""
+        if self.take is None:
+            return
+        self.take = self.take.timed(elapsed_sec, total_sec)
+        self.studio._status['elapsed_sec'] = round(self.take.elapsed_sec, 3)
+        self.studio._status['total_sec'] = round(self.take.total_sec, 3)
+
+    def phase_tick(self, elapsed_sec: float, total_sec: float) -> None:
+        """지금 단계의 진행 · 초기 이동 3.2/5.0 초 같은 것."""
+        if self.take is None:
+            return
+        self.take = self.take.phase_timed(elapsed_sec, total_sec)
+        self.studio._status['phase_elapsed_sec'] = round(self.take.phase_elapsed_sec, 3)
+        self.studio._status['phase_total_sec'] = round(self.take.phase_total_sec, 3)
 
     def note_idle(self, message: str) -> None:
         """테이크 없이 안내만 바꾼다 · 프로젝트 열기·삭제 같은 일."""

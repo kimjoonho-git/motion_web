@@ -86,18 +86,13 @@ class StudioPlaybackSession:
             operation_generation = studio._takes().begin(
                 'preview', '합성 미리보기 초기 위치 이동 중',
             )
-            studio._status.update({
-                'elapsed_sec': 0.0,
-                'playback_duration_sec': max(
-                    (float(frame.get('time_sec') or 0.0) for frame in frames),
-                    default=0.0,
-                ),
-                'playback_layer_count': sum(
-                    1 for layer in project.get('layers', []) if layer.get('enabled', True)
-                ),
-                'runtime_progress': {},
-                'initialization_progress': {},
-            })
+            studio._takes().tick(0.0, max(
+                (float(frame.get('time_sec') or 0.0) for frame in frames),
+                default=0.0,
+            ))
+            studio._status['playback_layer_count'] = sum(
+                1 for layer in project.get('layers', []) if layer.get('enabled', True)
+            )
         threading.Thread(
             target=self.prepare_playback,
             args=(
@@ -172,40 +167,29 @@ class StudioPlaybackSession:
             )
         if (
             payload.get('request_source') == 'motion_studio'
-            and studio_state in {'initializing', 'playing', 'stopping'}
             and isinstance(progress, dict)
+            and studio._take is not None
         ):
-            studio._status['runtime_progress'] = dict(progress)
+            # 테이크 시계인가 단계 진행인가 · 그 둘뿐이다 · §6-81
+            elapsed = float(progress.get('elapsed_sec') or 0.0)
+            total = float(progress.get('duration_sec') or 0.0)
             studio._status['updated_at'] = time.time()
-            if studio_state == 'initializing' and run_state in {'initializing', 'initialized'}:
-                studio._status['initialization_progress'] = dict(progress)
-            elif studio_state == 'initializing' and run_state == 'countdown':
-                studio._status['countdown_progress'] = dict(progress)
-            elif studio_state == 'playing' and run_state in {'running', 'verifying'}:
-                studio._status['elapsed_sec'] = float(progress.get('elapsed_sec') or 0.0)
-                studio._status['playback_duration_sec'] = float(
-                    progress.get('duration_sec')
-                    or studio._status.get('playback_duration_sec')
-                    or 0.0
+            if run_state in {'running', 'verifying'}:
+                studio._takes().tick(
+                    elapsed, total or studio._take.total_sec,
                 )
+            else:
+                studio._takes().phase_tick(elapsed, total)
         if (
             studio_state in {'initializing', 'playing'}
             and payload.get('request_source') == 'motion_studio'
             and payload.get('state') in {'completed', 'error', 'stopped'}
         ):
-            final_progress = dict(progress) if isinstance(progress, dict) else {}
             message = str(payload.get('message') or '합성 미리보기 종료')
             if payload.get('state') == 'error':
                 studio._takes().fail(message)
             else:
                 studio._takes().finish(message)
-            studio._status['runtime_progress'] = final_progress
-            studio._status['elapsed_sec'] = float(final_progress.get('elapsed_sec') or 0.0)
-            studio._status['playback_duration_sec'] = float(
-                final_progress.get('duration_sec')
-                or studio._status.get('playback_duration_sec')
-                or 0.0
-            )
 
     def start_initial_position(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         studio = self.studio
@@ -238,11 +222,7 @@ class StudioPlaybackSession:
             operation_generation = studio._takes().begin(
                 'initialize', '초기 위치 이동 중',
             )
-            studio._status.update({
-                'elapsed_sec': 0.0,
-                'runtime_progress': {},
-                'initialization_progress': {},
-            })
+
         threading.Thread(
             target=self.prepare_initial_position,
             args=(project, file_id, motion_ids, move_time, operation_generation),

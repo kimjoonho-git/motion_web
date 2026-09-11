@@ -2,6 +2,7 @@ import threading
 
 import pytest
 
+from motion_studio.take import StudioTake
 from motion_studio.studio_node import (
     MotionStudioNode,
     next_numbered_layer_name,
@@ -77,27 +78,23 @@ def test_incremental_composition_rechecks_affected_axis_and_keeps_other_axis():
     assert {item['motion_id'] for item in updated['conflicts']} == {'2-2'}
 
 
-def test_terminal_status_clears_playback_and_progress_metadata():
+def test_a_failed_take_leaves_no_stale_time_behind():
+    """테이크가 끝나면 그 시계도 함께 끝난다 · 남으면 다음 작업의 그래프가
+    지난 테이크의 길이로 그려진다 · §6-81"""
     node = MotionStudioNode.__new__(MotionStudioNode)
-    node._status = {
-        'state': 'playing',
-        'runtime_progress': {'ratio': 0.5},
-        'initialization_progress': {'ratio': 1.0},
-        'playback_duration_sec': 12.0,
-        'playback_layer_count': 3,
-    }
+    node._status = {'state': 'playing', 'playback_layer_count': 3}
     node._current_project = None
     node._store = type('Store', (), {'summary': staticmethod(lambda project: project)})()
     node._selected_motion_values_locked = lambda: {}
     node._recorded_motion_ids = set()
-    node._record_mode = 'record'
+    node._takes().take = StudioTake('preview', 'running', 1, '').timed(6.0, 12.0)
 
     node._takes().fail('재생 실패')
 
     assert node._status['message'] == '재생 실패'
-    assert node._status['runtime_progress'] == {}
-    assert node._status['initialization_progress'] == {}
-    assert node._status['playback_duration_sec'] == 0.0
+    assert node._status['state'] == 'error'
+    assert node._status['elapsed_sec'] == 0.0
+    assert node._status['total_sec'] == 0.0
     assert node._status['playback_layer_count'] == 0
 
 

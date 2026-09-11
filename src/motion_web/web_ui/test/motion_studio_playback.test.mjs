@@ -17,8 +17,8 @@ test('playback view reports initialization, playback, recording, and errors', ()
   const playing = motionStudioPlaybackView({
     status: {
       state: 'playing',
-      playback_duration_sec: 4,
-      runtime_progress: { elapsed_sec: 1 },
+      total_sec: 4,
+      elapsed_sec: 1,
     },
     duration: 3,
     now: () => 1000,
@@ -35,14 +35,14 @@ test('playback view reports initialization, playback, recording, and errors', ()
 
 test('playback clock advances monotonically and clears outside active states', () => {
   const state = {
-    status: { state: 'playing', runtime_progress: { elapsed_sec: 1 } },
+    status: { state: 'playing', elapsed_sec: 1 },
     playbackClock: null,
   };
   syncMotionStudioPlaybackClock(state, 1000);
   assert.deepEqual(state.playbackClock, {
     runtimeState: 'playing', sourceElapsed: 1, receivedAt: 1000,
   });
-  state.status.runtime_progress.elapsed_sec = 1.5;
+  state.status.elapsed_sec = 1.5;
   syncMotionStudioPlaybackClock(state, 2000);
   assert.equal(state.playbackClock.sourceElapsed, 2);
   state.status.state = 'idle';
@@ -68,8 +68,8 @@ test('playback controller renders monitor text and cancels animation', () => {
   };
   const state = {
     status: {
-      state: 'playing', playback_duration_sec: 2,
-      runtime_progress: { elapsed_sec: 1 },
+      state: 'playing', total_sec: 2,
+      elapsed_sec: 1,
     },
     playbackClock: null,
     playbackAnimationFrame: 0,

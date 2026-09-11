@@ -154,4 +154,33 @@ def test_status_fields_come_from_the_take_alone():
         '일반 녹화가 잠금 구간을 내보낸다'
 
     assert take_status_fields(StudioTake('preview', 'running', 1, ''))['record_mode'] is None
-    assert take_status_fields(None) == {'record_mode': None, 'overdub_spans': {}}
+
+    resting = take_status_fields(None)
+    assert resting['record_mode'] is None
+    assert resting['overdub_spans'] == {}
+    assert resting['elapsed_sec'] == 0.0 and resting['total_sec'] == 0.0
+
+
+def test_the_take_carries_its_own_clock():
+    """전에는 시간이 다섯 군데에 흩어져 있었고 **어느 게 진짜인지가 상태에
+    달려 있었다** · 화면이 그걸 다시 조립하다 녹화 중의 축 길이를 놓쳤다 · §6-79"""
+    take = StudioTake('overdub', 'running', 1, '').timed(3.4, 8.92)
+    fields = take_status_fields(take)
+    assert fields['elapsed_sec'] == 3.4
+    assert fields['total_sec'] == 8.92
+
+    # 단계 진행은 테이크 시계와 별개다 · 초기 이동 3.2/5.0 초 같은 것
+    staged = take.phase_timed(3.2, 5.0)
+    assert take_status_fields(staged)['phase_elapsed_sec'] == 3.2
+    assert take_status_fields(staged)['elapsed_sec'] == 3.4, '단계 진행이 테이크 시계를 덮었다'
+
+
+def test_the_board_clock_survives_a_phase_change():
+    """단계가 바뀌어도 시계는 이어진다 · 종류가 안 바뀌듯이."""
+    board = StudioTakeBoard(_Studio())
+    board.studio._status = {}
+    board.begin('overdub', '준비')
+    board.tick(3.4, 8.92)
+    board.advance('stopping', '정지 중')
+    assert board.take.elapsed_sec == 3.4
+    assert board.take.total_sec == 8.92

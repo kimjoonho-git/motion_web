@@ -137,7 +137,6 @@ class MotionStudioNode(Node):
             'message': '모션 스튜디오 대기',
             'project': None,
             'record_mode': None,
-            'elapsed_sec': 0.0,
             'recorded_frames': 0,
             'selected_motion_ids': [],
             'recording_motion_ids': [],
@@ -552,13 +551,7 @@ class MotionStudioNode(Node):
             'message': message,
             'updated_at': time.time(),
         })
-        if state not in {'recording'}:
-            self._status['elapsed_sec'] = 0.0
         if state in {'idle', 'error'}:
-            self._status['runtime_progress'] = {}
-            self._status['initialization_progress'] = {}
-            self._status['countdown_progress'] = {}
-            self._status['playback_duration_sec'] = 0.0
             self._status['playback_layer_count'] = 0
         project = self._current_project
         self._status['project'] = (

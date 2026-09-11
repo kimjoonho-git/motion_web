@@ -13,12 +13,8 @@ def test_playback_status_mirrors_motion_run_progress_for_web_graph():
     node = MotionStudioNode.__new__(MotionStudioNode)
     node._lock = threading.RLock()
     node._workspace_project_id = 'project-1'
-    node._status = {
-        'state': 'playing',
-        'phase': 'playing',
-        'elapsed_sec': 0.0,
-        'playback_duration_sec': 12.0,
-    }
+    node._takes().take = StudioTake('preview', 'running', 1, '').timed(0.0, 12.0)
+    node._status = {'state': 'playing', 'phase': 'playing'}
     node._motion_run_status = {}
     node._execution_context = {'project_generation': 1}
 
@@ -34,10 +30,10 @@ def test_playback_status_mirrors_motion_run_progress_for_web_graph():
         },
     })))
 
+    # 시간은 테이크 하나에서 나온다 · 화면이 조립할 게 없다 · §6-81
     assert node._status['state'] == 'playing'
     assert node._status['elapsed_sec'] == 3.2
-    assert node._status['playback_duration_sec'] == 12.0
-    assert node._status['runtime_progress']['ratio'] == pytest.approx(3.2 / 12.0)
+    assert node._status['total_sec'] == 12.0
 
     node._run_status_callback(String(data=json.dumps({
         'project_id': 'other-project',

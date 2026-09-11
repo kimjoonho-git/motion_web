@@ -310,9 +310,6 @@ class StudioRecordingSession:
         result['recorded_frames'] = len(studio._record_frames)
         if result.get('state') != 'recording':
             return
-        result['elapsed_sec'] = round(
-            len(studio._record_frames) * DEFAULT_PERIOD_SEC, 3
-        )
         preview_limit = 240
         frame_count = len(studio._record_frames)
         stride = max(1, (frame_count + preview_limit - 1) // preview_limit)
@@ -366,7 +363,12 @@ class StudioRecordingSession:
                 'values': values,
             }
             studio._record_frames.append(frame)
-            studio._status['elapsed_sec'] = frame['time_sec']
+            # 시계는 테이크가 쥔다 · 화면이 조립할 게 없어진다 · §6-81
+            take = studio._take
+            studio._takes().tick(
+                frame['time_sec'],
+                max(frame['time_sec'], take.total_sec if take else 0.0),
+            )
             studio._status['recorded_frames'] = index
             studio._status['updated_at'] = time.time()
 
