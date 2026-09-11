@@ -6,6 +6,7 @@ import threading
 import time
 from typing import Any, Dict, List
 
+from .procedure import StudioProcedure
 from .timeline import (
     layer_conflicts,
     motion_file_text,
@@ -114,22 +115,26 @@ class StudioPlaybackSession:
         move_time: float,
         operation_generation: int,
     ) -> None:
+        """합성 미리보기 · 초기 이동과 카운트다운은 실행 노드가 맡는다 · §6-82"""
         studio = self.studio
-        try:
-            studio._require_active_operation(operation_generation, 'initializing')
-            payload = {
-                **studio._run_payload(project, file_id, motion_ids, move_time),
-                'countdown_sec': 3.0,
-            }
+
+        def start() -> None:
             result = studio._request_run_for_operation(
-                'start', payload, 5.0, operation_generation, 'initializing'
+                'start',
+                {
+                    **studio._run_payload(project, file_id, motion_ids, move_time),
+                    'countdown_sec': 3.0,
+                },
+                5.0,
+                operation_generation,
+                'initializing',
             )
             if not result.get('success'):
                 raise ValueError(result.get('message') or '합성 미리보기 시작 실패')
-        except Exception as exc:
-            with studio._lock:
-                if operation_generation == studio._operation_generation:
-                    studio._takes().fail(str(exc))
+
+        StudioProcedure(studio, operation_generation).run([
+            ('합성 미리보기 시작', start),
+        ])
 
     def mirror_run_status_locked(self, payload: Dict[str, Any]) -> None:
         """실행 노드 상태를 스튜디오 상태에 비춘다 · 잠금 안에서 부른다.
@@ -242,9 +247,11 @@ class StudioPlaybackSession:
         move_time: float,
         operation_generation: int,
     ) -> None:
+        """초기 위치 이동 · 도착을 확인하고 끝낸다 · §6-82"""
         studio = self.studio
-        try:
-            studio._require_active_operation(operation_generation, 'initializing')
+        steps = StudioProcedure(studio, operation_generation)
+
+        def move() -> None:
             result = studio._request_run_for_operation(
                 'initialize',
                 studio._run_payload(project, file_id, motion_ids, move_time),
@@ -254,26 +261,21 @@ class StudioPlaybackSession:
             )
             if not result.get('success'):
                 raise ValueError(result.get('message') or '초기 위치 이동 실패')
-            deadline = time.monotonic() + max(15.0, move_time + 10.0)
-            while time.monotonic() < deadline:
-                with studio._lock:
-                    if operation_generation != studio._operation_generation:
-                        return
-                    state = studio._motion_run_status.get('state')
-                    run_message = studio._motion_run_status.get('message')
-                if state == 'initialized':
-                    with studio._lock:
-                        if operation_generation == studio._operation_generation:
-                            studio._takes().finish('초기 위치 이동 완료')
-                    return
-                if state == 'error':
-                    raise ValueError(run_message or '초기 위치 이동 실패')
-                time.sleep(0.05)
-            raise ValueError('초기 위치 도착 확인 시간 초과')
-        except Exception as exc:
+            steps.wait_for_run_state(
+                {'initialized'},
+                timeout=max(15.0, move_time + 10.0),
+                timeout_message='초기 위치 도착 확인',
+            )
+
+        def done() -> None:
             with studio._lock:
                 if operation_generation == studio._operation_generation:
-                    studio._takes().fail(str(exc))
+                    studio._takes().finish('초기 위치 이동 완료')
+
+        steps.run([
+            ('초기 위치 이동', move),
+            ('초기 위치 도착', done),
+        ])
 
     def stop(self) -> Dict[str, Any]:
         studio = self.studio

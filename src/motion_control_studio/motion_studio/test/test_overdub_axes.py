@@ -116,64 +116,31 @@ def test_plain_recording_does_not_start_playback():
     source = _source()
     start = source.index('def prepare(')
     body = source[start:source.index('\n    def ', start)]
-    assert 'self.start_overdub_playback(operation_generation, move_time)' in body
+    assert 'self.start_overdub_playback(' in body
+    assert "('추가 녹화 재생 시작', start_playback)" in body, '단계 목록에 없다'
 
 
 # --------------------------------------------------------------------- #
 # 녹화 시계의 0 초는 재생의 0 초여야 한다 · §6-76
 # --------------------------------------------------------------------- #
 
-def _clock_node():
-    """녹화 시계만 보기 위한 최소한의 스튜디오."""
-    node = MotionStudioNode.__new__(MotionStudioNode)
-    node._lock = threading.RLock()
-    node._operation_generation = 7
-    node._motion_run_status = {}
-    return node
+def test_the_recording_clock_waits_for_playback_in_the_step_list():
+    """녹화 시계의 0 초는 **재생의 0 초**여야 한다 · §6-76 §6-82
 
+    요청이 받아들여진 순간부터 재면 계획 생성과 초기 이동에 걸린 시간만큼 새
+    레이어가 통째로 밀린다 · 사용자가 본 움직임과 저장된 것이 어긋난다.
 
-def test_recording_clock_waits_for_playback_to_actually_run():
-    """요청이 받아들여진 순간부터 재면 계획 생성과 초기 이동에 걸린 시간만큼
-    새 레이어가 통째로 밀린다 · 사용자가 본 움직임과 저장된 것이 어긋난다."""
-    node = _clock_node()
-    session = StudioRecordingSession(node)
-    node._motion_run_status = {'state': 'preparing'}
+    기다림 자체는 `StudioProcedure` 가 맡는다 · 여기서는 절차가 **기다린 뒤에**
+    시계를 켜는지 순서만 본다.
+    """
+    source = _source()
+    start = source.index('def prepare(')
+    body = source[start:source.index('\n    def ', start)]
 
-    started = threading.Event()
-
-    def flip():
-        time.sleep(0.05)
-        with node._lock:
-            node._motion_run_status = {'state': 'running'}
-        started.set()
-
-    threading.Thread(target=flip, daemon=True).start()
-    begin = time.monotonic()
-    session.wait_for_playback_running(7, 5.0)
-    waited = time.monotonic() - begin
-
-    assert started.is_set(), '재생이 돌기도 전에 녹화 시계가 출발했다'
-    assert waited >= 0.04
-
-
-def test_recording_clock_gives_up_when_playback_errors():
-    """재생이 실패했는데 녹화만 도는 일은 없어야 한다."""
-    node = _clock_node()
-    node._motion_run_status = {'state': 'error', 'message': '계획 생성 실패'}
-    session = StudioRecordingSession(node)
-
-    with pytest.raises(ValueError, match='계획 생성 실패'):
-        session.wait_for_playback_running(7, 1.0)
-
-
-def test_recording_clock_stops_waiting_when_the_operation_is_replaced():
-    """사용자가 중지하면 기다림도 끝난다 · 멈춘 자리에서 계속 돌면 안 된다."""
-    node = _clock_node()
-    node._motion_run_status = {'state': 'preparing'}
-    session = StudioRecordingSession(node)
-    node._operation_generation = 8
-
-    session.wait_for_playback_running(7, 5.0)
+    gate = body.index('wait_for_run_state(')
+    clock = body.index("studio._record_started = time.monotonic()")
+    assert gate < clock, '녹화 시계가 재생보다 먼저 출발한다'
+    assert "{'running', 'verifying'}" in body, '재생이 도는 것을 확인하지 않는다'
 
 
 def test_a_finished_take_takes_its_ownership_with_it():

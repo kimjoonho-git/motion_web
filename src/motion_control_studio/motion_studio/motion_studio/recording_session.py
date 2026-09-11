@@ -9,6 +9,7 @@ from typing import Any, Dict
 
 from .constants import DEFAULT_PERIOD_SEC
 from .layer_commands import next_numbered_layer_name
+from .procedure import ProcedureStopped, StudioProcedure
 from .motion_model import layer_motion_ids
 from .timeline import (
     motion_file_text,
@@ -77,20 +78,23 @@ class StudioRecordingSession:
         }
 
     def prepare(self, move_time: float, operation_generation: int) -> None:
+        """녹화를 시작하기까지 · §6-82
+
+        무엇을 하는지만 적는다 · 언제 멈추는지, 어떻게 기다리는지, 실패하면
+        무엇을 되감는지는 `StudioProcedure` 가 맡는다.
+        """
         studio = self.studio
-        midi_locked = False
-        try:
-            studio._require_active_operation(operation_generation, 'initializing')
-            midi_prepare = studio._request_midi(
-                'studio_recording_prepare', {}, 5.0
-            )
-            midi_locked = True
-            if not midi_prepare.get('success'):
-                raise ValueError(
-                    midi_prepare.get('message') or 'MIDI 녹화 초기화 준비 실패'
-                )
-            self.wait_for_midi_faders_zero(8.0)
-            studio._require_active_operation(operation_generation, 'initializing')
+        steps = StudioProcedure(studio, operation_generation)
+        release_midi = lambda: studio._request_midi('studio_recording_ready', {}, 2.0)
+        state: Dict[str, Any] = {}
+
+        def lock_midi() -> None:
+            response = studio._request_midi('studio_recording_prepare', {}, 5.0)
+            steps.unwind(release_midi)
+            if not response.get('success'):
+                raise ValueError(response.get('message') or 'MIDI 녹화 초기화 준비 실패')
+
+        def move_to_zero() -> None:
             with studio._lock:
                 project = dict(studio._require_project_locked())
                 motion_ids = list(studio._record_eligible_motion_ids)
@@ -104,52 +108,48 @@ class StudioRecordingSession:
                 motion_file_text(project, zero_frames),
                 hidden=True,
             )
-            run_payload = studio._run_payload(
-                project, file_id, motion_ids, move_time
-            )
             response = studio._request_run_for_operation(
                 'initialize',
-                run_payload,
+                studio._run_payload(project, file_id, motion_ids, move_time),
                 30.0,
                 operation_generation,
                 'initializing',
             )
             if not response.get('success'):
                 raise ValueError(response.get('message') or '초기 위치 이동 실패')
-            deadline = time.monotonic() + max(15.0, move_time + 10.0)
-            while time.monotonic() < deadline:
-                with studio._lock:
-                    if operation_generation != studio._operation_generation:
-                        return
-                    status = dict(studio._motion_run_status)
-                if status.get('state') == 'initialized':
-                    break
-                if status.get('state') == 'error':
-                    raise ValueError(status.get('message') or '초기 위치 이동 실패')
-                time.sleep(0.05)
-            else:
-                raise ValueError('초기 위치 도착 확인 시간 초과')
-            if not studio._countdown('녹화', operation_generation):
-                return
-            studio._require_active_operation(operation_generation, 'initializing')
-            midi_ready = studio._request_midi(
-                'studio_recording_ready', {}, 5.0
+            steps.wait_for_run_state(
+                {'initialized'},
+                timeout=max(15.0, move_time + 10.0),
+                timeout_message='초기 위치 도착 확인',
             )
-            if not midi_ready.get('success'):
-                raise ValueError(
-                    midi_ready.get('message') or 'MIDI SELECT 잠금 해제 실패'
-                )
-            midi_locked = False
+
+        def countdown() -> None:
+            if not studio._countdown('녹화', operation_generation):
+                raise ProcedureStopped()
+
+        def unlock_midi() -> None:
+            response = studio._request_midi('studio_recording_ready', {}, 5.0)
+            if not response.get('success'):
+                raise ValueError(response.get('message') or 'MIDI SELECT 잠금 해제 실패')
+            steps.cancel_unwind(release_midi)
+
+        def start_playback() -> None:
             # 추가 녹화는 녹화된 대로 모터를 돌리면서 그 위에 얹는다 · §6-74
             #
-            # 재생과 녹화가 같은 20ms 타이머 위에서 돈다 · 재생은 축이 끝나면
-            # 둘 다 같은 소유 구간을 본다 · 재생은 구간 밖에서 그 축을 놓고,
-            # 녹화는 구간 안을 버린다.
-            overdub = self.start_overdub_playback(operation_generation, move_time)
-            if overdub:
-                self.wait_for_playback_running(
-                    operation_generation, max(30.0, move_time + 20.0),
+            # 재생과 녹화가 같은 소유 구간을 본다 · 재생은 구간 밖에서 그 축을
+            # 놓고, 녹화는 구간 안을 버린다.
+            state['overdub'] = self.start_overdub_playback(
+                operation_generation, move_time,
+            )
+            if state['overdub']:
+                # 녹화 시계의 0 초는 **재생의 0 초**여야 한다 · §6-76
+                steps.wait_for_run_state(
+                    {'running', 'verifying'},
+                    timeout=max(30.0, move_time + 20.0),
+                    timeout_message='추가 녹화 재생 시작 확인',
                 )
+
+        def begin_recording() -> None:
             with studio._lock:
                 studio._record_started = time.monotonic()
                 studio._record_frames = []
@@ -157,40 +157,19 @@ class StudioRecordingSession:
                 studio._takes().advance(
                     'running',
                     '추가 녹화 중 · 녹화된 축은 재생되고 나머지는 MIDI로 기록합니다'
-                    if overdub
+                    if state.get('overdub')
                     else '모션 녹화 중 · MIDI SELECT로 움직이는 축을 자동 기록합니다',
                 )
-        except Exception as exc:
-            with studio._lock:
-                if operation_generation == studio._operation_generation:
-                    studio._takes().fail(str(exc))
-        finally:
-            if midi_locked:
-                studio._request_midi('studio_recording_ready', {}, 2.0)
 
-    def wait_for_playback_running(
-        self, operation_generation: int, timeout: float
-    ) -> None:
-        """재생이 실제로 돌기 시작할 때까지 기다린다 · §6-76
-
-        녹화 시계의 0 초는 **재생의 0 초**여야 한다. 실행 요청이 받아들여진
-        순간부터 재면 계획 생성과 초기 이동에 걸린 시간만큼 새 레이어가 통째로
-        밀린다 · 사용자가 본 움직임과 저장된 것이 어긋난다.
-        """
-        studio = self.studio
-        deadline = time.monotonic() + max(0.1, float(timeout))
-        while time.monotonic() < deadline:
-            with studio._lock:
-                if operation_generation != studio._operation_generation:
-                    return
-                status = dict(studio._motion_run_status)
-            state = str(status.get('state') or '')
-            if state in {'running', 'verifying'}:
-                return
-            if state == 'error':
-                raise ValueError(status.get('message') or '추가 녹화 재생 실패')
-            time.sleep(0.01)
-        raise ValueError('추가 녹화 재생 시작 확인 시간 초과')
+        steps.run([
+            ('MIDI 녹화 준비', lock_midi),
+            ('MIDI 페이더 0 복귀', lambda: self.wait_for_midi_faders_zero(8.0)),
+            ('초기 위치 이동', move_to_zero),
+            ('카운트다운', countdown),
+            ('MIDI SELECT 잠금 해제', unlock_midi),
+            ('추가 녹화 재생 시작', start_playback),
+            ('녹화 시작', begin_recording),
+        ])
 
     def start_overdub_playback(
         self, operation_generation: int, move_time: float,
