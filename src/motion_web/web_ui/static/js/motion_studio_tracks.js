@@ -1,4 +1,4 @@
-import { MOTION_STUDIO_PERIOD_SEC } from './motion_studio_constants.js?v=20260911113528';
+import { MOTION_STUDIO_PERIOD_SEC } from './motion_studio_constants.js?v=20260911114309';
 
 export function motionStudioLayerTracks(layer) {
   const tracks = new Map();

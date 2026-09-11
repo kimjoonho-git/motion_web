@@ -11,20 +11,20 @@ import {
   stopMotionStudio,
   setProjectGeneration,
   fetchSystemVersion,
-} from './api.js?v=20260911113528';
-import { getElements } from './dom.js?v=20260911113528';
-import { createMotorEventLogController } from './event_log.js?v=20260911113528';
-import { createMidiMonitorController } from './midi_monitor.js?v=20260911113528';
-import { createMotionDataController } from './motion_data.js?v=20260911113528';
-import { createMotionStudioController } from './motion_studio.js?v=20260911113528';
-import { createMotionTestController } from './motion_test.js?v=20260911113528';
-import { createMotorConfigController } from './motor_config.js?v=20260911113528';
-import { createProjectExplorerController } from './project_explorer.js?v=20260911113528';
-import { renderAccess, renderMonitoring } from './monitoring.js?v=20260911113528';
-import { createOperationProgressManager } from './operation_progress.js?v=20260911113528';
-import { installDialogManager } from './ui_dialogs.js?v=20260911113528';
+} from './api.js?v=20260911114309';
+import { getElements } from './dom.js?v=20260911114309';
+import { createMotorEventLogController } from './event_log.js?v=20260911114309';
+import { createMidiMonitorController } from './midi_monitor.js?v=20260911114309';
+import { createMotionDataController } from './motion_data.js?v=20260911114309';
+import { createMotionStudioController } from './motion_studio.js?v=20260911114309';
+import { createMotionTestController } from './motion_test.js?v=20260911114309';
+import { createMotorConfigController } from './motor_config.js?v=20260911114309';
+import { createProjectExplorerController } from './project_explorer.js?v=20260911114309';
+import { renderAccess, renderMonitoring } from './monitoring.js?v=20260911114309';
+import { createOperationProgressManager } from './operation_progress.js?v=20260911114309';
+import { installDialogManager } from './ui_dialogs.js?v=20260911114309';
 import { StatusSocket } from './socket.js';
-import { trackedMotorRestartState } from './restart_tracking.js?v=20260911113528';
+import { trackedMotorRestartState } from './restart_tracking.js?v=20260911114309';
 import {
   canChangeProjectInWorkspace,
   createWorkspaceRouteState,
@@ -36,10 +36,10 @@ import {
   workspaceGroupFor,
   workspacePanelFor,
   workspaceForProjectCategory,
-} from './workspace_navigation.js?v=20260911113528';
-import { installFeedbackPresentation } from './ui_feedback.js?v=20260911113528';
-import { createServoAlarmController } from './servo_alarm.js?v=20260911113528';
-import { createCoordinationController } from './coordination.js?v=20260911113528';
+} from './workspace_navigation.js?v=20260911114309';
+import { installFeedbackPresentation } from './ui_feedback.js?v=20260911114309';
+import { createServoAlarmController } from './servo_alarm.js?v=20260911114309';
+import { createCoordinationController } from './coordination.js?v=20260911114309';
 
 const el = getElements();
 const operationProgress = createOperationProgressManager({ el });

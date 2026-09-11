@@ -1,4 +1,4 @@
-import { MOTION_STUDIO_PERIOD_SEC } from './motion_studio_constants.js?v=20260911113528';
+import { MOTION_STUDIO_PERIOD_SEC } from './motion_studio_constants.js?v=20260911114309';
 
 export function motionStudioPlaybackView({
   status = {},
@@ -185,21 +185,28 @@ export function createMotionStudioPlaybackController({
       el.studioPlaybackPhase.className = `status-chip ${playback.chip}`;
       el.studioPlaybackPhase.textContent = playback.label;
     }
-    if (el.studioPlaybackTime) {
-      el.studioPlaybackTime.textContent = `${timeText(playback.elapsed)} / ${timeText(playback.total)}`;
-    }
-    if (el.studioPlaybackLayerCount) {
-      const count = state.detailGraph?.enabledLayerCount
-        ?? Number(state.status?.playback_layer_count || 0);
-      el.studioPlaybackLayerCount.textContent = `재생 선택 ${count}개 · 합성 그래프`;
-    }
-    if (el.studioPlaybackProgressBar) {
-      el.studioPlaybackProgressBar.style.width = `${(playback.ratio * 100).toFixed(2)}%`;
-    }
     // 추가 녹화 중에는 지금 어느 축이 잠겼는지를 앞에 세운다 · §6-79
     const overdubHint = motionStudioOverdubHint(
       state.status?.overdub_spans, playback.elapsed,
     );
+    if (el.studioPlaybackTime) {
+      el.studioPlaybackTime.textContent = `${timeText(playback.elapsed)} / ${timeText(playback.total)}`;
+    }
+    if (el.studioPlaybackLayerCount) {
+      // 녹화 중에 "합성 그래프" 라고 적혀 있으면 지금 무엇을 보는지 헷갈린다 ·
+      // 무엇이 돌고 있는지를 말한다 · §6-85
+      const count = state.detailGraph?.enabledLayerCount
+        ?? Number(state.status?.playback_layer_count || 0);
+      const recorded = (state.status?.recording_motion_ids || []).length;
+      el.studioPlaybackLayerCount.textContent = overdubHint
+        ? `기존 ${count}개 재생 · 녹화된 축 ${recorded}개`
+        : (playback.displayState === 'recording'
+          ? `녹화 중 · 기록된 축 ${recorded}개`
+          : `재생 선택 ${count}개 · 합성 그래프`);
+    }
+    if (el.studioPlaybackProgressBar) {
+      el.studioPlaybackProgressBar.style.width = `${(playback.ratio * 100).toFixed(2)}%`;
+    }
     const message = overdubHint || playback.message;
     if (el.studioPlaybackMessage) el.studioPlaybackMessage.textContent = message;
     if (el.studioPlaybackQuickPhase) {
