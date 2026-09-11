@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+from motion_runtime.motion_run_constants import INITIAL_MOVE_TIME_OPTIONS_SEC
+from motion_runtime.motion_run_rules import _initial_move_time_override_sec
 from motion_studio.recording_session import StudioRecordingSession
 from motion_studio.studio_node import MotionStudioNode
 
@@ -113,7 +115,7 @@ def test_plain_recording_does_not_start_playback():
     source = _source()
     start = source.index('def prepare(')
     body = source[start:source.index('\n    def ', start)]
-    assert 'self.start_overdub_playback(operation_generation)' in body
+    assert 'self.start_overdub_playback(operation_generation, move_time)' in body
 
 
 # --------------------------------------------------------------------- #
@@ -198,6 +200,76 @@ def test_the_recording_clock_gate_is_actually_wired_into_prepare():
         / 'motion_studio' / 'recording_session.py'
     ).read_text(encoding='utf-8')
 
-    gate = source.index('wait_for_playback_running(operation_generation')
+    gate = source.index('self.wait_for_playback_running(')
     clock = source.index('studio._record_started = time.monotonic()')
     assert gate < clock, '녹화 시계가 재생보다 먼저 출발한다'
+
+
+# --------------------------------------------------------------------- #
+# 추가 녹화 재생 요청이 실행 노드의 규칙을 지키는가 · §6-78
+# --------------------------------------------------------------------- #
+
+class _PayloadStudio:
+    """`start_overdub_playback` 이 만드는 요청만 들여다보기 위한 대역."""
+
+    def __init__(self, move_time):
+        self._lock = threading.RLock()
+        self._record_mode = 'overdub'
+        self._record_ownership = {'1-1': [(0.02, 8.92)]}
+        self._move_time = move_time
+        self.sent = None
+        self._store = self
+
+    # 스튜디오가 내어 주는 것들
+    def _require_project_locked(self):
+        return {
+            'project_id': 'p1',
+            'mapping_file_id': 'm.yaml',
+            'period_sec': 0.02,
+            'layers': [{
+                'enabled': True,
+                'frames': [
+                    {'frame': 1, 'time_sec': 0.02, 'values': {'1-1': 0.0}},
+                    {'frame': 2, 'time_sec': 8.92, 'values': {'1-1': 3.0}},
+                ],
+            }],
+        }
+
+    def _validate_mapping_locked(self, project):
+        return {'motion_ids': ['1-1']}
+
+    def _manual_initial_values(self, mapping):
+        return {}
+
+    def write_motion_file(self, name, text, hidden=False):
+        return f'__{name}.json'
+
+    def _run_payload(self, project, file_id, motion_ids, move_time):
+        return {'motion_file_id': file_id, 'initial_move_time_sec': move_time}
+
+    def _request_run_for_operation(self, command, payload, timeout, gen, state):
+        self.sent = payload
+        return {'success': True}
+
+
+@pytest.mark.parametrize('move_time', INITIAL_MOVE_TIME_OPTIONS_SEC)
+def test_overdub_playback_uses_a_move_time_the_run_node_accepts(move_time):
+    """실행 노드는 5·7·10 초만 받는다 · 0 을 주면 "모션 실행 준비 실패" 로 끝나고
+    추가 녹화가 시작조차 못 한다.
+
+    합성의 0 초 값은 방금 맞춘 0 도와 다를 수 있으니 이동 자체는 필요하다 ·
+    사용자가 고른 값을 그대로 넘긴다.
+    """
+    studio = _PayloadStudio(move_time)
+    assert StudioRecordingSession(studio).start_overdub_playback(1, move_time)
+
+    sent = studio.sent
+    assert sent['initial_move_time_sec'] == move_time
+    # 실행 노드 자신의 규칙으로 확인한다 · 값만 베껴 적으면 규칙이 바뀔 때 갈린다
+    assert _initial_move_time_override_sec(sent) == move_time
+
+
+def test_the_run_node_rejects_a_zero_move_time():
+    """이 규칙 때문에 추가 녹화가 막혔다 · 규칙 쪽을 못 박아 둔다."""
+    with pytest.raises(ValueError, match='initial_move_time_sec'):
+        _initial_move_time_override_sec({'initial_move_time_sec': 0.0})

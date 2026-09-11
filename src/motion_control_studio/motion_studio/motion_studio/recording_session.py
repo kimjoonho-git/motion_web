@@ -159,9 +159,11 @@ class StudioRecordingSession:
             # 재생과 녹화가 같은 20ms 타이머 위에서 돈다 · 재생은 축이 끝나면
             # 둘 다 같은 소유 구간을 본다 · 재생은 구간 밖에서 그 축을 놓고,
             # 녹화는 구간 안을 버린다.
-            overdub = self.start_overdub_playback(operation_generation)
+            overdub = self.start_overdub_playback(operation_generation, move_time)
             if overdub:
-                self.wait_for_playback_running(operation_generation, 20.0)
+                self.wait_for_playback_running(
+                    operation_generation, max(30.0, move_time + 20.0),
+                )
             with studio._lock:
                 studio._record_started = time.monotonic()
                 studio._record_frames = []
@@ -204,7 +206,9 @@ class StudioRecordingSession:
             time.sleep(0.01)
         raise ValueError('추가 녹화 재생 시작 확인 시간 초과')
 
-    def start_overdub_playback(self, operation_generation: int) -> bool:
+    def start_overdub_playback(
+        self, operation_generation: int, move_time: float,
+    ) -> bool:
         """추가 녹화일 때 기존 레이어 재생을 함께 시작한다 · §6-74
 
         재생은 `axis_release_sec` 로 **축이 끝나면 그 축을 놓는다** · 놓은 축은
@@ -233,8 +237,13 @@ class StudioRecordingSession:
             motion_file_text(project, frames),
             hidden=True,
         )
+        # 초기 이동 시간은 사용자가 고른 값 그대로 넘긴다 · 실행 노드는 5·7·10
+        # 초만 받는다 · 0 을 주면 "모션 실행 준비 실패" 로 끝난다 · §6-78
+        #
+        # 합성의 0 초 값은 방금 맞춘 0 도와 다를 수 있다 · 여기서 한 번 더
+        # 이동해야 재생 첫 프레임에서 튀지 않는다.
         payload = {
-            **studio._run_payload(project, file_id, motion_ids, 0.0),
+            **studio._run_payload(project, file_id, motion_ids, move_time),
             # 축마다 재생이 쥐는 구간 · 이 밖에서는 그 축을 명령하지 않는다.
             #
             # 끝 시각만 보내면 **시작 전**이 빈다 · 합성은 모든 축을 매 순간
