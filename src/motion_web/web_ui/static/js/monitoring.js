@@ -11,7 +11,7 @@ import {
   normalizeMotorTypeKey,
   stateLabel,
   statusDisplayLabels,
-} from './format.js?v=20260718-korean-ui';
+} from './format.js?v=20260911095307';
 
 let lastMonitoringHeaderSignature = '';
 let lastMonitoringRowsSignature = '';

@@ -1,4 +1,4 @@
-import { escapeHtml } from './format.js?v=20260718-korean-ui';
+import { escapeHtml } from './format.js?v=20260911095307';
 import {
   activateProjectFile,
   clearMotorRuntimeApplication,
@@ -16,8 +16,8 @@ import {
   renameProjectFile,
   saveProjectMemo,
   selectProject,
-} from './api.js?v=20260910-api-table-1';
-import { showAlert, showConfirm, showPrompt } from './ui_dialogs.js?v=20260727-popup-common-3';
+} from './api.js?v=20260911095307';
+import { showAlert, showConfirm, showPrompt } from './ui_dialogs.js?v=20260911095307';
 
 function formatBytes(value) {
   const bytes = Number(value) || 0;

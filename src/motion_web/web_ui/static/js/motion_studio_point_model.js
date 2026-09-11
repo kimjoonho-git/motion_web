@@ -1,8 +1,8 @@
 import {
   MOTION_STUDIO_PERIOD_SEC,
   MOTION_STUDIO_TIME_EPSILON,
-} from './motion_studio_constants.js?v=20260803-studio-structure-4';
-import { motionStudioSnapFrameTime } from './motion_studio_editor_math.js?v=20260803-studio-structure-12';
+} from './motion_studio_constants.js?v=20260911095307';
+import { motionStudioSnapFrameTime } from './motion_studio_editor_math.js?v=20260911095307';
 
 export function motionStudioPointRangeTargetsMatch(
   firstMotionId,

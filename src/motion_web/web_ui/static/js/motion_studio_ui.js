@@ -1,4 +1,4 @@
-import { escapeHtml } from './format.js?v=20260718-korean-ui';
+import { escapeHtml } from './format.js?v=20260911095307';
 
 export function createMotionStudioState() {
   return {

@@ -3,7 +3,7 @@ import {
   formatInt,
   formatNumber,
   normalizeMotorTypeKey,
-} from './format.js?v=20260718-korean-ui';
+} from './format.js?v=20260911095307';
 import {
   requestAcServoAction,
   requestAcServoControl,
@@ -11,8 +11,8 @@ import {
   requestDynamixelAction,
   requestDynamixelJog,
   requestMotionSafetyStop,
-} from './api.js?v=20260910-api-table-1';
-import { showConfirm } from './ui_dialogs.js?v=20260727-popup-common-3';
+} from './api.js?v=20260911095307';
+import { showConfirm } from './ui_dialogs.js?v=20260911095307';
 
 const DEFAULT_MAX_JOG_DELTA_DEG = 360.0;
 const MOTION_DONE_VELOCITY_DEG_SEC = 0.05;

@@ -1,7 +1,7 @@
 import {
   editMotionStudioLayer,
   saveMotionStudioLayerData,
-} from './api.js?v=20260910-api-table-1';
+} from './api.js?v=20260911095307';
 import {
   motionStudioCanCreatePointCurve,
   motionStudioEditorValidationProject,
@@ -9,14 +9,14 @@ import {
   motionStudioLayerDuration,
   motionStudioLayerMotionIds,
   motionStudioPointCurveIsApplied,
-} from './motion_studio_project_model.js?v=20260803-studio-structure-12';
+} from './motion_studio_project_model.js?v=20260911095307';
 import {
   motionStudioEditorNextValueScale,
   motionStudioEditorValueBounds,
   motionStudioMotionAxisRange,
   motionStudioValueViewAfterRangeUnlock,
   synchronizeMotionStudioEditorTimeline,
-} from './motion_studio_editor_math.js?v=20260803-studio-structure-12';
+} from './motion_studio_editor_math.js?v=20260911095307';
 import {
   motionStudioCanSwitchPointDraftCurve,
   motionStudioEditorGraphClickAction,
@@ -24,16 +24,16 @@ import {
   motionStudioPointCurvePreview,
   motionStudioPointCurveViewEnd,
   motionStudioShouldProtectPointAxisSelection,
-} from './motion_studio_point_model.js?v=20260803-studio-structure-12';
+} from './motion_studio_point_model.js?v=20260911095307';
 import {
   drawMotionStudioEditorGraph,
-} from './motion_studio_graph.js?v=20260803-studio-structure-12';
+} from './motion_studio_graph.js?v=20260911095307';
 import {
   motionStudioEditorInspectorState,
   motionStudioRangeWarningGroups,
   renderMotionStudioEditorPresentation,
   requestMotionStudioEditorSave,
-} from './motion_studio_editor_ui.js?v=20260804-point-actions-range-1';
+} from './motion_studio_editor_ui.js?v=20260911095307';
 import {
   createMotionStudioEditorSession,
   motionStudioEditorFailureFingerprint,
@@ -47,27 +47,27 @@ import {
   motionStudioSelectedPointRange,
   motionStudioSelectedTimeRange,
   motionStudioStoredCurveForDraft,
-} from './motion_studio_editor_state.js?v=20260804-multi-axis-range-1';
+} from './motion_studio_editor_state.js?v=20260911095307';
 import {
   createMotionStudioGraphScheduler,
-} from './motion_studio_graph_scheduler.js?v=20260803-studio-structure-1';
+} from './motion_studio_graph_scheduler.js?v=20260911095307';
 import {
   createMotionStudioEditorViewportController,
-} from './motion_studio_editor_viewport.js?v=20260803-studio-structure-12';
+} from './motion_studio_editor_viewport.js?v=20260911095307';
 import {
   MOTION_STUDIO_PERIOD_SEC,
-} from './motion_studio_constants.js?v=20260803-studio-structure-4';
+} from './motion_studio_constants.js?v=20260911095307';
 import {
   bindMotionStudioGraphEvents,
-} from './motion_studio_graph_interactions.js?v=20260804-multi-axis-range-1';
+} from './motion_studio_graph_interactions.js?v=20260911095307';
 import {
   bindMotionStudioPointEditorEvents,
-} from './motion_studio_point_editor.js?v=20260804-multi-axis-range-1';
+} from './motion_studio_point_editor.js?v=20260911095307';
 import {
   createMotionStudioAxisEditorController,
   motionStudioValidMotionId,
-} from './motion_studio_axis_editor.js?v=20260803-studio-structure-12';
-import { showConfirm } from './ui_dialogs.js?v=20260727-popup-common-3';
+} from './motion_studio_axis_editor.js?v=20260911095307';
+import { showConfirm } from './ui_dialogs.js?v=20260911095307';
 
 const POINT_RANGE_EDIT_OPERATIONS = new Set([
   'time_shift',

@@ -1,6 +1,6 @@
-import { motionStudioPointRangePoints } from './motion_studio_point_model.js?v=20260803-studio-structure-12';
-import { MOTION_STUDIO_PERIOD_SEC } from './motion_studio_constants.js?v=20260803-studio-structure-4';
-import { MOTION_STUDIO_TIME_EPSILON } from './motion_studio_constants.js?v=20260803-studio-structure-4';
+import { motionStudioPointRangePoints } from './motion_studio_point_model.js?v=20260911095307';
+import { MOTION_STUDIO_PERIOD_SEC } from './motion_studio_constants.js?v=20260911095307';
+import { MOTION_STUDIO_TIME_EPSILON } from './motion_studio_constants.js?v=20260911095307';
 
 const clone = structuredClone;
 const layerDirtyCache = new WeakMap();

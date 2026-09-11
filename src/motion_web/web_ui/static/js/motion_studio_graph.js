@@ -1,13 +1,13 @@
-import { escapeHtml } from './format.js?v=20260718-korean-ui';
-import { motionStudioEditorValueBounds } from './motion_studio_editor_math.js?v=20260803-studio-structure-12';
-import { motionStudioPointCurvePreview } from './motion_studio_point_model.js?v=20260803-studio-structure-12';
-import { MOTION_STUDIO_PERIOD_SEC } from './motion_studio_constants.js?v=20260803-studio-structure-4';
+import { escapeHtml } from './format.js?v=20260911095307';
+import { motionStudioEditorValueBounds } from './motion_studio_editor_math.js?v=20260911095307';
+import { motionStudioPointCurvePreview } from './motion_studio_point_model.js?v=20260911095307';
+import { MOTION_STUDIO_PERIOD_SEC } from './motion_studio_constants.js?v=20260911095307';
 import {
   motionStudioDisplaySegments,
   motionStudioEditorIssueTimes,
   motionStudioLayerTracks,
   motionStudioVisiblePoints,
-} from './motion_studio_tracks.js?v=20260803-studio-structure-12';
+} from './motion_studio_tracks.js?v=20260911095307';
 
 export {
   motionStudioCompositionTracks,
@@ -16,7 +16,7 @@ export {
   motionStudioLayerTracks,
   motionStudioSampleTrack,
   motionStudioVisiblePoints,
-} from './motion_studio_tracks.js?v=20260803-studio-structure-12';
+} from './motion_studio_tracks.js?v=20260911095307';
 
 function pointCurves(layer) {
   return Array.isArray(layer?.point_curves) ? layer.point_curves : [];
