@@ -1,4 +1,4 @@
-import { MOTION_STUDIO_PERIOD_SEC } from './motion_studio_constants.js?v=20260911112527';
+import { MOTION_STUDIO_PERIOD_SEC } from './motion_studio_constants.js?v=20260911113528';
 
 export function motionStudioLayerTracks(layer) {
   const tracks = new Map();
@@ -82,14 +82,29 @@ export function motionStudioCompositionTracks(layers, mappingRows = []) {
   return { tracks, duration, sampleCount, enabledLayers };
 }
 
-export function motionStudioDisplaySegments(points, maximumPoints = 1200) {
+/** 곡선을 조각으로 나눈다 · 값이 비는 구간에서 선을 끊는다.
+ *
+ * `gapSec` 는 **받은 데이터의 실제 간격**을 따라야 한다 · §6-84
+ *
+ * 녹화 중 미리보기는 서버가 240점까지 솎아서 보낸다 · 그래서 점 간격이 20ms 가
+ * 아니라 stride 배가 된다. 임계를 20ms 에 묶어 두면 솎아낸 간격이 전부 "빈 구간"
+ * 으로 보여 모든 점이 낱개로 쪼개지고 **선이 하나도 안 그려진다**.
+ *
+ * 녹화 4.82초(241프레임)부터 그랬다 · 추가 녹화는 기존 레이어가 끝난 뒤부터
+ * 기록하므로 그 시점엔 이미 솎아내는 중이라, 새로 녹화한 것이 처음부터 끝까지
+ * 안 보였다.
+ */
+export function motionStudioDisplaySegments(
+  points, maximumPoints = 1200, gapSec = 0.031,
+) {
   const source = Array.isArray(points) ? points : [];
   if (!source.length) return [];
+  const limit = Math.max(0.031, Number(gapSec) || 0);
   const segments = [];
   let current = [];
   for (const point of source) {
     const previous = current[current.length - 1];
-    if (previous && Number(point.timeSec) - Number(previous.timeSec) > 0.031) {
+    if (previous && Number(point.timeSec) - Number(previous.timeSec) > limit) {
       segments.push(current);
       current = [];
     }

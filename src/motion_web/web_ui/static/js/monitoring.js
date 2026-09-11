@@ -11,7 +11,7 @@ import {
   normalizeMotorTypeKey,
   stateLabel,
   statusDisplayLabels,
-} from './format.js?v=20260911112527';
+} from './format.js?v=20260911113528';
 
 let lastMonitoringHeaderSignature = '';
 let lastMonitoringRowsSignature = '';

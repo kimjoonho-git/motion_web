@@ -2,8 +2,8 @@ import {
   clearMotorEvents,
   deleteMotorEventLogFile,
   fetchMotorEvents,
-} from './api.js?v=20260911112527';
-import { showConfirm } from './ui_dialogs.js?v=20260911112527';
+} from './api.js?v=20260911113528';
+import { showConfirm } from './ui_dialogs.js?v=20260911113528';
 
 const CATEGORY_LABELS = {
   error: '모터 에러',

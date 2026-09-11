@@ -8,14 +8,14 @@ import {
   writeEthercatAlias,
   saveMotorConfig,
   deleteMotorConfig,
-} from './api.js?v=20260911112527';
+} from './api.js?v=20260911113528';
 import {
   clone,
   displayText,
   escapeHtml,
   formatInt,
   stateLabel,
-} from './format.js?v=20260911112527';
+} from './format.js?v=20260911113528';
 import {
   activeRegistryMotors as selectActiveRegistryMotors,
   activeVisibleRegistryMotors as selectActiveVisibleRegistryMotors,
@@ -25,7 +25,7 @@ import {
   registryMotorById as selectRegistryMotorById,
   registryMotorLabel,
   upsertMotorInRegistry,
-} from './motor_registry.js?v=20260911112527';
+} from './motor_registry.js?v=20260911113528';
 import {
   duplicateEthercatAddress,
   detectedScanRow,
@@ -39,7 +39,7 @@ import {
   scanRowToMotor as acServoScanRowToMotor,
   siiReportedAcServoModel,
   verifiedAcServoModel,
-} from './motor_type_ac_servo.js?v=20260911112527';
+} from './motor_type_ac_servo.js?v=20260911113528';
 import {
   dynamixelScanDeviceKey,
   dynamixelScanDeviceToMotor as buildDynamixelScanDeviceToMotor,
@@ -47,7 +47,7 @@ import {
   modelTextFromDevice,
   runtimeIsDynamixel,
 } from './motor_type_dynamixel.js';
-import { showConfirm, showPrompt } from './ui_dialogs.js?v=20260911112527';
+import { showConfirm, showPrompt } from './ui_dialogs.js?v=20260911113528';
 
 export function isEditableMotorConfigPath(pathValue) {
   const path = String(pathValue || '');

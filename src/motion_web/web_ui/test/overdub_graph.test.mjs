@@ -291,3 +291,90 @@ test('the playhead reads the span the graph actually used', async () => {
   assert.ok(shared < recomputed, '플레이헤드가 그래프와 다른 축을 쓴다');
   assert.ok(shared < 52 + 982 - 1, '플레이헤드가 오른쪽 끝에 붙었다');
 });
+
+
+/**
+ * 솎아낸 미리보기도 선으로 이어져야 한다 · §6-84
+ *
+ * 녹화 중 미리보기는 서버가 240점까지 솎아서 보낸다 · 그래서 점 간격이 20ms 가
+ * 아니라 stride 배다. 화면이 임계를 20ms 에 묶어 두면 솎아낸 간격이 전부 "빈
+ * 구간" 으로 보여 모든 점이 낱개로 쪼개지고 **선이 하나도 안 그려진다**.
+ *
+ * 녹화 4.82초(241프레임)부터 그랬다 · 추가 녹화는 기존 레이어가 끝난 뒤부터
+ * 기록하므로 그때는 이미 솎아내는 중이라, 새로 녹화한 것이 처음부터 끝까지
+ * 안 보였다.
+ */
+const thinned = (stride, fromSec = 11.36, toSec = 17.26) => {
+  const points = [];
+  for (let t = fromSec; t <= toSec + 1e-9; t += 0.02 * stride) {
+    points.push({ timeSec: Number(t.toFixed(9)), value: Math.sin(t) * 50 });
+  }
+  return points;
+};
+
+const drawable = (segments) => segments.filter((s) => s.length >= 2).length;
+
+test('a thinned preview still draws as one line', async () => {
+  const { motionStudioDisplaySegments } = await import(
+    '../static/js/motion_studio_tracks.js'
+  );
+  for (const stride of [1, 2, 3, 4, 8]) {
+    const gapSec = Math.max(0.031, stride * 0.02 * 1.5);
+    const segments = motionStudioDisplaySegments(thinned(stride), 1520, gapSec);
+    assert.equal(
+      drawable(segments), 1,
+      `stride ${stride} · 솎아낸 간격이 빈 구간으로 오해돼 선이 끊겼다`,
+    );
+  }
+});
+
+test('a real gap still breaks the line even in a thinned preview', async () => {
+  /** 임계를 넓히면서 진짜 빈 구간까지 이어 버리면, 녹화 안 된 시간이 녹화된
+   *  것처럼 보인다 · 그건 더 나쁘다. */
+  const { motionStudioDisplaySegments } = await import(
+    '../static/js/motion_studio_tracks.js'
+  );
+  const stride = 4;
+  const points = [...thinned(stride, 11.36, 13.0), ...thinned(stride, 15.0, 17.26)];
+  const segments = motionStudioDisplaySegments(
+    points, 1520, Math.max(0.031, stride * 0.02 * 1.5),
+  );
+  assert.equal(drawable(segments), 2, '진짜 빈 구간이 이어져 버렸다');
+});
+
+test('the default threshold is unchanged for unthinned data', async () => {
+  const { motionStudioDisplaySegments } = await import(
+    '../static/js/motion_studio_tracks.js'
+  );
+  const points = [...thinned(1, 0, 1.0), ...thinned(1, 2.0, 3.0)];
+  assert.equal(drawable(motionStudioDisplaySegments(points, 1520)), 2);
+});
+
+test('the painter carries the preview interval down to the curve', async () => {
+  const { createMotionStudioGraphPainter } = await import(
+    '../static/js/motion_studio_graph_render.js'
+  );
+  const paintWith = (sampleIntervalSec, tracks) => {
+    const { canvas, context } = fakeCanvas();
+    const state = { detailGraph: { duration: 17.26 }, status: {} };
+    const painter = createMotionStudioGraphPainter({
+      state, el: { studioLayerGraph: canvas, studioLayerPlayhead: null },
+      updatePlayhead: () => {},
+    });
+    painter(tracks, recording(17.26), null, sampleIntervalSec);
+    return context.strokes;
+  };
+
+  // 눈금선도 stroke 를 쓴다 · 곡선만 세도록 바탕값을 뺀다
+  const curve = new Map([['1-1', thinned(4)]]);
+  const axisOnly = paintWith(0, new Map([['1-1', [{ timeSec: 0, value: 0 }]]])) - 1;
+
+  assert.equal(
+    paintWith(0.08, curve) - axisOnly, 1,
+    '솎아낸 간격을 전달해도 선이 끊긴다',
+  );
+  assert.ok(
+    paintWith(0, curve) - axisOnly > 10,
+    '간격을 모르면 쪼개지는 것이 맞다 · 그래서 전달이 필요하다',
+  );
+});

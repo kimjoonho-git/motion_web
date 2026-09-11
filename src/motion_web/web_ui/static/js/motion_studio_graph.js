@@ -1,13 +1,13 @@
-import { escapeHtml } from './format.js?v=20260911112527';
-import { motionStudioEditorValueBounds } from './motion_studio_editor_math.js?v=20260911112527';
-import { motionStudioPointCurvePreview } from './motion_studio_point_model.js?v=20260911112527';
-import { MOTION_STUDIO_PERIOD_SEC } from './motion_studio_constants.js?v=20260911112527';
+import { escapeHtml } from './format.js?v=20260911113528';
+import { motionStudioEditorValueBounds } from './motion_studio_editor_math.js?v=20260911113528';
+import { motionStudioPointCurvePreview } from './motion_studio_point_model.js?v=20260911113528';
+import { MOTION_STUDIO_PERIOD_SEC } from './motion_studio_constants.js?v=20260911113528';
 import {
   motionStudioDisplaySegments,
   motionStudioEditorIssueTimes,
   motionStudioLayerTracks,
   motionStudioVisiblePoints,
-} from './motion_studio_tracks.js?v=20260911112527';
+} from './motion_studio_tracks.js?v=20260911113528';
 
 export {
   motionStudioCompositionTracks,
@@ -16,7 +16,7 @@ export {
   motionStudioLayerTracks,
   motionStudioSampleTrack,
   motionStudioVisiblePoints,
-} from './motion_studio_tracks.js?v=20260911112527';
+} from './motion_studio_tracks.js?v=20260911113528';
 
 function pointCurves(layer) {
   return Array.isArray(layer?.point_curves) ? layer.point_curves : [];
@@ -124,6 +124,7 @@ export function drawMotionStudioLayerGraph({
   playback,
   ownedSpans = null,
   timeSpan = 0,
+  sampleIntervalSec = 0,
   updatePlayhead = () => {},
   devicePixelRatio = globalThis.devicePixelRatio || 1,
 }) {
@@ -193,6 +194,8 @@ export function drawMotionStudioLayerGraph({
   drawTrackLines({
     context, padding, plotWidth, plotHeight, maxTime, minValue, maxValue,
     tracks, colors, dashed: false, alpha: 1,
+    // 솎아낸 미리보기는 점 간격이 20ms 가 아니다 · §6-84
+    gapSec: Math.max(0.031, (Number(sampleIntervalSec) || 0) * 1.5),
   });
   updatePlayhead(playback);
   return true;
@@ -202,7 +205,7 @@ export function drawMotionStudioLayerGraph({
 /** 곡선을 그린다 · 바탕(기존 레이어)은 점선으로 옅게, 새로 녹화되는 것은 실선. */
 function drawTrackLines({
   context, padding, plotWidth, plotHeight, maxTime, minValue, maxValue,
-  tracks, colors, dashed, alpha,
+  tracks, colors, dashed, alpha, gapSec = 0.031,
 }) {
   if (!tracks || !tracks.size || maxTime <= 0) return;
   context.save();
@@ -211,7 +214,9 @@ function drawTrackLines({
   [...tracks.entries()].forEach(([, points], index) => {
     context.strokeStyle = colors[index % colors.length];
     context.lineWidth = dashed ? 1.5 : 2;
-    motionStudioDisplaySegments(points, Math.max(400, plotWidth * 2)).forEach((segment) => {
+    motionStudioDisplaySegments(
+      points, Math.max(400, plotWidth * 2), gapSec,
+    ).forEach((segment) => {
       context.beginPath();
       segment.forEach((point, pointIndex) => {
         const x = padding.left + ((point.timeSec / maxTime) * plotWidth);

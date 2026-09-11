@@ -1,4 +1,4 @@
-import { escapeHtml } from './format.js?v=20260911112527';
+import { escapeHtml } from './format.js?v=20260911113528';
 import {
   commitMotionStudioMerge,
   createMotionStudioLayer,
@@ -16,7 +16,7 @@ import {
   startMotionStudioRecord,
   stopMotionStudio,
   updateMotionStudioLayer,
-} from './api.js?v=20260911112527';
+} from './api.js?v=20260911113528';
 import {
   applyMotionStudioProjectPatch, motionStudioCanCreatePointCurve,
   motionStudioCanSwitchPointDraftCurve, motionStudioCanvasEventPoint,
@@ -33,12 +33,12 @@ import {
   motionStudioPointRangeTargetsMatch, motionStudioRuntimeStatusMessage,
   motionStudioShouldProtectPointAxisSelection, motionStudioSnapFrameTime,
   resolveMotionStudioSelectedLayerId, synchronizeMotionStudioEditorTimeline,
-} from './motion_studio_calculations.js?v=20260911112527';
-import { createMotionStudioGraphPainter } from './motion_studio_graph_render.js?v=20260911112527';
+} from './motion_studio_calculations.js?v=20260911113528';
+import { createMotionStudioGraphPainter } from './motion_studio_graph_render.js?v=20260911113528';
 import {
   motionStudioCompositionTracks as compositionTracks,
   motionStudioLayerTracks as layerTracks,
-} from './motion_studio_graph.js?v=20260911112527';
+} from './motion_studio_graph.js?v=20260911113528';
 import {
   bindMotionStudioEvent,
   bindMotionStudioProjectTransportEvents,
@@ -47,32 +47,33 @@ import {
   motionStudioExportResultMessage,
   resetMotionStudioProjectState,
   setMotionStudioMessage,
-} from './motion_studio_ui.js?v=20260911112527';
+} from './motion_studio_ui.js?v=20260911113528';
 import {
   motionStudioEditorAxisLabel,
-} from './motion_studio_editor_ui.js?v=20260911112527';
+} from './motion_studio_editor_ui.js?v=20260911113528';
 import {
   createMotionStudioPlaybackController,
-} from './motion_studio_playback.js?v=20260911112527';
+} from './motion_studio_playback.js?v=20260911113528';
 import {
   renderMotionStudioLayerManager,
-} from './motion_studio_layer_manager.js?v=20260911112527';
+} from './motion_studio_layer_manager.js?v=20260911113528';
 import {
   MOTION_STUDIO_PERIOD_MS,
-} from './motion_studio_constants.js?v=20260911112527';
+  MOTION_STUDIO_PERIOD_SEC,
+} from './motion_studio_constants.js?v=20260911113528';
 import {
   createMotionStudioLayerController, closeMotionStudioLayerManager, openMotionStudioLayerManager,
   selectMotionStudioLayer,
   updateMotionStudioMergeSelection,
-} from './motion_studio_layer_controller.js?v=20260911112527';
+} from './motion_studio_layer_controller.js?v=20260911113528';
 import {
   createMotionStudioEditorController,
-} from './motion_studio_editor_controller.js?v=20260911112527';
-import { motionStudioEditorPointCurves } from './motion_studio_editor_state.js?v=20260911112527';
+} from './motion_studio_editor_controller.js?v=20260911113528';
+import { motionStudioEditorPointCurves } from './motion_studio_editor_state.js?v=20260911113528';
 import {
   createMotionStudioRequestFence,
-} from './motion_studio_controller_events.js?v=20260911112527';
-import { showAlert, showConfirm } from './ui_dialogs.js?v=20260911112527';
+} from './motion_studio_controller_events.js?v=20260911113528';
+import { showAlert, showConfirm } from './ui_dialogs.js?v=20260911113528';
 export {
   applyMotionStudioProjectPatch, motionStudioCanCreatePointCurve,
   motionStudioCanSwitchPointDraftCurve, motionStudioCanvasEventPoint,
@@ -411,8 +412,10 @@ export function createMotionStudioController({
     state, el, updatePlayhead: updatePlaybackPlayhead,
   });
 
-  function drawLayerGraph(tracks, playback = playbackView(), baseTracks = null) {
-    paintLayerGraph(tracks, playback, baseTracks);
+  function drawLayerGraph(
+    tracks, playback = playbackView(), baseTracks = null, sampleIntervalSec = 0,
+  ) {
+    paintLayerGraph(tracks, playback, baseTracks, sampleIntervalSec);
   }
 
   const editorController = createMotionStudioEditorController({
@@ -688,7 +691,12 @@ export function createMotionStudioController({
       )).join('');
     }
     const view = renderPlaybackMonitor(duration);
-    drawLayerGraph(tracks, view, base?.tracks || null);
+    // 서버가 솎아 보낸 간격을 함께 넘긴다 · §6-84
+    drawLayerGraph(
+      tracks, view, base?.tracks || null,
+      Math.max(1, Number(state.status?.recording_preview_stride) || 1)
+        * MOTION_STUDIO_PERIOD_SEC,
+    );
     return true;
   }
 
