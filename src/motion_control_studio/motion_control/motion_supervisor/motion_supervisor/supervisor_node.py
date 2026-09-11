@@ -246,14 +246,35 @@ class MotionSupervisor(Node):
     def _command_owner_label(owner: CommandOwner) -> str:
         return COMMAND_OWNER_LABELS.get(owner, 'another command source')
 
+    @staticmethod
+    def _commanded_axes(msg: Any) -> list:
+        """이번 모터 명령이 실제로 목표를 준 축 · 슬롯이 0 이면 안 건드린다."""
+        axes = []
+        try:
+            counts = list(msg.number_of_target_interfaces)
+            indexes = list(msg.controller_index)
+        except (AttributeError, TypeError):
+            return axes
+        for slot, axis in enumerate(indexes):
+            if slot < len(counts) and int(counts[slot]) > 0:
+                axes.append(int(axis))
+        return axes
+
     def _acquire_command_owner(
         self,
         owner: CommandOwner,
         *,
+        axes: Optional[list] = None,
         lease_sec: Optional[float] = None,
     ) -> tuple[bool, str]:
+        """소유권을 얻는다 · `axes` 를 주면 그 축만, 안 주면 전체를 혼자 쓴다.
+
+        축을 주면 재생이 모는 축과 MIDI 가 모는 축이 같은 순간에 공존할 수 있다 ·
+        오버더빙이 그 위에 선다 · §6-72
+        """
         acquired, current_owner = self._command_arbiter_instance().acquire(
             owner,
+            axes=axes,
             lease_sec=lease_sec,
         )
         if acquired:
@@ -303,8 +324,12 @@ class MotionSupervisor(Node):
                 throttle_duration_sec=1.0,
             )
             return
+        # 이번 명령이 실제로 모는 축만 잡는다 · 슬롯이 0 인 축은 건드리지 않으므로
+        # 그 축은 MIDI 가 쓸 수 있다 · 이것이 오버더빙의 바탕이다 · §6-72
+        playback_axes = self._commanded_axes(msg)
         acquired, current_owner = self._command_arbiter_instance().acquire(
             CommandOwner.PLAYBACK,
+            axes=playback_axes,
             lease_sec=MOTION_RUN_ACTIVE_GRACE_SEC,
         )
         if not acquired:
@@ -440,9 +465,9 @@ class MotionSupervisor(Node):
 
         now = time.monotonic()
         global_error = ''
-        if now - self._last_motion_run_command_at < MOTION_RUN_ACTIVE_GRACE_SEC:
-            global_error = 'motion playback is active'
-        elif self._active_jogs or self._active_actions:
+        # 재생 여부는 **축마다** 따진다 · 전에는 재생이 돌면 MIDI 전체를 막아서
+        # 오버더빙이 불가능했다 · §6-72
+        if self._active_jogs or self._active_actions:
             global_error = 'a manual command is active'
 
         motors = self._current_motors()
@@ -560,6 +585,7 @@ class MotionSupervisor(Node):
                 ]
             acquired, owner_error = self._acquire_command_owner(
                 CommandOwner.MIDI,
+                axes=commanded_axes,
                 lease_sec=MIDI_COMMAND_OWNERSHIP_SEC,
             )
             if not acquired:
@@ -630,9 +656,7 @@ class MotionSupervisor(Node):
             return False, 'axis is required'
         if target_position is None:
             return False, 'target_deg is required'
-        now = time.monotonic()
-        if now - self._last_motion_run_command_at < MOTION_RUN_ACTIVE_GRACE_SEC:
-            return False, 'motion playback is active'
+        # 재생 여부는 축마다 따진다 · 소유권 획득에서 걸린다 · §6-72
         if self._active_jogs or self._active_actions:
             return False, 'a manual command is active'
 
@@ -658,6 +682,7 @@ class MotionSupervisor(Node):
 
         acquired, owner_error = self._acquire_command_owner(
             CommandOwner.MIDI,
+            axes=[axis],
             lease_sec=MIDI_COMMAND_OWNERSHIP_SEC,
         )
         if not acquired:

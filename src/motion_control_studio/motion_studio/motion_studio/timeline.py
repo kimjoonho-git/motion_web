@@ -260,6 +260,69 @@ def render_project(
     return frames
 
 
+def playback_ownership(
+    project: Dict[str, Any],
+    *,
+    motion_ids: Iterable[Any] | None = None,
+) -> Dict[str, List[tuple[float, float]]]:
+    """추가 녹화 중 **재생이 소유하는 축과 시간**을 낸다 · §6-72
+
+    오버더빙은 녹화된 대로 모터를 돌리면서 그 위에 얹는다. 같은 순간에도 축마다
+    주인이 다르다.
+
+    ```
+    축 1-1  ├── 레이어 있음 (0~10초) ──┤ 재생 소유 · MIDI 차단
+            └──────────────────────────┴── 10초 이후 · MIDI 로 녹화
+    축 1-2    레이어에 없음                전 구간 MIDI 로 녹화
+    ```
+
+    소유는 **레이어 안에서 그 축의 첫 프레임부터 마지막 프레임까지** 이어진다 ·
+    중간에 몇 프레임 비어도 끊지 않는다. 값이 비는 순간마다 주인이 바뀌면 모터가
+    재생과 MIDI 사이에서 떨기 때문이다 · "축이 잠깐 쉬는 순간에도 MIDI 는 동작하면
+    안 된다" 가 이 규칙이다.
+
+    돌려주는 것 · ``{motion_id: [(시작초, 끝초), ...]}`` · 구간은 시각 오름차순이며
+    겹치지 않는다. 축이 목록에 없으면 그 축은 재생이 소유하지 않는다.
+    """
+    period = float(project.get('period_sec') or DEFAULT_PERIOD_SEC)
+    selected = (
+        None
+        if motion_ids is None
+        else {str(value) for value in motion_ids if str(value)}
+    )
+    ranges: Dict[str, List[tuple[float, float]]] = {}
+    for layer in _enabled_layers(project):
+        for motion_id, points in _layer_series(layer, selected).items():
+            if points:
+                ranges.setdefault(motion_id, []).append(
+                    (points[0][0], points[-1][0])
+                )
+    return {
+        motion_id: _merge_ranges(spans, period)
+        for motion_id, spans in ranges.items()
+    }
+
+
+def _merge_ranges(
+    spans: List[tuple[float, float]],
+    period: float,
+) -> List[tuple[float, float]]:
+    """겹치거나 한 주기 안에서 맞닿는 구간을 하나로 잇는다.
+
+    레이어가 여럿이면 같은 축의 구간이 나뉘어 들어온다 · 이어 붙여야 "이 축은
+    언제부터 언제까지 재생 소유" 가 한 줄로 나온다.
+    """
+    if not spans:
+        return []
+    merged: List[tuple[float, float]] = []
+    for start, end in sorted(spans):
+        if merged and start <= merged[-1][1] + period + 1e-9:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
 def project_motion_ids(project: Dict[str, Any]) -> List[str]:
     values = []
     for layer in _enabled_layers(project):
