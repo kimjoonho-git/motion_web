@@ -3,7 +3,7 @@ import {
   formatInt,
   formatNumber,
   normalizeMotorTypeKey,
-} from './format.js?v=20260911131630';
+} from './format.js';
 import {
   requestAcServoAction,
   requestAcServoControl,
@@ -11,8 +11,8 @@ import {
   requestDynamixelAction,
   requestDynamixelJog,
   requestMotionSafetyStop,
-} from './api.js?v=20260911131630';
-import { showConfirm } from './ui_dialogs.js?v=20260911131630';
+} from './api.js';
+import { showConfirm } from './ui_dialogs.js';
 
 const DEFAULT_MAX_JOG_DELTA_DEG = 360.0;
 const MOTION_DONE_VELOCITY_DEG_SEC = 0.05;

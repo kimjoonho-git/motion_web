@@ -1,4 +1,4 @@
-import { MOTION_STUDIO_PERIOD_SEC } from './motion_studio_constants.js?v=20260911131630';
+import { MOTION_STUDIO_PERIOD_SEC } from './motion_studio_constants.js';
 
 export function motionStudioPlaybackView({
   status = {},

@@ -1,4 +1,4 @@
-import { escapeHtml } from './format.js?v=20260911131630';
+import { escapeHtml } from './format.js';
 
 export function createMotionStudioState() {
   return {

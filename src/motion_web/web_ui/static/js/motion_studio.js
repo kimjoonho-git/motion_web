@@ -1,4 +1,4 @@
-import { escapeHtml, formatMoment } from './format.js?v=20260911131630';
+import { escapeHtml, formatMoment } from './format.js';
 import {
   commitMotionStudioMerge,
   createMotionStudioLayer,
@@ -16,7 +16,7 @@ import {
   startMotionStudioRecord,
   stopMotionStudio,
   updateMotionStudioLayer,
-} from './api.js?v=20260911131630';
+} from './api.js';
 import {
   applyMotionStudioProjectPatch, motionStudioCanCreatePointCurve,
   motionStudioCanSwitchPointDraftCurve, motionStudioCanvasEventPoint,
@@ -33,13 +33,13 @@ import {
   motionStudioPointRangeTargetsMatch, motionStudioRuntimeStatusMessage,
   motionStudioShouldProtectPointAxisSelection, motionStudioSnapFrameTime,
   resolveMotionStudioSelectedLayerId, synchronizeMotionStudioEditorTimeline,
-} from './motion_studio_calculations.js?v=20260911131630';
-import { createMotionStudioGraphPainter } from './motion_studio_graph_render.js?v=20260911131630';
-import { createMotionStudioRecordingPreview } from './motion_studio_recording_preview.js?v=20260911131630';
+} from './motion_studio_calculations.js';
+import { createMotionStudioGraphPainter } from './motion_studio_graph_render.js';
+import { createMotionStudioRecordingPreview } from './motion_studio_recording_preview.js';
 import {
   motionStudioCompositionTracks as compositionTracks,
   motionStudioLayerTracks as layerTracks,
-} from './motion_studio_graph.js?v=20260911131630';
+} from './motion_studio_graph.js';
 import {
   bindMotionStudioEvent,
   bindMotionStudioProjectTransportEvents,
@@ -48,32 +48,32 @@ import {
   motionStudioExportResultMessage,
   resetMotionStudioProjectState,
   setMotionStudioMessage,
-} from './motion_studio_ui.js?v=20260911131630';
+} from './motion_studio_ui.js';
 import {
   motionStudioEditorAxisLabel,
-} from './motion_studio_editor_ui.js?v=20260911131630';
+} from './motion_studio_editor_ui.js';
 import {
   createMotionStudioPlaybackController,
-} from './motion_studio_playback.js?v=20260911131630';
+} from './motion_studio_playback.js';
 import {
   renderMotionStudioLayerManager,
-} from './motion_studio_layer_manager.js?v=20260911131630';
+} from './motion_studio_layer_manager.js';
 import {
   MOTION_STUDIO_PERIOD_SEC,
-} from './motion_studio_constants.js?v=20260911131630';
+} from './motion_studio_constants.js';
 import {
   createMotionStudioLayerController, closeMotionStudioLayerManager, openMotionStudioLayerManager,
   selectMotionStudioLayer,
   updateMotionStudioMergeSelection,
-} from './motion_studio_layer_controller.js?v=20260911131630';
+} from './motion_studio_layer_controller.js';
 import {
   createMotionStudioEditorController,
-} from './motion_studio_editor_controller.js?v=20260911131630';
-import { motionStudioEditorPointCurves } from './motion_studio_editor_state.js?v=20260911131630';
+} from './motion_studio_editor_controller.js';
+import { motionStudioEditorPointCurves } from './motion_studio_editor_state.js';
 import {
   createMotionStudioRequestFence,
-} from './motion_studio_controller_events.js?v=20260911131630';
-import { showAlert, showConfirm } from './ui_dialogs.js?v=20260911131630';
+} from './motion_studio_controller_events.js';
+import { showAlert, showConfirm } from './ui_dialogs.js';
 export {
   applyMotionStudioProjectPatch, motionStudioCanCreatePointCurve,
   motionStudioCanSwitchPointDraftCurve, motionStudioCanvasEventPoint,
