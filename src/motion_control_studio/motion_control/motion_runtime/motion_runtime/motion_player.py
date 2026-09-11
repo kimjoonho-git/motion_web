@@ -314,7 +314,9 @@ class MotionPlayer:
                     self._require_playback_command_allowed()
                     if automation_run and self._current_servo_alarm_grade() == 1:
                         grade1_seen = True
-                    positions = sample['positions']
+                    positions = self._positions_after_release(
+                        plan, sample['positions'], float(sample['time_sec']),
+                    )
                     self._publish_motion_setpoints(
                         motors,
                         plan['axes'],
@@ -835,6 +837,30 @@ class MotionPlayer:
         if motion_run_rules._has_ac_axes(axes):
             self._publish_ac_enable_for_axes(motors, axes)
             time.sleep(self._setpoint_clear_sec())
+
+    @staticmethod
+    def _positions_after_release(
+        plan: Dict[str, Any],
+        positions: Dict[int, float],
+        time_sec: float,
+    ) -> Dict[int, float]:
+        """재생이 놓아 준 축을 발행 대상에서 뺀다 · §6-73
+
+        오버더빙은 녹화된 축만 재생이 몰고 나머지는 MIDI 로 녹화한다. 축이
+        끝났는데도 계속 명령하면 `CommandArbiter` 가 그 축을 계속 쥐고 있어
+        MIDI 가 영영 못 들어온다.
+
+        `axis_release_sec` 가 없으면 **아무것도 거르지 않는다** · 로컬·그룹
+        실행은 이 값을 주지 않으므로 지금과 똑같이 돈다.
+        """
+        release = plan.get('axis_release_sec')
+        if not release:
+            return positions
+        return {
+            motor_axis: value
+            for motor_axis, value in positions.items()
+            if time_sec <= release.get(motor_axis, float('inf')) + 1e-9
+        }
 
     def _publish_motion_setpoints(
         self,

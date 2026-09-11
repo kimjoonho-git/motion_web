@@ -14,13 +14,39 @@ from __future__ import annotations
 
 import math
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from motion_common.values import finite_float, optional_int
 
 from . import motion_run_rules
 from .motion_automation_store import REPEAT_MODES
 from .motion_run_constants import CONTINUOUS_LOOP_TOLERANCE_DEG
+
+
+def _axis_release_sec(
+    payload: Dict[str, Any],
+    axes: List[Dict[str, Any]],
+) -> Dict[int, float]:
+    """`{motion_id: 종료초}` 요청을 `{모터축: 종료초}` 로 옮긴다 · §6-73
+
+    부르는 쪽(스튜디오)은 모션 ID 로 말하고 발행부는 모터축으로 움직인다 ·
+    옮겨 두면 재생 루프가 매 프레임 매핑을 다시 뒤지지 않는다.
+    """
+    requested = payload.get('axis_release_sec')
+    if not isinstance(requested, Mapping):
+        return {}
+    by_motion_id = {}
+    for motion_id, value in requested.items():
+        seconds = finite_float(value)
+        if seconds is not None and seconds >= 0.0:
+            by_motion_id[str(motion_id)] = float(seconds)
+    if not by_motion_id:
+        return {}
+    return {
+        int(axis['motor_axis']): by_motion_id[str(axis['motion_id'])]
+        for axis in axes
+        if str(axis['motion_id']) in by_motion_id
+    }
 
 
 class PlanBuilder:
@@ -416,6 +442,12 @@ class PlanBuilder:
             'motion_file_path': str(motion_file_path) if motion_file_path else '',
             'mapping_path': str(mapping_path),
             'axes': axes,
+            # 축별 재생 종료 시각 · 오버더빙에서 스튜디오가 준다 · §6-73
+            #
+            # 이 시각을 지나면 그 축은 더 이상 명령하지 않는다 · 소유권이 풀려
+            # MIDI 가 이어받을 수 있다. 샘플 계산은 그대로 두고 **발행 직전에만**
+            # 거르므로, 로컬·그룹 실행 경로는 이 값이 없어 아무 영향이 없다.
+            'axis_release_sec': _axis_release_sec(payload, axes),
             'samples': samples,
             'warnings': warnings,
             'capabilities': capabilities,
