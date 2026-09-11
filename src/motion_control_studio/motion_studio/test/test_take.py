@@ -184,3 +184,67 @@ def test_the_board_clock_survives_a_phase_change():
     board.advance('stopping', '정지 중')
     assert board.take.elapsed_sec == 3.4
     assert board.take.total_sec == 8.92
+
+
+# --------------------------------------------------------------------- #
+# 상태 이름은 한 곳에서만 정해진다 · §6-88
+# --------------------------------------------------------------------- #
+
+def test_the_state_names_are_exactly_what_takes_can_produce():
+    """손으로 적은 목록은 실제와 갈린다 · 테이크가 낼 수 있는 것에서 뽑는다."""
+    from motion_studio.take import KINDS, PHASES, RESTING_STATES, STATES
+
+    produced = {StudioTake(kind, phase, 1, '').state
+                for kind in KINDS for phase in PHASES}
+    assert STATES == produced | RESTING_STATES
+
+
+def test_the_frontend_knows_the_same_state_names():
+    """같은 이름을 파이썬 50곳과 JS 54곳이 맨 문자열로 들고 있었다 · 한쪽에
+    새 이름이 생기면 다른 쪽은 모른 채로 돌고, 알 방법도 없었다.
+
+    주기(`motion_common.timing`)를 한 곳에서 정의하는 것과 같은 방식이다.
+    """
+    import re
+    from pathlib import Path
+
+    from motion_studio.take import STATES, STATUS_PHASES
+
+    source = (
+        Path(__file__).resolve().parents[3]
+        / 'motion_web' / 'web_ui' / 'static' / 'js'
+        / 'motion_studio_constants.js'
+    ).read_text(encoding='utf-8')
+
+    def listed(name):
+        block = re.search(
+            rf'export const {name} = Object\.freeze\(\[(.*?)\]', source, re.S,
+        )
+        assert block, f'{name} 를 찾지 못했다'
+        return set(re.findall(r"'([a-z]+)'", block.group(1)))
+
+    assert listed('MOTION_STUDIO_STATES') == set(STATES), (
+        '화면과 서버가 아는 상태 이름이 다르다'
+    )
+    assert listed('MOTION_STUDIO_STATUS_PHASES') | set(STATES) == set(STATUS_PHASES)
+
+
+def test_every_state_the_studio_branches_on_is_a_known_name():
+    """오타 하나면 그 가지는 영영 안 탄다 · 조용히 안 도는 것이 제일 나쁘다."""
+    import re
+    from pathlib import Path
+
+    from motion_studio.take import STATUS_PHASES
+
+    root = Path(__file__).resolve().parents[1] / 'motion_studio'
+    run_node_states = {
+        'preparing', 'initialized', 'running', 'verifying', 'completed', 'stopped',
+    }
+    known = set(STATUS_PHASES) | run_node_states | {'preparing', 'record', 'overdub'}
+
+    for path in sorted(root.glob('*.py')):
+        body = path.read_text(encoding='utf-8')
+        for match in re.finditer(
+            r"_status(?:\.get\('state'\)|\['state'\])\s*(?:==|!=)\s*'([a-z_]+)'", body,
+        ):
+            assert match.group(1) in known, f'{path.name}: 모르는 상태 {match.group(1)}'

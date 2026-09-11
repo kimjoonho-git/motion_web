@@ -1,4 +1,4 @@
-import { escapeHtml } from './format.js?v=20260911114309';
+import { escapeHtml } from './format.js?v=20260911120155';
 import {
   activateProjectFile,
   clearMotorRuntimeApplication,
@@ -16,8 +16,8 @@ import {
   renameProjectFile,
   saveProjectMemo,
   selectProject,
-} from './api.js?v=20260911114309';
-import { showAlert, showConfirm, showPrompt } from './ui_dialogs.js?v=20260911114309';
+} from './api.js?v=20260911120155';
+import { showAlert, showConfirm, showPrompt } from './ui_dialogs.js?v=20260911120155';
 
 function formatBytes(value) {
   const bytes = Number(value) || 0;

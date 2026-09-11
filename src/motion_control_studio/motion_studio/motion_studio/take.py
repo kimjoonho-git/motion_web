@@ -35,6 +35,39 @@ RUN_LED_KINDS = frozenset({'preview', 'initialize'})
 #: 준비 → 카운트다운 → 진행 → 정지 중
 PHASES = ('preparing', 'countdown', 'running', 'stopping')
 
+#: 테이크가 없을 때의 상태 · 쉬는 중이거나, 실패했거나, 멈추는 중
+RESTING_STATES = frozenset({'idle', 'error', 'stopping'})
+
+
+def take_state(kind: str, phase: str) -> str:
+    """이 종류·단계가 화면에 어떤 상태로 보이는가 · §6-80
+
+    **종류에서 나온다** · 단계만 바뀌므로 녹화 테이크는 어느 단계에서도
+    'playing' 이 될 수 없다.
+    """
+    if phase in {'preparing', 'countdown'}:
+        return 'initializing'
+    if phase == 'stopping':
+        return 'stopping'
+    if kind == 'initialize':
+        return 'initializing'
+    return 'recording' if kind in RECORD_KINDS else 'playing'
+
+
+#: **화면이 읽는 상태 이름** · 여기가 유일한 정의다 · §6-88
+#:
+#: 같은 이름을 파이썬 50곳과 JS 54곳이 맨 문자열로 들고 있었다 · 한쪽에 새
+#: 이름이 생기면 다른 쪽은 모른 채로 돌고, 알 방법도 없었다.
+#:
+#: 프런트엔드의 `MOTION_STUDIO_STATES` 와 같아야 한다 · 갈리면 검사가 잡는다.
+STATES = frozenset(
+    {take_state(kind, phase) for kind in KINDS for phase in PHASES}
+    | RESTING_STATES
+)
+
+#: 상태에 더해 화면이 `phase` 로 받는 이름 · 카운트다운만 따로 보인다
+STATUS_PHASES = STATES | {'countdown'}
+
 
 @dataclass(frozen=True)
 class StudioTake:
@@ -81,18 +114,8 @@ class StudioTake:
 
     @property
     def state(self) -> str:
-        """옛 상태 이름 · 화면과 기존 코드가 이것을 읽는다.
-
-        **종류에서 나온다** · 단계만 바뀌므로 녹화 테이크는 어느 단계에서도
-        'playing' 이 될 수 없다.
-        """
-        if self.phase in {'preparing', 'countdown'}:
-            return 'initializing'
-        if self.phase == 'stopping':
-            return 'stopping'
-        if self.kind == 'initialize':
-            return 'initializing'
-        return 'recording' if self.records else 'playing'
+        """화면이 읽는 상태 · `take_state` 하나에서 나온다."""
+        return take_state(self.kind, self.phase)
 
     def advanced(self, phase: str, message: str) -> 'StudioTake':
         return replace(self, phase=phase, message=message)

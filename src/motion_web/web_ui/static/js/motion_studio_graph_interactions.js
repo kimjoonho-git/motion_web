@@ -1,25 +1,25 @@
 import {
   MOTION_STUDIO_PERIOD_SEC,
   MOTION_STUDIO_TIME_EPSILON,
-} from './motion_studio_constants.js?v=20260911114309';
+} from './motion_studio_constants.js?v=20260911120155';
 import {
   motionStudioCanvasEventPoint,
   motionStudioPointDragStarted,
   motionStudioSnapFrameTime,
-} from './motion_studio_editor_math.js?v=20260911114309';
+} from './motion_studio_editor_math.js?v=20260911120155';
 import {
   motionStudioEditorGraphClickAction,
   motionStudioMotionTargetAtTime,
   motionStudioNearestMotionTarget,
   motionStudioPointCurveAtTime,
   motionStudioPointHitTarget,
-} from './motion_studio_point_model.js?v=20260911114309';
+} from './motion_studio_point_model.js?v=20260911120155';
 import {
   motionStudioBeginPointDrag,
   motionStudioBeginTangentDrag,
   motionStudioRangeSelectionActive,
   motionStudioSelectRangePoint,
-} from './motion_studio_editor_state.js?v=20260911114309';
+} from './motion_studio_editor_state.js?v=20260911120155';
 
 export function motionStudioGraphPointInside(metrics, x, y) {
   const { padding } = metrics;

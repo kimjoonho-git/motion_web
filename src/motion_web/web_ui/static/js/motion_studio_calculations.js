@@ -1,3 +1,3 @@
-export * from './motion_studio_project_model.js?v=20260911114309';
-export * from './motion_studio_point_model.js?v=20260911114309';
-export * from './motion_studio_editor_math.js?v=20260911114309';
+export * from './motion_studio_project_model.js?v=20260911120155';
+export * from './motion_studio_point_model.js?v=20260911120155';
+export * from './motion_studio_editor_math.js?v=20260911120155';
