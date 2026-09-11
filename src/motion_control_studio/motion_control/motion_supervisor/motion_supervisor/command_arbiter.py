@@ -34,6 +34,20 @@ class _Claim:
 _ALL = object()
 
 
+#: 누가 누구의 축을 뺏는가 · 여기 적힌 관계 하나뿐이다.
+#:
+#: 재생은 MIDI 가 쥔 축을 가져온다. 오버더빙 중에는 MIDI 가 쉬지 않고 값을
+#: 흘리고 있어서, 먼저 온 순서대로 주면 **MIDI 가 축을 선점하고 재생이 영영
+#: 막힌다** · 모터가 한 번도 안 움직인다. 어느 축을 언제 재생할지는 녹화
+#: 데이터가 이미 정해 놓은 것이라 도착 순서로 정할 일이 아니다 · §6-76
+#:
+#: 수동(MANUAL)은 뺏지 않는다 · 사람이 조그를 쥐고 있는데 재생이 가져가면
+#: 위험하다 · 수동과 재생은 그대로 선착순이다.
+_PREEMPTS = {
+    CommandOwner.PLAYBACK: frozenset({CommandOwner.MIDI}),
+}
+
+
 class CommandArbiter:
     """Allow one normal command source to own each axis at a time.
 
@@ -66,10 +80,12 @@ class CommandArbiter:
         axes: Optional[Iterable[int]] = None,
         lease_sec: Optional[float] = None,
     ) -> tuple[bool, CommandOwner]:
-        """축을 얻는다 · 하나라도 다른 주인이 쥐고 있으면 **전부 실패한다**.
+        """축을 얻는다 · 하나라도 뺏을 수 없는 주인이 쥐고 있으면 **전부 실패한다**.
 
         일부만 얻으면 그 축들만 움직여 동작이 반쪽이 된다 · 부른 쪽이 왜 막혔는지
         보고 물러설 수 있도록 막은 주인을 함께 돌려준다.
+
+        `_PREEMPTS` 에 적힌 상대는 뺏는다 · 재생은 MIDI 가 쥔 축을 가져온다.
         """
         if owner is CommandOwner.NONE:
             raise ValueError('CommandOwner.NONE cannot acquire ownership')
@@ -164,18 +180,25 @@ class CommandArbiter:
         요청도 남이 전체를 쥐고 있으면 막힌다.
         """
         blanket = self._claims.get(_ALL)
-        if blanket is not None and blanket.owner is not owner:
+        if blanket is not None and self._outranked(owner, blanket.owner):
             return blanket.owner
         if _ALL in keys:
             for claim in self._claims.values():
-                if claim.owner is not owner:
+                if self._outranked(owner, claim.owner):
                     return claim.owner
             return None
         for key in keys:
             claim = self._claims.get(key)
-            if claim is not None and claim.owner is not owner:
+            if claim is not None and self._outranked(owner, claim.owner):
                 return claim.owner
         return None
+
+    @staticmethod
+    def _outranked(owner: CommandOwner, holder: CommandOwner) -> bool:
+        """`holder` 가 `owner` 를 막는가 · 뺏을 수 있는 상대면 막지 못한다."""
+        if holder is owner:
+            return False
+        return holder not in _PREEMPTS.get(owner, frozenset())
 
     def _dominant_locked(self) -> CommandOwner:
         for claim in self._claims.values():

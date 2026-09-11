@@ -27,6 +27,19 @@ class StudioRecordingSession:
     def mode_label(mode: str) -> str:
         return {'overdub': '오버더빙', 'append': '이어 녹화'}.get(mode, '녹화')
 
+    def overdub_take_locked(self) -> bool:
+        """지금 추가 녹화 테이크가 도는 중인가 · 잠금 안에서 부른다."""
+        return getattr(self.studio, '_record_mode', 'record') == 'overdub'
+
+    def clear_take_locked(self) -> None:
+        """테이크를 끝낸다 · 스튜디오가 idle/error 로 갈 때 부른다.
+
+        녹화 모드가 남아 있으면 다음 합성 미리보기가 추가 녹화로 오인돼 상태
+        전이를 통째로 잃는다 · §6-76
+        """
+        self.studio._record_mode = 'record'
+        self.studio._record_ownership = {}
+
     def overdub_candidates_locked(self) -> list:
         """추가 녹화로 녹화할 수 있는 축 · 활성 레이어가 쓰는 축을 뺀 나머지.
 
@@ -173,6 +186,8 @@ class StudioRecordingSession:
             # 재생과 녹화가 같은 20ms 타이머 위에서 돈다 · 재생은 축이 끝나면
             # `axis_release_sec` 로 그 축을 놓고, 녹화는 소유 구간을 버린다.
             overdub = self.start_overdub_playback(operation_generation)
+            if overdub:
+                self.wait_for_playback_running(operation_generation, 20.0)
             with studio._lock:
                 studio._record_started = time.monotonic()
                 studio._record_frames = []
@@ -190,6 +205,30 @@ class StudioRecordingSession:
         finally:
             if midi_locked:
                 studio._request_midi('studio_recording_ready', {}, 2.0)
+
+    def wait_for_playback_running(
+        self, operation_generation: int, timeout: float
+    ) -> None:
+        """재생이 실제로 돌기 시작할 때까지 기다린다 · §6-76
+
+        녹화 시계의 0 초는 **재생의 0 초**여야 한다. 실행 요청이 받아들여진
+        순간부터 재면 계획 생성과 초기 이동에 걸린 시간만큼 새 레이어가 통째로
+        밀린다 · 사용자가 본 움직임과 저장된 것이 어긋난다.
+        """
+        studio = self.studio
+        deadline = time.monotonic() + max(0.1, float(timeout))
+        while time.monotonic() < deadline:
+            with studio._lock:
+                if operation_generation != studio._operation_generation:
+                    return
+                status = dict(studio._motion_run_status)
+            state = str(status.get('state') or '')
+            if state in {'running', 'verifying'}:
+                return
+            if state == 'error':
+                raise ValueError(status.get('message') or '추가 녹화 재생 실패')
+            time.sleep(0.01)
+        raise ValueError('추가 녹화 재생 시작 확인 시간 초과')
 
     def start_overdub_playback(self, operation_generation: int) -> bool:
         """추가 녹화일 때 기존 레이어 재생을 함께 시작한다 · §6-74

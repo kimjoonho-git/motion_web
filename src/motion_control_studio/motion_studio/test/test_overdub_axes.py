@@ -1,14 +1,20 @@
-"""추가 녹화 · 어느 축을 녹화할 수 있는가 · §6-71
+"""추가 녹화 · 녹화된 것을 재생하면서 그 위에 얹는다 · §6-71 §6-76
 
-기존 레이어를 재생하며 **다른 축**을 이어 녹화한다. 1단계에서는 재생을 함께
-돌리지 않으므로(모터는 새 축만 움직인다) 축이 겹치면 두 레이어가 같은 축·같은
-시간을 갖게 되어 `layer_conflicts` 가 합성을 거절한다 · 녹화가 끝난 뒤에 알면
-한 번을 헛돌리므로 **시작할 때** 막고, 화면에는 미리 알린다.
+녹화된 축은 그 구간 동안 재생이 몰고(모터가 실제로 움직인다), 그 구간이 끝난
+뒤나 데이터가 없는 축은 MIDI 로 녹화한다 · 소유는 **축 × 시간**으로 갈린다.
+
+여기서는 그 바탕이 되는 두 가지를 본다 · 화면이 미리 알려 주는 녹화 가능 축과,
+녹화 시계가 재생의 0 초에 맞춰 출발하는지.
 """
+
+import threading
+import time
+from pathlib import Path
 
 import pytest
 
 from motion_studio.recording_session import StudioRecordingSession
+from motion_studio.studio_node import MotionStudioNode
 
 
 class FakeStore:
@@ -163,3 +169,90 @@ def test_plain_recording_does_not_start_playback():
     start = source.index('def prepare(')
     body = source[start:source.index('\n    def ', start)]
     assert 'self.start_overdub_playback(operation_generation)' in body
+
+
+# --------------------------------------------------------------------- #
+# 녹화 시계의 0 초는 재생의 0 초여야 한다 · §6-76
+# --------------------------------------------------------------------- #
+
+def _clock_node():
+    """녹화 시계만 보기 위한 최소한의 스튜디오."""
+    node = MotionStudioNode.__new__(MotionStudioNode)
+    node._lock = threading.RLock()
+    node._operation_generation = 7
+    node._motion_run_status = {}
+    return node
+
+
+def test_recording_clock_waits_for_playback_to_actually_run():
+    """요청이 받아들여진 순간부터 재면 계획 생성과 초기 이동에 걸린 시간만큼
+    새 레이어가 통째로 밀린다 · 사용자가 본 움직임과 저장된 것이 어긋난다."""
+    node = _clock_node()
+    session = StudioRecordingSession(node)
+    node._motion_run_status = {'state': 'preparing'}
+
+    started = threading.Event()
+
+    def flip():
+        time.sleep(0.05)
+        with node._lock:
+            node._motion_run_status = {'state': 'running'}
+        started.set()
+
+    threading.Thread(target=flip, daemon=True).start()
+    begin = time.monotonic()
+    session.wait_for_playback_running(7, 5.0)
+    waited = time.monotonic() - begin
+
+    assert started.is_set(), '재생이 돌기도 전에 녹화 시계가 출발했다'
+    assert waited >= 0.04
+
+
+def test_recording_clock_gives_up_when_playback_errors():
+    """재생이 실패했는데 녹화만 도는 일은 없어야 한다."""
+    node = _clock_node()
+    node._motion_run_status = {'state': 'error', 'message': '계획 생성 실패'}
+    session = StudioRecordingSession(node)
+
+    with pytest.raises(ValueError, match='계획 생성 실패'):
+        session.wait_for_playback_running(7, 1.0)
+
+
+def test_recording_clock_stops_waiting_when_the_operation_is_replaced():
+    """사용자가 중지하면 기다림도 끝난다 · 멈춘 자리에서 계속 돌면 안 된다."""
+    node = _clock_node()
+    node._motion_run_status = {'state': 'preparing'}
+    session = StudioRecordingSession(node)
+    node._operation_generation = 8
+
+    session.wait_for_playback_running(7, 5.0)
+
+
+def test_a_finished_take_stops_being_an_overdub_take():
+    """녹화 모드가 남아 있으면 다음 합성 미리보기가 추가 녹화로 오인돼
+    상태 전이를 통째로 잃는다."""
+    node = MotionStudioNode.__new__(MotionStudioNode)
+    node._record_mode = 'overdub'
+    node._record_ownership = {'1-1': [(0.0, 8.92)]}
+    session = StudioRecordingSession(node)
+
+    assert session.overdub_take_locked() is True
+    session.clear_take_locked()
+    assert session.overdub_take_locked() is False
+    assert node._record_ownership == {}
+
+
+def test_the_recording_clock_gate_is_actually_wired_into_prepare():
+    """`wait_for_playback_running` 은 있으나 마나가 되기 쉽다 · 호출 한 줄만
+    지워도 함수 자체의 검사는 그대로 통과한다 · 그래서 호출 지점을 못 박는다.
+
+    모터가 걸린 확인은 사용자가 직접 한다 · 여기서는 순서만 본다.
+    """
+    source = (
+        Path(__file__).resolve().parents[1]
+        / 'motion_studio' / 'recording_session.py'
+    ).read_text(encoding='utf-8')
+
+    gate = source.index('wait_for_playback_running(operation_generation')
+    clock = source.index('studio._record_started = time.monotonic()')
+    assert gate < clock, '녹화 시계가 재생보다 먼저 출발한다'

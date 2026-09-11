@@ -209,64 +209,7 @@ class MotionStudioNode(Node):
                         and operation_generation != self._operation_generation
                     ):
                         return
-                self._motion_run_status = payload
-                studio_state = str(self._status.get('state') or '')
-                run_state = str(payload.get('state') or '')
-                progress = payload.get('progress')
-                if (
-                    payload.get('request_source') == 'motion_studio'
-                    and studio_state == 'initializing'
-                    and run_state in {'running', 'verifying'}
-                ):
-                    self._set_status_locked(
-                        'playing',
-                        '레이어 합성 미리보기 재생 중',
-                    )
-                    studio_state = 'playing'
-                elif (
-                    payload.get('request_source') == 'motion_studio'
-                    and studio_state == 'initializing'
-                    and run_state == 'countdown'
-                ):
-                    self._status['phase'] = 'countdown'
-                    self._status['message'] = str(
-                        payload.get('message') or '모션 시작 대기'
-                    )
-                if (
-                    payload.get('request_source') == 'motion_studio'
-                    and studio_state in {'initializing', 'playing', 'stopping'}
-                    and isinstance(progress, dict)
-                ):
-                    self._status['runtime_progress'] = dict(progress)
-                    self._status['updated_at'] = time.time()
-                    if studio_state == 'initializing' and run_state in {'initializing', 'initialized'}:
-                        self._status['initialization_progress'] = dict(progress)
-                    elif studio_state == 'initializing' and run_state == 'countdown':
-                        self._status['countdown_progress'] = dict(progress)
-                    elif studio_state == 'playing' and run_state in {'running', 'verifying'}:
-                        self._status['elapsed_sec'] = float(progress.get('elapsed_sec') or 0.0)
-                        self._status['playback_duration_sec'] = float(
-                            progress.get('duration_sec')
-                            or self._status.get('playback_duration_sec')
-                            or 0.0
-                        )
-                if (
-                    studio_state in {'initializing', 'playing'}
-                    and payload.get('request_source') == 'motion_studio'
-                    and payload.get('state') in {'completed', 'error', 'stopped'}
-                ):
-                    final_progress = dict(progress) if isinstance(progress, dict) else {}
-                    self._set_status_locked(
-                        'idle' if payload.get('state') != 'error' else 'error',
-                        str(payload.get('message') or '합성 미리보기 종료'),
-                    )
-                    self._status['runtime_progress'] = final_progress
-                    self._status['elapsed_sec'] = float(final_progress.get('elapsed_sec') or 0.0)
-                    self._status['playback_duration_sec'] = float(
-                        final_progress.get('duration_sec')
-                        or self._status.get('playback_duration_sec')
-                        or 0.0
-                    )
+                self._playback().mirror_run_status_locked(payload)
 
     def _request_callback(self, msg: String) -> None:
         request = command_router.parse_request(msg.data, default_command='status')
@@ -592,6 +535,7 @@ class MotionStudioNode(Node):
         if state not in {'recording'}:
             self._status['elapsed_sec'] = 0.0
         if state in {'idle', 'error'}:
+            self._recording().clear_take_locked()
             self._status['runtime_progress'] = {}
             self._status['initialization_progress'] = {}
             self._status['countdown_progress'] = {}

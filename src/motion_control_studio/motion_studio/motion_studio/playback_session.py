@@ -137,6 +137,76 @@ class StudioPlaybackSession:
                 if operation_generation == studio._operation_generation:
                     studio._set_status_locked('error', str(exc))
 
+    def mirror_run_status_locked(self, payload: Dict[str, Any]) -> None:
+        """실행 노드 상태를 스튜디오 상태에 비춘다 · 잠금 안에서 부른다.
+
+        추가 녹화는 여기서 빠진다 · 오버더빙도 같은 실행 노드로 재생하기 때문에
+        아래 전이가 그대로 걸리면 녹화가 "미리보기 재생"으로 뒤집히고, 재생이
+        끝나는 순간 녹화까지 함께 끝나 버린다 · 추가 녹화 중에는 실행 상태를
+        받아 두기만 한다 · §6-76
+        """
+        studio = self.studio
+        studio._motion_run_status = payload
+        if studio._recording().overdub_take_locked():
+            return
+        studio_state = str(studio._status.get('state') or '')
+        run_state = str(payload.get('state') or '')
+        progress = payload.get('progress')
+        if (
+            payload.get('request_source') == 'motion_studio'
+            and studio_state == 'initializing'
+            and run_state in {'running', 'verifying'}
+        ):
+            studio._set_status_locked(
+                'playing',
+                '레이어 합성 미리보기 재생 중',
+            )
+            studio_state = 'playing'
+        elif (
+            payload.get('request_source') == 'motion_studio'
+            and studio_state == 'initializing'
+            and run_state == 'countdown'
+        ):
+            studio._status['phase'] = 'countdown'
+            studio._status['message'] = str(
+                payload.get('message') or '모션 시작 대기'
+            )
+        if (
+            payload.get('request_source') == 'motion_studio'
+            and studio_state in {'initializing', 'playing', 'stopping'}
+            and isinstance(progress, dict)
+        ):
+            studio._status['runtime_progress'] = dict(progress)
+            studio._status['updated_at'] = time.time()
+            if studio_state == 'initializing' and run_state in {'initializing', 'initialized'}:
+                studio._status['initialization_progress'] = dict(progress)
+            elif studio_state == 'initializing' and run_state == 'countdown':
+                studio._status['countdown_progress'] = dict(progress)
+            elif studio_state == 'playing' and run_state in {'running', 'verifying'}:
+                studio._status['elapsed_sec'] = float(progress.get('elapsed_sec') or 0.0)
+                studio._status['playback_duration_sec'] = float(
+                    progress.get('duration_sec')
+                    or studio._status.get('playback_duration_sec')
+                    or 0.0
+                )
+        if (
+            studio_state in {'initializing', 'playing'}
+            and payload.get('request_source') == 'motion_studio'
+            and payload.get('state') in {'completed', 'error', 'stopped'}
+        ):
+            final_progress = dict(progress) if isinstance(progress, dict) else {}
+            studio._set_status_locked(
+                'idle' if payload.get('state') != 'error' else 'error',
+                str(payload.get('message') or '합성 미리보기 종료'),
+            )
+            studio._status['runtime_progress'] = final_progress
+            studio._status['elapsed_sec'] = float(final_progress.get('elapsed_sec') or 0.0)
+            studio._status['playback_duration_sec'] = float(
+                final_progress.get('duration_sec')
+                or studio._status.get('playback_duration_sec')
+                or 0.0
+            )
+
     def start_initial_position(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         studio = self.studio
         with studio._lock:

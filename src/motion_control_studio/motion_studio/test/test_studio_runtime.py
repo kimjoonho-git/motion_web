@@ -382,3 +382,75 @@ def test_cancelled_operation_cannot_publish_a_late_start_command():
 
     assert result['success'] is False
     assert '정지' in result['message']
+
+
+# --------------------------------------------------------------------- #
+# 추가 녹화는 미리보기 상태 전이에 휩쓸리면 안 된다 · §6-76
+# --------------------------------------------------------------------- #
+
+def _overdub_node(state='recording'):
+    node = MotionStudioNode.__new__(MotionStudioNode)
+    node._lock = threading.RLock()
+    node._workspace_project_id = 'project-1'
+    node._execution_context = {'project_generation': 1}
+    node._record_mode = 'overdub'
+    node._status = {
+        'state': state,
+        'phase': state,
+        'elapsed_sec': 4.0,
+        'playback_duration_sec': 0.0,
+    }
+    node._motion_run_status = {}
+    return node
+
+
+def _run_status(state, **extra):
+    return String(data=json.dumps({
+        'project_id': 'project-1',
+        'execution_context': {'project_generation': 1},
+        'request_source': 'motion_studio',
+        'state': state,
+        **extra,
+    }))
+
+
+def test_overdub_recording_is_not_relabelled_as_preview_playback():
+    """추가 녹화도 같은 실행 노드로 재생한다 · 상태까지 미리보기로 뒤집히면
+    화면은 "미리보기 재생 중"이 되고 녹화 표시가 사라진다."""
+    node = _overdub_node(state='initializing')
+
+    node._run_status_callback(_run_status('running', progress={
+        'elapsed_sec': 0.1, 'duration_sec': 8.92,
+    }))
+
+    assert node._status['state'] == 'initializing'
+    assert node._status['state'] != 'playing'
+
+
+def test_overdub_survives_the_playback_reaching_its_end():
+    """실제 순서 그대로 · 재생이 돌기 시작하고, 녹화된 구간 끝에서 완료된다.
+
+    오버더빙 예외가 없으면 첫 신호가 상태를 'playing' 으로 바꾸고, 완료 신호가
+    그 'playing' 을 'idle' 로 내려 **녹화가 함께 끝난다** · 녹화된 구간 뒤에
+    이어 녹화하는 것이 오버더빙의 전부인데 그 뒤가 통째로 사라진다.
+    """
+    node = _overdub_node(state='initializing')
+
+    node._run_status_callback(_run_status('running', progress={
+        'elapsed_sec': 0.1, 'duration_sec': 8.92,
+    }))
+    node._run_status_callback(_run_status('completed', progress={
+        'elapsed_sec': 8.92, 'duration_sec': 8.92,
+    }))
+
+    assert node._status['state'] != 'idle', '재생이 끝나자 녹화가 함께 멈췄다'
+
+
+def test_overdub_still_records_the_run_status_for_the_start_gate():
+    """상태 전이는 건너뛰어도 실행 상태 자체는 받아 둬야 한다 ·
+    녹화 시계가 재생의 'running' 을 기다린다."""
+    node = _overdub_node(state='initializing')
+
+    node._run_status_callback(_run_status('running'))
+
+    assert node._motion_run_status.get('state') == 'running'
