@@ -14,6 +14,7 @@ supervisor의 동명 파라미터(최종 하드웨어 출력)와 이름이 겹�
 
 from __future__ import annotations
 
+import hashlib
 import os
 from typing import Dict
 
@@ -34,8 +35,30 @@ from typing import Dict
 
 
 def pc_namespace() -> str:
-    """이 PC 의 이름공간 · 없으면 빈 문자열."""
-    return (os.environ.get('MOTION_PC_NAMESPACE') or '').strip().strip('/')
+    """이 PC 의 이름공간 · 없으면 빈 문자열.
+
+    토픽 이름에 쓸 수 없는 글자는 밑줄로 바꾼다 · 호스트 이름을 그대로 넣는
+    일이 흔한데, 하이픈이나 점이 들어가면 **아무 말 없이 통신이 안 된다**.
+    숫자로 시작해도 안 되므로 앞에 밑줄을 붙인다.
+    """
+    raw = (os.environ.get('MOTION_PC_NAMESPACE') or '').strip().strip('/')
+    if not raw:
+        return ''
+    cleaned = ''.join(
+        character if character.isascii() and (character.isalnum() or character == '_')
+        else '_'
+        for character in raw
+    )
+    cleaned = cleaned.strip('_')
+    if not cleaned:
+        # 쓸 수 있는 글자가 하나도 안 남았다(예: 한글 호스트 이름) · 그렇다고
+        # 빈 값으로 두면 **조용히 이름표가 없어진다** · 공유망에서 그러면
+        # 다른 PC 와 토픽이 부딪힌다 · 대신 그 이름에서 늘 같은 값을 만든다.
+        digest = hashlib.sha1(raw.encode('utf-8')).hexdigest()[:8]
+        return f'pc_{digest}'
+    if cleaned[0].isdigit():
+        cleaned = f'pc_{cleaned}'
+    return cleaned
 
 
 def scoped(path: str) -> str:

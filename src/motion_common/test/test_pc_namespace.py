@@ -16,21 +16,32 @@ import os
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _restore_topics():
+    """이 파일은 토픽 모듈을 이름공간째로 다시 읽는다 · 끝나면 **되돌려 놔야**
+    한다 · 안 그러면 다음 검사가 접두사 붙은 이름을 보고 엉뚱하게 실패한다.
+
+    실제로 그랬다 · `test_topics.py` 가 혼자서는 통과하는데 전체로 돌리면
+    실패했다.
+    """
+    previous = os.environ.get('MOTION_PC_NAMESPACE')
+    yield
+    if previous is None:
+        os.environ.pop('MOTION_PC_NAMESPACE', None)
+    else:
+        os.environ['MOTION_PC_NAMESPACE'] = previous
+    from motion_common import topics
+    importlib.reload(topics)
+
+
 def _topics(namespace=None):
     """이름공간을 주고 모듈을 새로 읽는다 · 상수는 읽을 때 정해진다."""
-    previous = os.environ.get('MOTION_PC_NAMESPACE')
     if namespace is None:
         os.environ.pop('MOTION_PC_NAMESPACE', None)
     else:
         os.environ['MOTION_PC_NAMESPACE'] = namespace
-    try:
-        from motion_common import topics
-        return importlib.reload(topics)
-    finally:
-        if previous is None:
-            os.environ.pop('MOTION_PC_NAMESPACE', None)
-        else:
-            os.environ['MOTION_PC_NAMESPACE'] = previous
+    from motion_common import topics
+    return importlib.reload(topics)
 
 
 #: 지금 도는 시스템이 쓰는 이름 · 하나라도 달라지면 통신이 끊긴다
@@ -112,3 +123,40 @@ def test_two_pcs_never_collide():
 def test_the_namespace_is_tidied_before_use(given, expected):
     """앞뒤 빗금이나 공백 때문에 `//pc1//xtouch` 가 되면 안 된다."""
     assert _topics(given).XTOUCH_MIDI == expected
+
+
+# --------------------------------------------------------------------- #
+# 토픽 이름으로 쓸 수 없는 값 · 호스트 이름을 그대로 넣는 일이 흔하다
+# --------------------------------------------------------------------- #
+
+@pytest.mark.parametrize('given', ['pc-1', 'pc.2', 'pc 3', 'pc@4'])
+def test_characters_a_topic_name_cannot_hold_are_replaced(given):
+    """하이픈이나 점이 들어가면 **아무 말 없이 통신이 안 된다**."""
+    value = _topics(given).XTOUCH_MIDI
+    assert value.startswith('/pc_')
+    body = value[1:].split('/')[0]
+    assert body.replace('_', '').isalnum()
+
+
+def test_a_name_starting_with_a_digit_is_fixed():
+    """토픽 이름은 숫자로 시작할 수 없다."""
+    assert _topics('2호기').XTOUCH_MIDI.startswith('/pc_2')
+
+
+def test_an_unusable_name_never_silently_drops_the_namespace():
+    """쓸 수 있는 글자가 하나도 안 남아도 빈 값으로 두면 안 된다 ·
+    공유망에서 이름표가 없어지면 다른 PC 와 토픽이 부딪힌다."""
+    value = _topics('한글이름').XTOUCH_MIDI
+    assert value != '/xtouch/midi', '이름표가 조용히 사라졌다'
+    assert value.startswith('/pc_')
+
+
+def test_the_fallback_is_the_same_every_restart():
+    """다시 켤 때마다 달라지면 토픽 이름이 바뀌어 아무도 못 찾는다."""
+    first = _topics('한글이름').XTOUCH_MIDI
+    second = _topics('한글이름').XTOUCH_MIDI
+    assert first == second
+
+
+def test_two_unusable_names_still_differ():
+    assert _topics('한글이름').XTOUCH_MIDI != _topics('다른이름').XTOUCH_MIDI

@@ -4,6 +4,8 @@ set -Eeuo pipefail
 WORKSPACE="${MOTION_WORKSPACE:?MOTION_WORKSPACE is required}"
 MOTOR_CONFIG_FILE="${MOTOR_CONFIG_FILE:?MOTOR_CONFIG_FILE is required}"
 export ROS_LOCALHOST_ONLY="${ROS_LOCALHOST_ONLY:-1}"
+# PC 이름공간 · §6-95 · 제어 서비스와 **같은 값**이어야 서로 찾는다
+export MOTION_PC_NAMESPACE="${MOTION_PC_NAMESPACE:-$(hostname)}"
 ROS_SETUP="/opt/ros/humble/setup.bash"
 WORKSPACE_SETUP="${WORKSPACE}/install/setup.bash"
 MOTOR_EXECUTABLE="${WORKSPACE}/install/motion_control_bridge/lib/motion_control_bridge/motor_manager_node"
@@ -93,4 +95,11 @@ set +u
 source "${ROS_SETUP}"
 source "${WORKSPACE_SETUP}"
 set -u
-exec "${MOTOR_EXECUTABLE}" --ros-args -p "config_file:=${MOTOR_CONFIG_FILE}"
+# Motor Manager 는 토픽을 **상대 이름**으로 연다(`motion_control/motor_status`) ·
+# 그래서 ROS 이름공간이 그대로 먹는다 · 파일을 건드리지 않고 밖에서 준다 ·
+# 그 노드는 `motion_system` 안에 있어 수정하지 않는다 · §6-95
+MOTOR_ROS_ARGS=(--ros-args -p "config_file:=${MOTOR_CONFIG_FILE}")
+if [[ -n "${MOTION_PC_NAMESPACE}" ]]; then
+  MOTOR_ROS_ARGS+=(-r "__ns:=/${MOTION_PC_NAMESPACE}")
+fi
+exec "${MOTOR_EXECUTABLE}" "${MOTOR_ROS_ARGS[@]}"

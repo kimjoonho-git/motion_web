@@ -3,6 +3,8 @@ set -Eeuo pipefail
 
 WORKSPACE="${MOTION_WORKSPACE:?MOTION_WORKSPACE is required}"
 export ROS_LOCALHOST_ONLY="${ROS_LOCALHOST_ONLY:-1}"
+# PC 이름공간 · §6-95 · 제어 서비스와 **같은 값**이어야 서로 찾는다
+export MOTION_PC_NAMESPACE="${MOTION_PC_NAMESPACE:-$(hostname)}"
 ROS_SETUP="/opt/ros/humble/setup.bash"
 WORKSPACE_SETUP="${WORKSPACE}/install/setup.bash"
 SERVICE_EXECUTABLE="${WORKSPACE}/install/motion_web_bridge/lib/motion_web_bridge/motion_motor_service"
