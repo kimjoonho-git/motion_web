@@ -14,59 +14,86 @@ supervisor의 동명 파라미터(최종 하드웨어 출력)와 이름이 겹�
 
 from __future__ import annotations
 
+import os
 from typing import Dict
+
+
+# --------------------------------------------------------------------------- #
+# PC 이름공간 · §6-95
+# --------------------------------------------------------------------------- #
+#
+# 여러 PC 가 한 DDS 망에 있으면 같은 토픽 이름이 부딪힌다 · PC1 의
+# `/xtouch/midi` 와 PC2 의 것이 구별되지 않는다.
+#
+# 그래서 **이 PC 것**에는 접두사를 붙인다 · `/pc1/xtouch/midi`.
+# **그룹 공용**(`/motion_group/...`)에는 붙이지 않는다 · 그게 PC 끼리 만나는
+# 자리이기 때문이다.
+#
+# `MOTION_PC_NAMESPACE` 가 비어 있으면 **지금과 글자 하나 다르지 않다** ·
+# 켜지 않은 시스템은 아무것도 바뀌지 않는다.
+
+
+def pc_namespace() -> str:
+    """이 PC 의 이름공간 · 없으면 빈 문자열."""
+    return (os.environ.get('MOTION_PC_NAMESPACE') or '').strip().strip('/')
+
+
+def scoped(path: str) -> str:
+    """이 PC 것에 이름공간을 붙인다 · 그룹 공용에는 쓰지 않는다."""
+    namespace = pc_namespace()
+    return f'/{namespace}{path}' if namespace else path
 
 # --------------------------------------------------------------------------- #
 # /motion_control · 제어 평면
 # --------------------------------------------------------------------------- #
 
 #: 모터 상태 브로드캐스트
-MOTION_STATE = '/motion_control/motion_state'
+MOTION_STATE = scoped('/motion_control/motion_state')
 #: 모터 하드웨어 상태
-MOTOR_STATUS = '/motion_control/motor_status'
+MOTOR_STATUS = scoped('/motion_control/motor_status')
 #: 최종 하드웨어 명령 · motion_supervisor 단독 발행
-MOTOR_COMMAND = '/motion_control/motor_command'
+MOTOR_COMMAND = scoped('/motion_control/motor_command')
 #: 모터 스캔 진행률
-MOTOR_SCAN_PROGRESS = '/motion_control/motor_scan_progress'
+MOTOR_SCAN_PROGRESS = scoped('/motion_control/motor_scan_progress')
 #: 선택 프로젝트 전파
-ACTIVE_PROJECT = '/motion_control/active_project'
+ACTIVE_PROJECT = scoped('/motion_control/active_project')
 
 #: 모션 재생 합산 요청 · motion_run_manager → motion_supervisor
-MOTION_RUN_COMMAND = '/motion_control/motion_run_command'
-MOTION_RUN_REQUEST = '/motion_control/motion_run_request'
-MOTION_RUN_RESPONSE = '/motion_control/motion_run_response'
-MOTION_RUN_STATUS = '/motion_control/motion_run_status'
+MOTION_RUN_COMMAND = scoped('/motion_control/motion_run_command')
+MOTION_RUN_REQUEST = scoped('/motion_control/motion_run_request')
+MOTION_RUN_RESPONSE = scoped('/motion_control/motion_run_response')
+MOTION_RUN_STATUS = scoped('/motion_control/motion_run_status')
 
 #: 모션 축 매핑
-MOTION_MAPPING_REQUEST = '/motion_control/motion_mapping_request'
-MOTION_MAPPING_RESPONSE = '/motion_control/motion_mapping_response'
+MOTION_MAPPING_REQUEST = scoped('/motion_control/motion_mapping_request')
+MOTION_MAPPING_RESPONSE = scoped('/motion_control/motion_mapping_response')
 #: 모션값 상태
-MOTION_VALUE_STATE = '/motion_control/motion_value_state'
+MOTION_VALUE_STATE = scoped('/motion_control/motion_value_state')
 
 #: 수동 조그
-MANUAL_JOG_REQUEST = '/motion_control/manual_jog_request'
-MANUAL_JOG_RESULT = '/motion_control/manual_jog_result'
+MANUAL_JOG_REQUEST = scoped('/motion_control/manual_jog_request')
+MANUAL_JOG_RESULT = scoped('/motion_control/manual_jog_result')
 #: 수동 동작
-MANUAL_ACTION_REQUEST = '/motion_control/manual_action_request'
-MANUAL_ACTION_RESULT = '/motion_control/manual_action_result'
+MANUAL_ACTION_REQUEST = scoped('/motion_control/manual_action_request')
+MANUAL_ACTION_RESULT = scoped('/motion_control/manual_action_result')
 
 #: MIDI 위치 지정
-MIDI_POSITION_REQUEST = '/motion_control/midi_position_request'
-MIDI_POSITION_RESULT = '/motion_control/midi_position_result'
+MIDI_POSITION_REQUEST = scoped('/motion_control/midi_position_request')
+MIDI_POSITION_RESULT = scoped('/motion_control/midi_position_result')
 
 #: 안전
-SAFETY_REQUEST = '/motion_control/safety_request'
-SAFETY_STATUS = '/motion_control/safety_status'
+SAFETY_REQUEST = scoped('/motion_control/safety_request')
+SAFETY_STATUS = scoped('/motion_control/safety_status')
 
 # --------------------------------------------------------------------------- #
 # /motion_studio · 편집
 # --------------------------------------------------------------------------- #
 
-STUDIO_REQUEST = '/motion_studio/request'
-STUDIO_RESPONSE = '/motion_studio/response'
-STUDIO_STATUS = '/motion_studio/status'
-STUDIO_EDITOR_REQUEST = '/motion_studio/editor/request'
-STUDIO_EDITOR_RESPONSE = '/motion_studio/editor/response'
+STUDIO_REQUEST = scoped('/motion_studio/request')
+STUDIO_RESPONSE = scoped('/motion_studio/response')
+STUDIO_STATUS = scoped('/motion_studio/status')
+STUDIO_EDITOR_REQUEST = scoped('/motion_studio/editor/request')
+STUDIO_EDITOR_RESPONSE = scoped('/motion_studio/editor/response')
 
 # --------------------------------------------------------------------------- #
 # /motion_group · 다중 PC 연동 (DDS 별도 도메인)
@@ -83,25 +110,25 @@ GROUP_SYSTEM_INFO = '/motion_group/system_info'
 # /motion_schedule · 스케줄
 # --------------------------------------------------------------------------- #
 
-SCHEDULE_STATUS = '/motion_schedule/status'
+SCHEDULE_STATUS = scoped('/motion_schedule/status')
 
 # --------------------------------------------------------------------------- #
 # /motion_web · 웹 브리지 부가 채널
 # --------------------------------------------------------------------------- #
 
-MIDI_MONITOR_REQUEST = '/motion_web/midi_monitor/request'
-MIDI_MONITOR_RESPONSE = '/motion_web/midi_monitor/response'
-MIDI_MONITOR_STATE = '/motion_web/midi_monitor/state'
+MIDI_MONITOR_REQUEST = scoped('/motion_web/midi_monitor/request')
+MIDI_MONITOR_RESPONSE = scoped('/motion_web/midi_monitor/response')
+MIDI_MONITOR_STATE = scoped('/motion_web/midi_monitor/state')
 
 # --------------------------------------------------------------------------- #
 # /xtouch · MIDI 컨트롤 서피스
 # --------------------------------------------------------------------------- #
 
-XTOUCH_MIDI = '/xtouch/midi'
-XTOUCH_FEEDBACK = '/xtouch/feedback'
-XTOUCH_INPUT_STATE = '/xtouch/input_state'
-XTOUCH_CONNECTION_STATE = '/xtouch/connection/state'
-XTOUCH_CONNECTION_COMMAND = '/xtouch/connection/command'
+XTOUCH_MIDI = scoped('/xtouch/midi')
+XTOUCH_FEEDBACK = scoped('/xtouch/feedback')
+XTOUCH_INPUT_STATE = scoped('/xtouch/input_state')
+XTOUCH_CONNECTION_STATE = scoped('/xtouch/connection/state')
+XTOUCH_CONNECTION_COMMAND = scoped('/xtouch/connection/command')
 
 
 def all_topics() -> Dict[str, str]:
