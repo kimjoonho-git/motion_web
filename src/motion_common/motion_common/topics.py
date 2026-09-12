@@ -79,24 +79,6 @@ GROUP_ALARM = '/motion_group/alarm'
 GROUP_TIME_SYNC = '/motion_group/time_sync'
 GROUP_SYSTEM_INFO = '/motion_group/system_info'
 
-#: MIDI 가 지금 몰고 있는 모션값 · 20ms 마다 · 이 PC 안에서만 흐른다 · §6-93
-#:
-#: 조정 노드가 이것을 받아 연동된 PC 로 중계한다 · MIDI 노드는 그룹을 모른다 ·
-#: "연동 중인가" 는 조정 노드의 몫이다.
-MIDI_MOTION_VALUES = '/midi_control/motion_values'
-
-#: 연동된 PC 에서 받은 모션값 · 이 PC 안에서만 흐른다
-#:
-#: 조정 노드가 그룹에서 받아 여기로 내려 준다 · MIDI 노드가 자기 매핑과
-#: 한계값으로 자기 모터축에 옮긴다.
-REMOTE_MOTION_VALUES = '/midi_control/remote_motion_values'
-
-#: 연동된 PC 로 흐르는 실시간 모션값 · 20ms 마다 · §6-93
-#:
-#: 다른 그룹 토픽과 달리 **끊임없이 흐른다** · 그래서 신뢰성보다 최신성이
-#: 중요하다 · 놓친 값을 다시 보내느니 다음 값을 보내는 편이 낫다.
-GROUP_MOTION_VALUES = '/motion_group/motion_values'
-
 # --------------------------------------------------------------------------- #
 # /motion_schedule · 스케줄
 # --------------------------------------------------------------------------- #
