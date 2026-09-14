@@ -1393,3 +1393,13 @@
   font-weight: 600;
 }
 
+/* 확정된 명단 알림 · 실행 중 눈에 들어와야 한다 · §6-98 */
+#coordinationConfirmedRosterBanner {
+  margin-bottom: 12px;
+  font-size: 14px;
+  font-weight: 700;
+}
+#coordinationConfirmedRosterBanner:empty {
+  display: none;
+}
+
