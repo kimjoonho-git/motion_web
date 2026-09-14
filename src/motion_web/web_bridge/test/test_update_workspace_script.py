@@ -17,8 +17,6 @@ from pathlib import Path
 import pytest
 
 SCRIPT_RELATIVE = 'src/motion_web/web_bridge/deploy/update_workspace.sh'
-REPAIR_RELATIVE = 'src/motion_web/web_bridge/deploy/repair_python_packages.sh'
-REAL_REPAIR = Path(__file__).resolve().parents[1] / 'deploy/repair_python_packages.sh'
 INSTALLER_RELATIVE = 'src/motion_web/web_bridge/deploy/install_user_service.sh'
 REAL_SCRIPT = Path(__file__).resolve().parents[1] / 'deploy/update_workspace.sh'
 
@@ -73,7 +71,6 @@ def world(tmp_path):
         _padded(REAL_SCRIPT.read_text(encoding='utf-8'), '채움', 400),
     )
     _write(seed / INSTALLER_RELATIVE, _installer(0))
-    _write(seed / REPAIR_RELATIVE, REAL_REPAIR.read_text(encoding='utf-8'))
     _git(seed, 'add', '-A')
     _git(seed, 'commit', '-m', '처음')
     _git(seed, 'remote', 'add', 'origin', str(origin))
@@ -86,19 +83,6 @@ def world(tmp_path):
     fake_bin = tmp_path / 'bin'
     fake_bin.mkdir()
     _write(fake_bin / 'colcon', '#!/usr/bin/env bash\necho "가짜 빌드"\n')
-
-    def flaky_colcon(package):
-        """옛 찌꺼기가 있으면 실패하고, 지우면 통과하는 빌드를 흉내 낸다."""
-        stale = tmp_path / 'ws/build' / package
-        stale.mkdir(parents=True, exist_ok=True)
-        (stale / 'stale.txt').write_text('옛 찌꺼기', encoding='utf-8')
-        _write(fake_bin / 'colcon', f'''#!/usr/bin/env bash
-if [[ -e "{stale}" ]]; then
-  echo "Failed   <<< {package} [0.5s, exited with code 1]"
-  exit 1
-fi
-echo "가짜 빌드 · 통과"
-''')
     (tmp_path / 'ros_setup.bash').write_text('# 비어 있다\n', encoding='utf-8')
 
     def publish(*, script_text=None, installer_exit=None, note='다음'):
@@ -141,7 +125,6 @@ echo "가짜 빌드 · 통과"
 
     return {
         'workspace': workspace, 'publish': publish, 'run': run, 'head': head,
-        'flaky_colcon': flaky_colcon,
     }
 
 
@@ -241,90 +224,22 @@ def test_a_dirty_workspace_never_reaches_the_services(world):
     assert '서비스를 멈춘다' not in log
 
 
-def test_a_stale_build_cache_is_cleared_and_retried(world, tmp_path):
-    """빌드가 깨지면 옛 찌꺼기부터 의심한다.
+def test_it_always_builds_from_scratch(world, tmp_path):
+    """규칙은 하나다 · **업데이트는 매번 깨끗하게 빌드한다.**
 
-    손으로 할 때도 늘 그랬다 · 빌드 캐시를 지우고 그 꾸러미만 다시 빌드하면
-    통과했다 · 그 일을 사람이 하지 않게 한다 · 실패한 꾸러미만 지운다 ·
-    전체를 지우면 몇 분이 몇십 분이 된다.
+    `--symlink-install` 은 꾸러미를 `install/`(이름표)과 `build/`(실물)로 나눠
+    둔다 · 한쪽만 지워지면 colcon 은 "정상" 이라 하고 서비스는 시작에서 죽는다 ·
+    실제로 그 상태에 빠져 같은 실패를 반복했다.
+
+    지우고 시작하면 그 어긋남이 생길 수가 없다 · 확인도 수리도 필요 없다.
     """
-    world['flaky_colcon']('motion_web_ui')
+    leftover = tmp_path / 'ws/build/옛찌꺼기'
+    leftover.mkdir(parents=True)
+    (tmp_path / 'ws/install').mkdir(parents=True, exist_ok=True)
     world['publish'](note='새 것')
 
-    completed, state, log = world['run']()
+    completed, state, _log = world['run']()
 
     assert completed.returncode == 0, completed.stderr
     assert state['status'] == 'success'
-    assert '캐시를 지우고 다시 해 본다' in log
-    assert 'motion_web_ui' in log
-    assert not (tmp_path / 'ws/build/motion_web_ui').exists(), '찌꺼기가 남았다'
-
-
-def test_a_package_that_cannot_be_found_is_rebuilt_before_the_services_start(world):
-    """빌드가 31개 전부 성공이라고 해놓고 서비스가 시작에서 죽었다 ·
-    `No package metadata was found for motion-web-bridge`
-
-    `--symlink-install` 로 만든 파이썬 꾸러미의 메타데이터가 옛것과 어긋난
-    것이다 · **서비스를 켜기 전에** 잡아야 한다 · 켜 보고 알면 그때는 이미
-    장비가 멈춘 뒤다 · 끝내 못 고치면 켜지 말고 되돌린다.
-    """
-    before = world['head']()
-    world['publish'](note='새 것')
-
-    # 있을 리 없는 배포를 요구한다 · 가짜 빌드는 그것을 만들어내지 못한다
-    completed, state, log = world['run'](distributions='정말-없는-꾸러미')
-
-    assert completed.returncode != 0
-    assert '꾸러미 정보가 어긋났다' in log
-    assert '고쳐지지 않았다' in log
-    assert state['status'] == 'failure'
-    assert state['rolled_back'] is True
-    assert world['head']() == before, '되돌리지 못했다'
-    # 죽은 채로 서비스를 켜지 않았다
-    assert log.index('꾸러미 정보가 어긋났다') < log.index('되돌린다')
-
-
-def test_the_check_runs_before_the_installer():
-    from pathlib import Path as _Path
-    script = (
-        _Path(__file__).resolve().parents[1] / 'deploy/update_workspace.sh'
-    ).read_text(encoding='utf-8')
-
-    assert script.index('repair_if_broken') < script.index(
-        "write_state running installing"
-    ), '서비스를 켠 뒤에 확인한다'
-    # 판정과 수리의 주인은 한 곳이다 · 여기서 다시 적으면 갈린다
-    assert 'repair_python_packages.sh' in script
-    assert 'importlib.metadata' not in script, '같은 규칙을 두 곳에 적었다'
-
-
-def test_a_repair_that_cannot_be_patched_falls_back_to_a_clean_rebuild():
-    """부분 수리로 안 되면 전체를 지우고 다시 빌드한다.
-
-    여기서 포기하면 같은 실패가 **계속 반복된다** · 업데이트가 되돌아가면서
-    고침까지 함께 지워, 다음 시도도 옛 코드로 돌기 때문이다 · 실제로 한 대가
-    그 고리에 빠졌다.
-    """
-    from pathlib import Path as _Path
-    repair = (
-        _Path(__file__).resolve().parents[1] / 'deploy/repair_python_packages.sh'
-    ).read_text(encoding='utf-8')
-
-    assert 'rm -rf "${WORKSPACE}/build" "${WORKSPACE}/install"' in repair
-    # 전체 지우기는 **부분 수리를 해 본 뒤에만** 한다 · 늘 하면 몇 분이 몇십 분
-    assert repair.index('--packages-above') < repair.index(
-        'rm -rf "${WORKSPACE}/build" "${WORKSPACE}/install"'
-    )
-
-
-def test_the_installer_repairs_after_stopping_the_services():
-    """수리가 `install/` 을 통째로 지울 수 있다 · 서비스가 도는 채로 지우면
-    돌고 있는 것을 발밑에서 빼는 셈이다."""
-    from pathlib import Path as _Path
-    installer = (
-        _Path(__file__).resolve().parents[1] / 'deploy/install_user_service.sh'
-    ).read_text(encoding='utf-8')
-
-    assert installer.index('systemctl --user stop motion-coordination.service') < (
-        installer.index('repair_python_packages.sh')
-    ), '서비스를 멈추기 전에 수리한다'
+    assert not leftover.exists(), '옛 빌드가 남았다'

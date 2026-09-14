@@ -156,22 +156,6 @@ systemctl --user stop motion-control.service 2>/dev/null || true
 systemctl --user stop motion-motor.service 2>/dev/null || true
 systemctl --user stop motion-coordination.service 2>/dev/null || true
 
-# 켜기 전에 꾸러미 정보를 확인한다 · §6-97
-#
-# `install/` 은 `build/` 안의 메타데이터를 가리키는 **링크**다 · 둘 중 하나만
-# 어긋나도 서비스는 시작하자마자 죽는다(`No package metadata was found for
-# motion-web-bridge`) · 빌드는 "다 됐다" 고 한 뒤다.
-#
-# 켜 보고 알면 그때는 이미 장비가 멈춘 뒤다 · 여기서 미리 보고, 어긋났으면
-# 그 꾸러미만 다시 빌드한다 · 판정과 수리의 주인은 그 스크립트 하나다.
-REPAIR_SCRIPT="${SCRIPT_DIR}/repair_python_packages.sh"
-if [[ -f "${REPAIR_SCRIPT}" ]]; then
-  MOTION_WORKSPACE="${WORKSPACE}" bash "${REPAIR_SCRIPT}" || {
-    echo "꾸러미 정보를 고치지 못했습니다 · 서비스를 켜지 않습니다" >&2
-    exit 1
-  }
-fi
-
 mv "${INSTALL_TMP}/motion-control.service" "${CONTROL_UNIT_FILE}"
 mv "${INSTALL_TMP}/motion-motor.service" "${MOTOR_UNIT_FILE}"
 mv "${INSTALL_TMP}/motion-coordination.service" "${COORDINATION_UNIT_FILE}"

@@ -108,6 +108,15 @@ start_services() {
 }
 
 build() {
+  # **늘 깨끗하게 빌드한다** · §6-97
+  #
+  # `--symlink-install` 은 꾸러미를 `install/`(이름표)과 `build/`(실물)로
+  # 나눠 둔다 · 한쪽만 지워지면 colcon 은 "정상" 이라 하고 서비스는 시작에서
+  # 죽는다 · 실제로 그 상태에 빠져 같은 실패를 반복했다.
+  #
+  # 지우고 시작하면 그 어긋남이 **생길 수가 없다** · 몇 분 더 걸리는 대신
+  # 확인도, 수리도, 되살리기도 필요 없다 · 규칙이 하나다.
+  rm -rf "${WORKSPACE}/build" "${WORKSPACE}/install"
   set +u
   # shellcheck disable=SC1090
   source "${ROS_SETUP}"
@@ -115,62 +124,13 @@ build() {
   colcon build --symlink-install --base-paths "${WORKSPACE}/src"
 }
 
-#: 빌드가 깨지면 **옛 찌꺼기부터 의심한다**
-#:
-#: 손으로 할 때도 늘 그랬다 · 빌드 캐시를 지우고 그 꾸러미만 다시 빌드하면
-#: 통과했다 · 그 일을 사람이 하지 않게 한다.
-#:
-#: 실패한 꾸러미만 지운다 · 전체를 지우면 몇 분이 몇십 분이 된다 · 어느
-#: 꾸러미인지 못 찾았을 때만 통째로 지운다.
-build_with_recovery() {
-  if build; then
-    return 0
-  fi
-  say '빌드가 실패했다 · 캐시를 지우고 다시 해 본다'
-  write_state running building '빌드 실패 · 캐시를 지우고 다시 시도합니다'
-
-  local failed
-  failed="$(grep -oE 'Failed[[:space:]]+<<<[[:space:]]+[^ ]+' "${LOG_FILE}" \
-    | awk '{print $NF}' | sort -u | tr '\n' ' ')"
-
-  if [[ -z "${failed// /}" ]]; then
-    say '어느 꾸러미인지 못 찾았다 · 전체를 지우고 다시 빌드한다'
-    rm -rf "${WORKSPACE}/build" "${WORKSPACE}/install"
-    build
-    return
-  fi
-
-  say "다시 빌드할 꾸러미 · ${failed}"
-  local package
-  for package in ${failed}; do
-    rm -rf "${WORKSPACE}/build/${package}" "${WORKSPACE}/install/${package}"
-  done
-  set +u
-  # shellcheck disable=SC1090
-  source "${ROS_SETUP}"
-  set -u
-  # 그 꾸러미를 쓰는 것들도 같이 다시 빌드한다 · 혼자만 새것이면 갈린다
-  colcon build --symlink-install --base-paths "${WORKSPACE}/src" \
-    --packages-above ${failed}
-}
-
-# 빌드가 끝나도 **서비스가 못 뜨는 자리**가 하나 더 있다 ·
-# `--symlink-install` 파이썬 꾸러미의 메타데이터가 옛것과 어긋나면 `colcon` 은
-# "다 됐다" 하고 서비스는 시작에서 죽는다 · 그 판정과 수리는 사람이 직접 쓰는
-# 스크립트에 있다 · 여기서 다시 적으면 둘이 갈린다.
-#
-# 경로는 **작업공간 기준**이다 · 이 스크립트는 자기 복사본(/tmp)에서 돌기 때문에
-# 자기 위치를 기준으로 찾으면 못 찾는다.
-# shellcheck disable=SC1090
-source "${WORKSPACE}/src/motion_web/web_bridge/deploy/repair_python_packages.sh"
-
 roll_back() {
   ROLLED_BACK="true"
   write_state running rollback "되돌리는 중 · ${FROM_COMMIT}"
   say "되돌린다 → ${FROM_COMMIT}"
   git -C "${WORKSPACE}" reset --hard "${FROM_COMMIT}" || true
   git -C "${WORKSPACE}" submodule update --init --recursive || true
-  build_with_recovery || say '되돌린 뒤 빌드도 실패했다'
+  build || say '되돌린 뒤 빌드도 실패했다'
 }
 
 on_error() {
@@ -215,14 +175,9 @@ write_state running pulling '코드 받는 중'
 git merge --ff-only "origin/${BRANCH}"
 git submodule update --init --recursive
 
-write_state running building '빌드 중 · 몇 분 걸립니다'
+write_state running building '깨끗하게 다시 빌드하는 중 · 몇 분 걸립니다'
 say '빌드'
-build_with_recovery
-
-write_state running building '꾸러미 정보 확인'
-if ! repair_if_broken; then
-  false  # 여기서 서비스를 켜면 죽은 채로 남는다 · 되돌린다
-fi
+build
 
 write_state running installing '서비스 설치·시작'
 say '서비스를 켠다'
