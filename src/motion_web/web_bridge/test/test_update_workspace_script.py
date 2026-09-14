@@ -283,3 +283,26 @@ def test_a_failed_build_is_retried_from_scratch(world, tmp_path):
     assert state['status'] == 'success'
     assert '지우고 처음부터 다시 빌드한다' in log
     assert not (tmp_path / 'ws/build/옛찌꺼기').exists()
+
+
+def test_a_build_that_only_fails_together_gets_one_more_pass(world, tmp_path):
+    """전체를 한꺼번에 빌드할 때만 가끔 깨지는 꾸러미가 있다 · 단독으로는 잘
+    된다 · 이어서 한 번 더 하면 넘어간다 · 실제로 `robot_manager` 가 그랬다.
+    """
+    counter = tmp_path / 'bin/tries'
+    (tmp_path / 'bin/colcon').write_text(
+        '#!/usr/bin/env bash\n'
+        f'echo x >> "{counter}"\n'
+        f'[[ $(wc -l < "{counter}") -ge 3 ]] || {{ echo "Failed <<< robot_manager"; exit 1; }}\n'
+        'echo "가짜 빌드 · 통과"\n',
+        encoding='utf-8',
+    )
+    (tmp_path / 'bin/colcon').chmod(0o755)
+    world['publish'](note='새 것')
+
+    completed, state, log = world['run']()
+
+    assert completed.returncode == 0, completed.stderr
+    assert state['status'] == 'success'
+    assert '지우고 처음부터 다시 빌드한다' in log
+    assert '한 번 더 이어서 빌드한다' in log

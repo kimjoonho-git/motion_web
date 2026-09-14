@@ -170,22 +170,26 @@ git submodule update --init --recursive
 
 write_state running building '깨끗하게 다시 빌드하는 중 · 몇 분 걸립니다'
 say '빌드'
-# 빌드가 깨지면 **지우고 한 번 더** 해 본다 · §6-97
+# 빌드는 최대 세 번 해 본다 · §6-97
 #
-# 옛 결과가 새 빌드를 막는 경우가 있다 · 실제로 겪은 것 ·
+# 한 번에 안 되는 이유가 둘 있었다 ·
 #
-#     failed to create symbolic link '.../build/midi_msgs/...'
-#     because existing path cannot be removed: Is a directory
+#   · 옛 결과가 새 빌드를 막는다 · `existing path cannot be removed: Is a
+#     directory` · 빌드 방식이 한 번이라도 달라지면 부딪힌다 → 지우고 다시
+#   · 전체를 한꺼번에 빌드할 때만 가끔 깨지는 꾸러미가 있다 · 단독으로는
+#     잘 된다 → 이어서 한 번 더 하면 넘어간다
 #
-# 빌드 방식이 한 번이라도 달라지면(링크 ↔ 복사) 이렇게 부딪힌다 · 사람이
-# 하던 "지우고 다시 빌드" 를 여기서 한다 · 늘 지우지는 않는다 · 평소 빌드는
-# 빠른 편이 낫다.
-build || {
+# 늘 지우지는 않는다 · 평소 빌드는 10여 초로 끝나는 편이 낫다.
+if ! build; then
   say '빌드가 실패했다 · 지우고 처음부터 다시 빌드한다'
   write_state running building '빌드 실패 · 지우고 처음부터 다시 빌드합니다'
   rm -rf "${WORKSPACE}/build" "${WORKSPACE}/install"
-  build
-}
+  if ! build; then
+    say '한 번 더 이어서 빌드한다'
+    write_state running building '빌드를 이어서 한 번 더 합니다'
+    build
+  fi
+fi
 
 write_state running installing '서비스 설치·시작'
 say '서비스를 켠다'
