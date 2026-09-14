@@ -109,12 +109,13 @@ echo "가짜 빌드 · 통과"
         _git(seed, 'commit', '-m', note)
         _git(seed, 'push', '-q', 'origin', 'main')
 
-    def run():
+    def run(distributions=''):
         environment = {
             **os.environ,
             'MOTION_WORKSPACE': str(workspace),
             'MOTION_UPDATE_STATE_DIR': str(tmp_path / 'state'),
             'MOTION_UPDATE_SERVICES': '',
+            'MOTION_UPDATE_DISTRIBUTIONS': distributions,
             'MOTION_ROS_SETUP': str(tmp_path / 'ros_setup.bash'),
             'PATH': f'{fake_bin}{os.pathsep}{os.environ["PATH"]}',
         }
@@ -254,3 +255,38 @@ def test_a_stale_build_cache_is_cleared_and_retried(world, tmp_path):
     assert '캐시를 지우고 다시 해 본다' in log
     assert 'motion_web_ui' in log
     assert not (tmp_path / 'ws/build/motion_web_ui').exists(), '찌꺼기가 남았다'
+
+
+def test_a_package_that_cannot_be_found_is_rebuilt_before_the_services_start(world):
+    """빌드가 31개 전부 성공이라고 해놓고 서비스가 시작에서 죽었다 ·
+    `No package metadata was found for motion-web-bridge`
+
+    `--symlink-install` 로 만든 파이썬 꾸러미의 메타데이터가 옛것과 어긋난
+    것이다 · **서비스를 켜기 전에** 잡아야 한다 · 켜 보고 알면 그때는 이미
+    장비가 멈춘 뒤다 · 끝내 못 고치면 켜지 말고 되돌린다.
+    """
+    before = world['head']()
+    world['publish'](note='새 것')
+
+    # 있을 리 없는 배포를 요구한다 · 가짜 빌드는 그것을 만들어내지 못한다
+    completed, state, log = world['run'](distributions='정말-없는-꾸러미')
+
+    assert completed.returncode != 0
+    assert '꾸러미 정보가 어긋났다' in log
+    assert '고쳐지지 않았다' in log
+    assert state['status'] == 'failure'
+    assert state['rolled_back'] is True
+    assert world['head']() == before, '되돌리지 못했다'
+    # 죽은 채로 서비스를 켜지 않았다
+    assert log.index('꾸러미 정보가 어긋났다') < log.index('되돌린다')
+
+
+def test_the_check_runs_before_the_installer():
+    from pathlib import Path as _Path
+    script = (
+        _Path(__file__).resolve().parents[1] / 'deploy/update_workspace.sh'
+    ).read_text(encoding='utf-8')
+
+    assert script.index('verify_installed_python') < script.index(
+        "write_state running installing"
+    ), '서비스를 켠 뒤에 확인한다'
