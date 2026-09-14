@@ -20,6 +20,7 @@ const UPDATE_PHASE_LABEL = {
   installing: '서비스 시작',
   rollback: '되돌리는 중',
   done: '완료',
+  needs_attention: '설치만 남음',
   failed: '실패',
   blocked: '시작하지 못함',
   spawn: '시작하지 못함',

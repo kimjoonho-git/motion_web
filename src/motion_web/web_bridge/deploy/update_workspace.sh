@@ -76,7 +76,18 @@ stop_services() {
 start_services() {
   # 설치 스크립트가 유닛을 다시 그리고 켠다 · 오늘처럼 유닛 템플릿이 바뀌면
   # 빌드만으로는 옛 유닛이 그대로 남는다
-  bash "${INSTALLER}"
+  #
+  # 설치가 실패해도 **서비스는 켜고 나간다** · 여기서 그냥 끝내면 장비가
+  # 꺼진 채로 남는다 · 실패했다는 것은 돌려주고, 판단은 부르는 쪽이 한다
+  local status=0
+  bash "${INSTALLER}" || status=$?
+  if [[ "${status}" -ne 0 ]]; then
+    say "설치 스크립트가 ${status} 로 끝났다 · 옛 유닛으로 서비스만 켠다"
+    for service in "${SERVICES[@]}"; do
+      systemctl --user start "${service}" || true
+    done
+  fi
+  return "${status}"
 }
 
 build() {
@@ -144,7 +155,21 @@ build
 
 write_state running installing '서비스 설치·시작'
 say '서비스를 켠다'
-start_services
+INSTALL_STATUS=0
+start_services || INSTALL_STATUS=$?
+
+if [[ "${INSTALL_STATUS}" -eq 78 ]]; then
+  # 78 은 "사람이 sudo 로 해야 할 일이 남았다" 는 뜻이다(실시간 우선순위 권한) ·
+  # 코드는 이미 새것이고 빌드도 끝났다 · 되돌릴 이유가 없다 · 서비스는 위에서
+  # 이미 켰다
+  write_state success needs_attention \
+    '업데이트는 됐지만 서비스 설치에 사람 손이 필요합니다 · 기록을 확인하세요'
+  say '설치만 남았다'
+  exit 0
+fi
+if [[ "${INSTALL_STATUS}" -ne 0 ]]; then
+  false  # 여기서부터는 실패다 · ERR 트랩이 되돌린다
+fi
 
 write_state success done "업데이트 완료 · ${TO_COMMIT}"
 say '끝'

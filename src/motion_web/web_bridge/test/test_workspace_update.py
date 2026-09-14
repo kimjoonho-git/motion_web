@@ -265,6 +265,15 @@ def test_the_script_renders_the_units_again():
     assert 'install_user_service.sh' in SCRIPT
 
 
+def test_the_script_never_leaves_the_machine_switched_off():
+    """설치 스크립트는 실시간 권한처럼 사람이 sudo 로 해야 할 일이 남으면
+    78 로 끝난다 · 새 PC 에서 늘 그렇다 · 거기서 그냥 끝내면 코드만 새것이고
+    장비는 꺼진 채로 남는다."""
+    installer = SCRIPT[SCRIPT.index('start_services() {'):SCRIPT.index('build() {')]
+    assert 'systemctl --user start' in installer, '설치가 실패해도 켜야 한다'
+    assert 'INSTALL_STATUS}" -eq 78' in SCRIPT, '78 을 따로 보지 않는다'
+
+
 # --------------------------------------------------------------------- #
 # 지금 하면 안 되는 때
 # --------------------------------------------------------------------- #
