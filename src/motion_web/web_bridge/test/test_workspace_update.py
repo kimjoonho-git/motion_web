@@ -246,11 +246,13 @@ def test_the_script_only_fast_forwards():
     assert 'git pull' not in SCRIPT
 
 
-def test_the_script_can_put_it_back():
-    """빌드가 깨지면 반쯤 덮인 채로 남는다 · 직전 커밋으로 되돌리고 다시
-    빌드해서 도는 상태로 끝나야 한다."""
-    assert 'git -C "${WORKSPACE}" reset --hard "${FROM_COMMIT}"' in SCRIPT
-    assert 'roll_back' in SCRIPT
+def test_the_script_never_puts_the_old_code_back():
+    """되돌리기가 고리를 만들었다 · 실패 → 되돌리기 → 방금 받은 고침까지
+    함께 지워짐 → 다음 시도도 같은 자리에서 실패 · 한 대가 거기 빠졌다.
+
+    코드는 새것으로 두고, 켤 수 있는 것은 켜고 나간다.
+    """
+    assert 'reset --hard' not in SCRIPT, '옛 코드로 되돌린다'
     assert 'trap on_error ERR' in SCRIPT
 
 

@@ -124,23 +124,20 @@ build() {
   colcon build --symlink-install --base-paths "${WORKSPACE}/src"
 }
 
-roll_back() {
-  ROLLED_BACK="true"
-  write_state running rollback "되돌리는 중 · ${FROM_COMMIT}"
-  say "되돌린다 → ${FROM_COMMIT}"
-  git -C "${WORKSPACE}" reset --hard "${FROM_COMMIT}" || true
-  git -C "${WORKSPACE}" submodule update --init --recursive || true
-  build || say '되돌린 뒤 빌드도 실패했다'
-}
-
 on_error() {
-  local line=$?
-  say "실패했다 (exit ${line})"
-  if [[ -n "${FROM_COMMIT}" ]]; then
-    roll_back
-  fi
+  local status=$?
+  say "실패했다 (exit ${status})"
+
+  # **옛 코드로 되돌리지 않는다** · §6-97
+  #
+  # 전에는 되돌렸는데, 그러면 방금 받은 고침까지 함께 지워져 다음 시도도 같은
+  # 자리에서 실패한다 · 실제로 한 대가 그 고리에 빠졌다 · 코드는 새것으로 둔다 ·
+  # 고침이 올라오면 다시 누르기만 하면 된다.
+  #
+  # 대신 **켤 수 있는 것은 켜고** 나간다 · 빌드가 깨져도 성공한 꾸러미는
+  # 설치돼 있다 · 장비가 통째로 멈춘 채 남지 않게 한다.
   start_services || say '서비스 시작도 실패했다'
-  write_state failure failed "업데이트 실패 · 기록을 확인하세요"
+  write_state failure failed '업데이트 실패 · 코드는 새것으로 두었습니다 · 기록을 확인하세요'
   exit 1
 }
 trap on_error ERR
@@ -177,7 +174,12 @@ git submodule update --init --recursive
 
 write_state running building '깨끗하게 다시 빌드하는 중 · 몇 분 걸립니다'
 say '빌드'
-build
+# 한 번은 다시 해 본다 · 일시적인 실패가 있다 · 두 번째도 깨지면 진짜다
+build || {
+  say '빌드가 실패했다 · 한 번 더 해 본다'
+  write_state running building '빌드 실패 · 한 번 더 시도합니다'
+  build
+}
 
 write_state running installing '서비스 설치·시작'
 say '서비스를 켠다'

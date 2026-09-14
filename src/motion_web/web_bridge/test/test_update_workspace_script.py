@@ -177,9 +177,15 @@ def test_it_survives_rewriting_itself(world):
 # 안 되는 길 · 여기가 중요하다
 # --------------------------------------------------------------------- #
 
-def test_a_failed_install_puts_the_code_back(world):
-    """빌드까지 끝났는데 설치가 깨지면 반쯤 바뀐 채로 남는다 · 직전 커밋으로
-    되돌려야 한다."""
+def test_a_failure_keeps_the_new_code_and_starts_what_it_can(world):
+    """**옛 코드로 되돌리지 않는다.**
+
+    전에는 되돌렸는데, 그러면 방금 받은 고침까지 함께 지워져 다음 시도도 같은
+    자리에서 실패한다 · 실제로 한 대가 그 고리에 빠졌다.
+
+    코드는 새것으로 두고, 켤 수 있는 것은 켜고 나간다 · 고침이 올라오면 다시
+    누르기만 하면 된다.
+    """
     before = world['head']()
     world['publish'](installer_exit=1, note='설치가 깨지는 커밋')
 
@@ -187,9 +193,9 @@ def test_a_failed_install_puts_the_code_back(world):
 
     assert completed.returncode != 0
     assert state['status'] == 'failure'
-    assert state['rolled_back'] is True
-    assert world['head']() == before, '되돌리지 못했다'
-    assert '되돌린다' in log
+    assert world['head']() != before, '옛 코드로 되돌렸다'
+    assert '되돌린다' not in log
+    assert '서비스만 켠다' in log, '켤 수 있는 것도 안 켰다'
 
 
 def test_needing_a_human_is_not_a_rollback(world):
@@ -243,3 +249,23 @@ def test_it_always_builds_from_scratch(world, tmp_path):
     assert completed.returncode == 0, completed.stderr
     assert state['status'] == 'success'
     assert not leftover.exists(), '옛 빌드가 남았다'
+
+
+def test_a_flaky_build_gets_one_more_try(world, tmp_path):
+    """일시적인 실패가 있다 · 한 번은 다시 해 본다 · 두 번째도 깨지면 진짜다."""
+    counter = tmp_path / 'bin/tries'
+    (tmp_path / 'bin/colcon').write_text(
+        '#!/usr/bin/env bash\n'
+        f'echo x >> "{counter}"\n'
+        f'[[ $(wc -l < "{counter}") -ge 2 ]] || {{ echo "첫 번째 실패"; exit 1; }}\n'
+        'echo "가짜 빌드 · 통과"\n',
+        encoding='utf-8',
+    )
+    (tmp_path / 'bin/colcon').chmod(0o755)
+    world['publish'](note='새 것')
+
+    completed, state, log = world['run']()
+
+    assert completed.returncode == 0, completed.stderr
+    assert state['status'] == 'success'
+    assert '한 번 더 해 본다' in log
