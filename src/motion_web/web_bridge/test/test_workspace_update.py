@@ -17,7 +17,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from motion_web_bridge.workspace_update import BRANCH, UNIT_NAME, WorkspaceUpdate
+from motion_web_bridge.workspace_update import (
+    BRANCH,
+    UNIT_NAME,
+    WorkspaceUpdate,
+    blocking_reason,
+)
 
 
 class FakeRun:
@@ -258,3 +263,41 @@ def test_the_script_starts_the_services_again_even_when_it_fails():
 def test_the_script_renders_the_units_again():
     """오늘처럼 유닛 템플릿이 바뀌면 빌드만으로는 옛 유닛이 그대로 남는다."""
     assert 'install_user_service.sh' in SCRIPT
+
+
+# --------------------------------------------------------------------- #
+# 지금 하면 안 되는 때
+# --------------------------------------------------------------------- #
+
+def test_a_moving_motor_blocks_the_update():
+    """도는 채로 제어가 사라지면 안 된다."""
+    reason = blocking_reason({
+        'motor_activity': {'active': True, 'label': '모션 재생'},
+    })
+
+    assert reason == '모션 재생 중에는 업데이트할 수 없습니다'
+
+
+def test_a_running_motor_job_blocks_the_update():
+    reason = blocking_reason({
+        'motor_activity': {'active': False},
+        'motor_operation': {'operation_id': 'motor-1', 'status': 'running'},
+    })
+
+    assert reason == '모터 작업이 진행 중입니다'
+
+
+def test_an_old_finished_job_does_not_block_forever():
+    """끝난 작업 기록은 지워지지 않고 남는다 · 그것을 진행 중으로 보면 버튼이
+    영원히 꺼진다 · 실제로 며칠 전 끝난 모터 검색 하나에 막혔다."""
+    for status in ('partial', 'success', 'failure', 'timeout', 'cancelled'):
+        reason = blocking_reason({
+            'motor_activity': {'active': False},
+            'motor_operation': {'operation_id': 'motor-1', 'status': status},
+        })
+        assert reason == '', f'{status} 인 옛 기록이 업데이트를 막는다'
+
+
+def test_a_quiet_system_is_not_blocked():
+    assert blocking_reason({'motor_activity': {'active': False}}) == ''
+    assert blocking_reason({}) == ''

@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, Response
 from ament_index_python.packages import get_package_share_directory
 
 from motion_web_bridge import desktop_shortcut
-from motion_web_bridge.workspace_update import WorkspaceUpdate
+from motion_web_bridge.workspace_update import WorkspaceUpdate, blocking_reason
 
 
 #: `<!--#include 경로 -->` · 줄 하나가 통째로 조각 내용으로 바뀐다
@@ -195,23 +195,7 @@ def register_system_routes(app: FastAPI, bridge, project_call) -> None:
         return WorkspaceUpdate(Path(workspace))
 
     def _update_blocked_reason() -> str:
-        """지금 업데이트하면 안 되는 이유 · 없으면 빈 문자열.
-
-        업데이트는 서비스를 멈추고 몇 분 동안 빌드한다 · 모터가 움직이는 중에
-        그 일을 시작하면 도는 채로 제어가 사라진다.
-        """
-        snapshot = bridge.snapshot()
-        activity = snapshot.get('motor_activity') or {}
-        if activity.get('active'):
-            label = str(activity.get('label') or '모터 동작')
-            return f'{label} 중에는 업데이트할 수 없습니다'
-        operation = snapshot.get('motor_operation') or {}
-        status = str(operation.get('status') or '')
-        if operation.get('operation_id') and status not in {
-            '', 'success', 'failure', 'timeout', 'cancelled',
-        }:
-            return '모터 작업이 진행 중입니다'
-        return ''
+        return blocking_reason(bridge.snapshot())
 
     @app.get('/api/system/update/check')
     async def system_update_check():

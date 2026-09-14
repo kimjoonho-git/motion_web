@@ -20,7 +20,7 @@ import os
 import subprocess
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Mapping, Optional
 
 #: 하나뿐인 브랜치 · 스크립트와 **같은 값**이어야 한다
 BRANCH = 'main'
@@ -32,6 +32,36 @@ UNIT_NAME = 'motion-update'
 LOG_TAIL_LINES = 60
 
 GIT_TIMEOUT_SEC = 60.0
+
+#: 정말로 도는 중인 상태는 이것 하나다 · `motor_runtime_store` 가 그렇게 정한다
+#:
+#: 끝난 작업 기록은 지워지지 않고 남는다(`partial`·`timeout`·`success`…) ·
+#: 그것을 진행 중으로 보면 업데이트 버튼이 **영원히** 꺼진다 · 실제로 며칠 전
+#: 끝난 모터 검색 기록 하나에 막혔다.
+RUNNING_OPERATION_STATUS = 'running'
+
+
+def blocking_reason(snapshot: Mapping[str, Any]) -> str:
+    """지금 업데이트하면 안 되는 이유 · 없으면 빈 문자열.
+
+    업데이트는 서비스를 멈추고 몇 분 동안 빌드한다 · 모터가 움직이는 중에 그
+    일을 시작하면 도는 채로 제어가 사라진다.
+
+    무엇이 위험한지는 **웹 브리지의 상태**가 안다 · 판단은 여기 한 곳에서
+    하고, 화면과 API 는 이유를 받아 쓴다.
+    """
+    payload = snapshot if isinstance(snapshot, Mapping) else {}
+    activity = payload.get('motor_activity')
+    if isinstance(activity, Mapping) and activity.get('active'):
+        label = str(activity.get('label') or '모터 동작')
+        return f'{label} 중에는 업데이트할 수 없습니다'
+    operation = payload.get('motor_operation')
+    if (
+        isinstance(operation, Mapping)
+        and str(operation.get('status') or '') == RUNNING_OPERATION_STATUS
+    ):
+        return '모터 작업이 진행 중입니다'
+    return ''
 
 
 def _state_dir() -> Path:
