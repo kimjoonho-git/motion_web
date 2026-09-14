@@ -1403,3 +1403,16 @@
   display: none;
 }
 
+/* 참가 PC 한 줄 요약 · 자세한 표는 연동 화면에 있다 · §6-98 */
+.motion-run-peer-summary {
+  margin: 6px 0 0;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.04);
+  font-size: 13px;
+}
+
+.motion-run-scope-link {
+  margin-top: 8px;
+}
+

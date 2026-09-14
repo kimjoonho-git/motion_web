@@ -1602,6 +1602,15 @@ if (el.rows) {
   });
 }
 
+// 실행 화면에서 연동 화면으로 · 연동 조작은 연동 화면 하나다 · §6-98
+if (el.motionRunOpenCoordinationButton) {
+  el.motionRunOpenCoordinationButton.addEventListener('click', () => {
+    if (!setActiveWorkspace('coordination')) return;
+    renderLatestState();
+    coordination.refresh();
+  });
+}
+
 if (el.workspaceTabs) {
   el.workspaceTabs.addEventListener('click', (event) => {
     const groupButton = event.target.closest('button[data-workspace-group]');

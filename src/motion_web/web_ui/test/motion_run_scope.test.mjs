@@ -74,7 +74,8 @@ test('참가하지 않았으면 그룹 칸이 아예 없다', () => {
 
   assert.equal(view.scope, 'local', '고를 수 없는 것이 골라졌다');
   assert.equal(view.groupSelectable, false);
-  assert.equal(view.showJoinButton, true, '참가할 길이 없다');
+  assert.equal(view.needsCoordinationSetup, true, '참가할 길이 없다');
+  assert.match(view.coordinationLinkLabel, /참가하기/);
 });
 
 test('그룹에서 나가면 고른 값이 남아 있어도 이 PC 로 돌아온다', () => {
@@ -90,7 +91,7 @@ test('참가했으면 그룹을 고를 수 있고 대수가 이름에 박힌다'
 
   assert.equal(view.scope, 'group');
   assert.equal(view.groupLabel, '그룹 3대');
-  assert.equal(view.showJoinButton, false);
+  assert.equal(view.needsCoordinationSetup, false);
 });
 
 test('대상 한 줄 요약도 같은 판정에서 나온다', () => {
@@ -154,13 +155,31 @@ test('그룹이 도는 중은 막힌 것이 아니다', () => {
   assert.equal(view.reason, '');
 });
 
-test('그룹 칸과 참가 버튼과 사유 자리가 화면에 있다', () => {
+test('그룹 칸과 연동 화면 길과 사유 자리가 화면에 있다', () => {
   for (const id of [
-    'motionRunScopeGroupOption', 'motionRunJoinGroupButton', 'motionRunBlockReason',
+    'motionRunScopeGroupOption', 'motionRunOpenCoordinationButton',
+    'motionRunBlockReason', 'motionRunPeerSummary',
   ]) {
     assert.match(indexHtml, new RegExp(`id="${id}"`), `${id} 가 없다`);
     assert.match(dom, new RegExp(`${id}: document\\.getElementById\\('${id}'\\)`));
   }
-  // 참가는 실행 화면에서 바로 된다 · 연동 상세를 펴서 찾지 않는다
-  assert.match(coordination, /join: \(\) => control\('join'\)/);
+  // 참가 PC 이름은 연동 화면이 넘겨 준다 · 실행 화면이 따로 읽지 않는다
+  assert.match(coordination, /peers: peers\.map/);
+});
+
+test('참가 PC 를 한 줄로 요약한다', () => {
+  const view = motionRunTargetView({
+    role: {
+      joined: true, peerCount: 3, isMaster: true, master: 'joonhoTest',
+      peers: [
+        { display_name: 'pc-a', state: 'online' },
+        { display_name: 'pc-b', state: 'warning' },
+      ],
+    },
+    chosen: 'group',
+  });
+
+  assert.match(view.peerSummary, /joonhoTest\(마스터\)/);
+  assert.match(view.peerSummary, /pc-a 정상/);
+  assert.match(view.peerSummary, /pc-b 경고/);
 });

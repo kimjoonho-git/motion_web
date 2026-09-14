@@ -8,26 +8,39 @@ UI = WORKSPACE / 'src/motion_web/web_ui/static'
 BRIDGE = WORKSPACE / 'src/motion_web/web_bridge/motion_web_bridge/bridge_node.py'
 
 
-def test_coordination_lives_inside_the_run_screen():
-    """연동 화면은 설정·명단·진단만 갖는다 · 실행은 모션 실행 화면이 갖는다.
+def test_coordination_lives_in_one_screen():
+    """연동은 한 화면에 모인다 · 실행 제어는 모션 실행 화면이 갖는다.
 
-    "1회 시작"이 연동 화면과 모션 실행 화면에 두 벌 있었고, 한쪽은 전체 PC,
-    다른 쪽은 이 PC였다. 이름으로 구별할 수 없어 위험했다 · §6-65
+    **결정이 한 번 뒤집혔다.**
+
+    2026-09-10(§6-66) 에는 연동 탭을 없애고 실행 화면 안으로 넣었다 · 실행하려면
+    한쪽, 연동 상태를 보려면 다른 쪽을 봐야 했기 때문이다.
+
+    2026-09-14 에 다시 탭으로 나눴다 · 그 사이에 연동 살림살이(설정·세션)가
+    시스템 정보로 갔고, 그래서 연동이 **두 화면에 반씩** 나뉘어 [그룹 참가]
+    버튼이 양쪽에 하나씩 생겼다 · 어느 쪽을 열어야 할지 매번 생각해야 했다.
+
+    지금 규칙은 하나다 · **연동에 관한 것은 연동 화면 하나에만 있다** ·
+    실행 화면에는 "지금 시작해도 되는가" 에 답하는 것만 남는다(대상 · 참가 PC
+    한 줄 · 막힘 사유) · 실행 버튼은 여전히 실행 화면에만 있다.
 
     화면은 셸에 조각을 끼운 결과다 · 셸만 읽으면 패널이 보이지 않는다 · §6-44
     """
     html, _etag = IndexComposer(UI / 'index.html').compose()
+
+    # 연동 화면이 있고, 연동에 관한 것이 거기 있다
+    assert 'data-workspace-tab="coordination"' in html
+    assert 'data-workspace-panel="coordination"' in html
     for marker in (
         'id="coordinationGroupId"', 'id="coordinationDomainId"',
         'id="coordinationJoinButton"', 'id="coordinationLeaveButton"',
         'id="coordinationPeerRows"', 'id="coordinationRunAvailability"',
         'id="coordinationAcknowledgeErrorButton"',
         'id="coordinationErrorSummary"', '실행 참가',
-        '실물 미검증',
     ):
         assert marker in html
 
-    # 실행 제어는 모션 실행 화면 한 곳에만 있고, 범위로 갈린다
+    # 실행 제어는 모션 실행 화면 한 곳에만 있고, 대상으로 갈린다
     for moved in (
         'coordinationStartButton', 'coordinationContinuousStartButton',
         'coordinationInitializeButton', 'coordinationStopNowButton',
@@ -35,14 +48,15 @@ def test_coordination_lives_inside_the_run_screen():
         'coordinationDwellSec', 'coordinationTargetStopCycle',
     ):
         assert moved not in html, f'{moved} 가 연동 화면에 남아 있다'
-    for scope in ('id="motionRunScopeLocal"', 'id="motionRunScopeGroup"'):
+    for scope in (
+        'id="motionRunScopeLocal"', 'id="motionRunScopeGroup"',
+        'id="motionRunPeerSummary"', 'id="motionRunRoleBadge"',
+    ):
         assert scope in html
 
-    # 연동 탭과 패널은 없어졌고 내용은 실행 화면 안에 있다 · §6-66
-    assert 'data-workspace-tab="coordination"' not in html
-    assert 'data-workspace-panel="coordination"' not in html
-    assert 'id="motionRunGroupDetails"' in html
-    assert 'id="motionRunRoleBadge"' in html
+    # 같은 조작이 두 곳에 있으면 안 된다 · 참가는 연동 화면에서만
+    assert 'id="motionRunJoinGroupButton"' not in html
+    assert 'id="motionRunOpenCoordinationButton"' in html
 
     for obsolete in (
         'coordinationPairingStartButton', 'coordinationRoleSelect',

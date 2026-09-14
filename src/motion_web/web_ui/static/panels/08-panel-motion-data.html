@@ -251,7 +251,6 @@
                   <input id="motionRunScopeGroup" type="radio" name="motionRunScope" value="group">
                   <span><strong id="motionRunScopeGroupLabel">그룹 전체</strong><small id="motionRunScopeGroupHint">연동 상태 확인 중</small></span>
                 </label>
-                <button id="motionRunJoinGroupButton" type="button">그룹 참가</button>
               </div>
               <div id="motionRunBlockReason" class="registry-message motion-run-block-reason hidden" role="status"></div>
               <div id="motionRunGroupRole" class="motion-run-group-role hidden">
@@ -261,26 +260,10 @@
                   <span class="motion-run-role-caveat">PC별 프로젝트는 유지하고 시작·완료·오류 트리거만 공유합니다 · 실물 미검증</span>
                 </div>
               </div>
-            <section id="motionRunGroupDetails" class="motion-file-subsection hidden" aria-label="그룹 실행 상태">
-              <div class="section-head compact">
-                <strong id="coordinationExecutionState">그룹 실행 · 대기</strong>
-                <span id="coordinationControlSummary">제어 명령 대기</span>
-                <button id="coordinationAcknowledgeErrorButton" type="button" disabled>그룹 오류 확인</button>
-              </div>
-              <div id="coordinationErrorSummary" class="registry-message hidden" role="alert"></div>
-              <div id="coordinationConfirmedRosterBanner" class="registry-message"></div>
-              <div class="section-head compact">
-                <strong>그룹 참가 PC 상태</strong>
-                <span>경고 1.5초 · 통신 단절 3초 · 실행 참가 목록은 시작 시 고정</span>
-                <button type="button" id="coordinationConfirmRosterButton" class="secondary">현재 접속 PC로 명단 확정</button>
-              </div>
-              <div class="table-wrap">
-                <table class="coordination-peer-table">
-                  <thead><tr><th>PC</th><th>통신</th><th>실행 참가</th><th>모션 회차</th><th>모션 단계</th><th>진행</th><th>트리거 동기화</th><th>추정 불확실성</th><th>알람 등급</th><th>버전 (Git)</th><th>명단 관리</th></tr></thead>
-                  <tbody id="coordinationPeerRows"><tr><td colspan="11" class="empty">그룹 상태 수신 대기</td></tr></tbody>
-                </table>
-              </div>
-            </section>
+            <div id="motionRunPeerSummary" class="motion-run-peer-summary hidden"></div>
+            <div class="motion-run-scope-link">
+              <button id="motionRunOpenCoordinationButton" type="button">PC 연동 화면 열기</button>
+            </div>
             </section>
 
             <section class="motion-file-subsection" aria-label="실행할 모션">

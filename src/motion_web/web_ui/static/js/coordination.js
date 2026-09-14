@@ -640,6 +640,13 @@ export function createCoordinationController({ el }) {
       isMaster: config.is_master === true,
       joined: runtime.joined === true,
       peerCount: peers.length + 1,
+      // 실행 화면이 한 줄로 요약해 보여 준다 · 판정이 아니라 표시용이다 · §6-98
+      peers: peers.map((peer) => ({
+        pc_id: String(peer.pc_id || ''),
+        display_name: String(peer.display_name || peer.pc_id || ''),
+        state: String(peer.state || ''),
+        is_master: peer.is_master === true,
+      })),
       master: config.is_master === true
         ? (config.display_name || config.pc_id || '이 PC')
         : (masterPeer?.display_name || masterPeer?.pc_id || ''),
@@ -649,9 +656,6 @@ export function createCoordinationController({ el }) {
   const groupRun = {
     availability: groupRunAvailability,
     role: groupRole,
-    // 참가하지 않았으면 실행 화면에 그룹 칸이 없다 · 거기서 바로 참가한다 ·
-    // 연동 상세를 펴서 다른 버튼을 찾아 누르게 하지 않는다 · §6-98
-    join: () => control('join'),
     initialize: initializeGroup,
     start: (options) => control('start_group', groupRunOptions('once', options)),
     startContinuous: (options) => control('start_group', groupRunOptions('continuous', options)),

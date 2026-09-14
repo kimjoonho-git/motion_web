@@ -81,6 +81,21 @@ function degValue(value) {
  * 버튼 이름에 대상을 박는다 · 3대를 움직이는 버튼과 1대를 움직이는 버튼은
  * 글자가 달라야 한다 · 전에는 툴팁으로만 갈렸다.
  */
+const PEER_STATE_LABEL = {
+  online: '정상', warning: '경고', offline: '끊김', unknown: '확인 중',
+};
+
+/** 참가 PC 를 한 줄로 · 자세한 표는 연동 화면에 있다. */
+function peerSummaryText(role = {}) {
+  const here = `${role.master && role.isMaster ? role.master : '이 PC'}${role.isMaster ? '(마스터)' : ''}`;
+  const others = (Array.isArray(role.peers) ? role.peers : []).map((peer) => {
+    const name = peer.display_name || peer.pc_id || '이름 없음';
+    const state = PEER_STATE_LABEL[peer.state] || peer.state || '확인 중';
+    return `${name}${peer.is_master ? '(마스터)' : ''} ${state}`;
+  });
+  return [here, ...others].join(' · ');
+}
+
 export function motionRunTargetView({ role = {}, chosen = 'local' } = {}) {
   const joined = role.joined === true;
   const peerCount = Math.max(1, Number(role.peerCount || 1));
@@ -91,7 +106,10 @@ export function motionRunTargetView({ role = {}, chosen = 'local' } = {}) {
     joined,
     peerCount,
     groupSelectable: joined,
-    showJoinButton: !joined,
+    // 연동 조작은 연동 화면 하나다 · 실행 화면에는 그리로 가는 길만 둔다
+    needsCoordinationSetup: !joined,
+    coordinationLinkLabel: joined ? 'PC 연동 화면 열기' : 'PC 연동 화면에서 참가하기',
+    peerSummary: group ? peerSummaryText(role) : '',
     localLabel: '이 PC 만',
     groupLabel: `그룹 ${peerCount}대`,
     summary: group
@@ -2782,7 +2800,16 @@ export function createMotionDataController({
   /** 대상 칸과 버튼 이름을 판정대로 그린다 · 여기서 다시 판단하지 않는다. */
   function renderMotionRunTarget(target) {
     el.motionRunScopeGroupOption?.classList.toggle('hidden', !target.groupSelectable);
-    el.motionRunJoinGroupButton?.classList.toggle('hidden', !target.showJoinButton);
+    if (el.motionRunOpenCoordinationButton) {
+      el.motionRunOpenCoordinationButton.textContent = target.coordinationLinkLabel;
+      el.motionRunOpenCoordinationButton.classList.toggle(
+        'primary', target.needsCoordinationSetup,
+      );
+    }
+    if (el.motionRunPeerSummary) {
+      el.motionRunPeerSummary.textContent = target.peerSummary;
+      el.motionRunPeerSummary.classList.toggle('hidden', !target.peerSummary);
+    }
     if (el.motionRunScopeLocalLabel) {
       el.motionRunScopeLocalLabel.textContent = target.localLabel;
     }
@@ -3066,11 +3093,6 @@ export function createMotionDataController({
     [el.motionRunScopeLocal, el.motionRunScopeGroup].forEach((input) => {
       input?.addEventListener('change', () => renderMotionRunPanel());
     });
-    if (el.motionRunJoinGroupButton) {
-      el.motionRunJoinGroupButton.addEventListener('click', () => (
-        runGroupCommand(() => groupRun.join(), '그룹 참가 요청 중')
-      ));
-    }
     if (el.motionRunInitializeButton) {
       el.motionRunInitializeButton.addEventListener('click', () => (
         motionRunScope() === 'group'

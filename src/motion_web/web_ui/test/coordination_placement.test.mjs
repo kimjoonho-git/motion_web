@@ -2,74 +2,67 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-const runPanel = readFileSync(
-  new URL('../static/panels/08-panel-motion-data.html', import.meta.url), 'utf8',
-);
-const systemPanel = readFileSync(
-  new URL('../static/panels/03-panel-system.html', import.meta.url), 'utf8',
+const panel = (name) => readFileSync(
+  new URL(`../static/panels/${name}`, import.meta.url), 'utf8',
 );
 
-const has = (text, id) => new RegExp(`id="${id}"`).test(text);
+const runPanel = panel('08-panel-motion-data.html');
+const systemPanel = panel('03-panel-system.html');
+const coordinationPanel = panel('08b-panel-coordination.html');
+const topbar = panel('01-topbar.html');
+const navigation = readFileSync(
+  new URL('../static/js/workspace_navigation.js', import.meta.url), 'utf8',
+);
 
 /**
- * 매일 쓰는 것과 몇 달에 한 번 쓰는 것이 한 화면에 겹쳐 있었다 · §6-98
+ * 연동이 두 화면에 반씩 나뉘어 있었다 · §6-98
  *
- * 모션 실행 탭 안에 그룹 설정(pc_id·domain·마스터·필수 명단)과 세션 관리
- * (참가·나가기·일시 해제)와 스케줄까지 들어 있었다 · 한 번 정하면 몇 달을
- * 안 건드리는 것들이다.
+ * 시스템 정보에는 설정과 세션이, 모션 실행에는 상태와 명단이 있었고 [그룹 참가]
+ * 버튼은 **양쪽에 하나씩** 있었다 · 어느 쪽을 열어야 할지 매번 생각해야 했다.
  *
- * 실행 화면에는 **실행 중에 봐야 하는 것만** 남긴다.
+ * 이제 연동은 한 탭이다 · 실행 화면에는 "지금 시작해도 되는가" 에 답하는 것만
+ * 남는다 · 대상 · 참가 PC 한 줄 · 막힘 사유.
  */
 
-const HOUSEKEEPING = [
-  'coordinationPcId', 'coordinationDisplayName', 'coordinationGroupId',
-  'coordinationDomainId', 'coordinationEnabled', 'coordinationIsMaster',
-  'coordinationRequiredPeers', 'coordinationSaveButton', 'coordinationConfigMessage',
-  'coordinationJoinButton', 'coordinationLeaveButton',
-  'coordinationTemporaryDisableButton', 'coordinationAutoPlayToggle',
-  'coordinationJoinState', 'coordinationPeerCount', 'coordinationRunAvailability',
-];
+test('연동 탭이 있다', () => {
+  assert.match(coordinationPanel, /data-workspace-panel="coordination"/);
+  assert.match(topbar, /data-workspace-tab="coordination"/);
+  assert.match(navigation, /'motion-run', 'coordination'/);
+});
 
-const DURING_A_RUN = [
-  'coordinationExecutionState', 'coordinationControlSummary',
-  'coordinationErrorSummary', 'coordinationAcknowledgeErrorButton',
-  'coordinationPeerRows', 'coordinationConfirmRosterButton',
-  'coordinationConfirmedRosterBanner',
-];
-
-test('설정과 세션 관리는 실행 화면에 없다', () => {
-  for (const id of HOUSEKEEPING) {
-    assert.equal(has(runPanel, id), false, `${id} 가 아직 실행 화면에 있다`);
-    assert.equal(has(systemPanel, id), true, `${id} 가 시스템 화면에 없다`);
+test('연동 요소는 연동 탭에만 있다', () => {
+  const ids = [...coordinationPanel.matchAll(/id="(coordination[A-Za-z]*)"/g)]
+    .map((match) => match[1]);
+  assert.ok(ids.length > 15, `연동 요소를 못 찾았다 · ${ids.length}개`);
+  for (const id of ids) {
+    assert.equal(
+      new RegExp(`id="${id}"`).test(runPanel), false, `${id} 가 실행 화면에 남았다`,
+    );
+    assert.equal(
+      new RegExp(`id="${id}"`).test(systemPanel), false, `${id} 가 시스템 화면에 남았다`,
+    );
   }
 });
 
-test('실행 중에 봐야 하는 것은 실행 화면에 남는다', () => {
-  for (const id of DURING_A_RUN) {
-    assert.equal(has(runPanel, id), true, `${id} 가 실행 화면에서 사라졌다`);
-    assert.equal(has(systemPanel, id), false, `${id} 가 두 곳에 있다`);
+test('같은 조작이 두 곳에 있지 않다', () => {
+  // 실행 화면에도 [그룹 참가] 가 있었다 · 조작은 연동 화면 하나다
+  assert.equal(/id="motionRunJoinGroupButton"/.test(runPanel), false);
+  assert.match(runPanel, /id="motionRunOpenCoordinationButton"/);
+});
+
+test('실행 화면에는 시작 판단에 필요한 것만 남는다', () => {
+  for (const id of [
+    'motionRunScopeLocal', 'motionRunScopeGroup', 'motionRunScopeSummary',
+    'motionRunPeerSummary', 'motionRunBlockReason', 'motionRunGroupRole',
+  ]) {
+    assert.match(runPanel, new RegExp(`id="${id}"`), `${id} 가 없다`);
   }
 });
 
-test('그룹 상태는 그룹을 고를 때만 보인다', () => {
-  // 이 id 를 화면 코드가 범위에 따라 켜고 끈다 · 이름이 바뀌면 조용히 죽는다
-  assert.match(runPanel, /id="motionRunGroupDetails"[^>]*class="[^"]*hidden/);
-});
-
-
 /**
- * 순서가 기능을 따라가야 한다 · §6-98
- *
- * 전에는 그룹을 고르고 나면 **누가 함께 도는지가 맨 아래**에 있었다 · 그 위에
- * 로컬 그래프가 있었다 · 대상을 고른 자리에서 참가 PC 가 보이지 않으면 무엇을
- * 시작하는 것인지 알 수 없다.
- *
- *   1. 실행 대상 (누가 도는가 · 참가 PC 표)
- *   2. 실행할 모션 (무엇을)
- *   3. 실행 (어떻게 · 시작)
- *   4. 진행 (어떻게 되고 있나)
+ * 순서가 기능을 따라간다 · 어디서 → 무엇을 → 어떻게 → 어떻게 되고 있나
  */
-test('실행 화면은 어디서 · 무엇을 · 어떻게 · 어떻게 되고 있나 순서다', () => {
+test('실행 화면은 네 단계 순서다', () => {
   const order = ['1. 실행 대상', '2. 실행할 모션', '3. 실행', '4. 진행']
     .map((title) => runPanel.indexOf(`<strong>${title}</strong>`));
 
@@ -79,12 +72,12 @@ test('실행 화면은 어디서 · 무엇을 · 어떻게 · 어떻게 되고 �
   }
 });
 
-test('참가 PC 는 대상을 고른 자리에서 바로 보인다', () => {
+test('참가 PC 요약은 대상을 고른 자리에 있다', () => {
   const target = runPanel.indexOf('<strong>1. 실행 대상</strong>');
-  const peers = runPanel.indexOf('id="motionRunGroupDetails"');
+  const summary = runPanel.indexOf('id="motionRunPeerSummary"');
   const nextStep = runPanel.indexOf('<strong>2. 실행할 모션</strong>');
 
-  assert.ok(peers > target && peers < nextStep, '참가 PC 표가 대상 구역 밖에 있다');
+  assert.ok(summary > target && summary < nextStep, '요약이 대상 구역 밖에 있다');
 });
 
 test('진행에 관한 것은 한 자리에 모인다', () => {

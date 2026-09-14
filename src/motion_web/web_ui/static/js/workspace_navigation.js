@@ -6,7 +6,7 @@ export const WORKSPACE_GROUPS = Object.freeze({
     'motion-midi',
     'studio',
   ]),
-  execution: Object.freeze(['manual', 'motion-run']),
+  execution: Object.freeze(['manual', 'motion-run', 'coordination']),
 });
 
 const WORKSPACE_DEFAULTS = Object.freeze({
