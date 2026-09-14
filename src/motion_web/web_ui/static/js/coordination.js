@@ -649,6 +649,9 @@ export function createCoordinationController({ el }) {
   const groupRun = {
     availability: groupRunAvailability,
     role: groupRole,
+    // 참가하지 않았으면 실행 화면에 그룹 칸이 없다 · 거기서 바로 참가한다 ·
+    // 연동 상세를 펴서 다른 버튼을 찾아 누르게 하지 않는다 · §6-98
+    join: () => control('join'),
     initialize: initializeGroup,
     start: (options) => control('start_group', groupRunOptions('once', options)),
     startContinuous: (options) => control('start_group', groupRunOptions('continuous', options)),

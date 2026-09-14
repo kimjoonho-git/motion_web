@@ -67,6 +67,64 @@ function degValue(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+/**
+ * 실행 대상을 한 곳에서 정한다 · §6-98
+ *
+ * 전에는 대상의 주인이 둘이었다 · 화면의 라디오(사용자가 고름)와 실제 연동
+ * 상태(참가·마스터·PC 수)가 따로 놀았다 · 참가하지도 않은 채 "그룹 전체"를
+ * 고를 수 있었고, 그러면 버튼이 전부 회색이 되는데 이유는 작은 힌트 글씨
+ * 한 줄에만 나왔다.
+ *
+ * 이제 고를 수 없는 것은 **화면에 없다** · 참가하지 않았으면 그룹 칸이 아예
+ * 없고 참가 버튼만 있다.
+ *
+ * 버튼 이름에 대상을 박는다 · 3대를 움직이는 버튼과 1대를 움직이는 버튼은
+ * 글자가 달라야 한다 · 전에는 툴팁으로만 갈렸다.
+ */
+export function motionRunTargetView({ role = {}, chosen = 'local' } = {}) {
+  const joined = role.joined === true;
+  const peerCount = Math.max(1, Number(role.peerCount || 1));
+  const scope = joined && chosen === 'group' ? 'group' : 'local';
+  const group = scope === 'group';
+  return {
+    scope,
+    joined,
+    peerCount,
+    groupSelectable: joined,
+    showJoinButton: !joined,
+    localLabel: '이 PC 만',
+    groupLabel: `그룹 ${peerCount}대`,
+    buttons: {
+      initialize: group ? `그룹 초기 위치 이동 · ${peerCount}대` : '초기 위치 이동',
+      start: group ? `그룹 1회 시작 · ${peerCount}대` : '1회 시작',
+      continuous: group ? `그룹 연속 시작 · ${peerCount}대` : '연속 시작',
+      stop: group ? `그룹 즉시 정지 · ${peerCount}대` : '즉시 정지',
+      stopAfter: group ? `그룹 회차 후 정지 · ${peerCount}대` : '현재 회차 후 정지',
+    },
+  };
+}
+
+/**
+ * 왜 지금 시작할 수 없는가 · 대상마다 판정하는 규칙이 다르다 · §6-98
+ *
+ * 로컬은 실행 설정과 파일이, 그룹은 연동 상태(참가·역할·통신·알람)가 정한다 ·
+ * 사유는 **한 자리에** 늘 보인다 · 버튼을 회색으로만 두면 고장처럼 보인다 ·
+ * 특히 슬레이브 PC 는 시작이 영원히 불가라 더 그렇다.
+ */
+export function motionRunBlockView({
+  scope = 'local', availability = {}, localReady = true, localReason = '',
+} = {}) {
+  if (scope === 'group') {
+    // 그룹이 이미 도는 중이면 막힌 것이 아니다 · 정지는 누구나 할 수 있다
+    const blocked = availability.ok !== true && availability.active !== true;
+    return { blocked, reason: blocked ? String(availability.reason || '') : '' };
+  }
+  return {
+    blocked: !localReady,
+    reason: localReady ? '' : String(localReason || ''),
+  };
+}
+
 export function registeredMotionFileId(mapping = {}) {
   return String(mapping?.motion_file_id || '').trim();
 }
@@ -1419,13 +1477,21 @@ export function createMotionDataController({
     })();
     // 범위에 따라 판정하는 규칙이 다르다 · 로컬은 실행 설정과 파일, 그룹은
     // 연동 상태(참가·통신·알람)가 정한다. 버튼은 한 벌이고 판정만 갈린다 · §6-65
-    const scope = motionRunScope();
+    //
+    // 대상과 사유는 순수 함수 둘이 정한다 · 화면 없이 시험할 수 있어야 한다 · §6-98
+    const target = motionRunTargetView({
+      role: groupRunRole(), chosen: chosenMotionRunScope(),
+    });
+    renderMotionRunTarget(target);
+    const scope = target.scope;
     const group = scope === 'group' ? groupRunAvailability() : null;
     const groupActive = Boolean(group?.active);
-    const blocked = scope === 'group'
-      ? (!group.ok && !groupActive)
-      : (!contextReady || !hasRequiredFiles);
-    const blockReason = scope === 'group' ? (group.reason || '') : contextMessage;
+    const { blocked, reason: blockReason } = motionRunBlockView({
+      scope,
+      availability: group || {},
+      localReady: contextReady && hasRequiredFiles,
+      localReason: contextMessage,
+    });
 
     // 연동 상세는 접어 둔다 · 매번 보는 것은 역할 한 줄이면 충분하다
     el.motionRunGroupRole?.classList.toggle('hidden', scope !== 'group');
@@ -1434,9 +1500,10 @@ export function createMotionDataController({
     el.motionAutomationToggleWrap?.classList.toggle('hidden', scope === 'group');
     if (scope === 'group') renderMotionRunRole();
     if (el.motionRunScopeGroupHint) {
-      el.motionRunScopeGroupHint.textContent = group
-        ? (group.ok ? `참가 PC ${group.peerCount}대에 동시 전달` : group.reason)
-        : (groupRunAvailability().reason || '연동 상태 확인 중');
+      const availability = group || groupRunAvailability();
+      el.motionRunScopeGroupHint.textContent = availability.ok
+        ? '같은 시각에 동시 시작'
+        : (availability.reason || '연동 상태 확인 중');
     }
     if (el.motionRunCheckButton) {
       // 실행 준비 검사는 이 PC 기준이다 · 그룹 범위에서는 쓰지 않는다
@@ -1485,6 +1552,12 @@ export function createMotionDataController({
     }
     if (el.motionRunRefreshButton) {
       el.motionRunRefreshButton.disabled = motionRunLoading;
+    }
+    // 버튼을 회색으로만 두면 고장처럼 보인다 · 슬레이브 PC 는 시작이 영원히
+    // 불가라 더 그렇다 · 사유를 늘 같은 자리에 적는다 · §6-98
+    if (el.motionRunBlockReason) {
+      el.motionRunBlockReason.textContent = blockReason;
+      el.motionRunBlockReason.classList.toggle('hidden', !blocked || !blockReason);
     }
     if (el.motionRunInitialMoveTime) {
       el.motionRunInitialMoveTime.disabled = motionRunLoading || running;
@@ -2686,8 +2759,49 @@ export function createMotionDataController({
       : `현재 마스터는 ${state.master || '미정'} 입니다 · 보통 마스터에서 시작합니다`;
   }
 
-  function motionRunScope() {
+  /** 화면에서 고른 값 · 이것만으로는 대상이 정해지지 않는다. */
+  function chosenMotionRunScope() {
     return el.motionRunScopeGroup?.checked ? 'group' : 'local';
+  }
+
+  /** 연동 역할 · 참가 여부와 PC 수의 주인은 조정 노드다. */
+  function groupRunRole() {
+    return groupRun?.role?.() || { joined: false, peerCount: 1, isMaster: false };
+  }
+
+  /** 이번 실행의 대상 · 고를 수 없는 것은 골라져 있어도 '이 PC 만' 이다. */
+  function motionRunScope() {
+    return motionRunTargetView({
+      role: groupRunRole(), chosen: chosenMotionRunScope(),
+    }).scope;
+  }
+
+  /** 대상 칸과 버튼 이름을 판정대로 그린다 · 여기서 다시 판단하지 않는다. */
+  function renderMotionRunTarget(target) {
+    el.motionRunScopeGroupOption?.classList.toggle('hidden', !target.groupSelectable);
+    el.motionRunJoinGroupButton?.classList.toggle('hidden', !target.showJoinButton);
+    if (el.motionRunScopeLocalLabel) {
+      el.motionRunScopeLocalLabel.textContent = target.localLabel;
+    }
+    if (el.motionRunScopeGroupLabel) {
+      el.motionRunScopeGroupLabel.textContent = target.groupLabel;
+    }
+    // 고를 수 없는 칸이 골라진 채 남지 않게 한다 · 그룹에서 나간 순간이 그렇다
+    if (!target.groupSelectable && el.motionRunScopeGroup?.checked && el.motionRunScopeLocal) {
+      el.motionRunScopeLocal.checked = true;
+    }
+    const labels = target.buttons;
+    if (el.motionRunInitializeButton) {
+      el.motionRunInitializeButton.textContent = labels.initialize;
+    }
+    if (el.motionRunStartButton) el.motionRunStartButton.textContent = labels.start;
+    if (el.motionRunContinuousStartButton) {
+      el.motionRunContinuousStartButton.textContent = labels.continuous;
+    }
+    if (el.motionRunStopButton) el.motionRunStopButton.textContent = labels.stop;
+    if (el.motionRunStopAfterButton) {
+      el.motionRunStopAfterButton.textContent = labels.stopAfter;
+    }
   }
 
   function groupRunAvailability() {
@@ -2946,6 +3060,11 @@ export function createMotionDataController({
     [el.motionRunScopeLocal, el.motionRunScopeGroup].forEach((input) => {
       input?.addEventListener('change', () => renderMotionRunPanel());
     });
+    if (el.motionRunJoinGroupButton) {
+      el.motionRunJoinGroupButton.addEventListener('click', () => (
+        runGroupCommand(() => groupRun.join(), '그룹 참가 요청 중')
+      ));
+    }
     if (el.motionRunInitializeButton) {
       el.motionRunInitializeButton.addEventListener('click', () => (
         motionRunScope() === 'group'

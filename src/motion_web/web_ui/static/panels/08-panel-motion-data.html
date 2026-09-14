@@ -240,17 +240,19 @@
                 <strong>모션 실행</strong>
                 <span id="motionRunMessage">모션 파일과 매핑 파일을 선택하세요</span>
               </div>
-              <div class="motion-run-scope" role="radiogroup" aria-label="실행 범위">
-                <span class="motion-run-scope-label">실행 범위</span>
+              <div class="motion-run-scope" role="radiogroup" aria-label="실행 대상">
+                <span class="motion-run-scope-label">실행 대상</span>
                 <label class="motion-run-scope-option">
                   <input id="motionRunScopeLocal" type="radio" name="motionRunScope" value="local" checked>
-                  <span><strong>이 PC 단독</strong><small id="motionRunScopeLocalHint">연결된 모터만 움직입니다</small></span>
+                  <span><strong id="motionRunScopeLocalLabel">이 PC 만</strong><small id="motionRunScopeLocalHint">연결된 모터만 움직입니다</small></span>
                 </label>
-                <label class="motion-run-scope-option">
+                <label class="motion-run-scope-option hidden" id="motionRunScopeGroupOption">
                   <input id="motionRunScopeGroup" type="radio" name="motionRunScope" value="group">
-                  <span><strong>그룹 전체</strong><small id="motionRunScopeGroupHint">연동 상태 확인 중</small></span>
+                  <span><strong id="motionRunScopeGroupLabel">그룹 전체</strong><small id="motionRunScopeGroupHint">연동 상태 확인 중</small></span>
                 </label>
+                <button id="motionRunJoinGroupButton" type="button">그룹 참가</button>
               </div>
+              <div id="motionRunBlockReason" class="registry-message motion-run-block-reason hidden" role="status"></div>
 
               <div id="motionRunGroupRole" class="motion-run-group-role hidden">
                 <div class="motion-run-role">

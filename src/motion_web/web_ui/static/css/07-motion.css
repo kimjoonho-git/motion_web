@@ -1386,3 +1386,10 @@
   color: #8a6412;
   font-size: 12px;
 }
+
+/* 왜 시작할 수 없는지 · 늘 같은 자리에 · §6-98 */
+.motion-run-block-reason {
+  margin: 6px 0 0;
+  font-weight: 600;
+}
+
