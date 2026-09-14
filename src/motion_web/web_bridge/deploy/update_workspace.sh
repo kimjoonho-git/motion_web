@@ -12,15 +12,32 @@
 # 다시 뜨므로, 기억이 아니라 **디스크**에 있어야 화면이 결과를 볼 수 있다.
 set -Eeuo pipefail
 
+# 받는 도중 **이 파일 자신이 바뀐다** · 오늘도 이 스크립트를 두 번 고쳤다.
+#
+# `git` 은 파일을 제자리에서 고쳐 쓴다(inode 가 그대로다) · bash 는 스크립트를
+# 읽어 가며 실행하므로, 파일이 바뀌면 **읽던 자리부터 다른 글이 이어진다** ·
+# 업데이트가 서비스를 멈춘 채로 깨진다.
+#
+# 그래서 먼저 자기를 복사해 그쪽에서 다시 시작한다 · 복사본은 아무도 안 건드린다.
+if [[ "${MOTION_UPDATE_REEXEC:-}" != '1' ]]; then
+  SELF_COPY="$(mktemp /tmp/motion-update-XXXXXX.sh)"
+  cp "${BASH_SOURCE[0]}" "${SELF_COPY}"
+  export MOTION_UPDATE_REEXEC=1
+  export MOTION_UPDATE_SELF_COPY="${SELF_COPY}"
+  exec /bin/bash "${SELF_COPY}" "$@"
+fi
+trap 'rm -f "${MOTION_UPDATE_SELF_COPY:-}"' EXIT
+
 WORKSPACE="${MOTION_WORKSPACE:?MOTION_WORKSPACE is required}"
 STATE_DIR="${MOTION_UPDATE_STATE_DIR:-${XDG_STATE_HOME:-${HOME}/.local/state}/motion-update}"
 STATE_FILE="${STATE_DIR}/state.json"
 LOG_FILE="${STATE_DIR}/update.log"
 OPERATION_ID="${MOTION_UPDATE_OPERATION_ID:-update-$(date +%s)}"
 BRANCH="main"
-ROS_SETUP="/opt/ros/humble/setup.bash"
+ROS_SETUP="${MOTION_ROS_SETUP:-/opt/ros/humble/setup.bash}"
 INSTALLER="${WORKSPACE}/src/motion_web/web_bridge/deploy/install_user_service.sh"
-SERVICES=(motion-control.service motion-motor.service motion-coordination.service)
+# 검사는 이 목록을 비워 실제 장비를 건드리지 않고 전체 흐름을 돌린다
+read -r -a SERVICES <<< "${MOTION_UPDATE_SERVICES-motion-control.service motion-motor.service motion-coordination.service}"
 
 mkdir -p "${STATE_DIR}"
 : > "${LOG_FILE}"

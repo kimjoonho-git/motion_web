@@ -310,3 +310,17 @@ def test_an_old_finished_job_does_not_block_forever():
 def test_a_quiet_system_is_not_blocked():
     assert blocking_reason({'motor_activity': {'active': False}}) == ''
     assert blocking_reason({}) == ''
+
+
+def test_the_script_runs_from_a_copy_of_itself():
+    """받는 도중 이 스크립트 자신이 바뀐다 · `git` 은 파일을 **제자리에서**
+    고쳐 쓰고(inode 가 그대로다) bash 는 읽어 가며 실행한다 · 그래서 바뀐
+    지점의 한 줄이 망가지고, 그 줄이 실행문이면 업데이트가 서비스를 멈춘 채로
+    죽는다.
+
+    지금 스크립트는 8KB 아래라 bash 가 한 번에 다 읽어 우연히 안전하다 ·
+    한 번만 더 자라면 위험이 살아난다 · 복사본에서 다시 시작하면 크기와
+    상관없이 그 종류가 사라진다.
+    """
+    assert 'exec /bin/bash "${SELF_COPY}"' in SCRIPT
+    assert 'MOTION_UPDATE_REEXEC' in SCRIPT
