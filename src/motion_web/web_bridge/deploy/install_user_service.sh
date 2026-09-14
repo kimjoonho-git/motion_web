@@ -149,6 +149,13 @@ chmod 0644 \
   "${INSTALL_TMP}/motion-motor.service" \
   "${INSTALL_TMP}/motion-coordination.service"
 
+# Stop every existing state, including activating/auto-restart loops, so the
+# newly rendered unit is guaranteed to start with the updated ExecStart.
+SERVICES_STOPPED=true
+systemctl --user stop motion-control.service 2>/dev/null || true
+systemctl --user stop motion-motor.service 2>/dev/null || true
+systemctl --user stop motion-coordination.service 2>/dev/null || true
+
 # 켜기 전에 꾸러미 정보를 확인한다 · §6-97
 #
 # `install/` 은 `build/` 안의 메타데이터를 가리키는 **링크**다 · 둘 중 하나만
@@ -164,13 +171,6 @@ if [[ -f "${REPAIR_SCRIPT}" ]]; then
     exit 1
   }
 fi
-
-# Stop every existing state, including activating/auto-restart loops, so the
-# newly rendered unit is guaranteed to start with the updated ExecStart.
-SERVICES_STOPPED=true
-systemctl --user stop motion-control.service 2>/dev/null || true
-systemctl --user stop motion-motor.service 2>/dev/null || true
-systemctl --user stop motion-coordination.service 2>/dev/null || true
 
 mv "${INSTALL_TMP}/motion-control.service" "${CONTROL_UNIT_FILE}"
 mv "${INSTALL_TMP}/motion-motor.service" "${MOTOR_UNIT_FILE}"

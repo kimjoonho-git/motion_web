@@ -296,3 +296,35 @@ def test_the_check_runs_before_the_installer():
     # 판정과 수리의 주인은 한 곳이다 · 여기서 다시 적으면 갈린다
     assert 'repair_python_packages.sh' in script
     assert 'importlib.metadata' not in script, '같은 규칙을 두 곳에 적었다'
+
+
+def test_a_repair_that_cannot_be_patched_falls_back_to_a_clean_rebuild():
+    """부분 수리로 안 되면 전체를 지우고 다시 빌드한다.
+
+    여기서 포기하면 같은 실패가 **계속 반복된다** · 업데이트가 되돌아가면서
+    고침까지 함께 지워, 다음 시도도 옛 코드로 돌기 때문이다 · 실제로 한 대가
+    그 고리에 빠졌다.
+    """
+    from pathlib import Path as _Path
+    repair = (
+        _Path(__file__).resolve().parents[1] / 'deploy/repair_python_packages.sh'
+    ).read_text(encoding='utf-8')
+
+    assert 'rm -rf "${WORKSPACE}/build" "${WORKSPACE}/install"' in repair
+    # 전체 지우기는 **부분 수리를 해 본 뒤에만** 한다 · 늘 하면 몇 분이 몇십 분
+    assert repair.index('--packages-above') < repair.index(
+        'rm -rf "${WORKSPACE}/build" "${WORKSPACE}/install"'
+    )
+
+
+def test_the_installer_repairs_after_stopping_the_services():
+    """수리가 `install/` 을 통째로 지울 수 있다 · 서비스가 도는 채로 지우면
+    돌고 있는 것을 발밑에서 빼는 셈이다."""
+    from pathlib import Path as _Path
+    installer = (
+        _Path(__file__).resolve().parents[1] / 'deploy/install_user_service.sh'
+    ).read_text(encoding='utf-8')
+
+    assert installer.index('systemctl --user stop motion-coordination.service') < (
+        installer.index('repair_python_packages.sh')
+    ), '서비스를 멈추기 전에 수리한다'

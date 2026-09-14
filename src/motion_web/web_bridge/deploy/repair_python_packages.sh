@@ -77,6 +77,22 @@ repair_if_broken() {
     say '고쳤다'
     return 0
   fi
+
+  # 마지막 수단 · 전체를 지우고 다시 빌드한다
+  #
+  # 몇 분 걸리지만, 여기서 포기하면 같은 실패가 **계속 반복된다** ·
+  # 업데이트가 되돌아가면 고침까지 함께 지워져 다음 시도도 옛 코드로 돈다.
+  say "부분 수리로 안 된다 · 전체를 지우고 다시 빌드한다 (몇 분 걸립니다)"
+  rm -rf "${WORKSPACE}/build" "${WORKSPACE}/install"
+  set +u
+  # shellcheck disable=SC1090
+  source "${ROS_SETUP}"
+  set -u
+  colcon build --symlink-install --base-paths "${WORKSPACE}/src"
+  if verify_installed_python; then
+    say '전체 빌드로 고쳤다'
+    return 0
+  fi
   say "고쳐지지 않았다 · ${BROKEN_PACKAGES}"
   return 1
 }
