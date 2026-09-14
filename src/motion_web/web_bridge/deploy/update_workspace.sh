@@ -126,7 +126,17 @@ build() {
   # shellcheck disable=SC1090
   source "${ROS_SETUP}"
   set -u
-  colcon build --symlink-install --base-paths "${WORKSPACE}/src"
+  # **`--symlink-install` 을 쓰지 않는다** · 이것이 실패의 뿌리였다
+  #
+  # 그 방식은 실행에 필요한 정보(`*.egg-info`)를 `build/` 에 남겨 둔다 ·
+  # 그래서 프로그램이 도는 데 `install/` 만으로는 부족하고 `build/` 까지
+  # 맞아야 한다 · 둘이 조금만 어긋나면 `colcon` 은 "다 됐다" 하고 서비스는
+  # 시작에서 죽는다(`No package metadata was found for motion-web-bridge`).
+  #
+  # 그냥 설치하면 `install/` 안에 전부 들어간다 · `build/` 는 그때부터
+  # 없어도 된다 · 자동 업데이트가 도는 PC 는 코드를 고치는 곳이 아니므로
+  # 링크 방식이 줄 이점도 없다.
+  colcon build --base-paths "${WORKSPACE}/src"
 }
 
 on_error() {

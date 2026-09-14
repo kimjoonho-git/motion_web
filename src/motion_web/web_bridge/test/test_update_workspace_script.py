@@ -230,18 +230,19 @@ def test_a_dirty_workspace_never_reaches_the_services(world):
     assert '서비스를 멈춘다' not in log
 
 
-def test_it_always_builds_from_scratch(world, tmp_path):
-    """규칙은 하나다 · **업데이트는 매번 깨끗하게 빌드한다.**
+def test_it_builds_from_scratch_into_a_self_contained_install(world, tmp_path):
+    """실패의 뿌리는 `--symlink-install` 이었다.
 
-    `--symlink-install` 은 꾸러미를 `install/`(이름표)과 `build/`(실물)로 나눠
-    둔다 · 한쪽만 지워지면 colcon 은 "정상" 이라 하고 서비스는 시작에서 죽는다 ·
-    실제로 그 상태에 빠져 같은 실패를 반복했다.
+    그 방식은 실행에 필요한 정보(`*.egg-info`)를 `build/` 에 남겨 둔다 ·
+    프로그램이 도는 데 `install/` 만으로는 부족하고 `build/` 까지 맞아야 한다 ·
+    둘이 조금만 어긋나면 `colcon` 은 "다 됐다" 하고 서비스는 시작에서 죽는다 ·
+    한 대가 그 상태로 계속 실패했다.
 
-    지우고 시작하면 그 어긋남이 생길 수가 없다 · 확인도 수리도 필요 없다.
+    그래서 업데이트는 **지우고 · 링크 없이** 빌드한다 · `install/` 하나로
+    돌아가는 상태를 만든다.
     """
     leftover = tmp_path / 'ws/build/옛찌꺼기'
     leftover.mkdir(parents=True)
-    (tmp_path / 'ws/install').mkdir(parents=True, exist_ok=True)
     world['publish'](note='새 것')
 
     completed, state, _log = world['run']()
@@ -249,6 +250,16 @@ def test_it_always_builds_from_scratch(world, tmp_path):
     assert completed.returncode == 0, completed.stderr
     assert state['status'] == 'success'
     assert not leftover.exists(), '옛 빌드가 남았다'
+
+    script = (tmp_path / 'ws' / SCRIPT_RELATIVE).read_text(encoding='utf-8')
+    build_line = [
+        line for line in script.splitlines()
+        if line.strip().startswith('colcon build')
+    ]
+    assert build_line, '빌드 명령을 못 찾았다'
+    assert all('--symlink-install' not in line for line in build_line), (
+        '업데이트가 다시 링크 방식으로 빌드한다'
+    )
 
 
 def test_a_flaky_build_gets_one_more_try(world, tmp_path):
