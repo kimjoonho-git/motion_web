@@ -94,6 +94,9 @@ export function motionRunTargetView({ role = {}, chosen = 'local' } = {}) {
     showJoinButton: !joined,
     localLabel: '이 PC 만',
     groupLabel: `그룹 ${peerCount}대`,
+    summary: group
+      ? `참가 PC ${peerCount}대가 같은 시각에 움직입니다`
+      : '이 PC 에 연결된 모터만 움직입니다',
     buttons: {
       initialize: group ? `그룹 초기 위치 이동 · ${peerCount}대` : '초기 위치 이동',
       start: group ? `그룹 1회 시작 · ${peerCount}대` : '1회 시작',
@@ -2785,6 +2788,9 @@ export function createMotionDataController({
     }
     if (el.motionRunScopeGroupLabel) {
       el.motionRunScopeGroupLabel.textContent = target.groupLabel;
+    }
+    if (el.motionRunScopeSummary) {
+      el.motionRunScopeSummary.textContent = target.summary;
     }
     // 고를 수 없는 칸이 골라진 채 남지 않게 한다 · 그룹에서 나간 순간이 그렇다
     if (!target.groupSelectable && el.motionRunScopeGroup?.checked && el.motionRunScopeLocal) {

@@ -55,3 +55,41 @@ test('그룹 상태는 그룹을 고를 때만 보인다', () => {
   // 이 id 를 화면 코드가 범위에 따라 켜고 끈다 · 이름이 바뀌면 조용히 죽는다
   assert.match(runPanel, /id="motionRunGroupDetails"[^>]*class="[^"]*hidden/);
 });
+
+
+/**
+ * 순서가 기능을 따라가야 한다 · §6-98
+ *
+ * 전에는 그룹을 고르고 나면 **누가 함께 도는지가 맨 아래**에 있었다 · 그 위에
+ * 로컬 그래프가 있었다 · 대상을 고른 자리에서 참가 PC 가 보이지 않으면 무엇을
+ * 시작하는 것인지 알 수 없다.
+ *
+ *   1. 실행 대상 (누가 도는가 · 참가 PC 표)
+ *   2. 실행할 모션 (무엇을)
+ *   3. 실행 (어떻게 · 시작)
+ *   4. 진행 (어떻게 되고 있나)
+ */
+test('실행 화면은 어디서 · 무엇을 · 어떻게 · 어떻게 되고 있나 순서다', () => {
+  const order = ['1. 실행 대상', '2. 실행할 모션', '3. 실행', '4. 진행']
+    .map((title) => runPanel.indexOf(`<strong>${title}</strong>`));
+
+  assert.ok(order.every((index) => index > 0), `단계 제목이 빠졌다 · ${order}`);
+  for (let i = 1; i < order.length; i += 1) {
+    assert.ok(order[i] > order[i - 1], `${i + 1}번이 앞선다`);
+  }
+});
+
+test('참가 PC 는 대상을 고른 자리에서 바로 보인다', () => {
+  const target = runPanel.indexOf('<strong>1. 실행 대상</strong>');
+  const peers = runPanel.indexOf('id="motionRunGroupDetails"');
+  const nextStep = runPanel.indexOf('<strong>2. 실행할 모션</strong>');
+
+  assert.ok(peers > target && peers < nextStep, '참가 PC 표가 대상 구역 밖에 있다');
+});
+
+test('진행에 관한 것은 한 자리에 모인다', () => {
+  const progress = runPanel.indexOf('<strong>4. 진행</strong>');
+  for (const id of ['motionRunStatus', 'motionRunStageStrip', 'motionRunGraphCanvas']) {
+    assert.ok(runPanel.indexOf(`id="${id}"`) > progress, `${id} 가 진행 구역 밖에 있다`);
+  }
+});

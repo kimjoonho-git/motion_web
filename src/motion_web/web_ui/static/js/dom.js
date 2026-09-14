@@ -294,6 +294,7 @@ export function getElements() {
     motionRunScopeGroupOption: document.getElementById('motionRunScopeGroupOption'),
     motionRunJoinGroupButton: document.getElementById('motionRunJoinGroupButton'),
     motionRunBlockReason: document.getElementById('motionRunBlockReason'),
+    motionRunScopeSummary: document.getElementById('motionRunScopeSummary'),
     coordinationRunAvailability: document.getElementById('coordinationRunAvailability'),
     motionRunSummary: document.getElementById('motionRunSummary'),
     motionRunInitialMoveTime: document.getElementById('motionRunInitialMoveTime'),

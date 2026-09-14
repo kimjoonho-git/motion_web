@@ -93,6 +93,14 @@ test('참가했으면 그룹을 고를 수 있고 대수가 이름에 박힌다'
   assert.equal(view.showJoinButton, false);
 });
 
+test('대상 한 줄 요약도 같은 판정에서 나온다', () => {
+  const alone = motionRunTargetView({ role: { joined: true, peerCount: 3 }, chosen: 'local' });
+  const group = motionRunTargetView({ role: { joined: true, peerCount: 3 }, chosen: 'group' });
+
+  assert.match(alone.summary, /이 PC 에 연결된 모터만/);
+  assert.match(group.summary, /3대가 같은 시각에/);
+});
+
 test('버튼 이름이 몇 대를 움직이는지 말한다', () => {
   /** 전에는 같은 [1회 시작] 이 1대일 수도 3대일 수도 있었고 구분은 툴팁뿐이었다 ·
    * 모터가 실제로 움직이는 명령에서 이건 위험하다. */
