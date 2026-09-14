@@ -108,8 +108,13 @@ build_workspace() {
   source /opt/ros/humble/setup.bash
   set -u
   rosdep install --from-paths "${WORKSPACE_DIR}/src" --ignore-src -r -y
-  rm -rf "${WORKSPACE_DIR}/build/motion_web_ui" "${WORKSPACE_DIR}/install/motion_web_ui"
-  colcon build --symlink-install --base-paths "${WORKSPACE_DIR}/src"
+  # 지우고 · 링크 없이 빌드한다 · 웹 업데이트와 같은 방식이다 · §6-97
+  #
+  # `--symlink-install` 은 실행에 필요한 정보를 `build/` 에 남겨 두어,
+  # `install/` 만으로는 프로그램이 돌지 않는다 · 둘이 어긋나면 빌드는
+  # "다 됐다" 하고 서비스는 시작에서 죽는다 · 실제로 한 대가 그랬다.
+  rm -rf "${WORKSPACE_DIR}/build" "${WORKSPACE_DIR}/install"
+  colcon build --base-paths "${WORKSPACE_DIR}/src"
   if command -v ros2 >/dev/null 2>&1; then
     ros2 daemon stop || true
     ros2 daemon start || true
