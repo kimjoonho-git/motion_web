@@ -129,6 +129,12 @@ GROUP_ALARM = '/motion_group/alarm'
 GROUP_TIME_SYNC = '/motion_group/time_sync'
 GROUP_SYSTEM_INFO = '/motion_group/system_info'
 
+#: 원시 MIDI 중계 · §6-94 · 200Hz 최선형 · 깊이 1
+#:
+#: 장치가 꽂힌 PC 에서 대상 PC 로 · 되돌아가는 페이더 명령은 반대 길이다.
+GROUP_MIDI = '/motion_group/midi'
+GROUP_MIDI_FEEDBACK = '/motion_group/midi_feedback'
+
 # --------------------------------------------------------------------------- #
 # /motion_schedule · 스케줄
 # --------------------------------------------------------------------------- #

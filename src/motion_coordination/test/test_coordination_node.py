@@ -13,6 +13,19 @@ from motion_coordination.group_execution import GroupExecution, Member, MemberRe
 from motion_coordination.safety_stop import SafetyStopController
 
 
+class _MidiRelay:
+    """중계 자리만 채운다 · 중계 자체는 `test_midi_relay_bridge` 가 본다."""
+
+    def __init__(self):
+        self.ticks = 0
+
+    def tick(self):
+        self.ticks += 1
+
+    def snapshot(self):
+        return {}
+
+
 class _Publisher:
     def __init__(self, events=None):
         self.messages = []
@@ -87,6 +100,7 @@ def _node():
         'trigger_sync_uncertainty_ms': 0.0,
         'trigger_sync_source': 'dds_relative_monotonic',
     }
+    node._midi_relay = _MidiRelay()
     return node
 
 

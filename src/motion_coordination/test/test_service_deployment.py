@@ -91,12 +91,29 @@ def test_a_missing_helper_never_stops_the_service():
         assert 'export MOTION_PC_NAMESPACE="${MOTION_PC_NAMESPACE:-}"' in text
 
 
-def test_the_coordination_service_needs_no_namespace():
-    """조정 노드는 그룹 토픽만 쓴다 · 그룹 토픽에는 이름표가 안 붙는다."""
+def test_the_coordination_service_gets_the_same_namespace():
+    """조정 노드도 이름표를 받는다 · §6-94
+
+    그룹 토픽만 쓰던 동안에는 필요 없었다 · 이제 원시 MIDI 중계를 맡아 **이 PC
+    의** `/xtouch/midi` 를 연다 · 이름표가 없으면 옛 이름을 열어 아무 말 없이
+    아무것도 안 흐른다.
+
+    다른 서비스와 **같은 곳에서** 가져와야 한다 · 따로 읽으면 갈린다.
+    """
+    runner = (PACKAGE_ROOT / 'deploy/run_coordination_user_service.sh').read_text(
+        encoding='utf-8'
+    )
+    assert 'group_env.py' in runner, '조정 서비스가 설정을 안 읽는다'
+    assert 'hostname' not in runner, '호스트 이름을 따로 읽는다'
+    assert 'export MOTION_PC_NAMESPACE="${MOTION_PC_NAMESPACE:-}"' in runner
+
+
+def test_the_coordination_service_stays_open_to_the_network():
+    """조정 노드는 늘 열려 있다 · 여기가 PC 끼리 만나는 자리다."""
     unit = (PACKAGE_ROOT / 'deploy/motion-coordination.service.in').read_text(
         encoding='utf-8'
     )
-    assert 'MOTION_PC_NAMESPACE' not in unit
+    assert 'ROS_LOCALHOST_ONLY=0' in unit
 
 
 def test_the_motor_node_is_given_the_namespace_from_outside():
