@@ -39,11 +39,6 @@ INSTALLER="${WORKSPACE}/src/motion_web/web_bridge/deploy/install_user_service.sh
 # 검사는 이 목록을 비워 실제 장비를 건드리지 않고 전체 흐름을 돌린다
 read -r -a SERVICES <<< "${MOTION_UPDATE_SERVICES-motion-control.service motion-motor.service motion-coordination.service}"
 
-# 서비스가 실제로 부르는 파이썬 배포 이름 · 빌드가 끝나도 이것이 어긋나면
-# 서비스가 시작에서 죽는다(`No package metadata was found for ...`)
-read -r -a REQUIRED_DISTRIBUTIONS <<< "${MOTION_UPDATE_DISTRIBUTIONS-motion-web-bridge motion-coordination}"
-BROKEN_PACKAGES=""
-
 mkdir -p "${STATE_DIR}"
 : > "${LOG_FILE}"
 exec >>"${LOG_FILE}" 2>&1
@@ -159,48 +154,15 @@ build_with_recovery() {
     --packages-above ${failed}
 }
 
-#: 빌드가 끝나도 **서비스가 못 뜨는 자리**가 하나 더 있다
-#:
-#: `--symlink-install` 로 만든 파이썬 꾸러미는 메타데이터(egg-info)가 옛것과
-#: 어긋날 수 있다 · 그러면 빌드는 31개 전부 성공이라고 해놓고, 서비스는
-#: `No package metadata was found for motion-web-bridge` 로 죽는다 ·
-#: 실제로 그렇게 실패했다.
-#:
-#: **서비스를 켜기 전에** 잡는다 · 켜 보고 알면 그때는 이미 장비가 멈춘 뒤다.
-verify_installed_python() {
-  BROKEN_PACKAGES=""
-  local broken=()
-  local distribution
-  for distribution in "${REQUIRED_DISTRIBUTIONS[@]}"; do
-    if ! (
-      set +u
-      # shellcheck disable=SC1090
-      source "${ROS_SETUP}"
-      # shellcheck disable=SC1091
-      source "${WORKSPACE}/install/setup.bash"
-      set -u
-      python3 -c "import importlib.metadata as m; m.distribution('${distribution}')"
-    ) >/dev/null 2>&1; then
-      broken+=("${distribution//-/_}")
-    fi
-  done
-  BROKEN_PACKAGES="${broken[*]}"
-  [[ -z "${BROKEN_PACKAGES}" ]]
-}
-
-repair_packages() {
-  local package
-  for package in $1; do
-    say "꾸러미 정보를 지우고 다시 빌드 · ${package}"
-    rm -rf "${WORKSPACE}/build/${package}" "${WORKSPACE}/install/${package}"
-  done
-  set +u
-  # shellcheck disable=SC1090
-  source "${ROS_SETUP}"
-  set -u
-  colcon build --symlink-install --base-paths "${WORKSPACE}/src" \
-    --packages-above $1
-}
+# 빌드가 끝나도 **서비스가 못 뜨는 자리**가 하나 더 있다 ·
+# `--symlink-install` 파이썬 꾸러미의 메타데이터가 옛것과 어긋나면 `colcon` 은
+# "다 됐다" 하고 서비스는 시작에서 죽는다 · 그 판정과 수리는 사람이 직접 쓰는
+# 스크립트에 있다 · 여기서 다시 적으면 둘이 갈린다.
+#
+# 경로는 **작업공간 기준**이다 · 이 스크립트는 자기 복사본(/tmp)에서 돌기 때문에
+# 자기 위치를 기준으로 찾으면 못 찾는다.
+# shellcheck disable=SC1090
+source "${WORKSPACE}/src/motion_web/web_bridge/deploy/repair_python_packages.sh"
 
 roll_back() {
   ROLLED_BACK="true"
@@ -257,14 +219,9 @@ write_state running building '빌드 중 · 몇 분 걸립니다'
 say '빌드'
 build_with_recovery
 
-if ! verify_installed_python; then
-  say "꾸러미 정보가 어긋났다 · ${BROKEN_PACKAGES}"
-  write_state running building '꾸러미 정보가 어긋났다 · 지우고 다시 빌드합니다'
-  repair_packages "${BROKEN_PACKAGES}"
-  if ! verify_installed_python; then
-    say "고쳐지지 않았다 · ${BROKEN_PACKAGES}"
-    false  # 여기서 서비스를 켜면 죽은 채로 남는다 · 되돌린다
-  fi
+write_state running building '꾸러미 정보 확인'
+if ! repair_if_broken; then
+  false  # 여기서 서비스를 켜면 죽은 채로 남는다 · 되돌린다
 fi
 
 write_state running installing '서비스 설치·시작'

@@ -17,6 +17,8 @@ from pathlib import Path
 import pytest
 
 SCRIPT_RELATIVE = 'src/motion_web/web_bridge/deploy/update_workspace.sh'
+REPAIR_RELATIVE = 'src/motion_web/web_bridge/deploy/repair_python_packages.sh'
+REAL_REPAIR = Path(__file__).resolve().parents[1] / 'deploy/repair_python_packages.sh'
 INSTALLER_RELATIVE = 'src/motion_web/web_bridge/deploy/install_user_service.sh'
 REAL_SCRIPT = Path(__file__).resolve().parents[1] / 'deploy/update_workspace.sh'
 
@@ -71,6 +73,7 @@ def world(tmp_path):
         _padded(REAL_SCRIPT.read_text(encoding='utf-8'), '채움', 400),
     )
     _write(seed / INSTALLER_RELATIVE, _installer(0))
+    _write(seed / REPAIR_RELATIVE, REAL_REPAIR.read_text(encoding='utf-8'))
     _git(seed, 'add', '-A')
     _git(seed, 'commit', '-m', '처음')
     _git(seed, 'remote', 'add', 'origin', str(origin))
@@ -287,6 +290,9 @@ def test_the_check_runs_before_the_installer():
         _Path(__file__).resolve().parents[1] / 'deploy/update_workspace.sh'
     ).read_text(encoding='utf-8')
 
-    assert script.index('verify_installed_python') < script.index(
+    assert script.index('repair_if_broken') < script.index(
         "write_state running installing"
     ), '서비스를 켠 뒤에 확인한다'
+    # 판정과 수리의 주인은 한 곳이다 · 여기서 다시 적으면 갈린다
+    assert 'repair_python_packages.sh' in script
+    assert 'importlib.metadata' not in script, '같은 규칙을 두 곳에 적었다'
