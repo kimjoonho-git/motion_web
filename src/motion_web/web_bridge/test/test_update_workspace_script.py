@@ -230,36 +230,31 @@ def test_a_dirty_workspace_never_reaches_the_services(world):
     assert '서비스를 멈춘다' not in log
 
 
-def test_it_builds_from_scratch_into_a_self_contained_install(world, tmp_path):
-    """실패의 뿌리는 `--symlink-install` 이었다.
+def test_the_installer_turns_on_its_own_ros_environment():
+    """이것이 진짜 원인이었다 · §6-97
 
-    그 방식은 실행에 필요한 정보(`*.egg-info`)를 `build/` 에 남겨 둔다 ·
-    프로그램이 도는 데 `install/` 만으로는 부족하고 `build/` 까지 맞아야 한다 ·
-    둘이 조금만 어긋나면 `colcon` 은 "다 됐다" 하고 서비스는 시작에서 죽는다 ·
-    한 대가 그 상태로 계속 실패했다.
+    설치 스크립트는 모터 설정을 읽으려고 실행 파일을 **직접 부른다** · 그
+    프로그램은 자기 꾸러미 정보를 찾아야 하고, 그건 `install/setup.bash` 가
+    PYTHONPATH 에 넣어 준다.
 
-    그래서 업데이트는 **지우고 · 링크 없이** 빌드한다 · `install/` 하나로
-    돌아가는 상태를 만든다.
+    사람이 터미널에서 부를 때는 이미 켜져 있어 보이지 않았다 · 웹 업데이트는
+    깨끗한 환경(`systemd-run`)에서 돌기 때문에 **늘 여기서 죽었다** ·
+    `No package metadata was found for motion-web-bridge`.
+
+        환경 없이 실행 → PackageNotFoundError
+        환경 있이 실행 → 정상
+
+    그래서 스크립트가 스스로 환경을 켠다 · 누가 부르든 같게 동작해야 한다.
     """
-    leftover = tmp_path / 'ws/build/옛찌꺼기'
-    leftover.mkdir(parents=True)
-    world['publish'](note='새 것')
+    from pathlib import Path as _Path
+    installer = (
+        _Path(__file__).resolve().parents[1] / 'deploy/install_user_service.sh'
+    ).read_text(encoding='utf-8')
 
-    completed, state, _log = world['run']()
-
-    assert completed.returncode == 0, completed.stderr
-    assert state['status'] == 'success'
-    assert not leftover.exists(), '옛 빌드가 남았다'
-
-    script = (tmp_path / 'ws' / SCRIPT_RELATIVE).read_text(encoding='utf-8')
-    build_line = [
-        line for line in script.splitlines()
-        if line.strip().startswith('colcon build')
-    ]
-    assert build_line, '빌드 명령을 못 찾았다'
-    assert all('--symlink-install' not in line for line in build_line), (
-        '업데이트가 다시 링크 방식으로 빌드한다'
-    )
+    assert 'source "${WORKSPACE}/install/setup.bash"' in installer
+    assert installer.index('source "${WORKSPACE}/install/setup.bash"') < (
+        installer.index('--print-config')
+    ), '실행 파일을 부른 뒤에 환경을 켠다'
 
 
 def test_a_flaky_build_gets_one_more_try(world, tmp_path):

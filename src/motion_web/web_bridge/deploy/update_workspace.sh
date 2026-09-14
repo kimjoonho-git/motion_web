@@ -113,30 +113,11 @@ start_services() {
 }
 
 build() {
-  # **늘 깨끗하게 빌드한다** · §6-97
-  #
-  # `--symlink-install` 은 꾸러미를 `install/`(이름표)과 `build/`(실물)로
-  # 나눠 둔다 · 한쪽만 지워지면 colcon 은 "정상" 이라 하고 서비스는 시작에서
-  # 죽는다 · 실제로 그 상태에 빠져 같은 실패를 반복했다.
-  #
-  # 지우고 시작하면 그 어긋남이 **생길 수가 없다** · 몇 분 더 걸리는 대신
-  # 확인도, 수리도, 되살리기도 필요 없다 · 규칙이 하나다.
-  rm -rf "${WORKSPACE}/build" "${WORKSPACE}/install"
   set +u
   # shellcheck disable=SC1090
   source "${ROS_SETUP}"
   set -u
-  # **`--symlink-install` 을 쓰지 않는다** · 이것이 실패의 뿌리였다
-  #
-  # 그 방식은 실행에 필요한 정보(`*.egg-info`)를 `build/` 에 남겨 둔다 ·
-  # 그래서 프로그램이 도는 데 `install/` 만으로는 부족하고 `build/` 까지
-  # 맞아야 한다 · 둘이 조금만 어긋나면 `colcon` 은 "다 됐다" 하고 서비스는
-  # 시작에서 죽는다(`No package metadata was found for motion-web-bridge`).
-  #
-  # 그냥 설치하면 `install/` 안에 전부 들어간다 · `build/` 는 그때부터
-  # 없어도 된다 · 자동 업데이트가 도는 PC 는 코드를 고치는 곳이 아니므로
-  # 링크 방식이 줄 이점도 없다.
-  colcon build --base-paths "${WORKSPACE}/src"
+  colcon build --symlink-install --base-paths "${WORKSPACE}/src"
 }
 
 on_error() {

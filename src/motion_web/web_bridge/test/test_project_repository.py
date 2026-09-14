@@ -1803,15 +1803,7 @@ def test_motion_web_install_script_runs_full_first_install_flow():
     assert 'install_system_packages' in installer
     assert 'configure_locale_and_groups' in installer
     assert 'initialize_rosdep' in installer
-    # 지우고 · 링크 없이 빌드한다 · 웹 업데이트와 같은 상태를 만든다 · §6-97
-    # (링크 방식은 실행 정보를 build/ 에 남겨 install/ 만으로는 안 돈다)
-    assert 'rm -rf "${WORKSPACE_DIR}/build" "${WORKSPACE_DIR}/install"' in installer
-    build_lines = [
-        line for line in installer.splitlines()
-        if line.strip().startswith('colcon build')
-    ]
-    assert build_lines, '빌드 명령이 없다'
-    assert all('--symlink-install' not in line for line in build_lines)
+    assert 'colcon build --symlink-install' in installer
     assert 'ros2 daemon stop' in installer
     assert 'ros2 daemon start' in installer
     assert 'install_user_services' in installer

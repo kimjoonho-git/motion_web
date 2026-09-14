@@ -109,6 +109,21 @@ fi
 # Resolve the durable runtime target before stopping an already healthy Motor
 # Manager.  An upgrade with missing/invalid state must fail closed instead of
 # turning a running motor service into an unrecoverable stopped service.
+# ROS 환경을 **여기서 켠다** · §6-97
+#
+# 아래에서 실행 파일을 직접 부른다 · 그 프로그램은 자기 꾸러미 정보를 찾아야
+# 하고, 그건 `install/setup.bash` 가 PYTHONPATH 에 넣어 준다.
+#
+# 사람이 터미널에서 부를 때는 이미 켜져 있어 보이지 않던 문제다 · 웹 업데이트는
+# 깨끗한 환경(`systemd-run`)에서 돌기 때문에 **늘 여기서 죽었다** ·
+# `No package metadata was found for motion-web-bridge`.
+set +u
+# shellcheck disable=SC1091
+source /opt/ros/humble/setup.bash
+# shellcheck disable=SC1091
+source "${WORKSPACE}/install/setup.bash"
+set -u
+
 MOTOR_CONFIG="$("${MOTOR_SERVICE_EXECUTABLE}" --print-config)"
 if systemctl --user is-active --quiet motion-motor.service && [[ -z "${MOTOR_CONFIG}" ]]; then
   echo "설치 중단 · 실행 중인 Motor Manager의 검증된 실행 설정을 확인할 수 없습니다." >&2
