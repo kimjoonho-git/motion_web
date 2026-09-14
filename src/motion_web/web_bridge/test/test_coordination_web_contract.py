@@ -92,3 +92,21 @@ def test_frontend_uses_manual_group_commands_without_repeat_count():
     assert "peer.state !== 'online'" in controller
     assert 'repeat_count' not in controller
     assert 'common_dwell' not in controller
+
+
+def test_the_web_can_hand_the_midi_over():
+    """MIDI 를 쓸 PC 를 화면에서 정한다 · §6-94
+
+    중계는 조정 노드가 이미 하고 있었는데 화면에 길이 없어 `curl` 로만 됐다 ·
+    허용 목록에 없으면 400 으로 막힌다.
+
+    **판정은 여기서 하지 않는다** · 장치를 든 PC 만 정할 수 있다는 규칙은 조정
+    노드에 있고, 웹은 통로만 연다 · `pc_id` 를 그대로 넘겨야 하고 빈 값은
+    되돌리기다 · 값을 지어내면 안 된다.
+    """
+    source = (BRIDGE.parent / 'coordination_bridge.py').read_text(encoding='utf-8')
+
+    assert "'set_midi_target'," in source, '허용 목록에 없다'
+    assert "request['pc_id'] = str(payload.get('pc_id') or '')" in source, (
+        'pc_id 를 그대로 넘기지 않는다'
+    )

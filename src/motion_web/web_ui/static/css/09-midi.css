@@ -134,3 +134,16 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* MIDI 를 쓸 PC 고르기 · §6-94 */
+.midi-target-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.midi-target-choice.active {
+  border-color: var(--color-primary, #2b6cb0);
+  font-weight: 700;
+}
+

@@ -178,12 +178,18 @@ class CoordinationWebBridge:
         allowed = {
             'join', 'leave', 'start_group', 'stop_after_cycle', 'stop_now',
             'acknowledge_group_error', 'temporarily_disable', 'initialize_group',
+            # MIDI 를 쓸 PC 를 정한다 · §6-94 · 장치를 든 PC 만 정할 수 있고
+            # 그 판정은 조정 노드가 한다 · 여기서는 통로만 연다
+            'set_midi_target',
         }
         if command not in allowed:
             raise ValueError('지원하지 않는 DDS 그룹 실행 요청입니다')
         start_generation = int(self._project_generation())
         try:
             request = {'command': command}
+            if command == 'set_midi_target':
+                # 빈 값은 되돌리기다 · 값을 지어내면 안 된다
+                request['pc_id'] = str(payload.get('pc_id') or '')
             if command in {'start_group', 'initialize_group'}:
                 request.update({
                     'run_mode': payload.get('run_mode', 'continuous'),

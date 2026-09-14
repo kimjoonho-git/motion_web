@@ -4,6 +4,7 @@ import {
   saveCoordinationSettings,
 } from './api.js';
 import { showAlert, showConfirm, dismissAllDialogs } from './ui_dialogs.js';
+import { midiTargetView } from './midi_target.js';
 
 function text(value) {
   return String(value ?? '').replace(/[&<>"']/g, (character) => ({
@@ -86,6 +87,27 @@ export function createCoordinationController({ el }) {
       el.coordinationAutoPlayToggle.checked = config.auto_play === true;
     }
     if (el.coordinationRequiredPeers) el.coordinationRequiredPeers.value = Array.isArray(config.required_peers) ? config.required_peers.join(', ') : '';
+  }
+
+  /** MIDI 를 쓸 PC · 판정은 `midi_target.js` 가 하고 여기서는 그리기만 한다. */
+  function renderMidiTarget(runtime = {}, config = {}) {
+    if (!el.midiTargetChoices) return;
+    const view = midiTargetView({
+      relay: runtime.midi_relay || {},
+      config: runtime.config || config,
+      peers: Array.isArray(runtime.peers) ? runtime.peers : [],
+    });
+    if (el.midiTargetState) el.midiTargetState.textContent = view.state;
+    if (el.midiTargetMessage) {
+      el.midiTargetMessage.textContent = view.reason;
+      el.midiTargetMessage.classList.toggle('hidden', !view.reason);
+    }
+    el.midiTargetChoices.innerHTML = view.choices.map((choice) => {
+      const label = choice.isDevice ? `${choice.label} · 장치` : choice.label;
+      return `<button type="button" class="midi-target-choice${choice.active ? ' active' : ''}"`
+        + ` data-midi-target="${text(choice.pc_id)}"${choice.disabled ? ' disabled' : ''}>`
+        + `${text(label)}</button>`;
+    }).join('');
   }
 
   function peerRow(peer = {}, requiredPeers = new Set(), fixedParticipants = new Set()) {
@@ -251,6 +273,7 @@ export function createCoordinationController({ el }) {
     }
 
     if (el.coordinationAcknowledgeErrorButton) el.coordinationAcknowledgeErrorButton.disabled = loading || !groupErrorActive;
+    renderMidiTarget(runtime, config);
     if (el.coordinationErrorSummary) {
       const code = coordinationError.code || '';
       const failedPc = coordinationError.pc_id ? ` · PC ${coordinationError.pc_id}` : '';
@@ -527,6 +550,16 @@ export function createCoordinationController({ el }) {
       save();
     });
     
+    el.midiTargetChoices?.addEventListener('click', async (event) => {
+      const button = event.target.closest('button[data-midi-target]');
+      if (!button || button.disabled) return;
+      const target = button.dataset.midiTarget || '';
+      // 장치를 든 PC 를 고르면 되돌리기다 · 빈 값으로 보낸다
+      const relay = snapshot?.runtime?.midi_relay || {};
+      const wanted = target === String(relay.device_pc_id || '') ? '' : target;
+      await control('set_midi_target', { pc_id: wanted });
+    });
+
     el.coordinationConfirmRosterButton?.addEventListener('click', async () => {
       const peers = Array.isArray(snapshot?.runtime?.peers) ? snapshot.runtime.peers : [];
       const ids = new Set(peers.map(p => p.pc_id));
