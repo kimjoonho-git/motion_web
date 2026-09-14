@@ -257,8 +257,15 @@ def test_the_installer_turns_on_its_own_ros_environment():
     ), '실행 파일을 부른 뒤에 환경을 켠다'
 
 
-def test_a_flaky_build_gets_one_more_try(world, tmp_path):
-    """일시적인 실패가 있다 · 한 번은 다시 해 본다 · 두 번째도 깨지면 진짜다."""
+def test_a_failed_build_is_retried_from_scratch(world, tmp_path):
+    """옛 결과가 새 빌드를 막는 경우가 있다 · 빌드 방식이 한 번이라도
+    달라지면(링크 ↔ 복사) 부딪힌다 ·
+
+        failed to create symbolic link ... existing path cannot be removed
+
+    사람이 하던 "지우고 다시 빌드" 를 스크립트가 한다 · 늘 지우지는 않는다.
+    """
+    (tmp_path / 'ws/build/옛찌꺼기').mkdir(parents=True, exist_ok=True)
     counter = tmp_path / 'bin/tries'
     (tmp_path / 'bin/colcon').write_text(
         '#!/usr/bin/env bash\n'
@@ -274,4 +281,5 @@ def test_a_flaky_build_gets_one_more_try(world, tmp_path):
 
     assert completed.returncode == 0, completed.stderr
     assert state['status'] == 'success'
-    assert '한 번 더 해 본다' in log
+    assert '지우고 처음부터 다시 빌드한다' in log
+    assert not (tmp_path / 'ws/build/옛찌꺼기').exists()
