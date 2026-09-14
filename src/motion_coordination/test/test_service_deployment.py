@@ -184,3 +184,21 @@ def test_opening_the_network_never_lands_on_the_default_domain():
         WORKSPACE / 'src/motion_common/motion_common/group_env.py'
     ).read_text(encoding='utf-8')
     assert 'ROS_DOMAIN_ID' in text, '도메인을 정해 주지 않는다'
+
+
+def test_the_installer_checks_the_packages_before_starting_services():
+    """`install/` 은 `build/` 안의 메타데이터를 가리키는 링크다 · 둘 중 하나만
+    어긋나도 서비스는 시작하자마자 죽는다 · 빌드가 "다 됐다" 고 한 뒤에도
+    그렇다 · 실제로 그렇게 한 대가 멈췄다.
+
+    켜 보고 알면 그때는 이미 장비가 멈춘 뒤다 · 켜기 전에 본다.
+    """
+    installer = (
+        WORKSPACE / 'src/motion_web/web_bridge/deploy/install_user_service.sh'
+    ).read_text(encoding='utf-8')
+
+    assert 'repair_python_packages.sh' in installer, '켜기 전에 확인하지 않는다'
+    # 실패 복구 경로에도 start 가 있다 · 실제로 켜는 자리는 마지막 것이다
+    assert installer.index('repair_python_packages.sh') < installer.rindex(
+        'systemctl --user start motion-control.service'
+    ), '서비스를 켠 뒤에 확인한다'
