@@ -41,6 +41,16 @@ function setText(element, value) {
   if (element) element.textContent = value;
 }
 
+/** 언제 적힌 상태인가 · 옛 기록을 지금 것으로 오해하지 않게 한다. */
+function ageText(updatedAt, now) {
+  const stamp = Number(updatedAt);
+  if (!Number.isFinite(stamp) || stamp <= 0) return '';
+  const seconds = Math.max(0, Math.round(now / 1000 - stamp));
+  if (seconds < 60) return ` · ${seconds}초 전`;
+  const minutes = Math.round(seconds / 60);
+  return minutes < 60 ? ` · ${minutes}분 전` : ' · 오래 전';
+}
+
 export function createWorkspaceUpdateController({
   elements = {},
   api,
@@ -48,6 +58,7 @@ export function createWorkspaceUpdateController({
   alert,
   onFinished = () => {},
   timers = { setInterval, clearInterval },
+  now = () => Date.now(),
 } = {}) {
   let pollTimer = null;
 
@@ -75,11 +86,13 @@ export function createWorkspaceUpdateController({
   function renderProgress(status = {}, { disconnected = false } = {}) {
     const state = String(status.status || 'idle');
     const running = state === 'running';
+    const label = UPDATE_PHASE_LABEL[String(status.phase || '')]
+      || String(status.phase || '') || '-';
     setText(
       elements.phase,
       disconnected
         ? '서비스 재시작 중'
-        : (UPDATE_PHASE_LABEL[String(status.phase || '')] || String(status.phase || '') || '-'),
+        : `${label}${ageText(status.updated_at, now())}`,
     );
     if (state !== 'idle') {
       setText(
@@ -122,6 +135,9 @@ export function createWorkspaceUpdateController({
   function watch() {
     stop();
     pollTimer = timers.setInterval(poll, POLL_INTERVAL_MS);
+    // 첫 확인을 2초 뒤로 미루면 그동안 **지난 기록**이 화면에 남는다 ·
+    // 실패로 끝났던 기록이면 누르자마자 "실패" 로 보인다
+    poll();
   }
 
   async function refresh() {
@@ -143,6 +159,11 @@ export function createWorkspaceUpdateController({
     });
     if (!confirmed) return;
     if (elements.startButton) elements.startButton.disabled = true;
+    // 지난 기록을 먼저 지운다 · 옛 실패 글과 옛 기록이 새 작업의 것처럼 보인다
+    renderProgress({
+      status: 'running', phase: 'starting', message: '업데이트를 시작합니다',
+      log_tail: '', updated_at: now() / 1000,
+    });
     try {
       await api.start();
       watch();

@@ -43,6 +43,11 @@ mkdir -p "${STATE_DIR}"
 : > "${LOG_FILE}"
 exec >>"${LOG_FILE}" 2>&1
 
+# 기록이 화면에서 **실시간으로 보여야** 한다 · 파이썬은 파일로 내보낼 때 한
+# 줄씩이 아니라 뭉텅이로 모았다 쓴다 · 그러면 몇 분 동안 기록이 멈춘 것처럼
+# 보인다.
+export PYTHONUNBUFFERED=1
+
 FROM_COMMIT=""
 TO_COMMIT=""
 ROLLED_BACK="false"

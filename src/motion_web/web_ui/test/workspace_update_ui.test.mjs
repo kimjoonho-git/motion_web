@@ -37,6 +37,7 @@ function fixture({ check, status, start, confirmed = true } = {}) {
       setInterval: (fn) => { calls.intervals.push(fn); return calls.intervals.length; },
       clearInterval: () => { calls.cleared += 1; },
     },
+    now: () => 1_000_000_000_000,
   });
   return { controller, elements, calls };
 }
@@ -173,4 +174,57 @@ test('화면을 새로 열어도 하던 업데이트를 이어서 본다', async
 
   assert.equal(elements.phase.textContent, '코드 받는 중');
   assert.equal(calls.intervals.length, 1, '이어서 지켜봐야 한다');
+});
+
+
+// --------------------------------------------------------------------- //
+// 지난 기록이 지금 것처럼 보이면 안 된다 · §6-97
+// --------------------------------------------------------------------- //
+
+test('누르는 순간 지난 기록을 지운다', async () => {
+  /** 실패로 끝났던 기록이 남아 있으면 누르자마자 "실패" 로 보인다 ·
+   * 실제로 그렇게 보였다. */
+  const { controller, elements, calls } = fixture({
+    status: async () => ({ status: 'running', phase: 'building', message: '빌드 중' }),
+  });
+  controller.renderProgress({
+    status: 'failure', phase: 'failed', message: '업데이트 실패',
+    log_tail: '지난 기록',
+  });
+
+  await controller.start();
+
+  assert.notEqual(elements.summary.textContent, '업데이트 실패');
+  assert.equal(elements.summary.classList.contains('warning-text'), false);
+  assert.ok(!/지난 기록/.test(elements.log.textContent), '옛 기록이 남았다');
+  assert.ok(calls.intervals.length > 0, '지켜보기를 시작하지 않았다');
+});
+
+test('시작하면 곧바로 한 번 확인한다', async () => {
+  let asked = 0;
+  const { controller } = fixture({
+    status: async () => { asked += 1; return { status: 'running', phase: 'pulling' }; },
+  });
+
+  await controller.start();
+
+  assert.equal(asked, 1, '첫 확인을 2초 뒤로 미뤘다');
+});
+
+test('언제 적힌 상태인지 함께 보여 준다', () => {
+  const { controller, elements } = fixture();
+  controller.renderProgress({
+    status: 'running', phase: 'building', updated_at: 1_000_000_000 - 5,
+  });
+
+  assert.equal(elements.phase.textContent, '빌드 중 · 5초 전');
+});
+
+test('오래된 기록은 오래됐다고 보인다', () => {
+  const { controller, elements } = fixture();
+  controller.renderProgress({
+    status: 'failure', phase: 'failed', updated_at: 1_000_000_000 - 600,
+  });
+
+  assert.match(elements.phase.textContent, /10분 전/);
 });
