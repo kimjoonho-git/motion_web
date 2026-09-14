@@ -11,7 +11,9 @@ Environment="MOTION_WORKSPACE=@WORKSPACE@"
 Environment="MOTION_CONTROL_SERVICE_UNIT=motion-control.service"
 Environment="MOTION_MOTOR_SERVICE_UNIT=motion-motor.service"
 Environment="MOTION_COORDINATION_SERVICE_UNIT=motion-coordination.service"
-Environment="ROS_LOCALHOST_ONLY=1"
+# 네트워크 개방과 DDS 도메인·이름공간은 실행 스크립트가 그룹 설정에서
+# 정한다 · §6-96 · 도로 잠그려면 MOTION_GROUP_NETWORK=0
+Environment="MOTION_GROUP_NETWORK=1"
 ExecStart=/bin/bash @SERVICE_RUNNER@
 Restart=always
 RestartSec=3
