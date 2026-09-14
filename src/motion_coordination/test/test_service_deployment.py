@@ -72,11 +72,14 @@ def test_every_motor_side_service_resolves_the_namespace_the_same_way():
 
 def test_the_namespace_and_network_can_be_set_from_outside():
     """문제가 생기면 환경변수로 되돌릴 수 있어야 한다."""
-    text = (
-        WORKSPACE / 'src/motion_common/motion_common/group_env.py'
-    ).read_text(encoding='utf-8')
-    assert 'MOTION_PC_NAMESPACE:-' in text, '이름표를 바깥에서 못 덮는다'
-    assert 'ROS_DOMAIN_ID:-' in text, '도메인을 바깥에서 못 덮는다'
+    from motion_common.group_env import exports
+
+    given = {'MOTION_PC_NAMESPACE': 'stage_left', 'ROS_DOMAIN_ID': '42'}
+    lines = exports({'namespace': 'joonhoTest', 'domain_id': 21}, given)
+    assert 'export MOTION_PC_NAMESPACE="stage_left"' in lines, (
+        '이름표를 바깥에서 못 덮는다'
+    )
+    assert 'export ROS_DOMAIN_ID="42"' in lines, '도메인을 바깥에서 못 덮는다'
 
     runner = (WORKSPACE / MOTION_RUNNERS[0]).read_text(encoding='utf-8')
     assert '${MOTION_GROUP_NETWORK:-' in runner, '네트워크를 바깥에서 못 덮는다'

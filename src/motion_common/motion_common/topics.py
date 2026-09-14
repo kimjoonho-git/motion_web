@@ -34,14 +34,20 @@ from typing import Dict
 # 켜지 않은 시스템은 아무것도 바뀌지 않는다.
 
 
-def pc_namespace() -> str:
-    """이 PC 의 이름공간 · 없으면 빈 문자열.
+def sanitize_namespace(value: str) -> str:
+    """이름 하나를 토픽에 쓸 수 있는 모양으로 · 없으면 빈 문자열.
 
-    토픽 이름에 쓸 수 없는 글자는 밑줄로 바꾼다 · 호스트 이름을 그대로 넣는
-    일이 흔한데, 하이픈이나 점이 들어가면 **아무 말 없이 통신이 안 된다**.
-    숫자로 시작해도 안 되므로 앞에 밑줄을 붙인다.
+    토픽 이름에 쓸 수 없는 글자는 밑줄로 바꾼다 · `pc_id` 나 호스트 이름을
+    그대로 넣는 일이 흔한데, 하이픈이나 점이 들어가면 **아무 말 없이 통신이
+    안 된다** · 모터 노드(`__ns`)는 아예 뜨지도 않는다.
+    숫자로 시작해도 안 되므로 앞에 `pc_` 를 붙인다.
+
+    이 규칙의 주인은 여기 하나다 · 실행 스크립트가 넘기는 값도
+    `group_env.py` 를 거쳐 여기를 지난다 · 따로 적으면 둘이 갈린다.
+
+    두 번 걸어도 같은 값이다 · 이미 정리된 이름을 다시 넣어도 안 바뀐다.
     """
-    raw = (os.environ.get('MOTION_PC_NAMESPACE') or '').strip().strip('/')
+    raw = (value or '').strip().strip('/')
     if not raw:
         return ''
     cleaned = ''.join(
@@ -59,6 +65,11 @@ def pc_namespace() -> str:
     if cleaned[0].isdigit():
         cleaned = f'pc_{cleaned}'
     return cleaned
+
+
+def pc_namespace() -> str:
+    """이 PC 의 이름공간 · 없으면 빈 문자열."""
+    return sanitize_namespace(os.environ.get('MOTION_PC_NAMESPACE') or '')
 
 
 def scoped(path: str) -> str:
