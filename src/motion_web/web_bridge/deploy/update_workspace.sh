@@ -115,13 +115,52 @@ build() {
   colcon build --symlink-install --base-paths "${WORKSPACE}/src"
 }
 
+#: 빌드가 깨지면 **옛 찌꺼기부터 의심한다**
+#:
+#: 손으로 할 때도 늘 그랬다 · 빌드 캐시를 지우고 그 꾸러미만 다시 빌드하면
+#: 통과했다 · 그 일을 사람이 하지 않게 한다.
+#:
+#: 실패한 꾸러미만 지운다 · 전체를 지우면 몇 분이 몇십 분이 된다 · 어느
+#: 꾸러미인지 못 찾았을 때만 통째로 지운다.
+build_with_recovery() {
+  if build; then
+    return 0
+  fi
+  say '빌드가 실패했다 · 캐시를 지우고 다시 해 본다'
+  write_state running building '빌드 실패 · 캐시를 지우고 다시 시도합니다'
+
+  local failed
+  failed="$(grep -oE 'Failed[[:space:]]+<<<[[:space:]]+[^ ]+' "${LOG_FILE}" \
+    | awk '{print $NF}' | sort -u | tr '\n' ' ')"
+
+  if [[ -z "${failed// /}" ]]; then
+    say '어느 꾸러미인지 못 찾았다 · 전체를 지우고 다시 빌드한다'
+    rm -rf "${WORKSPACE}/build" "${WORKSPACE}/install"
+    build
+    return
+  fi
+
+  say "다시 빌드할 꾸러미 · ${failed}"
+  local package
+  for package in ${failed}; do
+    rm -rf "${WORKSPACE}/build/${package}" "${WORKSPACE}/install/${package}"
+  done
+  set +u
+  # shellcheck disable=SC1090
+  source "${ROS_SETUP}"
+  set -u
+  # 그 꾸러미를 쓰는 것들도 같이 다시 빌드한다 · 혼자만 새것이면 갈린다
+  colcon build --symlink-install --base-paths "${WORKSPACE}/src" \
+    --packages-above ${failed}
+}
+
 roll_back() {
   ROLLED_BACK="true"
   write_state running rollback "되돌리는 중 · ${FROM_COMMIT}"
   say "되돌린다 → ${FROM_COMMIT}"
   git -C "${WORKSPACE}" reset --hard "${FROM_COMMIT}" || true
   git -C "${WORKSPACE}" submodule update --init --recursive || true
-  build || say '되돌린 뒤 빌드도 실패했다'
+  build_with_recovery || say '되돌린 뒤 빌드도 실패했다'
 }
 
 on_error() {
@@ -168,7 +207,7 @@ git submodule update --init --recursive
 
 write_state running building '빌드 중 · 몇 분 걸립니다'
 say '빌드'
-build
+build_with_recovery
 
 write_state running installing '서비스 설치·시작'
 say '서비스를 켠다'

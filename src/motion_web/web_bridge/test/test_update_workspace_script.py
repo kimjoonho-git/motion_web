@@ -83,6 +83,19 @@ def world(tmp_path):
     fake_bin = tmp_path / 'bin'
     fake_bin.mkdir()
     _write(fake_bin / 'colcon', '#!/usr/bin/env bash\necho "가짜 빌드"\n')
+
+    def flaky_colcon(package):
+        """옛 찌꺼기가 있으면 실패하고, 지우면 통과하는 빌드를 흉내 낸다."""
+        stale = tmp_path / 'ws/build' / package
+        stale.mkdir(parents=True, exist_ok=True)
+        (stale / 'stale.txt').write_text('옛 찌꺼기', encoding='utf-8')
+        _write(fake_bin / 'colcon', f'''#!/usr/bin/env bash
+if [[ -e "{stale}" ]]; then
+  echo "Failed   <<< {package} [0.5s, exited with code 1]"
+  exit 1
+fi
+echo "가짜 빌드 · 통과"
+''')
     (tmp_path / 'ros_setup.bash').write_text('# 비어 있다\n', encoding='utf-8')
 
     def publish(*, script_text=None, installer_exit=None, note='다음'):
@@ -124,6 +137,7 @@ def world(tmp_path):
 
     return {
         'workspace': workspace, 'publish': publish, 'run': run, 'head': head,
+        'flaky_colcon': flaky_colcon,
     }
 
 
@@ -221,3 +235,22 @@ def test_a_dirty_workspace_never_reaches_the_services(world):
     assert state['phase'] == 'blocked'
     assert '고친 파일' in state['message']
     assert '서비스를 멈춘다' not in log
+
+
+def test_a_stale_build_cache_is_cleared_and_retried(world, tmp_path):
+    """빌드가 깨지면 옛 찌꺼기부터 의심한다.
+
+    손으로 할 때도 늘 그랬다 · 빌드 캐시를 지우고 그 꾸러미만 다시 빌드하면
+    통과했다 · 그 일을 사람이 하지 않게 한다 · 실패한 꾸러미만 지운다 ·
+    전체를 지우면 몇 분이 몇십 분이 된다.
+    """
+    world['flaky_colcon']('motion_web_ui')
+    world['publish'](note='새 것')
+
+    completed, state, log = world['run']()
+
+    assert completed.returncode == 0, completed.stderr
+    assert state['status'] == 'success'
+    assert '캐시를 지우고 다시 해 본다' in log
+    assert 'motion_web_ui' in log
+    assert not (tmp_path / 'ws/build/motion_web_ui').exists(), '찌꺼기가 남았다'
