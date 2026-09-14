@@ -25,6 +25,11 @@ if(BUILD_TESTING)
     test/test_fader_command_guard.cpp
   )
   target_include_directories(test_fader_command_guard PRIVATE include)
+  ament_add_gtest(
+    test_device_state_publish
+    test/test_device_state_publish.cpp
+  )
+  target_include_directories(test_device_state_publish PRIVATE include)
 endif()
 
 ament_package()

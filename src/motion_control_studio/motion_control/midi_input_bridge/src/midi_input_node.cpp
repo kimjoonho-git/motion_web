@@ -21,6 +21,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/string.hpp>
 
+#include "midi_input_bridge/device_state_publish.hpp"
 #include "midi_input_bridge/fader_command_guard.hpp"
 
 namespace
@@ -651,6 +652,13 @@ private:
 
   void publish_state()
   {
+    {
+      // 장치가 없으면 장치 상태도 없다 · 없는 값을 0 으로 채워 흘리지 않는다
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (!midi_input_bridge::should_publish_device_state(device_connected_)) {
+        return;
+      }
+    }
     Midi msg;
     std_msgs::msg::String input_state_msg;
     std::array<int32_t, kChannelCount> hold_values{};
