@@ -53,6 +53,24 @@
             </div>
             <div class="registry-message axis-apply-warning system-restart-warning">프로그램 재시작 · 서보 상태 유지 │ 모터 제어 재시작 · AC Servo OFF → 자동 ON 가능</div>
           </section>
+
+          <section class="project-system-manager system-update-card" aria-label="소프트웨어 업데이트">
+            <div class="section-head compact">
+              <strong>소프트웨어 업데이트</strong>
+              <span id="updateSummary">확인 전</span>
+            </div>
+            <div class="status-strip" aria-label="업데이트 상태">
+              <div><span>지금</span><strong id="updateCurrent">-</strong></div>
+              <div><span>최신 main</span><strong id="updateTarget">-</strong></div>
+              <div><span>진행</span><strong id="updatePhase">-</strong></div>
+            </div>
+            <div class="registry-actions system-program-actions">
+              <button id="updateCheckButton" type="button">업데이트 확인</button>
+              <button id="updateStartButton" type="button" disabled>업데이트 및 재빌드</button>
+            </div>
+            <div class="registry-message axis-apply-warning">main 브랜치만 받습니다 · 서비스가 멈추고 몇 분 동안 빌드합니다 · 모터가 정지된 상태에서만 시작할 수 있습니다</div>
+            <pre id="updateLog" class="system-update-log" hidden></pre>
+          </section>
         </div>
 
       </section>

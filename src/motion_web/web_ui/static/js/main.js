@@ -5,6 +5,9 @@ import {
   requestEmergencySafetyStop,
   requestMotionSafetyStop,
   restartManagedProgram,
+  fetchWorkspaceUpdateCheck,
+  fetchWorkspaceUpdateStatus,
+  startWorkspaceUpdate,
   restartMotorControlSystem,
   setMonitoringEnabled,
   stopMotionRun,
@@ -25,6 +28,7 @@ import { createOperationProgressManager } from './operation_progress.js';
 import { installDialogManager } from './ui_dialogs.js';
 import { StatusSocket } from './socket.js';
 import { trackedMotorRestartState } from './restart_tracking.js';
+import { createWorkspaceUpdateController } from './workspace_update.js';
 import {
   canChangeProjectInWorkspace,
   createWorkspaceRouteState,
@@ -1657,3 +1661,36 @@ async function initGlobalSystemVersion() {
   }
 }
 initGlobalSystemVersion();
+
+// 소프트웨어 업데이트 · §6-97 · 화면 규칙은 `workspace_update.js` 에 있다
+const workspaceUpdate = createWorkspaceUpdateController({
+  elements: {
+    summary: el.updateSummary,
+    current: el.updateCurrent,
+    target: el.updateTarget,
+    phase: el.updatePhase,
+    checkButton: el.updateCheckButton,
+    startButton: el.updateStartButton,
+    log: el.updateLog,
+  },
+  api: {
+    check: fetchWorkspaceUpdateCheck,
+    status: fetchWorkspaceUpdateStatus,
+    start: startWorkspaceUpdate,
+  },
+  confirm: (message, options) => appDialogs.confirm(message, options),
+  alert: (message) => window.alert(message),
+  onFinished: () => initGlobalSystemVersion(),
+});
+
+if (el.updateCheckButton) {
+  el.updateCheckButton.addEventListener('click', () => {
+    workspaceUpdate.refresh();
+  });
+}
+if (el.updateStartButton) {
+  el.updateStartButton.addEventListener('click', () => {
+    workspaceUpdate.start();
+  });
+}
+workspaceUpdate.init();

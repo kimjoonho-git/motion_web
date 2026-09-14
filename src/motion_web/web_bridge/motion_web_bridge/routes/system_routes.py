@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, Response
 from ament_index_python.packages import get_package_share_directory
 
 from motion_web_bridge import desktop_shortcut
+from motion_web_bridge.workspace_update import WorkspaceUpdate
 
 
 #: `<!--#include 경로 -->` · 줄 하나가 통째로 조각 내용으로 바뀐다
@@ -178,6 +179,64 @@ def register_system_routes(app: FastAPI, bridge, project_call) -> None:
                 'remote_web_url': '',
                 'is_main': False,
             }
+
+    # --------------------------------------------------------------- #
+    # 소프트웨어 업데이트 · §6-97
+    # --------------------------------------------------------------- #
+
+    def _updater() -> WorkspaceUpdate:
+        # 부를 때 만든다 · 등록 시점에 브리지 속성을 읽으면 화면이 붙기도 전에
+        # 그 속성이 있어야 한다 · 상태는 디스크에 있으므로 새로 만들어도 된다
+        workspace = (
+            os.environ.get('MOTION_WORKSPACE')
+            or getattr(bridge, 'workspace_root', None)
+            or os.getcwd()
+        )
+        return WorkspaceUpdate(Path(workspace))
+
+    def _update_blocked_reason() -> str:
+        """지금 업데이트하면 안 되는 이유 · 없으면 빈 문자열.
+
+        업데이트는 서비스를 멈추고 몇 분 동안 빌드한다 · 모터가 움직이는 중에
+        그 일을 시작하면 도는 채로 제어가 사라진다.
+        """
+        snapshot = bridge.snapshot()
+        activity = snapshot.get('motor_activity') or {}
+        if activity.get('active'):
+            label = str(activity.get('label') or '모터 동작')
+            return f'{label} 중에는 업데이트할 수 없습니다'
+        operation = snapshot.get('motor_operation') or {}
+        status = str(operation.get('status') or '')
+        if operation.get('operation_id') and status not in {
+            '', 'success', 'failure', 'timeout', 'cancelled',
+        }:
+            return '모터 작업이 진행 중입니다'
+        return ''
+
+    @app.get('/api/system/update/check')
+    async def system_update_check():
+        result = await asyncio.to_thread(_updater().check)
+        return {
+            **result,
+            'blocked_reason': result['blocked_reason'] or _update_blocked_reason(),
+        }
+
+    @app.get('/api/system/update/status')
+    async def system_update_status():
+        return await asyncio.to_thread(_updater().status)
+
+    @app.post('/api/system/update/start')
+    async def system_update_start():
+        def _start():
+            return _updater().start(blocked_reason=_update_blocked_reason())
+
+        try:
+            return await asyncio.to_thread(_start)
+        except ValueError as exc:
+            # 막힌 이유는 잘못이 아니다 · 화면이 그대로 보여 준다
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @app.get('/api/coordination')
     async def coordination_status():
