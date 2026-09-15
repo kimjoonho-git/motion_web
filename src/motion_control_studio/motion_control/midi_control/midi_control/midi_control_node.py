@@ -78,6 +78,9 @@ class MidiControlNode(Node):
         self.input_state_topic = str(
             self.declare_parameter('input_state_topic', topics.XTOUCH_INPUT_STATE).value
         )
+        self.surface_topic = str(
+            self.declare_parameter('surface_topic', topics.XTOUCH_SURFACE).value
+        )
         self.connection_command_topic = str(
             self.declare_parameter(
                 'connection_command_topic', topics.XTOUCH_CONNECTION_COMMAND
@@ -164,6 +167,18 @@ class MidiControlNode(Node):
         self._last_received_wall: float | None = None
         self._last_physical_input_monotonic: float | None = None
         self._last_physical_input_wall: float | None = None
+        #: 이 PC 의 USB 에 장치가 꽂혔나 · 주인은 입력 브리지 · §6-94
+        self._usb_connected = False
+        #: 표면을 쓸 권한 · 주인은 조정 노드 · §6-94
+        #:
+        #: 참으로 시작한다 · 조정 노드가 없는 PC(혼자 쓰는 경우)도 그대로
+        #: 돌아야 한다 · 넘겼다는 말은 조정 노드만 할 수 있고, 그 말이
+        #: 오기 전에는 넘긴 적이 없는 것이다
+        self._surface_owned = True
+        #: 내가 쓰는 표면이 남의 것인가 · 그렇다면 살아 있는지도 남이 말해 준다
+        self._surface_remote = False
+        self._surface_connected: bool | None = None
+        #: 위 둘을 합친 것 · **여기 한 곳에서만** 정해진다
         self._device_connected = False
         self._device_connection_message = 'MIDI 장치 연결 상태 확인 중'
         self._device_last_connected_at: float | None = None
@@ -296,6 +311,17 @@ class MidiControlNode(Node):
             self._midi_callback,
             midi_qos,
         )
+        #: 이 PC 가 표면을 쓸 수 있는가 · §6-94 · 주인은 조정 노드 하나다 ·
+        #: 장치가 꽂혔는지(`connection/state`)와는 **다른 사실**이다
+        self._midi_qos = midi_qos
+        self._surface_subscription = self.create_subscription(
+            String, self.surface_topic, self._surface_callback,
+            QoSProfile(
+                depth=1,
+                reliability=ReliabilityPolicy.RELIABLE,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            ),
+        )
         self._input_state_subscription = self.create_subscription(
             String, self.input_state_topic, self._input_state_callback, 10
         )
@@ -425,7 +451,9 @@ class MidiControlNode(Node):
         # 실제로 모아 보내는 길만 막고 이 콜백이 곧바로 내보내는 길을 열어 둬서,
         # 페이더 하나에 두 PC 의 모터가 같이 움직였다.
         #
-        # 되찾으면 `_connection_state_callback` 이 상태를 씻고 다시 연다.
+        # 이것은 **즉시 멈추는 층**이다 · 통로를 닫는 일은 타이머가 노드
+        # 스레드에서 한다(0.1초) · 그 사이에 들어온 값을 여기서 버린다 ·
+        # 되찾으면 `_surface_callback` 이 상태를 씻고 타이머가 다시 연다.
         with self._lock:
             if not self._device_connected:
                 return
@@ -1217,15 +1245,87 @@ class MidiControlNode(Node):
                     self._last_physical_input_monotonic = time.monotonic() - age_sec
                     self._last_physical_input_wall = time.time() - age_sec
 
-    def _connection_state_callback(self, msg: String) -> None:
+    def _surface_callback(self, msg: String) -> None:
+        """이 PC 가 표면을 쓸 수 있는가 · §6-94
+
+        **권한은 장치 연결과 다른 사실이다** · 장치가 꽂혔는지는 입력 브리지가
+        알고, 누가 쓰는지는 조정 노드가 정한다 · 전에는 한 통로에 섞어서,
+        재연결 한 번에 넘긴 PC 가 표면을 되찾고 페이더를 0 으로 밀었다 · 그
+        움직임이 받은 PC 의 모터까지 0 으로 끌고 갔다.
+
+        권한이 없으면 값을 받아서 버리는 것이 아니라 **구독을 닫는다** ·
+        버리는 자리를 한 곳이라도 빼먹으면 조용히 새기 때문이다.
+        """
         try:
             payload = json.loads(msg.data)
         except json.JSONDecodeError:
             return
         if not isinstance(payload, dict):
             return
-        connected = bool(payload.get('connected'))
-        message = str(payload.get('message') or '')
+        with self._lock:
+            self._surface_owned = bool(payload.get('owned'))
+            self._surface_remote = bool(payload.get('remote'))
+            self._surface_connected = bool(payload.get('connected'))
+            self._device_connection_message = str(payload.get('message') or '')
+            changed = self._resettle_surface_locked()
+            owned = self._surface_owned
+            connected = self._device_connected
+            if changed:
+                # 표면이 바뀌면 지난 판은 끝이다 · SELECT 도 모터 주인도
+                # 넘기지 않는다
+                self._reset_runtime_controls_locked()
+                if connected:
+                    now = time.monotonic()
+                    for channel in range(MIDI_CHANNEL_COUNT):
+                        self._faders._start_fader_parking_locked(channel, now)
+                else:
+                    self._faders.pending_positions = [None] * MIDI_CHANNEL_COUNT
+                    self._faders.pending_input_generations = list(
+                        self._faders.input_generation
+                    )
+                    self._touch = [False] * MIDI_CHANNEL_COUNT
+                    self._physical_touch = [False] * MIDI_CHANNEL_COUNT
+                    self._fader_moving = [False] * MIDI_CHANNEL_COUNT
+                    self._bridge_fader_syncing = [False] * MIDI_CHANNEL_COUNT
+        # 구독은 **여기서 여닫지 않는다** · 이 함수는 다른 구독의 콜백 안이고,
+        # 실행기가 이번에 고른 준비 목록에 그 구독이 들어 있을 수 있다 ·
+        # 타이머가 노드 스레드에서 맞춘다(0.1초) · 그 사이에 값이 들어와도
+        # `_midi_callback` 첫 줄이 막는다 · 즉시 멈추는 일과 통로를 닫는 일은
+        # 층이 다르다.
+
+    def _sync_surface_subscription(self, owned: bool) -> None:
+        """권한이 없으면 표면 값을 **받지 않는다** · §6-94
+
+        받아서 버리면 버리는 자리를 빠뜨릴 수 있다 · 실제로 모터로 나가는 길
+        셋 중 하나를 빠뜨려 두 PC 의 모터가 같이 움직였다.
+
+        **노드 스레드에서만 부른다** · 구독을 만들고 지우는 일을 다른 구독의
+        콜백 안에서 하면 실행기가 이미 고른 준비 목록과 어긋난다.
+        """
+        if owned and self._midi_subscription is None:
+            self._midi_subscription = self.create_subscription(
+                Midi, self.input_topic, self._midi_callback, self._midi_qos,
+            )
+        elif not owned and self._midi_subscription is not None:
+            self.destroy_subscription(self._midi_subscription)
+            self._midi_subscription = None
+
+    def _connection_state_callback(self, msg: String) -> None:
+        """이 PC 의 USB 에 장치가 꽂혔는가 · 주인은 입력 브리지다 · §6-94
+
+        **이것으로 표면을 열고 닫지 않는다** · 그 판단은 `xtouch/surface` 가
+        한다 · 전에 여기서 열고 닫았더니, 넘긴 PC 에서 재연결을 누르는 순간
+        브리지의 "붙었다" 가 권한을 덮어써서 페이더가 0 으로 밀렸다.
+
+        여기서는 화면에 보여 줄 숫자만 챙긴다.
+        """
+        try:
+            payload = json.loads(msg.data)
+        except json.JSONDecodeError:
+            return
+        if not isinstance(payload, dict):
+            return
+
         def positive_float(key: str) -> float | None:
             try:
                 value = float(payload.get(key))
@@ -1234,12 +1334,9 @@ class MidiControlNode(Node):
             return value if value > 0.0 else None
 
         with self._lock:
-            changed = connected != self._device_connected
-            self._device_connected = connected
-            self._device_connection_message = message
-            self._device_last_connected_at = positive_float(
-                'last_connected_at'
-            )
+            self._usb_connected = bool(payload.get('connected'))
+            changed = self._resettle_surface_locked()
+            self._device_last_connected_at = positive_float('last_connected_at')
             self._device_last_disconnected_at = positive_float(
                 'last_disconnected_at'
             )
@@ -1256,24 +1353,32 @@ class MidiControlNode(Node):
             except (TypeError, ValueError):
                 pass
             if changed:
-                # A USB reconnect creates a new hardware session. Never retain
-                # SELECT/motor ownership across it. Once the bridge has opened
-                # the new port it has also cleared its touch/movement state, so
-                # explicitly park every SELECT-OFF fader at zero.
+                # 내 USB 를 쓰던 중에 장치가 빠지거나 다시 붙었다 · 지난 판은
+                # 끝이다 · SELECT 도 모터 주인도 넘기지 않는다
                 self._reset_runtime_controls_locked()
-                if connected:
+                if self._device_connected:
                     now = time.monotonic()
                     for channel in range(MIDI_CHANNEL_COUNT):
                         self._faders._start_fader_parking_locked(channel, now)
-                else:
-                    self._faders.pending_positions = [None] * MIDI_CHANNEL_COUNT
-                    self._faders.pending_input_generations = list(
-                        self._faders.input_generation
-                    )
-                    self._touch = [False] * MIDI_CHANNEL_COUNT
-                    self._physical_touch = [False] * MIDI_CHANNEL_COUNT
-                    self._fader_moving = [False] * MIDI_CHANNEL_COUNT
-                    self._bridge_fader_syncing = [False] * MIDI_CHANNEL_COUNT
+
+    def _resettle_surface_locked(self) -> bool:
+        """권한과 장치 연결을 합쳐 **쓸 수 있는가**를 정한다 · §6-94
+
+        두 사실은 주인이 다르다 · 권한은 조정 노드가, USB 는 입력 브리지가
+        말한다 · 합치는 일은 **여기 한 곳**에서만 한다 · 전에는 두 곳에서
+        서로를 덮어써서, 재연결 한 번에 넘긴 PC 가 표면을 되찾았다.
+
+        남의 표면을 빌려 쓸 때는 내 USB 가 비어 있는 것이 당연하다 · 그때는
+        빌려준 PC 가 말해 주는 것을 본다.
+        """
+        alive = (
+            self._surface_connected if self._surface_remote
+            else self._usb_connected
+        )
+        wanted = bool(self._surface_owned and alive)
+        changed = wanted != self._device_connected
+        self._device_connected = wanted
+        return changed
 
     def _motor_result_callback(self, msg: String) -> None:
         try:
@@ -1686,6 +1791,10 @@ class MidiControlNode(Node):
         publisher.publish(msg)
 
     def _publish_state(self) -> None:
+        # 통로를 여닫는 일은 노드 스레드에서 한다 · §6-94
+        with self._lock:
+            owned = self._surface_owned
+        self._sync_surface_subscription(owned)
         snapshot = build_snapshot(self)
         self._publish_json(self._state_publisher, snapshot)
         for channel in snapshot['channels']:
@@ -2273,8 +2382,36 @@ class MidiControlNode(Node):
         )
         return response
 
+    def _refuse_without_surface(self, what: str) -> Dict[str, Any] | None:
+        """표면이 내 것이 아니면 장치를 건드리는 일을 거절한다 · §6-94
+
+        거절하지 않고 조용히 넘기면 사용자는 눌렀는데 아무 일도 안 일어난 줄
+        안다 · 왜 안 되는지 화면에 적어 준다.
+        """
+        with self._lock:
+            owned = self._surface_owned
+            message = self._device_connection_message
+        if owned:
+            return None
+        # 아무것도 안 바뀌었으니 스냅샷을 새로 만들지 않는다 · 왜 안 되는지만
+        # 말해 준다 · 조용히 넘기면 눌렀는데 아무 일도 안 난 줄 안다
+        return {
+            'success': False,
+            'message': (
+                f'{what} 불가 · '
+                f'{message or "이 PC 가 MIDI 를 쓰고 있지 않습니다"}'
+            ),
+        }
+
     def _cmd_reset_runtime_values(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """실시간 값만 초기화한다 · 저장 파일은 그대로다."""
+        """실시간 값만 초기화한다 · 저장 파일은 그대로다 · §6-94
+
+        이것도 페이더를 0 으로 되돌린다 · 표면이 내 것이 아니면 남의 모터를
+        움직이는 일이 된다.
+        """
+        denied = self._refuse_without_surface('MIDI 실시간 값 초기화')
+        if denied is not None:
+            return denied
         with self._lock:
             self._reset_live_values_locked()
         response = build_snapshot(self)
@@ -2344,7 +2481,17 @@ class MidiControlNode(Node):
         return response
 
     def _cmd_connect_device(self, payload: Dict[str, Any], command: str) -> Dict[str, Any]:
-        """MIDI 장치 연결·해제를 요청한다."""
+        """MIDI 장치 연결·해제를 요청한다 · **표면을 쓸 때만** · §6-94
+
+        넘긴 PC 에서 이것이 되면 안 된다 · 재연결은 장치를 새로 열면서 페이더를
+        0 으로 되돌리는데, 그 움직임은 **쓰는 PC 의 모터로 그대로 간다** ·
+        실제로 넘긴 PC 에서 재연결을 눌렀더니 받은 PC 의 모터가 0 으로 갔다.
+        """
+        denied = self._refuse_without_surface(
+            'MIDI 장치 연결' if command == 'connect_device' else 'MIDI 연결 해제'
+        )
+        if denied is not None:
+            return denied
         with self._lock:
             self._reset_runtime_controls_locked()
             self._faders.pending_positions = [None] * MIDI_CHANNEL_COUNT

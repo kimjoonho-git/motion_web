@@ -170,6 +170,17 @@ XTOUCH_INPUT_STATE = scoped('/xtouch/input_state')
 XTOUCH_CONNECTION_STATE = scoped('/xtouch/connection/state')
 XTOUCH_CONNECTION_COMMAND = scoped('/xtouch/connection/command')
 
+#: 이 PC 가 지금 표면을 쓸 수 있는가 · §6-94
+#:
+#: **권한은 장치 연결과 다른 사실이다** · USB 가 꽂혔는지는 입력 브리지가
+#: 알고, 누가 쓰는지는 조정 노드가 정한다 · 두 사실을 한 통로에 섞었더니
+#: 재연결 한 번에 서로를 덮어써서, 넘긴 PC 가 페이더를 0 으로 밀고 그것이
+#: 받은 PC 의 모터까지 0 으로 끌고 갔다.
+#:
+#: 주인은 **조정 노드 하나**다 · `midi_control` 은 이것만 보고 표면 구독을
+#: 열고 닫는다 · 권한이 없으면 값을 받아 버리는 것이 아니라 **받지 않는다**.
+XTOUCH_SURFACE = scoped('/xtouch/surface')
+
 
 def all_topics() -> Dict[str, str]:
     """정의된 토픽 전체를 ``{상수명: 토픽}``으로 돌려준다 · 점검·문서화용."""

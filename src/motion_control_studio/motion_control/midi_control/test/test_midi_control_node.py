@@ -104,6 +104,8 @@ def test_rec_mode_sends_source_motion_text_and_off_mode_keeps_14bit_text(monkeyp
     node = MidiControlNode.__new__(MidiControlNode)
     # 장치가 이 PC 것일 때의 이야기다 · §6-94
     node._device_connected = True
+    node._surface_owned = True
+    node._sync_surface_subscription = lambda owned: None
     node._pickup = PickupPolicy(node)
     node._faders = FaderStateMachine(node)
     node._state_publisher = CapturePublisher()
@@ -1574,6 +1576,10 @@ def test_connection_state_keeps_midi_power_reconnect_timestamps():
     node._faders = FaderStateMachine(node)
     node._lock = threading.Lock()
     node._device_connected = True
+    node._usb_connected = True
+    node._surface_owned = True
+    node._surface_remote = False
+    node._surface_connected = None
     node._device_connection_message = ''
     node._device_last_connected_at = None
     node._device_last_disconnected_at = None
@@ -1605,6 +1611,10 @@ def test_device_reconnect_parks_every_select_off_fader_at_zero():
     node._faders = FaderStateMachine(node)
     node._lock = threading.Lock()
     node._device_connected = False
+    node._usb_connected = False
+    node._surface_owned = True
+    node._surface_remote = False
+    node._surface_connected = None
     node._device_connection_message = ''
     node._device_last_connected_at = None
     node._device_last_disconnected_at = None
@@ -1631,6 +1641,8 @@ def test_device_reconnect_parks_every_select_off_fader_at_zero():
         node._faders.pending_positions[channel] = 0
 
     node._faders._start_fader_parking_locked = start_fader_parking
+    # 내 USB 에 장치가 다시 붙었다 · 표면은 원래 내 것이다
+    node._surface_owned = True
     node._connection_state_callback(SimpleNamespace(data=json.dumps({
         'connected': True,
         'message': 'X-Touch connected',
@@ -1650,6 +1662,10 @@ def test_device_disconnect_does_not_leave_undeliverable_zero_commands():
     node._faders = FaderStateMachine(node)
     node._lock = threading.Lock()
     node._device_connected = True
+    node._usb_connected = True
+    node._surface_owned = True
+    node._surface_remote = False
+    node._surface_connected = None
     node._device_connection_message = ''
     node._device_last_connected_at = None
     node._device_last_disconnected_at = None
@@ -1668,11 +1684,12 @@ def test_device_disconnect_does_not_leave_undeliverable_zero_commands():
         node._faders.pending_positions = [0] * MIDI_CHANNEL_COUNT
 
     node._reset_runtime_controls_locked = reset_runtime_controls
-    node._connection_state_callback(SimpleNamespace(data=json.dumps({
+    node._surface_owned = True
+    node._sync_surface_subscription = lambda owned: None
+    node._surface_callback(SimpleNamespace(data=json.dumps({
+        'owned': False,
         'connected': False,
-        'message': 'X-Touch disconnected',
-        'connection_count': 1,
-        'power_reconnect_count': 0,
+        'message': 'MIDI 를 pc2 가 쓰는 중입니다',
     })))
 
     assert node._faders.pending_positions == [None] * MIDI_CHANNEL_COUNT
@@ -2393,3 +2410,72 @@ def test_a_handed_over_surface_never_moves_this_pcs_motors():
     assert node._pending_motor_requests == {}, (
         '쌓아 두면 되찾는 순간 옛 값이 한꺼번에 나간다'
     )
+
+
+# --------------------------------------------------------------------- #
+# 표면 권한 · §6-94
+#
+# 넘긴 PC 에서 `MIDI 재연결` 을 눌렀더니 페이더가 0 으로 리셋되면서 **받은 PC 의
+# 모터가 0 으로** 갔다 · 넘긴 PC 는 장치를 건드릴 수 있으면 안 된다.
+# --------------------------------------------------------------------- #
+
+def _surface_owner_node(*, owned):
+    node = MidiControlNode.__new__(MidiControlNode)
+    node._pickup = PickupPolicy(node)
+    node._faders = FaderStateMachine(node)
+    node._lock = threading.Lock()
+    node._surface_owned = bool(owned)
+    node._device_connected = bool(owned)
+    node._device_connection_message = (
+        '' if owned else 'MIDI 를 pc2 가 쓰는 중입니다'
+    )
+    node._connection_command_publisher = CapturePublisher()
+    return node
+
+
+def test_a_handed_over_pc_cannot_reconnect_the_device():
+    """넘긴 PC 에서 `MIDI 재연결` 이 되면 안 된다 · §6-94
+
+    재연결은 장치를 새로 열면서 페이더를 0 으로 되돌린다 · 그 움직임은 쓰는
+    PC 의 모터로 그대로 간다 · 실제로 받은 PC 의 모터가 0 으로 갔다.
+    """
+    node = _surface_owner_node(owned=False)
+
+    response = node._cmd_connect_device({}, 'connect_device')
+
+    assert response['success'] is False
+    assert 'MIDI 를 pc2 가 쓰는 중입니다' in response['message']
+    assert node._connection_command_publisher.messages == [], (
+        '넘긴 PC 가 장치에 명령을 보냈다'
+    )
+
+
+def test_a_handed_over_pc_cannot_reset_the_faders():
+    """실시간 값 초기화도 페이더를 0 으로 되돌린다 · 남의 모터를 움직인다."""
+    node = _surface_owner_node(owned=False)
+
+    response = node._cmd_reset_runtime_values({})
+
+    assert response['success'] is False
+
+
+def test_losing_the_surface_closes_the_midi_subscription():
+    """권한이 없으면 값을 받아서 버리는 것이 아니라 **받지 않는다** · §6-94
+
+    버리는 자리를 한 곳이라도 빼먹으면 조용히 샌다 · 실제로 모터로 나가는 길
+    셋 중 하나를 빼먹어 두 PC 의 모터가 같이 움직였다.
+    """
+    node = MidiControlNode.__new__(MidiControlNode)
+    node._midi_subscription = object()
+    node.input_topic = '/pc1/xtouch/midi'
+    node._midi_qos = None
+    destroyed = []
+    node.destroy_subscription = destroyed.append
+    node.create_subscription = lambda *a, **k: 'new-subscription'
+
+    node._sync_surface_subscription(False)
+    assert destroyed, '권한이 없는데 표면 값을 계속 받는다'
+    assert node._midi_subscription is None
+
+    node._sync_surface_subscription(True)
+    assert node._midi_subscription == 'new-subscription', '되찾았는데 안 받는다'

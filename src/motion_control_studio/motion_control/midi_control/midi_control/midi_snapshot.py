@@ -58,6 +58,8 @@ def build_snapshot(node: Any) -> Dict[str, Any]:
         physical_input_monotonic = node._last_physical_input_monotonic
         physical_input_wall = node._last_physical_input_wall
         device_connected = node._device_connected
+        surface_owned = bool(getattr(node, '_surface_owned', True))
+        surface_remote = bool(getattr(node, '_surface_remote', False))
         device_connection_message = node._device_connection_message
         device_last_connected_at = node._device_last_connected_at
         device_last_disconnected_at = node._device_last_disconnected_at
@@ -389,6 +391,10 @@ def build_snapshot(node: Any) -> Dict[str, Any]:
         },
         'connected': connected,
         'device_connected': device_connected,
+        # 왜 안 되는지 화면이 구분할 수 있어야 한다 · §6-94 · 장치가 빠진
+        # 것과 다른 PC 가 쓰는 것은 다른 일이다
+        'surface_owned': surface_owned,
+        'surface_remote': surface_remote,
         'device_connection_message': device_connection_message,
         'device_last_connected_at': device_last_connected_at,
         'device_last_disconnected_at': device_last_disconnected_at,

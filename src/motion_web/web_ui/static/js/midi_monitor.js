@@ -318,8 +318,13 @@ export function createMidiMonitorController({ el, onMappingFileSaved }) {
   function render() {
     const deviceConnected = Boolean(status?.device_connected);
     const inputActive = Boolean(status?.connected);
+    // 다른 PC 가 쓰는 중인 것과 장치가 빠진 것은 **다른 일이다** · §6-94
+    // 둘 다 '연결 대기' 라고 하면 무엇을 고쳐야 할지 알 수 없다
+    const surfaceOwned = status?.surface_owned !== false;
     if (el.midiConnectionState) {
-      el.midiConnectionState.textContent = deviceConnected ? '연결됨' : '연결 대기';
+      el.midiConnectionState.textContent = surfaceOwned
+        ? (deviceConnected ? '연결됨' : '연결 대기')
+        : (status?.device_connection_message || '다른 PC 가 사용 중');
       el.midiConnectionState.classList.toggle('status-ok', deviceConnected);
       el.midiConnectionState.classList.toggle('status-bad', !deviceConnected);
     }
@@ -386,15 +391,19 @@ export function createMidiMonitorController({ el, onMappingFileSaved }) {
       // A USB power cycle can leave the old RtMidi handle looking open even
       // though it no longer receives the re-enumerated device. Keep this
       // action available so the user can always force a fresh port search.
-      el.connectMidiDeviceButton.disabled = loading;
+      // 표면이 내 것이 아니면 장치를 건드릴 수 없다 · 눌러도 거절당한다
+      el.connectMidiDeviceButton.disabled = loading || !surfaceOwned;
       el.connectMidiDeviceButton.textContent = status?.device_connected
         ? 'MIDI 재연결'
         : 'MIDI 연결';
     }
     if (el.disconnectMidiDeviceButton) {
-      el.disconnectMidiDeviceButton.disabled = loading || !Boolean(status?.device_connected);
+      el.disconnectMidiDeviceButton.disabled = loading
+        || !surfaceOwned || !Boolean(status?.device_connected);
     }
-    if (el.resetMidiRuntimeButton) el.resetMidiRuntimeButton.disabled = loading;
+    if (el.resetMidiRuntimeButton) {
+      el.resetMidiRuntimeButton.disabled = loading || !surfaceOwned;
+    }
     if (el.loadMidiBanksFileButton) el.loadMidiBanksFileButton.disabled = loading;
     if (el.saveMidiMappingButton) {
       el.saveMidiMappingButton.disabled = loading

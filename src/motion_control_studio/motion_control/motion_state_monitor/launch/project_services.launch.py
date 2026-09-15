@@ -109,6 +109,7 @@ def generate_launch_description():
                 'input_state_topic': topics.XTOUCH_INPUT_STATE,
                 'connection_command_topic': topics.XTOUCH_CONNECTION_COMMAND,
                 'connection_state_topic': topics.XTOUCH_CONNECTION_STATE,
+                'surface_topic': topics.XTOUCH_SURFACE,
                 'motion_state_topic': LaunchConfiguration('motion_state_topic'),
                 'motion_run_status_topic': topics.MOTION_RUN_STATUS,
                 'motion_mapping_response_topic': topics.MOTION_MAPPING_RESPONSE,

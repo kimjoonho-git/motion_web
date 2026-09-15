@@ -17,10 +17,23 @@ test('MIDI device connection and recent input activity are displayed separately'
   assert.match(dom, /midiPowerReconnectState: document\.getElementById\('midiPowerReconnectState'\)/);
   assert.match(controller, /const deviceConnected = Boolean\(status\?\.device_connected\)/);
   assert.match(controller, /const inputActive = Boolean\(status\?\.connected\)/);
-  assert.match(controller, /midiConnectionState\.textContent = deviceConnected/);
+  assert.match(controller, /midiConnectionState\.textContent = surfaceOwned/);
   assert.match(controller, /midiInputState\.textContent = inputActive/);
   assert.match(controller, /status\?\.last_received_at/);
   assert.match(controller, /status\?\.device_last_power_reconnected_at/);
+});
+
+test('being handed over is not shown as a disconnected device', () => {
+  // 장치가 빠진 것과 다른 PC 가 쓰는 것은 다른 일이다 · §6-94 · 둘 다
+  // '연결 대기' 라고 하면 무엇을 고쳐야 할지 알 수 없다
+  assert.match(controller, /const surfaceOwned = status\?\.surface_owned !== false/);
+  assert.match(controller, /다른 PC 가 사용 중/);
+  // 눌러 봐야 거절당하는 버튼은 아예 못 누르게 한다
+  assert.match(
+    controller,
+    /connectMidiDeviceButton\.disabled = loading \|\| !surfaceOwned/,
+  );
+  assert.match(controller, /resetMidiRuntimeButton\.disabled = loading \|\| !surfaceOwned/);
 });
 
 test('a verified MIDI bank save reports the new mapping file revision', () => {
