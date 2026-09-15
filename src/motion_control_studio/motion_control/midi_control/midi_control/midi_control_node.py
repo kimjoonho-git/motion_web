@@ -1827,6 +1827,14 @@ class MidiControlNode(Node):
             # A consumed one-shot fader target must not make the following
             # cycle look like a UI-state change. Otherwise every retry emits
             # a second LED/LCD-only packet immediately after the fader packet.
+            # 표면이 내 것이 아니면 페이더·LED 를 건드리지 않는다 · §6-94
+            #
+            # **보내지 않은 것을 보냈다고 적지 않는다** · 아래 `_last_feedback`
+            # 는 "이미 보낸 값" 이라는 뜻이다 · 못 보낸 것을 적어 두면, 표면을
+            # 넘겨받은 뒤 값이 그대로일 때 "이미 보냈다" 며 건너뛴다 · 그러면
+            # 새 주인이 SELECT 를 끄는 첫 신호를 영영 안 보낸다.
+            if not self._device_connected:
+                continue
             if self._last_feedback[index] == feedback and fader_position is None:
                 continue
             self._last_feedback[index] = feedback
@@ -1835,10 +1843,6 @@ class MidiControlNode(Node):
                 -1 if fader_position is None else fader_position,
                 fader_input_generation,
             )
-            # 장치가 이 PC 것이 아니면 페이더·LED 도 건드리지 않는다 · §6-94
-            # 넘긴 PC 와 받은 PC 가 같은 표면을 함께 밀면 SELECT 가 이상해진다
-            if not self._device_connected:
-                continue
             msg = String()
             msg.data = '\t'.join((str(index), *(str(value) for value in hardware_feedback)))
             self._feedback_publisher.publish(msg)

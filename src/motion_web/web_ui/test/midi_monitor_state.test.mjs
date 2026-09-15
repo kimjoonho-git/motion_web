@@ -52,3 +52,11 @@ test('SELECT OFF reports zero command without claiming physical arrival', () => 
   assert.match(controller, /const zeroReturnFailed/);
   assert.match(controller, /0 복귀 실패/);
 });
+
+test('running on default banks is called out instead of looking normal', () => {
+  // 뱅크가 안 실리면 빈 설정이 아니라 **채워진 기본 설정**으로 돈다 · §6-94
+  // 화면이 멀쩡해 보여서, 왜 내 설정대로 안 되는지 알 길이 없었다
+  assert.match(controller, /const bankMissing = status && status\.ready === false/);
+  assert.match(controller, /뱅크가 실리지 않았습니다/);
+  assert.match(controller, /1-1~1-8 은 기본값입니다/);
+});

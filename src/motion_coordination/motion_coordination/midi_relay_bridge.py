@@ -47,6 +47,15 @@ REMOTE_STREAM_TIMEOUT_SEC = 1.0
 #: 길이 있어야 한다 · 0.1 초마다 도는 `tick()` 에서 이 간격으로만 보낸다.
 GRANT_REPEAT_SEC = 1.0
 
+#: 권한은 **빌려주는 것**이다 · 이만큼 갱신이 없으면 스스로 놓는다 · §6-94
+#:
+#: 주는 말만 되풀이하고 거두는 말은 한 번뿐이면, 그 한 번을 놓친 PC 는 영영
+#: 제가 주인인 줄 안다 · 조정 노드를 다시 시작하면 실제로 그랬다 · 양쪽이
+#: 모두 "내가 주인" 이라고 했다.
+#:
+#: 되풀이 주기보다 넉넉히 길어야 한다 · 한두 번 놓쳤다고 놓으면 안 된다.
+GRANT_LEASE_SEC = 3.0
+
 
 #: 장치가 PC 로 보내던 통로 · 장치를 든 PC 가 대상 PC 로 나른다
 #:
@@ -142,6 +151,8 @@ class MidiRelayBridge:
         self._remote_source_pc_id = ''
         self._remote_seen_at: Optional[float] = None
         self._last_grant_at = 0.0
+        #: 권한을 마지막으로 확인받은 때 · 갱신이 끊기면 스스로 놓는다
+        self._granted_at: Optional[float] = None
         self._local_midi_sub: Any = None
         self._counters: Dict[str, int] = {
             'midi_sent': 0,
@@ -497,6 +508,7 @@ class MidiRelayBridge:
         self._granted = bool(payload.get('owned'))
         self._remote_device_connected = bool(payload.get('connected'))
         self._counters['channel_received'] += 1
+        self._granted_at = self._clock() if self._granted else None
         if self._granted:
             self._remote_source_pc_id = str(
                 payload.get('device_pc_id') or message.source_pc_id or ''
@@ -521,9 +533,34 @@ class MidiRelayBridge:
         구독을 여닫는 일이 **여기 한 곳**에 있다 · 로컬 API 스레드가 대상을
         바꾸고 같은 일을 하면 노드를 도는 쪽과 부딪힌다.
         """
+        self._expire_grant()
         self._expire_remote_stream()
         self._sync_local_midi_subscription()
         self._reassert_grant()
+
+    def _expire_grant(self) -> None:
+        """빌린 권한은 갱신이 끊기면 **스스로 놓는다** · §6-94
+
+        거두는 말 한 번에만 기대면, 그 한 번을 놓친 PC 는 영영 제가 주인인
+        줄 안다 · 빌려준 쪽이 다시 시작하거나 통신이 끊기면 실제로 그랬고,
+        양쪽이 모두 "내가 주인" 이라고 했다.
+
+        주는 쪽은 1 초마다 갱신한다(`_reassert_grant`) · 그것이 이만큼 끊기면
+        빌린 것으로 보지 않는다.
+        """
+        if not self._granted or self._granted_at is None:
+            return
+        if self._clock() - self._granted_at <= GRANT_LEASE_SEC:
+            return
+        self._granted = False
+        self._granted_at = None
+        self._remote_device_connected = False
+        self._remote_source_pc_id = ''
+        self._remote_seen_at = None
+        self.rules.update(target_pc_id='')
+        self._midi_gate.reset()
+        self._refresh_device_owner()
+        self._publish_surface()
 
     def _reassert_grant(self) -> None:
         """권한을 주기적으로 다시 말해 준다 · §6-94

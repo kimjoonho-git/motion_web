@@ -2479,3 +2479,39 @@ def test_losing_the_surface_closes_the_midi_subscription():
 
     node._sync_surface_subscription(True)
     assert node._midi_subscription == 'new-subscription', '되찾았는데 안 받는다'
+
+
+def test_feedback_skipped_without_the_surface_is_not_marked_as_sent():
+    """못 보낸 값을 "보냈다" 고 적으면 안 된다 · §6-94
+
+    `_last_feedback` 는 "이미 장치로 보낸 값" 이다 · 표면이 없어 못 보낸 것을
+    적어 두면, 넘겨받은 뒤 값이 그대로일 때 건너뛴다 · 그러면 새 주인이
+    SELECT 를 끄는 첫 신호를 영영 안 보낸다.
+    """
+    node = _surface_owner_node(owned=False)
+    node._last_feedback = [None] * MIDI_CHANNEL_COUNT
+    node._feedback_publisher = CapturePublisher()
+    node._state_publisher = CapturePublisher()
+    node._sync_surface_subscription = lambda owned: None
+    node._faders.pending_positions = [None] * MIDI_CHANNEL_COUNT
+    node._faders.pending_input_generations = [0] * MIDI_CHANNEL_COUNT
+    node._faders.input_generation = [0] * MIDI_CHANNEL_COUNT
+    node.build_snapshot = None
+    import midi_control.midi_control_node as module
+    module.build_snapshot = lambda _n: {'channels': [{
+        'channel': index,
+        'select_enabled': False,
+        'control_enabled': False,
+        'display_motion_value': False,
+        'filter_level': 0,
+        'motion_id': f'1-{index + 1}',
+        'raw_value': 0,
+        'observed_raw_value': 0,
+    } for index in range(MIDI_CHANNEL_COUNT)]}
+
+    node._publish_state()
+
+    assert node._feedback_publisher.messages == [], '표면도 없이 장치를 건드렸다'
+    assert node._last_feedback == [None] * MIDI_CHANNEL_COUNT, (
+        '못 보낸 값을 보냈다고 적었다'
+    )

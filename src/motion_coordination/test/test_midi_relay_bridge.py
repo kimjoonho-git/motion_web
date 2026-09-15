@@ -717,3 +717,38 @@ def test_only_one_side_may_write_each_channel_in_each_state(node, clock):
     assert target.owns_surface is True
     assert target.rules.should_send_midi is False, '받은 PC 가 값을 내보낸다'
     assert target.rules.should_send_feedback is True
+
+
+def test_a_borrowed_surface_is_released_when_the_lease_stops(node, clock):
+    """거두는 말을 못 들어도 스스로 놓는다 · §6-94
+
+    주는 말만 되풀이하고 거두는 말은 한 번뿐이면, 그 한 번을 놓친 PC 는 영영
+    제가 주인인 줄 안다 · 빌려준 PC 의 조정 노드를 다시 시작했더니 실제로
+    그랬다 · **양쪽이 모두 "내가 주인"** 이라고 했다.
+    """
+    bridge = _bridge(node, clock, pc_id='pc2')
+    node.deliver(topics.GROUP_MIDI_FEEDBACK, _grant(owned=True))
+    assert _surface(node)['owned'] is True
+
+    clock.advance(1.0)
+    bridge.tick()
+    assert _surface(node)['owned'] is True, '한 번 늦었다고 놓아 버렸다'
+
+    clock.advance(5.0)
+    bridge.tick()
+
+    assert _surface(node)['owned'] is False, '갱신이 끊겼는데 아직 주인이라 한다'
+    assert bridge.rules.should_send_feedback is False
+
+
+def test_a_renewed_lease_keeps_the_surface(node, clock):
+    """갱신이 계속 오면 계속 쓴다."""
+    bridge = _bridge(node, clock, pc_id='pc2')
+    node.deliver(topics.GROUP_MIDI_FEEDBACK, _grant(owned=True))
+
+    for _ in range(5):
+        clock.advance(1.0)
+        node.deliver(topics.GROUP_MIDI_FEEDBACK, _grant(owned=True))
+        bridge.tick()
+
+    assert _surface(node)['owned'] is True, '갱신이 오는데 놓았다'

@@ -353,9 +353,19 @@ export function createMidiMonitorController({ el, onMappingFileSaved }) {
       el.midiMotorOutputState.textContent = status?.motor_output_enabled ? '활성' : '사용 안 함';
     }
     if (el.midiMonitorMessage) {
+      // 뱅크가 안 실리면 **기본값(1-1~1-8)** 으로 돈다 · §6-94
+      //
+      // 빈 설정이 아니라 **채워진 기본 설정**이라 화면이 멀쩡해 보인다 ·
+      // 꺼 놓은 축도 살아 있는 것처럼 보이고, 이름도 그럴듯하다 · 조용히
+      // 두면 왜 내 설정대로 안 되는지 알 길이 없다.
+      const bankMissing = status && status.ready === false;
       el.midiMonitorMessage.textContent = loading
         ? 'MIDI 상태 확인 중'
-        : status?.message || 'MIDI 모니터 노드 상태 수신 대기';
+        : bankMissing
+          ? '⚠ 뱅크가 실리지 않았습니다 · 지금 보이는 1-1~1-8 은 기본값입니다'
+            + ' · 프로젝트 관리 탭에서 프로젝트를 먼저 띄우세요'
+          : status?.message || 'MIDI 모니터 노드 상태 수신 대기';
+      el.midiMonitorMessage.classList.toggle('status-bad', Boolean(bankMissing));
     }
     if (el.midiMappingPath) {
       const count = banks.length || 1;
