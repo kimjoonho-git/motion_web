@@ -926,6 +926,16 @@ class MidiControlNode(Node):
 
     def _publish_motor_request_batch(self) -> None:
         with self._lock:
+            # 장치가 이 PC 것이 아니면 **아무것도 내보내지 않는다** · §6-94
+            #
+            # USB 를 뽑아 다른 PC 에 꽂은 것과 같아야 한다 · 연동에서 MIDI 를
+            # 넘긴 뒤에도 이 PC 가 계속 모터를 움직여, 한 페이더로 두 PC 가
+            # 동시에 움직였다.
+            #
+            # 쌓인 요청도 버린다 · 남겨 두면 되찾는 순간 옛 값이 한꺼번에 나간다.
+            if not self._device_connected:
+                self._pending_motor_requests.clear()
+                return
             payload = self._take_motor_request_batch_locked()
         if payload is not None:
             self._publish_json(self._motor_request_publisher, payload)
@@ -1703,6 +1713,10 @@ class MidiControlNode(Node):
                 -1 if fader_position is None else fader_position,
                 fader_input_generation,
             )
+            # 장치가 이 PC 것이 아니면 페이더·LED 도 건드리지 않는다 · §6-94
+            # 넘긴 PC 와 받은 PC 가 같은 표면을 함께 밀면 SELECT 가 이상해진다
+            if not self._device_connected:
+                continue
             msg = String()
             msg.data = '\t'.join((str(index), *(str(value) for value in hardware_feedback)))
             self._feedback_publisher.publish(msg)
