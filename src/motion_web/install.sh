@@ -108,8 +108,25 @@ build_workspace() {
   source /opt/ros/humble/setup.bash
   set -u
   rosdep install --from-paths "${WORKSPACE_DIR}/src" --ignore-src -r -y
-  rm -rf "${WORKSPACE_DIR}/build/motion_web_ui" "${WORKSPACE_DIR}/install/motion_web_ui"
-  colcon build --symlink-install --base-paths "${WORKSPACE_DIR}/src"
+  # 지우고 처음부터 빌드한다 · §6-99
+  #
+  # `colcon` 은 **지워진 파일을 정리하지 않는다** · 꾸러미에서 파일이 빠지면
+  # `install/` 에 옛 흔적(끊어진 링크 등)이 남아 다음 빌드가 거기서 깨진다 ·
+  # 다른 PC 가 실제로 그렇게 멈췄다.
+  #
+  # 이 스크립트는 설치·업데이트 때만 돈다 · 1~2분 더 걸리는 대신 **늘 같은
+  # 결과**가 나온다 · 빌드 상태를 사람이 추측할 일이 없어진다.
+  rm -rf "${WORKSPACE_DIR}/build" "${WORKSPACE_DIR}/install"
+  # 지운 뒤 첫 빌드는 **한 번 더** 필요할 수 있다 · §6-99
+  #
+  # 어떤 꾸러미는 다른 꾸러미가 설치된 뒤에야 제 경로가 풀린다
+  # (`robot_manager` · `No such file or directory: .../robots/src/robots`) ·
+  # 단독으로는 잘 되고 전체를 한꺼번에 할 때만 깨진다 · 이어서 한 번 더 하면
+  # 남은 것이 붙는다 · 사람이 두 번 치지 않게 한다.
+  if ! colcon build --symlink-install --base-paths "${WORKSPACE_DIR}/src"; then
+    echo "빌드를 이어서 한 번 더 합니다" >&2
+    colcon build --symlink-install --base-paths "${WORKSPACE_DIR}/src"
+  fi
   if command -v ros2 >/dev/null 2>&1; then
     ros2 daemon stop || true
     ros2 daemon start || true
