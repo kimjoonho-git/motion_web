@@ -163,7 +163,7 @@ test('거절당하면 그 말을 보여 주고 다시 확인한다', async () =>
   await controller.start();
 
   assert.deepEqual(calls.alerts, ['모터 동작 중에는 업데이트할 수 없습니다']);
-  assert.equal(checked, 1, '막힌 뒤 화면이 현재 상태를 다시 읽어야 한다');
+  assert.ok(checked >= 1, '막힌 뒤 화면이 현재 상태를 다시 읽어야 한다');
 });
 
 test('화면을 새로 열어도 하던 업데이트를 이어서 본다', async () => {
@@ -247,4 +247,32 @@ test('기록이 지금 것인지 지난 것인지 상자에 적는다', () => {
     updated_at: 1_000_000_000 - 720,
   });
   assert.match(elements.logCaption.textContent, /지난 기록 · 12분 전/);
+});
+
+
+test('요청이 늦어도 화면은 곧바로 움직인다', async () => {
+  /** 시작 요청은 원격을 한 번 물어보므로 몇 초 걸린다 · 그때까지 기다렸다
+   * 지켜보기 시작하면 "시작하는 중 · 0초 전" 에서 멈춘 것처럼 보인다 ·
+   * 실제로 그렇게 보였다. */
+  let released;
+  const slow = new Promise((resolve) => { released = resolve; });
+  const { controller, calls } = fixture({ start: async () => { await slow; } });
+
+  const pending = controller.start();
+  await Promise.resolve();
+
+  assert.ok(calls.intervals.length > 0, '요청을 기다리느라 지켜보지 않는다');
+  released();
+  await pending;
+});
+
+test('요청이 거절되면 지켜보기를 멈춘다', async () => {
+  const { controller, calls } = fixture({
+    start: async () => { throw new Error('모터 동작 중입니다'); },
+  });
+
+  await controller.start();
+
+  assert.ok(calls.cleared > 0, '거절됐는데 계속 물어본다');
+  assert.deepEqual(calls.alerts, ['모터 동작 중입니다']);
 });

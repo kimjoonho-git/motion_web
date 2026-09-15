@@ -172,10 +172,15 @@ export function createWorkspaceUpdateController({
       status: 'running', phase: 'starting', message: '업데이트를 시작합니다',
       log_tail: '', updated_at: now() / 1000,
     });
+    // **요청을 기다리지 않고 곧바로 지켜본다** · 시작 요청은 원격을 한 번
+    // 물어보므로(fetch) 몇 초 걸릴 수 있다 · 그때까지 기다렸다 지켜보기
+    // 시작하면 화면이 "시작하는 중 · 0초 전" 에서 멈춘 것처럼 보인다 ·
+    // 실제로 그렇게 보였다.
+    watch();
     try {
       await api.start();
-      watch();
     } catch (error) {
+      stop();
       alert(error?.message || String(error));
       await refresh();
     }
