@@ -256,6 +256,7 @@ class WorkspaceUpdate:
             'to_commit': state['target'],
             'rolled_back': False,
             'updated_at': time.time(),
+            'started_at': time.time(),
         })
 
     def _write_state(self, payload: Dict[str, Any]) -> None:

@@ -43,6 +43,15 @@ function setText(element, value) {
   if (element) element.textContent = value;
 }
 
+/** 시:분:초 · 언제 시작했고 언제 끝났는지 못 박는다. */
+function clockText(epochSeconds) {
+  const stamp = Number(epochSeconds);
+  if (!Number.isFinite(stamp) || stamp <= 0) return '';
+  const when = new Date(stamp * 1000);
+  const two = (value) => String(value).padStart(2, '0');
+  return `${two(when.getHours())}:${two(when.getMinutes())}:${two(when.getSeconds())}`;
+}
+
 /** 얼마나 지났나 · `1분 12초` */
 function elapsedText(seconds) {
   const whole = Math.max(0, Math.round(seconds));
@@ -101,14 +110,18 @@ export function createWorkspaceUpdateController({
     const running = state === 'running';
     const label = UPDATE_PHASE_LABEL[String(status.phase || '')]
       || String(status.phase || '') || '-';
+    // 시작 시각을 글에 박는다 · 그러면 중간에 멈춰도 언제 것인지 알 수 있다
+    const began = clockText(status.started_at || startedAt);
+    const since = began ? ` · 시작 ${began}` : '';
     const waiting = startedAt
       ? ` · ${elapsedText(now() / 1000 - startedAt)} 경과`
       : '';
+    const ended = running ? '' : ` · ${clockText(status.updated_at)}`;
     setText(
       elements.phase,
       disconnected
-        ? `서비스 재시작 중${waiting}`
-        : `${label}${ageText(status.updated_at, now())}`,
+        ? `서비스 재시작 중${since}${waiting}`
+        : `${label}${since}${ended || ageText(status.updated_at, now())}`,
     );
     if (state !== 'idle') {
       setText(

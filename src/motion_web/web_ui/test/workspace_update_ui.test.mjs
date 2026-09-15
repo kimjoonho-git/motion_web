@@ -226,13 +226,16 @@ test('언제 적힌 상태인지 함께 보여 준다', () => {
   assert.equal(elements.phase.textContent, '빌드 중 · 5초 전');
 });
 
-test('오래된 기록은 오래됐다고 보인다', () => {
+test('끝난 작업은 끝난 시각을 박아 둔다', () => {
+  /** "10분 전" 보다 "18:46:30" 이 분명하다 · 화면을 오래 열어 두었을 때
+   * 지난 기록을 지금 것으로 오해하지 않는다. */
   const { controller, elements } = fixture();
   controller.renderProgress({
-    status: 'failure', phase: 'failed', updated_at: 1_000_000_000 - 600,
+    status: 'failure', phase: 'failed',
+    started_at: 1_000_000_000 - 700, updated_at: 1_000_000_000 - 600,
   });
 
-  assert.match(elements.phase.textContent, /10분 전/);
+  assert.match(elements.phase.textContent, /실패 · 시작 \d\d:\d\d:\d\d · \d\d:\d\d:\d\d/);
 });
 
 

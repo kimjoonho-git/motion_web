@@ -33,6 +33,8 @@ STATE_DIR="${MOTION_UPDATE_STATE_DIR:-${XDG_STATE_HOME:-${HOME}/.local/state}/mo
 STATE_FILE="${STATE_DIR}/state.json"
 LOG_FILE="${STATE_DIR}/update.log"
 OPERATION_ID="${MOTION_UPDATE_OPERATION_ID:-update-$(date +%s)}"
+#: 언제 시작했나 · 화면이 "빌드 중 · 시작 18:45:10" 으로 보여 준다
+STARTED_AT="$(date +%s)"
 BRANCH="main"
 ROS_SETUP="${MOTION_ROS_SETUP:-/opt/ros/humble/setup.bash}"
 INSTALLER="${WORKSPACE}/src/motion_web/web_bridge/deploy/install_user_service.sh"
@@ -57,16 +59,15 @@ write_state() {
   # 글자를 끼워 넣으면 따옴표 하나에 깨진다
   python3 - "$1" "$2" "$3" \
     "${OPERATION_ID}" "${FROM_COMMIT}" "${TO_COMMIT}" "${ROLLED_BACK}" \
-    "${STATE_FILE}" <<'PY'
+    "${STATE_FILE}" "${STARTED_AT}" <<'PY'
 import json
 import os
 import sys
 import tempfile
 import time
 
-status, phase, message, operation_id, from_commit, to_commit, rolled_back, path = (
-    sys.argv[1:9]
-)
+(status, phase, message, operation_id, from_commit, to_commit, rolled_back,
+ path, started_at) = sys.argv[1:10]
 payload = {
     'operation_id': operation_id,
     'status': status,
@@ -76,6 +77,7 @@ payload = {
     'to_commit': to_commit,
     'rolled_back': rolled_back == 'true',
     'updated_at': time.time(),
+    'started_at': float(started_at or 0),
 }
 # 통째로 새로 쓰고 옮긴다 · 반쯤 쓰인 파일을 화면이 읽으면 JSON 이 깨진다
 handle, temporary = tempfile.mkstemp(dir=os.path.dirname(path))

@@ -36,6 +36,7 @@ export function getElements() {
     updatePhase: document.getElementById('updatePhase'),
     updateCheckButton: document.getElementById('updateCheckButton'),
     updateStartButton: document.getElementById('updateStartButton'),
+    updateReloadButton: document.getElementById('updateReloadButton'),
     updateLog: document.getElementById('updateLog'),
     updateLogCaption: document.getElementById('updateLogCaption'),
     accessUrl: document.getElementById('accessUrl'),

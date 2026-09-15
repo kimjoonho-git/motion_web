@@ -1703,4 +1703,10 @@ if (el.updateStartButton) {
     workspaceUpdate.start();
   });
 }
+// 빌드가 끝나면 저절로 새로 불러오지만, 기다리지 않고 바로 볼 수도 있어야 한다
+if (el.updateReloadButton) {
+  el.updateReloadButton.addEventListener('click', () => {
+    window.location.reload();
+  });
+}
 workspaceUpdate.init();
