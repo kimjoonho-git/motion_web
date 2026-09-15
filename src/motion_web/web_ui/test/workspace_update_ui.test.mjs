@@ -21,6 +21,7 @@ function fixture({ check, status, start, confirmed = true } = {}) {
   const elements = {
     summary: element(), current: element(), target: element(), phase: element(),
     checkButton: element(), startButton: element(), log: element(),
+    logCaption: element(),
   };
   const calls = { start: 0, finished: 0, alerts: [], intervals: [], cleared: 0 };
   const controller = createWorkspaceUpdateController({
@@ -227,4 +228,23 @@ test('오래된 기록은 오래됐다고 보인다', () => {
   });
 
   assert.match(elements.phase.textContent, /10분 전/);
+});
+
+
+test('기록이 지금 것인지 지난 것인지 상자에 적는다', () => {
+  /** 기록만 보고는 알 수 없다 · "이 로그가 최신인지 확신이 없다" 는 말이
+   * 그래서 나왔다. */
+  const { controller, elements } = fixture();
+
+  controller.renderProgress({
+    status: 'running', phase: 'building', log_tail: '빌드 중',
+    updated_at: 1_000_000_000 - 3,
+  });
+  assert.equal(elements.logCaption.textContent, '진행 중 기록 · 3초 전');
+
+  controller.renderProgress({
+    status: 'failure', phase: 'failed', log_tail: '오류',
+    updated_at: 1_000_000_000 - 720,
+  });
+  assert.match(elements.logCaption.textContent, /지난 기록 · 12분 전/);
 });

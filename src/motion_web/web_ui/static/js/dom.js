@@ -37,6 +37,7 @@ export function getElements() {
     updateCheckButton: document.getElementById('updateCheckButton'),
     updateStartButton: document.getElementById('updateStartButton'),
     updateLog: document.getElementById('updateLog'),
+    updateLogCaption: document.getElementById('updateLogCaption'),
     accessUrl: document.getElementById('accessUrl'),
     motorTypeRows: document.getElementById('motorTypeRows'),
     motorTypeSummaryDetail: document.getElementById('motorTypeSummaryDetail'),

@@ -1681,6 +1681,7 @@ const workspaceUpdate = createWorkspaceUpdateController({
     checkButton: el.updateCheckButton,
     startButton: el.updateStartButton,
     log: el.updateLog,
+    logCaption: el.updateLogCaption,
   },
   api: {
     check: fetchWorkspaceUpdateCheck,

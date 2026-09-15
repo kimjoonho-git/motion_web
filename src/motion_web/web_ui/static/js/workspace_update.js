@@ -105,6 +105,14 @@ export function createWorkspaceUpdateController({
       const tail = String(status.log_tail || '');
       elements.log.hidden = !tail;
       elements.log.textContent = tail;
+      if (elements.logCaption) {
+        // 기록만 보고는 지금 것인지 지난 것인지 알 수 없다 · 언제 것인지 적는다
+        elements.logCaption.hidden = !tail;
+        elements.logCaption.textContent = tail
+          ? `${running ? '진행 중 기록' : '지난 기록'}${ageText(status.updated_at, now())}`
+          : '';
+        elements.logCaption.classList?.toggle('warning-text', !running);
+      }
     }
     if (running && elements.startButton) elements.startButton.disabled = true;
     if (elements.checkButton) elements.checkButton.disabled = running;
