@@ -276,13 +276,6 @@
   background: #f8fbff !important;
 }
 
-.settings-commit-actions {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-}
-
 .settings-commit-actions .registry-message,
 .settings-commit-actions .registry-actions {
   margin: 0;

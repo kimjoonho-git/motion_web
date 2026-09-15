@@ -49,40 +49,11 @@
   min-height: 74px;
 }
 
-.motion-file-layout {
-  display: grid;
-  grid-template-columns: minmax(220px, 0.45fr) minmax(0, 1.8fr);
-  gap: 12px;
-  align-items: start;
-  min-width: 0;
-}
-
-.motion-file-layout > * {
-  min-width: 0;
-}
-
 .motion-file-column,
 .motion-file-subsection {
   padding: 12px;
   border: 1px solid var(--line);
   background: #ffffff;
-}
-
-.motion-file-upload {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin-bottom: 12px;
-}
-
-.motion-file-upload input[type="file"] {
-  width: 100%;
-  min-height: 38px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 7px 9px;
-  background: #f9fbfd;
-  color: var(--ink);
 }
 
 .motion-file-table-wrap {
@@ -278,12 +249,6 @@
 }
 
 .motion-mapping-layout {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.motion-run-layout {
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -816,24 +781,6 @@
   background: #fde8e8;
 }
 
-.config-file-edit-row {
-  display: flex;
-  align-items: flex-end;
-  gap: 12px;
-  margin: 10px 0;
-  flex-wrap: wrap;
-}
-
-.config-file-name-field {
-  width: min(360px, 100%);
-}
-
-.config-file-name-note {
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 1.45;
-}
-
 .config-value-input {
   width: min(180px, 100%);
   min-height: 32px;
@@ -1219,10 +1166,6 @@
   margin-left: 4px;
   color: var(--muted);
   font-weight: 600;
-}
-
-#coordinationRosterSection .coordination-overview-layout {
-  gap: 10px;
 }
 
 /* 왜 시작할 수 없는지 · 늘 같은 자리에 · §6-98 */

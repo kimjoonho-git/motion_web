@@ -385,10 +385,15 @@ test('graph click intent keeps point creation separate from range selection', ()
     operation: 'point_curve',
     pointTarget,
   }), 'edit_point');
-  assert.equal(motionStudioEditorGraphClickAction({
-    operation: 'time_shift',
-    pointTarget,
-  }), 'edit_point');
+  // 구간 편집 기능이 골라져 있으면 포인트 클릭은 **구간을 잡는다** · §6-101
+  // 전에는 어떤 기능이든 포인트 편집으로 넘어가, `모션값 배율` 을 골라 두고
+  // 포인트를 찍으면 `포인트 곡선` 으로 바뀌어 구간을 못 잡았다
+  for (const operation of ['time_shift', 'time_scale', 'value_offset', 'value_scale']) {
+    assert.equal(motionStudioEditorGraphClickAction({
+      operation,
+      pointTarget,
+    }), 'select_point', `${operation} 에서 포인트 편집으로 샜다`);
+  }
   assert.equal(motionStudioEditorGraphClickAction({
     operation: 'point_curve',
     pointTarget,

@@ -85,11 +85,6 @@
   white-space: nowrap;
 }
 
-.midi-motion-value {
-  font-weight: 700;
-  color: #1d4ed8;
-}
-
 .midi-touch-active {
   color: #b45309;
   font-weight: 700;

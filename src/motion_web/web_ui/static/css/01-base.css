@@ -15,13 +15,6 @@
   --red: #c62828;
 }
 
-.coordination-overview-grid {
-  display: grid;
-  grid-template-columns: minmax(420px, 1.2fr) minmax(360px, 1fr);
-  gap: 12px;
-  margin-bottom: 12px;
-}
-
 .coordination-settings-fields {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -55,33 +48,6 @@
   flex-direction: column;
   align-items: stretch;
   gap: 4px;
-}
-
-.input-with-button {
-  display: flex;
-  gap: 6px;
-  width: 100%;
-}
-.input-with-button input {
-  flex: 1;
-  min-width: 0;
-}
-.input-with-button button {
-  white-space: nowrap;
-}
-
-.coordination-status-strip {
-  grid-template-columns: repeat(2, minmax(140px, 1fr));
-}
-
-.coordination-readiness-actions {
-  align-items: center;
-  margin-top: 12px;
-}
-
-.coordination-readiness-actions span {
-  color: var(--muted);
-  font-size: 12px;
 }
 
 .coordination-control-panel {
@@ -132,9 +98,5 @@
   grid-template-columns: 370px minmax(0, 1fr);
   gap: 16px;
   align-items: start;
-}
-
-.workspace-content {
-  min-width: 0;
 }
 

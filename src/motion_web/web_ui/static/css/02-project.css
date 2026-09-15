@@ -96,39 +96,6 @@
   background: #ffffff;
 }
 
-.project-context-compare {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  margin-bottom: 10px;
-}
-
-.project-context-compare > div {
-  min-width: 0;
-  padding: 9px 10px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: #ffffff;
-}
-
-.project-context-compare span,
-.project-context-compare strong {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.project-context-compare span {
-  margin-bottom: 3px;
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.project-context-compare strong {
-  font-size: 13px;
-}
-
 .project-context-compare .warning-text {
   color: var(--yellow);
 }
@@ -139,37 +106,10 @@
   gap: 6px;
   padding: 0 12px 10px;
 }
-
-.project-sidebar-actions button,
-.project-import-box button {
+.project-sidebar-actions button {
   min-height: 34px;
   padding: 0 8px;
   font-size: 12px;
-}
-
-.project-import-box {
-  margin: 0 12px 10px;
-  padding: 8px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-}
-
-.project-import-box summary {
-  cursor: pointer;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.project-import-box[open] {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 6px;
-}
-
-.project-import-box[open] summary {
-  grid-column: 1 / -1;
-  margin-bottom: 4px;
 }
 
 .project-sidebar-help {
@@ -228,9 +168,7 @@
   min-height: 32px;
   padding: 0;
 }
-
 .project-explorer-panel > .section-head,
-.project-explorer-toolbar,
 .project-file-editor-panel > .section-head,
 .project-file-editor-panel > .registry-actions,
 .project-file-editor-panel > .registry-message {
@@ -238,23 +176,8 @@
   padding-right: 14px;
 }
 
-.project-explorer-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-  padding-bottom: 12px;
-}
-
 .project-explorer-toolbar .wide-select {
   min-width: 260px;
-}
-
-.project-explorer-layout {
-  display: grid;
-  grid-template-columns: minmax(260px, 34%) minmax(0, 1fr);
-  min-height: 430px;
-  border-top: 1px solid var(--line);
 }
 
 .project-file-manager-layout {
@@ -301,10 +224,8 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
 .project-tree-root small,
-.project-tree-folder summary small,
-.project-tree-file-info small {
+.project-tree-folder summary small {
   color: var(--muted);
 }
 
@@ -334,15 +255,6 @@
   background: #ffffff;
 }
 
-.project-tree-folder-motor_axes { --folder-color: #7957c8; }
-.project-tree-folder-motion_axis_matching { --folder-color: #2875c7; }
-.project-tree-folder-motions { --folder-color: #16834a; }
-.project-tree-folder-layers { --folder-color: #bd6b12; }
-.project-tree-folder-logs { --folder-color: #596a7b; }
-.project-tree-folder-project_root { --folder-color: #526579; }
-.project-tree-folder-runtime { --folder-color: #6f7782; }
-.project-tree-folder-trash { --folder-color: #8a6f58; }
-
 .project-tree-folder[open] > summary {
   border-bottom: 1px solid #e2e8ef;
 }
@@ -371,29 +283,6 @@
   color: var(--folder-color);
   font-size: 15px;
   font-weight: 800;
-}
-
-.project-folder-title {
-  min-width: 0;
-}
-
-.project-folder-title strong,
-.project-folder-title small {
-  display: block;
-}
-
-.project-folder-title strong {
-  color: var(--ink);
-  font-size: 13px;
-}
-
-.project-folder-title small {
-  margin-top: 2px;
-  overflow: hidden;
-  font-size: 10px;
-  font-weight: 400;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .project-tree-children {
@@ -493,33 +382,6 @@ button.project-tree-midi:hover {
 .project-tree-action:hover {
   color: var(--blue);
   background: var(--panel);
-}
-
-.project-tree-add {
-  color: var(--green);
-  font-size: 17px;
-}
-
-.project-file-type {
-  display: grid;
-  width: 22px;
-  height: 25px;
-  place-items: center;
-  border: 1px solid #c7d2df;
-  border-radius: 4px;
-  background: #ffffff;
-  color: #526579;
-  font: 700 10px/1 Arial, sans-serif;
-}
-
-.project-tree-file-info {
-  min-width: 0;
-}
-
-.project-tree-file-info small {
-  display: block;
-  margin-top: 3px;
-  font-size: 9px;
 }
 
 .project-tree-name {
@@ -642,20 +504,6 @@ button.project-tree-midi:hover {
 
 .project-sidebar {
   box-shadow: none;
-}
-
-.project-management-box {
-  margin: 0 12px 10px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-}
-
-.project-management-box > summary {
-  padding: 8px 10px;
-  cursor: pointer;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 700;
 }
 
 .project-management-box .project-sidebar-actions {

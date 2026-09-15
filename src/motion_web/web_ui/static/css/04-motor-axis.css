@@ -255,31 +255,6 @@
   margin-bottom: 0;
 }
 
-.registration-tab-panel {
-  min-width: 0;
-}
-
-.registration-placeholder {
-  min-height: 120px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px dashed var(--line);
-  color: var(--muted);
-  background: #f9fbfd;
-}
-
-.scan-panel {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-height: 44px;
-  margin-bottom: 14px;
-  padding: 10px 12px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-}
-
 .registration-panel .scan-panel {
   margin-top: 2px;
 }
@@ -322,17 +297,6 @@
 
 .axis-apply-warning {
   margin-bottom: 10px;
-}
-
-.scan-panel strong {
-  flex: 0 0 auto;
-}
-
-.scan-panel span {
-  color: var(--muted);
-  overflow: visible;
-  text-overflow: clip;
-  white-space: normal;
 }
 
 .table-wrap {

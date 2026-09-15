@@ -3,10 +3,6 @@
  * `styles.css` 7,415줄을 순서 그대로 자른 조각이다 · §6-43
  * 원본 3717~4856줄 · **연결 순서를 바꾸면 겹치기(cascade)가 달라진다.**
  */
-.studio-editor-footer > span {
-  color: var(--muted);
-  font-size: 11px;
-}
 
 @media (max-width: 1100px) {
   .studio-editor-layout {
@@ -125,9 +121,7 @@
   border: 1px solid var(--line);
   overflow: auto;
 }
-
-.registry-actions,
-.editor-actions {
+.registry-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -159,11 +153,6 @@
 .settings-panel summary {
   cursor: pointer;
   list-style-position: inside;
-}
-
-.registry-table-wrap {
-  border: 1px solid var(--line);
-  overflow: auto;
 }
 
 table {
@@ -276,17 +265,6 @@ th {
 
 .axis-name-input {
   min-width: 120px;
-}
-
-.axis-readonly-cell {
-  color: var(--text);
-  font-weight: 700;
-  white-space: nowrap;
-}
-
-.axis-id-cell {
-  color: var(--text);
-  white-space: nowrap;
 }
 
 .matching-table td.identity-mismatch {
@@ -782,91 +760,14 @@ th {
   background: #fdeaea;
 }
 
-.registry-flag {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 42px;
-  height: 24px;
-  padding: 0 8px;
-  border-radius: 4px;
-  font-weight: 700;
-  background: #f1f4f7;
-  color: var(--muted);
-}
-
 .registry-flag.on {
   background: #e8f6ee;
   color: var(--green);
 }
 
-.identity-cell {
-  max-width: 360px;
-  white-space: normal;
-  text-align: left;
-}
-
-.row-actions {
-  display: inline-flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  justify-content: center;
-}
-
-.row-actions button {
-  min-height: 30px;
-  padding: 0 9px;
-}
-
-.pending-list {
-  margin: 0;
-  padding-left: 18px;
-  color: var(--muted);
-}
-
-.pending-list li + li {
-  margin-top: 6px;
-}
-
 .selected-row {
   background: #eff6ff;
   box-shadow: inset 3px 0 0 #2563eb;
-}
-
-.editor-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 10px;
-}
-
-.editor-grid label {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.editor-grid input,
-.editor-grid select {
-  min-height: 36px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  padding: 0 9px;
-  background: #ffffff;
-  color: var(--ink);
-  font: inherit;
-}
-
-.readonly-field input {
-  background: #f4f7f9;
-  color: var(--muted);
-}
-
-.editor-actions {
-  align-items: end;
-  margin-bottom: 0;
 }
 
 .manual-panel {
@@ -926,10 +827,8 @@ th {
   margin-top: 0;
   margin-bottom: 0;
 }
-
 .motion-test-readout,
-.manual-field,
-.manual-check {
+.manual-field {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -980,10 +879,8 @@ th {
 .motion-test-readout + .motion-test-readout {
   margin-top: 8px;
 }
-
 .motion-test-readout span,
-.manual-field span,
-.manual-check span {
+.manual-field span {
   color: var(--muted);
   font-size: 13px;
   font-weight: 700;
@@ -1108,22 +1005,6 @@ th {
 .segmented-control button.active {
   background: #eaf2ff;
   color: var(--blue);
-}
-
-.manual-check {
-  flex-direction: row;
-  align-items: center;
-  min-height: 38px;
-  justify-content: flex-start;
-  padding: 7px 10px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: #ffffff;
-}
-
-.manual-check input {
-  width: 18px;
-  height: 18px;
 }
 
 .manual-actions {

@@ -18,6 +18,7 @@ import {
   motionStudioBeginPointDrag,
   motionStudioBeginTangentDrag,
   motionStudioRangeSelectionActive,
+  motionStudioResetRangeSelection,
   motionStudioSelectRangePoint,
 } from './motion_studio_editor_state.js';
 
@@ -101,6 +102,11 @@ export function bindMotionStudioGraphEvents(context) {
   const selectRangePoint = (pointTarget) => {
     const editor = state.editor;
     if (!editor || !pointTarget) return false;
+    // 첫 포인트가 구간 선택을 연다 · §6-101 · [구간 선택] 을 먼저 눌러야만
+    // 되면, 화면 안내대로 포인트를 찍은 사람은 아무 일도 안 일어난 줄 안다
+    if (!motionStudioRangeSelectionActive(editor)) {
+      motionStudioResetRangeSelection(editor, true);
+    }
     const result = motionStudioSelectRangePoint(editor, pointTarget);
     if (result.ok && result.phase === 'awaiting_end') {
       if (!selectPointCurveFromGraph(

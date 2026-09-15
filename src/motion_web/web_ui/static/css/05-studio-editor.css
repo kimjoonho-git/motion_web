@@ -3,47 +3,6 @@
  * `styles.css` 7,415줄을 순서 그대로 자른 조각이다 · §6-43
  * 원본 2268~3716줄 · **연결 순서를 바꾸면 겹치기(cascade)가 달라진다.**
  */
-.studio-layer-name-cell {
-  display: grid;
-  gap: 6px;
-  min-width: 0;
-  text-align: left;
-}
-
-.studio-layer-name-cell > div:first-child {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.studio-layer-name-cell input {
-  width: 100%;
-  min-width: 0;
-  font-size: 15px;
-  font-weight: 700;
-}
-
-.studio-layer-meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.studio-layer-meta label {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  white-space: nowrap;
-}
-
-.studio-layer-meta input {
-  width: 14px;
-  min-width: 14px;
-  margin: 0;
-}
 
 .studio-layer-panel > .table-wrap {
   max-height: 470px;
@@ -110,56 +69,12 @@
   background: #ffffff;
 }
 
-.studio-layer-control-row {
-  display: grid;
-  grid-template-columns: 92px minmax(0, 1fr);
-  align-items: start;
-  gap: 8px 12px;
-  min-height: 52px;
-  padding: 9px 11px;
-}
-
-.studio-layer-control-row + .studio-layer-control-row {
-  border-top: 1px solid #e3e9ef;
-}
-
-.studio-layer-safety-row {
-  background: #fbfcfd;
-}
-
-.studio-layer-control-title {
-  padding-top: 8px;
-  color: #3e5266;
-  font-size: 12px;
-  font-weight: 800;
-  white-space: nowrap;
-}
-
-.studio-layer-control-content {
-  display: grid;
-  min-width: 0;
-  gap: 8px;
-}
-
-.studio-layer-safety-content {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  gap: 8px;
-}
-
 .studio-layer-safety-content .compact-field {
   flex: 0 0 112px;
 }
 
 .studio-layer-control-row .compact-field {
   min-width: 0;
-}
-
-.studio-layer-control-row input,
-.studio-layer-control-row select {
-  box-sizing: border-box;
-  width: 100%;
 }
 
 .studio-merge-status {
@@ -175,13 +90,6 @@
 
 .studio-merge-status.error {
   color: var(--red);
-}
-
-.studio-transition-rule-info {
-  flex: 1 1 200px;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.45;
 }
 
 @media (max-width: 700px) {
@@ -929,22 +837,6 @@
   line-height: 1.35;
 }
 
-.studio-editor-range-field {
-  display: grid;
-  grid-template-columns: 52px minmax(0, 1fr);
-  width: 100%;
-}
-
-.studio-editor-range-field > span {
-  white-space: nowrap;
-}
-
-.studio-editor-range-field input {
-  box-sizing: border-box;
-  width: 100%;
-  min-width: 0;
-}
-
 .studio-editor-axis-list {
   min-height: 80px;
   max-height: 170px;
@@ -1031,9 +923,7 @@
   grid-column: 1 / -1;
   font-size: 11px;
 }
-
-.studio-editor-axis-form > label,
-.studio-editor-axis-form-action > label {
+.studio-editor-axis-form > label {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 2px;
@@ -1062,21 +952,8 @@
 .studio-editor-axis-delete-form button {
   width: 100%;
 }
-
-.studio-editor-axis-form-action {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 6px;
-}
-
-.studio-editor-axis-form-action button {
-  width: 100%;
-  white-space: nowrap;
-}
-
 .studio-editor-toolbar,
-.studio-editor-operations,
-.studio-editor-footer {
+.studio-editor-operations {
   display: flex;
   align-items: end;
   flex-wrap: wrap;
@@ -1143,14 +1020,6 @@
   display: grid;
   align-self: center;
   gap: 3px;
-}
-
-.studio-editor-scope-controls {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 7px;
-  padding-bottom: 9px;
-  border-bottom: 1px solid var(--line);
 }
 
 .studio-editor-conversion-controls {
@@ -1310,20 +1179,6 @@
   width: 100%;
 }
 
-.studio-editor-scope-controls > strong {
-  align-self: center;
-}
-
-.studio-editor-scope-controls .studio-editor-range-field {
-  grid-template-columns: 72px minmax(0, 1fr);
-  width: 100%;
-}
-
-.studio-editor-scope-controls small {
-  color: var(--muted);
-  line-height: 1.4;
-}
-
 .studio-editor-conversion-controls .studio-editor-inspector-field {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -1336,66 +1191,6 @@
   box-sizing: border-box;
   width: 100%;
   min-width: 0;
-}
-
-.studio-interpolation-choices {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.studio-editor-spike-controls {
-  display: flex;
-  align-items: end;
-  gap: 8px;
-}
-
-.studio-interpolation-choices > span {
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.studio-interpolation-choices label {
-  position: relative;
-  display: grid;
-  grid-template-columns: 72px auto;
-  align-items: center;
-  gap: 4px;
-  min-height: 38px;
-  padding: 3px 7px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: #fff;
-  cursor: pointer;
-}
-
-.studio-interpolation-choices input {
-  position: absolute;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.studio-interpolation-choices svg {
-  width: 72px;
-  height: 30px;
-}
-
-.studio-interpolation-choices path {
-  fill: none;
-  stroke: #65788a;
-  stroke-width: 2;
-}
-
-.studio-interpolation-choices label:has(input:checked) {
-  border-color: #1f6feb;
-  box-shadow: inset 0 0 0 1px #1f6feb;
-  color: #135fbd;
-  background: #eef6ff;
-}
-
-.studio-interpolation-choices label:has(input:checked) path {
-  stroke: #1f6feb;
 }
 
 .studio-editor-point-controls {
@@ -1457,12 +1252,5 @@
   display: block;
   width: 100%;
   height: 100%;
-}
-
-.studio-editor-footer {
-  justify-content: space-between;
-  align-items: center;
-  padding-top: 10px;
-  border-top: 1px solid var(--line);
 }
 
