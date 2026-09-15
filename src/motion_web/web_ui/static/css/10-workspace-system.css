@@ -599,3 +599,21 @@
   margin-top: 12px;
   resize: vertical;
 }
+
+/* 터미널 사용법 · 외우지 않아도 되게 화면에 적어 둔다 · §6-99 */
+.terminal-howto {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.terminal-howto-command {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.06);
+  font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  user-select: all;
+}
+

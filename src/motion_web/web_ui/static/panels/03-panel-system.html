@@ -4,7 +4,12 @@
       <!-- 웹 터미널 · 코드를 받아 다시 빌드하는 일을 여기서 한다 · §6-99 -->
       <section class="btop-panel workspace-panel hidden" data-workspace-panel="terminal" aria-label="터미널">
         <div class="section-head workspace-page-head">
-          <div><strong>터미널</strong><small>코드 받기·빌드 · <code>git pull &amp;&amp; bash src/motion_web/install.sh</code></small></div>
+          <div><strong>터미널</strong><small>이 PC 의 작업공간에서 바로 시작합니다</small></div>
+        </div>
+        <div class="registry-message terminal-howto">
+          <strong>코드 받기 + 다시 빌드</strong> · 아래 한 줄을 그대로 치세요 (몇 분 걸립니다)
+          <pre class="terminal-howto-command">git pull &amp;&amp; bash src/motion_web/install.sh</pre>
+          <span>빌드 동안 이 웹 화면은 잠깐 끊깁니다 · <strong>터미널은 안 끊깁니다</strong> · 끝나면 <code>설치 완료</code> 가 찍힙니다</span>
         </div>
         <div style="flex: 1; display: flex; flex-direction: column; width: 100%; min-height: calc(100vh - 200px);">
           <iframe id="terminalIframe" style="flex: 1; width: 100%; height: 100%; min-height: 600px; border: none;"></iframe>
