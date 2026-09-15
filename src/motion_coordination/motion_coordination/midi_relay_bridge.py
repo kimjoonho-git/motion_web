@@ -24,7 +24,7 @@ import time
 from typing import Any, Callable, Dict, Optional
 
 from midi_msgs.msg import Midi
-from motion_coordination_interfaces.msg import GroupMidi, GroupMidiChannel
+from motion_coordination_interfaces.msg import GroupMidiChannel
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 
@@ -125,7 +125,7 @@ class MidiRelayBridge:
         }
 
         self._group_midi_pub = node.create_publisher(
-            GroupMidi, topics.GROUP_MIDI, _midi_qos()
+            GroupMidiChannel, topics.GROUP_MIDI, _midi_qos()
         )
         self._local_midi_pub = node.create_publisher(
             Midi, topics.XTOUCH_MIDI, _midi_qos()
@@ -142,7 +142,7 @@ class MidiRelayBridge:
         }
 
         node.create_subscription(
-            GroupMidi, topics.GROUP_MIDI, self._on_group_midi, _midi_qos()
+            GroupMidiChannel, topics.GROUP_MIDI, self._on_group_midi, _midi_qos()
         )
         node.create_subscription(
             GroupMidiChannel, topics.GROUP_MIDI_FEEDBACK,
@@ -180,6 +180,12 @@ class MidiRelayBridge:
                     'MIDI 장치가 이 PC 에 없습니다 · 장치가 꽂힌 PC 에서 정하세요'
                 )
         self.rules.update(target_pc_id=wanted)
+        # 넘기면 이 PC 는 장치를 놓고, 되돌리면 다시 든다
+        if self._device_connected:
+            self._announce_local_device(
+                not self.rules.relaying,
+                f'MIDI 를 {wanted} 가 쓰는 중입니다' if self.rules.relaying else '',
+            )
         # 대상이 바뀌면 번호도 새로 센다 · 안 그러면 새 흐름의 첫 값이
         # 지난 흐름의 큰 번호에 막혀 통째로 버려진다
         self._midi_gate.reset()
@@ -205,6 +211,9 @@ class MidiRelayBridge:
             return
         if not isinstance(payload, dict):
             return
+        if payload.get('relay'):
+            # 내가 낸 알림이다 · 장치가 실제로 빠진 것이 아니다
+            return
         connected = bool(payload.get('connected'))
         if connected == self._device_connected:
             return
@@ -215,6 +224,24 @@ class MidiRelayBridge:
             self.rules.update(target_pc_id='')
         self._refresh_device_owner()
         self._sync_local_midi_subscription()
+
+    def _announce_local_device(self, connected: bool, message: str) -> None:
+        """이 PC 의 `midi_control` 에게 장치 상태를 알린다 · §6-94
+
+        넘기면 이 PC 는 **장치를 놓는다** · USB 를 뽑아 옮겨 꽂은 것과 같아야
+        한다 · 그래야 이 PC 가 모터를 건드리지도, 페이더·LED 를 밀지도 않는다 ·
+        넘겨준 뒤에도 양쪽이 같은 장치를 밀면 SELECT 가 이상해진다.
+
+        장치 브리지가 쓰는 것과 **같은 통로·같은 모양**으로 알린다 · 새 규약을
+        만들면 `midi_control` 이 두 가지를 알아야 한다.
+        """
+        payload = json.dumps(
+            # 이 알림은 **중계가 낸 것**이라는 표시 · 없으면 아래 콜백이 이것을
+            # 다시 읽어 "이 PC 에 장치가 없다" 고 믿고 중계를 멈춘다
+            {'connected': connected, 'message': message, 'relay': True},
+            ensure_ascii=False,
+        )
+        self._local_channel_pub['connection_state'].publish(String(data=payload))
 
     def _refresh_device_owner(self) -> None:
         """장치 주인은 하나다 · 내 장치가 붙어 있으면 나, 아니면 나에게 값을
@@ -243,12 +270,13 @@ class MidiRelayBridge:
         if not self.rules.should_send_midi:
             return
         self._sequence += 1
-        out = GroupMidi()
+        out = GroupMidiChannel()
         out.group_id = self.rules.group_id
         out.source_pc_id = self.rules.pc_id
         out.target_pc_id = self.rules.target_pc_id
         out.sequence = self._sequence
         out.sent_at = self._now()
+        out.channel = 'midi'
         # 장치 상태를 **그대로** 담는다 · 베껴 적으면 규격이 바뀔 때 갈린다
         out.midi = message
         self._group_midi_pub.publish(out)
@@ -258,7 +286,7 @@ class MidiRelayBridge:
     # 받기 · 대상 PC 에서
     # ----------------------------------------------------------------- #
 
-    def _on_group_midi(self, message: GroupMidi) -> None:
+    def _on_group_midi(self, message: GroupMidiChannel) -> None:
         if not self.rules.accepts_midi(message):
             return
         if not self._midi_gate.accepts(message.sequence):

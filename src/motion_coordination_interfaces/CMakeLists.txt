@@ -15,7 +15,6 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/GroupTimeSync.msg"
   "msg/GroupAlarm.msg"
   "msg/GroupSystemInfo.msg"
-  "msg/GroupMidi.msg"
   "msg/GroupMidiChannel.msg"
   "action/MotorScan.action"
   DEPENDENCIES

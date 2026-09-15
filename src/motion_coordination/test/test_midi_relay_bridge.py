@@ -11,7 +11,7 @@ import json
 
 import pytest
 from midi_msgs.msg import Midi
-from motion_coordination_interfaces.msg import GroupMidi, GroupMidiChannel
+from motion_coordination_interfaces.msg import GroupMidiChannel
 from std_msgs.msg import String
 
 from motion_common import topics
@@ -125,7 +125,8 @@ def _channels(messages):
 
 
 def _incoming(sequence=1, source='pc1', target='pc2', group='test1', channel=1):
-    message = GroupMidi()
+    message = GroupMidiChannel()
+    message.channel = 'midi'
     message.group_id = group
     message.source_pc_id = source
     message.target_pc_id = target
@@ -400,3 +401,47 @@ def test_a_brief_gap_is_not_a_disconnect(node, clock):
     bridge.tick()
 
     assert bridge.rules.relaying
+
+
+# --------------------------------------------------------------------- #
+# 넘기면 이 PC 는 장치를 놓는다 · §6-94
+# --------------------------------------------------------------------- #
+
+def test_handing_over_releases_the_local_device(node, clock):
+    """USB 를 뽑아 옮겨 꽂은 것과 같아야 한다 · 넘겨준 PC 가 계속 모터를
+    움직이고 페이더·LED 를 밀면 SELECT 가 이상해진다 · 실제로 그랬다."""
+    bridge = _bridge(node, clock)
+    _connect(node)
+
+    bridge.set_target('pc2')
+
+    announced = node.sent(topics.XTOUCH_CONNECTION_STATE)
+    assert announced, '이 PC 에 아무 말도 안 했다'
+    payload = json.loads(announced[-1].data)
+    assert payload['connected'] is False, '넘겼는데 장치를 계속 들고 있다'
+    assert 'pc2' in payload['message']
+
+
+def test_taking_it_back_picks_the_device_up_again(node, clock):
+    bridge = _bridge(node, clock)
+    _connect(node)
+    bridge.set_target('pc2')
+
+    bridge.set_target('')
+
+    payload = json.loads(node.sent(topics.XTOUCH_CONNECTION_STATE)[-1].data)
+    assert payload['connected'] is True
+
+
+def test_the_relay_does_not_believe_its_own_announcement(node, clock):
+    """그 알림을 중계가 다시 읽으면 장치가 없다고 믿고 스스로 멈춘다."""
+    bridge = _bridge(node, clock)
+    _connect(node)
+    bridge.set_target('pc2')
+
+    # 자기가 낸 알림이 돌아온다
+    node.deliver(topics.XTOUCH_CONNECTION_STATE, node.sent(topics.XTOUCH_CONNECTION_STATE)[-1])
+    bridge.tick()
+
+    assert bridge.rules.holds_device, '자기 알림에 속아 장치를 놓았다'
+    assert bridge.rules.should_send_midi, '중계가 멈췄다'

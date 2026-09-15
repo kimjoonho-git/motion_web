@@ -8,7 +8,9 @@
 #   장치 → PC   input_state · connection_state
 #   PC → 장치   feedback · connection_command
 #
-# 원시 MIDI(200Hz)만 `GroupMidi` 로 따로 간다 · 그것만 형이 다르고 양이 많다.
+# 규격은 이것 하나다 · 다만 **토픽은 둘**이다 · 200Hz 원시 MIDI 는 최선형으로
+# 흘리고(놓친 것보다 다음 것이 낫다), 나머지는 확실히 전달해야 한다 ·
+# 한 토픽에 묶으면 둘 중 하나는 반드시 손해를 본다.
 
 string group_id
 
@@ -21,8 +23,12 @@ string target_pc_id
 uint64 sequence
 builtin_interfaces/Time sent_at
 
-# 통로 이름 · `input_state` · `connection_state` · `feedback` · `connection_command`
+# 통로 이름 · `midi` · `input_state` · `connection_state` · `feedback` ·
+# `connection_command`
 string channel
 
-# 그 통로가 나르던 내용 그대로 · JSON
+# 글로 오가던 통로의 내용 그대로 · JSON · `midi` 일 때는 비어 있다
 string payload
+
+# 장치 상태 그대로 · `midi` 일 때만 채운다 · 베껴 적으면 규격이 갈린다
+midi_msgs/Midi midi
