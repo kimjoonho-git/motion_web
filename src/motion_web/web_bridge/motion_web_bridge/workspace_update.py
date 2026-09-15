@@ -152,25 +152,57 @@ class WorkspaceUpdate:
     # 시작
     # ----------------------------------------------------------------- #
 
+    def _record_refusal(self, reason: str) -> None:
+        """시작하지 못한 것도 **기록으로 남긴다** · §6-97
+
+        전에는 눌러서 거절당하면 아무 데도 남지 않았다 · 화면 경고를 놓치면
+        "눌러도 아무 일이 없다" 로만 보이고, 서버 기록에도 한 줄이 없어 왜
+        그런지 알 방법이 없었다.
+        """
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime('%H:%M:%S')
+        try:
+            with (self.state_dir / 'update.log').open('a', encoding='utf-8') as log:
+                log.write(f'· {stamp} 시작하지 못함 · {reason}\n')
+        except OSError:
+            pass
+        self._write_state({
+            'operation_id': f'refused-{int(time.time())}',
+            'status': 'failure',
+            'phase': 'blocked',
+            'message': f'시작하지 못했습니다 · {reason}',
+            'from_commit': '',
+            'to_commit': '',
+            'rolled_back': False,
+            'updated_at': time.time(),
+            'started_at': time.time(),
+        })
+
     def start(self, *, blocked_reason: str = '') -> Dict[str, Any]:
         """업데이트를 띄운다 · 막을 이유가 하나라도 있으면 시작하지 않는다.
 
         `blocked_reason` 은 부르는 쪽이 넘긴다(모터가 도는 중 등) · 무엇이
         위험한지는 웹 브리지가 알고, 이 객체는 모른다.
         """
-        if blocked_reason:
-            raise ValueError(blocked_reason)
+        # 도는 중인 작업의 기록은 덮지 않는다 · 그것 말고는 모두 남긴다
         running = self.status()
         if running.get('status') == 'running':
             raise ValueError('업데이트가 이미 진행 중입니다')
 
+        def refuse(reason: str) -> None:
+            self._record_refusal(reason)
+            raise ValueError(reason)
+
+        if blocked_reason:
+            refuse(blocked_reason)
+
         state = self.check()
         if state['blocked_reason']:
-            raise ValueError(state['blocked_reason'])
+            refuse(state['blocked_reason'])
         if not state['fetched']:
-            raise ValueError(state['message'] or '원격을 확인하지 못했습니다')
+            refuse(state['message'] or '원격을 확인하지 못했습니다')
         if state['up_to_date']:
-            raise ValueError('이미 최신입니다')
+            refuse('이미 최신입니다')
 
         operation_id = f'update-{int(time.time())}'
         script = (
@@ -178,7 +210,7 @@ class WorkspaceUpdate:
             / 'src/motion_web/web_bridge/deploy/update_workspace.sh'
         )
         if not script.is_file():
-            raise ValueError(f'업데이트 스크립트가 없습니다 · {script}')
+            refuse(f'업데이트 스크립트가 없습니다 · {script}')
 
         # 화면이 곧바로 "시작했다"를 볼 수 있어야 한다 · 스크립트가 첫 상태를
         # 쓰기까지의 짧은 사이에 화면이 "가만히 있다"로 보이면 사용자가 다시

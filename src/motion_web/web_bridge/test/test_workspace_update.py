@@ -326,3 +326,45 @@ def test_the_script_runs_from_a_copy_of_itself():
     """
     assert 'exec /bin/bash "${SELF_COPY}"' in SCRIPT
     assert 'MOTION_UPDATE_REEXEC' in SCRIPT
+
+
+# --------------------------------------------------------------------- #
+# 시작하지 못한 것도 기록에 남는다
+# --------------------------------------------------------------------- #
+
+def test_a_refused_start_is_written_down(updater, tmp_path):
+    """전에는 눌러서 거절당하면 아무 데도 남지 않았다 · 화면 경고를 놓치면
+    "눌러도 아무 일이 없다" 로만 보이고, 서버 기록에도 한 줄이 없었다 ·
+    왜 그런지 알 방법이 없다."""
+    _workspace_with_script(tmp_path)
+    instance = updater(FakeRun({f'rev-list --count HEAD..origin/{BRANCH}': '0'}))
+
+    with pytest.raises(ValueError, match='최신'):
+        instance.start()
+
+    status = instance.status()
+    assert status['status'] == 'failure'
+    assert '이미 최신입니다' in status['message']
+    assert '시작하지 못함' in status['log_tail']
+
+
+def test_a_reason_from_outside_is_written_down_too(updater, tmp_path):
+    _workspace_with_script(tmp_path)
+    instance = updater(FakeRun())
+
+    with pytest.raises(ValueError):
+        instance.start(blocked_reason='모션 재생 중에는 업데이트할 수 없습니다')
+
+    assert '모션 재생 중' in instance.status()['message']
+
+
+def test_a_running_job_is_not_overwritten_by_a_refusal(updater, tmp_path):
+    """도는 중인 작업의 기록을 거절이 덮으면, 진행 중이던 것이 사라진다."""
+    _workspace_with_script(tmp_path)
+    instance = updater(FakeRun())
+    instance._write_state({'status': 'running', 'phase': 'building'})
+
+    with pytest.raises(ValueError, match='이미 진행'):
+        instance.start()
+
+    assert instance.status()['status'] == 'running'
