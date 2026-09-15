@@ -1,0 +1,21 @@
+[Unit]
+# 웹에서 쓰는 터미널 · §6-99
+#
+# 코드를 받아 다시 빌드하는 일은 여기서 한다 ·
+#
+#     git pull && bash src/motion_web/install.sh
+#
+# 화면에 진행 상황을 그리는 기능을 따로 만들지 않는다 · 만들어 봤더니
+# **그 화면이 올라가 있는 서버를 업데이트가 멈춘다** · 터미널은 별개 서비스라
+# 제어·모터 서비스가 멈췄다 켜져도 끊기지 않는다.
+Description=Motion Web Terminal (ttyd)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/ttyd -p 8081 -w @WORKSPACE@ /bin/bash -l
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

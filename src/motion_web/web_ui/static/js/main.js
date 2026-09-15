@@ -5,9 +5,6 @@ import {
   requestEmergencySafetyStop,
   requestMotionSafetyStop,
   restartManagedProgram,
-  fetchWorkspaceUpdateCheck,
-  fetchWorkspaceUpdateStatus,
-  startWorkspaceUpdate,
   restartMotorControlSystem,
   setMonitoringEnabled,
   stopMotionRun,
@@ -28,7 +25,6 @@ import { createOperationProgressManager } from './operation_progress.js';
 import { installDialogManager } from './ui_dialogs.js';
 import { StatusSocket } from './socket.js';
 import { trackedMotorRestartState } from './restart_tracking.js';
-import { createWorkspaceUpdateController } from './workspace_update.js';
 import {
   canChangeProjectInWorkspace,
   createWorkspaceRouteState,
@@ -159,6 +155,10 @@ function renderWorkspacePanel() {
   }
   if (activePanel === 'btop' && el.btopIframe && !el.btopIframe.src) {
     el.btopIframe.src = `http://${window.location.hostname}:8080/`;
+  }
+  // 터미널은 **별개 서비스**다 · 빌드가 제어 서비스를 멈춰도 끊기지 않는다
+  if (activePanel === 'terminal' && el.terminalIframe && !el.terminalIframe.src) {
+    el.terminalIframe.src = `http://${window.location.hostname}:8081/`;
   }
   const motionTab = motionTabForWorkspace(activeWorkspace);
   if (motionTab) {
@@ -1670,43 +1670,3 @@ async function initGlobalSystemVersion() {
   }
 }
 initGlobalSystemVersion();
-
-// 소프트웨어 업데이트 · §6-97 · 화면 규칙은 `workspace_update.js` 에 있다
-const workspaceUpdate = createWorkspaceUpdateController({
-  elements: {
-    summary: el.updateSummary,
-    current: el.updateCurrent,
-    target: el.updateTarget,
-    phase: el.updatePhase,
-    checkButton: el.updateCheckButton,
-    startButton: el.updateStartButton,
-    log: el.updateLog,
-    logCaption: el.updateLogCaption,
-  },
-  api: {
-    check: fetchWorkspaceUpdateCheck,
-    status: fetchWorkspaceUpdateStatus,
-    start: startWorkspaceUpdate,
-  },
-  confirm: (message, options) => appDialogs.confirm(message, options),
-  alert: (message) => window.alert(message),
-  onFinished: () => initGlobalSystemVersion(),
-});
-
-if (el.updateCheckButton) {
-  el.updateCheckButton.addEventListener('click', () => {
-    workspaceUpdate.refresh();
-  });
-}
-if (el.updateStartButton) {
-  el.updateStartButton.addEventListener('click', () => {
-    workspaceUpdate.start();
-  });
-}
-// 빌드가 끝나면 저절로 새로 불러오지만, 기다리지 않고 바로 볼 수도 있어야 한다
-if (el.updateReloadButton) {
-  el.updateReloadButton.addEventListener('click', () => {
-    window.location.reload();
-  });
-}
-workspaceUpdate.init();

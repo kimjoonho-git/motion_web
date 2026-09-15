@@ -599,17 +599,3 @@
   margin-top: 12px;
   resize: vertical;
 }
-
-/* 업데이트 기록 · 길어지면 안에서만 스크롤한다 */
-.system-update-log {
-  margin: 8px 0 0;
-  padding: 8px 10px;
-  max-height: 220px;
-  overflow: auto;
-  white-space: pre-wrap;
-  word-break: break-all;
-  font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  background: rgba(0, 0, 0, 0.04);
-  border-radius: 6px;
-}
-

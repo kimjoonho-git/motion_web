@@ -118,15 +118,6 @@ export const saveServoAlarmPolicy = (overrides) => request('PUT', '/api/servo-al
 
 export const restartManagedProgram = () => request('POST', '/api/system/program/restart');
 
-export const fetchWorkspaceUpdateCheck = () =>
-  request('GET', '/api/system/update/check', { timeoutMs: 20000 });
-
-export const fetchWorkspaceUpdateStatus = () =>
-  request('GET', '/api/system/update/status', { timeoutMs: 5000 });
-
-export const startWorkspaceUpdate = () =>
-  request('POST', '/api/system/update/start', { timeoutMs: 30000 });
-
 export const createDesktopShortcut = () => request('POST', '/api/system/desktop-shortcut');
 
 export const restartMotorControlSystem = () => request('POST', '/api/system/motor-control/restart');

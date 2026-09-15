@@ -16,6 +16,8 @@ USER_UNIT_DIR="${HOME}/.config/systemd/user"
 CONTROL_UNIT_FILE="${USER_UNIT_DIR}/motion-control.service"
 MOTOR_UNIT_FILE="${USER_UNIT_DIR}/motion-motor.service"
 COORDINATION_UNIT_FILE="${USER_UNIT_DIR}/motion-coordination.service"
+TERMINAL_TEMPLATE="${SCRIPT_DIR}/motion-terminal.service.in"
+TERMINAL_UNIT_FILE="${USER_UNIT_DIR}/motion-terminal.service"
 INSTALL_TMP=""
 SERVICES_STOPPED=false
 INSTALL_COMPLETE=false
@@ -175,8 +177,23 @@ mv "${INSTALL_TMP}/motion-control.service" "${CONTROL_UNIT_FILE}"
 mv "${INSTALL_TMP}/motion-motor.service" "${MOTOR_UNIT_FILE}"
 mv "${INSTALL_TMP}/motion-coordination.service" "${COORDINATION_UNIT_FILE}"
 
+# 웹 터미널 · ttyd 가 있을 때만 · 없는 PC 에서도 설치는 끝나야 한다
+if [[ -x /usr/bin/ttyd ]]; then
+  sed -e "s|@WORKSPACE@|${WORKSPACE//&/\\&}|g" \
+    "${TERMINAL_TEMPLATE}" > "${INSTALL_TMP}/motion-terminal.service"
+  chmod 0644 "${INSTALL_TMP}/motion-terminal.service"
+  systemctl --user stop motion-terminal.service 2>/dev/null || true
+  mv "${INSTALL_TMP}/motion-terminal.service" "${TERMINAL_UNIT_FILE}"
+else
+  echo "ttyd 가 없어 웹 터미널은 건너뜁니다 · sudo apt install ttyd" >&2
+fi
+
 systemctl --user daemon-reload
 systemctl --user enable motion-motor.service motion-control.service motion-coordination.service
+if [[ -f "${TERMINAL_UNIT_FILE}" ]]; then
+  systemctl --user enable motion-terminal.service
+  systemctl --user start motion-terminal.service
+fi
 if [[ -n "${MOTOR_CONFIG}" ]]; then
   systemctl --user start motion-motor.service
 else
