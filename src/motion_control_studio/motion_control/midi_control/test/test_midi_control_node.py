@@ -102,6 +102,8 @@ def test_motion_value_topic_cache_accepts_only_current_project_generation():
 
 def test_rec_mode_sends_source_motion_text_and_off_mode_keeps_14bit_text(monkeypatch):
     node = MidiControlNode.__new__(MidiControlNode)
+    # 장치가 이 PC 것일 때의 이야기다 · §6-94
+    node._device_connected = True
     node._pickup = PickupPolicy(node)
     node._faders = FaderStateMachine(node)
     node._state_publisher = CapturePublisher()
@@ -169,6 +171,8 @@ def test_midi_node_rejects_previous_project_generation():
 
 
 def add_motor_control_state(node):
+    # 모터를 움직이려면 장치가 이 PC 것이어야 한다 · §6-94
+    node._device_connected = True
     node._execution_context = {'context_id': 'test-context'}
     node._execution_context_ready = True
     node._studio_select_locked = False
@@ -430,6 +434,8 @@ def test_repeated_same_project_context_does_not_release_select(tmp_path, monkeyp
 
 def test_pending_motor_targets_are_published_as_one_batch():
     node = MidiControlNode.__new__(MidiControlNode)
+    # 장치가 이 PC 것일 때의 이야기다 · §6-94
+    node._device_connected = True
     node._pickup = PickupPolicy(node)
     node._faders = FaderStateMachine(node)
     node._lock = threading.Lock()
@@ -504,6 +510,8 @@ def test_only_supervisor_approved_motion_values_become_recording_source():
 
 def test_linked_targets_mark_the_channel_as_atomic():
     node = MidiControlNode.__new__(MidiControlNode)
+    # 장치가 이 PC 것일 때의 이야기다 · §6-94
+    node._device_connected = True
     node._pickup = PickupPolicy(node)
     node._faders = FaderStateMachine(node)
     node._lock = threading.Lock()
@@ -713,6 +721,8 @@ def test_pickup_rejects_stale_feedback_and_detects_crossing():
 
 def parking_node():
     node = MidiControlNode.__new__(MidiControlNode)
+    # 장치가 이 PC 것이어야 페이더·모터를 건드린다 · §6-94
+    node._device_connected = True
     node._pickup = PickupPolicy(node)
     node._faders = FaderStateMachine(node)
     node._control_enabled = [False] * MIDI_CHANNEL_COUNT
@@ -2272,3 +2282,114 @@ def test_reset_live_values_keeps_bank_settings_but_clears_runtime_state():
     assert node._final_output_values == [0.0] * MIDI_CHANNEL_COUNT
     assert node._faders.pending_positions == [0] * MIDI_CHANNEL_COUNT
     assert node._previous_dial == node._dial
+
+
+
+def _surface_node(*, device_connected):
+    """표면 값이 들어오는 PC · 장치가 내 것인지만 다르다 · §6-94
+
+    물리 장치는 피시1 의 USB 에 그대로 꽂혀 있다 · 그래서 넘긴 뒤에도
+    `xtouch/midi` 는 200Hz 로 계속 흐른다 · "넘겼다" 는 사실만으로 값이
+    멎지는 않는다 · 값을 받고도 **안 움직이는 것은 이 노드가 정해야 한다**.
+    """
+    node = MidiControlNode.__new__(MidiControlNode)
+    node._pickup = PickupPolicy(node)
+    node._faders = FaderStateMachine(node)
+    node._lock = threading.Lock()
+    node._banks = MidiBankManager()
+    node._raw_channels = [0] * MIDI_CHANNEL_COUNT
+    node._observed_raw_channels = [0] * MIDI_CHANNEL_COUNT
+    node._channels = [0.0] * MIDI_CHANNEL_COUNT
+    node._filter_stage1 = [0.0] * MIDI_CHANNEL_COUNT
+    node._filter_stage2 = [0.0] * MIDI_CHANNEL_COUNT
+    node._filter_last_at = [None] * MIDI_CHANNEL_COUNT
+    node._touch = [False] * MIDI_CHANNEL_COUNT
+    node._dial = [0] * MIDI_CHANNEL_COUNT
+    node._btn0 = [False] * MIDI_CHANNEL_COUNT
+    node._btn1 = [False] * MIDI_CHANNEL_COUNT
+    node._btn2 = [False] * MIDI_CHANNEL_COUNT
+    node._btn3 = [False] * MIDI_CHANNEL_COUNT
+    node._previous_btn0 = [False] * MIDI_CHANNEL_COUNT
+    node._previous_btn3 = [False] * MIDI_CHANNEL_COUNT
+    node._previous_dial = [0] * MIDI_CHANNEL_COUNT
+    node._confirmed = [False] * MIDI_CHANNEL_COUNT
+    node._control_enabled = [False] * MIDI_CHANNEL_COUNT
+    node._final_output_values = [0.0] * MIDI_CHANNEL_COUNT
+    node._faders.pending_positions = [None] * MIDI_CHANNEL_COUNT
+    node._motor_angle_mode = [False] * MIDI_CHANNEL_COUNT
+    node._bank_file_dirty = False
+    node._last_group_motor_targets = [{} for _ in range(MIDI_CHANNEL_COUNT)]
+    add_motor_control_state(node)
+    node._latest_motion_state = {'motors': [
+        {'controller_index': 2, 'position_deg': 0.0, 'lower': -180.0, 'upper': 180.0},
+        {'controller_index': 3, 'position_deg': 0.0, 'lower': -180.0, 'upper': 180.0},
+    ]}
+    row = {
+        'motion_lower_deg': -20,
+        'motion_upper_deg': 20,
+        'reference_position_deg': 0,
+        'gear_ratio': 1,
+        'scale': 1,
+    }
+    axes = {'1-1': 2, '1-2': 3}
+    node._axis_registry = SimpleNamespace(
+        motor_axis=lambda motion_id: axes.get(motion_id),
+        mapping=lambda motion_id: row if motion_id in axes else None,
+        file_id='selected.yaml',
+    )
+    node._device_connected = bool(device_connected)
+    return node
+
+
+def _surface_input(*, select=False, touch=False, value=0):
+    return SimpleNamespace(
+        channel=[value] + [0] * (MIDI_CHANNEL_COUNT - 1),
+        touch=[touch] + [False] * (MIDI_CHANNEL_COUNT - 1),
+        dial=[0] * MIDI_CHANNEL_COUNT,
+        btn0=[False] * MIDI_CHANNEL_COUNT,
+        btn1=[False] * MIDI_CHANNEL_COUNT,
+        btn2=[False] * MIDI_CHANNEL_COUNT,
+        btn3=[select] + [False] * (MIDI_CHANNEL_COUNT - 1),
+    )
+
+
+def _drive_one_fader(node):
+    """SELECT 를 켜고 페이더를 끝까지 민다 · 모터가 움직여야 하는 조작."""
+    node._midi_callback(_surface_input(select=True))
+    node._midi_callback(_surface_input())
+    node._faders.awaiting_sync[0] = False
+    node._midi_callback(_surface_input(touch=True, value=round(MIDI_VALUE_MAX / 2)))
+    node._midi_callback(_surface_input(touch=True, value=MIDI_VALUE_MAX))
+
+
+def test_the_surface_moves_motors_while_the_device_is_ours():
+    """장치가 내 것이면 움직인다 · 아래 검사가 헛돌지 않는다는 증거."""
+    node = _surface_node(device_connected=True)
+
+    _drive_one_fader(node)
+
+    assert node._control_enabled[0] is True, 'SELECT 가 안 켜졌다 · 검사가 헛돈다'
+    assert node._motor_request_publisher.messages, (
+        '장치가 내 것인데 모터 명령이 안 나갔다 · 검사가 헛돈다'
+    )
+
+
+def test_a_handed_over_surface_never_moves_this_pcs_motors():
+    """넘긴 PC 는 표면 값을 받아도 모터를 건드리지 않는다 · §6-94
+
+    한 페이더로 **두 PC 의 모터가 같이 움직이던** 문제 · 모아 보내는 길만
+    막고, 미디 입력이 **곧바로 내보내는 길**을 열어 두어서 그대로 나갔다.
+    """
+    node = _surface_node(device_connected=False)
+
+    _drive_one_fader(node)
+
+    assert node._motor_request_publisher.messages == [], (
+        '장치를 넘겼는데 이 PC 가 모터 명령을 내보냈다'
+    )
+    assert node._control_enabled == [False] * MIDI_CHANNEL_COUNT, (
+        '장치를 넘겼는데 이 PC 에서 SELECT 가 켜졌다'
+    )
+    assert node._pending_motor_requests == {}, (
+        '쌓아 두면 되찾는 순간 옛 값이 한꺼번에 나간다'
+    )

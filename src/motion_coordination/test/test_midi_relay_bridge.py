@@ -445,3 +445,67 @@ def test_the_relay_does_not_believe_its_own_announcement(node, clock):
 
     assert bridge.rules.holds_device, '자기 알림에 속아 장치를 놓았다'
     assert bridge.rules.should_send_midi, '중계가 멈췄다'
+
+
+def _group_connection_states(node):
+    """그룹으로 나간 장치 알림만 골라 본다."""
+    return [
+        (message.target_pc_id, json.loads(message.payload)['connected'])
+        for message in node.sent(topics.GROUP_MIDI_FEEDBACK)
+        if message.channel == 'connection_state'
+    ]
+
+
+def test_the_target_is_told_it_now_holds_the_device(node, clock):
+    """받는 PC 가 모르면 모터도 SELECT 도 건드리지 않는다 · §6-94"""
+    bridge = _bridge(node, clock)
+    _connect(node)
+
+    bridge.set_target('pc2')
+
+    assert ('pc2', True) in _group_connection_states(node), (
+        '넘겨받는 PC 에게 장치를 들었다고 알리지 않았다'
+    )
+
+
+def test_the_target_is_told_when_the_device_goes_back(node, clock):
+    """되돌릴 때 알리지 않으면 그 PC 는 장치를 **놓지 않는다**."""
+    bridge = _bridge(node, clock)
+    _connect(node)
+    bridge.set_target('pc2')
+
+    bridge.set_target('')
+
+    assert _group_connection_states(node)[-1] == ('pc2', False), (
+        '되돌렸는데 쓰던 PC 가 아직 장치를 들고 있다고 믿는다'
+    )
+
+
+def test_unplugging_tells_the_target_too(node, clock):
+    """USB 를 뽑아도 쓰던 PC 는 그 사실을 알아야 한다."""
+    bridge = _bridge(node, clock)
+    _connect(node)
+    bridge.set_target('pc2')
+
+    _connect(node, connected=False)
+
+    assert _group_connection_states(node)[-1] == ('pc2', False), (
+        '장치가 빠졌는데 쓰던 PC 에게 알리지 않았다'
+    )
+
+
+def test_the_relays_own_announcement_never_leaves_this_pc(node, clock):
+    """이 PC 가 장치를 놓는다는 말을 그대로 내보내면 받는 PC 가 거꾸로 듣는다."""
+    bridge = _bridge(node, clock)
+    _connect(node)
+    bridge.set_target('pc2')
+
+    # 알림이 로컬 통로를 타고 구독자 모두에게 돌아온다 (실제 ROS 와 같음)
+    node.deliver(
+        topics.XTOUCH_CONNECTION_STATE,
+        node.sent(topics.XTOUCH_CONNECTION_STATE)[-1],
+    )
+
+    assert ('pc2', False) not in _group_connection_states(node), (
+        '이 PC 가 놓는다는 말이 받는 PC 에게 갔다 · 그 PC 는 아무것도 못 움직인다'
+    )

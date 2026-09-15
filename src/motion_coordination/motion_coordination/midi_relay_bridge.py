@@ -79,6 +79,19 @@ def _midi_qos() -> QoSProfile:
     return QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
 
 
+def _is_relay_announcement(data: Any) -> bool:
+    """중계가 낸 장치 알림인가 · §6-94
+
+    장치 브리지가 낸 것과 통로가 같아서 내용으로 가른다 · 중계가 낸 것을 다시
+    그룹으로 내보내면 넘겨받는 PC 가 거꾸로 된 말을 듣는다.
+    """
+    try:
+        payload = json.loads(str(data or ''))
+    except (json.JSONDecodeError, TypeError):
+        return False
+    return isinstance(payload, dict) and bool(payload.get('relay'))
+
+
 def _connection_state_qos() -> QoSProfile:
     """장치 연결 상태 · 늦게 붙어도 마지막 값을 받아야 한다."""
     return QoSProfile(
@@ -179,6 +192,7 @@ class MidiRelayBridge:
                 raise ValueError(
                     'MIDI 장치가 이 PC 에 없습니다 · 장치가 꽂힌 PC 에서 정하세요'
                 )
+        previous = self.rules.target_pc_id
         self.rules.update(target_pc_id=wanted)
         # 넘기면 이 PC 는 장치를 놓고, 되돌리면 다시 든다
         if self._device_connected:
@@ -186,6 +200,15 @@ class MidiRelayBridge:
                 not self.rules.relaying,
                 f'MIDI 를 {wanted} 가 쓰는 중입니다' if self.rules.relaying else '',
             )
+            # 놓은 장치는 **누군가 들어야 한다** · 받는 PC 에게 같은 말을 한다 ·
+            # 안 알리면 그 PC 의 `midi_control` 은 장치가 없다고 믿어 모터도
+            # SELECT 도 건드리지 않고, 되돌린 뒤에는 반대로 **놓지 않는다**
+            if previous and previous != wanted:
+                self._announce_to_target(previous, False, '')
+            if wanted:
+                self._announce_to_target(
+                    wanted, True, f'{self.rules.pc_id} 의 MIDI 를 씁니다',
+                )
         # 대상이 바뀌면 번호도 새로 센다 · 안 그러면 새 흐름의 첫 값이
         # 지난 흐름의 큰 번호에 막혀 통째로 버려진다
         self._midi_gate.reset()
@@ -221,7 +244,10 @@ class MidiRelayBridge:
         if not connected:
             # 장치가 빠졌으면 중계도 끝이다 · 대상만 남겨 두면 다시 꽂는
             # 순간 아무도 누르지 않았는데 남의 PC 로 흘러 나간다
+            previous = self.rules.target_pc_id
             self.rules.update(target_pc_id='')
+            if previous and previous != self.rules.pc_id:
+                self._announce_to_target(previous, False, '')
         self._refresh_device_owner()
         self._sync_local_midi_subscription()
 
@@ -242,6 +268,35 @@ class MidiRelayBridge:
             ensure_ascii=False,
         )
         self._local_channel_pub['connection_state'].publish(String(data=payload))
+
+    def _announce_to_target(
+        self, target: str, connected: bool, message: str,
+    ) -> None:
+        """MIDI 를 쓰는 PC 에게 장치 상태를 알린다 · §6-94
+
+        장치 브리지가 쓰는 것과 **같은 통로·같은 모양**이다 · 받는 PC 의
+        `midi_control` 은 이것을 보고 장치를 들었다/놓았다를 안다 · 장치를
+        놓으면 그 PC 도 SELECT 를 끄고 페이더를 0 으로 되돌린다.
+
+        `relay` 표시를 남긴다 · 받는 PC 의 **중계**는 이것을 보고 "내 USB 에
+        장치가 꽂혔다" 고 믿으면 안 된다 · 장치는 여전히 이쪽에 있다.
+        """
+        if not target:
+            return
+        self._channel_sequence += 1
+        out = GroupMidiChannel()
+        out.group_id = self.rules.group_id
+        out.source_pc_id = self.rules.pc_id
+        out.target_pc_id = str(target)
+        out.sequence = self._channel_sequence
+        out.sent_at = self._now()
+        out.channel = 'connection_state'
+        out.payload = json.dumps(
+            {'connected': bool(connected), 'message': message, 'relay': True},
+            ensure_ascii=False,
+        )
+        self._group_channel_pub.publish(out)
+        self._counters['channel_sent'] += 1
 
     def _refresh_device_owner(self) -> None:
         """장치 주인은 하나다 · 내 장치가 붙어 있으면 나, 아니면 나에게 값을
@@ -319,6 +374,11 @@ class MidiRelayBridge:
         """
         if channel in DEVICE_CHANNELS:
             if not self.rules.should_send_midi:
+                return
+            if _is_relay_announcement(message.data):
+                # 내가 낸 알림이다 · 이대로 내보내면 넘겨받는 PC 가 "장치가
+                # 없다" 는 말을 듣는다 · 받는 PC 에게 갈 말은 `set_target` 이
+                # 따로 보낸다
                 return
             target = self.rules.target_pc_id
         else:

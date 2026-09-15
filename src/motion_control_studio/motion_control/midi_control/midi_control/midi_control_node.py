@@ -416,6 +416,19 @@ class MidiControlNode(Node):
         }
 
     def _midi_callback(self, msg: Midi) -> None:
+        # 장치가 이 PC 것이 아니면 **표면 값도 이 PC 것이 아니다** · §6-94
+        #
+        # 물리 장치는 넘긴 뒤에도 이 PC 의 USB 에 꽂혀 있다 · `xtouch/midi` 는
+        # 200Hz 로 계속 흐른다 · "넘겼다" 는 사실만으로 값이 멎지 않는다.
+        #
+        # 그래서 **여기서 끊는다** · 내보내는 자리마다 막으면 한 곳을 빼먹는다 ·
+        # 실제로 모아 보내는 길만 막고 이 콜백이 곧바로 내보내는 길을 열어 둬서,
+        # 페이더 하나에 두 PC 의 모터가 같이 움직였다.
+        #
+        # 되찾으면 `_connection_state_callback` 이 상태를 씻고 다시 연다.
+        with self._lock:
+            if not self._device_connected:
+                return
         now = time.monotonic()
         motor_request_payload = None
         with self._lock:
