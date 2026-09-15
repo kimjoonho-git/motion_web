@@ -23,7 +23,10 @@ function fixture({ check, status, start, confirmed = true } = {}) {
     checkButton: element(), startButton: element(), log: element(),
     logCaption: element(),
   };
-  const calls = { start: 0, finished: 0, alerts: [], intervals: [], cleared: 0 };
+  const calls = {
+    start: 0, finished: 0, alerts: [], intervals: [], cleared: 0,
+    reloaded: 0, timeouts: [],
+  };
   const controller = createWorkspaceUpdateController({
     elements,
     api: {
@@ -37,8 +40,10 @@ function fixture({ check, status, start, confirmed = true } = {}) {
     timers: {
       setInterval: (fn) => { calls.intervals.push(fn); return calls.intervals.length; },
       clearInterval: () => { calls.cleared += 1; },
+      setTimeout: (fn) => { calls.timeouts.push(fn); return calls.timeouts.length; },
     },
     now: () => 1_000_000_000_000,
+    reload: () => { calls.reloaded += 1; },
   });
   return { controller, elements, calls };
 }
@@ -107,8 +112,8 @@ test('응답이 없는 구간은 오류가 아니라 재시작 중이다', async
 
   await controller.poll();
 
-  assert.equal(elements.phase.textContent, '서비스 재시작 중');
-  assert.equal(elements.summary.textContent, '웹이 다시 뜨기를 기다립니다');
+  assert.match(elements.phase.textContent, /서비스 재시작 중/);
+  assert.match(elements.summary.textContent, /빌드 중입니다/);
   assert.equal(calls.cleared, 0, '폴링을 멈추면 돌아온 뒤를 못 본다');
 });
 
@@ -275,4 +280,57 @@ test('요청이 거절되면 지켜보기를 멈춘다', async () => {
 
   assert.ok(calls.cleared > 0, '거절됐는데 계속 물어본다');
   assert.deepEqual(calls.alerts, ['모터 동작 중입니다']);
+});
+
+
+// --------------------------------------------------------------------- //
+// 기다리는 동안과 끝난 뒤 · §6-97
+// --------------------------------------------------------------------- //
+
+test('웹이 멈춘 구간에는 경과 시간을 보여 준다', () => {
+  /** 빌드 동안에는 웹 서버 자신이 멈춰 화면이 아무것도 못 받는다 ·
+   * 아무 표시가 없으면 무기한 대기로 보인다. */
+  const { controller, elements } = fixture();
+
+  controller.renderProgress({ status: 'running' }, { disconnected: true });
+
+  assert.match(elements.phase.textContent, /서비스 재시작 중/);
+  assert.match(elements.summary.textContent, /빌드 중입니다 · 웹이 다시 뜨면/);
+});
+
+test('끝나면 끝났다고 말하고 화면을 새로 불러온다', async () => {
+  let finished = false;
+  const { controller, elements, calls } = fixture({
+    status: async () => (finished
+      ? { status: 'success', phase: 'done', message: '업데이트 완료' }
+      : { status: 'running', phase: 'building' }),
+    check: async () => ({ fetched: true, up_to_date: true, behind: 0 }),
+  });
+
+  await controller.start();
+  finished = true;
+  await calls.intervals[0]();
+
+  assert.match(elements.summary.textContent, /업데이트 완료/);
+  assert.match(elements.summary.textContent, /새로 불러옵니다/);
+  assert.equal(calls.timeouts.length, 1, '새로 불러오기를 걸지 않았다');
+  calls.timeouts[0]();
+  assert.equal(calls.reloaded, 1);
+});
+
+test('완료 문구가 "최신입니다" 에 덮이지 않는다', async () => {
+  /** 확인을 나중에 하면 완료 문구가 덮여 사용자는 끝난 줄 모른다. */
+  let finished = false;
+  const { controller, elements } = fixture({
+    status: async () => (finished
+      ? { status: 'success', phase: 'done' }
+      : { status: 'running', phase: 'building' }),
+    check: async () => ({ fetched: true, up_to_date: true, behind: 0 }),
+  });
+
+  await controller.start();
+  finished = true;
+  await controller.poll();
+
+  assert.notEqual(elements.summary.textContent, '최신입니다');
 });

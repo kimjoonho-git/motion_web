@@ -32,6 +32,8 @@ const UPDATE_CONFIRM_MESSAGE = '최신 main 을 받아 다시 빌드합니다.\n
   + '모든 모션이 정지됐고 장비가 안전한지 확인했습니까?';
 
 const POLL_INTERVAL_MS = 2000;
+//: 끝난 것을 읽을 시간은 주고, 새 화면으로 바꾼다
+const RELOAD_DELAY_MS = 4000;
 
 function shortCommit(value) {
   return String(value || '').slice(0, 7) || '-';
@@ -39,6 +41,13 @@ function shortCommit(value) {
 
 function setText(element, value) {
   if (element) element.textContent = value;
+}
+
+/** 얼마나 지났나 · `1분 12초` */
+function elapsedText(seconds) {
+  const whole = Math.max(0, Math.round(seconds));
+  if (whole < 60) return `${whole}초`;
+  return `${Math.floor(whole / 60)}분 ${String(whole % 60).padStart(2, '0')}초`;
 }
 
 /** 언제 적힌 상태인가 · 옛 기록을 지금 것으로 오해하지 않게 한다. */
@@ -57,10 +66,14 @@ export function createWorkspaceUpdateController({
   confirm,
   alert,
   onFinished = () => {},
-  timers = { setInterval, clearInterval },
+  timers = { setInterval, clearInterval, setTimeout },
   now = () => Date.now(),
+  reload = () => window.location.reload(),
 } = {}) {
   let pollTimer = null;
+  //: 빌드 동안에는 웹 서버 자신이 멈춰 화면이 아무것도 못 받는다 · 그 구간은
+  //: 누른 시각에서 흐른 시간으로만 셀 수 있다 · 없으면 "무기한 대기" 로 보인다
+  let startedAt = 0;
 
   function renderCheck(check = {}) {
     const blocked = String(check.blocked_reason || '');
@@ -88,16 +101,21 @@ export function createWorkspaceUpdateController({
     const running = state === 'running';
     const label = UPDATE_PHASE_LABEL[String(status.phase || '')]
       || String(status.phase || '') || '-';
+    const waiting = startedAt
+      ? ` · ${elapsedText(now() / 1000 - startedAt)} 경과`
+      : '';
     setText(
       elements.phase,
       disconnected
-        ? '서비스 재시작 중'
+        ? `서비스 재시작 중${waiting}`
         : `${label}${ageText(status.updated_at, now())}`,
     );
     if (state !== 'idle') {
       setText(
         elements.summary,
-        disconnected ? '웹이 다시 뜨기를 기다립니다' : String(status.message || ''),
+        disconnected
+          ? '빌드 중입니다 · 웹이 다시 뜨면 저절로 돌아옵니다 (보통 1~3분)'
+          : String(status.message || ''),
       );
       elements.summary?.classList?.toggle('warning-text', state === 'failure');
     }
@@ -136,8 +154,22 @@ export function createWorkspaceUpdateController({
     }
     if (renderProgress(status)) return;
     stop();
+    const finishedIn = startedAt ? elapsedText(now() / 1000 - startedAt) : '';
+    const done = String(status.status || '') === 'success';
+    startedAt = 0;
     onFinished(status);
+    // 확인을 먼저 하고 **그 뒤에** 끝난 것을 적는다 · 순서가 바뀌면 "최신입니다"
+    // 가 완료 문구를 덮어 사용자는 끝난 줄 모른다
     await refresh();
+    if (!done) return;
+    setText(
+      elements.summary,
+      `업데이트 완료${finishedIn ? ` · ${finishedIn} 걸렸습니다` : ''}`
+      + ' · 잠시 뒤 화면을 새로 불러옵니다',
+    );
+    elements.summary?.classList?.toggle('warning-text', false);
+    // 새 화면 코드는 다시 불러와야 뜬다 · 사용자가 F5 를 기억하지 않아도 되게
+    timers.setTimeout(reload, RELOAD_DELAY_MS);
   }
 
   function watch() {
@@ -176,6 +208,7 @@ export function createWorkspaceUpdateController({
     // 물어보므로(fetch) 몇 초 걸릴 수 있다 · 그때까지 기다렸다 지켜보기
     // 시작하면 화면이 "시작하는 중 · 0초 전" 에서 멈춘 것처럼 보인다 ·
     // 실제로 그렇게 보였다.
+    startedAt = now() / 1000;
     watch();
     try {
       await api.start();
