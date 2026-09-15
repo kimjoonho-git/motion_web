@@ -16,7 +16,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/GroupAlarm.msg"
   "msg/GroupSystemInfo.msg"
   "msg/GroupMidi.msg"
-  "msg/GroupMidiFeedback.msg"
+  "msg/GroupMidiChannel.msg"
   "action/MotorScan.action"
   DEPENDENCIES
   midi_msgs builtin_interfaces action_msgs

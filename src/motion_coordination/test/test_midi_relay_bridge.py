@@ -11,7 +11,7 @@ import json
 
 import pytest
 from midi_msgs.msg import Midi
-from motion_coordination_interfaces.msg import GroupMidi, GroupMidiFeedback
+from motion_coordination_interfaces.msg import GroupMidi, GroupMidiChannel
 from std_msgs.msg import String
 
 from motion_common import topics
@@ -270,10 +270,57 @@ def test_a_late_old_value_is_dropped(node, clock):
 
 
 # --------------------------------------------------------------------- #
-# 되돌아가는 페이더 명령 · 물리 페이더는 한 대뿐이다
+# 통로를 그대로 나른다 · 중간에서 판단하지 않는다
 # --------------------------------------------------------------------- #
 
-def test_only_the_target_sends_the_fader_back(node, clock):
+def _channel(channel, payload, source='pc1', target='pc2', group='test1', sequence=1):
+    message = GroupMidiChannel()
+    message.group_id = group
+    message.source_pc_id = source
+    message.target_pc_id = target
+    message.sequence = sequence
+    message.channel = channel
+    message.payload = payload
+    return message
+
+
+def test_the_device_channels_go_with_the_midi(node, clock):
+    """원시 MIDI 만 나르면 받는 PC 는 값이 들어오는데도 "장치가 없다" 고 안다 ·
+    그래서 녹화가 막히고 SELECT 가 이상했다 · USB 선이 나르던 것을 그대로
+    나른다."""
+    bridge = _bridge(node, clock)
+    _connect(node)
+    bridge.set_target('pc2')
+    bridge.tick()
+
+    node.deliver(topics.XTOUCH_CONNECTION_STATE, String(data='{"connected":true}'))
+    node.deliver(topics.XTOUCH_INPUT_STATE, String(data='{"physical_touch":[true]}'))
+
+    sent = node.sent(topics.GROUP_MIDI_FEEDBACK)
+    channels = [message.channel for message in sent]
+    assert 'connection_state' in channels, '장치가 붙었다는 사실이 안 간다'
+    assert 'input_state' in channels, '지금 눌렸다는 사실이 안 간다'
+    assert sent[0].target_pc_id == 'pc2'
+    # 내용은 손대지 않는다
+    assert '{"connected":true}' in [message.payload for message in sent]
+
+
+def test_the_received_channels_are_republished_untouched(node, clock):
+    """받는 PC 가 제 것으로 판단할 수 있게, 온 것을 그대로 내보낸다."""
+    bridge = _bridge(node, clock, pc_id='pc2')
+    node.deliver(topics.GROUP_MIDI, _incoming())
+
+    node.deliver(
+        topics.GROUP_MIDI_FEEDBACK,
+        _channel('connection_state', '{"connected":true}'),
+    )
+
+    local = node.sent(topics.XTOUCH_CONNECTION_STATE)
+    assert [message.data for message in local] == ['{"connected":true}']
+
+
+def test_only_the_target_sends_the_surface_back(node, clock):
+    """물리 장치는 한 대뿐이다 · 대상 PC 하나만 조작을 되돌린다."""
     bridge = _bridge(node, clock, pc_id='pc2')
 
     node.deliver(topics.XTOUCH_FEEDBACK, String(data='{"fader":1}'))
@@ -281,45 +328,34 @@ def test_only_the_target_sends_the_fader_back(node, clock):
 
     node.deliver(topics.GROUP_MIDI, _incoming())
     node.deliver(topics.XTOUCH_FEEDBACK, String(data='{"fader":1}'))
+    node.deliver(topics.XTOUCH_CONNECTION_COMMAND, String(data='{"connect":true}'))
 
     sent = node.sent(topics.GROUP_MIDI_FEEDBACK)
-    assert len(sent) == 1
-    assert sent[0].source_pc_id == 'pc2'
-    assert sent[0].target_pc_id == 'pc1', '장치를 든 PC 로 돌아가야 한다'
-    assert sent[0].payload == '{"fader":1}'
+    assert [message.channel for message in sent] == ['feedback', 'connection_command']
+    assert all(message.target_pc_id == 'pc1' for message in sent), '장치를 든 PC 로'
 
 
-def test_the_device_pc_unwraps_the_returning_fader_command(node, clock):
+def test_the_device_pc_unwraps_the_returning_surface(node, clock):
     bridge = _bridge(node, clock)
     _connect(node)
     bridge.set_target('pc2')
     bridge.tick()
 
-    returning = GroupMidiFeedback()
-    returning.group_id = 'test1'
-    returning.source_pc_id = 'pc2'
-    returning.target_pc_id = 'pc1'
-    returning.sequence = 1
-    returning.payload = '{"fader":3}'
-    node.deliver(topics.GROUP_MIDI_FEEDBACK, returning)
+    node.deliver(
+        topics.GROUP_MIDI_FEEDBACK,
+        _channel('feedback', '{"fader":3}', source='pc2', target='pc1'),
+    )
 
-    assert [message.data for message in node.sent(topics.XTOUCH_FEEDBACK)] == [
-        '{"fader":3}'
-    ]
+    assert [m.data for m in node.sent(topics.XTOUCH_FEEDBACK)] == ['{"fader":3}']
 
 
-def test_a_pc_without_the_device_never_unwraps_feedback(node, clock):
-    """페이더가 없는 PC 가 이것을 풀면 아무 일도 안 일어나거나, 더 나쁘게는
-    제 `midi_control` 이 남의 명령을 자기 것으로 본다."""
+def test_a_pc_without_the_device_never_unwraps_the_surface(node, clock):
     bridge = _bridge(node, clock, pc_id='pc2')
 
-    returning = GroupMidiFeedback()
-    returning.group_id = 'test1'
-    returning.source_pc_id = 'pc3'
-    returning.target_pc_id = 'pc2'
-    returning.sequence = 1
-    returning.payload = '{"fader":3}'
-    node.deliver(topics.GROUP_MIDI_FEEDBACK, returning)
+    node.deliver(
+        topics.GROUP_MIDI_FEEDBACK,
+        _channel('feedback', '{"fader":3}', source='pc3', target='pc2'),
+    )
 
     assert node.sent(topics.XTOUCH_FEEDBACK) == []
 

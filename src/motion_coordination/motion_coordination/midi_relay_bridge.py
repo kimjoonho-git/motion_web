@@ -24,7 +24,7 @@ import time
 from typing import Any, Callable, Dict, Optional
 
 from midi_msgs.msg import Midi
-from motion_coordination_interfaces.msg import GroupMidi, GroupMidiFeedback
+from motion_coordination_interfaces.msg import GroupMidi, GroupMidiChannel
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 
@@ -40,6 +40,34 @@ from .midi_relay import MidiRelayRules, SequenceGate
 #: "기억을 지울 때"만 쓰므로 넉넉히 둔다 · 짧게 잡으면 잠깐 끊길 때마다
 #: 장치 주인이 없어졌다 생겼다 한다.
 REMOTE_STREAM_TIMEOUT_SEC = 1.0
+
+
+#: 장치가 PC 로 보내던 통로 · 장치를 든 PC 가 대상 PC 로 나른다
+#:
+#: **중간에서 판단하지 않는다** · USB 선이 나르던 것을 그대로 나르는 것이
+#: 전부다 · 장치가 붙어 있는지, 지금 눌렸는지, 녹화해도 되는지는 **받는 PC 가**
+#: 제 것으로 정한다 · 전에는 원시 MIDI 만 날라서, 받는 PC 는 값이 들어오는데도
+#: "장치가 없다" 고 알았다 · 그래서 녹화가 막히고 SELECT 가 이상했다.
+DEVICE_CHANNELS = ('input_state', 'connection_state')
+
+#: PC 가 장치로 보내던 통로 · 대상 PC 가 장치를 든 PC 로 되돌린다
+CONTROL_CHANNELS = ('feedback', 'connection_command')
+
+
+def _channel_topic(channel: str) -> str:
+    return {
+        'input_state': topics.XTOUCH_INPUT_STATE,
+        'connection_state': topics.XTOUCH_CONNECTION_STATE,
+        'feedback': topics.XTOUCH_FEEDBACK,
+        'connection_command': topics.XTOUCH_CONNECTION_COMMAND,
+    }[channel]
+
+
+def _channel_qos(channel: str) -> QoSProfile:
+    """그 통로가 원래 쓰던 것과 **같아야** 한다 · 다르면 아무 말 없이 안 간다."""
+    if channel == 'connection_state':
+        return _connection_state_qos()
+    return QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
 
 
 def _midi_qos() -> QoSProfile:
@@ -82,9 +110,8 @@ class MidiRelayBridge:
         self.rules = MidiRelayRules(pc_id)
         self.rules.update(group_id=group_id)
         self._midi_gate = SequenceGate()
-        self._feedback_gate = SequenceGate()
         self._sequence = 0
-        self._feedback_sequence = 0
+        self._channel_sequence = 0
         self._device_connected = False
         self._remote_source_pc_id = ''
         self._remote_seen_at: Optional[float] = None
@@ -93,8 +120,8 @@ class MidiRelayBridge:
             'midi_sent': 0,
             'midi_received': 0,
             'midi_dropped': 0,
-            'feedback_sent': 0,
-            'feedback_received': 0,
+            'channel_sent': 0,
+            'channel_received': 0,
         }
 
         self._group_midi_pub = node.create_publisher(
@@ -103,27 +130,34 @@ class MidiRelayBridge:
         self._local_midi_pub = node.create_publisher(
             Midi, topics.XTOUCH_MIDI, _midi_qos()
         )
-        self._group_feedback_pub = node.create_publisher(
-            GroupMidiFeedback, topics.GROUP_MIDI_FEEDBACK, 10
+        self._group_channel_pub = node.create_publisher(
+            GroupMidiChannel, topics.GROUP_MIDI_FEEDBACK, 10
         )
-        self._local_feedback_pub = node.create_publisher(
-            String, topics.XTOUCH_FEEDBACK, 10
-        )
+        #: 통로마다 이 PC 쪽 발행구 하나 · 받은 것을 그대로 다시 내보낸다
+        self._local_channel_pub = {
+            channel: node.create_publisher(
+                String, _channel_topic(channel), _channel_qos(channel)
+            )
+            for channel in DEVICE_CHANNELS + CONTROL_CHANNELS
+        }
 
         node.create_subscription(
             GroupMidi, topics.GROUP_MIDI, self._on_group_midi, _midi_qos()
         )
         node.create_subscription(
-            GroupMidiFeedback, topics.GROUP_MIDI_FEEDBACK,
-            self._on_group_feedback, 10,
+            GroupMidiChannel, topics.GROUP_MIDI_FEEDBACK,
+            self._on_group_channel, 10,
         )
+        # 이 PC 의 장치가 붙었는지는 여기서만 본다 · 중계할지 정하는 데 쓴다
         node.create_subscription(
             String, topics.XTOUCH_CONNECTION_STATE,
             self._on_connection_state, _connection_state_qos(),
         )
-        node.create_subscription(
-            String, topics.XTOUCH_FEEDBACK, self._on_local_feedback, 10
-        )
+        for channel in DEVICE_CHANNELS + CONTROL_CHANNELS:
+            node.create_subscription(
+                String, _channel_topic(channel),
+                self._forwarder(channel), _channel_qos(channel),
+            )
 
     # ----------------------------------------------------------------- #
     # 대상 선택 · 주인은 장치를 든 PC 하나다
@@ -149,7 +183,6 @@ class MidiRelayBridge:
         # 대상이 바뀌면 번호도 새로 센다 · 안 그러면 새 흐름의 첫 값이
         # 지난 흐름의 큰 번호에 막혀 통째로 버려진다
         self._midi_gate.reset()
-        self._feedback_gate.reset()
         # 구독은 여기서 열지 않는다 · 이 함수는 **로컬 API 스레드**에서 불리고,
         # 구독을 만들고 지우는 일은 노드를 도는 쪽이 해야 한다 · 다음 `tick()`
         # 이 맞춰 준다(0.1초) · 넘겨주는 일에 그 정도 늦음은 보이지 않는다.
@@ -245,30 +278,51 @@ class MidiRelayBridge:
     # 되돌아가는 페이더 명령
     # ----------------------------------------------------------------- #
 
-    def _on_local_feedback(self, message: String) -> None:
-        """물리 페이더는 한 대뿐이다 · **대상 PC 하나만** 되돌린다."""
-        if not self.rules.should_send_feedback:
-            return
-        self._feedback_sequence += 1
-        out = GroupMidiFeedback()
+    def _forwarder(self, channel: str):
+        """이 통로로 들어온 것을 그대로 내보낸다 · 내용은 손대지 않는다."""
+        def forward(message: String) -> None:
+            self._on_local_channel(channel, message)
+        return forward
+
+    def _on_local_channel(self, channel: str, message: String) -> None:
+        """장치 쪽 통로는 장치를 든 PC 가, 조작 쪽 통로는 쓰는 PC 가 보낸다.
+
+        물리 장치는 한 대뿐이다 · **대상 PC 하나만** 조작을 되돌린다.
+        """
+        if channel in DEVICE_CHANNELS:
+            if not self.rules.should_send_midi:
+                return
+            target = self.rules.target_pc_id
+        else:
+            if not self.rules.should_send_feedback:
+                return
+            target = self.rules.device_pc_id
+        self._channel_sequence += 1
+        out = GroupMidiChannel()
         out.group_id = self.rules.group_id
         out.source_pc_id = self.rules.pc_id
-        out.target_pc_id = self.rules.device_pc_id
-        out.sequence = self._feedback_sequence
+        out.target_pc_id = target
+        out.sequence = self._channel_sequence
         out.sent_at = self._now()
+        out.channel = channel
         out.payload = str(message.data or '')
-        self._group_feedback_pub.publish(out)
-        self._counters['feedback_sent'] += 1
+        self._group_channel_pub.publish(out)
+        self._counters['channel_sent'] += 1
 
-    def _on_group_feedback(self, message: GroupMidiFeedback) -> None:
-        if not self.rules.accepts_feedback(message):
+    def _on_group_channel(self, message: GroupMidiChannel) -> None:
+        channel = str(message.channel or '')
+        if channel not in self._local_channel_pub:
             return
-        if not self._feedback_gate.accepts(message.sequence):
+        if channel in DEVICE_CHANNELS:
+            # 장치 쪽 통로는 "내가 쓰기로 된 PC 인가" 로 가른다
+            if not self.rules.accepts_midi(message):
+                return
+        elif not self.rules.accepts_feedback(message):
             return
         out = String()
         out.data = str(message.payload or '')
-        self._local_feedback_pub.publish(out)
-        self._counters['feedback_received'] += 1
+        self._local_channel_pub[channel].publish(out)
+        self._counters['channel_received'] += 1
 
     # ----------------------------------------------------------------- #
     # 시간
@@ -296,7 +350,6 @@ class MidiRelayBridge:
         self._remote_seen_at = None
         self._remote_source_pc_id = ''
         self._midi_gate.reset()
-        self._feedback_gate.reset()
         if not self._device_connected:
             self.rules.update(target_pc_id='')
         self._refresh_device_owner()
