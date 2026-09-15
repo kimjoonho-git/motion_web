@@ -12,7 +12,6 @@ import {
   fetchMotionRunStatus,
   initializeMotionRun,
   saveMotionMapping,
-  startMotionAutomation,
   startMotionRun,
   stopMotionRun,
   stopMotionRunAfterCycle,
@@ -44,13 +43,6 @@ const MOTION_RUN_STAGES = [
   { key: 'completed', label: '모션 완료' },
 ];
 
-function bytesText(value) {
-  const bytes = Number(value);
-  if (!Number.isFinite(bytes)) return '-';
-  if (bytes < 1024) return `${formatInt(bytes)} B`;
-  if (bytes < 1024 * 1024) return `${formatNumber(bytes / 1024, 1)} KB`;
-  return `${formatNumber(bytes / (1024 * 1024), 2)} MB`;
-}
 
 function numericOr(value, fallback) {
   const number = Number(value);
@@ -98,17 +90,27 @@ function peerSummaryText(role = {}) {
 
 export function motionRunTargetView({ role = {}, chosen = 'local' } = {}) {
   const joined = role.joined === true;
+  const isMaster = role.isMaster === true;
   const peerCount = Math.max(1, Number(role.peerCount || 1));
-  const scope = joined && chosen === 'group' ? 'group' : 'local';
+  // **그룹 실행은 마스터만 한다** · §6-100
+  //
+  // 조정 노드가 이미 거부한다("이 PC 는 연동 슬레이브라 그룹 실행을 시작할 수
+  // 없습니다") · 그런데 화면은 참가만 하면 `그룹 전체` 를 보여 줬다 · 골라서
+  // 누른 뒤에야 거부당하니, 슬레이브 앞에 앉은 사람은 무엇이 잘못됐는지
+  // 모른다 · 아예 고를 수 없게 한다.
+  // 실행 화면에는 대상 선택이 없다 · §6-100 · 언제나 이 PC 다
+  const groupSelectable = false;
+  const scope = 'local';
   const group = scope === 'group';
   return {
     scope,
     joined,
+    isMaster,
     peerCount,
-    groupSelectable: joined,
+    groupSelectable,
     // 연동 조작은 연동 화면 하나다 · 실행 화면에는 그리로 가는 길만 둔다
     needsCoordinationSetup: !joined,
-    coordinationLinkLabel: joined ? 'PC 연동 화면 열기' : 'PC 연동 화면에서 참가하기',
+    coordinationLinkLabel: joined ? 'PC 연동 설정 열기' : 'PC 연동 설정에서 참가하기',
     peerSummary: group ? peerSummaryText(role) : '',
     localLabel: '이 PC 만',
     groupLabel: `그룹 ${peerCount}대`,
@@ -430,62 +432,6 @@ function emptyRow(colspan, message) {
   return `<tr><td colspan="${colspan}" class="empty">${displayText(message)}</td></tr>`;
 }
 
-function valueGridHtml(items) {
-  return items
-    .map((item) => (
-      `<div class="motion-summary-item"><span>${displayText(item.label)}</span><strong>${displayText(item.value)}</strong></div>`
-    ))
-    .join('');
-}
-
-function validationHtml(analysis) {
-  if (!analysis || !analysis.format_valid) {
-    return '<div class="empty">해석 가능한 모션 파일을 선택하세요</div>';
-  }
-  const interpolation = analysis.interpolation || {};
-  const rows = [
-    ['파일 형식', analysis.json_valid ? 'JSON' : '헤더 + 대괄호 행'],
-    ['데이터 검사', analysis.valid ? '통과' : '오류 있음'],
-    ['데이터 위치', analysis.source || '-'],
-    ['기준 주기', `${formatNumber(interpolation.period_sec, 3)} s`],
-    ['보간 필요', interpolation.required ? '필요' : '불필요'],
-  ];
-  const issueRows = [
-    ...(analysis.errors || []).map((message) => ['오류', message]),
-    ...(analysis.warnings || []).map((message) => ['주의', message]),
-  ];
-  const tableRows = [...rows, ...issueRows]
-    .map(([label, value]) => `<tr><th>${displayText(label)}</th><td>${displayText(value)}</td></tr>`)
-    .join('');
-  return `<table class="motion-state-table"><tbody>${tableRows}</tbody></table>`;
-}
-
-function motionIdRowsHtml(analysis) {
-  const motionIds = Array.isArray(analysis?.motion_ids) ? analysis.motion_ids : [];
-  if (!motionIds.length) return emptyRow(8, 'motion ID가 없습니다');
-  return motionIds.map((item) => (
-    `<tr>
-      <td>${displayText(item.motion_id)}</td>
-      <td>${formatInt(item.count)}</td>
-      <td>${formatNumber(item.first_value, 3)}</td>
-      <td>${formatNumber(item.last_value, 3)}</td>
-      <td>${formatNumber(item.min_value, 3)}</td>
-      <td>${formatNumber(item.max_value, 3)}</td>
-      <td>${formatNumber(item.first_time_sec, 3)} - ${formatNumber(item.last_time_sec, 3)}</td>
-      <td>${item.requires_interpolation ? '필요' : '불필요'}</td>
-    </tr>`
-  )).join('');
-}
-
-export function motionFileOriginalText(file, analysis) {
-  const content = String(file?.content || file?.content_preview || '');
-  if (content.trim()) return content;
-  const records = Array.isArray(analysis?.preview_records) ? analysis.preview_records : [];
-  if (!records.length) return '원본 데이터가 없습니다';
-  return records
-    .map((record) => `[${formatInt(record.frame)}, ${formatNumber(record.time_sec, 3)}, "${record.motion_id}", ${formatNumber(record.value, 3)}]`)
-    .join('\n');
-}
 
 function drawGraph(canvas, messageEl, analysis, hiddenIds = new Set()) {
   if (!canvas) return;
@@ -601,9 +547,6 @@ export function createMotionDataController({
   let motionRunLastResult = null;
   let motionRunLoading = false;
   let motionRunGraphAnimationId = null;
-  let motionFileGraphFileId = '';
-  let motionFileGraphToggleSignature = '';
-  const motionFileGraphHiddenIds = new Set();
   let motionRunGraphFileId = '';
   let motionRunGraphToggleSignature = '';
   const motionRunGraphHiddenIds = new Set();
@@ -1348,12 +1291,20 @@ export function createMotionDataController({
             <th>진행</th><td>${displayText(Number.isFinite(ratio) ? `${formatNumber(ratio * 100, 1)} %` : '-')}</td>
             <th>경과 / 전체</th><td>${displayText(`${formatNumber(progress.elapsed_sec, 2)} / ${formatNumber(progress.duration_sec, 2)} s`)}</td>
           </tr>
-          <tr><th>초기 위치</th><td colspan="3">${displayText(capabilityText(capabilities.initial_position))}</td></tr>
-          <tr><th>1회 모션</th><td colspan="3">${displayText(capabilityText(capabilities.single_run))}</td></tr>
-          <tr><th>연속 모션</th><td colspan="3">${displayText(continuousText)}</td></tr>
-          <tr><th>범위 제한</th><td colspan="3">${displayText(warnings.length ? warnings.join(' / ') : '제한 적용 없음')}</td></tr>
-          <tr><th>메시지</th><td colspan="3">${displayText(status.message || '-')}</td></tr>
-          <tr><th>갱신</th><td colspan="3">${displayText(timeText(status.updated_at))}</td></tr>
+          <!-- 두 쌍씩 채워 다섯 줄로 · §6-100 · 한 쌍만 쓰고 가로를 비워 두면
+               실행 화면에서 상태표가 그래프보다 높이를 더 먹는다 -->
+          <tr>
+            <th>초기 위치</th><td>${displayText(capabilityText(capabilities.initial_position))}</td>
+            <th>1회 모션</th><td>${displayText(capabilityText(capabilities.single_run))}</td>
+          </tr>
+          <tr>
+            <th>연속 모션</th><td>${displayText(continuousText)}</td>
+            <th>범위 제한</th><td>${displayText(warnings.length ? warnings.join(' / ') : '제한 적용 없음')}</td>
+          </tr>
+          <tr>
+            <th>메시지</th><td>${displayText(status.message || '-')}</td>
+            <th>갱신</th><td>${displayText(timeText(status.updated_at))}</td>
+          </tr>
         </tbody>
       </table>
     `;
@@ -1414,16 +1365,6 @@ export function createMotionDataController({
     el.motionAutomationDwellWrap?.classList.toggle('hidden', !showDwell);
     if (el.motionAutomationDwellSec) {
       el.motionAutomationDwellSec.disabled = busy;
-    }
-    if (el.motionAutomationStartButton) {
-      el.motionAutomationStartButton.disabled = (
-        motionRunLoading || !enabled || armed || !hasFiles || !contextReady
-      );
-    }
-    if (el.motionAutomationReserveButton) {
-      el.motionAutomationReserveButton.disabled = (
-        motionRunLoading || !enabled || !hasFiles || !contextReady
-      );
     }
     if (el.motionAutomationDetail) {
       const fileName = motionRunSelectedMotionFile()?.filename
@@ -1501,7 +1442,7 @@ export function createMotionDataController({
     //
     // 대상과 사유는 순수 함수 둘이 정한다 · 화면 없이 시험할 수 있어야 한다 · §6-98
     const target = motionRunTargetView({
-      role: groupRunRole(), chosen: chosenMotionRunScope(),
+      role: groupRunRole(), chosen: 'local',
     });
     renderMotionRunTarget(target);
     const scope = target.scope;
@@ -1514,12 +1455,8 @@ export function createMotionDataController({
       localReason: contextMessage,
     });
 
-    // 연동 상세는 접어 둔다 · 매번 보는 것은 역할 한 줄이면 충분하다
-    el.motionRunGroupRole?.classList.toggle('hidden', scope !== 'group');
-    el.motionRunGroupDetails?.classList.toggle('hidden', scope !== 'group');
     // 같은 이름의 자동 재생이 둘이었다 · 범위마다 자기 것만 보인다 · §6-66
     el.motionAutomationToggleWrap?.classList.toggle('hidden', scope === 'group');
-    if (scope === 'group') renderMotionRunRole();
     if (el.motionRunScopeGroupHint) {
       const availability = group || groupRunAvailability();
       el.motionRunScopeGroupHint.textContent = availability.ok
@@ -1648,120 +1585,6 @@ export function createMotionDataController({
         </tr>`
       );
     }).join('');
-  }
-
-  function renderMotionFileGraphAxisToggles(file) {
-    if (!el.motionFileGraphAxisToggles) return;
-    const fileId = String(file?.id || '');
-    if (fileId !== motionFileGraphFileId) {
-      motionFileGraphFileId = fileId;
-      motionFileGraphToggleSignature = '';
-      motionFileGraphHiddenIds.clear();
-    }
-    const series = Array.isArray(analysisOf(file)?.graph_series)
-      ? analysisOf(file).graph_series
-      : [];
-    if (!series.length) {
-      if (motionFileGraphToggleSignature !== `${fileId}|empty`) {
-        el.motionFileGraphAxisToggles.innerHTML = '';
-        motionFileGraphToggleSignature = `${fileId}|empty`;
-      }
-      return;
-    }
-    const allVisible = series.every((item) => !motionFileGraphHiddenIds.has(String(item.motion_id)));
-    const noneVisible = series.every((item) => motionFileGraphHiddenIds.has(String(item.motion_id)));
-    const allStateText = allVisible ? '표시' : (noneVisible ? '숨김' : '일부');
-    const signature = `${fileId}|${series.map((item) => {
-      const motionId = String(item.motion_id);
-      return `${motionId}:${motionFileGraphHiddenIds.has(motionId) ? '0' : '1'}`;
-    }).join(',')}`;
-    if (signature === motionFileGraphToggleSignature) return;
-    const allButton = `<button type="button" class="motion-run-graph-toggle ${allVisible ? 'active' : ''}" data-motion-file-graph-all="true" aria-pressed="${allVisible}">전체 · ${allStateText}</button>`;
-    const axisButtons = series.map((item) => {
-      const motionId = String(item.motion_id);
-      const visible = !motionFileGraphHiddenIds.has(motionId);
-      return `<button type="button" class="motion-run-graph-toggle ${visible ? 'active' : ''}" data-motion-file-graph-id="${displayText(motionId)}" aria-pressed="${visible}">${displayText(motionId)} · ${visible ? '표시' : '숨김'}</button>`;
-    }).join('');
-    el.motionFileGraphAxisToggles.innerHTML = `${allButton}${axisButtons}`;
-    motionFileGraphToggleSignature = signature;
-  }
-
-  function renderMotionFileGraph(file) {
-    renderMotionFileGraphAxisToggles(file);
-    drawGraph(
-      el.motionFileGraphCanvas,
-      el.motionFileGraphMessage,
-      analysisOf(file),
-      motionFileGraphHiddenIds,
-    );
-  }
-
-  function renderSelectedFile() {
-    const file = selectedFile;
-    const analysis = analysisOf(file);
-    if (el.deleteMotionFileButton) {
-      el.deleteMotionFileButton.disabled = !file || loading;
-      el.deleteMotionFileButton.title = (
-        file && file.id === registeredMotionFileIdValue
-          ? '재생 등록을 해제한 뒤 삭제할 수 있습니다'
-          : ''
-      );
-    }
-    if (el.exportMotionFileToStudioButton) {
-      el.exportMotionFileToStudioButton.disabled = !file || loading;
-      el.exportMotionFileToStudioButton.title = file
-        ? '선택한 실행 파일을 독립된 스튜디오 레이어로 내보냅니다'
-        : '모션 파일을 먼저 선택하세요';
-    }
-    if (el.registerMotionFileButton) {
-      const registered = Boolean(file && file.id === registeredMotionFileIdValue);
-      el.registerMotionFileButton.disabled = (
-        !file || !selectedMappingId || loading || mappingLoading || mappingDirty || registered
-      );
-      el.registerMotionFileButton.textContent = registered
-        ? '재생 등록됨'
-        : (mappingDirty ? '설정 저장 필요' : '재생 등록');
-      el.registerMotionFileButton.title = !selectedMappingId
-        ? '저장된 모션축 설정을 먼저 선택하세요'
-        : (mappingDirty ? '모션축 설정의 편집 내용을 먼저 저장하거나 되돌리세요' : '');
-    }
-    if (el.unregisterMotionFileButton) {
-      const registered = Boolean(file && file.id === registeredMotionFileIdValue);
-      el.unregisterMotionFileButton.disabled = (
-        !registered || !selectedMappingId || loading || mappingLoading || mappingDirty
-      );
-      el.unregisterMotionFileButton.title = registered
-        ? '현재 모션축 설정에서 이 파일의 재생 등록을 해제합니다'
-        : '현재 재생 등록된 파일을 선택하세요';
-    }
-    if (!file) {
-      if (el.motionFileSummary) el.motionFileSummary.innerHTML = '<div class="empty">파일을 선택하세요</div>';
-      if (el.motionFileValidation) el.motionFileValidation.innerHTML = '파일을 선택하세요';
-      if (el.motionFileMotionIdRows) el.motionFileMotionIdRows.innerHTML = emptyRow(8, '파일을 선택하세요');
-      if (el.motionFilePreviewRows) el.motionFilePreviewRows.textContent = '파일을 선택하세요';
-      renderMotionFileGraph(null);
-      return;
-    }
-
-    if (el.motionFileSummary) {
-      const interpolation = analysis.interpolation || {};
-      el.motionFileSummary.innerHTML = valueGridHtml([
-        { label: '파일명', value: file.filename },
-        { label: '상태', value: statusText(file) },
-        { label: '레코드', value: `${formatInt(analysis.valid_records)} / ${formatInt(analysis.total_records)}` },
-        { label: '총 시간', value: `${formatNumber(analysis.time?.duration_sec, 3)} s` },
-        { label: '모션 ID', value: formatInt(analysis.motion_id_count) },
-        { label: '보간', value: interpolation.required ? '20ms 선형보간 필요' : '20ms 기준 통과' },
-        // 목록을 좁혀 뺀 항목 · 여기로 옮겼다
-        { label: '크기', value: bytesText(file.size_bytes) },
-        // 어느 파일이 최신인지 알 수 없어 헷갈린다 · §6-91
-        { label: '마지막 수정', value: formatMoment(file.updated_at) },
-      ]);
-    }
-    if (el.motionFileValidation) el.motionFileValidation.innerHTML = validationHtml(analysis);
-    if (el.motionFileMotionIdRows) el.motionFileMotionIdRows.innerHTML = motionIdRowsHtml(analysis);
-    if (el.motionFilePreviewRows) el.motionFilePreviewRows.textContent = motionFileOriginalText(file, analysis);
-    renderMotionFileGraph(file);
   }
 
   function renderMappingSelect() {
@@ -2067,7 +1890,6 @@ export function createMotionDataController({
   function render() {
     renderMotionTabs();
     renderFileRows();
-    renderSelectedFile();
     renderMappingPanel();
     renderMotionRunPanel();
   }
@@ -2657,9 +2479,7 @@ export function createMotionDataController({
     forceMappingNameInput('');
     motionRunStatus = null;
     motionRunLastResult = null;
-    motionFileGraphFileId = '';
     motionRunGraphFileId = '';
-    motionFileGraphHiddenIds.clear();
     motionRunGraphHiddenIds.clear();
     setMessage('현재 프로젝트 모션 파일을 불러오세요');
     setMappingMessage('현재 프로젝트 모션축 설정을 불러오세요');
@@ -2760,30 +2580,7 @@ export function createMotionDataController({
    * 브리지가 거절한다(`coordination_bridge.local_execution_blocker`). 그래서
    * 화면에서도 하나만 고르게 한다 · 같은 이름의 버튼을 두 벌 두지 않는다 · §6-65
    */
-  /** 이 PC 의 역할을 알린다 · 마스터는 부팅 자동 재생을 몰고 다중 마스터를
-   * 감지한다. 그룹 시작 자체는 참가한 PC면 가능하고 **정지는 어디서든 되어야**
-   * 하므로 역할로 버튼을 잠그지 않는다 · 어디서 몰아야 하는지만 알린다 · §6-66
-   */
-  function renderMotionRunRole() {
-    if (!el.motionRunRoleBadge) return;
-    const state = groupRun?.role?.() || {};
-    const isMaster = state.isMaster === true;
-    el.motionRunRoleBadge.textContent = isMaster ? '이 PC · 마스터' : '이 PC · 슬레이브';
-    el.motionRunRoleBadge.classList.toggle('is-master', isMaster);
-    if (!el.motionRunRoleDetail) return;
-    if (!state.joined) {
-      el.motionRunRoleDetail.textContent = '그룹에 참가하지 않았습니다';
-      return;
-    }
-    el.motionRunRoleDetail.textContent = isMaster
-      ? `현재 마스터입니다 · 참가 ${state.peerCount}대 · 부팅 자동 재생을 이 PC가 몹니다`
-      : `현재 마스터는 ${state.master || '미정'} 입니다 · 보통 마스터에서 시작합니다`;
-  }
 
-  /** 화면에서 고른 값 · 이것만으로는 대상이 정해지지 않는다. */
-  function chosenMotionRunScope() {
-    return el.motionRunScopeGroup?.checked ? 'group' : 'local';
-  }
 
   /** 연동 역할 · 참가 여부와 PC 수의 주인은 조정 노드다. */
   function groupRunRole() {
@@ -2792,37 +2589,12 @@ export function createMotionDataController({
 
   /** 이번 실행의 대상 · 고를 수 없는 것은 골라져 있어도 '이 PC 만' 이다. */
   function motionRunScope() {
-    return motionRunTargetView({
-      role: groupRunRole(), chosen: chosenMotionRunScope(),
-    }).scope;
+    // 실행 화면에는 대상 선택이 없다 · §6-100 · 언제나 이 PC 다
+    return 'local';
   }
 
-  /** 대상 칸과 버튼 이름을 판정대로 그린다 · 여기서 다시 판단하지 않는다. */
+  /** 버튼 이름을 판정대로 그린다 · 여기서 다시 판단하지 않는다. */
   function renderMotionRunTarget(target) {
-    el.motionRunScopeGroupOption?.classList.toggle('hidden', !target.groupSelectable);
-    if (el.motionRunOpenCoordinationButton) {
-      el.motionRunOpenCoordinationButton.textContent = target.coordinationLinkLabel;
-      el.motionRunOpenCoordinationButton.classList.toggle(
-        'primary', target.needsCoordinationSetup,
-      );
-    }
-    if (el.motionRunPeerSummary) {
-      el.motionRunPeerSummary.textContent = target.peerSummary;
-      el.motionRunPeerSummary.classList.toggle('hidden', !target.peerSummary);
-    }
-    if (el.motionRunScopeLocalLabel) {
-      el.motionRunScopeLocalLabel.textContent = target.localLabel;
-    }
-    if (el.motionRunScopeGroupLabel) {
-      el.motionRunScopeGroupLabel.textContent = target.groupLabel;
-    }
-    if (el.motionRunScopeSummary) {
-      el.motionRunScopeSummary.textContent = target.summary;
-    }
-    // 고를 수 없는 칸이 골라진 채 남지 않게 한다 · 그룹에서 나간 순간이 그렇다
-    if (!target.groupSelectable && el.motionRunScopeGroup?.checked && el.motionRunScopeLocal) {
-      el.motionRunScopeLocal.checked = true;
-    }
     const labels = target.buttons;
     if (el.motionRunInitializeButton) {
       el.motionRunInitializeButton.textContent = labels.initialize;
@@ -2841,35 +2613,6 @@ export function createMotionDataController({
     return groupRun?.availability?.() || { ok: false, reason: '연동 정보를 받지 못했습니다' };
   }
 
-  /** 그룹 실행에 넘길 반복 옵션 · 화면의 입력값을 그대로 쓴다. */
-  function groupRunOverrides() {
-    return {
-      repeat_mode: String(el.motionAutomationRepeatMode?.value || 'reinitialize'),
-      dwell_sec: Number(el.motionAutomationDwellSec?.value || 0),
-      target_cycle_count: Math.max(0, parseInt(el.motionRunTargetCycle?.value || '0', 10)),
-    };
-  }
-
-  /** 그룹 명령을 보내고 화면 메시지를 맞춘다. */
-  async function runGroupCommand(action, busyMessage) {
-    motionRunLoading = true;
-    setMotionRunMessage(busyMessage);
-    renderMotionRunPanel();
-    try {
-      const result = await action();
-      if (result && result.success === false) {
-        await showMotionRunFailure(result.message, '그룹 실행 실패');
-      }
-      setMotionRunMessage(result?.message || '그룹 명령 전달 완료');
-    } catch (error) {
-      const message = error?.message || String(error);
-      setMotionRunMessage(`그룹 명령 실패: ${message}`);
-      await showMotionRunFailure(message, '그룹 실행 실패');
-    } finally {
-      motionRunLoading = false;
-      renderMotionRunPanel();
-    }
-  }
 
   async function startCurrentMotionRun(runMode = 'once') {
     const continuous = runMode === 'continuous';
@@ -2989,67 +2732,6 @@ export function createMotionDataController({
     }
   }
 
-  async function startCurrentMotionAutomation() {
-    const confirmed = await showConfirm(
-      '등록된 모션 파일을 검사하고 전체 활성 축을 초기 위치로 이동한 뒤 자동 반복을 시작합니다.',
-      {
-        title: '자동 반복 시작',
-        confirmLabel: '시작',
-        tone: 'warning',
-      },
-    );
-    if (!confirmed) return;
-    motionRunLoading = true;
-    renderMotionRunPanel();
-    try {
-      await ensureMotionRunMotionFileDetail();
-      const payload = await startMotionAutomation(motionRunPayload());
-      motionRunStatus = payload.status || motionRunStatus || null;
-      motionRunLastResult = payload;
-      if (payload.success === false) {
-        await showMotionRunFailure(payload.message, '자동 반복 시작 실패');
-      }
-    } catch (error) {
-      await showMotionRunFailure(error?.message || String(error), '자동 반복 시작 실패');
-    } finally {
-      motionRunLoading = false;
-      renderMotionRunPanel();
-    }
-  }
-
-  async function reserveCurrentMotionAutomation() {
-    const confirmed = await showConfirm(
-      '현재 모션을 출발시키지 않고 다음 번 부팅(또는 재시작) 시에 자동으로 시작하도록 예약합니다.\n'
-      + '재생 등록된 모션 파일과 매핑 설정을 사용합니다.',
-      {
-        title: '부팅 시 자동 반복 예약',
-        confirmLabel: '예약',
-        tone: 'info',
-      },
-    );
-    if (!confirmed) return;
-    motionRunLoading = true;
-    renderMotionRunPanel();
-    try {
-      await ensureMotionRunMotionFileDetail();
-      const payload = await reserveMotionAutomation(motionRunPayload());
-      motionRunStatus = payload.status || motionRunStatus || null;
-      motionRunLastResult = payload;
-      if (payload.success === false) {
-        await showMotionRunFailure(payload.message, '자동 반복 예약 실패');
-      } else {
-        await showAlert('자동 반복 예약이 완료되었습니다.\n다음 번 부팅 시 지정된 모션이 자동으로 시작됩니다.', {
-          title: '자동 반복 예약 완료',
-          tone: 'info',
-        });
-      }
-    } catch (error) {
-      await showMotionRunFailure(error?.message || String(error), '자동 반복 예약 실패');
-    } finally {
-      motionRunLoading = false;
-      renderMotionRunPanel();
-    }
-  }
 
   function bindEvents() {
     if (el.motionFileRows) {
@@ -3061,28 +2743,6 @@ export function createMotionDataController({
     }
     el.registerMotionFileButton?.addEventListener('click', registerSelectedMotionFile);
     el.unregisterMotionFileButton?.addEventListener('click', unregisterSelectedMotionFile);
-    if (el.motionFileGraphAxisToggles) {
-      el.motionFileGraphAxisToggles.addEventListener('click', (event) => {
-        const button = event.target.closest('button');
-        if (!button) return;
-        event.preventDefault();
-        const series = Array.isArray(analysisOf(selectedFile)?.graph_series)
-          ? analysisOf(selectedFile).graph_series
-          : [];
-        if (button.dataset.motionFileGraphAll === 'true') {
-          const allVisible = series.every((item) => !motionFileGraphHiddenIds.has(String(item.motion_id)));
-          motionFileGraphHiddenIds.clear();
-          if (allVisible) {
-            series.forEach((item) => motionFileGraphHiddenIds.add(String(item.motion_id)));
-          }
-        } else if (button.dataset.motionFileGraphId !== undefined) {
-          const motionId = String(button.dataset.motionFileGraphId);
-          if (motionFileGraphHiddenIds.has(motionId)) motionFileGraphHiddenIds.delete(motionId);
-          else motionFileGraphHiddenIds.add(motionId);
-        }
-        renderMotionFileGraph(selectedFile);
-      });
-    }
     el.exportMotionFileToStudioButton?.addEventListener('click', exportSelectedFileToStudio);
     if (el.deleteMotionFileButton) {
       el.deleteMotionFileButton.addEventListener('click', deleteSelectedFile);
@@ -3090,43 +2750,35 @@ export function createMotionDataController({
     if (el.motionRunCheckButton) {
       el.motionRunCheckButton.addEventListener('click', checkCurrentMotionRun);
     }
-    [el.motionRunScopeLocal, el.motionRunScopeGroup].forEach((input) => {
-      input?.addEventListener('change', () => renderMotionRunPanel());
-    });
+    // **이 버튼들은 언제나 이 PC 것이다** · §6-100
+    //
+    // 전에는 같은 버튼이 `실행 대상` 에 따라 이 PC 를 돌리기도, 참가한 PC
+    // 전부에게 시작 신호를 보내기도 했다 · 모터가 실제로 움직이는 버튼에서
+    // 그 애매함은 위험하다 · 그룹 실행은 `PC 연동 설정` 탭에 따로 있다.
     if (el.motionRunInitializeButton) {
-      el.motionRunInitializeButton.addEventListener('click', () => (
-        motionRunScope() === 'group'
-          ? runGroupCommand(() => groupRun.initialize(), '그룹 초기 위치 이동 요청 중')
-          : initializeCurrentMotionRun()
-      ));
+      el.motionRunInitializeButton.addEventListener(
+        'click', () => initializeCurrentMotionRun(),
+      );
     }
     if (el.motionRunStartButton) {
-      el.motionRunStartButton.addEventListener('click', () => (
-        motionRunScope() === 'group'
-          ? runGroupCommand(() => groupRun.start(groupRunOverrides()), '그룹 모션 1회 시작 요청 중')
-          : startCurrentMotionRun('once')
-      ));
+      el.motionRunStartButton.addEventListener(
+        'click', () => startCurrentMotionRun('once'),
+      );
     }
     if (el.motionRunContinuousStartButton) {
-      el.motionRunContinuousStartButton.addEventListener('click', () => (
-        motionRunScope() === 'group'
-          ? runGroupCommand(() => groupRun.startContinuous(groupRunOverrides()), '그룹 연속 모션 시작 요청 중')
-          : startCurrentMotionRun('continuous')
-      ));
+      el.motionRunContinuousStartButton.addEventListener(
+        'click', () => startCurrentMotionRun('continuous'),
+      );
     }
     if (el.motionRunStopButton) {
-      el.motionRunStopButton.addEventListener('click', () => (
-        motionRunScope() === 'group'
-          ? runGroupCommand(() => groupRun.stopNow(), '그룹 즉시 정지 요청 중')
-          : stopCurrentMotionRun()
-      ));
+      el.motionRunStopButton.addEventListener(
+        'click', () => stopCurrentMotionRun(),
+      );
     }
     if (el.motionRunStopAfterButton) {
-      el.motionRunStopAfterButton.addEventListener('click', () => (
-        motionRunScope() === 'group'
-          ? runGroupCommand(() => groupRun.stopAfterCycle(), '그룹 회차 후 정지 요청 중')
-          : stopCurrentMotionRunAfterCycle()
-      ));
+      el.motionRunStopAfterButton.addEventListener(
+        'click', () => stopCurrentMotionRunAfterCycle(),
+      );
     }
     if (el.motionRunRefreshButton) {
       el.motionRunRefreshButton.addEventListener('click', refreshMotionRunStatus);
@@ -3145,14 +2797,6 @@ export function createMotionDataController({
         void saveMotionAutomation(true);
       }
     });
-    el.motionAutomationStartButton?.addEventListener(
-      'click',
-      startCurrentMotionAutomation,
-    );
-    el.motionAutomationReserveButton?.addEventListener(
-      'click',
-      reserveCurrentMotionAutomation,
-    );
     if (el.motionRunGraphAxisToggles) {
       el.motionRunGraphAxisToggles.addEventListener('click', (event) => {
         const button = event.target.closest('button');

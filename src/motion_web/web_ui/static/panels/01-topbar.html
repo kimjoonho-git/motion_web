@@ -6,6 +6,10 @@
           <h1>모션 녹화 시스템</h1>
           <span class="version-badge">버전 0.5.0</span>
           <a id="globalGitVersion" class="version-badge git-version-badge" title="Git 상태 로드 중..." href="#" target="_blank" rel="noopener" style="margin-left: 8px; cursor: help; display: none;"></a>
+          <!-- 어느 PC 의 화면인지 늘 보인다 · §6-100 · 여러 PC 를 한 사람이
+               띄워 놓고 쓰는데, 탭을 옮겨야 알 수 있으면 엉뚱한 PC 에 명령을
+               내린다 -->
+          <span id="globalPcName" class="version-badge pc-name-badge" style="margin-left: 8px; display: none;"></span>
           <div
             id="motorActivityBanner"
             class="motor-activity-banner"
@@ -67,6 +71,6 @@
         <div class="workspace-tabs hidden" data-workspace-group-panel="execution" role="tablist" aria-label="실행 및 시험 메뉴">
           <button class="workspace-tab-button" type="button" role="tab" data-workspace-tab="manual">동작 테스트</button>
           <button class="workspace-tab-button" type="button" role="tab" data-workspace-tab="motion-run">모션 실행</button>
-          <button class="workspace-tab-button" type="button" role="tab" data-workspace-tab="coordination">PC 연동</button>
+          <button class="workspace-tab-button" type="button" role="tab" data-workspace-tab="coordination">PC 연동 설정</button>
         </div>
       </nav>

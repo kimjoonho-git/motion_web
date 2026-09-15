@@ -31,46 +31,18 @@
                 </div>
                 <div class="coord-badge coord-badge-context">
                   <div class="coord-badge-info">
-                    <span>이 PC ID</span>
-                    <strong id="coordinationMachineId">-</strong>
-                  </div>
-                </div>
-                <div class="coord-badge coord-badge-context">
-                  <div class="coord-badge-info">
                     <span>그룹·Domain</span>
                     <strong id="coordinationGroupDomain">-</strong>
                   </div>
                 </div>
-              </div>
-          <div class="coordination-control-panel" aria-label="연동 세션">
-            <div class="coord-control-groups">
-                  <div class="coord-group session-group">
-                    <span class="coord-group-label">세션 관리</span>
-                    <div class="coord-group-buttons">
-                      <button id="coordinationJoinButton" type="button" disabled>그룹 참가</button>
-                      <button id="coordinationLeaveButton" type="button" disabled>그룹 나가기</button>
-                      <button id="coordinationTemporaryDisableButton" type="button" disabled>연동 일시 해제</button>
-                    </div>
-                  </div>
-                  <div class="coord-group autoplay-group" id="coordinationAutoPlayGroup" style="display: none;">
-                    <span class="coord-group-label">그룹 자동 재생 · 스케줄 (마스터)</span>
-                    <div class="coord-group-buttons" style="display: flex; align-items: center; gap: 10px;">
-                      <label class="motion-automation-toggle">
-                        <input id="coordinationAutoPlayToggle" type="checkbox">
-                        <span>그룹 부팅 시 자동 재생</span>
-                      </label>
-                      <span id="scheduleStatusBadgeCoord" class="badge bg-secondary" style="font-size: 11px; padding: 4px 8px; border-radius: 4px; background-color: #4a5568; color: #fff;">스케줄러: 확인 중</span>
-                      <button id="btnScheduleModalCoord" type="button" class="primary" style="background-color: #2b6cb0; color: #fff; border: none; padding: 5px 12px; border-radius: 4px; cursor: pointer; font-weight: bold;">📅 모션 스케줄</button>
-                    </div>
-                  </div>
-              <div class="coord-group safety-group">
-                <span class="coord-group-label">그룹 실행</span>
-                <div class="coord-group-buttons">
-                  <span id="coordinationRunAvailability" class="registry-message">그룹 실행 상태 확인 중</span>
+                <!-- 버튼 세 개가 한 줄을 통째로 쓰고 있었다 · 뱃지와 같은 줄에
+                     둔다 · §6-100 -->
+                <div class="coord-badge coord-badge-actions">
+                  <button id="coordinationJoinButton" type="button" disabled>그룹 참가</button>
+                  <button id="coordinationLeaveButton" type="button" disabled>그룹 나가기</button>
+                  <button id="coordinationTemporaryDisableButton" type="button" disabled>연동 일시 해제</button>
                 </div>
               </div>
-            </div>
-          </div>
             <details class="coordination-settings-details">
               <summary class="section-head compact">
                 <strong>이 PC 연동 설정</strong>
@@ -112,29 +84,90 @@
             </details>
           </section>
 
-          <section id="motionRunGroupDetails" class="motion-file-subsection hidden" aria-label="그룹 실행 상태">
-          <div class="section-head compact">
-            <strong id="coordinationExecutionState">그룹 실행 · 대기</strong>
-            <span id="coordinationControlSummary">제어 명령 대기</span>
-            <button id="coordinationAcknowledgeErrorButton" type="button" disabled>그룹 오류 확인</button>
-          </div>
-          <div id="coordinationErrorSummary" class="registry-message hidden" role="alert"></div>
+          <!-- 여기는 **구성**만 둔다 · §6-100 · 실행 중에 보는 것(각 PC 진행 ·
+               그룹 오류)은 `모션 실행` 탭으로 갔다 · 실행을 시작한 탭에서
+               진행을 못 보면 탭을 왔다갔다 하게 된다 -->
+          <section id="coordinationRosterSection" class="motion-file-subsection hidden" aria-label="그룹 참가 PC">
           <div id="coordinationConfirmedRosterBanner" class="registry-message"></div>
           <div class="section-head compact">
-            <strong>그룹 참가 PC 상태</strong>
+            <strong>2. 그룹 참가 PC</strong>
             <span>경고 1.5초 · 통신 단절 3초 · 실행 참가 목록은 시작 시 고정</span>
             <button type="button" id="coordinationConfirmRosterButton" class="secondary">현재 접속 PC로 명단 확정</button>
           </div>
           <div class="table-wrap">
             <table class="coordination-peer-table">
-              <thead><tr><th>PC</th><th>통신</th><th>실행 참가</th><th>모션 회차</th><th>모션 단계</th><th>진행</th><th>트리거 동기화</th><th>추정 불확실성</th><th>알람 등급</th><th>버전 (Git)</th><th>명단 관리</th></tr></thead>
-              <tbody id="coordinationPeerRows"><tr><td colspan="11" class="empty">그룹 상태 수신 대기</td></tr></tbody>
+              <thead><tr><th>PC</th><th>통신</th><th>실행 참가</th><th>버전 (Git)</th><th>명단 관리</th></tr></thead>
+              <tbody id="coordinationPeerRows"><tr><td colspan="5" class="empty">그룹 상태 수신 대기</td></tr></tbody>
             </table>
           </div>
+          <div class="registry-message">각 PC 의 회차·단계·진행률은 <strong>모션 실행</strong> 탭의 <strong>4. 진행</strong> 에서 봅니다</div>
           </section>
+        <!-- 3. 그룹 실행 · §6-100
+             **그룹 실행은 모션 파일을 들고 가지 않는다** · 참가한 PC 들에게
+             시작·정지 신호만 보내고, 각 PC 는 제 모션을 돌린다 · `모션 실행`
+             탭의 "이 모션 파일을 이 PC 에서 돌린다" 와는 다른 일이다.
+             **마스터에서만 보인다** · 조정 노드가 슬레이브를 거부한다 -->
+        <section id="coordinationGroupRunSection" class="motion-file-subsection hidden" aria-label="그룹 실행">
+          <div class="section-head compact">
+            <strong>3. 그룹 실행</strong>
+            <span id="coordinationExecutionState">그룹 실행 · 대기</span>
+            <span id="coordinationControlSummary">제어 명령 대기</span>
+          </div>
+          <div id="coordinationRunAvailability" class="registry-message">그룹 실행 상태 확인 중</div>
+          <!-- 반복 방식·대기·회차는 **그룹 것**을 따로 정한다 · §6-100
+               전에는 `모션 실행` 탭의 입력을 빌려 썼다 · 화면을 가르면서 그냥
+               두면 그룹은 말없이 기본값(바로 다음 모션 · 무한 반복)으로 돈다 -->
+          <div class="motion-run-compact-fields">
+            <label class="compact-field"><span>회차 사이 동작</span>
+              <select id="coordinationRepeatMode" class="compact-select">
+                <option value="direct">바로 다음 모션</option>
+                <option value="dwell">대기 후 다음 모션</option>
+                <option value="reinitialize" selected>초기 위치 이동 후 다음</option>
+                <option value="dwell_reinitialize">대기 후 초기위치 → 다음</option>
+              </select>
+            </label>
+            <label class="compact-field"><span>대기 시간(초)</span>
+              <input id="coordinationDwellSec" type="number" min="0" max="86400" step="0.1" value="5.0">
+            </label>
+            <label class="compact-field"><span>정지 목표(N)회차</span>
+              <input id="coordinationTargetCycle" type="number" min="0" max="10000" step="1" value="0" title="0은 무한 반복입니다">
+            </label>
+          </div>
+          <div class="registry-actions">
+            <button id="coordinationInitializeButton" type="button">그룹 초기 위치 이동</button>
+            <button id="coordinationStartOnceButton" class="primary" type="button">그룹 1회 시작</button>
+            <button id="coordinationStartContinuousButton" class="primary" type="button">그룹 연속 시작</button>
+            <button id="coordinationStopNowButton" class="danger" type="button">그룹 즉시 정지</button>
+            <button id="coordinationStopAfterButton" class="warning-button" type="button">현재 회차 후 정지</button>
+            <button id="coordinationAcknowledgeErrorButton" type="button" disabled>그룹 오류 확인</button>
+          </div>
+          <div id="coordinationErrorSummary" class="registry-message hidden" role="alert"></div>
+          <div class="table-wrap">
+            <table class="coordination-peer-table">
+              <thead><tr><th>PC</th><th>실행 참가</th><th>모션 회차</th><th>모션 단계</th><th>진행</th><th>트리거 동기화</th><th>추정 불확실성</th><th>알람 등급</th></tr></thead>
+              <tbody id="motionRunPeerRows"><tr><td colspan="8" class="empty">그룹 상태 수신 대기</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- 4. 예약 · 그룹 자동 재생과 스케줄은 그룹 일이다 -->
+        <section class="motion-file-subsection" id="coordinationAutoPlayGroup" style="display: none;" aria-label="그룹 예약 실행">
+          <div class="section-head compact">
+            <strong>4. 그룹 예약 실행</strong>
+            <span id="scheduleStatusBadgeCoord">스케줄러: 확인 중</span>
+          </div>
+          <div class="registry-actions">
+            <label class="motion-automation-toggle">
+              <input id="coordinationAutoPlayToggle" type="checkbox">
+              <span>그룹 부팅 시 자동 재생</span>
+            </label>
+            <button id="btnScheduleModalCoord" type="button" class="primary">📅 모션 스케줄</button>
+          </div>
+        </section>
+
         <section class="motion-file-subsection" aria-label="MIDI 사용 PC">
           <div class="section-head compact">
-            <strong>3. MIDI 사용 PC</strong>
+            <strong>5. MIDI 사용 PC</strong>
             <span id="midiTargetState">MIDI 장치 확인 중</span>
           </div>
           <div class="registry-message">MIDI 장치는 한 대뿐입니다 · 한 번에 한 PC 만 씁니다 · 정하는 것은 장치가 꽂힌 PC 입니다</div>

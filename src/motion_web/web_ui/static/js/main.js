@@ -328,6 +328,13 @@ function renderServiceManagement(payload) {
     el.systemHostname.textContent = hostname;
     el.systemHostname.title = hostname;
   }
+  if (el.globalPcName) {
+    // 어느 PC 의 화면인지 상단바에 늘 둔다 · §6-100
+    const hostname = String(systemInfo.hostname || '').trim();
+    el.globalPcName.textContent = hostname ? `🖥 ${hostname}` : '';
+    el.globalPcName.title = hostname ? `이 화면은 ${hostname} 의 것입니다` : '';
+    el.globalPcName.style.display = hostname ? '' : 'none';
+  }
   if (el.systemWorkspacePath) {
     const workspacePath = String(systemInfo.workspace_root || '-');
     el.systemWorkspacePath.textContent = workspacePath;

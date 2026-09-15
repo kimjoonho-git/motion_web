@@ -128,19 +128,32 @@ export function createCoordinationController({ el }) {
       ? `<button type="button" class="danger remove-peer-btn" data-pc-id="${text(peer.pc_id)}" style="padding: 2px 8px; font-size: 11px; cursor: pointer;">명단 제외</button>`
       : `<button type="button" class="primary add-peer-btn" data-pc-id="${text(peer.pc_id)}" style="padding: 2px 8px; font-size: 11px; cursor: pointer;">명단 추가</button>`;
 
-    return `<tr>
-      <td>${pcNameHtml}${badgeHtml}</td>
+    // 표가 둘이다 · §6-100
+    //
+    // **구성**(누가 참가했나 · 어떤 버전인가 · 명단)은 `PC 연동 설정` 탭,
+    // **진행**(회차 · 단계 · 진행률 · 동기화 · 알람)은 `모션 실행` 탭 ·
+    // 실행을 시작한 탭에서 진행을 못 보면 탭을 왔다갔다 하게 된다.
+    const pcCell = `<td>${pcNameHtml}${badgeHtml}</td>`;
+    const joinCell = `<td class="${executionStateClass}"><strong>${executionStateText}</strong></td>`;
+    return {
+      setup: `<tr>
+      ${pcCell}
       <td class="${stateClass(peer.state)}"><span class="peer-status-dot ${peer.state || 'offline'}"></span>${text(stateText(peer.state))}</td>
-      <td class="${executionStateClass}"><strong>${executionStateText}</strong></td>
+      ${joinCell}
+      <td title="${text(peer.git_message || '')}">[${text(peer.git_branch || '?')}] ${text(peer.git_hash || '-')}</td>
+      <td style="text-align: center;">${actionButton}</td>
+    </tr>`,
+      progress: `<tr>
+      ${pcCell}
+      ${joinCell}
       <td>${text(peerCycleText(peer))}</td>
       <td class="${peerPhaseClass(peer)}">${text(peerMotionStep(peer))}</td>
       <td>${text(peerProgressText(peer))}</td>
       <td class="${stateClass(peer.trigger_sync_state)}">${text(stateText(peer.trigger_sync_state))}</td>
       <td>${Number(peer.trigger_sync_uncertainty_ms || 0).toFixed(3)} ms</td>
       <td class="${Number(peer.servo_alarm_grade || 0) > 0 ? 'coordination-state-bad' : 'coordination-state-ok'}">${text(alarmText)}</td>
-      <td title="${text(peer.git_message || '')}">[${text(peer.git_branch || '?')}] ${text(peer.git_hash || '-')}</td>
-      <td style="text-align: center;">${actionButton}</td>
-    </tr>`;
+    </tr>`,
+    };
   }
 
   function render() {
@@ -195,7 +208,6 @@ export function createCoordinationController({ el }) {
       el.coordinationUpdatedAt.textContent = snapshot?.status_age_sec == null
         ? '수신 없음' : `${Number(snapshot.status_age_sec).toFixed(1)}초 전`;
     }
-    if (el.coordinationMachineId) el.coordinationMachineId.textContent = config.pc_id || '-';
     if (el.coordinationGroupDomain) {
       el.coordinationGroupDomain.textContent = `${config.group_id || '-'} · ${config.dds_domain_id ?? '-'}`;
     }
@@ -317,7 +329,7 @@ export function createCoordinationController({ el }) {
       shownCoordinationError = '';
       dismissAllDialogs();
     }
-    if (el.coordinationPeerRows) {
+    if (el.coordinationPeerRows || el.motionRunPeerRows) {
       const rows = [];
       const seenPcs = new Set();
       
@@ -347,8 +359,22 @@ export function createCoordinationController({ el }) {
         }
       });
       
-      el.coordinationPeerRows.innerHTML = rows.length
-        ? rows.join('') : '<tr><td colspan="11" class="empty">그룹에 참가하면 PC 상태가 표시됩니다</td></tr>';
+      if (el.coordinationPeerRows) {
+        el.coordinationPeerRows.innerHTML = rows.length
+          ? rows.map((row) => row.setup).join('')
+          : '<tr><td colspan="5" class="empty">그룹에 참가하면 PC 상태가 표시됩니다</td></tr>';
+      }
+      if (el.motionRunPeerRows) {
+        el.motionRunPeerRows.innerHTML = rows.length
+          ? rows.map((row) => row.progress).join('')
+          : '<tr><td colspan="8" class="empty">그룹에 참가하면 각 PC 진행이 표시됩니다</td></tr>';
+      }
+      // 명단은 그룹에 참가했으면 늘 보인다
+      el.coordinationRosterSection?.classList.toggle('hidden', !joined);
+      // 그룹 실행은 **마스터에서만** 보인다 · 조정 노드가 슬레이브를 거부한다
+      el.coordinationGroupRunSection?.classList.toggle(
+        'hidden', !(joined && config.is_master === true),
+      );
     }
   }
 
@@ -491,6 +517,17 @@ export function createCoordinationController({ el }) {
     await control('temporarily_disable');
   }
 
+  /** 그룹 실행에 넘길 반복 옵션 · 이 화면의 입력값을 그대로 쓴다. */
+  function groupRunFields() {
+    return {
+      repeat_mode: String(el.coordinationRepeatMode?.value || 'reinitialize'),
+      dwell_sec: Number(el.coordinationDwellSec?.value || 0),
+      target_cycle_count: Math.max(
+        0, parseInt(el.coordinationTargetCycle?.value || '0', 10),
+      ),
+    };
+  }
+
   function groupRunOptions(runMode, overrides = {}) {
     const dwellSec = Number(overrides.dwell_sec);
     const targetCycleCount = Number(overrides.target_cycle_count);
@@ -540,6 +577,22 @@ export function createCoordinationController({ el }) {
     el.coordinationSaveButton?.addEventListener('click', save);
     el.coordinationJoinButton?.addEventListener('click', () => control('join'));
     el.coordinationLeaveButton?.addEventListener('click', () => control('leave'));
+    // 그룹 실행은 **여기가 주인**이다 · §6-100
+    //
+    // 그룹 실행은 모션 파일을 들고 가지 않는다 · 참가한 PC 들에게 시작·정지
+    // 신호만 보내고 각 PC 는 제 모션을 돌린다 · `모션 실행` 탭의 "이 파일을
+    // 이 PC 에서 돌린다" 와는 다른 일이라 버튼도 따로 둔다 · 전에는 한 버튼이
+    // 대상에 따라 둘 다 했고, 모터가 움직이는 버튼에서 그 애매함은 위험했다.
+    el.coordinationInitializeButton?.addEventListener(
+      'click', () => groupRun.initialize());
+    el.coordinationStartOnceButton?.addEventListener(
+      'click', () => groupRun.start(groupRunFields()));
+    el.coordinationStartContinuousButton?.addEventListener(
+      'click', () => groupRun.startContinuous(groupRunFields()));
+    el.coordinationStopNowButton?.addEventListener(
+      'click', () => groupRun.stopNow());
+    el.coordinationStopAfterButton?.addEventListener(
+      'click', () => groupRun.stopAfterCycle());
     el.coordinationTemporaryDisableButton?.addEventListener('click', temporarilyDisable);
 
     el.coordinationAcknowledgeErrorButton?.addEventListener('click', () => control('acknowledge_group_error'));

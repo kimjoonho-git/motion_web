@@ -4,7 +4,6 @@ import test from 'node:test';
 import { indexHtml } from '../tools/index_html.mjs';
 
 import {
-  motionFileOriginalText,
   registeredMotionFileId,
 } from '../static/js/motion_data.js';
 
@@ -120,17 +119,6 @@ test('registered motion file can be explicitly unregistered without deleting the
   assert.match(unregisterBody, /mappingDraft\.motion_file_id = ''/);
   assert.match(unregisterBody, /await saveCurrentMapping\(\)/);
   assert.doesNotMatch(unregisterBody, /deleteMotionFile/);
-});
-
-test('original motion file view prefers the complete file content without truncation', () => {
-  const complete = `header\n${'x'.repeat(15000)}\nlast-frame`;
-  assert.equal(
-    motionFileOriginalText(
-      { content: complete, content_preview: complete.slice(0, 12000) },
-      {},
-    ),
-    complete,
-  );
 });
 
 test('registered motion file deletion is blocked with an alert before delete request', () => {

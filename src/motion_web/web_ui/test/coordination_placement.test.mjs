@@ -44,26 +44,29 @@ test('연동 요소는 연동 탭에만 있다', () => {
   }
 });
 
-test('같은 조작이 두 곳에 있지 않다', () => {
-  // 실행 화면에도 [그룹 참가] 가 있었다 · 조작은 연동 화면 하나다
-  assert.equal(/id="motionRunJoinGroupButton"/.test(runPanel), false);
-  assert.match(runPanel, /id="motionRunOpenCoordinationButton"/);
-});
-
-test('실행 화면에는 시작 판단에 필요한 것만 남는다', () => {
+test('실행 화면에 연동 이야기가 남아 있지 않다', () => {
+  // **실행과 연동을 가른다** · §6-100 · 실행 화면은 이 PC 의 모션만 다룬다
   for (const id of [
-    'motionRunScopeLocal', 'motionRunScopeGroup', 'motionRunScopeSummary',
-    'motionRunPeerSummary', 'motionRunBlockReason', 'motionRunGroupRole',
+    'motionRunJoinGroupButton', 'motionRunScopeLocal', 'motionRunScopeGroup',
+    'motionRunScopeSummary', 'motionRunPeerSummary', 'motionRunGroupRole',
+    'motionRunOpenCoordinationButton', 'motionRunPeerRows',
   ]) {
-    assert.match(runPanel, new RegExp(`id="${id}"`), `${id} 가 없다`);
+    assert.equal(
+      new RegExp(`id="${id}"`).test(runPanel), false, `${id} 가 아직 실행 화면에 있다`,
+    );
   }
 });
 
+test('실행 화면에는 시작 판단에 필요한 것만 남는다', () => {
+  // 왜 못 누르는지는 로컬 실행에도 필요하다
+  assert.match(runPanel, /id="motionRunBlockReason"/);
+});
+
 /**
- * 순서가 기능을 따라간다 · 어디서 → 무엇을 → 어떻게 → 어떻게 되고 있나
+ * 순서가 기능을 따라간다 · 무엇을 → 어떻게 → 어떻게 되고 있나
  */
-test('실행 화면은 네 단계 순서다', () => {
-  const order = ['1. 실행 대상', '2. 실행할 모션', '3. 실행', '4. 진행']
+test('실행 화면은 세 단계 순서다', () => {
+  const order = ['1. 실행할 모션', '2. 실행', '3. 진행']
     .map((title) => runPanel.indexOf(`<strong>${title}</strong>`));
 
   assert.ok(order.every((index) => index > 0), `단계 제목이 빠졌다 · ${order}`);
@@ -72,17 +75,32 @@ test('실행 화면은 네 단계 순서다', () => {
   }
 });
 
-test('참가 PC 요약은 대상을 고른 자리에 있다', () => {
-  const target = runPanel.indexOf('<strong>1. 실행 대상</strong>');
-  const summary = runPanel.indexOf('id="motionRunPeerSummary"');
-  const nextStep = runPanel.indexOf('<strong>2. 실행할 모션</strong>');
-
-  assert.ok(summary > target && summary < nextStep, '요약이 대상 구역 밖에 있다');
+test('그룹 실행과 각 PC 진행은 연동 화면에 있다', () => {
+  for (const id of [
+    'coordinationStartOnceButton', 'coordinationStopNowButton',
+    'motionRunPeerRows', 'coordinationExecutionState',
+  ]) {
+    assert.match(coordinationPanel, new RegExp(`id="${id}"`), `${id} 가 없다`);
+  }
 });
 
 test('진행에 관한 것은 한 자리에 모인다', () => {
-  const progress = runPanel.indexOf('<strong>4. 진행</strong>');
+  const progress = runPanel.indexOf('<strong>3. 진행</strong>');
   for (const id of ['motionRunStatus', 'motionRunStageStrip', 'motionRunGraphCanvas']) {
     assert.ok(runPanel.indexOf(`id="${id}"`) > progress, `${id} 가 진행 구역 밖에 있다`);
   }
+});
+
+test('실행 상태표는 가로를 채워 다섯 줄이다', () => {
+  // 한 쌍만 쓰고 가로를 비워 두면 상태표가 그래프보다 높이를 더 먹는다 · §6-100
+  const controller = readFileSync(
+    new URL('../static/js/motion_data.js', import.meta.url), 'utf8');
+  const table = controller.slice(
+    controller.indexOf('motion-run-status-table'),
+    controller.indexOf('</table>', controller.indexOf('motion-run-status-table')),
+  );
+  const rows = table.match(/<tr>/g) || [];
+  assert.equal(rows.length, 5, `줄 수가 ${rows.length} 이다`);
+  // 한 칸짜리로 늘어놓던 자리가 남아 있지 않다
+  assert.equal(/colspan="3"/.test(table), false, '가로를 비워 둔 칸이 있다');
 });

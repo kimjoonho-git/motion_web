@@ -236,39 +236,13 @@
           <div class="motion-run-workspace">
 
             <!-- 기능별로 모은다 · 어디서 → 무엇을 → 어떻게 → 어떻게 되고 있나 · §6-98 -->
-            <section class="motion-file-subsection" aria-label="실행 대상">
-              <div class="section-head compact">
-                <strong>1. 실행 대상</strong>
-                <span id="motionRunScopeSummary">이 PC 의 모터만 움직입니다</span>
-              </div>
-              <div class="motion-run-scope" role="radiogroup" aria-label="실행 대상">
-                <span class="motion-run-scope-label">실행 대상</span>
-                <label class="motion-run-scope-option">
-                  <input id="motionRunScopeLocal" type="radio" name="motionRunScope" value="local" checked>
-                  <span><strong id="motionRunScopeLocalLabel">이 PC 만</strong><small id="motionRunScopeLocalHint">연결된 모터만 움직입니다</small></span>
-                </label>
-                <label class="motion-run-scope-option hidden" id="motionRunScopeGroupOption">
-                  <input id="motionRunScopeGroup" type="radio" name="motionRunScope" value="group">
-                  <span><strong id="motionRunScopeGroupLabel">그룹 전체</strong><small id="motionRunScopeGroupHint">연동 상태 확인 중</small></span>
-                </label>
-              </div>
-              <div id="motionRunBlockReason" class="registry-message motion-run-block-reason hidden" role="status"></div>
-              <div id="motionRunGroupRole" class="motion-run-group-role hidden">
-                <div class="motion-run-role">
-                  <span class="motion-run-role-badge" id="motionRunRoleBadge">역할 확인 중</span>
-                  <span id="motionRunRoleDetail">연동 상태를 받아오는 중입니다</span>
-                  <span class="motion-run-role-caveat">PC별 프로젝트는 유지하고 시작·완료·오류 트리거만 공유합니다 · 실물 미검증</span>
-                </div>
-              </div>
-            <div id="motionRunPeerSummary" class="motion-run-peer-summary hidden"></div>
-            <div class="motion-run-scope-link">
-              <button id="motionRunOpenCoordinationButton" type="button">PC 연동 화면 열기</button>
-            </div>
-            </section>
-
+            <!-- 여기는 **이 PC 의 모션**만 다룬다 · §6-100
+                 그룹 실행은 모션 파일을 들고 가지 않는다 · 시작·정지 신호만
+                 보내고 각 PC 는 제 모션을 돌린다 · 다른 일이라 다른 탭이다
+                 (`PC 연동 설정`) -->
             <section class="motion-file-subsection" aria-label="실행할 모션">
               <div class="section-head compact">
-                <strong>2. 실행할 모션</strong>
+                <strong>1. 실행할 모션</strong>
                 <span id="motionRunMessage">모션 파일과 매핑 파일을 선택하세요</span>
               </div>
               <div class="motion-run-columns">
@@ -278,6 +252,9 @@
                     <strong>모션 파일 <span id="motionFileCount" class="motion-file-count"></span></strong>
                     <span id="motionFileMessage">현재 파일 확인 중</span>
                   </div>
+                  <!-- 표와 버튼을 옆으로 나란히 · §6-100 · 버튼이 표 아래
+                       두 줄을 차지해 위아래로 길었다 -->
+                  <div class="motion-file-body">
                   <div class="table-wrap motion-file-table-wrap">
                     <table class="motion-file-table motion-file-table-compact">
                       <thead>
@@ -297,11 +274,10 @@
                   </div>
                   <div class="motion-file-actions">
                     <button id="registerMotionFileButton" class="primary" type="button" disabled>재생 등록</button>
-                    <div class="registry-actions">
-                      <button id="unregisterMotionFileButton" type="button" class="danger" disabled>재생 등록 해제</button>
-                      <button id="exportMotionFileToStudioButton" type="button" title="이 파일을 모션 스튜디오에서 엽니다" disabled>스튜디오로</button>
-                      <button id="deleteMotionFileButton" type="button" class="danger" disabled>삭제</button>
-                    </div>
+                    <button id="unregisterMotionFileButton" type="button" class="danger" disabled>재생 등록 해제</button>
+                    <button id="exportMotionFileToStudioButton" type="button" title="이 파일을 모션 스튜디오에서 엽니다" disabled>스튜디오로</button>
+                    <button id="deleteMotionFileButton" type="button" class="danger" disabled>삭제</button>
+                  </div>
                   </div>
                 </section>
               </div>
@@ -315,9 +291,10 @@
 
             <section class="motion-file-subsection" aria-label="실행 방법과 시작">
               <div class="section-head compact">
-                <strong>3. 실행</strong>
+                <strong>2. 실행</strong>
                 <span id="motionAutomationDetail" class="motion-automation-detail">재생 등록 파일과 현재 모션축 설정을 사용합니다.</span>
               </div>
+              <div id="motionRunBlockReason" class="registry-message motion-run-block-reason hidden" role="status"></div>
               <div class="coordination-control-panel">
                 <div class="coord-control-groups">
                   <div class="coord-group motion-group">
@@ -351,8 +328,6 @@
                       <button id="motionRunInitializeButton" type="button" disabled>초기 위치 이동</button>
                       <button id="motionRunStartButton" class="primary" type="button" disabled>1회 시작</button>
                       <button id="motionRunContinuousStartButton" class="primary" type="button" disabled>연속 시작</button>
-                      <button id="motionAutomationStartButton" type="button" style="display:none;" disabled>자동 반복 예약 (숨김)</button>
-                      <button id="motionAutomationReserveButton" type="button" style="display:none;" disabled>부팅 시 예약</button>
                     </div>
                   </div>
 
@@ -374,7 +349,7 @@
 
             <section class="motion-file-subsection" aria-label="진행 상황">
               <div class="section-head compact">
-                <strong>4. 진행</strong>
+                <strong>3. 진행</strong>
                 <span id="motionRunGraphMessage">모션 진행 대기</span>
               </div>
                 <section class="motion-file-subsection" aria-label="모션 실행 상태">
@@ -401,78 +376,20 @@
                   <div id="motionRunGraphAxisToggles" class="motion-run-graph-axis-toggles" aria-label="그래프 축 표시 선택"></div>
                 </section>
 
+            <!-- 각 PC 진행 · §6-100
+                 실행을 시작한 탭에서 진행을 못 보면 탭을 왔다갔다 하게 된다 ·
+                 그룹으로 돌릴 때만 보인다 · 구성(참가·버전·명단)은 `PC 연동
+                 설정` 탭에 있다 -->
             <!-- 실행 중에 봐야 하는 것만 · 설정·세션은 시스템 정보로 갔다 · §6-98 -->
             </section>
 
-            <details class="motion-run-more">
-              <summary><strong>선택 파일 상세</strong><span>검사 · 그래프 · 모션 ID · 원본</span></summary>
-              <div class="motion-run-more-body">
-                <div id="motionFileSummary" class="motion-file-summary">
-                  <div class="empty">파일을 선택하세요</div>
-                </div>
-                <div class="motion-file-detail-grid">
-                  <section class="motion-file-subsection" aria-label="모션 검사">
-                    <div class="section-head compact">
-                      <strong>검사 / 보간</strong>
-                      <span>20ms 기준</span>
-                    </div>
-                    <div id="motionFileValidation" class="motion-value-table">파일을 선택하세요</div>
-                  </section>
 
-                  <section class="motion-file-subsection motion-graph-section" aria-label="모션 그래프">
-                    <div class="section-head compact">
-                      <strong>모션 그래프</strong>
-                      <span>모션 ID별 위치값</span>
-                    </div>
-                    <canvas id="motionFileGraphCanvas" class="motion-graph" width="1040" height="280"></canvas>
-                    <div id="motionFileGraphAxisToggles" class="motion-run-graph-axis-toggles" aria-label="모션 파일 그래프 축 표시 선택"></div>
-                    <div id="motionFileGraphMessage" class="registry-message">파일을 선택하세요</div>
-                  </section>
-                </div>
-                <section class="motion-file-subsection" aria-label="모션 ID 목록">
-                  <div class="section-head compact">
-                    <strong>모션 ID 목록</strong>
-                    <span>시작 / 종료 / 최솟값 / 최댓값</span>
-                  </div>
-                  <div class="table-wrap">
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>모션 ID</th>
-                          <th>개수</th>
-                          <th>시작값</th>
-                          <th>끝값</th>
-                          <th>최솟값</th>
-                          <th>최댓값</th>
-                          <th>시간</th>
-                          <th>보간</th>
-                        </tr>
-                      </thead>
-                      <tbody id="motionFileMotionIdRows">
-                        <tr>
-                          <td colspan="8" class="empty">파일을 선택하세요</td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
-                </section>
-                <section class="motion-file-subsection" aria-label="모션 원본 보기">
-                  <div class="section-head compact">
-                    <strong>원본 보기</strong>
-                    <span>전체 파일</span>
-                  </div>
-                  <pre id="motionFilePreviewRows" class="motion-file-preview-text">파일을 선택하세요</pre>
-                </section>
-              </div>
-            </details>
-
-            <details class="motion-run-more">
-              <summary><strong>실행 축</strong><span>실행 준비 검사 후 채워집니다</span></summary>
-              <div class="motion-run-more-body">
+            <!-- 접지 않는다 · §6-100 · 어느 축이 어디까지 움직이는지는 실행
+                 전에 매번 보는 것이다 · 접어 두면 펴는 손이 한 번 더 든다 -->
                 <section class="motion-file-subsection" aria-label="모션 실행 축">
                   <div class="section-head compact">
-                    <strong>실행 축</strong>
-                    <span>활성 매핑 기준</span>
+                    <strong>4. 실행 축</strong>
+                    <span>활성 매핑 기준 · 실행 준비 검사 후 채워집니다</span>
                   </div>
                   <div class="table-wrap">
                     <table>
@@ -498,8 +415,6 @@
                     </table>
                   </div>
                 </section>
-              </div>
-            </details>
           </div>
         </div>
       </section>

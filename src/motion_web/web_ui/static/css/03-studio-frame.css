@@ -477,6 +477,14 @@ body.emergency-latched .shell {
   background: #fffaf0;
 }
 
+/* 어느 PC 의 화면인지 늘 보인다 · §6-100 */
+.pc-name-badge {
+  border-color: #3f6fb5;
+  background: #eef4fc;
+  color: #24456f;
+  font-weight: 600;
+}
+
 h1 {
   margin: 0;
   font-size: 28px;
@@ -707,9 +715,18 @@ button[aria-disabled="true"] {
   margin-bottom: 10px;
 }
 
+/* 구역 제목은 **한 줄로 둔다** · §6-100
+   제목과 설명이 한 줄을 나눠 쓰는데, 좁은 칸에서는 제목이 먼저 접혀
+   "모션 실행으로 / 보내기" 처럼 갈라졌다 · 줄여야 하는 쪽은 설명이다. */
+.section-head > strong {
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
 .section-head span {
   color: var(--muted);
   font-size: 13px;
+  min-width: 0;
 }
 
 
@@ -723,4 +740,13 @@ button[aria-disabled="true"] {
   background: #f4f8fc;
   color: #4a5666;
   font-size: 12px;
+}
+
+/* 세션 버튼을 뱃지 줄에 태운다 · §6-100 · 버튼 세 개로 한 줄을 통째로 쓰던
+   자리를 없앤다 */
+.coord-badge-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
 }

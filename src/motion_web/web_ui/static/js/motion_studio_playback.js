@@ -125,7 +125,6 @@ export function motionStudioOverdubHint(ownedSpans, elapsedSec) {
 }
 
 
-
 export function createMotionStudioPlaybackController({
   state,
   el,

@@ -132,7 +132,6 @@
   .motion-test-results-grid,
   .servo-action-groups,
   .motion-file-layout,
-  .motion-file-detail-grid,
   .motion-file-summary,
   .motion-mapping-toolbar,
   .motion-mapping-form {
@@ -270,12 +269,17 @@
   border-bottom: 1px solid var(--line);
 }
 
+/* 한 줄에 눕힌다 · §6-100
+   칸마다 라벨을 값 위에 쌓고 넉넉한 여백을 주니, 다섯 칸이 화면 높이를
+   통째로 먹었다 · 여기 있는 것은 전부 **한눈에 스치는 값**이지 읽고 앉아
+   있을 것이 아니다. */
 .coordination-dashboard {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 12px;
-  margin-bottom: 16px;
-  padding: 12px 14px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-bottom: 10px;
+  padding: 8px 10px;
   background: #f8fafc;
   border-radius: 8px;
   border: 1px solid #e2e8f0;
@@ -283,20 +287,20 @@
 
 .coord-badge {
   display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
-  border-radius: 8px;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 6px;
   background: #ffffff;
   border: 1px solid #cbd5e1;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
 }
 
 .coord-badge-icon {
-  width: 14px;
-  height: 14px;
+  width: 9px;
+  height: 9px;
   border-radius: 50%;
   background: #94a3b8;
+  align-self: center;
 }
 
 .coord-badge.active .coord-badge-icon {
@@ -309,10 +313,12 @@
   box-shadow: 0 0 8px rgba(239, 68, 68, 0.4);
 }
 
+/* 라벨과 값을 나란히 · 쌓으면 칸 높이가 두 배가 된다 */
 .coord-badge-info {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: baseline;
+  gap: 6px;
+  white-space: nowrap;
 }
 
 .coord-badge-info span {
@@ -322,8 +328,14 @@
 }
 
 .coord-badge-info strong {
-  font-size: 15px;
+  font-size: 13px;
   color: #0f172a;
+}
+
+/* 세션 버튼도 같은 줄에 · 뱃지 높이에 맞춘다 */
+.coord-badge-actions > button {
+  padding: 4px 10px;
+  font-size: 12px;
 }
 
 .coord-control-groups {

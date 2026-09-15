@@ -36,8 +36,25 @@
             </div>
           </section>
 
+          <!-- 내보내기는 접기 밖으로 꺼냈다 · §6-100 · 스튜디오 작업의
+               **마지막 단계**인데 "필요할 때 펼쳐서 확인" 안에 묻혀 있었다 -->
+          <section class="motion-file-subsection studio-export-panel">
+            <div class="section-head compact">
+              <strong>모션 실행으로 보내기</strong>
+              <span>재생 선택 체크 기준 · 연한 파란색 행과 무관</span>
+            </div>
+            <div id="studioExportTarget" class="studio-export-target" data-state="empty">
+              내보내기 대상 없음 · 재생 선택 레이어를 1개만 체크하세요
+            </div>
+            <div class="studio-export-row">
+              <input id="studioExportName" type="text" placeholder="내보낼 모션 파일명">
+              <button id="studioExportButton" class="primary" type="button" disabled>모션 실행 파일 저장</button>
+            </div>
+            <small>스튜디오 편집본과 독립된 파일로 저장되며, 모션 실행에서 별도로 재생 등록합니다.</small>
+          </section>
+
           <details class="motion-file-subsection studio-axis-panel">
-            <summary><strong>축 상태 및 파일 내보내기</strong><span>필요할 때 펼쳐서 확인</span></summary>
+            <summary><strong>축 상태</strong><span>필요할 때 펼쳐서 확인</span></summary>
             <div class="studio-secondary-grid">
               <div class="studio-axis-status">
                 <div class="section-head compact">
@@ -50,15 +67,6 @@
                     <tbody id="studioAxisRows"><tr><td colspan="4" class="empty">프로젝트를 불러오세요</td></tr></tbody>
                   </table>
                 </div>
-              </div>
-              <div class="studio-export-panel">
-                <div class="section-head compact"><strong>모션 실행으로 보내기</strong><span>재생 선택 체크 기준 · 연한 파란색 행과 무관</span></div>
-                <div id="studioExportTarget" class="studio-export-target" data-state="empty">
-                  내보내기 대상 없음 · 재생 선택 레이어를 1개만 체크하세요
-                </div>
-                <input id="studioExportName" type="text" placeholder="내보낼 모션 파일명">
-                <button id="studioExportButton" type="button" disabled>모션 실행 파일 저장</button>
-                <small>스튜디오 편집본과 독립된 파일로 저장되며, 모션 실행에서 별도로 재생 등록합니다.</small>
               </div>
             </div>
           </details>

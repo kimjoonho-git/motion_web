@@ -371,11 +371,9 @@
   border-bottom: 1px solid var(--line);
 }
 
+/* 접기 안에는 축 상태만 남았다 · 한 칸이면 격자가 필요 없다 · §6-100 */
 .studio-secondary-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(260px, 0.34fr);
-  gap: 14px;
-  align-items: start;
+  display: block;
 }
 
 .studio-axis-status,
@@ -383,13 +381,29 @@
   min-width: 0;
 }
 
+/* 내보내기는 접기 밖으로 나왔다 · 좁은 칸에 세로로 쌓던 것을 가로로 눕힌다 */
 .studio-export-panel {
   display: grid;
-  gap: 10px;
-  padding: 12px;
+  gap: 8px;
+  padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #f8fafc;
+}
+
+.studio-export-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.studio-export-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.studio-export-row button {
+  flex: 0 0 auto;
 }
 
 .studio-export-panel .section-head,
