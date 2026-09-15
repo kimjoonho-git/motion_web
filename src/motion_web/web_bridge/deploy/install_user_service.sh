@@ -178,11 +178,14 @@ mv "${INSTALL_TMP}/motion-motor.service" "${MOTOR_UNIT_FILE}"
 mv "${INSTALL_TMP}/motion-coordination.service" "${COORDINATION_UNIT_FILE}"
 
 # 웹 터미널 · ttyd 가 있을 때만 · 없는 PC 에서도 설치는 끝나야 한다
+#
+# **이 서비스는 절대 멈추지 않는다** · 설치를 돌리고 있는 창이 바로 이 서비스일
+# 수 있다 · 멈추면 자기가 자기를 죽여 설치가 9단계에서 끊긴다 · 실제로 그랬다 ·
+# 유닛 파일만 갱신하고, 꺼져 있을 때만 켠다 · 바뀐 내용은 다음에 켤 때 붙는다.
 if [[ -x /usr/bin/ttyd ]]; then
   sed -e "s|@WORKSPACE@|${WORKSPACE//&/\\&}|g" \
     "${TERMINAL_TEMPLATE}" > "${INSTALL_TMP}/motion-terminal.service"
   chmod 0644 "${INSTALL_TMP}/motion-terminal.service"
-  systemctl --user stop motion-terminal.service 2>/dev/null || true
   mv "${INSTALL_TMP}/motion-terminal.service" "${TERMINAL_UNIT_FILE}"
 else
   echo "ttyd 가 없어 웹 터미널은 건너뜁니다 · sudo apt install ttyd" >&2
@@ -192,7 +195,9 @@ systemctl --user daemon-reload
 systemctl --user enable motion-motor.service motion-control.service motion-coordination.service
 if [[ -f "${TERMINAL_UNIT_FILE}" ]]; then
   systemctl --user enable motion-terminal.service
-  systemctl --user start motion-terminal.service
+  # 이미 떠 있으면 건드리지 않는다 · 이 창이 그 서비스일 수 있다
+  systemctl --user is-active --quiet motion-terminal.service \
+    || systemctl --user start motion-terminal.service
 fi
 if [[ -n "${MOTOR_CONFIG}" ]]; then
   systemctl --user start motion-motor.service

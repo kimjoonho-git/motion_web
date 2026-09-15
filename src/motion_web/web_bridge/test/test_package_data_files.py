@@ -114,3 +114,37 @@ def test_the_installer_tries_the_build_twice():
         '빌드를 한 번만 한다 · 지운 뒤 첫 빌드가 깨지면 설치가 멈춘다'
     )
     assert '빌드를 이어서 한 번 더 합니다' in installer
+
+
+def test_the_installer_never_stops_the_terminal_it_runs_in():
+    """설치를 돌리는 창이 웹 터미널일 수 있다 · 그 서비스를 멈추면 자기가
+    자기를 죽여 설치가 중간에 끊긴다 · 실제로 9단계에서 끊겼다.
+
+    유닛 파일만 갱신하고, 꺼져 있을 때만 켠다.
+    """
+    installer = (
+        WORKSPACE / 'src/motion_web/web_bridge/deploy/install_user_service.sh'
+    ).read_text(encoding='utf-8')
+
+    assert 'systemctl --user stop motion-terminal' not in installer, (
+        '설치가 자기가 도는 터미널을 멈춘다'
+    )
+    assert 'is-active --quiet motion-terminal.service' in installer, (
+        '이미 떠 있는데 다시 켠다'
+    )
+
+
+def test_the_installer_does_not_skip_the_pull_because_of_the_submodule():
+    """`src/motion_system` 은 서브모듈이라 그 안에 빌드 찌꺼기가 생기면 부모
+    저장소에 늘 "변경됨" 으로 나온다 · 그냥 `status --porcelain` 을 보면
+    **모든 PC 에서 git 수신이 조용히 건너뛰어진다** · 설치를 돌려도 코드가
+    그대로였다 · 실제로 그 때문에 업데이트가 안 됐다.
+
+    막아야 하는 것은 "이 PC 에서 손으로 고친 추적 파일" 하나뿐이다.
+    """
+    installer = (WORKSPACE / 'src/motion_web/install.sh').read_text(encoding='utf-8')
+
+    assert '--ignore-submodules=all' in installer, '서브모듈 때문에 수신을 건너뛴다'
+    assert '--untracked-files=no' in installer
+    # 건너뛸 때는 눈에 띄어야 한다 · 조용히 지나가면 사람이 못 본다
+    assert '코드가 갱신되지 않습니다' in installer

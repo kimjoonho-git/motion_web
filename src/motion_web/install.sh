@@ -79,9 +79,21 @@ sync_git_repository() {
     echo "Git origin 없음 · 수신 건너뜀"
     return 0
   fi
-  if [[ -n "$(git -C "${WORKSPACE_DIR}" status --porcelain)" ]]; then
-    echo "로컬 변경 있음 · 자동 Git 수신 건너뜀"
-    git -C "${WORKSPACE_DIR}" status --short
+  # 서브모듈과 추적 안 하는 파일은 보지 않는다 · §6-99
+  #
+  # 그냥 `status --porcelain` 을 보면 `src/motion_system`(서브모듈) 이 늘
+  # "변경됨" 으로 나온다 · 그 안에 빌드 찌꺼기(`__pycache__`)가 생기기 때문이다 ·
+  # 그래서 **모든 PC 에서 git 수신이 조용히 건너뛰어졌다** · 설치를 돌려도
+  # 코드가 그대로였다.
+  #
+  # 막아야 하는 것은 "이 PC 에서 손으로 고친 추적 파일" 하나뿐이다.
+  local dirty
+  dirty="$(git -C "${WORKSPACE_DIR}" status --porcelain \
+    --untracked-files=no --ignore-submodules=all)"
+  if [[ -n "${dirty}" ]]; then
+    echo "!! 고친 파일이 있어 Git 수신을 건너뜁니다 · 코드가 갱신되지 않습니다" >&2
+    echo "${dirty}" >&2
+    echo "!! 되돌리려면: git checkout -- <파일>" >&2
     return 0
   fi
   git -C "${WORKSPACE_DIR}" pull --recurse-submodules --ff-only
