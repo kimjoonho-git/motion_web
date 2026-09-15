@@ -79,6 +79,17 @@ def _midi_qos() -> QoSProfile:
     return QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
 
 
+def _mark_as_relayed(data: str) -> str:
+    """건너온 장치 상태에 "내 USB 가 아니다" 표시를 붙인다 · §6-94"""
+    try:
+        payload = json.loads(str(data or ''))
+    except (json.JSONDecodeError, TypeError):
+        return data
+    if not isinstance(payload, dict):
+        return data
+    return json.dumps({**payload, 'relay': True}, ensure_ascii=False)
+
+
 def _is_relay_announcement(data: Any) -> bool:
     """중계가 낸 장치 알림인가 · §6-94
 
@@ -238,18 +249,42 @@ class MidiRelayBridge:
             # 내가 낸 알림이다 · 장치가 실제로 빠진 것이 아니다
             return
         connected = bool(payload.get('connected'))
-        if connected == self._device_connected:
+        if not connected and self.rules.is_target and self._remote_seen_at is not None:
+            # 내 브리지가 "장치 없음" 을 냈다 · §6-94
+            #
+            # 맞는 말이다 · 내 USB 에는 아무것도 없다 · 그런데 나는 지금
+            # **남의 장치**를 쓰고 있다 · 이 PC 에서 `MIDI 재연결` 을 누르면
+            # 장치 없는 내 브리지가 포트를 못 찾아 이 말을 내고, 그대로 두면
+            # `midi_control` 이 쓰고 있던 남의 장치까지 놓아 버린다.
+            self._announce_local_device(
+                True, f'{self._remote_source_pc_id} 의 MIDI 를 씁니다'
+            )
             return
-        self._device_connected = connected
-        if not connected:
-            # 장치가 빠졌으면 중계도 끝이다 · 대상만 남겨 두면 다시 꽂는
-            # 순간 아무도 누르지 않았는데 남의 PC 로 흘러 나간다
-            previous = self.rules.target_pc_id
-            self.rules.update(target_pc_id='')
-            if previous and previous != self.rules.pc_id:
-                self._announce_to_target(previous, False, '')
-        self._refresh_device_owner()
-        self._sync_local_midi_subscription()
+        if connected != self._device_connected:
+            self._device_connected = connected
+            if not connected:
+                # 장치가 빠졌으면 중계도 끝이다 · 대상만 남겨 두면 다시 꽂는
+                # 순간 아무도 누르지 않았는데 남의 PC 로 흘러 나간다
+                previous = self.rules.target_pc_id
+                self.rules.update(target_pc_id='')
+                if previous and previous != self.rules.pc_id:
+                    self._announce_to_target(previous, False, '')
+            self._refresh_device_owner()
+            self._sync_local_midi_subscription()
+
+        # **재연결이 주인을 바꾸지는 않는다** · §6-94
+        #
+        # 장치가 꽂힌 PC 에서 `MIDI 재연결` 을 누르면 브리지가 같은 통로로
+        # "붙었다" 고 다시 알린다 · 그 말은 **물리적 사실**이지 누가 쓰느냐가
+        # 아닌데, 이 PC 의 `midi_control` 은 그것만 보고 장치를 도로 가져간다 ·
+        # 그러면 넘긴 PC 와 받은 PC 가 같은 표면을 함께 민다.
+        #
+        # 그래서 넘긴 상태면 **곧바로 바로잡는다** · 되돌리는 길은 대상을
+        # 비우는 것 하나뿐이다.
+        if connected and self.rules.relaying:
+            self._announce_local_device(
+                False, f'MIDI 를 {self.rules.target_pc_id} 가 쓰는 중입니다'
+            )
 
     def _announce_local_device(self, connected: bool, message: str) -> None:
         """이 PC 의 `midi_control` 에게 장치 상태를 알린다 · §6-94
@@ -408,7 +443,19 @@ class MidiRelayBridge:
         elif not self.rules.accepts_feedback(message):
             return
         out = String()
-        out.data = str(message.payload or '')
+        payload = str(message.payload or '')
+        if channel == 'connection_state':
+            # **내 USB 이야기가 아니라는 표시를 남긴다** · §6-94
+            #
+            # 이 통로에는 두 가지가 흐른다 · 내 브리지가 내는 물리적 사실과,
+            # 남의 장치 사실을 건너 받은 것 · 표시가 없으면 이 PC 의 중계가
+            # 건너온 "붙었다" 를 제 USB 이야기로 읽고 장치 주인을 자기로
+            # 바꾼다 · 그러면 중계가 멈춰 페이더·LED 가 안 돌아간다.
+            #
+            # 내용을 바꾸는 것이 아니라 **어디서 왔는지**를 붙이는 것이다 ·
+            # `midi_control` 은 이 칸을 보지 않는다.
+            payload = _mark_as_relayed(payload)
+        out.data = payload
         self._local_channel_pub[channel].publish(out)
         self._counters['channel_received'] += 1
 

@@ -307,17 +307,75 @@ def test_the_device_channels_go_with_the_midi(node, clock):
 
 
 def test_the_received_channels_are_republished_untouched(node, clock):
-    """받는 PC 가 제 것으로 판단할 수 있게, 온 것을 그대로 내보낸다."""
+    """받는 PC 가 제 것으로 판단할 수 있게, 온 것을 그대로 내보낸다.
+
+    장치 상태만 예외다 · **어디서 왔는지**를 한 칸 붙인다 · 내용은 그대로 두되,
+    이 PC 의 중계가 남의 장치를 제 USB 로 착각하지 않게 하는 표시다.
+    """
     bridge = _bridge(node, clock, pc_id='pc2')
     node.deliver(topics.GROUP_MIDI, _incoming())
 
     node.deliver(
         topics.GROUP_MIDI_FEEDBACK,
+        _channel('input_state', '{"physical_touch":[true]}'),
+    )
+    node.deliver(
+        topics.GROUP_MIDI_FEEDBACK,
         _channel('connection_state', '{"connected":true}'),
     )
 
-    local = node.sent(topics.XTOUCH_CONNECTION_STATE)
-    assert [message.data for message in local] == ['{"connected":true}']
+    assert [m.data for m in node.sent(topics.XTOUCH_INPUT_STATE)] == [
+        '{"physical_touch":[true]}'
+    ]
+    state = json.loads(node.sent(topics.XTOUCH_CONNECTION_STATE)[-1].data)
+    assert state['connected'] is True, '장치 사실이 바뀌었다'
+    assert state['relay'] is True, '어디서 왔는지 표시가 없다'
+
+
+def test_a_relayed_device_state_is_not_mistaken_for_my_own_usb(node, clock):
+    """건너온 장치 상태가 되돌아와도 장치 주인은 안 바뀐다 · §6-94
+
+    표시가 없으면 이 PC 의 중계가 그것을 제 USB 이야기로 읽고 장치 주인을
+    자기로 바꾼다 · 그러면 중계가 멈춰 페이더·LED 가 안 돌아간다 · 장치를
+    든 PC 에서 `MIDI 재연결` 을 눌렀을 때 실제로 그렇게 멈췄다.
+    """
+    bridge = _bridge(node, clock, pc_id='pc2')
+    node.deliver(topics.GROUP_MIDI, _incoming())
+
+    before = len(node.sent(topics.XTOUCH_CONNECTION_STATE))
+    node.deliver(
+        topics.GROUP_MIDI_FEEDBACK,
+        _channel('connection_state', '{"connected":true}'),
+    )
+    # 실제 ROS 처럼 방금 낸 것이 자기 구독으로 되돌아온다
+    for message in node.sent(topics.XTOUCH_CONNECTION_STATE)[before:]:
+        node.deliver(topics.XTOUCH_CONNECTION_STATE, message)
+
+    assert bridge.rules.device_pc_id == 'pc1', '남의 장치를 제 것으로 알았다'
+    assert bridge.rules.should_send_feedback, '중계가 멈춰 페이더가 안 돌아간다'
+
+
+def test_my_own_empty_bridge_never_takes_away_a_borrowed_device(node, clock):
+    """받는 PC 에서 `MIDI 재연결` 을 눌러도 쓰던 장치를 놓지 않는다 · §6-94
+
+    이 PC 에는 장치가 없으니 제 브리지는 포트를 못 찾고 "장치 없음" 을 낸다 ·
+    맞는 말이지만 지금 쓰는 것은 **남의 장치**다 · 그대로 두면 `midi_control`
+    이 그것까지 놓아 버린다.
+    """
+    bridge = _bridge(node, clock, pc_id='pc2')
+    node.deliver(topics.GROUP_MIDI, _incoming())
+
+    before = len(node.sent(topics.XTOUCH_CONNECTION_STATE))
+    node.deliver(
+        topics.XTOUCH_CONNECTION_STATE,
+        String(data='{"connected":false,"message":"port not found"}'),
+    )
+
+    after = node.sent(topics.XTOUCH_CONNECTION_STATE)[before:]
+    assert after, '제 브리지의 "장치 없음" 을 바로잡지 않았다'
+    assert json.loads(after[-1].data)['connected'] is True, (
+        '남의 장치를 쓰는 중인데 놓아 버렸다'
+    )
 
 
 def test_only_the_target_sends_the_surface_back(node, clock):
@@ -509,3 +567,62 @@ def test_the_relays_own_announcement_never_leaves_this_pc(node, clock):
     assert ('pc2', False) not in _group_connection_states(node), (
         '이 PC 가 놓는다는 말이 받는 PC 에게 갔다 · 그 PC 는 아무것도 못 움직인다'
     )
+
+
+def test_a_device_reconnect_does_not_take_the_midi_back(node, clock):
+    """장치를 다시 연결해도 주인은 안 바뀐다 · §6-94
+
+    장치가 꽂힌 PC 에서 `MIDI 재연결` 을 누르면 브리지가 "붙었다" 고 다시
+    알린다 · 그 말을 그대로 두면 이 PC 의 `midi_control` 이 장치를 도로
+    가져가, 넘긴 PC 와 받은 PC 가 같은 표면을 함께 민다.
+
+    **누가 쓰는지는 재연결로 바뀌지 않는다** · 되돌리려면 대상을 비워야 한다.
+    """
+    bridge = _bridge(node, clock)
+    _connect(node)
+    bridge.set_target('pc2')
+
+    before = len(node.sent(topics.XTOUCH_CONNECTION_STATE))
+    _connect(node, connected=True)
+    after = node.sent(topics.XTOUCH_CONNECTION_STATE)[before:]
+
+    assert bridge.rules.target_pc_id == 'pc2', '재연결이 주인을 바꿔 버렸다'
+    assert after, '재연결을 듣고도 장치를 놓는다고 다시 알리지 않았다'
+    assert json.loads(after[-1].data)['connected'] is False, (
+        '재연결 뒤 이 PC 가 장치를 도로 가져갔다'
+    )
+
+
+def test_a_device_reconnect_still_reaches_the_target(node, clock):
+    """받는 PC 는 장치가 되살아난 것을 알아야 한다."""
+    bridge = _bridge(node, clock)
+    _connect(node)
+    bridge.set_target('pc2')
+
+    before = len(_group_connection_states(node))
+    _connect(node, connected=True)
+
+    assert ('pc2', True) in _group_connection_states(node)[before:], (
+        '장치가 되살아난 것이 쓰는 PC 에게 가지 않았다'
+    )
+
+
+def test_the_target_can_ask_the_device_pc_to_reconnect(node, clock):
+    """받은 PC 에서 `MIDI 재연결` 을 누르면 장치가 꽂힌 PC 로 가야 한다 · §6-94
+
+    장치는 남의 USB 에 있다 · 그 PC 의 브리지만 포트를 다시 열 수 있으므로,
+    이 요청은 반드시 건너가야 한다 · 안 가면 받은 PC 에서는 아무 일도 안
+    일어난다.
+    """
+    bridge = _bridge(node, clock, pc_id='pc2')
+    node.deliver(topics.GROUP_MIDI, _incoming())
+
+    node.deliver(topics.XTOUCH_CONNECTION_COMMAND, String(data='connect'))
+
+    sent = [
+        message for message in node.sent(topics.GROUP_MIDI_FEEDBACK)
+        if message.channel == 'connection_command'
+    ]
+    assert sent, '재연결 요청이 장치를 든 PC 로 가지 않았다'
+    assert sent[-1].payload == 'connect', '내용이 바뀌었다'
+    assert sent[-1].target_pc_id == 'pc1', '장치를 든 PC 가 아닌 곳으로 갔다'
