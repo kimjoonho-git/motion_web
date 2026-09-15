@@ -25,7 +25,7 @@ function fixture({ check, status, start, confirmed = true } = {}) {
   };
   const calls = {
     start: 0, finished: 0, alerts: [], intervals: [], cleared: 0,
-    reloaded: 0, timeouts: [],
+    reloaded: 0, timeouts: [], ticks: [],
   };
   const controller = createWorkspaceUpdateController({
     elements,
@@ -38,7 +38,11 @@ function fixture({ check, status, start, confirmed = true } = {}) {
     alert: (message) => calls.alerts.push(message),
     onFinished: () => { calls.finished += 1; },
     timers: {
-      setInterval: (fn) => { calls.intervals.push(fn); return calls.intervals.length; },
+      // 1초 시계와 2초 확인이 따로 돈다 · 검사는 확인 쪽만 직접 부른다
+      setInterval: (fn, ms) => {
+        (ms === 1000 ? calls.ticks : calls.intervals).push(fn);
+        return calls.intervals.length + calls.ticks.length;
+      },
       clearInterval: () => { calls.cleared += 1; },
       setTimeout: (fn) => { calls.timeouts.push(fn); return calls.timeouts.length; },
     },
@@ -336,4 +340,43 @@ test('완료 문구가 "최신입니다" 에 덮이지 않는다', async () => {
   await controller.poll();
 
   assert.notEqual(elements.summary.textContent, '최신입니다');
+});
+
+
+test('서버가 조용해도 화면은 1초마다 스스로 움직인다', async () => {
+  /** 확인 응답이 늦거나 웹이 멈춘 구간에는 화면이 "0초 전" 에서 굳어 보인다 ·
+   * 실제로 그렇게 보였고 사용자는 멈춘 줄 안다 · 경과는 서버와 무관하게
+   * 올라가야 한다. */
+  let clock = 1_000_000_000_000;
+  const elements = {
+    summary: element(), current: element(), target: element(), phase: element(),
+    checkButton: element(), startButton: element(), log: element(),
+    logCaption: element(),
+  };
+  const ticks = [];
+  const controller = createWorkspaceUpdateController({
+    elements,
+    api: {
+      check: async () => ({ fetched: true, up_to_date: false, behind: 1 }),
+      status: async () => { throw new Error('Failed to fetch'); },
+      start: async () => ({ success: true }),
+    },
+    confirm: async () => true,
+    alert: () => {},
+    timers: {
+      setInterval: (fn, ms) => { if (ms === 1000) ticks.push(fn); return ticks.length; },
+      clearInterval: () => {},
+      setTimeout: () => 0,
+    },
+    now: () => clock,
+  });
+
+  await controller.start();
+  const first = elements.phase.textContent;
+  clock += 5000;
+  ticks[0]();
+
+  assert.ok(ticks.length > 0, '1초 시계가 없다');
+  assert.notEqual(elements.phase.textContent, first, '화면이 굳어 있다');
+  assert.match(elements.phase.textContent, /5초/);
 });

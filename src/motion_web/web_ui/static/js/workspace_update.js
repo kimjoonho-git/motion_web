@@ -83,6 +83,9 @@ export function createWorkspaceUpdateController({
   //: 빌드 동안에는 웹 서버 자신이 멈춰 화면이 아무것도 못 받는다 · 그 구간은
   //: 누른 시각에서 흐른 시간으로만 셀 수 있다 · 없으면 "무기한 대기" 로 보인다
   let startedAt = 0;
+  //: 마지막으로 그린 것 · 1초 시계가 이것을 다시 그려 경과를 올린다
+  let lastPainted = null;
+  let tickTimer = null;
 
   function renderCheck(check = {}) {
     const blocked = String(check.blocked_reason || '');
@@ -106,6 +109,7 @@ export function createWorkspaceUpdateController({
   }
 
   function renderProgress(status = {}, { disconnected = false } = {}) {
+    lastPainted = { status, disconnected };
     const state = String(status.status || 'idle');
     const running = state === 'running';
     const label = UPDATE_PHASE_LABEL[String(status.phase || '')]
@@ -151,9 +155,25 @@ export function createWorkspaceUpdateController({
   }
 
   function stop() {
-    if (pollTimer === null) return;
-    timers.clearInterval(pollTimer);
-    pollTimer = null;
+    if (pollTimer !== null) {
+      timers.clearInterval(pollTimer);
+      pollTimer = null;
+    }
+    if (tickTimer !== null) {
+      timers.clearInterval(tickTimer);
+      tickTimer = null;
+    }
+  }
+
+  /** 1초마다 화면만 다시 그린다 · §6-97
+   *
+   * 서버에서 오는 것과 **무관하게** 경과 시간이 올라가야 한다 · 확인 응답이
+   * 늦거나 웹이 멈춘 구간에는 화면이 "0초 전" 에서 굳어 보인다 · 실제로
+   * 그렇게 보였고, 사용자는 멈춘 줄 안다.
+   */
+  function tick() {
+    if (!lastPainted) return;
+    renderProgress(lastPainted.status, { disconnected: lastPainted.disconnected });
   }
 
   async function poll() {
@@ -187,6 +207,7 @@ export function createWorkspaceUpdateController({
 
   function watch() {
     stop();
+    tickTimer = timers.setInterval(tick, 1000);
     pollTimer = timers.setInterval(poll, POLL_INTERVAL_MS);
     // 첫 확인을 2초 뒤로 미루면 그동안 **지난 기록**이 화면에 남는다 ·
     // 실패로 끝났던 기록이면 누르자마자 "실패" 로 보인다
@@ -212,6 +233,7 @@ export function createWorkspaceUpdateController({
     });
     if (!confirmed) return;
     if (elements.startButton) elements.startButton.disabled = true;
+    startedAt = now() / 1000;
     // 지난 기록을 먼저 지운다 · 옛 실패 글과 옛 기록이 새 작업의 것처럼 보인다
     renderProgress({
       status: 'running', phase: 'starting', message: '업데이트를 시작합니다',
@@ -221,7 +243,6 @@ export function createWorkspaceUpdateController({
     // 물어보므로(fetch) 몇 초 걸릴 수 있다 · 그때까지 기다렸다 지켜보기
     // 시작하면 화면이 "시작하는 중 · 0초 전" 에서 멈춘 것처럼 보인다 ·
     // 실제로 그렇게 보였다.
-    startedAt = now() / 1000;
     watch();
     try {
       await api.start();
