@@ -96,6 +96,7 @@ export function createCoordinationController({ el }) {
       relay: runtime.midi_relay || {},
       config: runtime.config || config,
       peers: Array.isArray(runtime.peers) ? runtime.peers : [],
+      joined: runtime.joined === true,
     });
     if (el.midiTargetState) el.midiTargetState.textContent = view.state;
     if (el.midiTargetMessage) {

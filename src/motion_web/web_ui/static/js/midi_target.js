@@ -14,18 +14,25 @@ function currentUser(relay = {}) {
   return String(relay.target_pc_id || relay.device_pc_id || '');
 }
 
-export function midiTargetView({ relay = {}, config = {}, peers = [] } = {}) {
+export function midiTargetView({
+  relay = {}, config = {}, peers = [], joined = false,
+} = {}) {
   const me = String(config.pc_id || relay.pc_id || '');
   const deviceHolder = String(relay.device_pc_id || '');
   const holdsDevice = relay.holds_device === true;
   const current = currentUser(relay);
 
-  const names = [
-    { pc_id: me, label: `이 PC (${me || '이름 없음'})` },
-    ...(Array.isArray(peers) ? peers : []).map((peer) => ({
+  // **연동 중인 PC 중에서만 고른다** · 통신이 끊긴 PC 로 넘기면 MIDI 가 아무
+  // 데도 가지 않고, 그 PC 는 자기가 대상이 된 줄도 모른다
+  const online = (Array.isArray(peers) ? peers : [])
+    .filter((peer) => String(peer.state || '') === 'online')
+    .map((peer) => ({
       pc_id: String(peer.pc_id || ''),
       label: String(peer.display_name || peer.pc_id || ''),
-    })),
+    }));
+  const names = [
+    { pc_id: me, label: `이 PC (${me || '이름 없음'})` },
+    ...online,
   ].filter((item) => item.pc_id);
 
   let reason = '';
@@ -33,6 +40,10 @@ export function midiTargetView({ relay = {}, config = {}, peers = [] } = {}) {
     reason = '그룹에 MIDI 장치가 없습니다';
   } else if (!holdsDevice) {
     reason = `MIDI 장치는 ${deviceHolder} 에 있습니다 · 그 PC 에서 정하세요`;
+  } else if (!joined) {
+    reason = '그룹에 참가하지 않았습니다 · 참가해야 다른 PC 로 넘길 수 있습니다';
+  } else if (online.length === 0) {
+    reason = '연동 중인 다른 PC 가 없습니다';
   }
 
   return {
@@ -51,7 +62,8 @@ export function midiTargetView({ relay = {}, config = {}, peers = [] } = {}) {
       active: item.pc_id === current,
       // 장치를 든 PC 를 고르는 것이 곧 되돌리기다
       isDevice: item.pc_id === deviceHolder,
-      disabled: !holdsDevice || item.pc_id === current,
+      disabled: !holdsDevice || item.pc_id === current
+        || (item.pc_id !== deviceHolder && !joined),
     })),
   };
 }
