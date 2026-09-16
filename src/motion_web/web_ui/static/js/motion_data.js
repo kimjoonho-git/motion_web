@@ -1587,6 +1587,49 @@ export function createMotionDataController({
     }).join('');
   }
 
+  /** 모션 파일 버튼을 켜고 끈다 · §6-100
+   *
+   * **화면 조각에 딸려 있으면 안 된다** · 전에는 `선택 파일 상세`를 그리는
+   * 함수 안에 끼어 있었다 · 그 화면을 걷어내자 함수째 사라져 재생 등록도
+   * 삭제도 못 하는 상태가 됐다 · 버튼은 그 화면이 없어도 있다.
+   */
+  function renderMotionFileActions() {
+    const file = selectedFile;
+    const registered = Boolean(file && file.id === registeredMotionFileIdValue);
+    if (el.deleteMotionFileButton) {
+      el.deleteMotionFileButton.disabled = !file || loading;
+      el.deleteMotionFileButton.title = registered
+        ? '재생 등록을 해제한 뒤 삭제할 수 있습니다'
+        : '';
+    }
+    if (el.exportMotionFileToStudioButton) {
+      el.exportMotionFileToStudioButton.disabled = !file || loading;
+      el.exportMotionFileToStudioButton.title = file
+        ? '선택한 실행 파일을 독립된 스튜디오 레이어로 내보냅니다'
+        : '모션 파일을 먼저 선택하세요';
+    }
+    if (el.registerMotionFileButton) {
+      el.registerMotionFileButton.disabled = (
+        !file || !selectedMappingId || loading || mappingLoading
+        || mappingDirty || registered
+      );
+      el.registerMotionFileButton.textContent = registered
+        ? '재생 등록됨'
+        : (mappingDirty ? '설정 저장 필요' : '재생 등록');
+      el.registerMotionFileButton.title = !selectedMappingId
+        ? '저장된 모션축 설정을 먼저 선택하세요'
+        : (mappingDirty ? '모션축 설정의 편집 내용을 먼저 저장하거나 되돌리세요' : '');
+    }
+    if (el.unregisterMotionFileButton) {
+      el.unregisterMotionFileButton.disabled = (
+        !registered || !selectedMappingId || loading || mappingLoading || mappingDirty
+      );
+      el.unregisterMotionFileButton.title = registered
+        ? '현재 모션축 설정에서 이 파일의 재생 등록을 해제합니다'
+        : '현재 재생 등록된 파일을 선택하세요';
+    }
+  }
+
   function renderMappingSelect() {
     if (!el.motionMappingSelect) return;
     const options = [
@@ -1890,6 +1933,7 @@ export function createMotionDataController({
   function render() {
     renderMotionTabs();
     renderFileRows();
+    renderMotionFileActions();
     renderMappingPanel();
     renderMotionRunPanel();
   }
