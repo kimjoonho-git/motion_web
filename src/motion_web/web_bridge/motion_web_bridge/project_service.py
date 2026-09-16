@@ -368,16 +368,29 @@ class ProjectService:
     ) -> Dict[str, Any]:
         self.bridge._ensure_project_mutation_allowed(project_id)
         if str(payload.get('category') or '').strip() == 'motions':
-            raise ValueError(
-                '외부 모션 JSON 파일 가져오기는 지원하지 않습니다. '
-                '모션 스튜디오에서 실행 파일을 저장하세요'
-            )
+            self._ensure_motion_import_target(project_id)
         return self.repository.import_text(
             project_id,
             payload.get('category'),
             payload.get('file_name'),
             payload.get('content'),
         )
+
+    def _ensure_motion_import_target(self, project_id: Any) -> None:
+        """모션축 설정이 없는 프로젝트는 모션 파일을 받지 않는다.
+
+        모션 파일 혼자서는 아무것도 못 한다 · 재생 등록도, 실행도,
+        스튜디오로 보내기도 모션축 설정을 먼저 요구한다. 넣어 봐야 파일만
+        놓이고, 그 사이 `import_text`가 비어 있던 `active_files`에 그 파일을
+        말없이 꽂는다. 문 앞에서 막는 편이 낫다.
+        """
+        summary = self.repository.get_project(project_id)['project']
+        counts = summary.get('counts') if isinstance(summary.get('counts'), dict) else {}
+        if not int(counts.get('motion_axis_matching') or 0):
+            raise ValueError(
+                '모션축 설정이 없는 프로젝트에는 모션 파일을 넣을 수 없습니다. '
+                '모션축 설정을 먼저 만드세요'
+            )
 
     def activate_file(
         self, project_id: Any, category: Any, file_name: Any

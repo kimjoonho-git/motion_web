@@ -11,6 +11,7 @@ import {
   fetchMotionMappings,
   fetchMotionRunStatus,
   initializeMotionRun,
+  projectFileDownloadUrl,
   saveMotionMapping,
   startMotionRun,
   stopMotionRun,
@@ -528,6 +529,8 @@ export function createMotionDataController({
   let files = [];
   let selectedFileId = null;
   let selectedFile = null;
+  // 내려받기 주소가 프로젝트 번호를 요구한다 · 목록 응답이 실어 온다.
+  let motionProjectId = '';
   let mappingFiles = [];
   let selectedMappingId = null;
   let mappingDraft = emptyMappingDraft();
@@ -1608,6 +1611,12 @@ export function createMotionDataController({
         ? '선택한 실행 파일을 독립된 스튜디오 레이어로 내보냅니다'
         : '모션 파일을 먼저 선택하세요';
     }
+    if (el.downloadMotionFileButton) {
+      el.downloadMotionFileButton.disabled = !file || !motionProjectId || loading;
+      el.downloadMotionFileButton.title = file
+        ? '이 파일을 지금 보고 있는 컴퓨터로 내려받습니다'
+        : '모션 파일을 먼저 선택하세요';
+    }
     if (el.registerMotionFileButton) {
       el.registerMotionFileButton.disabled = (
         !file || !selectedMappingId || loading || mappingLoading
@@ -2220,6 +2229,24 @@ export function createMotionDataController({
     }
   }
 
+  /** 파일을 **이 웹을 보고 있는 컴퓨터**로 내려받는다 · 서버끼리 옮기지 않는다.
+   *
+   * blob 이 아니라 평범한 링크다. blob 은 헤드리스에서 확인이 안 됐고, 서버가
+   * 한글 파일명을 이미 `filename*=utf-8''` 로 붙여 준다.
+   */
+  function downloadSelectedMotionFile() {
+    const file = selectedFile;
+    if (!file || !motionProjectId) {
+      setMessage('내려받을 모션 파일을 먼저 선택하세요');
+      return;
+    }
+    const anchor = document.createElement('a');
+    anchor.href = projectFileDownloadUrl(motionProjectId, 'motions', file.id);
+    anchor.download = file.filename || file.id;
+    anchor.click();
+    setMessage(`내려받기: ${file.filename || file.id}`);
+  }
+
   async function registerSelectedMotionFile() {
     if (!selectedFile || !selectedMappingId) {
       setMessage('재생 등록할 모션 파일과 저장된 모션축 설정을 먼저 선택하세요');
@@ -2534,7 +2561,11 @@ export function createMotionDataController({
   }
 
   const fileManager = createMotionFileManager({
-    onFilesChanged: (newFiles) => { files = newFiles; render(); },
+    onFilesChanged: (newFiles, projectId) => {
+      files = newFiles;
+      motionProjectId = String(projectId || '');
+      render();
+    },
     onFileSelected: (id, file) => { selectedFileId = id; selectedFile = file; render(); },
     onExportToStudio: async (id) => {
       const result = await onExportMotionFileToStudio(id);
@@ -2788,6 +2819,7 @@ export function createMotionDataController({
     el.registerMotionFileButton?.addEventListener('click', registerSelectedMotionFile);
     el.unregisterMotionFileButton?.addEventListener('click', unregisterSelectedMotionFile);
     el.exportMotionFileToStudioButton?.addEventListener('click', exportSelectedFileToStudio);
+    el.downloadMotionFileButton?.addEventListener('click', downloadSelectedMotionFile);
     if (el.deleteMotionFileButton) {
       el.deleteMotionFileButton.addEventListener('click', deleteSelectedFile);
     }

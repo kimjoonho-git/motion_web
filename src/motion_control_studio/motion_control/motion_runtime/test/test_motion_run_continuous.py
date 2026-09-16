@@ -1103,3 +1103,110 @@ def test_plan_builder_reads_project_dirs_from_the_manager(tmp_path):
     # 프로젝트 분기를 탔다면 디렉터리를 함께 넘긴다
     assert ('motion', tmp_path / 'motions') in asked
     assert ('mapping', tmp_path / 'mappings') in asked
+
+
+def _shared_file_manager(mapping_motion_ids, records):
+    """한 모션 파일을 여러 PC 가 나눠 가지는 모양 · §6-101
+
+    연동은 원래 이렇게 돈다 · 파일 하나에 1-1, 1-2 가 들어 있고 피시1 은
+    1-1 만, 피시2 는 1-2 만 제 모션축 설정에 가지고 있다.
+    """
+    manager = MotionRunManager.__new__(MotionRunManager)
+    manager._player = MotionPlayer(manager)
+    manager._plan_builder = PlanBuilder(manager)
+    manager.period_sec = 0.02
+    manager._mapping_file_path = lambda _file_id: None
+    manager._motion_file_path = lambda _file_id: None
+    manager._load_mapping = lambda _path: {
+        'motion_file_id': '',
+        'mappings': [
+            {
+                'motion_id': motion_id,
+                'motor_axis': index,
+                'reference_position_deg': 100.0,
+                'initial_mode': 'first_frame',
+                'initial_move_time_sec': 5.0,
+                'gear_ratio': 50.0,
+            }
+            for index, motion_id in enumerate(mapping_motion_ids)
+        ],
+    }
+    manager._load_motion_records = lambda _path: list(records)
+    manager._current_motors = lambda: [{'axis': 0}, {'axis': 1}]
+    manager._motor_for_axis = lambda axis, motors: motors[axis]
+    _patch_rule('_motor_ready_error', lambda _motor: '')
+    _patch_rule('_target_range_limit_error', lambda _motor, _low, _high: '')
+    _patch_rule('_motor_type', lambda _motor: 'ac_servo')
+    return manager
+
+
+def _two_axis_records():
+    records = []
+    for index, time_sec in enumerate([0.0, 0.5, 1.0]):
+        for motion_id, scale in (('1-1', 10.0), ('1-2', 20.0)):
+            records.append({
+                'frame': len(records),
+                'time_sec': time_sec,
+                'motion_id': motion_id,
+                'value': time_sec * scale,
+                'row_index': len(records),
+            })
+    return records
+
+
+def _shared_file_plan(mapping_motion_ids):
+    manager = _shared_file_manager(mapping_motion_ids, _two_axis_records())
+    return manager._plan_builder.build({
+        'motion_file_id': 'show.json',
+        'mapping_file_id': 'axes.yaml',
+    })
+
+
+def test_motion_file_axes_missing_from_this_pc_are_skipped_in_silence():
+    """모션축 설정에 없는 축은 조용히 빠진다 · 실행을 막지 않는다.
+
+    예전에는 파일에 들어 있는 축을 전부 "요구한 축" 으로 바꿔서, 남의 축이
+    하나라도 섞이면 `requested Motion ID is unavailable` 로 실행이 통째로
+    거부됐다. 그래서 PC 마다 제 축만 든 파일을 따로 만들어야 했다.
+    """
+    plan = _shared_file_plan(['1-1'])
+
+    assert [axis['motion_id'] for axis in plan['axes']] == ['1-1']
+    assert not plan.get('errors')
+
+
+def test_each_pc_runs_its_own_axes_from_one_shared_motion_file():
+    """같은 파일로 PC 마다 제 축만 돈다 · 재생 길이는 그대로다.
+
+    길이가 달라지면 연동 회차가 어긋난다. 스튜디오가 만드는 파일은 한 시각에
+    모든 축을 함께 적으므로, 축을 덜어내도 시간 범위는 안 변한다.
+    """
+    first = _shared_file_plan(['1-1'])
+    second = _shared_file_plan(['1-2'])
+    both = _shared_file_plan(['1-1', '1-2'])
+
+    assert [axis['motion_id'] for axis in first['axes']] == ['1-1']
+    assert [axis['motion_id'] for axis in second['axes']] == ['1-2']
+    assert [axis['motion_id'] for axis in both['axes']] == ['1-1', '1-2']
+    durations = {
+        plan['summary']['duration_sec'] for plan in (first, second, both)
+    }
+    assert durations == {1.0}
+
+
+def test_mapping_axis_without_motion_data_stays_out_of_the_way():
+    """매핑에만 있고 파일에 없는 축도 실행을 막지 않는다 · 양방향이다."""
+    plan = _shared_file_plan(['1-1', '1-3'])
+
+    assert [axis['motion_id'] for axis in plan['axes']] == ['1-1']
+
+
+def test_motion_file_with_no_usable_axis_says_so_plainly():
+    """쓸 축이 하나도 없으면 매핑 줄마다 딴소리하지 말고 한 번에 말한다."""
+    manager = _shared_file_manager(['9-9'], _two_axis_records())
+
+    with pytest.raises(ValueError, match='쓸 수 있는 축이 없습니다'):
+        manager._plan_builder.build({
+            'motion_file_id': 'show.json',
+            'mapping_file_id': 'axes.yaml',
+        })

@@ -1124,6 +1124,9 @@ projectExplorer = createProjectExplorerController({
   el,
   canChangeProject: () => canChangeProjectInWorkspace(workspaceRouteState.current()),
   canManageProjectFiles: () => canChangeProjectInWorkspace(workspaceRouteState.current()),
+  onMotionFilesChange: async () => {
+    await motionData.refreshMotionFiles();
+  },
   onOpenEditor: async (result, requestedWorkspace = '') => {
     const targetRoute = requestedWorkspace || workspaceForProjectCategory(
       result.category,

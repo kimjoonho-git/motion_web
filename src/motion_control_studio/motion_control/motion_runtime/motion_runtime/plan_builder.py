@@ -174,6 +174,34 @@ class PlanBuilder:
                 f'mapping file expects motion file {mapping_motion_file_id}, not {motion_file_id}'
             )
 
+        # 이 PC 의 모션축 설정에 없는 축은 **읽자마자 버린다** · 알리지 않는다.
+        #
+        # 연동은 원래 이 모양이다 · 한 모션 파일을 여러 PC 가 나눠 가지고 각자
+        # 제 축만 돈다. 예전에는 파일에 들어 있는 축을 전부 "요구한 축" 으로
+        # 바꿔 버려서, 남의 축이 하나라도 섞이면 실행이 통째로 거부됐다
+        # (`requested Motion ID is unavailable`). 그래서 PC 마다 제 축만 든
+        # 파일을 따로 만들어야 했다.
+        #
+        # 여기서 한 번 버리면 아래는 저절로 풀린다 · `groups` 도 요구 축도
+        # 재생 길이도 남은 축만 보고 정해진다. 파일 자체는 건드리지 않으므로
+        # 버려진 축은 그 PC 에서 자고 있을 뿐 돌려보내면 다시 산다.
+        mapping_motion_ids = {
+            str(row.get('motion_id') or '').strip()
+            for row in (mapping.get('mappings') or [])
+            if isinstance(row, dict)
+        }
+        if motion_records and mapping_motion_ids:
+            motion_records = [
+                record for record in motion_records
+                if str(record.get('motion_id') or '') in mapping_motion_ids
+            ]
+            if not motion_records and not initialization_only:
+                # 하나도 안 남았다 · 여기서 말하지 않으면 아래가 매핑 줄마다
+                # `motion file data not found` 를 뱉어 원인을 못 찾는다.
+                raise ValueError(
+                    '이 모션 파일에는 현재 모션축 설정에서 쓸 수 있는 축이 없습니다'
+                )
+
         groups = motion_run_rules._motion_groups(motion_records)
         if request_source != 'motion_studio':
             requested_motion_ids = (

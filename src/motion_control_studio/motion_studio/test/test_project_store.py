@@ -331,7 +331,7 @@ def test_editor_metadata_does_not_hide_invalid_runtime_frames(tmp_path):
         store.import_motion_file('invalid-runtime.json', 'face.yaml')
 
 
-def test_motion_file_import_rejects_id_missing_from_read_only_mapping(tmp_path):
+def test_motion_file_import_rejects_a_file_with_no_usable_axis(tmp_path):
     write_mapping(tmp_path)
     store = ProjectStore(tmp_path)
     (tmp_path / 'motions' / 'unknown-axis.json').write_text(
@@ -340,10 +340,54 @@ def test_motion_file_import_rejects_id_missing_from_read_only_mapping(tmp_path):
         encoding='utf-8',
     )
 
-    with pytest.raises(ValueError, match='모션축 설정에 없는 Motion ID: 9-9'):
+    with pytest.raises(ValueError, match='쓸 수 있는 축이 없습니다'):
         store.import_motion_file('unknown-axis.json', 'face.yaml')
 
     assert store.list_projects() == []
+
+
+def test_motion_file_import_drops_axes_this_mapping_does_not_have(tmp_path):
+    """모션축 설정에 없는 축은 조용히 빠진다 · 파일은 그대로 둔다 · §6-101
+
+    파일 하나를 여러 PC 가 나눠 갖는 것이 연동의 정상 모양이다 · 남의 축이
+    섞였다고 파일을 통째로 거절하면 받아 와도 열 수가 없다.
+
+    떼어낼 곳이 셋이다 — `motion_ids`, 프레임의 `values`, 그리고
+    `point_curves`. 곡선만 남으면 짝 없는 시각마다 불일치가 나서 합성
+    미리보기와 내보내기가 막힌다.
+    """
+    write_mapping(tmp_path, 'one-axis.yaml')
+    (tmp_path / 'motion_axis_matching' / 'one-axis.yaml').write_text(
+        'mappings:\n'
+        '- motion_id: 1-1\n'
+        '  enabled: true\n'
+        '  motor_axis: 0\n',
+        encoding='utf-8',
+    )
+    store = ProjectStore(tmp_path)
+    source = (
+        '{"title":"두 축","type":"motion_header","rotation_unit":"deg",'
+        '"editor":{"schema_version":1,"layer":{"point_curves":['
+        '{"curve_id":"keep","motion_id":"1-1","interpolation_order":1,"points":['
+        '{"point_id":"k1","time_sec":0.02,"value_deg":1.0,"tangent_mode":"linear"},'
+        '{"point_id":"k2","time_sec":0.04,"value_deg":3.0,"tangent_mode":"linear"}]},'
+        '{"curve_id":"drop","motion_id":"1-2","interpolation_order":1,"points":['
+        '{"point_id":"d1","time_sec":0.02,"value_deg":2.0,"tangent_mode":"linear"},'
+        '{"point_id":"d2","time_sec":0.04,"value_deg":4.0,"tangent_mode":"linear"}]}]}}}\n'
+        '[1,0.02,"1-1",1.0,"1-2",2.0]\n'
+        '[2,0.04,"1-1",3.0,"1-2",4.0]\n'
+    )
+    (tmp_path / 'motions' / 'two-axis.json').write_text(source, encoding='utf-8')
+
+    project = store.import_motion_file('two-axis.json', 'one-axis.yaml')
+
+    layer = project['layers'][0]
+    assert [
+        sorted(frame['values']) for frame in layer['frames']
+    ] == [['1-1'], ['1-1']]
+    assert [curve['curve_id'] for curve in layer.get('point_curves') or []] == ['keep']
+    # 원본 파일은 한 글자도 안 바뀐다 · 축을 가진 PC 로 돌아가면 다시 산다
+    assert (tmp_path / 'motions' / 'two-axis.json').read_text(encoding='utf-8') == source
 
 
 def test_workspace_identity_and_imported_layer_round_trip(tmp_path):

@@ -237,6 +237,59 @@ class ProjectStore:
             layer['source_layer_ids'] = source_layer_ids
         return layer
 
+    @staticmethod
+    def _motion_for_mapping(
+        motion: Dict[str, Any], available: set
+    ) -> Dict[str, Any]:
+        """모션축 설정에 없는 축을 떼어낸 사본을 돌려준다 · 알리지 않는다.
+
+        파일 하나를 여러 PC 가 나눠 갖는 것이 연동의 정상 모양이다 · 이 PC 가
+        못 쓰는 축이 섞였다고 파일 전체를 거절하면 받아 와도 열 수가 없다.
+
+        떼어낼 곳이 **셋**이다. 하나라도 빠뜨리면 조용히 어긋난다:
+        `motion_ids`, 프레임마다의 `values`, 그리고 `editor_layer` 의
+        `point_curves`. 곡선만 남기면 `point_curve_frame_mismatches` 가 짝이
+        없는 시각마다 `inf` 를 내서 합성 미리보기와 내보내기가 막힌다.
+
+        **읽을 때만 떼어낸다 · 파일은 건드리지 않는다.** 떨어져 나간 축은
+        원본에 그대로 있고, 축을 가진 PC 로 돌아가면 다시 산다.
+        """
+        frames = []
+        for frame in motion.get('frames') or []:
+            values = {
+                motion_id: value
+                for motion_id, value in (frame.get('values') or {}).items()
+                if motion_id in available
+            }
+            if values:
+                frames.append({**frame, 'values': values})
+        if not frames:
+            raise ValueError(
+                '이 모션 파일에는 선택한 모션축 설정에서 쓸 수 있는 축이 없습니다'
+            )
+        trimmed = {
+            **motion,
+            'motion_ids': [
+                motion_id for motion_id in motion.get('motion_ids') or []
+                if motion_id in available
+            ],
+            'frames': frames,
+            'duration_sec': max(
+                (frame['time_sec'] for frame in frames), default=0.0
+            ),
+        }
+        editor_layer = motion.get('editor_layer')
+        if isinstance(editor_layer, dict):
+            trimmed['editor_layer'] = {
+                **editor_layer,
+                'point_curves': [
+                    curve for curve in editor_layer.get('point_curves') or []
+                    if isinstance(curve, dict)
+                    and str(curve.get('motion_id') or '') in available
+                ],
+            }
+        return trimmed
+
     def import_motion_file(
         self,
         file_id: Any,
@@ -245,12 +298,7 @@ class ProjectStore:
     ) -> Dict[str, Any]:
         motion = self.read_motion_file(file_id)
         mapping = self.inspect_mapping(mapping_file_id)
-        available = set(mapping['motion_ids'])
-        missing = [motion_id for motion_id in motion['motion_ids'] if motion_id not in available]
-        if missing:
-            raise ValueError(
-                '선택한 모션축 설정에 없는 Motion ID: ' + ', '.join(missing)
-            )
+        motion = self._motion_for_mapping(motion, set(mapping['motion_ids']))
         project = self.create_project(name or motion['title'], mapping['file_id'])
         project['layers'] = [self._imported_layer(motion)]
         return self.save_project(project)
@@ -260,12 +308,7 @@ class ProjectStore:
     ) -> Dict[str, Any]:
         motion = self.read_motion_file(file_id)
         mapping = self.inspect_mapping(project.get('mapping_file_id'))
-        available = set(mapping['motion_ids'])
-        missing = [motion_id for motion_id in motion['motion_ids'] if motion_id not in available]
-        if missing:
-            raise ValueError(
-                '선택한 모션축 설정에 없는 Motion ID: ' + ', '.join(missing)
-            )
+        motion = self._motion_for_mapping(motion, set(mapping['motion_ids']))
         layer = self._imported_layer(motion)
         project.setdefault('layers', []).append(layer)
         return self.save_project(

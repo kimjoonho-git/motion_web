@@ -182,13 +182,31 @@ test('motion file list refreshes from successful Studio exports without manual p
   assert.match(main, /onMotionFilesChange: async \(\) => \{\s*await motionData\.refreshMotionFiles\(\);\s*await projectExplorer\.refresh\(true\)/);
 });
 
-test('external JSON upload is not exposed by the motion file UI or API client', () => {
+test('motion files leave and arrive as plain files · one door each', () => {
+  // 나가는 문 · 모션 실행 화면의 내려받기 · 이미 있는 프로젝트 파일 경로를
+  // 그대로 쓴다 · 전용 업로드/다운로드 API 를 새로 내지 않는다.
+  assert.match(html, /id="downloadMotionFileButton"[^>]*>내려받기</);
+  assert.match(dom, /downloadMotionFileButton/);
+  assert.match(controller, /function downloadSelectedMotionFile/);
+  assert.match(controller, /projectFileDownloadUrl\(motionProjectId, 'motions', file\.id\)/);
+  assert.doesNotMatch(api, /motion-files\/upload|uploadMotionFile/);
+
+  // 주소가 프로젝트 번호를 요구한다 · 목록 응답이 실어 오는 값만 쓴다
+  assert.match(controller, /motionProjectId = String\(projectId \|\| ''\)/);
+
+  // 들어오는 문 · 프로젝트 관리의 파일 가져오기 하나뿐 ·
+  // 모션 실행 화면에는 업로드 입력을 두지 않는다
+  assert.match(html, /option value="motions">모션 파일</);
   assert.doesNotMatch(html, /uploadMotionFileButton|motionFileInput/);
   assert.doesNotMatch(dom, /uploadMotionFileButton|motionFileInput/);
   assert.doesNotMatch(controller, /uploadSelectedFile|uploadMotionFile/);
-  assert.doesNotMatch(api, /motion-files\/upload|uploadMotionFile/);
-  assert.doesNotMatch(html, /option value="motions">모션 파일/);
-  assert.doesNotMatch(projectExplorer, /'motor_axes', 'motion_axis_matching', 'motions', 'layers'/);
+});
+
+test('an imported motion file shows up in the run screen without a reload', () => {
+  // 모션 실행 목록은 프로젝트가 바뀔 때와 스튜디오가 저장할 때만 다시
+  // 읽었다 · 가져온 파일이 탭을 옮겨도 안 보였다.
+  assert.match(projectExplorer, /if \(imported && category === 'motions'\) await onMotionFilesChange\(\)/);
+  assert.match(main, /onMotionFilesChange: async \(\) => \{\s*await motionData\.refreshMotionFiles\(\);\s*\},/);
 });
 
 test('DDS execution blocks show a recovery popup and expose local temporary disable', () => {

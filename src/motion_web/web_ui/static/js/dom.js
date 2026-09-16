@@ -240,6 +240,7 @@ export function getElements() {
     motionWorkspaceSubtitle: document.getElementById('motionWorkspaceSubtitle'),
     motionWorkflowGuide: document.getElementById('motionWorkflowGuide'),
     exportMotionFileToStudioButton: document.getElementById('exportMotionFileToStudioButton'),
+    downloadMotionFileButton: document.getElementById('downloadMotionFileButton'),
     registerMotionFileButton: document.getElementById('registerMotionFileButton'),
     unregisterMotionFileButton: document.getElementById('unregisterMotionFileButton'),
     deleteMotionFileButton: document.getElementById('deleteMotionFileButton'),

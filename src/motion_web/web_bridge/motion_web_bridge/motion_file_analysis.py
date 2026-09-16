@@ -313,6 +313,7 @@ def list_motion_files(
         return {
             'success': True,
             'message': '통합 프로젝트를 먼저 선택하세요',
+            'project_id': '',
             'project_dir': '',
             'files_dir': '',
             'files': [],
@@ -340,6 +341,9 @@ def list_motion_files(
             if repository.selected_project_id()
             else '통합 프로젝트를 먼저 선택하세요'
         ),
+        # 내려받기 주소가 프로젝트 번호를 쓴다 · 화면은 이 응답 말고는
+        # 번호를 알 길이 없어서 폴더 경로에서 끊어 쓰고 있었다.
+        'project_id': project_id,
         'project_dir': str(motion_projects_dir / project_id),
         'files_dir': str(files_dir),
         'files': files,

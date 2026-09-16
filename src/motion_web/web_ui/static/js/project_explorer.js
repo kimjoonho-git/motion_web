@@ -46,6 +46,7 @@ export function createProjectExplorerController({
   onManageFile = () => {},
   onNavigate = () => {},
   onProjectChange = async () => {},
+  onMotionFilesChange = async () => {},
   canChangeProject = () => true,
   canManageProjectFiles = () => true,
 }) {
@@ -830,13 +831,17 @@ export function createProjectExplorerController({
       const category = el.projectImportCategory?.value;
       if (!file || !category || !state.project) return;
       const content = await file.text();
-      await run(
+      const imported = await run(
         () => importProjectFile(state.project.project_id, {
           category, file_name: file.name, content,
         }),
         `${file.name} 가져오기 완료`,
       );
       el.projectImportFileInput.value = '';
+      // 모션 실행 화면은 제 목록을 직접 다시 읽어야 한다 · 프로젝트가 바뀔
+      // 때와 스튜디오가 저장할 때만 갱신되고 있어서, 가져온 파일이 탭을
+      // 옮겨도 안 보였다.
+      if (imported && category === 'motions') await onMotionFilesChange();
     });
     el.projectExplorerTree?.addEventListener('click', async (event) => {
       const readOnlyButton = event.target.closest('[data-project-readonly-open]');

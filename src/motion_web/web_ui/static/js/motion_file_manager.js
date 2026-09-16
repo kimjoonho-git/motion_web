@@ -18,6 +18,9 @@ export function createMotionFileManager({
   let selectedFileId = null;
   let selectedFile = null;
   let fileLoadToken = 0;
+  // 내려받기 주소가 프로젝트 번호를 요구한다 · 이 화면이 번호를 아는 곳은
+  // 목록 응답뿐이다.
+  let projectId = '';
 
   async function loadFiles(targetFileId = selectedFileId, { retried = false } = {}) {
     const loadToken = ++fileLoadToken;
@@ -28,6 +31,7 @@ export function createMotionFileManager({
       const payload = await fetchMotionFiles();
       if (loadToken !== fileLoadToken) return;
       files = Array.isArray(payload.files) ? payload.files : [];
+      projectId = String(payload.project_id || '');
       if (targetFileId && files.some((file) => file.id === targetFileId)) {
         await selectFile(targetFileId, loadToken);
         return;
@@ -51,7 +55,7 @@ export function createMotionFileManager({
     } finally {
       if (loadToken === fileLoadToken) {
         setLoading(false);
-        onFilesChanged(files);
+        onFilesChanged(files, projectId);
         if (staleRetry) void loadFiles(targetFileId, { retried: true });
       }
     }
@@ -174,6 +178,7 @@ export function createMotionFileManager({
 
   return {
     getFiles: () => files,
+    getProjectId: () => projectId,
     getSelectedFileId: () => selectedFileId,
     getSelectedFile: () => selectedFile,
     loadFiles,

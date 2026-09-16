@@ -91,7 +91,39 @@ def test_external_motion_file_upload_route_is_not_available():
     assert not hasattr(MotionWebBridge, 'upload_motion_file')
 
 
-def test_project_file_tools_cannot_import_or_copy_motion_files(tmp_path):
+def test_motion_file_import_needs_a_motion_axis_setting(tmp_path):
+    """모션축 설정이 없는 프로젝트는 모션 파일을 받지 않는다.
+
+    모션 파일 혼자서는 재생 등록도 실행도 스튜디오로 보내기도 못 한다 ·
+    넣어 봐야 파일만 놓이고 `import_text`가 비어 있던 `active_files`에
+    그 파일을 말없이 꽂는다.
+    """
+    projects_dir = tmp_path / 'projects'
+    repository = ProjectRepository(projects_dir)
+    target_id = repository.create_project('target')['project']['project_id']
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge.project_repository = repository
+    bridge._ensure_project_mutation_allowed = lambda _project_id: None
+
+    def _import(name):
+        return _project_of(bridge).import_file(target_id, {
+            'category': 'motions',
+            'file_name': name,
+            'content': MOTION_CONTENT,
+        })
+
+    with pytest.raises(ValueError, match='모션축 설정이 없는 프로젝트'):
+        _import('external.json')
+
+    (projects_dir / target_id / 'motion_axis_matching' / 'axes.yaml').write_text(
+        'mappings: []\n', encoding='utf-8'
+    )
+    _import('external.json')
+    assert (projects_dir / target_id / 'motions' / 'external.json').is_file()
+
+
+def test_project_copy_still_cannot_move_motion_files(tmp_path):
+    """가져오기만 열었다 · 프로젝트끼리 복사는 그대로 막는다."""
     projects_dir = tmp_path / 'projects'
     repository = ProjectRepository(projects_dir)
     source_id = repository.create_project('source')['project']['project_id']
@@ -100,12 +132,6 @@ def test_project_file_tools_cannot_import_or_copy_motion_files(tmp_path):
     bridge.project_repository = repository
     bridge._ensure_project_mutation_allowed = lambda _project_id: None
 
-    with pytest.raises(ValueError, match='외부 모션 JSON'):
-        _project_of(bridge).import_file(target_id, {
-            'category': 'motions',
-            'file_name': 'external.json',
-            'content': MOTION_CONTENT,
-        })
     with pytest.raises(ValueError, match='프로젝트 복사'):
         _project_of(bridge).copy_file(target_id, {
             'source_project_id': source_id,
