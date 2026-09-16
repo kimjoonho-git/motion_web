@@ -1703,13 +1703,27 @@ export function createMotionDataController({
   function motorSelectHtml(row) {
     const motors = sortedRuntimeMotors();
     const mappedMotor = motorForMapping(row);
-    const value = String(row.motor_ref || motorSelectionValue(mappedMotor) || '');
+    // 대소문자를 무시하고 맞춘다 · §6-104
+    //
+    // 화면은 `encodeURIComponent` 로 값을 만드는데 그것은 **대문자**를 낸다
+    // (`%2Fdev%2F...usb-FTDI_...`) · 서버는 저장할 때 **소문자**로 바꾼다
+    // (`%2fdev%2f...usb-ftdi_...`). 그래서 저장을 누른 뒤 화면이 제 선택을
+    // 못 찾아 「선택 안함」으로 되돌아갔다.
+    //
+    // AC 서보 값(`ac_servo:master:0:alias:103`)은 대문자가 없어 안 걸린다 ·
+    // **다이나믹셀에서만** 났고, 저장 직후에만 났다.
+    //
+    // 짝을 찾는 다른 곳(`motorForRef`)은 이미 양쪽을 소문자로 낮춰 비교한다 ·
+    // 여기만 빠져 있었다.
+    const value = String(
+      row.motor_ref || motorSelectionValue(mappedMotor) || ''
+    ).trim().toLowerCase();
     return (
       `<select class="wide-select" data-motion-mapping-field="motor_ref" data-motion-id="${displayText(row.motion_id)}">
         <option value="">선택 안함</option>
         ${motors.map((motor) => {
           const selectionValue = motorSelectionValue(motor);
-          const selected = selectionValue === value ? ' selected' : '';
+          const selected = selectionValue.trim().toLowerCase() === value ? ' selected' : '';
           return selectionValue
             ? `<option value="${displayText(selectionValue)}"${selected}>${displayText(motorOptionLabel(motor))}</option>`
             : '';

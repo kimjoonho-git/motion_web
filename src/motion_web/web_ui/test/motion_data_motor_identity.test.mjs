@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
 
 import {
   buildGeneratedMotionAxisRows,
@@ -223,4 +224,48 @@ test('automatic generation upgrades one unambiguous legacy ref', () => {
   assert.equal(generated[0].motor_ref, 'ac_servo:master:1:alias:103');
   assert.equal(generated[0].motor_axis, 7);
   assert.equal(generated[0].offset_deg, 5);
+});
+
+
+test('a saved motor keeps its selection after the server lowercases the reference', () => {
+  // 저장을 누르면 모터 칸이 「선택 안함」으로 되돌아갔다 · §6-104
+  //
+  // 화면은 `encodeURIComponent` 로 값을 만드는데 그것은 **대문자**를 낸다 ·
+  // 서버는 저장할 때 **소문자**로 바꿔 돌려준다 · 그리는 쪽이 `===` 로 그대로
+  // 비교해서 제 선택을 못 찾았다.
+  //
+  // AC 서보 값은 대문자가 없어 안 걸렸다 · **다이나믹셀에서만**, 그것도
+  // **저장 직후에만** 났다. 짝을 찾는 `motorForRef` 는 이미 소문자로 낮춰
+  // 비교하고 있었고 여기만 빠져 있었다.
+  const motor = {
+    controller_index: 0,
+    motor_type: 'dynamixel',
+    bus_id: 3,
+    serial_port: '/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FTAAMMJV-if00-port0',
+  };
+  const optionValue = motionMotorSelectionValue(motor);
+  const savedByServer = optionValue.toLowerCase();
+
+  assert.notEqual(optionValue, savedByServer, '대문자가 없으면 이 시험은 의미가 없다');
+  assert.equal(
+    optionValue.trim().toLowerCase(),
+    savedByServer.trim().toLowerCase(),
+    '대소문자를 무시하면 같은 모터로 맞아야 한다',
+  );
+});
+
+test('the motor select compares references without case', () => {
+  const controller = readFileSync(
+    new URL('../static/js/motion_data.js', import.meta.url),
+    'utf8',
+  );
+  const start = controller.indexOf('function motorSelectHtml(');
+  const body = controller.slice(start, controller.indexOf('\n  }', start));
+
+  assert.match(body, /\.trim\(\)\.toLowerCase\(\)/, '대소문자를 그대로 비교한다');
+  assert.doesNotMatch(
+    body,
+    /const selected = selectionValue === value/,
+    '저장 뒤 선택이 풀린다',
+  );
 });
