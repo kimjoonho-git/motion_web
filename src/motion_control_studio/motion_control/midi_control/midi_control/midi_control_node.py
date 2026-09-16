@@ -5,7 +5,7 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Set
 
 import rclpy
 import yaml
@@ -215,6 +215,12 @@ class MidiControlNode(Node):
         self._motion_run_request_source = ''
         self._motion_studio_state = 'idle'
         self._playback_phase = 'idle'
+        # 스튜디오 녹화 중 **재생이 쥔 축** · 녹화가 아니면 `None` · §6-105
+        #
+        # `None` 과 빈 집합은 뜻이 다르다 · `None` 은 "스튜디오 녹화가 아니다"
+        # (평소 재생이므로 전 채널 추종) · 빈 집합은 "녹화인데 재생이 쥔 축이
+        # 없다"(전 채널 조종)다.
+        self._studio_playback_motion_ids: Optional[Set[str]] = None
         self._playback_follow_enabled = [False] * MIDI_CHANNEL_COUNT
         self._playback_follow_targets: List[int | None] = [
             None
@@ -625,6 +631,11 @@ class MidiControlNode(Node):
                     and self._execution_context_ready
                     and self._playback_phase == 'playing'
                     and not was_parking
+                    # 추가 녹화 중에는 **재생이 쥔 축만** 따라간다 · 나머지는
+                    # 아래 조종 분기로 간다 · §6-105
+                    and self._channel_follows_playback_locked(
+                        channel, mappings[channel]
+                    )
                 ):
                     self._last_select_toggle_at[channel] = now
                     try:
@@ -2128,6 +2139,30 @@ class MidiControlNode(Node):
             'device_connected': connected,
         }
 
+    def _channel_follows_playback_locked(self, channel: int, mapping) -> bool:
+        """이 채널의 SELECT 가 「재생 추종」이어야 하는가 · §6-105
+
+        평소 재생(모션 실행)을 구경할 때는 모든 채널이 따라간다 · 지금까지의
+        동작 그대로다.
+
+        추가 녹화 중에는 다르다 · **레이어에 있는 축만** 재생이 쥔다 ·
+        레이어에 없는 축은 지금 새로 녹화하는 축이므로 SELECT 가 원래 뜻대로
+        "내가 이 축을 잡는다" 여야 한다.
+
+        예전에는 "지금 재생 중이냐" 하나만 보고 전 채널을 추종으로 돌렸다 ·
+        새로 녹화할 축까지 조종이 꺼져서, SELECT 불은 켜지는데 모터가 안
+        움직였고 재생이 끝나야 비로소 잡혔다.
+
+        목록은 스튜디오가 준다 · 여기서 다시 계산하지 않는다.
+        """
+        owned = getattr(self, '_studio_playback_motion_ids', None)
+        if owned is None:
+            # 스튜디오 녹화가 아니다 · 평소 재생이므로 지금까지대로 따라간다
+            return True
+        return bool({
+            str(motion_id) for motion_id in mapping_motion_ids(mapping)
+        } & owned)
+
     def _finish_studio_recording_initialization_locked(self) -> None:
         self._studio_select_locked = False
         self._previous_btn3 = list(self._btn3)
@@ -2477,8 +2512,24 @@ class MidiControlNode(Node):
         return response
 
     def _cmd_studio_recording_ready(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """SELECT 잠금을 풀어 녹화 축 선택을 허용한다."""
+        """SELECT 잠금을 풀어 녹화 축 선택을 허용한다.
+
+        `playback_motion_ids` 는 **재생이 쥔 축**이다 · 추가 녹화에서 스튜디오가
+        보낸다 · 그 축만 SELECT 가 재생 추종이 되고, 나머지는 조종이다 · §6-105
+        """
         with self._lock:
+            # 키가 **없으면** 녹화 해제다 · 이 명령은 절차가 실패했을 때
+            # 되돌리는 용도로도 `{}` 로 불린다 · 그때 빈 집합으로 두면
+            # "녹화인데 재생이 쥔 축이 없다" 가 되어 평소 재생 추종이 깨진다.
+            raw = payload.get('playback_motion_ids')
+            self._studio_playback_motion_ids = (
+                None if raw is None
+                else {
+                    str(motion_id or '').strip()
+                    for motion_id in raw
+                    if str(motion_id or '').strip()
+                }
+            )
             self._finish_studio_recording_initialization_locked()
         response = build_snapshot(self)
         response['message'] = 'MIDI SELECT 잠금 해제 · 녹화할 축을 선택하세요'

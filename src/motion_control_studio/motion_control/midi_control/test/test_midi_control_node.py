@@ -2515,3 +2515,54 @@ def test_feedback_skipped_without_the_surface_is_not_marked_as_sent():
     assert node._last_feedback == [None] * MIDI_CHANNEL_COUNT, (
         '못 보낸 값을 보냈다고 적었다'
     )
+
+
+def _follow_node(owned):
+    """`_channel_follows_playback_locked` 만 떼어 보는 최소 대역."""
+    node = MidiControlNode.__new__(MidiControlNode)
+    node._studio_playback_motion_ids = owned
+    return node
+
+
+def test_normal_playback_still_follows_on_every_channel():
+    """모션 실행 재생을 구경할 때는 지금까지대로 모든 채널이 따라간다."""
+    node = _follow_node(None)
+
+    for motion_id in ('1-1', '1-2', '9-9'):
+        assert node._channel_follows_playback_locked(
+            0, {'motion_id': motion_id}
+        ) is True
+
+
+def test_overdub_follows_only_the_axes_playback_owns():
+    """추가 녹화 중에는 **레이어에 있는 축만** 재생을 따라간다 · §6-105
+
+    예전에는 "지금 재생 중이냐" 하나만 보고 전 채널을 추종으로 돌렸다 ·
+    새로 녹화할 축(레이어에 없는 축)까지 조종이 꺼져서 SELECT 불은 켜지는데
+    모터가 안 움직였고, 재생이 끝나야 비로소 잡혔다.
+
+    불과 모터가 서로 다른 값을 본다 ·
+        불   = control_enabled 또는 playback_follow_enabled
+        모터 = control_enabled
+    그래서 "SELECT 는 되는데 모터만 안 움직인다" 로 보였다.
+    """
+    node = _follow_node({'1-1'})
+
+    assert node._channel_follows_playback_locked(0, {'motion_id': '1-1'}) is True
+    assert node._channel_follows_playback_locked(1, {'motion_id': '1-2'}) is False
+
+
+def test_plain_recording_leaves_every_channel_to_the_operator():
+    """보통 녹화는 재생이 쥔 축이 없다 · 전 채널이 조종이어야 한다."""
+    node = _follow_node(set())
+
+    assert node._channel_follows_playback_locked(0, {'motion_id': '1-1'}) is False
+
+
+def test_linked_motion_ids_count_as_owned():
+    """한 채널이 여러 축을 묶어 쓰면 그중 하나만 걸려도 재생이 쥔 것이다."""
+    node = _follow_node({'1-2'})
+
+    assert node._channel_follows_playback_locked(
+        0, {'motion_id': '1-1', 'linked_motion_ids': ['1-2']}
+    ) is True

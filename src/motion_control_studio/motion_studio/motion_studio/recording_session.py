@@ -134,7 +134,24 @@ class StudioRecordingSession:
                 raise ProcedureStopped()
 
         def unlock_midi() -> None:
-            response = studio._request_midi('studio_recording_ready', {}, 5.0)
+            # 재생이 쥔 축을 MIDI 에도 알린다 · §6-105
+            #
+            # 추가 녹화는 재생을 돌리며 얹는다 · 그런데 MIDI 노드는 "지금 재생
+            # 중이냐" 하나만 보고 **모든 채널**을 재생 추종으로 돌렸다 ·
+            # 레이어에 없는 축(새로 녹화할 축)까지 조종이 꺼져서, SELECT 불은
+            # 켜지는데 모터가 안 움직였다 · 재생이 끝나야 비로소 잡혔다.
+            #
+            # 목록은 이미 있다 · `start()` 가 만들어 테이크에 넣어 두고
+            # 런타임에도 `axis_playback_spans` 로 같은 값을 보낸다 · 여기서는
+            # 그 축 이름만 넘긴다 · 새로 계산하지 않는다.
+            with studio._lock:
+                take = studio._take
+                ownership = dict(take.ownership) if take and take.ownership else {}
+            response = studio._request_midi(
+                'studio_recording_ready',
+                {'playback_motion_ids': sorted(ownership)},
+                5.0,
+            )
             if not response.get('success'):
                 raise ValueError(response.get('message') or 'MIDI SELECT 잠금 해제 실패')
             steps.cancel_unwind(release_midi)
