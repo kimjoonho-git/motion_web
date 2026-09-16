@@ -209,8 +209,6 @@ export const createProject = (payload) => request('POST', '/api/projects', { bod
 
 export const deleteProject = (projectId) => request('DELETE', `/api/projects/${encodeURIComponent(projectId)}`);
 
-export const copyProjectFile = (projectId, payload) =>
-  request('POST', `/api/projects/${encodeURIComponent(projectId)}/copy-file`, { body: payload });
 
 export const fetchProject = (projectId) => request('GET', `/api/projects/${encodeURIComponent(projectId)}`);
 

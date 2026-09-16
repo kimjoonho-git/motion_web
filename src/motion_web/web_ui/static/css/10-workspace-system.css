@@ -542,14 +542,6 @@
   font-size: 11px;
 }
 
-.system-project-tools-body .project-copy-box {
-  grid-column: auto;
-  grid-row: auto;
-  margin: 0;
-  padding: 10px;
-  background: #ffffff;
-}
-
 .system-panel #projectFileManager {
   margin-top: 0;
 }

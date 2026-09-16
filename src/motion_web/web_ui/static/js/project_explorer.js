@@ -2,7 +2,6 @@ import { escapeHtml } from './format.js';
 import {
   activateProjectFile,
   clearMotorRuntimeApplication,
-  copyProjectFile,
   createProject,
   deleteProject,
   deleteProjectFile,
@@ -36,10 +35,6 @@ const CATEGORY_VIEW = {
   runtime: { icon: '◇' },
 };
 
-const PROJECT_COPY_FILE_CATEGORIES = new Set([
-  'motor_axes', 'motion_axis_matching', 'layers',
-]);
-
 export function createProjectExplorerController({
   el,
   onOpenEditor = () => {},
@@ -53,7 +48,7 @@ export function createProjectExplorerController({
   const state = {
     projects: [], project: null, tree: [], selectedFile: null, projectInfoFile: null,
     fileActionMenuOpen: false, busy: false, projectRoot: '',
-    copySourceProjectId: '', copySourceTree: [], runtimeProjectId: '', memoDraft: '', memoDirty: false,
+    runtimeProjectId: '', memoDraft: '', memoDirty: false,
     memoError: '',
     projectGeneration: null,
   };
@@ -123,34 +118,6 @@ export function createProjectExplorerController({
       `<option value="${escapeHtml(project.project_id)}">${escapeHtml(project.name)}</option>`
     )).join('');
     el.projectExplorerSelect.value = selected || '';
-    if (el.projectCopySourceProject) {
-      const currentId = state.project?.project_id || '';
-      const available = state.projects.filter((project) => project.project_id !== currentId);
-      el.projectCopySourceProject.innerHTML = '<option value="">원본 프로젝트 선택</option>' + available.map((project) => (
-        `<option value="${escapeHtml(project.project_id)}">${escapeHtml(project.name)}</option>`
-      )).join('');
-      if (available.some((project) => project.project_id === state.copySourceProjectId)) {
-        el.projectCopySourceProject.value = state.copySourceProjectId;
-      } else {
-        state.copySourceProjectId = '';
-        state.copySourceTree = [];
-      }
-    }
-    if (el.projectCopySourceFile) {
-      const previous = el.projectCopySourceFile.value;
-      const options = state.copySourceTree.filter((folder) => (
-        PROJECT_COPY_FILE_CATEGORIES.has(folder.category)
-      )).flatMap((folder) => (
-        (folder.children || []).map((file) => ({
-          value: JSON.stringify([folder.category, file.name]),
-          label: `${folder.name} / ${file.name}`,
-        }))
-      ));
-      el.projectCopySourceFile.innerHTML = '<option value="">파일 선택</option>' + options.map((item) => (
-        `<option value="${escapeHtml(item.value)}">${escapeHtml(item.label)}</option>`
-      )).join('');
-      if (options.some((item) => item.value === previous)) el.projectCopySourceFile.value = previous;
-    }
   }
 
   function treeFileCount(nodes) {
@@ -387,13 +354,6 @@ export function createProjectExplorerController({
         : '해제할 모터 실행 적용이 없습니다';
     }
     if (el.projectDeleteButton) el.projectDeleteButton.disabled = state.busy || !hasProject;
-    if (el.projectCopySourceProject) el.projectCopySourceProject.disabled = state.busy || !hasProject;
-    if (el.projectCopySourceFile) {
-      el.projectCopySourceFile.disabled = state.busy || !hasProject || !state.copySourceProjectId;
-    }
-    if (el.projectCopyFileButton) {
-      el.projectCopyFileButton.disabled = state.busy || !hasProject || !el.projectCopySourceFile?.value;
-    }
     if (el.projectExplorerRefreshButton) el.projectExplorerRefreshButton.disabled = state.busy;
     if (el.projectUsbRescanButton) el.projectUsbRescanButton.disabled = state.busy;
     if (el.projectMemoInput) {
@@ -764,8 +724,6 @@ export function createProjectExplorerController({
         state.selectedFile = null;
         state.projectInfoFile = null;
         closeFileActionMenu();
-        state.copySourceProjectId = '';
-        state.copySourceTree = [];
         loadMemoDraft();
         setMessage(result.message || '프로젝트와 관련 파일을 영구 삭제했습니다');
         await onProjectChange(null, state.projectGeneration);
@@ -785,63 +743,22 @@ export function createProjectExplorerController({
         render();
       }
     });
-    el.projectCopySourceProject?.addEventListener('change', async () => {
-      state.copySourceProjectId = el.projectCopySourceProject.value;
-      state.copySourceTree = [];
-      if (!state.copySourceProjectId) {
-        render();
-        return;
-      }
-      state.busy = true;
-      renderControls();
-      try {
-        const source = await fetchProject(state.copySourceProjectId);
-        state.copySourceTree = source.tree || [];
-        setMessage(`원본 프로젝트 선택: ${source.project?.name || state.copySourceProjectId}`);
-      } catch (error) {
-        state.copySourceProjectId = '';
-        setMessage(error.message, true);
-      } finally {
-        state.busy = false;
-        render();
-      }
-    });
-    el.projectCopySourceFile?.addEventListener('change', renderControls);
-    el.projectCopyFileButton?.addEventListener('click', async () => {
-      if (!state.project || !state.copySourceProjectId || !el.projectCopySourceFile?.value) return;
-      let selection;
-      try {
-        selection = JSON.parse(el.projectCopySourceFile.value);
-      } catch (error) {
-        setMessage('복사할 파일 선택값이 올바르지 않습니다', true);
-        return;
-      }
-      await run(
-        () => copyProjectFile(state.project.project_id, {
-          source_project_id: state.copySourceProjectId,
-          category: selection[0],
-          file_name: selection[1],
-        }),
-        `${selection[1]} 파일을 현재 프로젝트 폴더로 복사했습니다`,
-      );
-    });
     el.projectImportFileButton?.addEventListener('click', () => el.projectImportFileInput?.click());
     el.projectImportFileInput?.addEventListener('change', async () => {
       const file = el.projectImportFileInput.files?.[0];
-      const category = el.projectImportCategory?.value;
-      if (!file || !category || !state.project) return;
+      if (!file || !state.project) return;
       const content = await file.text();
       const imported = await run(
         () => importProjectFile(state.project.project_id, {
-          category, file_name: file.name, content,
+          category: 'motions', file_name: file.name, content,
         }),
-        `${file.name} 가져오기 완료`,
+        `${file.name} 불러오기 완료`,
       );
       el.projectImportFileInput.value = '';
       // 모션 실행 화면은 제 목록을 직접 다시 읽어야 한다 · 프로젝트가 바뀔
       // 때와 스튜디오가 저장할 때만 갱신되고 있어서, 가져온 파일이 탭을
       // 옮겨도 안 보였다.
-      if (imported && category === 'motions') await onMotionFilesChange();
+      if (imported) await onMotionFilesChange();
     });
     el.projectExplorerTree?.addEventListener('click', async (event) => {
       const readOnlyButton = event.target.closest('[data-project-readonly-open]');

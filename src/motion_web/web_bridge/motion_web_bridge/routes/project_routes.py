@@ -37,13 +37,6 @@ def register_project_routes(app: FastAPI, bridge, project_call) -> None:
     async def delete_motion_project(project_id: str):
         return project_call(bridge._project.delete_project, project_id)
 
-    @app.post('/api/projects/{project_id}/copy-file')
-    async def copy_motion_project_file(project_id: str, request: Request):
-        body = await request.json()
-        if not isinstance(body, dict):
-            raise HTTPException(status_code=400, detail='request body must be an object')
-        return project_call(bridge._project.copy_file, project_id, body)
-
     @app.post('/api/projects/{project_id}/files')
     async def import_motion_project_file(project_id: str, request: Request):
         body = await request.json()

@@ -263,10 +263,6 @@ class ProjectStore:
             }
             if values:
                 frames.append({**frame, 'values': values})
-        if not frames:
-            raise ValueError(
-                '이 모션 파일에는 선택한 모션축 설정에서 쓸 수 있는 축이 없습니다'
-            )
         trimmed = {
             **motion,
             'motion_ids': [

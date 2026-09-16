@@ -533,56 +533,6 @@ class ProjectRepository:
             'permanently_deleted': True,
         }
 
-    def copy_file_from_project(
-        self,
-        target_project_id: Any,
-        source_project_id: Any,
-        category: Any,
-        file_name: Any,
-        new_name: Any = None,
-    ) -> Dict[str, Any]:
-        target_dir = self._project_dir(target_project_id)
-        source_dir = self._project_dir(source_project_id)
-        if target_dir == source_dir:
-            raise ValueError('같은 프로젝트가 아닌 다른 프로젝트를 선택하세요')
-        safe_category = self._category(category)
-        source = self._asset_path(source_dir.name, safe_category, file_name)
-        requested_name = new_name if str(new_name or '').strip() else source.name
-        target_name = self._file_name(safe_category, requested_name)
-        target = target_dir / safe_category / target_name
-        if target.exists():
-            stem = Path(target_name).stem
-            suffix = Path(target_name).suffix
-            counter = 2
-            target = target_dir / safe_category / f'{stem}-copy{suffix}'
-            while target.exists():
-                target = target_dir / safe_category / f'{stem}-copy-{counter}{suffix}'
-                counter += 1
-            target_name = target.name
-        limit, label = _text_limit(safe_category)
-        if source.stat().st_size > limit:
-            raise ValueError(f'파일이 {label} 제한을 초과합니다')
-        content = source.read_text(encoding='utf-8')
-        self._validate_content(safe_category, target_name, content)
-        shutil.copy2(source, target)
-        manifest = self._read_manifest(target_dir)
-        if not manifest['active_files'].get(safe_category):
-            manifest['active_files'][safe_category] = target_name
-        self._write_manifest(target_dir, manifest)
-        result = self.get_project(target_dir.name)
-        result.update({
-            'message': f'{source_dir.name}/{source.name}을 {target_dir.name}/{safe_category}/{target_name}으로 복사했습니다',
-            'copied_file': {
-                'source_project_id': source_dir.name,
-                'target_project_id': target_dir.name,
-                'category': safe_category,
-                'source_file_name': source.name,
-                'file_name': target_name,
-                'path': str(target),
-            },
-        })
-        return result
-
     def import_text(
         self, project_id: Any, category: Any, file_name: Any, content: Any
     ) -> Dict[str, Any]:

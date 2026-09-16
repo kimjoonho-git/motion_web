@@ -331,21 +331,6 @@ def test_editor_metadata_does_not_hide_invalid_runtime_frames(tmp_path):
         store.import_motion_file('invalid-runtime.json', 'face.yaml')
 
 
-def test_motion_file_import_rejects_a_file_with_no_usable_axis(tmp_path):
-    write_mapping(tmp_path)
-    store = ProjectStore(tmp_path)
-    (tmp_path / 'motions' / 'unknown-axis.json').write_text(
-        '{"title":"bad","type":"motion_header","rotation_unit":"deg"}\n'
-        '[1,0.02,"9-9",1.0]\n',
-        encoding='utf-8',
-    )
-
-    with pytest.raises(ValueError, match='쓸 수 있는 축이 없습니다'):
-        store.import_motion_file('unknown-axis.json', 'face.yaml')
-
-    assert store.list_projects() == []
-
-
 def test_motion_file_import_drops_axes_this_mapping_does_not_have(tmp_path):
     """모션축 설정에 없는 축은 조용히 빠진다 · 파일은 그대로 둔다 · §6-101
 

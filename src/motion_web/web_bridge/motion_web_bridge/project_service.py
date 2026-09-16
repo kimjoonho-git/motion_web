@@ -346,29 +346,21 @@ class ProjectService:
             project_id, category, file_name, payload.get('new_name')
         )
 
-    def copy_file(
-        self, project_id: Any, payload: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        self.bridge._ensure_project_mutation_allowed(project_id)
-        if str(payload.get('category') or '').strip() == 'motions':
-            raise ValueError(
-                '모션 파일은 프로젝트 복사로 전달할 수 없습니다. '
-                '모션 파일 화면의 스튜디오 내보내기를 사용하세요'
-            )
-        return self.repository.copy_file_from_project(
-            project_id,
-            payload.get('source_project_id'),
-            payload.get('category'),
-            payload.get('file_name'),
-            payload.get('new_name'),
-        )
-
     def import_file(
         self, project_id: Any, payload: Dict[str, Any]
     ) -> Dict[str, Any]:
         self.bridge._ensure_project_mutation_allowed(project_id)
-        if str(payload.get('category') or '').strip() == 'motions':
-            self._ensure_motion_import_target(project_id)
+        # 밖에서 들어올 수 있는 것은 모션 파일 하나뿐이다.
+        #
+        # 모터축·모션축 설정은 그 PC 의 하드웨어 배선에 매인 값이라 옮기면
+        # 꼬인다 · 레이어는 스튜디오가 제 프로젝트 안에서만 다룬다. 남의 PC
+        # 값을 끌어오는 길을 열어 두면 화면에서 지워도 언젠가 다시 새어 든다.
+        if str(payload.get('category') or '').strip() != 'motions':
+            raise ValueError(
+                '프로젝트로 가져올 수 있는 것은 모션 파일뿐입니다. '
+                '모터축·모션축 설정은 이 PC 에서 직접 만드세요'
+            )
+        self._ensure_motion_import_target(project_id)
         return self.repository.import_text(
             project_id,
             payload.get('category'),

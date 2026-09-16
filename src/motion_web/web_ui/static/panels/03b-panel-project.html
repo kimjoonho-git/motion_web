@@ -2,7 +2,7 @@
      셋을 담고 있어 탭 이름과 내용이 어긋났다 · 프로젝트 쪽을 갈랐다 · §6-67 -->
       <section class="system-panel workspace-panel hidden" data-workspace-panel="project" aria-label="프로젝트 관리">
         <div class="section-head workspace-page-head">
-          <div><strong>프로젝트 관리</strong><small>프로젝트를 만들고 파일을 가져오거나 복사합니다</small></div>
+          <div><strong>프로젝트 관리</strong><small>프로젝트를 만들고 모션 파일을 불러옵니다</small></div>
         </div>
 
         <div class="system-project-grid">
@@ -18,18 +18,12 @@
                 <button id="projectDeleteButton" class="danger" type="button" disabled>현재 프로젝트 삭제</button>
               </div>
               <div id="projectUsbHelp" class="project-usb-help">프로젝트 저장 위치 확인 중</div>
+              <!-- 파일로 들어올 수 있는 것은 모션 파일 하나뿐이다 · 모터축·모션축
+                   설정은 받는 PC 의 하드웨어에 매인 값이라 옮기면 꼬인다 ·
+                   종류를 고르는 칸이 없으니 고를 일도 없다 -->
               <div class="project-import-row">
-                <select id="projectImportCategory" class="compact-select" aria-label="가져올 파일 종류">
-                  <option value="motor_axes">모터축 설정</option><option value="motion_axis_matching">모션축 설정</option><option value="motions">모션 파일</option><option value="layers">레이어</option>
-                </select>
-                <button id="projectImportFileButton" type="button" disabled>파일 가져오기</button>
-                <input id="projectImportFileInput" type="file" class="hidden" accept=".yaml,.yml,.json">
-              </div>
-              <div class="project-copy-box">
-                <strong>다른 프로젝트에서 복사</strong>
-                <select id="projectCopySourceProject" class="wide-select" aria-label="원본 프로젝트"><option value="">원본 프로젝트 선택</option></select>
-                <select id="projectCopySourceFile" class="wide-select" aria-label="복사할 파일" disabled><option value="">파일 선택</option></select>
-                <button id="projectCopyFileButton" type="button" disabled>현재 프로젝트로 복사</button>
+                <button id="projectImportFileButton" type="button" disabled>모션 파일 불러오기</button>
+                <input id="projectImportFileInput" type="file" class="hidden" accept=".json">
               </div>
             </div>
           </section>

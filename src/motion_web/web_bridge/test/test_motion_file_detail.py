@@ -122,22 +122,27 @@ def test_motion_file_import_needs_a_motion_axis_setting(tmp_path):
     assert (projects_dir / target_id / 'motions' / 'external.json').is_file()
 
 
-def test_project_copy_still_cannot_move_motion_files(tmp_path):
-    """가져오기만 열었다 · 프로젝트끼리 복사는 그대로 막는다."""
+def test_only_motion_files_can_be_brought_into_a_project(tmp_path):
+    """밖에서 들어올 수 있는 것은 모션 파일 하나뿐이다.
+
+    모터축·모션축 설정은 그 PC 의 하드웨어 배선에 매인 값이고 레이어는
+    스튜디오가 제 프로젝트 안에서만 다룬다 · 화면에서 종류 칸을 없앴어도
+    길이 열려 있으면 언젠가 다시 새어 든다.
+    """
     projects_dir = tmp_path / 'projects'
     repository = ProjectRepository(projects_dir)
-    source_id = repository.create_project('source')['project']['project_id']
-    target_id = repository.create_project('target')['project']['project_id']
+    project_id = repository.create_project('target')['project']['project_id']
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge.project_repository = repository
     bridge._ensure_project_mutation_allowed = lambda _project_id: None
 
-    with pytest.raises(ValueError, match='프로젝트 복사'):
-        _project_of(bridge).copy_file(target_id, {
-            'source_project_id': source_id,
-            'category': 'motions',
-            'file_name': 'show.json',
-        })
+    for category in ('motor_axes', 'motion_axis_matching', 'layers', ''):
+        with pytest.raises(ValueError, match='모션 파일뿐입니다'):
+            _project_of(bridge).import_file(project_id, {
+                'category': category,
+                'file_name': 'x.yaml',
+                'content': 'mappings: []\n',
+            })
 
 
 def test_registered_motion_file_cannot_be_deleted(tmp_path):

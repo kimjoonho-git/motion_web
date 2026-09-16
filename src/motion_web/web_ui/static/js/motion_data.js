@@ -529,7 +529,7 @@ export function createMotionDataController({
   let files = [];
   let selectedFileId = null;
   let selectedFile = null;
-  // 내려받기 주소가 프로젝트 번호를 요구한다 · 목록 응답이 실어 온다.
+  // 파일로 저장할 때 쓰는 주소가 프로젝트 번호를 요구한다 · 목록 응답이 실어 온다.
   let motionProjectId = '';
   let mappingFiles = [];
   let selectedMappingId = null;
@@ -1614,7 +1614,7 @@ export function createMotionDataController({
     if (el.downloadMotionFileButton) {
       el.downloadMotionFileButton.disabled = !file || !motionProjectId || loading;
       el.downloadMotionFileButton.title = file
-        ? '이 파일을 지금 보고 있는 컴퓨터로 내려받습니다'
+        ? '이 파일을 지금 보고 있는 컴퓨터에 저장합니다'
         : '모션 파일을 먼저 선택하세요';
     }
     if (el.registerMotionFileButton) {
@@ -2229,7 +2229,7 @@ export function createMotionDataController({
     }
   }
 
-  /** 파일을 **이 웹을 보고 있는 컴퓨터**로 내려받는다 · 서버끼리 옮기지 않는다.
+  /** 파일을 **이 웹을 보고 있는 컴퓨터**에 저장한다 · 서버끼리 옮기지 않는다.
    *
    * blob 이 아니라 평범한 링크다. blob 은 헤드리스에서 확인이 안 됐고, 서버가
    * 한글 파일명을 이미 `filename*=utf-8''` 로 붙여 준다.
@@ -2237,14 +2237,14 @@ export function createMotionDataController({
   function downloadSelectedMotionFile() {
     const file = selectedFile;
     if (!file || !motionProjectId) {
-      setMessage('내려받을 모션 파일을 먼저 선택하세요');
+      setMessage('저장할 모션 파일을 먼저 선택하세요');
       return;
     }
     const anchor = document.createElement('a');
     anchor.href = projectFileDownloadUrl(motionProjectId, 'motions', file.id);
     anchor.download = file.filename || file.id;
     anchor.click();
-    setMessage(`내려받기: ${file.filename || file.id}`);
+    setMessage(`파일로 저장: ${file.filename || file.id}`);
   }
 
   async function registerSelectedMotionFile() {

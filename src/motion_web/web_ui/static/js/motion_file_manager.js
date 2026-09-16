@@ -18,7 +18,7 @@ export function createMotionFileManager({
   let selectedFileId = null;
   let selectedFile = null;
   let fileLoadToken = 0;
-  // 내려받기 주소가 프로젝트 번호를 요구한다 · 이 화면이 번호를 아는 곳은
+  // 파일로 저장할 때 쓰는 주소가 프로젝트 번호를 요구한다 · 이 화면이 아는 곳은
   // 목록 응답뿐이다.
   let projectId = '';
 

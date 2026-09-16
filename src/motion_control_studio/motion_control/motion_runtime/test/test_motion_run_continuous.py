@@ -1199,14 +1199,3 @@ def test_mapping_axis_without_motion_data_stays_out_of_the_way():
     plan = _shared_file_plan(['1-1', '1-3'])
 
     assert [axis['motion_id'] for axis in plan['axes']] == ['1-1']
-
-
-def test_motion_file_with_no_usable_axis_says_so_plainly():
-    """쓸 축이 하나도 없으면 매핑 줄마다 딴소리하지 말고 한 번에 말한다."""
-    manager = _shared_file_manager(['9-9'], _two_axis_records())
-
-    with pytest.raises(ValueError, match='쓸 수 있는 축이 없습니다'):
-        manager._plan_builder.build({
-            'motion_file_id': 'show.json',
-            'mapping_file_id': 'axes.yaml',
-        })

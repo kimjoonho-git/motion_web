@@ -523,26 +523,6 @@ button.project-tree-midi:hover {
   font-size: 12px;
 }
 
-.project-copy-box {
-  display: grid;
-  gap: 6px;
-  margin: 0 8px 8px;
-  padding: 8px;
-  border: 1px solid var(--line);
-  border-radius: 5px;
-}
-
-.project-copy-box strong {
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.project-copy-box select,
-.project-copy-box button {
-  min-height: 34px;
-  font-size: 12px;
-}
-
 #projectDeleteButton {
   grid-column: 1 / -1;
 }

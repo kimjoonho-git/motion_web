@@ -195,12 +195,6 @@ class PlanBuilder:
                 record for record in motion_records
                 if str(record.get('motion_id') or '') in mapping_motion_ids
             ]
-            if not motion_records and not initialization_only:
-                # 하나도 안 남았다 · 여기서 말하지 않으면 아래가 매핑 줄마다
-                # `motion file data not found` 를 뱉어 원인을 못 찾는다.
-                raise ValueError(
-                    '이 모션 파일에는 현재 모션축 설정에서 쓸 수 있는 축이 없습니다'
-                )
 
         groups = motion_run_rules._motion_groups(motion_records)
         if request_source != 'motion_studio':

@@ -2664,24 +2664,6 @@ def test_project_change_is_blocked_by_persisted_motor_operation():
         _project_of(bridge).ensure_change_allowed()
 
 
-def test_copy_file_between_projects_is_a_physical_independent_copy(tmp_path):
-    repository = ProjectRepository(tmp_path / 'projects')
-    source_id = repository.create_project('source')['project']['project_id']
-    target_id = repository.create_project('target')['project']['project_id']
-    repository.import_text(source_id, 'motions', 'wave.json', MOTION_TEXT)
-
-    result = repository.copy_file_from_project(
-        target_id, source_id, 'motions', 'wave.json'
-    )
-    copied = tmp_path / 'projects' / target_id / 'motions' / 'wave.json'
-    assert copied.is_file()
-    assert result['copied_file']['path'] == str(copied)
-
-    changed = MOTION_TEXT.replace('[1, 0.0, "1-1", 0.0]', '[1, 0.0, "1-1", 10.0]')
-    repository.save_file(source_id, 'motions', 'wave.json', changed)
-    assert copied.read_text(encoding='utf-8') == MOTION_TEXT + '\n'
-
-
 def test_delete_project_rejects_the_active_motor_runtime_owner(tmp_path):
     repository = ProjectRepository(tmp_path / 'projects')
     project_id = repository.create_project('running')['project']['project_id']
