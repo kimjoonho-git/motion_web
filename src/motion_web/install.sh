@@ -241,6 +241,17 @@ build_workspace() {
   # 링크라 파이썬을 고치면 즉시 반영된다.
   echo "1/2 · robot_manager (심볼릭 링크 없이)"
   colcon build --base-paths "${WORKSPACE_DIR}/src" --packages-up-to robot_manager
+  # 2단계는 **따로 도는 colcon** 이다 · 1단계가 깐 것을 환경으로 받아야
+  # 거기 기대는 꾸러미가 파이썬 경로를 제대로 잡는다.
+  #
+  # 이 줄을 빠뜨렸더니 `motion_control_robot`(robot_manager 에 기댄다)과
+  # `motion_state_monitor` 가 이렇게 죽었다:
+  #     Fatal Python error: init_import_site: Failed to import the site module
+  # 한 번에 빌드하던 때는 colcon 이 제 안에서 이어 줘서 필요 없던 줄이다 ·
+  # 둘로 가르면서 그 이음매가 생겼다.
+  set +u
+  source "${WORKSPACE_DIR}/install/setup.bash"
+  set -u
   echo "2/2 · 나머지 전부"
   colcon build --symlink-install --base-paths "${WORKSPACE_DIR}/src" \
     --packages-skip-up-to robot_manager
