@@ -64,7 +64,7 @@ export function motionStudioExportResultMessage(result, error = null) {
     return `모션 실행 파일이 저장되지 않았습니다.\n원인 · ${error.message || String(error)}`;
   }
   return (
-    '모션 실행 파일 저장 완료\n'
+    '모션 파일 등록 완료\n'
     + `파일 · ${result?.file_id || '-'}\n`
     + `프레임 · ${Number(result?.frame_count) || 0}개`
   );

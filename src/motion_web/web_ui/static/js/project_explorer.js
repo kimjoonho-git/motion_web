@@ -752,7 +752,7 @@ export function createProjectExplorerController({
         () => importProjectFile(state.project.project_id, {
           category: 'motions', file_name: file.name, content,
         }),
-        `${file.name} 불러오기 완료`,
+        `${file.name} 가져오기 완료`,
       );
       el.projectImportFileInput.value = '';
       // 모션 실행 화면은 제 목록을 직접 다시 읽어야 한다 · 프로젝트가 바뀔

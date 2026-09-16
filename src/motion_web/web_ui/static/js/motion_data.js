@@ -1614,7 +1614,7 @@ export function createMotionDataController({
     if (el.downloadMotionFileButton) {
       el.downloadMotionFileButton.disabled = !file || !motionProjectId || loading;
       el.downloadMotionFileButton.title = file
-        ? '이 파일을 지금 보고 있는 컴퓨터에 저장합니다'
+        ? '이 파일을 지금 보고 있는 PC 에 저장합니다'
         : '모션 파일을 먼저 선택하세요';
     }
     if (el.registerMotionFileButton) {
@@ -2237,14 +2237,14 @@ export function createMotionDataController({
   function downloadSelectedMotionFile() {
     const file = selectedFile;
     if (!file || !motionProjectId) {
-      setMessage('저장할 모션 파일을 먼저 선택하세요');
+      setMessage('내 PC로 저장할 모션 파일을 먼저 선택하세요');
       return;
     }
     const anchor = document.createElement('a');
     anchor.href = projectFileDownloadUrl(motionProjectId, 'motions', file.id);
     anchor.download = file.filename || file.id;
     anchor.click();
-    setMessage(`파일로 저장: ${file.filename || file.id}`);
+    setMessage(`내 PC로 저장: ${file.filename || file.id}`);
   }
 
   async function registerSelectedMotionFile() {

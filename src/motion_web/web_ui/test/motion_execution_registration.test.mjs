@@ -185,7 +185,7 @@ test('motion file list refreshes from successful Studio exports without manual p
 test('motion files leave and arrive as plain files · one door each', () => {
   // 나가는 문 · 모션 실행 화면의 「파일로 저장」 · 이미 있는 프로젝트 파일
   // 경로를 그대로 쓴다 · 전용 업로드/다운로드 API 를 새로 내지 않는다.
-  assert.match(html, /id="downloadMotionFileButton"[^>]*>파일로 저장</);
+  assert.match(html, /id="downloadMotionFileButton"[^>]*>내 PC로 저장</);
   assert.match(dom, /downloadMotionFileButton/);
   assert.match(controller, /function downloadSelectedMotionFile/);
   assert.match(controller, /projectFileDownloadUrl\(motionProjectId, 'motions', file\.id\)/);
@@ -196,7 +196,7 @@ test('motion files leave and arrive as plain files · one door each', () => {
 
   // 들어오는 문 · 프로젝트 관리의 「모션 파일 불러오기」 하나뿐 ·
   // 모션 실행 화면에는 불러오기 입력을 두지 않는다
-  assert.match(html, /id="projectImportFileButton"[^>]*>모션 파일 불러오기</);
+  assert.match(html, /id="projectImportFileButton"[^>]*>내 PC에서 가져오기</);
   assert.doesNotMatch(html, /uploadMotionFileButton|motionFileInput/);
   assert.doesNotMatch(dom, /uploadMotionFileButton|motionFileInput/);
   assert.doesNotMatch(controller, /uploadSelectedFile|uploadMotionFile/);

@@ -972,7 +972,7 @@ export function createMotionStudioController({
       + '선택 기준 · 재생 선택 체크\n'
       + '연한 파란색 행 · 상세보기 대상이며 내보내기와 무관',
       {
-        title: '모션 실행 파일 저장',
+        title: '모션 파일 등록',
         confirmLabel: '이 레이어 저장',
         tone: 'primary',
       },
@@ -985,7 +985,7 @@ export function createMotionStudioController({
         onError: (error) => {
           failed = error;
           void showAlert(motionStudioExportResultMessage(null, error), {
-            title: '모션 실행 파일 저장 실패',
+            title: '모션 파일 등록 실패',
             confirmLabel: '확인',
             tone: 'danger',
           });
@@ -1001,7 +1001,7 @@ export function createMotionStudioController({
     }
     await onMotionFilesChange(result);
     await showAlert(motionStudioExportResultMessage(result), {
-      title: '모션 실행 파일 저장 완료',
+      title: '모션 파일 등록 완료',
       confirmLabel: '확인',
       tone: 'info',
     });

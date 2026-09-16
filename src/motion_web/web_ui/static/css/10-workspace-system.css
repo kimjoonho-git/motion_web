@@ -454,7 +454,9 @@
 
 .system-project-grid {
   display: grid;
-  grid-template-columns: minmax(0, 3fr) minmax(400px, 2fr);
+  /* 관리 도구와 메모를 반반으로 · 가져오기 종류 칸이 빠지면서 왼쪽이
+     비었는데 3:2 가 그대로라 한쪽만 휑했다 */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 14px;
   align-items: stretch;
   margin-bottom: 14px;

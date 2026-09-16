@@ -138,9 +138,11 @@ test('system status cards use compact exact desktop columns', () => {
     styles,
     /\.system-runtime-grid\s*\{[\s\S]*?grid-template-columns: minmax\(0, 3fr\) minmax\(400px, 2fr\)/,
   );
+  // 프로젝트 관리 도구와 메모는 반반이다 · 가져오기 종류 칸이 빠지면서
+  // 왼쪽이 비었는데 3:2 가 그대로라 한쪽만 휑했다
   assert.match(
     styles,
-    /\.system-project-grid\s*\{[\s\S]*?grid-template-columns: minmax\(0, 3fr\) minmax\(400px, 2fr\)/,
+    /\.system-project-grid\s*\{[\s\S]*?grid-template-columns: minmax\(0, 1fr\) minmax\(0, 1fr\)/,
   );
   assert.match(
     styles,
@@ -162,7 +164,7 @@ test('system status cards use compact exact desktop columns', () => {
 test('system project tools and memo use a fixed two-column layout', () => {
   assert.match(
     styles,
-    /\.system-project-grid\s*\{[\s\S]*?grid-template-columns: minmax\(0, 3fr\) minmax\(400px, 2fr\)/,
+    /\.system-project-grid\s*\{[\s\S]*?grid-template-columns: minmax\(0, 1fr\) minmax\(0, 1fr\)/,
   );
   assert.match(
     html,
