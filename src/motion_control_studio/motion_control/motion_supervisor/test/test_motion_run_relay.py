@@ -1,5 +1,6 @@
 import json
 import threading
+import time
 
 import pytest
 from motion_control_msgs.msg import MotorStatus
@@ -27,6 +28,15 @@ class QuietLogger:
 
     def error(self, *_args, **_kwargs):
         pass
+
+
+def _targets_by_axis(command):
+    """모터 매니저가 읽는 방식 · 슬롯 번호가 아니라 `controller_index` 로 찾는다."""
+    return {
+        int(axis): float(command.position[slot])
+        for slot, axis in enumerate(command.controller_index)
+        if int(command.number_of_target_interfaces[slot]) > 0
+    }
 
 
 def test_runtime_command_is_allowed_when_state_is_current_and_manual_is_idle():
@@ -192,7 +202,6 @@ def test_midi_batch_publishes_multiple_axes_in_one_motor_status():
     supervisor._last_motion_run_command_at = 0.0
     supervisor._active_jogs = {}
     supervisor._active_actions = {}
-    supervisor._midi_active_until = 0.0
     supervisor._emergency_latched = False
     supervisor._motion_stop_block_until = 0.0
     supervisor._command_lock = threading.RLock()
@@ -226,10 +235,9 @@ def test_midi_batch_publishes_multiple_axes_in_one_motor_status():
     assert all(result['success'] for result in results)
     assert len(supervisor._command_pub.messages) == 1
     command = supervisor._command_pub.messages[0]
-    assert command.number_of_target_interfaces[1] == 2
-    assert command.number_of_target_interfaces[3] == 2
-    assert command.position[1] == 10.0
-    assert command.position[3] == -20.0
+    # 안 모는 축은 아예 싣지 않는다 · 빈 칸이 남의 목표를 지운다 · §6-108
+    assert _targets_by_axis(command) == {1: 10.0, 3: -20.0}
+    assert list(command.controller_index) == [1, 3]
 
 
 def test_linked_midi_group_blocks_every_axis_when_one_target_is_invalid():
@@ -237,7 +245,6 @@ def test_linked_midi_group_blocks_every_axis_when_one_target_is_invalid():
     supervisor._last_motion_run_command_at = 0.0
     supervisor._active_jogs = {}
     supervisor._active_actions = {}
-    supervisor._midi_active_until = 0.0
     supervisor._emergency_latched = False
     supervisor._motion_stop_block_until = 0.0
     supervisor._command_lock = threading.RLock()
@@ -270,7 +277,6 @@ def test_midi_select_off_holds_linked_axes_at_their_current_positions():
     supervisor._last_motion_run_command_at = 0.0
     supervisor._active_jogs = {}
     supervisor._active_actions = {}
-    supervisor._midi_active_until = 0.0
     supervisor._emergency_latched = False
     supervisor._motion_stop_block_until = 0.0
     supervisor._command_lock = threading.RLock()
@@ -303,9 +309,9 @@ def test_midi_select_off_holds_linked_axes_at_their_current_positions():
     assert all(result['operation'] == 'hold' for result in results)
     assert len(supervisor._command_pub.messages) == 1
     command = supervisor._command_pub.messages[0]
-    assert command.position[1] == 12.5
-    assert command.position[3] == -7.0
-    assert supervisor._midi_active_until == 0.0
+    assert _targets_by_axis(command) == {1: 12.5, 3: -7.0}
+    # SELECT 를 놓으면 소유권도 놓는다 · 사실의 주인은 중재기 하나다 · §6-107
+    assert supervisor._command_arbiter_instance().owns_any(CommandOwner.MIDI) is False
 
 
 def test_normal_midi_position_keeps_short_command_ownership():
@@ -313,7 +319,6 @@ def test_normal_midi_position_keeps_short_command_ownership():
     supervisor._last_motion_run_command_at = 0.0
     supervisor._active_jogs = {}
     supervisor._active_actions = {}
-    supervisor._midi_active_until = 0.0
     supervisor._emergency_latched = False
     supervisor._motion_stop_block_until = 0.0
     supervisor._command_lock = threading.RLock()
@@ -332,7 +337,8 @@ def test_normal_midi_position_keeps_short_command_ownership():
     ])
 
     assert success is True
-    assert supervisor._midi_active_until > 0.0
+    # 짧은 소유권은 **그 축에만** 걸린다 · §6-107
+    assert supervisor._command_arbiter_instance().axis_owners() == {'0': 'midi'}
 
 
 def test_midi_blocks_every_ac_axis_with_live_internal_limit_status():
@@ -340,7 +346,6 @@ def test_midi_blocks_every_ac_axis_with_live_internal_limit_status():
     supervisor._last_motion_run_command_at = 0.0
     supervisor._active_jogs = {}
     supervisor._active_actions = {}
-    supervisor._midi_active_until = 0.0
     supervisor._emergency_latched = False
     supervisor._motion_stop_block_until = 0.0
     supervisor._command_lock = threading.RLock()
@@ -371,7 +376,6 @@ def test_playback_owner_blocks_midi_even_without_legacy_grace_flag():
     supervisor._last_motion_run_command_at = 0.0
     supervisor._active_jogs = {}
     supervisor._active_actions = {}
-    supervisor._midi_active_until = 0.0
     supervisor._emergency_latched = False
     supervisor._motion_stop_block_until = 0.0
     supervisor._command_lock = threading.RLock()
@@ -430,7 +434,6 @@ def test_runtime_callback_acquires_playback_owner_before_final_publish():
     supervisor = MotionSupervisor.__new__(MotionSupervisor)
     supervisor._active_jogs = {}
     supervisor._active_actions = {}
-    supervisor._midi_active_until = 0.0
     supervisor._last_motion_run_command_at = 0.0
     supervisor._emergency_latched = False
     supervisor._motion_stop_block_until = 0.0
@@ -470,7 +473,6 @@ def test_grade1_playback_filter_uses_controller_index_not_array_slot(
     supervisor = MotionSupervisor.__new__(MotionSupervisor)
     supervisor._active_jogs = {}
     supervisor._active_actions = {}
-    supervisor._midi_active_until = 0.0
     supervisor._last_motion_run_command_at = 0.0
     supervisor._emergency_latched = False
     supervisor._servo_alarm_guard = ServoAlarmGuard()
@@ -586,7 +588,6 @@ def test_project_boundary_rejects_old_commands_and_cancels_current_generation():
     supervisor._motion_stop_block_until = 0.0
     supervisor._active_jogs = {0: {'target_position': 1.0}}
     supervisor._active_actions = {}
-    supervisor._midi_active_until = 1.0
     supervisor._last_motion_run_command_at = 1.0
     supervisor._command_lock = threading.RLock()
     supervisor._command_arbiter = CommandArbiter()
@@ -668,7 +669,6 @@ def safety_supervisor():
     supervisor._active_jogs = {1: {'target_position': 12.0}}
     supervisor._active_actions = {}
     supervisor._action_threads = {}
-    supervisor._midi_active_until = 1.0
     supervisor._last_motion_run_command_at = 1.0
     supervisor._emergency_latched = False
     supervisor._motion_stop_block_until = 0.0
@@ -892,3 +892,154 @@ def test_manual_activity_snapshot_distinguishes_jog_and_action_axes():
         'manual_activity_modes': ['jog', 'action'],
         'manual_activity_axes': [0, 2],
     }
+
+
+# MIDI 는 축별로 판정한다 · §6-107
+#
+# 전에는 `_midi_active_until` 하나로 "MIDI 가 도는 중" 을 적어 두고, 축을
+# 가리지 않고 재생 중계를 통째로 막았다 · 추가 녹화는 한쪽 축을 MIDI 로
+# 녹화하면서 다른 축을 재생하는 일이라, 녹화를 시작하는 순간 재생이 끊겼다.
+
+
+def _relay_supervisor(controller_indexes):
+    supervisor = MotionSupervisor.__new__(MotionSupervisor)
+    supervisor._active_jogs = {}
+    supervisor._active_actions = {}
+    supervisor._last_motion_run_command_at = 0.0
+    supervisor._emergency_latched = False
+    supervisor._motion_stop_block_until = 0.0
+    supervisor._command_lock = threading.RLock()
+    supervisor._command_arbiter = CommandArbiter()
+    supervisor._project_generation = 1
+    supervisor._command_pub = CapturePublisher()
+    supervisor.get_logger = lambda: QuietLogger()
+    supervisor._current_motors = lambda: [
+        {'controller_index': axis} for axis in controller_indexes
+    ]
+    return supervisor
+
+
+def _command_for(controller_indexes, driven_axes):
+    command = MotorStatus()
+    size = len(controller_indexes)
+    command.controller_index = list(controller_indexes)
+    # 슬롯이 0 인 축은 이번 명령이 건드리지 않는다
+    command.number_of_target_interfaces = [
+        2 if axis in driven_axes else 0 for axis in controller_indexes
+    ]
+    command.target_interface_id = [
+        Int8MultiArray(data=[0, 1]) for _ in range(size)
+    ]
+    command.controlword = [1] * size
+    command.statusword = [0] * size
+    command.errorcode = [0] * size
+    command.position = [5.0] * size
+    command.velocity = [0.0] * size
+    command.effort = [0.0] * size
+    return command
+
+
+def test_playback_relay_passes_while_midi_drives_another_axis():
+    """추가 녹화 · 축 0 은 MIDI 로 녹화 중이고 축 1 은 재생이 몬다."""
+    supervisor = _relay_supervisor([0, 1])
+    supervisor._command_arbiter.acquire(
+        CommandOwner.MIDI, axes=[0], lease_sec=5.0
+    )
+    # 전역 깃발이 되살아나면 여기서 막힌다
+    supervisor._midi_active_until = time.monotonic() + 10.0
+
+    supervisor._motion_run_command_callback(_command_for([0, 1], {1}))
+
+    assert len(supervisor._command_pub.messages) == 1, (
+        'MIDI 가 다른 축을 쓴다고 재생 중계가 통째로 막혔다'
+    )
+    assert supervisor._command_arbiter.axis_owners() == {
+        '0': 'midi', '1': 'playback',
+    }
+
+
+def test_playback_relay_still_stops_for_a_manual_command():
+    """수동은 전체를 쥔다 · 사람이 조그를 잡고 있으면 재생은 들어오지 않는다."""
+    supervisor = _relay_supervisor([0, 1])
+    supervisor._active_jogs = {0: {'request_id': 'jog-1'}}
+
+    supervisor._motion_run_command_callback(_command_for([0, 1], {1}))
+
+    assert supervisor._command_pub.messages == []
+
+
+# 명령에는 자기가 모는 축만 담는다 · §6-108
+#
+# 모터 매니저(`motor_manager.cpp` · 수정 불가)는 메시지에 실린 축을 전부 자기
+# 명령표에 덮어쓴다 · 슬롯이 0 인 **빈 칸도 덮어쓴다** · 그래서 한 축만 보내는
+# 명령에 다른 축의 빈 칸이 같이 실려 있으면 방금 도착한 그 축의 목표가 지워진다.
+#
+# 추가 녹화는 재생과 MIDI 가 같은 통로로 번갈아 나가므로, MIDI 가 한 번 나갈
+# 때마다 재생 축의 목표가 지워져 모터가 버벅였다.
+
+
+def _midi_supervisor(controller_indexes):
+    supervisor = MotionSupervisor.__new__(MotionSupervisor)
+    supervisor._last_motion_run_command_at = 0.0
+    supervisor._active_jogs = {}
+    supervisor._active_actions = {}
+    supervisor._emergency_latched = False
+    supervisor._motion_stop_block_until = 0.0
+    supervisor._command_lock = threading.RLock()
+    supervisor._command_pub = CapturePublisher()
+    supervisor._current_motors = lambda: [
+        {
+            'controller_index': axis,
+            'state': 'detected',
+            'fault': False,
+            'motor_type': 'dynamixel',
+            'lower': -180.0,
+            'upper': 180.0,
+        }
+        for axis in controller_indexes
+    ]
+    return supervisor
+
+
+def test_midi_command_does_not_carry_the_axes_it_is_not_driving():
+    """추가 녹화 · MIDI 는 축 2 만 몬다 · 재생이 모는 축 0, 1 이 실리면 안 된다."""
+    supervisor = _midi_supervisor([0, 1, 2])
+
+    success, _, _ = supervisor._handle_midi_position_batch([
+        {'request_id': 'rec', 'channel': 2, 'axis': 2, 'target_deg': 10.0},
+    ])
+
+    assert success is True
+    command = supervisor._command_pub.messages[0]
+    assert list(command.controller_index) == [2], (
+        '안 모는 축이 빈 칸으로 실렸다 · 매니저가 그 축의 재생 목표를 지운다'
+    )
+    assert _targets_by_axis(command) == {2: 10.0}
+    assert MotionSupervisor._motor_command_shape_error(command) is None
+
+
+def test_compacting_keeps_the_real_axis_numbers():
+    """슬롯 번호가 아니라 축 번호가 실려야 한다 · 매니저가 그것으로 찾는다."""
+    supervisor = _midi_supervisor([0, 1, 2, 3])
+
+    supervisor._handle_midi_position_batch([
+        {'request_id': 'a', 'channel': 3, 'axis': 3, 'target_deg': 5.0},
+    ])
+
+    command = supervisor._command_pub.messages[0]
+    assert list(command.controller_index) == [3]
+    assert command.position[0] == 5.0
+
+
+def test_a_command_that_drives_every_axis_is_left_alone():
+    """합성 미리보기처럼 전 축을 모는 명령은 그대로 나간다."""
+    supervisor = _midi_supervisor([0, 1])
+
+    supervisor._handle_midi_position_batch([
+        {'request_id': 'a', 'channel': 0, 'axis': 0, 'target_deg': 1.0},
+        {'request_id': 'b', 'channel': 1, 'axis': 1, 'target_deg': 2.0},
+    ])
+
+    command = supervisor._command_pub.messages[0]
+    assert list(command.controller_index) == [0, 1]
+    assert _targets_by_axis(command) == {0: 1.0, 1: 2.0}

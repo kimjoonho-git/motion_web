@@ -160,6 +160,35 @@ class CommandArbiter:
             claim = self._claims.get(_ALL) or self._claims.get(int(axis))
             return claim.owner if claim else CommandOwner.NONE
 
+    def axis_owners(self) -> Dict[str, str]:
+        """축별 주인 표 · 판정하는 쪽이 이것을 본다 · §6-106
+
+        `snapshot()` 은 **대표 하나로 줄인 축약형**이다 · 화면에 "지금 뭐가
+        도나" 를 적는 자리에는 맞지만, **무엇을 계속할지 정하는 데 쓰면 안
+        된다**. MIDI 가 축 하나만 잡아도 대표가 `midi` 로 바뀌어, 다른 축을
+        몰던 재생이 "MIDI 가 쓰는 중" 이라며 스스로 멈췄다.
+
+        전체를 쥔 주인은 `all` 칸에 넣는다 · 축을 지정하지 않은 옛 호출이
+        그렇게 잡는다.
+        """
+        with self._lock:
+            self._expire_locked(self._clock())
+            owners: Dict[str, str] = {}
+            for key, claim in self._claims.items():
+                name = 'all' if key is _ALL else str(int(key))
+                owners[name] = claim.owner.value
+            return owners
+
+    def owns_any(self, owner: CommandOwner) -> bool:
+        """이 주인이 **한 축이라도** 쥐고 있는가 · §6-106
+
+        "재생이 도는 중인가" 같은 물음은 대표 주인으로 답하면 안 된다 ·
+        재생이 한 축을 몰고 있어도 MIDI 가 다른 축을 잡으면 대표가 바뀐다.
+        """
+        with self._lock:
+            self._expire_locked(self._clock())
+            return any(claim.owner is owner for claim in self._claims.values())
+
     # ----------------------------------------------------------------- #
     # 내부
     # ----------------------------------------------------------------- #

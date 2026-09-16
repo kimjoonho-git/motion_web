@@ -602,7 +602,7 @@ def test_start_routes_one_owned_initialization_and_motion_sequence(monkeypatch):
     manager._run_thread = None
     manager._stop_event = threading.Event()
     manager._graceful_stop_event = threading.Event()
-    manager._playback_ownership_error = lambda: ''
+    manager._playback_ownership_error = lambda axes=None: ''
     current = {'state': 'initialized'}
     manager.status = lambda: dict(current)
     manager._set_status = lambda status: (current.clear(), current.update(status))
@@ -655,7 +655,7 @@ def test_start_acknowledges_before_motion_plan_processing(monkeypatch):
     manager._run_thread = None
     manager._stop_event = threading.Event()
     manager._graceful_stop_event = threading.Event()
-    manager._playback_ownership_error = lambda: ''
+    manager._playback_ownership_error = lambda axes=None: ''
     manager._current_motors = lambda: [{'axis': 0}]
     current = {'state': 'idle'}
     manager.status = lambda: dict(current)

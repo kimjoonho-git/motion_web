@@ -88,3 +88,45 @@ def test_runtime_stream_guard_raises_before_publishing_for_midi_owner():
 
     with pytest.raises(RuntimeError, match='MIDI 제어'):
         manager._player._require_playback_command_allowed()
+
+
+def test_playback_keeps_running_when_midi_owns_a_different_axis():
+    """추가 녹화의 바탕 · 내 축이 비어 있으면 계속한다 · §6-106
+
+    `command_owner` 는 **대표 하나로 줄인 축약형**이다 · MIDI 가 축 하나만
+    잡아도 대표가 `midi` 로 바뀐다. 재생이 매 프레임 그것을 보고 있어서,
+    다른 축을 몰던 재생이 **스스로 멈췄다** · 레이어에 있는 축의 재생이 끊겨
+    그 위에 얹어 녹화하는 것이 불가능했다.
+    """
+    manager = run_manager_with_safety_status({
+        'command_owner': 'midi',                       # 축약형은 midi
+        'command_axis_owners': {'0': 'midi', '1': 'playback'},
+        'commands_blocked': False,
+        'emergency_latched': False,
+    })
+
+    assert manager._playback_ownership_error(axes=[1]) == '', '내 축은 비어 있다'
+    assert '축 0' in manager._playback_ownership_error(axes=[0]), '남이 쥔 축은 막는다'
+
+
+def test_a_blanket_owner_still_blocks_every_axis():
+    """축을 지정하지 않고 전체를 쥔 주인은 어느 축이든 막는다."""
+    manager = run_manager_with_safety_status({
+        'command_owner': 'manual',
+        'command_axis_owners': {'all': 'manual'},
+        'commands_blocked': False,
+        'emergency_latched': False,
+    })
+
+    assert '수동 제어' in manager._playback_ownership_error(axes=[1])
+
+
+def test_without_the_axis_table_the_old_summary_still_decides():
+    """표를 못 받은 상대(옛 supervisor)와도 돈다 · 지금까지대로 축약형을 본다."""
+    manager = run_manager_with_safety_status({
+        'command_owner': 'midi',
+        'commands_blocked': False,
+        'emergency_latched': False,
+    })
+
+    assert 'MIDI 제어' in manager._playback_ownership_error(axes=[1])

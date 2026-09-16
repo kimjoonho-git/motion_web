@@ -53,7 +53,7 @@ def _manager():
     }
     manager._automation_project_id = 'project'
     manager._publish_status = lambda: None
-    manager._player._require_playback_command_allowed = lambda: None
+    manager._player._require_playback_command_allowed = lambda axes=None: None
     manager._current_motors = lambda: []
     manager._player._prepare_motion_stream = lambda _motors, _axes: None
     manager._player._publish_motion_setpoints = lambda *_args, **_kwargs: None

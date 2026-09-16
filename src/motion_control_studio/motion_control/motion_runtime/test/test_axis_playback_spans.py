@@ -97,3 +97,44 @@ def test_an_empty_span_list_means_the_axis_is_never_played():
     plan = {'axis_playback_spans': spans}
     assert _filter(plan, {0: 1.0, 3: 2.0}, 5.0) == {0: 1.0}, '빈 목록인 축을 몰고 있다'
     assert _filter(plan, {0: 1.0, 3: 2.0}, 0.02) == {}
+
+
+# 발행과 판정은 같은 표를 본다 · §6-107
+#
+# 계획의 `axes` 는 모션에 적힌 축 전부다 · 추가 녹화에서는 그중 일부만 재생이
+# 몰고 나머지는 지금 MIDI 로 녹화하는 축이다 · 전부를 두고 "MIDI 가 쓰는
+# 중이냐" 를 물으면, 녹화 중인 축 때문에 재생이 스스로 멈춘다.
+
+_owned_axes = MotionPlayer._playback_axes
+
+
+def _plan(axes, spans=None):
+    plan = {'axes': [{'motor_axis': axis} for axis in axes]}
+    if spans is not None:
+        plan['axis_playback_spans'] = spans
+    return plan
+
+
+def test_the_axis_being_recorded_now_is_not_my_axis():
+    """추가 녹화의 모양 · 축 1 은 재생, 축 0 은 지금 MIDI 로 녹화한다."""
+    plan = _plan([0, 1], {0: [], 1: [(0.0, 10.0)]})
+    assert [a['motor_axis'] for a in _owned_axes(plan)] == [1]
+
+
+def test_without_spans_every_plan_axis_is_mine():
+    """로컬·그룹 실행은 이 표를 주지 않는다 · 지금 그대로 전부가 재생의 축이다."""
+    assert [a['motor_axis'] for a in _owned_axes(_plan([0, 1]))] == [0, 1]
+    assert [a['motor_axis'] for a in _owned_axes(_plan([0, 1], {}))] == [0, 1]
+
+
+def test_an_axis_missing_from_the_table_is_mine():
+    plan = _plan([0, 1], {1: [(0.0, 10.0)]})
+    assert [a['motor_axis'] for a in _owned_axes(plan)] == [0, 1]
+
+
+def test_judging_and_publishing_agree_on_the_same_axis():
+    """발행이 거르는 축은 판정도 남의 축으로 봐야 한다 · 어긋나면 재생이 죽는다."""
+    plan = _plan([0, 1], {0: [], 1: [(0.0, 10.0)]})
+    published = _filter(plan, {0: 1.0, 1: 2.0}, 5.0)
+    judged = {a['motor_axis'] for a in _owned_axes(plan)}
+    assert set(published) == judged

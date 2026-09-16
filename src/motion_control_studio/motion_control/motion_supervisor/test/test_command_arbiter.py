@@ -138,3 +138,54 @@ def test_safety_revoke_clears_every_axis():
     assert arbiter.revoke_all() is not CommandOwner.NONE
     assert arbiter.owner_of(0) is CommandOwner.NONE
     assert arbiter.owner_of(1) is CommandOwner.NONE
+
+
+# 축별 주인 표 · §6-106
+#
+# `snapshot()` 은 대표 하나로 줄인 축약형이다 · 무엇을 계속할지 정하는 데 쓰면
+# MIDI 가 축 하나만 잡아도 대표가 바뀌어, 다른 축을 몰던 재생이 스스로 멈춘다.
+
+
+def test_axis_owners_lists_each_axis_separately():
+    arbiter = CommandArbiter()
+    arbiter.acquire(CommandOwner.PLAYBACK, axes=[1], lease_sec=1.0)
+    arbiter.acquire(CommandOwner.MIDI, axes=[0], lease_sec=1.0)
+
+    assert arbiter.axis_owners() == {'1': 'playback', '0': 'midi'}
+
+
+def test_axis_owners_puts_a_blanket_owner_in_the_all_slot():
+    arbiter = CommandArbiter()
+    arbiter.acquire(CommandOwner.MANUAL)
+
+    assert arbiter.axis_owners() == {'all': 'manual'}
+
+
+def test_axis_owners_drops_expired_leases():
+    clock = FakeClock()
+    arbiter = CommandArbiter(clock=clock)
+    arbiter.acquire(CommandOwner.MIDI, axes=[2], lease_sec=0.15)
+
+    clock.now += 0.16
+    assert arbiter.axis_owners() == {}
+
+
+def test_owns_any_sees_playback_even_when_midi_is_the_dominant_owner():
+    """대표가 MIDI 여도 재생은 축 하나를 몰고 있다 · 이걸 못 보면 재생이 죽는다."""
+    arbiter = CommandArbiter()
+    arbiter.acquire(CommandOwner.MIDI, axes=[0], lease_sec=1.0)
+    arbiter.acquire(CommandOwner.PLAYBACK, axes=[1], lease_sec=1.0)
+
+    assert arbiter.owns_any(CommandOwner.PLAYBACK) is True
+    assert arbiter.owns_any(CommandOwner.MIDI) is True
+    assert arbiter.owns_any(CommandOwner.MANUAL) is False
+
+
+def test_owns_any_is_false_after_the_lease_expires():
+    clock = FakeClock()
+    arbiter = CommandArbiter(clock=clock)
+    arbiter.acquire(CommandOwner.PLAYBACK, axes=[1], lease_sec=0.15)
+
+    assert arbiter.owns_any(CommandOwner.PLAYBACK) is True
+    clock.now += 0.16
+    assert arbiter.owns_any(CommandOwner.PLAYBACK) is False

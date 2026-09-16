@@ -71,7 +71,13 @@ class MotionPlayer:
             )
             if self.manager._stop_event.is_set():
                 return
-            ownership_error = self.manager._playback_ownership_error()
+            # 시작 전에도 **내가 쓸 축만** 본다 · §6-106
+            ownership_error = self.manager._playback_ownership_error(
+                axes=[
+                    int(axis_plan['motor_axis'])
+                    for axis_plan in self._playback_axes(plan)
+                ]
+            )
             if ownership_error:
                 raise ValueError(ownership_error)
             guard_error = motion_run_rules._motion_auto_start_guard_error(plan)
@@ -259,7 +265,7 @@ class MotionPlayer:
             automation_run = bool(plan.get('automation_run'))
             repeat_mode = str(plan.get('repeat_mode') or 'direct')
             dwell_sec = max(float(plan.get('dwell_sec') or 0.0), 0.0)
-            self._require_playback_command_allowed()
+            self._require_playback_command_allowed(self._playback_axes(plan))
             motors = self.manager._current_motors()
             self._prepare_motion_stream(motors, plan['axes'])
             motion_started_at = time.time()
@@ -311,7 +317,7 @@ class MotionPlayer:
                         status['cycle_count'] = cycle_count
                         self.manager._set_status(status)
                         return
-                    self._require_playback_command_allowed()
+                    self._require_playback_command_allowed(self._playback_axes(plan))
                     if automation_run and self._current_servo_alarm_grade() == 1:
                         grade1_seen = True
                     positions = self._owned_positions(
@@ -407,7 +413,7 @@ class MotionPlayer:
                             '반복 초기위치 이동 완료 후 정지',
                         )
                         return
-                    self._require_playback_command_allowed()
+                    self._require_playback_command_allowed(self._playback_axes(plan))
                     motors = self.manager._current_motors()
                     self._prepare_motion_stream(motors, plan['axes'])
                     self._restore_running_status(
@@ -497,7 +503,7 @@ class MotionPlayer:
         for step in range(steps + 1):
             if self.manager._stop_event.is_set():
                 raise InterruptedError()
-            self._require_playback_command_allowed()
+            self._require_playback_command_allowed(axes)
 
             elapsed = min(step * tick_sec, duration)
             positions: Dict[int, float] = {}
@@ -987,7 +993,40 @@ class MotionPlayer:
             self.manager.ac_target_tolerance_deg,
         )
 
-    def _require_playback_command_allowed(self) -> None:
-        error = self.manager._playback_ownership_error()
+    @staticmethod
+    def _playback_axes(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """재생이 **실제로 모는** 축만 · §6-107
+
+        계획의 `axes` 는 모션에 적힌 축 전부다 · 추가 녹화에서는 그중 일부만
+        재생이 몰고 나머지는 **지금 MIDI 로 녹화하는 축**이다 · 그 전부를 두고
+        "MIDI 가 쓰는 중이냐" 를 물으면, 녹화 중인 축 때문에 재생이 스스로
+        멈춘다 · 레이어가 끊기고 그 위에 얹어 녹화할 수 없었다.
+
+        누가 무엇을 모는지는 `axis_playback_spans` 가 이미 정해 두었다 ·
+        발행할 때 거르는 `_owned_positions` 와 **같은 표**를 본다 · 판정과
+        발행이 서로 다른 것을 보면 반드시 어긋난다.
+
+        표가 없으면 전부가 재생의 축이다 · 로컬·그룹 실행은 지금 그대로다.
+        """
+        axes = list(plan.get('axes') or [])
+        spans = plan.get('axis_playback_spans')
+        if not spans:
+            return axes
+        return [
+            axis_plan for axis_plan in axes
+            if spans.get(int(axis_plan['motor_axis']), True)
+        ]
+
+    def _require_playback_command_allowed(self, axes=None) -> None:
+        """재생을 계속해도 되는지 · 안 되면 멈춘다 · §6-106
+
+        `axes` 를 주면 **그 축들만** 본다 · 다른 축을 MIDI 가 잡고 있어도
+        내 축이 비어 있으면 계속한다. 추가 녹화가 그 위에 선다.
+        """
+        error = self.manager._playback_ownership_error(
+            axes=None if axes is None else [
+                int(axis_plan['motor_axis']) for axis_plan in axes
+            ]
+        )
         if error:
             raise RuntimeError(error)

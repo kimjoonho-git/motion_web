@@ -154,7 +154,6 @@ class MotionSupervisor(Node):
         self._jog_threads: Dict[int, threading.Thread] = {}
         self._action_threads: Dict[int, threading.Thread] = {}
         self._motor_config_cache: Optional[Dict[str, Any]] = None
-        self._midi_active_until = 0.0
         self._last_motion_run_command_at = 0.0
         self._emergency_latched = False
         self._servo_alarm_guard = ServoAlarmGuard()
@@ -307,10 +306,18 @@ class MotionSupervisor(Node):
                 throttle_duration_sec=1.0,
             )
             return
+        # MIDI 는 **축별로** 판정한다 · §6-107
+        #
+        # 전에는 `_midi_active_until` 하나로 "MIDI 가 도는 중" 을 적어 두고,
+        # 축을 가리지 않고 재생 중계를 통째로 막았다 · 추가 녹화는 한쪽 축을
+        # MIDI 로 녹화하면서 다른 축을 재생하는 일이라, 녹화를 시작하는 순간
+        # 재생이 끊겼다.
+        #
+        # 같은 사실을 `CommandArbiter` 가 이미 축별로 쥐고 있다 · 한 사실을 두
+        # 곳에 적으면 반드시 어긋난다 · 판정은 중재기 하나만 한다.
         reason = motion_run_rejection_reason(
             motor_state_available=bool(self._current_motors()),
             manual_command_active=bool(self._active_jogs or self._active_actions),
-            midi_command_active=time.monotonic() < self._midi_active_until,
             emergency_latched=self._emergency_latched,
         )
         alarm_reason = self._servo_alarm_block_reason()
@@ -615,13 +622,12 @@ class MotionSupervisor(Node):
                         self._midi_target_result(target, False, message)
                         for target in requests
                     ]
-                self._command_pub.publish(command)
+                self._command_pub.publish(self._only_driven_axes(command))
             # A SELECT-off hold releases MIDI ownership. The initialization
             # command which follows must be allowed through immediately.
-            if any(target.get('operation') != 'hold' for target in requests):
-                self._midi_active_until = now + MIDI_COMMAND_OWNERSHIP_SEC
-            else:
-                self._midi_active_until = 0.0
+            # SELECT 를 놓으면 소유권도 놓는다 · 뒤따르는 초기화 명령이
+            # 바로 지나가야 한다.
+            if not any(target.get('operation') != 'hold' for target in requests):
                 self._command_arbiter_instance().release(CommandOwner.MIDI)
 
         all_success = success_count == len(requests)
@@ -691,7 +697,6 @@ class MotionSupervisor(Node):
             motors, motor, axis, target_position, controlword
         )
         if success:
-            self._midi_active_until = now + MIDI_COMMAND_OWNERSHIP_SEC
             motion_deg = self._optional_float(request.get('motion_deg'))
             motion_text = '' if motion_deg is None else f', motion {motion_deg:.3f} deg'
             return True, (
@@ -878,7 +883,6 @@ class MotionSupervisor(Node):
             ]
             self._active_jogs.clear()
             self._active_actions.clear()
-            self._midi_active_until = 0.0
             self._last_motion_run_command_at = 0.0
             self._command_arbiter_instance().revoke_all()
 
@@ -917,8 +921,14 @@ class MotionSupervisor(Node):
             motor for motor in state.get('motors') or []
             if isinstance(motor, dict)
         ]
+        # "재생이 도는 중인가" 는 **한 축이라도 쥐고 있으면 참**이다 · §6-106
+        #
+        # 대표 주인(`snapshot().owner`)으로 보면, 추가 녹화에서 MIDI 가 축
+        # 하나를 잡는 순간 대표가 `midi` 로 바뀌어 다른 축을 몰던 재생이
+        # 없는 것으로 판정된다 · 알람 처리가 "재생 중" 과 "정지 중" 을 다르게
+        # 다루므로 판정이 달라진다.
         playback_active = (
-            self._command_arbiter_instance().snapshot().owner is CommandOwner.PLAYBACK
+            self._command_arbiter_instance().owns_any(CommandOwner.PLAYBACK)
             or time.monotonic() - self._last_motion_run_command_at
             < MOTION_RUN_ACTIVE_GRACE_SEC
         )
@@ -2013,7 +2023,7 @@ class MotionSupervisor(Node):
                 return False, 'emergency stop is latched; restart the full program'
             if time.monotonic() < self._motion_stop_block_until:
                 return False, 'motion stop is settling'
-            self._command_pub.publish(command)
+            self._command_pub.publish(self._only_driven_axes(command))
         return True, 'position target command sent'
 
     def _publish_ac_servo_action_setpoint(
@@ -2152,7 +2162,7 @@ class MotionSupervisor(Node):
                     return
             if time.monotonic() < self._motion_stop_block_until:
                 return
-            self._command_pub.publish(command)
+            self._command_pub.publish(self._only_driven_axes(command))
 
     def _handle_safety_stop(self, emergency: bool) -> tuple[bool, str]:
         """Cancel every upper-level command and publish one final safe command."""
@@ -2172,7 +2182,6 @@ class MotionSupervisor(Node):
             ]
             self._active_jogs.clear()
             self._active_actions.clear()
-            self._midi_active_until = 0.0
             self._last_motion_run_command_at = 0.0
             self._command_arbiter_instance().revoke_all()
 
@@ -2282,7 +2291,10 @@ class MotionSupervisor(Node):
             'servo_alarm_policy_project_id': alarm_state['policy_project_id'],
             'servo_alarm_policy_version': alarm_state['policy_version'],
             'servo_alarm_policy_revision': alarm_state['policy_revision'],
+            # `command_owner` 는 **화면 표시용 축약형**이다 · 무엇을 계속할지
+            # 정하는 쪽은 `command_axis_owners` 를 봐야 한다 · §6-106
             'command_owner': self._command_arbiter_instance().snapshot().owner.value,
+            'command_axis_owners': self._command_arbiter_instance().axis_owners(),
             **self._manual_activity_snapshot(),
             'message': message,
             'stamp': time.time(),
@@ -2356,6 +2368,47 @@ class MotionSupervisor(Node):
         command.velocity = [0.0] * size
         command.effort = [0.0] * size
         return command
+
+    @staticmethod
+    def _only_driven_axes(command: MotorStatus) -> MotorStatus:
+        """이번에 **실제로 모는 축만** 남긴다 · §6-108
+
+        모터 매니저는 메시지에 실린 축을 전부 자기 명령표에 덮어쓴다 ·
+        슬롯이 0 인 **빈 칸도 덮어쓴다** · 그래서 한 축만 보내는 명령에 다른
+        축의 빈 칸이 같이 실려 있으면, 방금 도착한 **그 축의 목표가 지워진다**.
+
+        추가 녹화는 재생과 MIDI 가 같은 통로로 번갈아 나간다 · MIDI 가 한 번
+        나갈 때마다 재생 축의 목표가 지워져 모터가 버벅였다 · 합성 미리보기는
+        한 줄기라 모든 축이 한 메시지에 실려 멀쩡했다.
+
+        재생은 이미 자기 축만 담는다(`_publish_positions`) · 같은 규칙을 MIDI
+        와 수동 단건 명령에도 적용한다.
+        """
+        slots = [
+            slot for slot in range(len(command.controller_index))
+            if int(command.number_of_target_interfaces[slot]) > 0
+        ]
+        if len(slots) == len(command.controller_index):
+            return command
+
+        compact = MotorStatus()
+        compact.number_of_target_interfaces = [
+            int(command.number_of_target_interfaces[slot]) for slot in slots
+        ]
+        compact.target_interface_id = [
+            Int8MultiArray(data=list(command.target_interface_id[slot].data))
+            for slot in slots
+        ]
+        compact.controller_index = [
+            int(command.controller_index[slot]) for slot in slots
+        ]
+        compact.controlword = [int(command.controlword[slot]) for slot in slots]
+        compact.statusword = [int(command.statusword[slot]) for slot in slots]
+        compact.errorcode = [int(command.errorcode[slot]) for slot in slots]
+        compact.position = [float(command.position[slot]) for slot in slots]
+        compact.velocity = [float(command.velocity[slot]) for slot in slots]
+        compact.effort = [float(command.effort[slot]) for slot in slots]
+        return compact
 
     @staticmethod
     def _motor_command_shape_error(command: MotorStatus) -> Optional[str]:

@@ -1106,8 +1106,12 @@ class MotionRunManager(Node):
             'status': self.status(),
         }
 
-    def _playback_ownership_error(self) -> str:
-        """Return why runtime commands cannot currently own motor output."""
+    def _playback_ownership_error(self, axes=None) -> str:
+        """재생이 지금 모터를 몰 수 없는 이유 · 없으면 빈 문자열.
+
+        `axes` 를 주면 **그 축들만** 본다 · 안 주면 지금까지대로 대표 주인을
+        본다(옛 호출부).
+        """
         lock = getattr(self, '_safety_status_lock', None)
         if lock is None:
             # Lightweight unit-test instances created with __new__ predate this
@@ -1125,12 +1129,35 @@ class MotionRunManager(Node):
             return '긴급정지 잠김 상태입니다. 상위 프로그램 재시작이 필요합니다'
         if bool(status.get('commands_blocked')):
             return str(status.get('message') or '모터 명령이 일시 차단된 상태입니다')
+        owner_names = {
+            'midi': 'MIDI 제어',
+            'manual': '수동 제어',
+        }
+        # 내가 쓰는 축의 주인만 본다 · §6-106
+        #
+        # `command_owner` 는 **대표 하나로 줄인 축약형**이다 · 추가 녹화에서
+        # MIDI 가 축 하나를 잡으면 대표가 `midi` 로 바뀐다 · 그러면 다른 축을
+        # 몰던 재생이 매 프레임 이 검사에 걸려 **스스로 멈췄다** · 레이어에
+        # 있는 축의 재생이 끊기고, 그 위에 얹어 녹화하는 것이 불가능했다.
+        #
+        # 소유는 `CommandArbiter` 가 **축별**로 갖고 있다 · 축약형은 화면에
+        # 쓰고, 계속할지 말지는 축별로 묻는다.
+        axis_owners = status.get('command_axis_owners')
+        if isinstance(axis_owners, dict) and axes is not None:
+            blanket = str(axis_owners.get('all') or 'none').strip().lower()
+            if blanket not in ('none', 'playback'):
+                return f"{owner_names.get(blanket, blanket)}가 사용 중이어서 모션을 시작할 수 없습니다"
+            for axis in axes:
+                holder = str(axis_owners.get(str(int(axis))) or 'none').strip().lower()
+                if holder not in ('none', 'playback'):
+                    return (
+                        f"{owner_names.get(holder, holder)}가 축 {int(axis)}를 "
+                        '사용 중이어서 모션을 시작할 수 없습니다'
+                    )
+            return ''
+        # 축을 모르는 옛 호출 · 표를 못 받은 상태 · 지금까지대로 축약형을 본다
         owner = str(status.get('command_owner') or 'none').strip().lower()
         if owner not in ('none', 'playback'):
-            owner_names = {
-                'midi': 'MIDI 제어',
-                'manual': '수동 제어',
-            }
             return f"{owner_names.get(owner, owner)}가 사용 중이어서 모션을 시작할 수 없습니다"
         return ''
 
