@@ -69,7 +69,10 @@ export function defaultWorkspaceForGroup(group) {
 }
 
 export function workspaceForLegacyNavigation(workspace, motionTab = '') {
-  if (!['motion', 'project'].includes(workspace)) return normalizeWorkspaceRoute(workspace);
+  // `'project'`는 여기 없어야 한다 · 지금은 `WORKSPACE_GROUPS.setup`에 실재하는
+  // **프로젝트 관리 탭**의 이름이다. 옛 이름으로 알아들으면 그 탭을 누를 때마다
+  // `motion-run`으로 튕겨 나가고, `onManageFile`의 편집기 스크롤도 빗나간다.
+  if (!['motion'].includes(workspace)) return normalizeWorkspaceRoute(workspace);
   // 파일 관리는 모션 실행 화면으로 합쳐졌다 · 옛 'files' 요청도 그리로 보낸다
   const tab = String(motionTab || 'run') === 'files' ? 'run' : String(motionTab || 'run');
   return Object.entries(MOTION_WORKSPACE_TABS)

@@ -43,11 +43,23 @@ test('workspace defaults and legacy motion navigation are deterministic', () => 
   assert.equal(defaultWorkspaceForGroup('unknown'), 'monitoring');
   assert.equal(normalizeWorkspaceRoute('unknown'), 'monitoring');
   assert.equal(workspaceForLegacyNavigation('motion', 'midi'), 'motion-midi');
-  assert.equal(workspaceForLegacyNavigation('project', 'mapping'), 'motion-mapping');
   assert.equal(workspaceForLegacyNavigation('motion', 'unknown'), 'motion-run');
   // 옛 'files' 탭 요청도 통합된 실행 화면으로 보낸다 · 북마크·탐색기 대비
   assert.equal(workspaceForLegacyNavigation('motion', 'files'), 'motion-run');
   assert.equal(workspaceForLegacyNavigation('config'), 'config');
+});
+
+test('every real workspace route survives navigation unchanged', () => {
+  // `'project'`가 옛 이름 목록에 남아 있어서, 프로젝트 관리 탭을 누를 때마다
+  // `motion-run`으로 튕겨 나갔다 · `onManageFile`의 편집기 스크롤도 빗나갔다.
+  // 옛 이름으로 다룰 수 있는 것은 `'motion'` 하나뿐이다.
+  for (const route of Object.values(WORKSPACE_GROUPS).flat()) {
+    assert.equal(
+      workspaceForLegacyNavigation(route),
+      route,
+      `${route} 탭이 제자리로 가야 한다`,
+    );
+  }
 });
 
 test('project categories navigate directly to their feature screen', () => {
