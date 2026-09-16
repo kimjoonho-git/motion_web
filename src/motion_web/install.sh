@@ -6,12 +6,70 @@ WORKSPACE_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 export DEBIAN_FRONTEND=noninteractive
 ROS_DAEMON_UPDATED=false
+CURRENT_STEP="시작 전"
 
 print_step() {
+  CURRENT_STEP="$1"
   echo
   echo "========================================="
   echo "$1"
   echo "========================================="
+}
+
+# 멈추면 **어디서 왜 멈췄는지**를 마지막 화면에 남긴다 · §6-102
+#
+# `set -Eeuo pipefail` 은 오류 한 줄만 뱉고 끝난다 · 화면을 위로 한참 올려야
+# 원인이 보이고, 그마저 PC 앞에 있는 사람이 옮겨 적어야 했다. PC 가 늘어날수록
+# 그 전달이 병목이 된다 · 마지막 스무 줄만 찍어 보내면 되게 한다.
+report_failure() {
+  local exit_code=$1 line=$2 command=$3
+  echo >&2
+  echo "=========================================" >&2
+  echo "설치 실패" >&2
+  echo "=========================================" >&2
+  echo "멈춘 단계 · ${CURRENT_STEP}" >&2
+  echo "실행하려던 것 · ${command}" >&2
+  echo "스크립트 ${line}행 · 끝난 값 ${exit_code}" >&2
+  echo >&2
+  case "${CURRENT_STEP}" in
+    *"Git"*)
+      echo "자주 있는 원인" >&2
+      echo "  - 원격에 닿지 못함 · 인터넷·사내망 확인" >&2
+      echo "  - 계정 권한 없음 · git 자격증명 확인" >&2
+      ;;
+    *"필수 프로그램"*|*"ROS 2 저장소"*|*"rosdep"*)
+      echo "자주 있는 원인" >&2
+      echo "  - apt 잠김 · 다른 설치가 돌고 있는지 확인" >&2
+      echo "  - 인터넷 안 됨 · 저장소에 닿는지 확인" >&2
+      ;;
+    *"빌드"*)
+      echo "자주 있는 원인" >&2
+      echo "  - 위 로그의 '--- stderr:' 아래 줄이 진짜 원인이다" >&2
+      echo "  - 저장 공간 부족 · df -h ~" >&2
+      echo "  - EtherCAT 자리 · 7단계가 찍은 경로를 확인" >&2
+      ;;
+  esac
+  echo >&2
+  echo "이 화면 그대로(위 20줄 포함) 알려 주시면 됩니다." >&2
+  echo "=========================================" >&2
+  exit "${exit_code}"
+}
+trap 'report_failure "$?" "${LINENO}" "${BASH_COMMAND}"' ERR
+
+# 중간에 멈추는 흔한 이유 둘을 **먼저** 걸러낸다
+preflight_checks() {
+  local avail_gb
+  avail_gb="$(df -BG --output=avail "${WORKSPACE_DIR}" | tail -1 | tr -dc '0-9')"
+  echo "작업공간 · ${WORKSPACE_DIR}"
+  echo "남은 공간 · ${avail_gb}GB"
+  if [[ "${avail_gb}" -lt 5 ]]; then
+    echo "!! 저장 공간이 5GB 미만입니다 · 전체 빌드가 중간에 멈출 수 있습니다" >&2
+  fi
+  # sudo 는 여러 단계에서 쓴다 · 중간에 물어 멈추지 않게 여기서 한 번만 받는다
+  if ! sudo -n true 2>/dev/null; then
+    echo "관리자 권한이 필요합니다 · 비밀번호를 한 번만 입력하세요"
+    sudo -v
+  fi
 }
 
 require_ubuntu_2204() {
@@ -79,25 +137,58 @@ sync_git_repository() {
     echo "Git origin 없음 · 수신 건너뜀"
     return 0
   fi
-  # 서브모듈과 추적 안 하는 파일은 보지 않는다 · §6-99
+  if ! git -C "${WORKSPACE_DIR}" fetch --prune origin; then
+    echo "!! 원격에 닿지 못했습니다 · 지금 있는 코드로 빌드합니다" >&2
+    return 0
+  fi
+
+  local upstream
+  upstream="$(git -C "${WORKSPACE_DIR}" rev-parse --abbrev-ref \
+    --symbolic-full-name '@{u}' 2>/dev/null || echo 'origin/main')"
+
+  # **어떤 PC 든 이 명령 하나로 원격과 같아진다** · §6-102
   #
-  # 그냥 `status --porcelain` 을 보면 `src/motion_system`(서브모듈) 이 늘
-  # "변경됨" 으로 나온다 · 그 안에 빌드 찌꺼기(`__pycache__`)가 생기기 때문이다 ·
-  # 그래서 **모든 PC 에서 git 수신이 조용히 건너뛰어졌다** · 설치를 돌려도
-  # 코드가 그대로였다.
+  # 예전에는 두 자리에서 사람 손을 요구했다.
+  #   - 고친 파일이 있으면 수신을 건너뛰고 **옛 코드로 빌드**했다 · 조용한 실패라
+  #     설치를 돌려도 코드가 그대로인 줄 몰랐다.
+  #   - 이력이 갈라지면 `pull --ff-only` 가 실패하고 `set -e` 로 **스크립트가
+  #     통째로 죽었다** · 빌드 근처에도 못 갔다.
+  # 그래서 PC 마다 다른 명령을 손으로 치게 됐고, **그 자체가 다음 사고**가 됐다.
   #
-  # 막아야 하는 것은 "이 PC 에서 손으로 고친 추적 파일" 하나뿐이다.
-  local dirty
+  # 여기서는 원격에 맞추되 **아무것도 잃지 않는다** · 이 PC 에서 고친 파일은
+  # `backups/` 로 떠 두고, 원격에 없는 커밋에는 표를 붙인다. 둘 다 되돌릴 수 있다.
+  #
+  # 서브모듈은 보지 않는다 · 빌드 찌꺼기(`__pycache__`)로 늘 "변경됨" 이라
+  # 그것까지 세면 모든 PC 가 갱신을 멈춘다 · §6-99
+  local stamp dirty backup_dir file
+  stamp="$(date +%Y%m%d-%H%M%S)"
   dirty="$(git -C "${WORKSPACE_DIR}" status --porcelain \
     --untracked-files=no --ignore-submodules=all)"
   if [[ -n "${dirty}" ]]; then
-    echo "!! 고친 파일이 있어 Git 수신을 건너뜁니다 · 코드가 갱신되지 않습니다" >&2
-    echo "${dirty}" >&2
-    echo "!! 되돌리려면: git checkout -- <파일>" >&2
-    return 0
+    backup_dir="${WORKSPACE_DIR}/backups/pre-update-${stamp}"
+    echo "이 PC 에서 고친 파일을 옮겨 둡니다 · ${backup_dir}"
+    while read -r _ file; do
+      [[ -z "${file}" || ! -f "${WORKSPACE_DIR}/${file}" ]] && continue
+      mkdir -p "${backup_dir}/$(dirname "${file}")"
+      cp -p "${WORKSPACE_DIR}/${file}" "${backup_dir}/${file}"
+      echo "  ${file}"
+    done <<< "${dirty}"
   fi
-  git -C "${WORKSPACE_DIR}" pull --recurse-submodules --ff-only
-  git -C "${WORKSPACE_DIR}" submodule update --init --recursive
+
+  if [[ -n "$(git -C "${WORKSPACE_DIR}" log --oneline "${upstream}..HEAD" 2>/dev/null)" ]]; then
+    echo "이 PC 에만 있는 커밋에 표를 붙입니다 · pre-update-${stamp}"
+    git -C "${WORKSPACE_DIR}" log --oneline "${upstream}..HEAD" | sed 's/^/  /'
+    git -C "${WORKSPACE_DIR}" tag "pre-update-${stamp}" >/dev/null 2>&1 || true
+  fi
+
+  git -C "${WORKSPACE_DIR}" reset --hard "${upstream}"
+  git -C "${WORKSPACE_DIR}" submodule update --init --recursive --force
+  echo "원격과 같아졌습니다 · $(git -C "${WORKSPACE_DIR}" log --oneline -1)"
+  if [[ -n "${dirty}" ]]; then
+    echo
+    echo "!! 고친 파일은 덮어썼습니다 · 필요하면 아래에서 가져오세요" >&2
+    echo "!! ${backup_dir}" >&2
+  fi
 }
 
 configure_locale_and_groups() {
@@ -284,6 +375,9 @@ resolve_ethercat_paths() {
   fi
 }
 
+print_step "0. 사전 확인"
+preflight_checks
+
 print_step "1. Ubuntu 버전 확인"
 require_ubuntu_2204
 
@@ -316,6 +410,15 @@ print_step "10. 서비스 적용"
 restart_user_services
 
 print_step "설치 완료"
+# 끝났는지 **눈으로 한 번에** 보이게 · 단계 제목만 지나가면 끝난 줄 알기 어렵다
+echo "작업공간 · ${WORKSPACE_DIR}"
+echo "코드     · $(git -C "${WORKSPACE_DIR}" log --oneline -1 2>/dev/null || echo '(git 아님)')"
+echo "빌드     · $(find "${WORKSPACE_DIR}/install" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | wc -l)개 꾸러미"
+echo -n "서비스   · "
+for unit in motion-control motion-motor motion-coordination; do
+  echo -n "${unit}=$(systemctl --user is-active "${unit}.service" 2>/dev/null || echo unknown) "
+done
+echo
 echo "웹 주소: http://localhost:8000"
 echo "상태 확인: systemctl --user status --no-pager motion-control.service motion-coordination.service"
 if [[ "${ROS_DAEMON_UPDATED}" == true ]]; then

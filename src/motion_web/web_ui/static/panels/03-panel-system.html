@@ -7,8 +7,13 @@
           <div><strong>터미널</strong><small>이 PC 의 작업공간에서 바로 시작합니다</small></div>
         </div>
         <div class="registry-message terminal-howto">
+          <!-- `git pull &&` 를 앞에 붙이지 않는다 · §6-102
+               이력이 갈라진 PC 에서 `git pull` 이 실패하면 `&&` 때문에
+               install.sh 가 **아예 돌지 않았다** · 그래서 그 PC 만 다른 명령을
+               손으로 치게 됐고 그것이 다음 사고가 됐다. 코드 수신은 install.sh
+               2단계가 스스로 한다. -->
           <strong>코드 받기 + 다시 빌드</strong> · 아래 한 줄을 그대로 치세요 (몇 분 걸립니다)
-          <pre class="terminal-howto-command">git pull &amp;&amp; bash src/motion_web/install.sh</pre>
+          <pre class="terminal-howto-command">bash src/motion_web/install.sh</pre>
           <span>빌드 동안 이 웹 화면은 잠깐 끊깁니다 · <strong>터미널은 안 끊깁니다</strong> · 끝나면 <code>설치 완료</code> 가 찍힙니다</span>
         </div>
         <div style="flex: 1; display: flex; flex-direction: column; width: 100%; min-height: calc(100vh - 200px);">
