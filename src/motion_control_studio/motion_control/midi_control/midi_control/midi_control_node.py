@@ -1045,10 +1045,32 @@ class MidiControlNode(Node):
             ] * MIDI_CHANNEL_COUNT
 
     def _force_all_select_off_for_playback_locked(self, message: str) -> None:
-        """Release MIDI ownership/follow state without commanding robot motors."""
+        """재생 상태가 바뀌면 재생이 쥔 채널을 놓는다 · 모터는 명령하지 않는다.
+
+        **녹화 중인 채널은 건드리지 않는다** · §6-105
+
+        추가 녹화는 레이어에 있는 축을 재생하면서 없는 축을 얹어 녹화한다 ·
+        재생이 끝나면 여기가 돌면서 **전 채널**의 SELECT 를 껐다 · 지금 손으로
+        녹화하던 축까지 같이 꺼져서 거기서 녹화가 끊겼다.
+
+        재생이 쥔 축만 놓으면 된다 · 그 판정은 SELECT 를 나눌 때와 같은
+        `_channel_follows_playback_locked` 를 쓴다 · 두 곳이 다른 기준을 쓰면
+        한쪽만 고쳐졌을 때 조용히 어긋난다.
+        """
         self._ensure_playback_follow_state_locked()
         now = time.monotonic()
+        # 평소 재생이면 전 채널을 놓는다 · 뱅크를 볼 일이 없다 · 스튜디오
+        # 녹화일 때만 어느 축이 재생 것인지 가린다.
+        owned = getattr(self, '_studio_playback_motion_ids', None)
+        mappings = (
+            self._banks.snapshot()['active_bank']['mappings']
+            if owned is not None else None
+        )
         for channel in range(MIDI_CHANNEL_COUNT):
+            if mappings is not None and not self._channel_follows_playback_locked(
+                channel, mappings[channel]
+            ):
+                continue
             was_selected = bool(
                 self._control_enabled[channel]
                 or self._playback_follow_enabled[channel]

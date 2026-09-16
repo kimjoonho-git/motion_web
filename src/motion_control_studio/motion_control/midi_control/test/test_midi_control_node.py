@@ -1,4 +1,5 @@
 import json
+import types
 import threading
 import time
 from types import SimpleNamespace
@@ -2566,3 +2567,61 @@ def test_linked_motion_ids_count_as_owned():
     assert node._channel_follows_playback_locked(
         0, {'motion_id': '1-1', 'linked_motion_ids': ['1-2']}
     ) is True
+
+
+def _select_off_node(owned, mappings):
+    """`_force_all_select_off_for_playback_locked` 만 떼어 보는 최소 대역."""
+    node = MidiControlNode.__new__(MidiControlNode)
+    node._studio_playback_motion_ids = owned
+    node._banks = types.SimpleNamespace(
+        snapshot=lambda: {'active_bank': {'mappings': mappings}}
+    )
+    node._control_enabled = [True] * MIDI_CHANNEL_COUNT
+    node._playback_follow_enabled = [False] * MIDI_CHANNEL_COUNT
+    node._playback_follow_targets = [None] * MIDI_CHANNEL_COUNT
+    node._playback_follow_resume_not_before = [0.0] * MIDI_CHANNEL_COUNT
+    node._motor_follow_active = [False] * MIDI_CHANNEL_COUNT
+    node._motor_command_state = [''] * MIDI_CHANNEL_COUNT
+    node._motor_command_message = [''] * MIDI_CHANNEL_COUNT
+    node._last_feedback = [None] * MIDI_CHANNEL_COUNT
+    node._motion_run_state = 'idle'
+    node._motion_studio_state = 'idle'
+    node._playback_phase = 'idle'
+    node._faders = types.SimpleNamespace(
+        parking=[True] * MIDI_CHANNEL_COUNT,
+        _start_fader_parking_locked=lambda *_a: None,
+    )
+    node._deactivate_control_channel_locked = (
+        lambda channel, request_motor_hold=True: node._control_enabled.__setitem__(
+            channel, False
+        )
+    )
+    node._clear_pending_channel_locked = lambda _channel: None
+    return node
+
+
+def test_overdub_keeps_the_recorded_axis_selected_when_playback_ends():
+    """재생이 끝나도 **손으로 녹화 중인 축**은 SELECT 가 유지된다 · §6-105
+
+    재생 상태가 바뀔 때마다 전 채널 SELECT 를 껐다 · 추가 녹화에서 재생이
+    끝나는 순간 지금 녹화하던 축까지 같이 꺼져 거기서 녹화가 끊겼다.
+    """
+    mappings = [{'motion_id': '1-1'}, {'motion_id': '1-2'}] + [
+        {'motion_id': f'9-{index}'} for index in range(MIDI_CHANNEL_COUNT - 2)
+    ]
+    node = _select_off_node({'1-1'}, mappings)
+
+    node._force_all_select_off_for_playback_locked('모션 동작 종료 · SELECT OFF')
+
+    assert node._control_enabled[0] is False, '재생이 쥔 축은 놓아야 한다'
+    assert node._control_enabled[1] is True, '녹화 중인 축은 유지해야 한다'
+
+
+def test_normal_playback_still_releases_every_channel():
+    """평소 재생에서는 지금까지대로 전 채널을 놓는다."""
+    mappings = [{'motion_id': f'1-{index + 1}'} for index in range(MIDI_CHANNEL_COUNT)]
+    node = _select_off_node(None, mappings)
+
+    node._force_all_select_off_for_playback_locked('모션 동작 종료 · SELECT OFF')
+
+    assert not any(node._control_enabled), '평소 재생은 전 채널을 놓아야 한다'
