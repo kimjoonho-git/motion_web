@@ -77,18 +77,23 @@ class MotionWebBridge(Node):
             'motion_value_topic',
             topics.MOTION_VALUE_STATE,
         ).value
+        # 이름은 `topics` 가 단독으로 정한다 · 여기 글자로 적으면 PC 이름표가
+        # 빠져 **남의 PC 가 대답한다** · §6-103
         self.monitoring_service = self.declare_parameter(
             'monitoring_service',
-            '/set_monitoring',
+            topics.SET_MONITORING,
         ).value
-        self.scan_service = self.declare_parameter('scan_service', '/scan_motors').value
+        self.scan_service = self.declare_parameter(
+            'scan_service',
+            topics.SCAN_MOTORS,
+        ).value
         self.scan_ac_servo_service = self.declare_parameter(
             'scan_ac_servo_service',
-            '/scan_ac_servo_motors',
+            topics.SCAN_AC_SERVO_MOTORS,
         ).value
         self.scan_dynamixel_service = self.declare_parameter(
             'scan_dynamixel_service',
-            '/scan_dynamixel_motors',
+            topics.SCAN_DYNAMIXEL_MOTORS,
         ).value
         self.scan_progress_topic = self.declare_parameter(
             'scan_progress_topic',

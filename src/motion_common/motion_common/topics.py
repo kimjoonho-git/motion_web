@@ -89,6 +89,33 @@ MOTOR_STATUS = scoped('/motion_control/motor_status')
 MOTOR_COMMAND = scoped('/motion_control/motor_command')
 #: 모터 스캔 진행률
 MOTOR_SCAN_PROGRESS = scoped('/motion_control/motor_scan_progress')
+
+# --------------------------------------------------------------------------- #
+# 모터 검색·감시 서비스 · **이름표가 반드시 붙어야 한다** · §6-103
+# --------------------------------------------------------------------------- #
+#
+# 이것들만 이름표 없이 전역(`/motor_scan`)이었다 · 세 PC 가 같은 이름으로
+# 등록해서 **누가 받을지 정해지지 않았다**:
+#
+#     Action: /motor_scan
+#     Action servers: 3
+#
+# 실제로 피시1에서 누른 검색을 피시3이 받아, 피시3의 EtherCAT 상태
+# (`Phase: Operation`)로 "Master 사용 중" 을 돌려줬다. 검색은 **버스를 다시
+# 훑고 모터 서비스를 껐다 켠다** · 남의 PC 하드웨어를 건드릴 수 있었다.
+#
+# 진행률(`MOTOR_SCAN_PROGRESS`)은 처음부터 이름표가 있었다 · 요청 쪽만 빠져
+# 있었다. 같은 사실을 두 곳에 적으면 이렇게 한쪽만 어긋난다.
+#: 모터 검색 Action · 장기 작업
+MOTOR_SCAN_ACTION = scoped('/motor_scan')
+#: 전체 검색 · Trigger
+SCAN_MOTORS = scoped('/scan_motors')
+#: AC 서보만 검색
+SCAN_AC_SERVO_MOTORS = scoped('/scan_ac_servo_motors')
+#: 다이나믹셀만 검색
+SCAN_DYNAMIXEL_MOTORS = scoped('/scan_dynamixel_motors')
+#: 상태 감시 켜고 끄기
+SET_MONITORING = scoped('/set_monitoring')
 #: 선택 프로젝트 전파
 ACTIVE_PROJECT = scoped('/motion_control/active_project')
 

@@ -124,16 +124,22 @@ class MotionStateMonitor(Node):
             String, self.scan_progress_topic, 20
         )
         self._input_qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
-        self._service = self.create_service(SetBool, 'set_monitoring', self._set_monitoring)
-        self._scan_service = self.create_service(Trigger, 'scan_motors', self._scan_motors)
+        # 이름은 `topics` 가 단독으로 정한다 · 여기 글자로 적으면 PC 이름표가
+        # 빠져 세 PC 가 같은 이름으로 등록한다 · §6-103
+        self._service = self.create_service(
+            SetBool, topics.SET_MONITORING, self._set_monitoring
+        )
+        self._scan_service = self.create_service(
+            Trigger, topics.SCAN_MOTORS, self._scan_motors
+        )
         self._scan_ac_servo_service = self.create_service(
             Trigger,
-            'scan_ac_servo_motors',
+            topics.SCAN_AC_SERVO_MOTORS,
             self._scan_ac_servo_motors,
         )
         self._scan_dynamixel_service = self.create_service(
             Trigger,
-            'scan_dynamixel_motors',
+            topics.SCAN_DYNAMIXEL_MOTORS,
             self._scan_dynamixel_motors_service,
         )
         # 장기 작업 Action · 진행 상황을 같은 통로로 보내고 취소를 받는다 (§6-26)
@@ -142,7 +148,7 @@ class MotionStateMonitor(Node):
         self._scan_action_server = ActionServer(
             self,
             MotorScan,
-            'motor_scan',
+            topics.MOTOR_SCAN_ACTION,
             execute_callback=self._execute_scan_goal,
             cancel_callback=self._accept_scan_cancel,
             callback_group=self._scan_action_group,

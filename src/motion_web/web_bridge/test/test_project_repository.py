@@ -1791,7 +1791,10 @@ def test_motion_web_install_script_runs_full_first_install_flow():
 
     assert 'require_ubuntu_2204' in installer
     assert 'sync_git_repository' in installer
-    assert 'git -C "${WORKSPACE_DIR}" pull --recurse-submodules --ff-only' in installer
+    # `pull --ff-only` 는 이력이 갈라진 PC 에서 실패하고 `set -e` 로 스크립트를
+    # 통째로 죽였다 · 빌드 근처에도 못 갔다 · 지금은 원격에 맞춘다 · §6-102
+    assert 'git -C "${WORKSPACE_DIR}" fetch --prune origin' in installer
+    assert 'reset --hard "${upstream}"' in installer
     assert 'git -C "${WORKSPACE_DIR}" submodule update --init --recursive' in installer
     assert 'MOTION_WEB_SKIP_GIT_PULL' in installer
     assert 'ensure_ros_apt_source' in installer

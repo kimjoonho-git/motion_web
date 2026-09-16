@@ -104,16 +104,39 @@ def test_the_installer_builds_from_scratch():
     ), '지우기 전에 빌드한다'
 
 
-def test_the_installer_tries_the_build_twice():
-    """지운 뒤 첫 빌드는 한 번 더 필요할 수 있다 · 어떤 꾸러미는 다른 꾸러미가
-    설치된 뒤에야 제 경로가 풀린다 · 단독으로는 되고 전체로는 깨진다 ·
-    실제로 그랬고, 이어서 한 번 더 하니 31개가 전부 붙었다."""
+def test_the_installer_builds_robot_manager_without_symlinks():
+    """`robot_manager` 만 심볼릭 링크 없이 깐다 · §6-102
+
+    이 꾸러미는 `ament_python` 인데 **소스 뿌리가 둘**이다 ·
+    `--symlink-install` 은 `setup.py develop` 로 도는데 develop 은 뿌리 하나를
+    전제해서 경로가 어긋난다:
+
+        FileNotFoundError: .../build/robot_manager/robots/src/robots
+
+    예전에는 "실패하면 한 번 더" 로 우연히 넘겼다 · 되는 PC 와 안 되는 PC 가
+    갈렸고 피시3 은 계속 깨졌다.
+
+    2단계는 **따로 도는 colcon** 이라 1단계 환경을 물려받아야 한다 · 그 줄을
+    빠뜨렸더니 `init_import_site` 로 죽었다.
+    """
     installer = (WORKSPACE / 'src/motion_web/install.sh').read_text(encoding='utf-8')
 
-    assert installer.count('colcon build --symlink-install') == 2, (
-        '빌드를 한 번만 한다 · 지운 뒤 첫 빌드가 깨지면 설치가 멈춘다'
+    assert '--packages-up-to robot_manager' in installer, 'robot_manager 를 따로 안 짓는다'
+    assert '--packages-skip-up-to robot_manager' in installer
+    # 1단계에는 심볼릭 링크가 붙으면 안 된다
+    first = installer.index('--packages-up-to robot_manager')
+    line_start = installer.rindex('colcon build', 0, first)
+    assert '--symlink-install' not in installer[line_start:first], (
+        'robot_manager 를 심볼릭 링크로 깐다 · develop 이 깨진다'
     )
-    assert '빌드를 이어서 한 번 더 합니다' in installer
+    # 2단계 전에 1단계 환경을 물려준다
+    second = installer.index('--packages-skip-up-to robot_manager')
+    assert 'install/setup.bash' in installer[first:second], (
+        '2단계가 1단계 환경을 못 받는다 · init_import_site 로 죽는다'
+    )
+    assert '빌드를 이어서 한 번 더 합니다' not in installer, (
+        '우연에 기대는 재시도가 남아 있다'
+    )
 
 
 def test_the_installer_never_stops_the_terminal_it_runs_in():
@@ -146,5 +169,9 @@ def test_the_installer_does_not_skip_the_pull_because_of_the_submodule():
 
     assert '--ignore-submodules=all' in installer, '서브모듈 때문에 수신을 건너뛴다'
     assert '--untracked-files=no' in installer
-    # 건너뛸 때는 눈에 띄어야 한다 · 조용히 지나가면 사람이 못 본다
-    assert '코드가 갱신되지 않습니다' in installer
+    # 고친 파일이 있어도 **건너뛰지 않는다** · 조용히 옛 코드로 빌드하던 자리다 ·
+    # 대신 `backups/` 로 떠 두고 원격에 맞춘다 · §6-102
+    assert '코드가 갱신되지 않습니다' not in installer, (
+        '고친 파일이 있으면 수신을 건너뛴다 · 옛 코드로 빌드된다'
+    )
+    assert 'backups/pre-update-' in installer, '고친 파일을 잃는다'

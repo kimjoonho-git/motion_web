@@ -12,10 +12,16 @@ def generate_launch_description():
     workspace = Path(os.environ.get('MOTION_WORKSPACE', Path.cwd())).expanduser()
     return LaunchDescription([
         DeclareLaunchArgument('motion_state_topic', default_value=topics.MOTION_STATE),
-        DeclareLaunchArgument('monitoring_service', default_value='/set_monitoring'),
-        DeclareLaunchArgument('scan_service', default_value='/scan_motors'),
-        DeclareLaunchArgument('scan_ac_servo_service', default_value='/scan_ac_servo_motors'),
-        DeclareLaunchArgument('scan_dynamixel_service', default_value='/scan_dynamixel_motors'),
+        # 여기 글자로 적으면 노드가 `topics` 에서 가져온 이름표를 **덮어쓴다** ·
+        # 같은 사실을 두 곳에 적어서 한쪽만 어긋났던 자리다 · §6-103
+        DeclareLaunchArgument('monitoring_service', default_value=topics.SET_MONITORING),
+        DeclareLaunchArgument('scan_service', default_value=topics.SCAN_MOTORS),
+        DeclareLaunchArgument(
+            'scan_ac_servo_service', default_value=topics.SCAN_AC_SERVO_MOTORS
+        ),
+        DeclareLaunchArgument(
+            'scan_dynamixel_service', default_value=topics.SCAN_DYNAMIXEL_MOTORS
+        ),
         DeclareLaunchArgument('host', default_value='0.0.0.0'),
         DeclareLaunchArgument('port', default_value='8000'),
         DeclareLaunchArgument('web_publish_hz', default_value='10.0'),

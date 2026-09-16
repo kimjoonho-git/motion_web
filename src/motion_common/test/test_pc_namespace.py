@@ -160,3 +160,39 @@ def test_the_fallback_is_the_same_every_restart():
 
 def test_two_unusable_names_still_differ():
     assert _topics('한글이름').XTOUCH_MIDI != _topics('다른이름').XTOUCH_MIDI
+
+
+def test_scan_and_monitoring_services_carry_the_pc_nameplate():
+    """모터 검색·감시 요청에도 이름표가 붙어야 한다 · §6-103
+
+    이것들만 전역(`/motor_scan`)이라 세 PC 가 같은 이름으로 등록했다:
+
+        Action: /motor_scan
+        Action servers: 3
+
+    피시1에서 누른 검색을 피시3이 받아, 피시3의 EtherCAT 상태로
+    "Master 사용 중" 을 돌려줬다. 검색은 **버스를 다시 훑고 모터 서비스를
+    껐다 켠다** · 남의 PC 하드웨어를 건드릴 수 있었다.
+
+    진행률(`MOTOR_SCAN_PROGRESS`)은 처음부터 이름표가 있었다 · 요청 쪽만
+    빠져서 한쪽만 어긋나 있었다.
+    """
+    scoped = _topics('pc1')
+    for name in (
+        'MOTOR_SCAN_ACTION',
+        'SCAN_MOTORS',
+        'SCAN_AC_SERVO_MOTORS',
+        'SCAN_DYNAMIXEL_MOTORS',
+        'SET_MONITORING',
+    ):
+        assert getattr(scoped, name).startswith('/pc1/'), f'{name} 에 이름표가 없다'
+
+
+def test_scan_services_keep_their_old_names_when_the_nameplate_is_off():
+    """켜지 않은 시스템은 글자 하나도 달라지면 안 된다."""
+    plain = _topics('')
+    assert plain.MOTOR_SCAN_ACTION == '/motor_scan'
+    assert plain.SCAN_MOTORS == '/scan_motors'
+    assert plain.SCAN_AC_SERVO_MOTORS == '/scan_ac_servo_motors'
+    assert plain.SCAN_DYNAMIXEL_MOTORS == '/scan_dynamixel_motors'
+    assert plain.SET_MONITORING == '/set_monitoring'

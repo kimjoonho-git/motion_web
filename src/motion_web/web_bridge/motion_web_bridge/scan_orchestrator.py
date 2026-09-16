@@ -25,6 +25,7 @@ from rclpy.action import ActionClient
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
+from motion_common import topics
 from motion_coordination_interfaces.action import MotorScan
 
 from motion_web_bridge import (
@@ -337,7 +338,9 @@ class ScanOrchestrator:
         if self._action_client is not None:
             return self._action_client
         try:
-            self._action_client = ActionClient(self.bridge, MotorScan, 'motor_scan')
+            self._action_client = ActionClient(
+                self.bridge, MotorScan, topics.MOTOR_SCAN_ACTION
+            )
         except (AttributeError, TypeError):
             return None
         return self._action_client
@@ -348,8 +351,11 @@ class ScanOrchestrator:
         Action 서버가 없으면 기존 `Trigger` 서비스로 돌아간다 · 구버전 노드가
         떠 있는 동안에도 검색이 멈추지 않아야 한다.
         """
+        # 이름표가 붙은 뒤에는 `/joonhoTest/scan_ac_servo_motors` 로 온다 ·
+        # `lstrip('/')` 만 하면 표에서 못 찾아 **조용히 전체 검색으로 바뀐다** ·
+        # 끝 조각으로 맞춘다 · §6-103
         transport = self.TRANSPORT_BY_SERVICE.get(
-            str(service_name).lstrip('/'), 'all'
+            str(service_name).rsplit('/', 1)[-1], 'all'
         )
         action_client = self._scan_action_client()
         if action_client is None or not action_client.wait_for_server(timeout_sec=0.5):
