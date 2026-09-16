@@ -116,6 +116,11 @@ initialize_rosdep() {
 build_workspace() {
   systemctl --user stop motion-control.service motion-motor.service motion-coordination.service 2>/dev/null || true
   systemctl --user reset-failed 2>/dev/null || true
+  # 옛 작업공간이 환경에 남아 있으면 그쪽 경로를 먼저 본다 · 깨끗한 ROS 만 켠다
+  unset AMENT_PREFIX_PATH CMAKE_PREFIX_PATH COLCON_PREFIX_PATH || true
+  unset ROS_PACKAGE_PATH LD_LIBRARY_PATH PYTHONPATH || true
+  # `CMAKE_INCLUDE_PATH`·`CMAKE_LIBRARY_PATH` 는 7단계가 정해 준 EtherCAT
+  # 자리다 · 여기서 지우면 다시 못 찾는다
   set +u
   source /opt/ros/humble/setup.bash
   set -u
@@ -129,16 +134,25 @@ build_workspace() {
   # 이 스크립트는 설치·업데이트 때만 돈다 · 1~2분 더 걸리는 대신 **늘 같은
   # 결과**가 나온다 · 빌드 상태를 사람이 추측할 일이 없어진다.
   rm -rf "${WORKSPACE_DIR}/build" "${WORKSPACE_DIR}/install"
-  # 지운 뒤 첫 빌드는 **한 번 더** 필요할 수 있다 · §6-99
+
+  # `robot_manager` 는 심볼릭 링크로 깔지 않는다 · §6-102
   #
-  # 어떤 꾸러미는 다른 꾸러미가 설치된 뒤에야 제 경로가 풀린다
-  # (`robot_manager` · `No such file or directory: .../robots/src/robots`) ·
-  # 단독으로는 잘 되고 전체를 한꺼번에 할 때만 깨진다 · 이어서 한 번 더 하면
-  # 남은 것이 붙는다 · 사람이 두 번 치지 않게 한다.
-  if ! colcon build --symlink-install --base-paths "${WORKSPACE_DIR}/src"; then
-    echo "빌드를 이어서 한 번 더 합니다" >&2
-    colcon build --symlink-install --base-paths "${WORKSPACE_DIR}/src"
-  fi
+  # 이 꾸러미는 `ament_python` 인데 **소스 뿌리가 둘**이다.
+  #     find_packages(where='robots/src') + find_packages(where='robot_manager/src')
+  #     package_dir = {'robots': 'robots/src/robots', ...}
+  # `--symlink-install` 은 `setup.py develop` 로 도는데, develop 은 뿌리 하나를
+  # 전제해서 경로가 어긋난다 · `No such file or directory: .../robots/src/robots`
+  # 가 그것이다. 예전에는 "한 번 더 빌드" 로 우연히 넘겼는데, 실패가 남는 PC 가
+  # 있었다.
+  #
+  # 이 꾸러미는 서브모듈(`motion_system`) 것이라 우리가 고칠 수 없다 · 대신
+  # **이것만** 평범하게 복사해 깐다. 우리가 손대는 꾸러미들은 그대로 심볼릭
+  # 링크라 파이썬을 고치면 즉시 반영된다.
+  echo "1/2 · robot_manager (심볼릭 링크 없이)"
+  colcon build --base-paths "${WORKSPACE_DIR}/src" --packages-up-to robot_manager
+  echo "2/2 · 나머지 전부"
+  colcon build --symlink-install --base-paths "${WORKSPACE_DIR}/src" \
+    --packages-skip-up-to robot_manager
   if command -v ros2 >/dev/null 2>&1; then
     ros2 daemon stop || true
     ros2 daemon start || true
@@ -159,39 +173,114 @@ restart_user_services() {
   systemctl --user restart motion-coordination.service || true
 }
 
-check_ethercat_ready() {
-  local ethercat_missing=false
-  
-  if ! command -v ethercat >/dev/null 2>&1; then
-    echo "[EtherCAT 경고] ethercat 명령어를 찾을 수 없습니다." >&2
-    ethercat_missing=true
+# IgH EtherCAT 이 **어디에 깔렸든** 찾아서 빌드·실행에 넘긴다 · §6-102
+#
+# 왜 PC 마다 결과가 달랐나.
+#   피시1·2 : `--prefix=/opt/etherlab` 로 깔았고 `/usr/lib` 에도 복사돼 있었다.
+#   피시3   : `--prefix=/usr/local/etherlab` 로 깔았다.
+# `motor_manager/CMakeLists.txt` 가 뒤지는 자리는 고정돼 있다 ·
+#   헤더 `/usr/local/include /usr/include /opt/etherlab/include`
+#   라이브러리 `/usr/local/lib /usr/lib/x86_64-linux-gnu /usr/lib /opt/etherlab/lib`
+# `/usr/local/etherlab/**` 은 **둘 다 없다.** 그래서 같은 코드가 한 PC 에서만
+# 깨졌다. 깔린 자리 하나 차이였다.
+#
+# 게다가 옛 검사는 진짜 헤더를 못 찾으면 **빈 가짜 헤더**를 만들었다 · CMake 의
+# `find_path` 는 통과하고 `find_library` 만 실패해서, "라이브러리가 없다" 는
+# 엉뚱한 곳을 가리켰다. 있는 것을 없다고 판정하고 그 위에 가짜를 덮은 셈이다.
+#
+# 여기서는 자리를 **실제로 뒤져** 찾고, 찾으면 CMake 변수로 직접 넘긴다
+# (`motor_manager` 가 덮어쓰라고 열어 둔 변수다) · 서브모듈은 건드리지 않는다.
+ethercat_search_roots() {
+  printf '%s\n' \
+    /opt/etherlab \
+    /usr/local/etherlab \
+    /usr/local \
+    /usr \
+    /opt/ethercat \
+    /usr/local/src/ethercat
+}
+
+find_ethercat_include_dir() {
+  local root
+  while read -r root; do
+    # 크기가 0 인 것은 예전 설치가 만든 가짜다 · 진짜만 인정한다
+    if [[ -s "${root}/include/ecrt.h" ]]; then
+      echo "${root}/include"
+      return 0
+    fi
+  done < <(ethercat_search_roots)
+  local found
+  found="$(find /opt /usr/local /usr/include -maxdepth 4 -name ecrt.h -size +0 \
+    -print -quit 2>/dev/null || true)"
+  [[ -n "${found}" ]] && dirname "${found}"
+}
+
+find_ethercat_library() {
+  local root candidate
+  while read -r root; do
+    for candidate in "${root}/lib/libethercat.so" "${root}/lib/x86_64-linux-gnu/libethercat.so"; do
+      if [[ -e "${candidate}" ]]; then
+        echo "${candidate}"
+        return 0
+      fi
+    done
+  done < <(ethercat_search_roots)
+  find /opt /usr/local /usr/lib -maxdepth 4 -name 'libethercat.so' -print -quit 2>/dev/null || true
+}
+
+register_ethercat_runtime_path() {
+  # 빌드에서 찾아도 **실행할 때** 못 찾으면 소용없다 · ldconfig 에 등록한다
+  local lib_dir="$1"
+  if ldconfig -p 2>/dev/null | grep -q 'libethercat\.so'; then
+    return 0
   fi
-  
-  if [[ ! -f /opt/etherlab/include/ecrt.h ]] && [[ ! -f /usr/local/include/ecrt.h ]] && [[ ! -f /usr/include/ecrt.h ]] && [[ ! -f /usr/local/src/ethercat/include/ecrt.h ]]; then
-    echo "[EtherCAT 경고] ecrt.h 헤더 파일이 없습니다. 빌드 통과를 위해 가짜 파일을 자동 생성합니다." >&2
+  echo "${lib_dir}" | sudo tee /etc/ld.so.conf.d/motion-etherlab.conf >/dev/null
+  sudo ldconfig
+  echo "EtherCAT 실행 경로 등록 · ${lib_dir}"
+}
+
+resolve_ethercat_paths() {
+  local include_dir lib_file
+  include_dir="$(find_ethercat_include_dir)"
+  lib_file="$(find_ethercat_library)"
+
+  if [[ -n "${include_dir}" && -n "${lib_file}" ]]; then
+    echo "EtherCAT 헤더 · ${include_dir}/ecrt.h"
+    echo "EtherCAT 라이브러리 · ${lib_file}"
+    # `-D` 로 넘기면 그 변수를 안 쓰는 꾸러미마다 CMake 가 "쓰이지 않은
+    # 변수" 경고를 낸다 · 경고가 쌓이면 진짜 오류가 묻힌다. CMake 가 표준으로
+    # 읽는 탐색 경로를 쓴다 · `find_path`·`find_library` 가 HINTS 보다 **먼저**
+    # 본다.
+    export CMAKE_INCLUDE_PATH="${include_dir}${CMAKE_INCLUDE_PATH:+:${CMAKE_INCLUDE_PATH}}"
+    export CMAKE_LIBRARY_PATH="$(dirname "${lib_file}")${CMAKE_LIBRARY_PATH:+:${CMAKE_LIBRARY_PATH}}"
+    register_ethercat_runtime_path "$(dirname "${lib_file}")"
+    # 예전 설치가 만든 빈 가짜 헤더는 치운다 · 두면 다음 사람이 또 속는다
+    if [[ -f /opt/etherlab/include/ecrt.h && ! -s /opt/etherlab/include/ecrt.h \
+          && "${include_dir}" != /opt/etherlab/include ]]; then
+      sudo rm -f /opt/etherlab/include/ecrt.h
+      echo "예전에 만들어 둔 빈 ecrt.h 를 지웠습니다"
+    fi
+    return 0
+  fi
+
+  echo
+  echo "========================================="
+  echo "EtherCAT 서보 모터 미설치 경고 (빌드는 진행됨)"
+  echo "========================================="
+  [[ -z "${include_dir}" ]] && echo "- ecrt.h 를 찾지 못했습니다"
+  [[ -z "${lib_file}" ]] && echo "- libethercat.so 를 찾지 못했습니다"
+  echo "찾아본 자리:"
+  ethercat_search_roots | sed 's/^/  /'
+  echo
+  echo "AC 서보를 쓰신다면 IgH EtherCAT Master 를 설치하세요."
+  echo "다이나믹셀만 쓰신다면 이 경고를 무시해도 됩니다."
+  echo "========================================="
+
+  if [[ -z "${include_dir}" ]]; then
+    # 빌드만 통과시키는 자리표시 헤더 · **진짜로 아무 데도 없을 때만** 만든다
     sudo mkdir -p /opt/etherlab/include
     sudo touch /opt/etherlab/include/ecrt.h
-    ethercat_missing=true
-  fi
-  
-  if ! lsmod | grep -q ec_master && ! modinfo ec_master >/dev/null 2>&1; then
-    echo "[EtherCAT 경고] ec_master 커널 모듈을 찾을 수 없습니다." >&2
-    ethercat_missing=true
-  fi
-  
-  if [[ ! -c /dev/EtherCAT0 && ! -e /dev/EtherCAT0 ]]; then
-    echo "[EtherCAT 경고] /dev/EtherCAT0 장치가 존재하지 않습니다." >&2
-    ethercat_missing=true
-  fi
-  
-  if [[ "${ethercat_missing}" == true ]]; then
-    echo
-    echo "========================================="
-    echo "EtherCAT 서보 모터 미설치 경고 (빌드는 진행됨)"
-    echo "========================================="
-    echo "AC 서보 모터 제어 환경이 불완전하지만 설치는 계속 진행합니다."
-    echo "다이나믹셀 단독 사용 시 이 경고를 무시해도 됩니다."
-    echo "========================================="
+    echo "!! 빈 ecrt.h 를 만들었습니다 · AC 서보는 동작하지 않습니다" >&2
   fi
 }
 
@@ -213,8 +302,8 @@ configure_locale_and_groups
 print_step "6. rosdep 초기화"
 initialize_rosdep
 
-print_step "7. EtherCAT 설치 검사"
-check_ethercat_ready
+print_step "7. EtherCAT 경로 확인"
+resolve_ethercat_paths
 
 print_step "8. 전체 빌드"
 cd "${WORKSPACE_DIR}"
