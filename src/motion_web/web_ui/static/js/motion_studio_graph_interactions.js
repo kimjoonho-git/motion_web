@@ -1,4 +1,8 @@
 import {
+  restartRange,
+  setPendingPoint,
+} from './motion_studio_editor_selection.js';
+import {
   MOTION_STUDIO_PERIOD_SEC,
   MOTION_STUDIO_TIME_EPSILON,
 } from './motion_studio_constants.js';
@@ -18,6 +22,7 @@ import {
   motionStudioBeginPointDrag,
   motionStudioBeginTangentDrag,
   motionStudioRangeSelectionActive,
+  motionStudioRangeSelectionChosen,
   motionStudioResetRangeSelection,
   motionStudioSelectRangePoint,
 } from './motion_studio_editor_state.js';
@@ -102,11 +107,8 @@ export function bindMotionStudioGraphEvents(context) {
   const selectRangePoint = (pointTarget) => {
     const editor = state.editor;
     if (!editor || !pointTarget) return false;
-    // 첫 포인트가 구간 선택을 연다 · §6-101 · [구간 선택] 을 먼저 눌러야만
-    // 되면, 화면 안내대로 포인트를 찍은 사람은 아무 일도 안 일어난 줄 안다
-    if (!motionStudioRangeSelectionActive(editor)) {
-      motionStudioResetRangeSelection(editor, true);
-    }
+    // 다 잡아 둔 구간이 있으면 새로 잡기 시작한다 · §6-123
+    restartRange(editor);
     const result = motionStudioSelectRangePoint(editor, pointTarget);
     if (result.ok && result.phase === 'awaiting_end') {
       if (!selectPointCurveFromGraph(
@@ -115,7 +117,7 @@ export function bindMotionStudioGraphEvents(context) {
         false,
         true,
       )) {
-        editor.rangeSelection = { phase: 'awaiting_start', start: null, end: null };
+        restartRange(editor);
         return false;
       }
       setEditorMessage(
@@ -242,12 +244,14 @@ export function bindMotionStudioGraphEvents(context) {
     const editor = state.editor;
     const metrics = editor?.graphMetrics;
     if (!editor || !metrics) return;
-    const rangeSelecting = motionStudioRangeSelectionActive(editor);
-    if (editor.suppressGraphClick && !rangeSelecting) {
+    // 구간을 다 잡은 뒤에도 「구간 선택」쪽이다 · 그때 포인트를 누르면 구간을
+    // 새로 잡는다 · 포인트 하나를 고치려면 「포인트 선택」을 누른다 · §6-123
+    const rangeChosen = motionStudioRangeSelectionChosen(editor);
+    if (editor.suppressGraphClick && !rangeChosen) {
       editor.suppressGraphClick = false;
       return;
     }
-    if (rangeSelecting) editor.suppressGraphClick = false;
+    if (rangeChosen) editor.suppressGraphClick = false;
     if (event.motionStudioRangeHandled) return;
     event.motionStudioRangeHandled = true;
     const clickPoint = { ...canvasPoint(event, metrics), timeStamp: event.timeStamp };
@@ -256,7 +260,7 @@ export function bindMotionStudioGraphEvents(context) {
       editor.pointHitTargets,
       clickPoint.x,
       clickPoint.y,
-      rangeSelecting ? 22 : 14,
+      rangeChosen ? 22 : 14,
     );
     const selectedMotionIds = editorSelectedMotionIds();
     const motionTarget = motionStudioNearestMotionTarget(
@@ -278,7 +282,7 @@ export function bindMotionStudioGraphEvents(context) {
       motionTarget,
       pointRegion,
       activeCurveId: editor.pointDraft?.curve_id,
-      rangeSelection: rangeSelecting,
+      rangeSelection: rangeChosen,
     });
     if (graphAction === 'edit_point') {
       if (
@@ -352,13 +356,13 @@ export function bindMotionStudioGraphEvents(context) {
         timeSec,
         metrics.valueFor(clickPoint.y),
       );
-      editor.pendingPointCandidate = {
+      setPendingPoint(editor, {
         motionId,
         timeSec: Number(timeSec.toFixed(2)),
         valueDeg: Number(
           (graphSample?.value ?? metrics.valueFor(clickPoint.y)).toFixed(6),
         ),
-      };
+      });
       setEditorMessage(
         `${motionId} 추가 위치 선택 · ${editor.pendingPointCandidate.timeSec.toFixed(2)}초 · `
         + `${editor.pendingPointCandidate.valueDeg.toFixed(3)}° · 포인트 추가를 누르세요.`,
@@ -390,7 +394,13 @@ export function bindMotionStudioGraphEvents(context) {
       return;
     }
     const { x, y } = canvasPoint(event, metrics);
-    if (motionStudioRangeSelectionActive(editor)) {
+    // 「구간 선택」쪽에 서 있으면 포인트를 눌러도 **끌기로 새지 않는다** · §6-123
+    //
+    // 전에는 「고르는 중」일 때만 막았다 · 구간을 한 번 잡고 나면(`complete`)
+    // 가드가 풀려, 다음에 포인트를 누르는 순간 끌기가 시작되고 그 끌기가
+    // 포인트 곡선 모드로 갈아탔다 · 그 바람에 구간이 풀리고 축도 하나만
+    // 남았다.
+    if (motionStudioRangeSelectionChosen(editor)) {
       event.preventDefault();
       editor.draggingPoint = null;
       editor.draggingHandle = null;

@@ -411,7 +411,8 @@ test('graph hover and point creation use the same 20 ms motion sample source', (
   assert.match(addPointFlow, /const timeSec = motionStudioSnapFrameTime/);
   assert.match(addPointFlow, /const graphSample = motionStudioMotionTargetAtTime/);
   assert.match(addPointFlow, /graphSample\?\.value \?\? metrics\.valueFor/);
-  assert.match(addPointFlow, /editor\.pendingPointCandidate =/);
+  // 후보 자리를 기억하는 일도 주인 모듈이 맡는다 · §6-127
+  assert.match(addPointFlow, /setPendingPoint\(editor,/);
   assert.doesNotMatch(addPointFlow, /editor\.pointDraft\.points\.push/);
   assert.match(confirmPointFlow, /addMotionStudioDraftPoint\(editor, candidate/);
   assert.match(confirmPointFlow, /clearPendingPointCandidate\(editor\)/);
@@ -430,14 +431,22 @@ test('graph click intent keeps point creation separate from range selection', ()
     operation: 'point_curve',
     pointTarget,
   }), 'edit_point');
-  // 구간 편집 기능이 골라져 있으면 포인트 클릭은 **구간을 잡는다** · §6-101
-  // 전에는 어떤 기능이든 포인트 편집으로 넘어가, `모션값 배율` 을 골라 두고
-  // 포인트를 찍으면 `포인트 곡선` 으로 바뀌어 구간을 못 잡았다
+  // 클릭의 뜻은 **선택 방식**이 정한다 · 기능 탭은 관여하지 않는다 · §6-121
+  //
+  // 「포인트 선택」이면 어떤 기능이 골라져 있든 포인트 하나를 고른다 ·
+  // 전에는 기능 탭이 클릭의 뜻까지 정해서, 포인트 하나를 고치려면 반드시
+  // `포인트 곡선` 을 먼저 골라야 했다.
   for (const operation of ['time_shift', 'time_scale', 'value_offset', 'value_scale']) {
     assert.equal(motionStudioEditorGraphClickAction({
       operation,
       pointTarget,
-    }), 'select_point', `${operation} 에서 포인트 편집으로 샜다`);
+    }), 'edit_point', `${operation} 에서 포인트를 못 고른다`);
+    // 「구간 선택」을 켜면 같은 클릭이 구간을 잡는다
+    assert.equal(motionStudioEditorGraphClickAction({
+      operation,
+      pointTarget,
+      rangeSelection: true,
+    }), 'select_point', `${operation} 에서 구간을 못 잡는다`);
   }
   assert.equal(motionStudioEditorGraphClickAction({
     operation: 'point_curve',
@@ -790,7 +799,7 @@ test('point range actions reset stale selection and use the point-curve apply pa
     /studioEditorPointDeleteButton\?\.addEventListener\('click'[\s\S]*?studioEditorRangeCopyButton/,
   )?.[0] || '';
   const rangeSelectControlFlow = source.match(
-    /if \(el\.studioEditorRangeSelectButton\) \{[\s\S]*?classList\.toggle\('on', rangeSelecting\);/,
+    /if \(el\.studioEditorRangeSelectButton\) \{[\s\S]*?classList\.toggle\('on', rangeChosen\);/,
   )?.[0] || '';
   const rangeFlow = source;
 
@@ -804,7 +813,7 @@ test('point range actions reset stale selection and use the point-curve apply pa
     html,
     /id="studioEditorRangeActions"[\s\S]*?class="studio-editor-point-action-row"[\s\S]*?id="studioEditorPointAddButton"[\s\S]*?id="studioEditorPointDeleteButton"[\s\S]*?class="studio-editor-range-action-row"[\s\S]*?id="studioEditorRangeCopyButton"[\s\S]*?id="studioEditorRangeDeleteButton"[\s\S]*?<\/section>/,
   );
-  assert.match(html, /id="studioEditorRangeStatus"[^>]*>선택된 축에서 시작·종료 포인트/);
+  assert.match(html, /id="studioEditorRangeStatus"[^>]*>포인트 선택은 그래프의 포인트 하나를/);
   assert.match(html, /id="studioEditorRangeCopyTarget"[^>]*step="0\.02"[^>]*disabled/);
   assert.match(html, /id="studioEditorRangeCopyButton"[^>]*disabled>구간 복사</);
   assert.match(html, /id="studioEditorRangeDeleteButton"[^>]*disabled>구간 삭제</);
@@ -813,7 +822,7 @@ test('point range actions reset stale selection and use the point-curve apply pa
   assert.match(rangeFlow, /motionStudioCopyPointRange/);
   assert.match(rangeFlow, /motionStudioDeletePointRange/);
   assert.match(rangeFlow, /activatePointDraftMutation/);
-  assert.match(source, /rangeSelection: rangeSelecting/);
+  assert.match(source, /rangeSelection: rangeChosen/);
   assert.match(source, /void applyDraggedPoint\(\)/);
   assert.match(
     rangeSelectControlFlow,
@@ -831,18 +840,20 @@ test('point range actions reset stale selection and use the point-curve apply pa
     styles,
     /studio-editor-range-actions button \{[\s\S]*?white-space: nowrap/,
   );
-  assert.match(source, /if \(editor\.suppressGraphClick && !rangeSelecting\)/);
-  assert.match(source, /rangeSelecting \? 22 : 14/);
+  assert.match(source, /if \(editor\.suppressGraphClick && !rangeChosen\)/);
+  assert.match(source, /rangeChosen \? 22 : 14/);
   assert.match(source, /구간을 선택하려면 포인트 곡선이 표시된 Motion ID/);
   assert.doesNotMatch(source, /studioEditorRangeActions\.classList\.toggle\('hidden'/);
   assert.match(
     source,
     /studioEditorRangeStatus\.textContent = rangeReady[\s\S]*?rangePointTargets\.length/,
   );
+  // 구간 복사·삭제는 **시간 범위**로 켜진다 · 시작·종료가 다른 축이어도 된다 · §6-122
   assert.match(
     source,
-    /studioEditorRangeCopyTarget\.disabled = !selectedRange \|\| Boolean\(editor\?\.preview\)/,
+    /studioEditorRangeCopyTarget\.disabled = !rangeUsable \|\| Boolean\(editor\?\.preview\)/,
   );
+  assert.match(source, /const rangeUsable = Boolean\(selectedTimeRange\)/);
 });
 
 test('temporary point editing restores the last selected range edit operation', () => {

@@ -1079,6 +1079,23 @@
   background: #eef6ff;
 }
 
+/* 선택 방식 두 개 · 하나만 눌린 것처럼 붙여 둔다 · §6-121 */
+.studio-editor-select-mode {
+  display: inline-flex;
+  gap: 0;
+}
+
+.studio-editor-select-mode button:first-child {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.studio-editor-select-mode button:last-child {
+  margin-left: -1px;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
 .studio-editor-range-head {
   display: flex;
   align-items: center;

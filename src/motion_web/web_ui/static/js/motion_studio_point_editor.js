@@ -1,4 +1,8 @@
 import {
+  selectPoint,
+  setSelectionMode,
+} from './motion_studio_editor_selection.js';
+import {
   motionStudioCopyPointRange,
   motionStudioDeletePointRange,
   motionStudioPointCurveOrder,
@@ -12,7 +16,7 @@ import {
   MOTION_STUDIO_TIME_EPSILON,
 } from './motion_studio_constants.js';
 import {
-  motionStudioRangeSelectionActive,
+  motionStudioRangeSelectionChosen,
   motionStudioRangeSelectionBounds,
   motionStudioResetRangeSelection,
 } from './motion_studio_editor_state.js';
@@ -69,7 +73,7 @@ export function addMotionStudioDraftPoint(editor, candidate, {
   };
   editor.pointDraft.points.push(point);
   editor.pointDraft.points.sort((first, second) => first.time_sec - second.time_sec);
-  editor.selectedPointId = point.point_id;
+  selectPoint(editor, point.point_id);
   return { ok: true, point };
 }
 
@@ -80,7 +84,7 @@ export function deleteMotionStudioDraftPoint(editor, pointId) {
   }
   if (points.length <= 2) return { ok: false, reason: 'minimum_points' };
   editor.pointDraft.points = points.filter((point) => point.point_id !== pointId);
-  editor.selectedPointId = editor.pointDraft.points[0]?.point_id || '';
+  selectPoint(editor, editor.pointDraft.points[0]?.point_id);
   return { ok: true, deletedCount: 1 };
 }
 
@@ -99,7 +103,7 @@ export function applyMotionStudioCopiedPointRange(editor, curve, result, createP
     ),
     ...copiedPoints,
   ].sort((first, second) => Number(first.time_sec) - Number(second.time_sec));
-  editor.selectedPointId = copiedPoints[0]?.point_id || '';
+  selectPoint(editor, copiedPoints[0]?.point_id);
   return copiedPoints;
 }
 
@@ -107,7 +111,7 @@ export function applyMotionStudioDeletedPointRange(editor, curve, result) {
   if (!editor || !curve || !result?.ok) return false;
   editor.pointDraft = structuredClone(curve);
   editor.pointDraft.points = result.points;
-  editor.selectedPointId = result.points[0]?.point_id || '';
+  selectPoint(editor, result.points[0]?.point_id);
   return true;
 }
 
@@ -117,7 +121,7 @@ export function bindMotionStudioPointEditorEvents(context) {
     syncPointControls, editorDuration, clearEditorPointRange, renderEditor,
     editorSelectedMotionIds, clearPendingPointCandidate, pointCurveIsApplied,
     pointCurveCanBeCreated, editorId, selectedEditorPointRange,
-    activatePointDraftMutation,
+    activatePointDraftMutation, selectedEditorTimeRange, applyEditorOperation,
   } = context;
   const updateSelectedPointFromControls = () => {
     const editor = state.editor;
@@ -245,94 +249,71 @@ export function bindMotionStudioPointEditorEvents(context) {
     setEditorMessage('포인트를 작업본에서 제거했습니다 · 결과 계산 전에는 저장되지 않습니다.');
     renderEditor();
   });
+  // 선택 방식은 둘 중 하나 · §6-121
+  //
+  // 「포인트 선택」이면 클릭이 포인트 하나를 고르고, 「구간 선택」이면
+  // 시작·종료를 잡는다 · 아래 기능 탭은 클릭의 뜻에 관여하지 않는다.
+  el.studioEditorPointSelectButton?.addEventListener('click', () => {
+    const editor = state.editor;
+    if (!editor) return;
+    // **방식**을 본다 · 「고르는 중」이 아니어도 구간 선택 쪽에 서 있을 수
+    // 있다 · 여기서 고르는 중만 보면, 구간을 다 잡았거나 아직 안 잡은
+    // 상태에서 이 버튼이 먹지 않는다 · §6-125
+    if (!motionStudioRangeSelectionChosen(editor)) {
+      setEditorMessage('이미 포인트 선택입니다 · 그래프의 포인트를 누르세요.');
+      return;
+    }
+    setSelectionMode(editor, 'point');
+    setEditorMessage('포인트 선택 · 그래프의 포인트를 눌러 고르거나 끌어 옮기세요.');
+    renderEditor();
+  });
   el.studioEditorRangeSelectButton?.addEventListener('click', () => {
     const editor = state.editor;
     if (!editor) return;
-    const selecting = !motionStudioRangeSelectionActive(editor);
+    // 두 버튼은 **토글이 아니다** · 누르면 그 방식이 된다 · §6-125
+    //
+    // 전에는 「고르는 중인가」를 뒤집어 방식을 정했다 · 그래서 구간을 고르는
+    // 중에 「구간 선택」을 누르면 오히려 포인트 선택으로 넘어갔고, 다 고른
+    // 뒤에는 「포인트 선택」이 먹지 않았다.
     const selectedIds = new Set(editorSelectedMotionIds());
     const selectedCurves = (editor.working?.point_curves || []).filter(
       (curve) => selectedIds.has(String(curve.motion_id || '')),
     );
-    if (selecting && !selectedCurves.length) {
+    if (!selectedCurves.length) {
       setEditorMessage(
         '구간을 선택하려면 포인트 곡선이 표시된 Motion ID를 먼저 선택하세요.',
         true,
       );
       return;
     }
-    clearEditorPointRange(editor);
-    motionStudioResetRangeSelection(editor, selecting);
-    setEditorMessage(
-      selecting
-        ? '공통 시간영역 선택 · 선택된 축에서 시작 포인트를 선택하세요.'
-        : '구간 선택을 취소했습니다 · 포인트 하나를 선택하거나 드래그할 수 있습니다.',
-    );
+    setSelectionMode(editor, 'range');
+    setEditorMessage('구간 선택 · 선택된 축에서 시작 포인트를 선택하세요.');
     renderEditor();
   });
-  el.studioEditorRangeCopyButton?.addEventListener('click', () => {
+  // 구간 복사·삭제는 **고른 축 전부**를 서버가 한 번에 바꾼다 · §6-122
+  //
+  // 전에는 화면에서 곡선 하나의 임시 작업본만 고쳤다 · 그래서 축을 셋 골라도
+  // 한 축만 바뀌었다 · 시간 이동·배율이 이미 쓰던 길(서버 편집 → 결과
+  // 미리보기 → 작업본 반영)로 맞춘다.
+  const runRangeOperation = (operation, missingMessage) => {
     const editor = state.editor;
-    const selectedRange = selectedEditorPointRange(editor);
-    if (!editor || !selectedRange) {
-      setEditorMessage('구간 복사는 같은 축·같은 곡선의 두 포인트를 선택하세요.', true);
+    if (!editor) return;
+    if (!selectedEditorTimeRange(editor)) {
+      setEditorMessage(missingMessage, true);
       return;
     }
-    const bounds = motionStudioRangeSelectionBounds(editor);
-    const result = motionStudioCopyPointRange(
-      selectedRange.curve,
-      bounds.startSec,
-      bounds.endSec,
-      Number(el.studioEditorRangeCopyTarget?.value),
-    );
-    if (!result.ok) {
-      const errors = {
-        invalid_range: '복사할 포인트 구간을 다시 선택하세요.',
-        invalid_target: '복사 시작 시간은 0초 이상의 20ms 단위 값이어야 합니다.',
-        time_conflict: '복사한 포인트끼리 같은 시간에 겹칩니다. 구간을 다시 선택하세요.',
-      };
-      setEditorMessage(errors[result.reason] || '포인트 구간을 복사할 수 없습니다.', true);
-      return;
-    }
-    discardEditorPreview();
-    const copiedPoints = applyMotionStudioCopiedPointRange(
-      editor, selectedRange.curve, result, () => editorId('point'),
-    );
-    const replacedCount = (result.replacedPointIds || []).length;
-    activatePointDraftMutation(
-      editor,
-      `구간 복사 완료 · ${copiedPoints.length}개 포인트 · `
-        + `${result.startSec.toFixed(2)}초 ~ ${result.endSec.toFixed(2)}초`
-        + (replacedCount ? ` · 그 자리 기존 포인트 ${replacedCount}개 대체` : '')
-        + ' · 결과 미리보기로 곡선을 확인하세요.',
+    applyEditorOperation(operation);
+  };
+  el.studioEditorRangeCopyButton?.addEventListener('click', () => {
+    runRangeOperation(
+      'copy_point_range',
+      '복사할 구간을 먼저 선택하세요 · 「구간 선택」을 누르고 포인트 두 개를 선택합니다.',
     );
   });
   el.studioEditorRangeDeleteButton?.addEventListener('click', () => {
-    const editor = state.editor;
-    const selectedRange = selectedEditorPointRange(editor);
-    if (!editor || !selectedRange) {
-      setEditorMessage('삭제할 포인트 구간을 다시 선택하세요.', true);
-      return;
-    }
-    const bounds = motionStudioRangeSelectionBounds(editor);
-    const result = motionStudioDeletePointRange(
-      selectedRange.curve,
-      bounds.startSec,
-      bounds.endSec,
-    );
-    if (!result.ok) {
-      setEditorMessage(
-        result.reason === 'minimum_points'
-          ? '곡선을 유지하려면 삭제 후 포인트가 최소 2개 남아야 합니다.'
-          : '삭제할 포인트 구간을 다시 선택하세요.',
-        true,
-      );
-      return;
-    }
-    discardEditorPreview();
-    applyMotionStudioDeletedPointRange(editor, selectedRange.curve, result);
-    activatePointDraftMutation(
-      editor,
-      `구간 삭제 완료 · ${result.deletedCount}개 포인트 · `
-        + '결과 미리보기로 곡선을 확인하세요.',
+    runRangeOperation(
+      'delete_point_range',
+      '삭제할 구간을 먼저 선택하세요 · 「구간 선택」을 누르고 포인트 두 개를 선택합니다.',
     );
   });
 }

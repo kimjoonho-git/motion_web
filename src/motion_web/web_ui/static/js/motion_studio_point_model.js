@@ -207,16 +207,17 @@ export function motionStudioEditorGraphClickAction({
   rangeSelection = false,
 } = {}) {
   const pointMode = operation === 'point_curve';
-  // 포인트를 누르면 **지금 고른 기능이 정한다** · §6-101
+  // 포인트를 누르면 **선택 방식이 정한다** · §6-121
   //
-  // 전에는 어떤 기능이 골라져 있든 포인트 편집으로 넘어갔다 · `모션값 배율`
-  // 을 골라 두고 포인트를 찍으면 `포인트 곡선` 으로 바뀌어 구간을 못 잡았다 ·
-  // 화면은 "동그란 포인트 두 개를 선택하세요" 라고 안내하면서 실제로는 첫
-  // 클릭에 모드를 갈아 버려, 안내와 동작이 어긋났다.
+  // 「포인트 선택」이면 그 포인트 하나를 고르고, 「구간 선택」이면 시작·종료를
+  // 잡는다 · 아래 기능 탭(시간 배율·모션값 이동…)은 **적용했을 때 무엇을
+  // 하는가**만 정하고 클릭의 뜻에는 관여하지 않는다.
   //
-  // 포인트 하나를 고쳐 쓰는 일은 `포인트 곡선` 기능의 몫이다.
+  // 전에는 기능 탭이 클릭의 뜻까지 정했다 · 그래서 포인트 하나를 고치려면
+  // 반드시 `포인트 곡선` 을 먼저 골라야 했고, 다른 기능에서 포인트를 누르면
+  // 뜻하지 않게 구간 선택이 시작됐다.
   if (pointTarget) {
-    return rangeSelection || !pointMode ? 'select_point' : 'edit_point';
+    return rangeSelection ? 'select_point' : 'edit_point';
   }
   const regionCurveId = String(pointRegion?.curve_id || '');
   const activeId = String(activeCurveId || '');

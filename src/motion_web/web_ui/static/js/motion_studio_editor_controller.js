@@ -50,6 +50,8 @@ import {
   motionStudioPointDraftHasUnsavedChanges,
   motionStudioRangeSelectionActive,
   motionStudioRangeSelectionBounds,
+  motionStudioRangePicked,
+  motionStudioRangeSelectionChosen,
   motionStudioResetRangeSelection,
   motionStudioSelectedDraftPoint,
   motionStudioSelectedPointRange,
@@ -175,7 +177,7 @@ export function createMotionStudioEditorController({
     const editor = state.editor;
     if (!editor || !curve) return;
     editor.pointDraft = clone(curve);
-    editor.pendingPointCandidate = null;
+    clearPendingPoint(editor);
     const derivedOrder = (editor.pointDraft.points || []).every(
       (point) => point.tangent_mode === 'linear',
     ) ? 1 : 3;
@@ -190,7 +192,7 @@ export function createMotionStudioEditorController({
     (editor.pointDraft.points || []).forEach((point) => {
       if (point.tangent_mode === 'linear') point.tangent_mode = 'auto';
     });
-    editor.selectedPointId = pointId || curve.points?.[0]?.point_id || '';
+    selectPoint(editor, pointId || curve.points?.[0]?.point_id || '');
     editor.draggingHandle = null;
     editor.draggingPoint = null;
   }
@@ -201,13 +203,13 @@ export function createMotionStudioEditorController({
     });
   }
 
+  // 고른 것을 바꾸는 일은 `motion_studio_editor_selection.js` 가 맡는다 · §6-127
   function clearEditorPointRange(editor) {
-    if (!editor) return;
-    motionStudioResetRangeSelection(editor);
+    releaseRange(editor);
   }
 
   function clearPendingPointCandidate(editor = state.editor) {
-    if (editor) editor.pendingPointCandidate = null;
+    clearPendingPoint(editor);
   }
 
   function rememberEditorEditOperation(editor, operation) {
@@ -338,6 +340,8 @@ export function createMotionStudioEditorController({
     const selectedTimeRange = selectedEditorTimeRange(editor);
     const rangeReady = Boolean(selectedTimeRange);
     const rangeSelecting = motionStudioRangeSelectionActive(editor);
+    // 구간을 다 잡은 뒤에도 「구간 선택」쪽에 서 있어야 한다 · §6-123
+    const rangeChosen = motionStudioRangeSelectionChosen(editor);
     const rangeBounds = selectedTimeRange || motionStudioRangeSelectionBounds(editor);
     const selectedIds = editorSelectedMotionIds();
     const rangePointTargets = selectedEditorTimeRangePoints(editor);
@@ -411,40 +415,45 @@ export function createMotionStudioEditorController({
           : '구간 선택을 누른 뒤 시작·종료 포인트를 선택하세요.';
       el.studioEditorRangeStatus.classList.toggle('ready', rangeReady);
     }
+    if (el.studioEditorPointSelectButton) {
+      // 선택 방식 두 개는 함께 갱신한다 · 하나만 눌린 것처럼 보여야 한다 · §6-121
+      el.studioEditorPointSelectButton.disabled = Boolean(editor?.preview);
+      el.studioEditorPointSelectButton.setAttribute(
+        'aria-pressed', rangeChosen ? 'false' : 'true',
+      );
+      el.studioEditorPointSelectButton.classList.toggle('on', !rangeChosen);
+      el.studioEditorPointSelectButton.title = editor?.preview
+        ? '현재 결과 미리보기를 먼저 편집 반영하거나 취소하세요'
+        : '그래프의 포인트 하나를 눌러 고릅니다';
+    }
     if (el.studioEditorRangeSelectButton) {
       el.studioEditorRangeSelectButton.disabled = Boolean(editor?.preview);
-      el.studioEditorRangeSelectButton.textContent = rangeSelecting
-        ? '구간 선택 취소'
-        : '구간 선택';
+      el.studioEditorRangeSelectButton.textContent = '구간 선택';
       el.studioEditorRangeSelectButton.setAttribute(
-        'aria-pressed', rangeSelecting ? 'true' : 'false',
+        'aria-pressed', rangeChosen ? 'true' : 'false',
       );
-      el.studioEditorRangeSelectButton.classList.toggle('on', rangeSelecting);
+      el.studioEditorRangeSelectButton.classList.toggle('on', rangeChosen);
       el.studioEditorRangeSelectButton.title = editor?.preview
         ? '현재 결과 미리보기를 먼저 편집 반영하거나 취소하세요'
         : '구간의 시작 포인트와 종료 포인트를 차례로 선택합니다';
     }
+    // 구간 복사·삭제는 **고른 축 전부**를 다룬다 · 켜지는 조건도 시간 범위로
+    // 본다 · 시작·종료가 서로 다른 축이어도 된다 · §6-122
+    const rangeUsable = Boolean(selectedTimeRange) && rangePointTargets.length > 0;
     if (el.studioEditorRangeCopyTarget) {
-      el.studioEditorRangeCopyTarget.disabled = !selectedRange || Boolean(editor?.preview);
+      el.studioEditorRangeCopyTarget.disabled = !rangeUsable || Boolean(editor?.preview);
     }
     if (el.studioEditorRangeCopyButton) {
-      el.studioEditorRangeCopyButton.disabled = !selectedRange || Boolean(editor?.preview);
-      el.studioEditorRangeCopyButton.title = selectedRange
-        ? '같은 곡선에서 선택한 포인트를 복사합니다'
-        : '구간 복사는 같은 축·같은 곡선의 두 포인트를 선택하세요';
+      el.studioEditorRangeCopyButton.disabled = !rangeUsable || Boolean(editor?.preview);
+      el.studioEditorRangeCopyButton.title = rangeUsable
+        ? '선택한 축 전부에서 이 구간을 복사해 「복사 시작(초)」 자리에 붙입니다'
+        : '「구간 선택」을 누르고 시작·종료 포인트를 선택하세요';
     }
     if (el.studioEditorRangeDeleteButton) {
-      const remainingCount = selectedRange
-        ? (selectedRange.curve.points || []).length - selectedRange.points.length
-        : 0;
-      el.studioEditorRangeDeleteButton.disabled = (
-        !selectedRange || Boolean(editor?.preview) || remainingCount < 2
-      );
-      el.studioEditorRangeDeleteButton.title = !selectedRange
-        ? '같은 포인트 곡선의 시작·종료 포인트를 먼저 선택하세요'
-        : remainingCount < 2
-          ? '곡선을 유지하려면 삭제 후 포인트가 최소 2개 남아야 합니다'
-          : '선택 범위의 포인트를 삭제합니다';
+      el.studioEditorRangeDeleteButton.disabled = !rangeUsable || Boolean(editor?.preview);
+      el.studioEditorRangeDeleteButton.title = rangeUsable
+        ? '선택한 축 전부에서 이 구간의 포인트를 지웁니다'
+        : '「구간 선택」을 누르고 시작·종료 포인트를 선택하세요';
     }
     if (el.studioEditorPointCurveOrder) {
       el.studioEditorPointCurveOrder.disabled = !pointMode || !editablePointCurve;
@@ -651,6 +660,14 @@ export function createMotionStudioEditorController({
     const pointRangeReady = Boolean(selectedEditorTimeRange(editor));
     const pointDraftDirty = pointDraftHasUnsavedChanges(editor);
     const hasTransientChange = Boolean(editor?.preview) || pointDraftDirty;
+    // 되돌릴 것이 있는가 · §6-124
+    //
+    // 잘못 고른 구간이나 포인트도 되돌릴 거리다 · 전에는 결과 미리보기나
+    // 포인트 변경이 있을 때만 「실행 취소」가 켜져서, 구간을 잘못 잡으면
+    // 물릴 방법이 없었다.
+    const hasPickToCancel = Boolean(
+      motionStudioRangePicked(editor) || editor?.selectedPointId,
+    );
     const layerDirty = motionStudioEditorLayerIsDirty(editor, motionStudioLayerDataEqual);
     if (editor?.saveState === 'failed'
       && editor.saveFailureFingerprint !== motionStudioEditorFailureFingerprint(editor)) {
@@ -663,7 +680,16 @@ export function createMotionStudioEditorController({
       saveState = layerDirty || pointDraftDirty ? 'dirty' : 'saved';
     }
     if (el.studioEditorUndoButton) {
-      el.studioEditorUndoButton.disabled = !hasTransientChange && !editor?.undo.length;
+      el.studioEditorUndoButton.disabled = (
+        !hasTransientChange && !hasPickToCancel && !editor?.undo.length
+      );
+      el.studioEditorUndoButton.title = editor?.preview
+        ? '결과 미리보기를 취소합니다'
+        : (pointDraftDirty
+          ? '반영 전 포인트 변경을 취소합니다'
+          : (hasPickToCancel
+            ? '고른 구간·포인트를 취소합니다'
+            : '마지막으로 반영한 편집을 되돌립니다'));
     }
     if (el.studioEditorRedoButton) {
       el.studioEditorRedoButton.disabled = hasTransientChange || !editor?.redo.length;
@@ -928,7 +954,7 @@ export function createMotionStudioEditorController({
     editor.pendingCurveId = '';
     if (appliedOperation === 'create_axis_point_curve') {
       editor.pointDraft = null;
-      editor.selectedPointId = '';
+      selectPoint(editor, '');
     }
     if (
       appliedOperation === 'delete_axis'
@@ -936,7 +962,7 @@ export function createMotionStudioEditorController({
       && !editorMotionIds(editor.working).includes(String(editor.pointDraft.motion_id || ''))
     ) {
       editor.pointDraft = null;
-      editor.selectedPointId = '';
+      selectPoint(editor, '');
     }
     if (activeCurveId) {
       const updatedCurve = editorPointCurves(editor.working).find(
@@ -1158,6 +1184,8 @@ export function createMotionStudioEditorController({
       offset_deg: Number(el.studioEditorOffset?.value || 0),
       factor: Number(el.studioEditorFactor?.value || 1),
       delta_sec: Number(el.studioEditorDelta?.value || 0) / 1000,
+      // 구간 복사가 붙일 자리 · 고른 축 전부에 같은 시간으로 붙는다 · §6-122
+      target_start_sec: Number(el.studioEditorRangeCopyTarget?.value || 0),
       interpolation_order: operation === 'point_curve'
         ? motionStudioPointCurveOrder(
           editor.pointDraft?.interpolation_order,
@@ -1307,13 +1335,16 @@ export function createMotionStudioEditorController({
       editor.operation = nextOperation;
       clearPendingPointCandidate(editor);
       if (editor.operation === 'point_curve') {
+        // 보고 있던 자리를 그대로 둔다 · §6-121
+        //
+        // 전에는 여기서 `viewStart = 0` 으로 되돌려, 확대해서 보던 자리가
+        // 기능을 바꿀 때마다 날아갔다 · 「끝(초)」 입력칸이 쓰는
+        // `pointTimelineEnd` 는 계산해 두되 보기 범위는 건드리지 않는다.
         editor.pointTimelineEnd = motionStudioPointCurveViewEnd(
           editorDuration(editor.working),
           editor.viewEnd,
           editor.pointTimelineEnd,
         );
-        editor.viewStart = 0;
-        editor.viewEnd = editor.pointTimelineEnd;
       }
       renderEditor();
       if (leavingPointMode && !selectedEditorPointRange(editor)) {
@@ -1327,7 +1358,7 @@ export function createMotionStudioEditorController({
       syncPointControls, editorDuration, clearEditorPointRange, renderEditor,
       editorSelectedMotionIds, clearPendingPointCandidate, pointCurveIsApplied,
       pointCurveCanBeCreated, editorId, selectedEditorPointRange,
-      activatePointDraftMutation,
+      activatePointDraftMutation, selectedEditorTimeRange, applyEditorOperation,
     });
     [el.studioEditorOffset, el.studioEditorFactor, el.studioEditorDelta].forEach((input) => {
       input?.addEventListener('input', () => {
@@ -1378,10 +1409,17 @@ export function createMotionStudioEditorController({
           setEditorMessage('편집 반영 전 포인트 변경을 취소했습니다.');
         } else {
           editor.pointDraft = null;
-          editor.selectedPointId = '';
+          selectPoint(editor, '');
           setEditorMessage('편집 반영 전 포인트 작업을 취소했습니다.');
         }
         restoreEditorEditOperation(editor);
+        renderEditor();
+        return;
+      }
+      // 잘못 고른 구간·포인트부터 물린다 · 반영한 편집보다 가까운 실수다 · §6-124
+      if (motionStudioRangePicked(editor) || editor.selectedPointId) {
+        clearPicks(editor);
+        setEditorMessage('고른 구간·포인트를 취소했습니다 · 다시 고르세요.');
         renderEditor();
         return;
       }
@@ -1398,7 +1436,7 @@ export function createMotionStudioEditorController({
         loadPointDraft(previousCurve, previous.selectedPointId);
       } else {
         editor.pointDraft = null;
-        editor.selectedPointId = '';
+        selectPoint(editor, '');
       }
       refreshEditorTimeline(editor.working, replacedLayer);
       refreshEditorAxisControls(null, editor.working);
@@ -1423,7 +1461,7 @@ export function createMotionStudioEditorController({
         loadPointDraft(followingCurve, following.selectedPointId);
       } else {
         editor.pointDraft = null;
-        editor.selectedPointId = '';
+        selectPoint(editor, '');
       }
       refreshEditorTimeline(editor.working, replacedLayer);
       refreshEditorAxisControls(null, editor.working);
@@ -1462,7 +1500,7 @@ export function createMotionStudioEditorController({
         if (savedCurve) loadPointDraft(savedCurve, selectedPointId);
         else {
           editor.pointDraft = null;
-          editor.selectedPointId = '';
+          selectPoint(editor, '');
         }
       }
       if (el.studioEditorSubtitle) {
@@ -1586,7 +1624,7 @@ export function createMotionStudioEditorController({
         points, editor?.selectedPointId, step,
       );
       if (!next || next === editor.selectedPointId) return false;
-      editor.selectedPointId = next;
+      selectPoint(editor, next);
       renderEditor();
       return true;
     }

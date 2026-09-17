@@ -1,3 +1,4 @@
+import { releaseAfterTimelineChange } from './motion_studio_editor_selection.js';
 import { MOTION_STUDIO_PERIOD_SEC } from './motion_studio_constants.js';
 import { motionStudioLayerDuration } from './motion_studio_project_model.js';
 
@@ -79,7 +80,9 @@ export function synchronizeMotionStudioEditorTimeline(editor, layer, previousLay
   }
   editor.viewStart = 0;
   editor.viewEnd = Math.max(MOTION_STUDIO_PERIOD_SEC, duration);
-  editor.rangeSelection = { phase: 'inactive', start: null, end: null };
+  // 레이어 길이가 바뀌었을 때만 여기 온다 · 잡아 둔 구간의 시간이 더는 맞지
+  // 않으므로 푼다 · **선택 방식은 그대로 둔다** · §6-125 §6-127
+  releaseAfterTimelineChange(editor);
   return true;
 }
 

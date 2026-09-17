@@ -416,6 +416,7 @@ export function getElements() {
     studioEditorPointMode: document.getElementById('studioEditorPointMode'),
     studioEditorPointDeleteButton: document.getElementById('studioEditorPointDeleteButton'),
     studioEditorRangeStatus: document.getElementById('studioEditorRangeStatus'),
+    studioEditorPointSelectButton: document.getElementById('studioEditorPointSelectButton'),
     studioEditorRangeSelectButton: document.getElementById('studioEditorRangeSelectButton'),
     studioEditorRangeCopyTarget: document.getElementById('studioEditorRangeCopyTarget'),
     studioEditorRangeCopyButton: document.getElementById('studioEditorRangeCopyButton'),

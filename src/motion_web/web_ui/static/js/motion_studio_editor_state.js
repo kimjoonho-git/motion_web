@@ -27,6 +27,13 @@ export function createMotionStudioEditorSession({
     valueOffset: 0,
     valueView: null,
     valueRangeLock: null,
+    // 선택 방식은 사용자가 고른 것 · 편집·저장으로 풀리지 않는다 · §6-125
+    //
+    // 고른 구간(`rangeSelection`)과 **따로** 둔다 · 레이어 길이가 바뀌면
+    // 잡아 둔 시간이 더는 맞지 않아 구간은 풀어야 하지만, 「구간 선택으로
+    // 일하는 중」이라는 사실까지 풀리면 저장할 때마다 포인트 선택으로
+    // 되돌아간다.
+    selectionMode: 'point',
     rangeSelection: {
       phase: 'inactive',
       start: null,
@@ -143,6 +150,36 @@ export function motionStudioResetRangeSelection(editor, active = false) {
 
 export function motionStudioRangeSelectionActive(editor) {
   return ['awaiting_start', 'awaiting_end'].includes(editor?.rangeSelection?.phase);
+}
+
+/** 지금 「구간 선택」 쪽에 서 있는가 · §6-123
+ *
+ * 구간을 다 잡으면 단계가 `complete` 가 된다 · 고르는 중이 아니라고 해서
+ * 「포인트 선택」으로 돌아간 것처럼 보이면 안 된다 · 편집하고 반영한 뒤에도
+ * 잡아 둔 구간 그대로 이어서 일할 수 있어야 한다.
+ */
+export function motionStudioRangeSelectionChosen(editor) {
+  if (editor?.selectionMode === 'range') return true;
+  if (editor?.selectionMode === 'point') return false;
+  // 옛 편집 상태에는 `selectionMode` 가 없다 · 단계로 미루어 본다
+  return motionStudioRangeSelectionActive(editor)
+    || editor?.rangeSelection?.phase === 'complete';
+}
+
+/** 실제로 **고른 것**이 있는가 · 방식이 아니라 고른 결과를 본다 · §6-125 */
+export function motionStudioRangePicked(editor) {
+  return ['awaiting_end', 'complete'].includes(editor?.rangeSelection?.phase);
+}
+
+/** 선택 방식을 정한다 · §6-125
+ *
+ * 바꾸는 일의 주인은 `motion_studio_editor_selection.js` 다 · 여기 있는 것은
+ * 그 모듈이 부르는 알맹이이고, 옛 호출부를 위해 이름을 남겨 둔다 · §6-127
+ */
+export function motionStudioSetSelectionMode(editor, mode) {
+  if (!editor) return;
+  editor.selectionMode = mode === 'range' ? 'range' : 'point';
+  motionStudioResetRangeSelection(editor, editor.selectionMode === 'range');
 }
 
 export function motionStudioRangeSelectionBounds(editor) {
