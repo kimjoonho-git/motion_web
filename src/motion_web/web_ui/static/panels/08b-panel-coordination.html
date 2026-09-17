@@ -37,18 +37,46 @@
                 </div>
                 <!-- 버튼 세 개가 한 줄을 통째로 쓰고 있었다 · 뱃지와 같은 줄에
                      둔다 · §6-100 -->
+                <!-- 셋을 둘로 · §6-132
+                     「그룹 나가기」와 「연동 일시 해제」는 그룹이 돌고 있지 않으면
+                     **완전히 같은 일**이었다 · 차이는 실행 중일 때 하나뿐인데
+                     (나가기는 거부, 일시 해제는 강제 정지 후 나감) 그 선택을
+                     버튼 이름으로 하게 해 두었다 · 이제 확인창이 묻는다. -->
                 <div class="coord-badge coord-badge-actions">
-                  <button id="coordinationJoinButton" type="button" disabled>그룹 참가</button>
-                  <button id="coordinationLeaveButton" type="button" disabled>그룹 나가기</button>
-                  <button id="coordinationTemporaryDisableButton" type="button" disabled>연동 일시 해제</button>
+                  <button id="coordinationJoinButton" type="button" disabled>다시 참가</button>
+                  <button id="coordinationTemporaryDisableButton" type="button" disabled>지금 빠지기</button>
                 </div>
               </div>
-            <details class="coordination-settings-details">
+              <!-- 무엇이 남고 무엇이 풀리는지 · §6-132 -->
+              <p class="coordination-persistence-note">
+                「지금 빠지기」는 이 PC 만 잠시 그룹에서 뺍니다 ·
+                프로그램을 다시 켜면 아래 「연동 사용」 설정을 따라 자동으로 다시 참가합니다.
+              </p>
+            <details class="coordination-settings-details" open>
               <summary class="section-head compact">
                 <strong>이 PC 연동 설정</strong>
                 <span id="coordinationNodeState">연동 노드 확인 중</span>
               </summary>
               <div class="coordination-settings-fields">
+                <!-- 「연동 사용」이 맨 앞이다 · §6-132
+                     이름이 「연동 설정」이라 구역 제목(「이 PC 연동 설정」)과
+                     겹쳤다 · 이 칸이 정하는 것은 **쓸지 말지**다. -->
+                <label class="compact-field"><span>연동 사용</span>
+                  <select id="coordinationEnabled" class="compact-select">
+                    <option value="false">사용 안 함</option>
+                    <option value="true">사용</option>
+                  </select>
+                </label>
+                <label class="compact-field"><span>역할</span>
+                  <select id="coordinationIsMaster" class="compact-select">
+                    <option value="false">참가자 (슬레이브)</option>
+                    <option value="true">마스터</option>
+                  </select>
+                </label>
+                <p class="coordination-persistence-note span-2">
+                  이 두 가지는 <strong>저장하면 계속 유지됩니다</strong> ·
+                  프로그램을 다시 켜도 그대로입니다.
+                </p>
                 <label class="compact-field"><span>이 PC ID</span>
                   <input id="coordinationPcId" type="text" readonly>
                 </label>
@@ -60,18 +88,6 @@
                 </label>
                 <label class="compact-field"><span>DDS Domain ID</span>
                   <input id="coordinationDomainId" type="number" min="0" max="101" value="21">
-                </label>
-                <label class="compact-field"><span>연동 설정</span>
-                  <select id="coordinationEnabled" class="compact-select">
-                    <option value="false">사용 안 함</option>
-                    <option value="true">사용</option>
-                  </select>
-                </label>
-                <label class="compact-field"><span>역할</span>
-                  <select id="coordinationIsMaster" class="compact-select">
-                    <option value="false">참가자 (슬레이브)</option>
-                    <option value="true">마스터</option>
-                  </select>
                 </label>
                 <label class="compact-field span-2"><span>필수 참가 명단</span>
                   <input id="coordinationRequiredPeers" type="text" placeholder="예: pc-1, pc-2">

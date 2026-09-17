@@ -226,9 +226,14 @@ test('DDS execution blocks show a recovery popup and expose local temporary disa
   );
   assert.match(controller, /async function showMotionRunFailure/);
   assert.match(controller, /DDS 그룹 실행이 로컬 모션 실행을 사용 중입니다/);
-  assert.match(controller, /「연동 일시 해제」를 실행한 뒤 다시 시도하세요/);
-  assert.match(html, /id="coordinationTemporaryDisableButton"[^>]*>연동 일시 해제</);
+  // 버튼 이름이 바뀌면 이 안내문도 같이 바뀌어야 한다 · §6-132
+  assert.match(controller, /「지금 빠지기」를 누른 뒤 다시 시도하세요/);
+  assert.match(html, /id="coordinationTemporaryDisableButton"[^>]*>지금 빠지기</);
   assert.match(dom, /coordinationTemporaryDisableButton/);
   assert.match(coordination, /control\('temporarily_disable'\)/);
-  assert.match(coordination, /다른 PC의 확인 없이 이 PC가 그룹에서 나갑니다/);
+  assert.match(coordination, /다른 PC의 확인 없이 빠집니다/);
+  // 「그룹 나가기」는 화면에서 뺐다 · 실행 중이 아니면 「지금 빠지기」와 같은 일이었다
+  assert.doesNotMatch(html, /coordinationLeaveButton/);
+  assert.doesNotMatch(dom, /coordinationLeaveButton/);
+  assert.doesNotMatch(coordination, /coordinationLeaveButton/);
 });

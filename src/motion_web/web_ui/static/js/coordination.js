@@ -268,13 +268,22 @@ export function createCoordinationController({ el }) {
         }
       }
     }
-    if (el.coordinationJoinButton) el.coordinationJoinButton.disabled = loading || !nodeReady || joined || active;
-    if (el.coordinationLeaveButton) el.coordinationLeaveButton.disabled = loading || !joined || active;
+    // 빠져 있을 때만 「다시 참가」가 보인다 · §6-132
+    //
+    // 참가 초기값은 「연동 사용」 설정이다 (`_joined = configured`) · 그래서
+    // 평소에는 이미 참가한 채로 뜨고, 참가 버튼은 누를 일이 없다 · 늘 보이면
+    // "눌러야 하나" 를 매번 묻게 된다.
+    if (el.coordinationJoinButton) {
+      el.coordinationJoinButton.hidden = joined;
+      el.coordinationJoinButton.disabled = loading || !nodeReady || joined || active;
+      el.coordinationJoinButton.title = '이 PC 를 그룹에 다시 넣습니다';
+    }
     if (el.coordinationTemporaryDisableButton) {
+      el.coordinationTemporaryDisableButton.hidden = !joined;
       el.coordinationTemporaryDisableButton.disabled = loading || !nodeReady || !joined;
       el.coordinationTemporaryDisableButton.title = active
-        ? '이 PC와 다른 PC의 그룹 모션을 즉시 정지한 뒤 이 PC의 연동을 해제합니다'
-        : '이 PC의 연동을 해제해 단독 모션·모션 스튜디오를 사용합니다';
+        ? '이 PC와 다른 PC의 그룹 모션을 즉시 정지한 뒤 이 PC 를 그룹에서 뺍니다'
+        : '이 PC 를 그룹에서 빼 단독 모션·모션 스튜디오를 사용합니다';
     }
     // 실행 제어는 모션 실행 화면으로 옮겼다 · 여기서는 왜 못 하는지만 알린다 · §6-65
     if (el.coordinationRunAvailability) {
@@ -501,15 +510,15 @@ export function createCoordinationController({ el }) {
     const active = Boolean(snapshot?.runtime?.execution?.execution_id);
     const confirmed = await showConfirm(
       active
-        ? '이 PC의 DDS 연동을 일시 해제합니다.\n\n'
-          + '진행 중이거나 준비 중인 그룹 모션은 두 PC 모두 즉시 정지됩니다. '
-          + '다른 PC의 확인 없이 이 PC가 그룹에서 나갑니다.'
-        : '이 PC의 DDS 연동을 일시 해제합니다.\n\n'
-          + '다른 PC의 확인 없이 이 PC가 그룹에서 나갑니다. '
-          + '단독 모션·모션 스튜디오를 사용할 수 있으며, 다시 연동하려면 「그룹 참가」를 누르세요.',
+        ? '지금 그룹 모션이 돌고 있습니다.\n\n'
+          + '참가한 모든 PC 의 모션이 즉시 정지된 뒤 이 PC 가 그룹에서 빠집니다.\n'
+          + '회차가 끝나기를 기다리지 않습니다.'
+        : '이 PC 를 그룹에서 뺍니다.\n\n'
+          + '다른 PC의 확인 없이 빠집니다. 단독 모션·모션 스튜디오를 사용할 수 있습니다.\n'
+          + '프로그램을 다시 켜면 「연동 사용」 설정을 따라 자동으로 다시 참가합니다.',
       {
-        title: '연동 일시 해제',
-        confirmLabel: '연동 해제',
+        title: '그룹에서 빠지기',
+        confirmLabel: '빠지기',
         tone: 'warning',
       },
     );
@@ -576,7 +585,6 @@ export function createCoordinationController({ el }) {
   function bindEvents() {
     el.coordinationSaveButton?.addEventListener('click', save);
     el.coordinationJoinButton?.addEventListener('click', () => control('join'));
-    el.coordinationLeaveButton?.addEventListener('click', () => control('leave'));
     // 그룹 실행은 **여기가 주인**이다 · §6-100
     //
     // 그룹 실행은 모션 파일을 들고 가지 않는다 · 참가한 PC 들에게 시작·정지

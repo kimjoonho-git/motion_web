@@ -331,6 +331,21 @@
   font-size: 12px;
 }
 
+/* 무엇이 남고 무엇이 풀리는지 · §6-132
+   「연동 사용」은 설정 파일에 영구히 남고, 「지금 빠지기」는 노드 메모리만
+   바꾼다 · 화면에서는 둘 다 그냥 선택지라 구분할 길이 없었다. */
+.coordination-persistence-note {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted, #5b6b7c);
+}
+
+.coordination-settings-fields .coordination-persistence-note {
+  align-self: end;
+  margin: 0 0 6px;
+}
+
 .coord-control-groups {
   display: flex;
   flex-direction: column;
