@@ -4,7 +4,6 @@ import {
   configureMotionAutomation,
   deleteMotionMapping,
   deleteMotionFile,
-  disableMotionAutomation,
   fetchMotionFile,
   fetchMotionFiles,
   fetchMotionMapping,
@@ -553,7 +552,6 @@ export function createMotionDataController({
   let motionRunGraphFileId = '';
   let motionRunGraphToggleSignature = '';
   const motionRunGraphHiddenIds = new Set();
-  let automationResumeModalHidden = false;
 
   function setMessage(message) {
     if (el.motionFileMessage) el.motionFileMessage.textContent = message;
@@ -1341,26 +1339,18 @@ export function createMotionDataController({
   }
 
 
+  /** 한 회차가 끝나면 어떻게 잇는가 · 바로 · 대기 후 · 초기 위치 이동 후
+   *
+   * 부팅 때 스스로 시작하는 기능은 뺐다 · §6-134 · 여기 남은 것은 **반복
+   * 방식**뿐이고, 스케줄도 이 값을 읽어 그대로 실어 보낸다.
+   */
   function renderMotionAutomation() {
     const automation = motionRunStatus?.automation || {};
-    const enabled = automation.enabled === true;
-    const armed = automation.armed === true;
     const repeatMode = String(automation.repeat_mode || 'direct');
     const dwellSec = Number(automation.dwell_sec);
-    const busy = motionRunLoading || armed;
-    const hasFiles = Boolean(
-      motionRunPayload().motion_file_id && motionRunPayload().mapping_file_id,
-    );
-    const contextReady = getLatestState()?.execution_context?.ready === true;
+    const busy = motionRunLoading;
 
-    if (el.motionAutomationEnabled) {
-      el.motionAutomationEnabled.checked = enabled;
-      el.motionAutomationEnabled.disabled = motionRunLoading;
-    }
     if (el.motionAutomationRepeatMode) {
-      if (enabled) {
-        el.motionAutomationRepeatMode.value = repeatMode;
-      }
       el.motionAutomationRepeatMode.disabled = busy;
     }
     const currentRepeatMode = el.motionAutomationRepeatMode?.value || repeatMode;
@@ -1382,40 +1372,6 @@ export function createMotionDataController({
     }
   }
 
-  function renderAutomationResumeModal() {
-    const modal = document.getElementById('automationResumeModal');
-    if (!modal) return;
-    
-    const status = motionRunStatus || {};
-    const automation = status.automation || {};
-    const pending = Boolean(automation.resume_pending);
-    
-    // Automatically reset hidden state when pending becomes false (recovery completed or cancelled)
-    if (!pending) {
-      automationResumeModalHidden = false;
-    }
-    
-    if (pending && !automationResumeModalHidden) {
-      modal.classList.remove('hidden');
-      
-      const stageEl = document.getElementById('automationResumeStage');
-      if (stageEl) {
-        const stage = automation.stage || 'waiting';
-        let stageText = '상태 확인 중';
-        if (stage === 'waiting') stageText = '하드웨어 준비 대기 중';
-        else if (stage === 'starting') stageText = '초기 위치 이동 중';
-        else if (stage === 'running') stageText = '모션 실행 중';
-        stageEl.textContent = stageText;
-      }
-      
-      const messageEl = document.getElementById('automationResumeMessage');
-      if (messageEl) {
-        messageEl.textContent = automation.message || '하드웨어 연결 상태를 점검하고 있습니다.';
-      }
-    } else {
-      modal.classList.add('hidden');
-    }
-  }
 
   function renderMotionRunPanel() {
     const payload = motionRunPayload();
@@ -1543,7 +1499,6 @@ export function createMotionDataController({
     stopMotionRunGraphAnimationIfIdle();
     renderMotionRunAxes();
     renderMotionAutomation();
-    renderAutomationResumeModal();
   }
 
   function renderMotionTabs(active = null) {
@@ -2772,7 +2727,7 @@ export function createMotionDataController({
     }
   }
 
-  function motionAutomationSettings(enabled = true) {
+  function motionAutomationSettings() {
     const repeatMode = String(
       el.motionAutomationRepeatMode?.value
       || motionRunStatus?.automation?.repeat_mode
@@ -2787,7 +2742,6 @@ export function createMotionDataController({
       || motionRunStatus?.automation?.mapping_file_id
       || '';
     return {
-      enabled,
       repeat_mode: repeatMode,
       dwell_sec: Number.isFinite(dwellSec) && dwellSec >= 0 ? dwellSec : 0,
       motion_file_id: motionFileId,
@@ -2795,13 +2749,12 @@ export function createMotionDataController({
     };
   }
 
-  async function saveMotionAutomation(enabled = true) {
+  /** 반복 방식·대기 시간을 저장한다 · 부팅 자동 재생은 없앴다 · §6-134 */
+  async function saveMotionAutomation() {
     motionRunLoading = true;
     renderMotionRunPanel();
     try {
-      const payload = enabled
-        ? await configureMotionAutomation(motionAutomationSettings(true))
-        : await disableMotionAutomation();
+      const payload = await configureMotionAutomation(motionAutomationSettings());
       motionRunStatus = payload.status || motionRunStatus || null;
       motionRunLastResult = payload;
       if (payload.success === false) {
@@ -2873,19 +2826,14 @@ export function createMotionDataController({
     if (el.motionRunRefreshButton) {
       el.motionRunRefreshButton.addEventListener('click', refreshMotionRunStatus);
     }
-    el.motionAutomationEnabled?.addEventListener('change', () => {
-      void saveMotionAutomation(el.motionAutomationEnabled.checked);
-    });
+    // 반복 방식은 고치는 즉시 저장한다 · 전에는 「부팅 시 자동 재생」이
+    // 켜져 있을 때만 저장돼서, 꺼 두면 고친 값이 다음 실행에 안 갔다 · §6-134
     el.motionAutomationRepeatMode?.addEventListener('change', () => {
       renderMotionAutomation();
-      if (el.motionAutomationEnabled?.checked) {
-        void saveMotionAutomation(true);
-      }
+      void saveMotionAutomation();
     });
     el.motionAutomationDwellSec?.addEventListener('change', () => {
-      if (el.motionAutomationEnabled?.checked) {
-        void saveMotionAutomation(true);
-      }
+      void saveMotionAutomation();
     });
     if (el.motionRunGraphAxisToggles) {
       el.motionRunGraphAxisToggles.addEventListener('click', (event) => {
@@ -2992,23 +2940,6 @@ export function createMotionDataController({
         const row = event.target.closest('tr[data-mapping-index]');
         if (!row) return;
         updateMappingRow(row.dataset.mappingIndex, field, event.target.value, event.target.checked);
-      });
-    }
-
-    const automationHideBtn = document.getElementById('automationResumeHideButton');
-    if (automationHideBtn) {
-      automationHideBtn.addEventListener('click', () => {
-        automationResumeModalHidden = true;
-        renderAutomationResumeModal();
-      });
-    }
-
-    const automationCancelBtn = document.getElementById('automationResumeCancelButton');
-    if (automationCancelBtn) {
-      automationCancelBtn.addEventListener('click', async () => {
-        automationResumeModalHidden = true;
-        renderAutomationResumeModal();
-        await saveMotionAutomation(false);
       });
     }
   }

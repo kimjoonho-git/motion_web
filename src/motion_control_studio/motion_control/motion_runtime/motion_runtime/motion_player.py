@@ -752,9 +752,10 @@ class MotionPlayer:
         self.manager._graceful_stop_event.clear()
         if state != 'error':
             with self.manager._run_lock:
-                enabled = bool(self.manager._automation_state.get('enabled'))
+                # 부팅 자동 재생을 없애면서 `enabled` 도 없앴다 · §6-134 ·
+                # 반복 방식은 늘 준비돼 있고, 시작만 사람·스케줄이 시킨다
                 self.manager._automation_runtime.update({
-                    'state': 'ready' if enabled else 'off',
+                    'state': 'ready',
                     'message': message,
                     'stop_after_cycle': False,
                 })

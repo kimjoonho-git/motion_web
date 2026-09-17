@@ -488,7 +488,6 @@ class MotorRuntimeService:
                 motion_state,
                 execution_context,
             )
-            self.bridge._try_trigger_automation_resume(execution_context)
         except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
             self.bridge.get_logger().error(
                 f'Motor operation reconcile failed: {exc}'

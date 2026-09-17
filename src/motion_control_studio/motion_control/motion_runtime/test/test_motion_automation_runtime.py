@@ -40,15 +40,10 @@ def _manager():
     manager._status = motion_run_rules._empty_status()
     manager._execution_context = {}
     manager._execution_context_ready = True
-    manager._automation_state = {
-        **default_automation_state(),
-        'enabled': True,
-        'armed': True,
-    }
+    manager._automation_state = dict(default_automation_state())
     manager._automation_runtime = {
         'state': 'starting',
         'message': '',
-        'resume_pending': False,
         'stop_after_cycle': False,
     }
     manager._automation_project_id = 'project'
@@ -227,64 +222,23 @@ def test_disable_during_first_initialization_does_not_start_motion():
     assert '초기위치 이동 완료 후' in manager.status()['message']
 
 
-def test_confirmed_context_schedules_only_armed_automation_for_restart():
-    manager = _manager()
-    manager._execution_context = {
-        'context_id': 'context-1',
-        'project_id': 'project',
-    }
-    manager._automation_state.update({
-        'enabled': True,
-        'armed': True,
-    })
-    manager._automation_resume_pending = False
-    manager._automation_resume_started_at = None
-    # 단독 PC · 연동을 쓰지 않으면 부팅 자동 재생을 되살린다
-    manager._coordination_enabled = lambda: False
+def test_confirmed_context_no_longer_revives_playback():
+    """부팅 때 스스로 시작하는 기능은 없앴다 · §6-134
 
-    result = manager._confirm_execution_context({'context_id': 'context-1'})
-
-    assert result['success'] is True
-    assert manager._execution_context_ready is True
-    assert manager._automation_resume_pending is True
-    assert manager._automation_runtime['resume_pending'] is True
-
-
-def test_coordinated_pc_does_not_revive_local_automation_at_boot():
-    """연동 중이면 부팅 재생은 그룹이 몬다 · 로컬을 되살리면 안 된다 · §6-70
-
-    로컬 자동 재생이 실행 슬롯을 먼저 차지하면 그룹 시작이
-    "previous motion run task is still running" 으로 막힌다 · 마스터 화면에는
-    그 PC 가 왜 빠졌는지 나오지 않아 원인을 찾기 어렵다.
+    켜는 곳이 둘이었고(이 PC · 그룹) 서로 배타적이었다 · 연동을 켜면 로컬이
+    스스로 꺼지고, 그룹은 필수 PC 가 2대 미만이면 안 떴다 · 그래서 혼자 쓰는
+    PC 가 연동을 켜 두면 아무것도 안 됐다 · 시작은 사람이나 스케줄이 시킨다.
     """
     manager = _manager()
     manager._execution_context = {
         'context_id': 'context-1',
         'project_id': 'project',
     }
-    manager._automation_state.update({'enabled': True, 'armed': True})
-    manager._automation_resume_pending = False
-    manager._coordination_enabled = lambda: True
 
     result = manager._confirm_execution_context({'context_id': 'context-1'})
 
     assert result['success'] is True
     assert manager._execution_context_ready is True
-    assert manager._automation_resume_pending is False
-
-
-def test_confirmed_context_does_not_start_enabled_but_unarmed_automation():
-    manager = _manager()
-    manager._execution_context = {
-        'context_id': 'context-1',
-        'project_id': 'project',
-    }
-    manager._automation_state.update({
-        'enabled': True,
-        'armed': False,
-    })
-    manager._automation_resume_pending = False
-
-    manager._confirm_execution_context({'context_id': 'context-1'})
-
-    assert manager._automation_resume_pending is False
+    assert not hasattr(manager, '_automation_resume_pending')
+    assert 'resume_pending' not in manager._automation_runtime
+    assert not hasattr(manager, '_coordination_enabled')

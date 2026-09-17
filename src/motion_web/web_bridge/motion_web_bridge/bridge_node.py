@@ -1037,57 +1037,6 @@ class MotionWebBridge(Node):
             )
         self._supervisor_project_generation = generation
 
-    def _try_trigger_automation_resume(
-        self, execution_context: Optional[Dict[str, Any]] = None
-    ) -> None:
-        """Trigger autonomous motion start once execution context is ready and motor control blockers clear."""
-        context = (
-            execution_context
-            if isinstance(execution_context, dict)
-            else self._execution_context.status(validate_files=False)
-        )
-        if not context.get('ready'):
-            return
-        context_id = str(context.get('context_id') or '')
-        if not context_id:
-            return
-
-        triggered_id = getattr(self, '_automation_triggered_context_id', None)
-        if triggered_id == context_id:
-            return
-
-        motion_status = dict(getattr(self, '_motion_run_status', {}) or {})
-        automation = (
-            motion_status.get('automation')
-            if isinstance(motion_status.get('automation'), dict)
-            else {}
-        )
-        if not (automation.get('enabled') and automation.get('armed')):
-            return
-
-        if not automation.get('resume_pending'):
-            return
-
-        blocker = self._motor_runtime_control_blocker()
-        if blocker:
-            return
-
-        self.get_logger().info(
-            f"자동 재생 예약 활성화됨. 하드웨어 준비 완료. 트리거 시도: {automation.get('motion_file_id')}"
-        )
-        res = self.motion_automation_start({
-            'run_mode': 'continuous',
-            'motion_file_id': automation.get('motion_file_id', ''),
-            'mapping_file_id': automation.get('mapping_file_id', ''),
-            'request_source': 'network_control',
-        })
-        if isinstance(res, dict) and res.get('success'):
-            self._automation_triggered_context_id = context_id
-        else:
-            self.get_logger().warn(
-                f"자동 재생 트리거 대기 중: {res.get('message') if isinstance(res, dict) else res}"
-            )
-
     def _build_web_access_info(self) -> Dict[str, Any]:
         lan_ip = self.access_host or self._detect_lan_ip()
         display_host = lan_ip or self.host
@@ -1541,34 +1490,6 @@ class MotionWebBridge(Node):
             'automation_configure',
             self._with_active_project_files(payload),
             timeout_sec=2.0,
-        )
-
-    def motion_automation_start(
-        self, payload: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        conflict = self._coordination_execution_blocker()
-        if conflict:
-            return {'success': False, 'message': f'자동 반복 시작 불가: {conflict}'}
-        blocker = self._motor_runtime_control_blocker()
-        if blocker:
-            return {'success': False, 'message': f'자동 반복 시작 불가: {blocker}'}
-        return self._request_motion_run(
-            'automation_start', payload, timeout_sec=2.0
-        )
-
-    def motion_automation_reserve(
-        self, payload: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        conflict = self._coordination_execution_blocker()
-        if conflict:
-            return {'success': False, 'message': f'자동 반복 예약 불가: {conflict}'}
-        return self._request_motion_run(
-            'automation_reserve', payload, timeout_sec=2.0
-        )
-
-    def motion_automation_disable(self) -> Dict[str, Any]:
-        return self._request_motion_run(
-            'automation_disable', {}, timeout_sec=2.0
         )
 
     def motion_run_stop(self) -> Dict[str, Any]:

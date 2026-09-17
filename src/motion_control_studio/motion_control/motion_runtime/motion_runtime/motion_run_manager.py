@@ -13,10 +13,6 @@ from typing import Any, Dict, List, Optional
 import rclpy
 import yaml
 from motion_common import command_router, generation as generation_mod, motion_table, topics
-from motion_common.coordination import (
-    coordination_settings_path,
-    load_coordination_settings,
-)
 from motion_common.values import finite_float, optional_int
 from motion_control_msgs.msg import MotorStatus
 from rclpy.node import Node
@@ -143,22 +139,10 @@ class MotionRunManager(Node):
         self._automation_runtime: Dict[str, Any] = {
             'state': 'off',
             'message': '',
-            'resume_pending': False,
             'stop_after_cycle': False,
         }
         self._automation_project_id = ''
-        self._automation_resume_pending = False
-        self._automation_resume_started_at: Optional[float] = None
         self._automation_last_attempt_at = 0.0
-        self.automation_startup_timeout_sec = max(
-            float(
-                self.declare_parameter(
-                    'automation_startup_timeout_sec',
-                    120.0,
-                ).value
-            ),
-            1.0,
-        )
         self.ac_target_tolerance_deg = max(
             float(self.declare_parameter('ac_target_tolerance_deg', AC_TARGET_TOLERANCE_DEG).value),
             0.0,
@@ -294,8 +278,6 @@ class MotionRunManager(Node):
     #: 실행 컨텍스트가 서 있어야 처리하는 명령
     COMMANDS_REQUIRING_CONTEXT = frozenset({
         'automation_configure',
-        'automation_start',
-        'automation_reserve',
         'check',
         'initialize',
         'start',
@@ -326,9 +308,6 @@ class MotionRunManager(Node):
             'success': True, 'message': 'motion run status', 'status': self.status(),
         })
         router.register('automation_configure', self._configure_automation)
-        router.register('automation_start', self._start_automation)
-        router.register('automation_reserve', self._reserve_automation)
-        router.register('automation_disable', self._disable_automation)
         router.register('check', self._handle_check)
         router.register('initialize', lambda payload: self._start_thread('initialize', payload))
         router.register('start', lambda payload: self._start_thread('run', payload))
@@ -355,11 +334,8 @@ class MotionRunManager(Node):
             self._automation_runtime = {
                 'state': 'off',
                 'message': '',
-                'resume_pending': False,
                 'stop_after_cycle': False,
             }
-            self._automation_resume_pending = False
-            self._automation_resume_started_at = None
         return {
             'success': True,
             'message': '모션 실행 프로젝트 메모리 폐기',
@@ -447,48 +423,19 @@ class MotionRunManager(Node):
             **self._execution_context,
         }
 
-    def _coordination_enabled(self) -> bool:
-        """이 PC 가 연동을 쓰는가 · 부팅 자동 재생 되살리기 판단에 쓴다 · §6-70
-
-        읽지 못하면 **연동을 쓰는 것으로 본다** · 되살리지 않는 쪽이 안전하다.
-        """
-        try:
-            settings = load_coordination_settings(
-                coordination_settings_path('motion_runtime')
-            )
-        except Exception:
-            self.get_logger().warning('연동 설정을 읽지 못했습니다 · 자동 재생을 되살리지 않습니다')
-            return True
-        if settings is None:
-            return False
-        return bool(settings.get('enabled', False))
-
     def _confirm_execution_context(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         context_id = str(payload.get('context_id') or '').strip()
         with self._run_lock:
             if not context_id or context_id != self._execution_context.get('context_id'):
                 raise ValueError('확인하려는 실행 컨텍스트가 적용된 설정과 다릅니다')
+            # 부팅 때 스스로 시작하는 기능은 없앴다 · §6-134
+            #
+            # 켜는 곳이 둘이었고(이 PC · 그룹) 서로 배타적이었다 · 연동을 켜면
+            # 로컬이 스스로 꺼지고, 그룹은 필수 PC 가 2대 미만이면 안 떴다 ·
+            # 그래서 혼자 쓰는 PC 가 연동을 켜 두면 아무것도 안 됐다.
+            #
+            # 시작은 사람이 누르거나 스케줄이 시킨다 · 판단 주체가 하나다.
             self._execution_context_ready = True
-            automation = dict(
-                getattr(self, '_automation_state', default_automation_state())
-            )
-            # 연동 중이면 부팅 재생은 그룹이 몬다(`_drive_auto_play`) · 여기서
-            # 로컬을 되살리면 실행 슬롯을 먼저 차지해 그룹 시작이
-            # "previous motion run task is still running" 으로 막힌다 · §6-70
-            if (
-                automation.get('enabled')
-                and automation.get('armed')
-                and not self._coordination_enabled()
-            ):
-                self._automation_resume_pending = True
-                self._automation_resume_started_at = time.monotonic()
-                self._automation_runtime = {
-                    **self._automation_runtime,
-                    'state': 'waiting',
-                    'message': '프로그램 시작 후 자동 반복 준비 중',
-                    'resume_pending': True,
-                    'stop_after_cycle': False,
-                }
         return {
             'success': True,
             'message': '모션 실행 허용',
@@ -526,16 +473,9 @@ class MotionRunManager(Node):
         with self._run_lock:
             self._automation_project_id = project_id
             self._automation_state = state
-            self._automation_resume_pending = False
-            self._automation_resume_started_at = None
             self._automation_runtime = {
-                'state': (
-                    'blocked'
-                    if error
-                    else ('ready' if state.get('enabled') else 'off')
-                ),
+                'state': 'blocked' if error else 'ready',
                 'message': error,
-                'resume_pending': False,
                 'stop_after_cycle': False,
             }
         self._graceful_stop_event.clear()
@@ -566,10 +506,6 @@ class MotionRunManager(Node):
             current = dict(self._automation_state)
             context = dict(self._execution_context)
 
-        enabled = bool(payload.get('enabled', current.get('enabled', False)))
-        if not enabled:
-            return self._disable_automation(payload)
-
         repeat_mode = str(
             payload.get('repeat_mode') or current.get('repeat_mode') or 'reinitialize'
         ).strip()
@@ -589,32 +525,26 @@ class MotionRunManager(Node):
             or ''
         ).strip()
 
-        motion_sha = ''
-        mapping_sha = ''
-        armed = False
-
-        if motion_file_id and mapping_file_id:
-            armed = True
+        # 반복 방식만 저장한다 · 부팅 자동 재생은 없앴다 · §6-134
+        files_ready = bool(motion_file_id and mapping_file_id)
 
         candidate = normalize_automation_state({
             **current,
-            'enabled': True,
-            'armed': armed,
             'repeat_mode': repeat_mode,
             'dwell_sec': dwell_sec,
-            'motion_file_id': motion_file_id if armed else '',
-            'mapping_file_id': mapping_file_id if armed else '',
-            'motion_sha256': motion_sha,
-            'mapping_sha256': mapping_sha,
+            'motion_file_id': motion_file_id if files_ready else '',
+            'mapping_file_id': mapping_file_id if files_ready else '',
+            'motion_sha256': '',
+            'mapping_sha256': '',
             'last_error': '',
         })
 
         saved = self._save_automation(
             candidate,
-            runtime_state='ready' if armed else 'blocked',
+            runtime_state='ready' if files_ready else 'blocked',
             runtime_message=(
-                '부팅 시 자동 재생 예약 완료'
-                if armed
+                '자동 반복 설정 저장 완료'
+                if files_ready
                 else '재생 등록 모션 및 매핑 파일이 필요합니다'
             ),
         )
@@ -623,169 +553,6 @@ class MotionRunManager(Node):
             'message': '자동 반복 설정 저장 완료',
             'automation': self._automation_snapshot(),
             'settings': saved,
-            'status': self.status(),
-        }
-
-    def _start_automation(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        with self._run_lock:
-            configured = dict(self._automation_state)
-        if not configured.get('enabled'):
-            return {
-                'success': False,
-                'message': '자동 반복 사용을 먼저 켜세요',
-                'automation': self._automation_snapshot(),
-                'status': self.status(),
-            }
-        motion_file_id = str(payload.get('motion_file_id') or '').strip()
-        mapping_file_id = str(payload.get('mapping_file_id') or '').strip()
-        if not motion_file_id or not mapping_file_id:
-            return {
-                'success': False,
-                'message': '재생 등록된 모션 파일과 모션축 설정이 필요합니다',
-                'automation': self._automation_snapshot(),
-                'status': self.status(),
-            }
-        project_id, motions_dir, mappings_dir = self._project_asset_dirs(payload)
-        motion_path = self._motion_file_path(motion_file_id, motions_dir)
-        mapping_path = self._mapping_file_path(mapping_file_id, mappings_dir)
-        saved = self._save_automation(
-            {
-                'enabled': True,
-                'armed': True,
-                'repeat_mode': configured.get('repeat_mode', 'direct'),
-                'dwell_sec': configured.get('dwell_sec', 0.0),
-                'motion_file_id': motion_path.name,
-                'mapping_file_id': mapping_path.name,
-                'motion_sha256': '',
-                'mapping_sha256': '',
-                'last_error': '',
-            },
-            runtime_state='checking',
-            runtime_message='자동 반복 시작 검사 중',
-        )
-        request_payload = {
-            **payload,
-            'project_id': project_id,
-            'motion_file_id': saved['motion_file_id'],
-            'mapping_file_id': saved['mapping_file_id'],
-            'run_mode': 'continuous',
-            'automation_run': True,
-            'repeat_mode': saved['repeat_mode'],
-            'dwell_sec': saved['dwell_sec'],
-        }
-        try:
-            result = self._start_thread('run', request_payload)
-        except Exception as exc:
-            self._automation_failure(str(exc))
-            return {
-                'success': False,
-                'message': str(exc),
-                'automation': self._automation_snapshot(),
-                'status': self.status(),
-            }
-        if not result.get('success'):
-            self._automation_failure(str(result.get('message') or '자동 반복 시작 실패'))
-            result['automation'] = self._automation_snapshot()
-            result['status'] = self.status()
-            return result
-        with self._run_lock:
-            self._automation_resume_pending = False
-            self._automation_runtime = {
-                **self._automation_runtime,
-                'state': 'starting',
-                'message': '초기위치 이동 후 자동 반복을 시작합니다',
-                'resume_pending': False,
-                'stop_after_cycle': False,
-            }
-        result['automation'] = self._automation_snapshot()
-        return result
-
-    def _reserve_automation(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        with self._run_lock:
-            configured = dict(self._automation_state)
-        if not configured.get('enabled'):
-            return {
-                'success': False,
-                'message': '자동 반복 사용을 먼저 켜세요',
-                'automation': self._automation_snapshot(),
-                'status': self.status(),
-            }
-        motion_file_id = str(payload.get('motion_file_id') or '').strip()
-        mapping_file_id = str(payload.get('mapping_file_id') or '').strip()
-        if not motion_file_id or not mapping_file_id:
-            return {
-                'success': False,
-                'message': '재생 등록된 모션 파일과 모션축 설정이 필요합니다',
-                'automation': self._automation_snapshot(),
-                'status': self.status(),
-            }
-        project_id, motions_dir, mappings_dir = self._project_asset_dirs(payload)
-        motion_path = self._motion_file_path(motion_file_id, motions_dir)
-        mapping_path = self._mapping_file_path(mapping_file_id, mappings_dir)
-        saved = self._save_automation(
-            {
-                'enabled': True,
-                'armed': True,
-                'repeat_mode': configured.get('repeat_mode', 'direct'),
-                'dwell_sec': configured.get('dwell_sec', 0.0),
-                'motion_file_id': motion_path.name,
-                'mapping_file_id': mapping_path.name,
-                'motion_sha256': hashlib.sha256(motion_path.read_bytes()).hexdigest(),
-                'mapping_sha256': hashlib.sha256(mapping_path.read_bytes()).hexdigest(),
-                'last_error': '',
-            },
-            runtime_state='ready',
-            runtime_message='부팅 시 자동 반복이 예약되었습니다',
-        )
-        return {
-            'success': True,
-            'message': '부팅 시 자동 시작 예약 완료',
-            'automation': self._automation_snapshot(),
-            'status': self.status(),
-        }
-
-    def _disable_automation(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        project_id = str(payload.get('project_id') or '').strip()
-        with self._run_lock:
-            automation_project_id = self._automation_project_id
-        if not project_id or project_id != automation_project_id:
-            raise ValueError('현재 프로젝트의 자동 반복 설정만 해제할 수 있습니다')
-        current_status = self.status()
-        active = (
-            bool(current_status.get('automation_run'))
-            and current_status.get('state')
-            in {'initializing', 'initialized', 'running', 'waiting', 'verifying'}
-        )
-        self._save_automation(
-            {
-                'enabled': False,
-                'armed': False,
-                'last_error': '',
-            },
-            runtime_state='stop_requested' if active else 'off',
-            runtime_message=(
-                '현재 단계 완료 후 자동 반복을 정지합니다'
-                if active
-                else '자동 반복 사용 안 함'
-            ),
-        )
-        with self._run_lock:
-            self._automation_resume_pending = False
-            self._automation_resume_started_at = None
-            self._automation_runtime['resume_pending'] = False
-            self._automation_runtime['stop_after_cycle'] = active
-        if active:
-            self._graceful_stop_event.set()
-        else:
-            self._graceful_stop_event.clear()
-        return {
-            'success': True,
-            'message': (
-                '현재 단계 완료 후 자동 반복 정지'
-                if active
-                else '자동 반복 사용 안 함'
-            ),
-            'automation': self._automation_snapshot(),
             'status': self.status(),
         }
 
@@ -805,26 +572,9 @@ class MotionRunManager(Node):
                     'state': 'blocked',
                     'message': text,
                 })
-        with self._run_lock:
-            self._automation_resume_pending = False
-            self._automation_runtime['resume_pending'] = False
 
     def _automation_snapshot(self) -> Dict[str, Any]:
         with self._run_lock:
-            resume_started = getattr(self, '_automation_resume_started_at', None)
-            timeout_sec = getattr(self, 'automation_startup_timeout_sec', 120.0)
-            if (
-                getattr(self, '_automation_resume_pending', False)
-                and resume_started is not None
-                and time.monotonic() - resume_started > timeout_sec
-            ):
-                self._automation_resume_pending = False
-                if hasattr(self, '_automation_runtime') and isinstance(self._automation_runtime, dict):
-                    self._automation_runtime.update({
-                        'state': 'blocked',
-                        'message': '자동 모션 복구 준비 시간 초과',
-                        'resume_pending': False,
-                    })
             return {
                 **getattr(self, '_automation_state', {}),
                 **getattr(self, '_automation_runtime', {}),
@@ -909,9 +659,6 @@ class MotionRunManager(Node):
                     'message': str(exc),
                     'status': self.status(),
                 }
-            self._automation_resume_pending = False
-            if hasattr(self, '_automation_runtime') and isinstance(self._automation_runtime, dict):
-                self._automation_runtime['resume_pending'] = False
             preparing_status = motion_run_rules._empty_status()
             preparing_status.update({
                 'state': 'preparing',
@@ -1029,11 +776,10 @@ class MotionRunManager(Node):
 
     def _handle_stop(self) -> Dict[str, Any]:
         current = self.status()
-        if current.get('automation_run') or current.get('automation', {}).get('armed'):
+        if current.get('automation_run'):
             try:
                 self._save_automation(
                     {
-                        'armed': False,
                         'last_error': '사용자가 모션을 즉시 정지했습니다',
                     },
                     runtime_state='stopped',

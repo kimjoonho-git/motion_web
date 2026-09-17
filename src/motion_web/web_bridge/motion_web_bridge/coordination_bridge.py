@@ -113,7 +113,7 @@ class CoordinationWebBridge:
         """Save project-independent DDS group settings and restart the node."""
         if not isinstance(payload, Mapping):
             raise ValueError('연동 설정 요청은 객체여야 합니다')
-        allowed = {'enabled', 'group_id', 'dds_domain_id', 'display_name', 'is_master', 'auto_play', 'required_peers'}
+        allowed = {'enabled', 'group_id', 'dds_domain_id', 'display_name', 'is_master', 'required_peers'}
         if set(payload).difference(allowed):
             raise ValueError('허용되지 않은 연동 설정 항목이 있습니다')
         if 'enabled' in payload and not isinstance(payload['enabled'], bool):
@@ -123,7 +123,6 @@ class CoordinationWebBridge:
             current,
             enabled=bool(payload.get('enabled', current.enabled)),
             is_master=bool(payload.get('is_master', current.is_master)),
-            auto_play=bool(payload.get('auto_play', current.auto_play)),
             required_peers=tuple(str(x).strip() for x in payload.get('required_peers', current.required_peers) if str(x).strip()),
             group_id=str(payload.get('group_id', current.group_id)).strip(),
             dds_domain_id=int(payload.get('dds_domain_id', current.dds_domain_id)),
@@ -257,7 +256,6 @@ class CoordinationWebBridge:
             'display_name': config.display_name,
             'enabled': config.enabled,
             'is_master': config.is_master,
-            'auto_play': config.auto_play,
             'required_peers': list(config.required_peers),
             'group_id': config.group_id,
             'dds_domain_id': config.dds_domain_id,

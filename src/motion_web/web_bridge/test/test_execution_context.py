@@ -378,21 +378,16 @@ def test_motion_automation_commands_use_current_execution_context():
     bridge._request_motion_run = request
     bridge._motor_runtime_control_blocker = lambda: ''
 
+    # 부팅 자동 재생을 빼면서 `start` · `reserve` · `disable` 통로도 함께
+    # 없앴다 · §6-134 · 남은 것은 반복 방식 저장뿐이다
     assert bridge.motion_automation_configure({
-        'enabled': True,
         'repeat_mode': 'dwell',
         'dwell_sec': 3,
     })['success']
-    assert bridge.motion_automation_start({
-        'motion_file_id': 'motion.json',
-        'mapping_file_id': 'mapping.yaml',
-    })['success']
-    assert bridge.motion_automation_disable()['success']
-    assert [call[0] for call in calls] == [
-        'automation_configure',
-        'automation_start',
-        'automation_disable',
-    ]
+    assert [call[0] for call in calls] == ['automation_configure']
+    assert not hasattr(bridge, 'motion_automation_start')
+    assert not hasattr(bridge, 'motion_automation_reserve')
+    assert not hasattr(bridge, 'motion_automation_disable')
 
 
 def test_group_motion_commands_include_execution_context_id():
@@ -441,24 +436,6 @@ def test_group_motion_commands_include_execution_context_id():
         'group_initialize_at',
     ]
     assert all(payload.get('context_id') == 'context-sha' for payload in payloads)
-
-
-def test_motion_automation_start_obeys_motor_runtime_blocker():
-    bridge = make_bridge()
-    calls = []
-    bridge._request_motion_run = lambda *args, **kwargs: calls.append((args, kwargs))
-    bridge._motor_runtime_control_blocker = lambda: '서보 에러 2등급'
-
-    result = bridge.motion_automation_start({
-        'motion_file_id': 'motion.json',
-        'mapping_file_id': 'mapping.yaml',
-    })
-
-    assert result == {
-        'success': False,
-        'message': '자동 반복 시작 불가: 서보 에러 2등급',
-    }
-    assert calls == []
 
 
 def test_coordinator_establishes_persisted_generation_after_program_restart():

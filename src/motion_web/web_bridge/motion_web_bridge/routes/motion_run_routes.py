@@ -98,27 +98,6 @@ def register_motion_run_routes(app: FastAPI, bridge, safety_first_stop) -> None:
             bridge.get_logger().error(f'motion_automation_configure API error: {trace}')
             return {'success': False, 'message': f'서버 내부 오류: {exc}'}
 
-    @app.post('/api/motion-run/automation/start')
-    async def motion_automation_start(request: Request):
-        body = await request.json()
-        if not isinstance(body, dict):
-            raise HTTPException(status_code=400, detail='request body must be an object')
-        handler = bridge.motion_automation_start
-        return await asyncio.to_thread(handler, body)
-
-    @app.post('/api/motion-run/automation/reserve')
-    async def motion_automation_reserve(request: Request):
-        body = await request.json()
-        if not isinstance(body, dict):
-            raise HTTPException(status_code=400, detail='request body must be an object')
-        handler = bridge.motion_automation_reserve
-        return await asyncio.to_thread(handler, body)
-
-    @app.post('/api/motion-run/automation/disable')
-    async def motion_automation_disable():
-        handler = bridge.motion_automation_disable
-        return await asyncio.to_thread(handler)
-
     @app.post('/api/motion-run/stop')
     async def motion_run_stop():
         stop_fn = bridge.motion_run_stop

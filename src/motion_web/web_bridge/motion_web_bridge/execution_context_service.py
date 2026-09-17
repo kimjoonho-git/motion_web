@@ -331,10 +331,6 @@ class ExecutionContextService:
                 message='저장 설정과 실행 설정이 일치합니다 · 사용자 제어 가능',
                 verified_at=time.time(),
             )
-            
-            # 부팅 시 자동 재생 (자동 반복 시작 핸들러 호출)
-            self.bridge._try_trigger_automation_resume()
-            
             return self.status()
         finally:
             self._apply_lock.release()

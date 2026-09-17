@@ -50,7 +50,6 @@ test('그룹에 관한 것은 전부 PC 연동 설정 탭에 있다', () => {
   assert.equal(panelOf('motionRunPeerRows'), 'coordination', '각 PC 진행');
   assert.equal(panelOf('coordinationExecutionState'), 'coordination', '그룹 실행 상태');
   assert.equal(panelOf('coordinationAcknowledgeErrorButton'), 'coordination', '그룹 오류 확인');
-  assert.equal(panelOf('coordinationAutoPlayToggle'), 'coordination', '부팅 시 자동 재생');
   assert.equal(panelOf('midiTargetChoices'), 'coordination', 'MIDI 사용 PC');
 });
 

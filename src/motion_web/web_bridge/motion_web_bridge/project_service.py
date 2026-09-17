@@ -207,7 +207,6 @@ class ProjectService:
         self.bridge._midi_monitor_store.clear()
         with self.bridge._motion_run_lock:
             self.bridge._motion_run_status = {}
-            self.bridge._automation_triggered_context_id = None
         with self.bridge._midi_monitor_lock:
             self.bridge._midi_monitor_status = {}
         self.bridge._motion_studio_sync().clear_project_memory()

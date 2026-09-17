@@ -53,9 +53,22 @@ def test_safety_stop_also_stops_the_group():
         assert '_stop_group_too(' in _body(SAFETY, handler), f'{handler} 가 그룹을 세우지 않는다'
 
 
-def test_coordinated_pc_does_not_revive_local_boot_playback():
+def test_no_pc_revives_playback_on_boot():
+    """부팅 때 스스로 시작하는 기능은 없앴다 · §6-134
+
+    켜는 곳이 둘이었고(이 PC · 그룹) 서로 배타적이었다 · 연동을 켜면 로컬이
+    스스로 꺼지고(`_coordination_enabled`), 그룹은 필수 PC 가 2대 미만이면
+    안 떴다(`_drive_auto_play`) · 그래서 혼자 쓰는 PC 가 연동을 켜 두면
+    아무것도 안 됐다 · 시작은 사람이 누르거나 스케줄이 시킨다.
+    """
+    assert '_coordination_enabled' not in RUN_MANAGER, '되살리기 판단이 남아 있다'
+    assert '_automation_resume_pending' not in RUN_MANAGER, '복구 예약이 남아 있다'
+    assert 'resume_pending' not in RUN_MANAGER
     body = _body(RUN_MANAGER, '_confirm_execution_context')
-    assert 'self._coordination_enabled()' in body, '연동 여부를 보지 않는다'
-    fallback = _body(RUN_MANAGER, '_coordination_enabled')
-    # 읽지 못하면 되살리지 않는 쪽이 안전하다
-    assert 'return True' in fallback
+    assert 'automation' not in body, '실행 컨텍스트 확인이 자동 재생을 건드린다'
+
+    coordination = (
+        Path(__file__).resolve().parents[3]
+        / 'motion_coordination' / 'motion_coordination' / 'coordination_node.py'
+    ).read_text(encoding='utf-8')
+    assert 'auto_play' not in coordination, '그룹 부팅 자동 재생이 남아 있다'

@@ -23,7 +23,6 @@ class GroupConfig:
     group_id: str
     dds_domain_id: int
     is_master: bool = False
-    auto_play: bool = False
     required_peers: tuple[str, ...] = ()
     heartbeat_sec: float = 0.5
     warning_timeout_sec: float = 1.5
@@ -64,7 +63,6 @@ def load_group_config(path: Path) -> GroupConfig:
         _identifier(group_id, 'group_id')
     enabled = bool(value.get('enabled', False)) if version == 2 else False
     is_master = bool(value.get('is_master', False))
-    auto_play = bool(value.get('auto_play', False))
     required_peers = tuple(str(x).strip() for x in value.get('required_peers') or [] if str(x).strip())
     domain = _integer(value.get('dds_domain_id'), 21, 'dds_domain_id')
     if not 0 <= domain <= 101:
@@ -105,7 +103,6 @@ def load_group_config(path: Path) -> GroupConfig:
         display_name=display_name,
         enabled=enabled,
         is_master=is_master,
-        auto_play=auto_play,
         required_peers=required_peers,
         group_id=group_id,
         dds_domain_id=domain,
@@ -133,7 +130,6 @@ def save_group_config(path: Path, config: GroupConfig) -> None:
         'display_name': config.display_name,
         'enabled': bool(config.enabled),
         'is_master': bool(config.is_master),
-        'auto_play': bool(config.auto_play),
         'required_peers': list(config.required_peers),
         'group_id': config.group_id,
         'dds_domain_id': int(config.dds_domain_id),

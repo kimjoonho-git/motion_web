@@ -83,9 +83,6 @@ export function createCoordinationController({ el }) {
     if (el.coordinationIsMaster && el.coordinationIsMaster.value !== String(config.is_master === true)) {
       el.coordinationIsMaster.value = String(config.is_master === true);
     }
-    if (el.coordinationAutoPlayToggle && el.coordinationAutoPlayToggle.checked !== (config.auto_play === true)) {
-      el.coordinationAutoPlayToggle.checked = config.auto_play === true;
-    }
     if (el.coordinationRequiredPeers) el.coordinationRequiredPeers.value = Array.isArray(config.required_peers) ? config.required_peers.join(', ') : '';
   }
 
@@ -228,10 +225,6 @@ export function createCoordinationController({ el }) {
       if (el.coordinationMasterName) el.coordinationMasterName.textContent = currentMaster || '-';
     }
 
-    if (el.coordinationAutoPlayGroup) {
-      el.coordinationAutoPlayGroup.style.display = config.is_master ? 'flex' : 'none';
-    }
-
     if (el.coordinationPeerCount) el.coordinationPeerCount.textContent = `${peers.length + (joined ? 1 : 0)}대`;
     if (el.coordinationExecutionState) {
       const coordinator = execution.coordinator_id ? ` · 진행 ${execution.coordinator_id}` : '';
@@ -309,7 +302,7 @@ export function createCoordinationController({ el }) {
         'GROUP_PARTICIPANT_DISCONNECTED',
         'GROUP_SCHEDULE_ACK_TIMEOUT',
         'GROUP_MOTION_START_REPORT_TIMEOUT',
-      ].includes(code) || config.auto_play;
+      ].includes(code);
 
       if (!isTransientRecoveryError) {
         const errorKey = [
@@ -419,7 +412,6 @@ export function createCoordinationController({ el }) {
       const result = await saveCoordinationSettings({
         enabled: el.coordinationEnabled?.value === 'true',
         is_master: el.coordinationIsMaster?.value === 'true',
-        auto_play: el.coordinationAutoPlayToggle?.checked === true,
         required_peers: el.coordinationRequiredPeers?.value?.split(',').map(s => s.trim()).filter(Boolean) || [],
         group_id: el.coordinationGroupId?.value?.trim() || '',
         dds_domain_id: Number(el.coordinationDomainId?.value ?? 21),
@@ -606,12 +598,7 @@ export function createCoordinationController({ el }) {
     el.coordinationAcknowledgeErrorButton?.addEventListener('click', () => control('acknowledge_group_error'));
     [el.coordinationDisplayName, el.coordinationGroupId, el.coordinationDomainId, el.coordinationEnabled, el.coordinationIsMaster, el.coordinationRequiredPeers]
       .forEach((field) => field?.addEventListener('input', () => { formDirty = true; }));
-      
-    el.coordinationAutoPlayToggle?.addEventListener('change', () => {
-      formDirty = true;
-      save();
-    });
-    
+
     el.midiTargetChoices?.addEventListener('click', async (event) => {
       const button = event.target.closest('button[data-midi-target]');
       if (!button || button.disabled) return;

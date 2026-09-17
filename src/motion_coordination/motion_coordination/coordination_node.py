@@ -105,7 +105,6 @@ class MotionCoordinationNode(Node):
             'trigger_sync_uncertainty_ms': 0.0,
             'trigger_sync_source': 'dds_relative_monotonic',
         }
-        self._auto_play_triggered = False
         self._local_sync_offset_ns = 0
         self._sync_estimators: Dict[str, TriggerSyncEstimator] = {}
         self._sync_sent_samples: Dict[str, int] = {}
@@ -293,7 +292,6 @@ class MotionCoordinationNode(Node):
         self._prune_seen_commands()
         self._check_multiple_masters()
         self._auto_recover_group_errors()
-        self._drive_auto_play()
         self._midi_relay.tick()
 
     def _auto_recover_group_errors(self) -> None:
@@ -331,8 +329,6 @@ class MotionCoordinationNode(Node):
                 
         # All required peers are back and healthy! Auto-clear the error.
         self.get_logger().info(f'통신 단절 복구 감지: {code} 자동 해제 및 복구 진행')
-        with self._lock:
-            self._auto_play_triggered = False
         self._acknowledge_coordination_error()
 
     def _heartbeat_callback(self, message: GroupHeartbeat) -> None:
@@ -435,54 +431,6 @@ class MotionCoordinationNode(Node):
             ),
             execution_id=execution_id,
         )
-
-    def _drive_auto_play(self) -> None:
-        if not self._config.is_master or not self._config.auto_play:
-            return
-        if not self._joined:
-            return
-        required_peers = tuple(self._config.required_peers) or tuple(sorted(set((self._config.pc_id, *self._registry.joined()))))
-        if len(required_peers) < 2:
-            return
-        with self._lock:
-            if self._auto_play_triggered:
-                return
-            if self._execution.execution_id or self._coordination_error.get('active'):
-                return
-        now = time.monotonic()
-        missing_or_unhealthy = []
-        for pc_id in required_peers:
-            if pc_id == self._config.pc_id:
-                status = 'online'
-                alarm = self._local_alarm_grade()
-            else:
-                status = self._registry.status(pc_id, now=now)
-                member = self._registry.member(pc_id)
-                joined = member.joined if member else False
-                alarm = member.alarm_grade if member else 0
-            if status != 'online' or not joined or alarm > 0:
-                missing_or_unhealthy.append(pc_id)
-        if missing_or_unhealthy:
-            return
-        
-        # All required peers are online and healthy. We can start the group execution.
-        try:
-            with self._lock:
-                self._auto_play_triggered = True
-            self._start_group_execution(
-                participants_override=required_peers,
-                request={
-                    'run_mode': 'continuous',
-                    'repeat_mode': 'reinitialize',
-                    'dwell_sec': 0.0,
-                },
-                initialization_only=False,
-            )
-            self.get_logger().info('마스터 권한으로 그룹 자동 재생을 시작했습니다')
-        except Exception as exc:
-            with self._lock:
-                self._auto_play_triggered = False
-            self.get_logger().error(f'자동 재생 시작 실패: {exc}')
 
     def _time_sync_callback(self, message: GroupTimeSync) -> None:
         """Handle one execution-local DDS monotonic clock exchange."""
@@ -1138,7 +1086,6 @@ class MotionCoordinationNode(Node):
         }
         with self._lock:
             self._coordination_error = error
-            self._auto_play_triggered = True
         alarm = GroupAlarm()
         alarm.group_id = self._config.group_id
         alarm.execution_id = str(execution_id)
