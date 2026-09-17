@@ -43,6 +43,18 @@ DEFAULT_MOTION_PROJECTS_DIR = str(
 )
 
 
+class ProjectNotAttached(ValueError):
+    """이 노드에 통합 프로젝트가 붙어 있지 않다 · §6-109
+
+    서비스가 다시 뜨면 이 노드는 빈손으로 시작한다 · 열려 있던 화면은 그것을
+    모르고 편집·삭제를 보낸다 · 화면을 새로 고치면 되던 이유는, 조회 경로가
+    노드에 되물어 보고 어긋나면 다시 붙이기 때문이다.
+
+    다른 실패와 **구분해서** 알린다 · 부른 쪽이 다시 붙이고 한 번 더 보낼 수
+    있어야 한다.
+    """
+
+
 class MotionStudioNode(Node):
     """Own editable motion projects; delegate all motor work to existing nodes."""
 
@@ -218,6 +230,17 @@ class MotionStudioNode(Node):
                 request.command, request.generation, request.payload
             )
             result = self._handle(request.command, request.payload)
+        except ProjectNotAttached as exc:
+            # 노드가 프로젝트를 놓쳤다는 사실을 **말로** 알린다 · §6-109
+            #
+            # 서비스가 다시 뜨면 이 노드는 빈손으로 시작한다 · 그런데 열려
+            # 있던 화면은 그걸 모르고 편집·삭제를 보낸다 · 부른 쪽이 다시
+            # 붙이고 한 번 더 보낼 수 있도록 표시를 달아 준다 · 메시지 글자를
+            # 맞춰 보게 하면 문구만 바뀌어도 조용히 깨진다.
+            self.get_logger().warning(
+                f'studio command without an attached project: {request.command}'
+            )
+            result = command_router.error_response(exc, project_attached=False)
         except Exception as exc:
             self.get_logger().error(
                 f'studio command failed: {request.command}\n{traceback.format_exc()}'
@@ -500,7 +523,7 @@ class MotionStudioNode(Node):
 
     def _require_project_locked(self) -> Dict[str, Any]:
         if self._current_project is None:
-            raise ValueError('먼저 왼쪽에서 통합 프로젝트를 선택하세요')
+            raise ProjectNotAttached('먼저 왼쪽에서 통합 프로젝트를 선택하세요')
         return self._current_project
 
     def _require_idle_locked(self) -> None:

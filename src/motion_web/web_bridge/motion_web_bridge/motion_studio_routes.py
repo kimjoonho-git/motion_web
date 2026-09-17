@@ -66,7 +66,7 @@ def register_motion_studio_routes(
         body = await request.json()
         return await asyncio.to_thread(
             lambda: sync().sync_result(
-                transport().request('save', body)
+                sync().request_attached('save', body)
             )
         )
 
@@ -75,7 +75,7 @@ def register_motion_studio_routes(
         body = await request.json()
         return await asyncio.to_thread(
             lambda: sync().sync_result(
-                transport().request('update_layer', body)
+                sync().request_attached('update_layer', body)
             )
         )
 
@@ -84,7 +84,7 @@ def register_motion_studio_routes(
         body = await request.json()
         return await asyncio.to_thread(
             lambda: sync().sync_result(
-                transport().request('create_layer', body)
+                sync().request_attached('create_layer', body)
             )
         )
 
@@ -93,7 +93,7 @@ def register_motion_studio_routes(
         body = await request.json()
         return await asyncio.to_thread(
             lambda: sync().sync_result(
-                transport().request(
+                sync().request_attached(
                     'replace_layer_data', body, timeout_sec=8.0
                 )
             )
@@ -103,7 +103,7 @@ def register_motion_studio_routes(
     async def motion_studio_layer_delete(layer_id: str):
         return await asyncio.to_thread(
             lambda: sync().sync_result(
-                transport().request(
+                sync().request_attached(
                     'delete_layer', {'layer_id': layer_id}
                 )
             )
@@ -113,7 +113,7 @@ def register_motion_studio_routes(
     async def motion_studio_layer_duplicate(layer_id: str):
         return await asyncio.to_thread(
             lambda: sync().sync_result(
-                transport().request(
+                sync().request_attached(
                     'duplicate_layer', {'layer_id': layer_id}
                 )
             )
@@ -138,7 +138,7 @@ def register_motion_studio_routes(
         body = await request.json()
         return await asyncio.to_thread(
             lambda: sync().sync_result(
-                transport().request(
+                sync().request_attached(
                     'commit_merged_layer', body, timeout_sec=12.0
                 )
             )

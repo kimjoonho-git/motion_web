@@ -275,6 +275,32 @@ class MotionStudioSync:
         ]
         return result
 
+    def request_attached(
+        self,
+        command: str,
+        payload: Optional[Dict[str, Any]] = None,
+        timeout_sec: float = 4.0,
+    ) -> Dict[str, Any]:
+        """스튜디오에 쓰기 · 노드가 프로젝트를 놓쳤으면 다시 붙이고 한 번만 더 · §6-109
+
+        서비스가 다시 뜨면(갱신·재시작) 스튜디오 노드는 빈손으로 시작한다 ·
+        그런데 열려 있던 화면은 그것을 모르고 편집·삭제를 보낸다 · 화면에는
+        프로젝트가 멀쩡히 보이는데 "프로젝트를 선택하세요" 가 뜬다.
+
+        새로 고치면 되던 이유는 **조회 경로만** 노드에 되물어 보고 어긋나면
+        다시 붙이기 때문이다(`prepare`) · 쓰기 경로에는 그 확인이 없었다.
+
+        평소에는 아무 값도 더 들지 않는다 · 붙어 있으면 그대로 한 번에 끝나고,
+        놓쳤을 때만 다시 붙인다 · 왜 놓쳤는지는 묻지 않는다.
+        """
+        result = self.transport.request(command, payload or {}, timeout_sec=timeout_sec)
+        if result.get('project_attached') is not False:
+            return result
+        prepared = self.prepare()
+        if prepared.get('success') is False:
+            return prepared
+        return self.transport.request(command, payload or {}, timeout_sec=timeout_sec)
+
     def request_prepared(
         self, command: str, payload: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
