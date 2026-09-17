@@ -537,8 +537,17 @@ test('unsaved point drafts block curve and axis switches without blocking same-c
     true,
   );
   assert.equal(motionStudioCanSwitchPointDraftCurve('', 'curve-b', true), true);
-  assert.equal(motionStudioShouldProtectPointAxisSelection(true, true, false), true);
+  // 잠그는 이유는 **잃을 것이 있을 때**뿐이다 · §6-129
+  //
+  // 전에는 포인트 곡선 기능이 골라져 있기만 해도 잠갔다 · 이제 그래프의
+  // 포인트를 한 번만 눌러도 그 모드로 들어가므로, 그렇게 잠그면 포인트를 누른
+  // 뒤 축 확인란이 아예 먹지 않는다.
+  assert.equal(motionStudioShouldProtectPointAxisSelection(true, true, true), true);
   assert.equal(motionStudioShouldProtectPointAxisSelection(true, false, true), true);
+  assert.equal(
+    motionStudioShouldProtectPointAxisSelection(true, true, false), false,
+    '바꾼 것이 없는데 잠근다',
+  );
   assert.equal(motionStudioShouldProtectPointAxisSelection(true, false, false), false);
   assert.equal(motionStudioShouldProtectPointAxisSelection(false, true, true), false);
 });
@@ -752,9 +761,15 @@ test('applied point curves can be edited again before the layer is saved', () =>
   )?.[0] || '';
   assert.match(appliedGuard, /editor\?\.working/);
   assert.doesNotMatch(appliedGuard, /editor\?\.original/);
+  // 포인트 곡선 편집만 초안을 따진다 · 구간 편집은 고른 구간에 포인트가
+  // 있으면 된다 · §6-131 · 실제 동작은 studio_editor_controller_drive 가 누른다
   assert.match(
     source,
-    /Boolean\(editor\?\.preview\)[\s\S]*?\(!appliedPointCurve && !creatablePointCurve\)[\s\S]*?\(!pointMode && !pointRangeReady\)/,
+    /disabled = Boolean\(editor\?\.preview\) \|\| \(pointMode[\s\S]*?\(!appliedPointCurve && !creatablePointCurve\)[\s\S]*?: !rangeEditReady\)/,
+  );
+  assert.match(
+    source,
+    /const rangeEditReady = pointRangeReady[\s\S]*?selectedEditorTimeRangePoints\(editor\)\.length > 0/,
   );
 });
 

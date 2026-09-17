@@ -393,3 +393,68 @@ test('LOCK 주인 모듈은 방식과 고른 것을 따로 다룬다', () => {
   // 읽는 것(`=== 'range'`)은 되고, 바꾸는 것(`= ...`)은 안 된다
   assert.doesNotMatch(release, /editor\.selectionMode = (?!=)/);
 });
+
+// ------------------------------------- 축을 고르면 그 축만 그려진다 · §6-129
+//
+// 포인트를 한 번 누르면 포인트 곡선 모드로 들어간다 · 그때 축 선택을 잠가
+// 버리면 확인란을 눌러도 그래프가 따라오지 않는다 · 잠그는 이유는 **잃을 것이
+// 있을 때**, 곧 반영 전 포인트 변경이 있을 때뿐이다.
+
+import {
+  motionStudioShouldProtectPointAxisSelection,
+} from '../static/js/motion_studio_point_model.js';
+import {
+  drawMotionStudioEditorGraph,
+} from '../static/js/motion_studio_graph.js';
+
+test('LOCK 바꾼 것이 없으면 축 선택을 잠그지 않는다', () => {
+  // 포인트를 눌러 작업본만 들고 있는 상태 · 확인란은 먹어야 한다
+  assert.equal(motionStudioShouldProtectPointAxisSelection(true, true, false), false);
+  assert.equal(motionStudioShouldProtectPointAxisSelection(true, false, false), false);
+  // 반영 전 변경이 있으면 잠근다 · 축을 바꾸면 그 변경이 사라진다
+  assert.equal(motionStudioShouldProtectPointAxisSelection(true, true, true), true);
+});
+
+test('LOCK 고른 축만 그래프에 그려진다', () => {
+  const layer = layerOf(['1-1', '1-2', '1-3']);
+  const legendOf = (selected) => {
+    let html = '';
+    const canvas = {
+      getBoundingClientRect: () => ({ width: 900, height: 400 }),
+      getContext: () => new Proxy({}, {
+        get: (_t, name) => (name === 'measureText'
+          ? () => ({ width: 10 }) : () => {}),
+        set: () => true,
+      }),
+      width: 900, height: 400,
+    };
+    drawMotionStudioEditorGraph({
+      editor: { original: layer, working: layer, view: null },
+      canvas,
+      legend: { set innerHTML(value) { html = value; } },
+      selectedMotionIds: selected,
+      devicePixelRatio: 1,
+    });
+    return html;
+  };
+
+  const one = legendOf(['1-2']);
+  assert.ok(one.includes('1-2'), '고른 축이 안 보인다');
+  assert.ok(!one.includes('>1-1<'), '안 고른 축이 보인다');
+  assert.ok(!one.includes('>1-3<'), '안 고른 축이 보인다');
+
+  const all = legendOf(['1-1', '1-2', '1-3']);
+  for (const motionId of ['1-1', '1-2', '1-3']) {
+    assert.ok(all.includes(motionId), `${motionId} 이 빠졌다`);
+  }
+
+  const none = legendOf([]);
+  assert.ok(!none.includes('>1-1<') && !none.includes('>1-2<'), '아무것도 안 골랐는데 그려진다');
+});
+
+test('LOCK 축 선택이 바뀌면 그 축 임시 작업본을 놓는다', () => {
+  const handler = CONTROLLER.slice(
+    CONTROLLER.indexOf('const onEditorAxisSelectionChange'),
+  ).slice(0, 900);
+  assert.match(handler, /editor\.pointDraft = null;/, '고르지 않은 축의 작업본이 남는다');
+});

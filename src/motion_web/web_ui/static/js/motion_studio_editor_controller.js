@@ -77,6 +77,12 @@ import {
   createMotionStudioAxisEditorController,
   motionStudioValidMotionId,
 } from './motion_studio_axis_editor.js';
+import {
+  clearPendingPoint,
+  clearPicks,
+  releaseRange,
+  selectPoint,
+} from './motion_studio_editor_selection.js';
 import { showConfirm } from './ui_dialogs.js';
 
 const POINT_RANGE_EDIT_OPERATIONS = new Set([
@@ -696,11 +702,27 @@ export function createMotionStudioEditorController({
     }
     if (el.studioEditorUpdateButton) el.studioEditorUpdateButton.disabled = !editor?.preview;
     if (el.studioEditorApplyButton) {
-      el.studioEditorApplyButton.disabled = (
-        Boolean(editor?.preview)
-        || (!appliedPointCurve && !creatablePointCurve)
-        || (!pointMode && !pointRangeReady)
-      );
+      // 무엇이 있어야 미리보기를 할 수 있는가 · §6-131
+      //
+      // 포인트 곡선 편집은 **편집 중인 초안**이 있어야 한다 · 그런데 구간
+      // 편집(시간·모션값 이동·배율)은 초안과 아무 상관이 없다 · 고른 축의
+      // 고른 구간에 포인트가 있으면 된다.
+      //
+      // 전에는 둘 다 `appliedPointCurve` 하나로 막았다 · 포인트 곡선을 먼저
+      // 골라야만 구간 편집을 할 수 있던 시절의 규칙이다 · 이제는 포인트를
+      // 누르지 않고 구간만 잡을 수 있어서, 전체 포인트를 생성해 두고도
+      // 「변경 미리보기」가 끝까지 눌리지 않았다.
+      //
+      // 구간 복사·삭제는 이미 이 규칙을 쓴다 (`rangeUsable`) · 같은 질문에
+      // 같은 답을 주도록 맞춘다.
+      const rangeEditReady = pointRangeReady
+        && selectedEditorTimeRangePoints(editor).length > 0;
+      el.studioEditorApplyButton.disabled = Boolean(editor?.preview) || (pointMode
+        ? (!appliedPointCurve && !creatablePointCurve)
+        : !rangeEditReady);
+      el.studioEditorApplyButton.title = pointMode || rangeEditReady
+        ? '고른 구간·포인트에 편집을 적용해 결과를 미리 봅니다'
+        : '먼저 「구간 선택」으로 시작·끝을 찍으세요 · 그 구간에 포인트가 있어야 합니다';
     }
     if (el.studioEditorSaveButton) {
       el.studioEditorSaveButton.disabled = (
@@ -1264,6 +1286,17 @@ export function createMotionStudioEditorController({
     bound = true;
     const onEditorAxisSelectionChange = () => {
       if (protectPointDraftAxisSelection()) return;
+      // 더는 고르지 않은 축의 임시 작업본은 놓는다 · 그 축 그래프가 사라지는데
+      // 편집 대상으로 남아 있으면 앞뒤가 안 맞는다 · §6-129
+      const editor = state.editor;
+      const stillSelected = new Set(editorSelectedMotionIds());
+      if (
+        editor?.pointDraft
+        && !stillSelected.has(String(editor.pointDraft.motion_id || ''))
+      ) {
+        editor.pointDraft = null;
+        selectPoint(editor, '');
+      }
       resetEditorValueView({ unlock: true });
       clearPendingPointCandidate();
       clearEditorPointRange(state.editor);

@@ -166,12 +166,22 @@ export function motionStudioCanSwitchPointDraftCurve(
   return !active || active === target || !hasUnsavedChanges;
 }
 
+/** 축 선택을 잠가야 하는가 · §6-129
+ *
+ * 잠그는 이유는 **잃을 것이 있을 때**뿐이다 · 반영 전 포인트 변경이 있는데
+ * 축 선택을 바꾸면 그 변경이 사라진다.
+ *
+ * 전에는 「포인트 곡선 기능이 골라져 있으면」도 잠갔다 · 그런데 이제 그래프의
+ * 포인트를 한 번만 눌러도 포인트 곡선 모드로 들어간다 · 그래서 포인트를 누른
+ * 뒤에는 축 확인란이 먹지 않고, 그래프가 한 축만 보이거나 전체가 그대로
+ * 남았다 · 바꾼 것이 없으면 잠글 이유가 없다.
+ */
 export function motionStudioShouldProtectPointAxisSelection(
   hasPointDraft,
-  pointMode,
+  _pointMode,
   hasUnsavedChanges,
 ) {
-  return Boolean(hasPointDraft) && (Boolean(pointMode) || Boolean(hasUnsavedChanges));
+  return Boolean(hasPointDraft) && Boolean(hasUnsavedChanges);
 }
 
 export function motionStudioPointCurveAtTime(
