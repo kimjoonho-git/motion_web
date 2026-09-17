@@ -413,3 +413,24 @@
 .peer-status-dot.online { background-color: #22c55e; }
 .peer-status-dot.offline { background-color: #ef4444; }
 .peer-status-dot.warning { background-color: #f59e0b; }
+
+/* 스케줄 범위 안내 · 발화해도 실행되지 않는 상태를 목록 위에 띄운다 · §6-133 */
+.schedule-scope-notice {
+  margin: 0 0 16px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #a0aec0;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.schedule-scope-notice.schedule-scope-warning {
+  color: #f6e05e;
+  background: rgba(246, 224, 94, 0.12);
+}
+
+.schedule-scope-notice.schedule-scope-blocked {
+  color: #90cdf4;
+  background: rgba(144, 205, 244, 0.12);
+}

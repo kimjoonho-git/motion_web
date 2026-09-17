@@ -52,7 +52,6 @@ def test_coordination_lives_in_one_screen():
         'id="coordinationStartContinuousButton"',
         'id="coordinationInitializeButton"', 'id="coordinationStopNowButton"',
         'id="coordinationStopAfterButton"', 'id="motionRunPeerRows"',
-        'id="btnScheduleModalCoord"',
     ):
         assert marker in html, f'{marker} 가 연동 화면에 없다'
 

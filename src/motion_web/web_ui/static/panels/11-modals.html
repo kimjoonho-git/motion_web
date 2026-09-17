@@ -86,8 +86,10 @@
           </div>
           <button id="btnCloseScheduleModal" type="button" style="background: none; border: none; color: #a0aec0; font-size: 20px; cursor: pointer;">&times;</button>
         </div>
-        <p style="color: #a0aec0; font-size: 13px; margin-bottom: 16px;">
-          마스터 PC 전용 스케줄러. 시작 시각 도달 시 "연속 시작", 종료 도달 시 "현재 회차후 정지"를 실행합니다.
+        <!-- 고정 문구였다 · 연동을 켠 적 없는 PC 에도 "마스터 PC 전용" 이라고
+             떴다 · 이제 상태에 따라 갈린다 · §6-133 -->
+        <p id="scheduleScopeNotice" class="schedule-scope-notice">
+          스케줄러 상태를 확인하고 있습니다.
         </p>
         <div id="scheduleListContainer" style="max-height: 350px; overflow-y: auto; margin-bottom: 20px; background: #2d3748; padding: 12px; border-radius: 6px;">
           <div class="text-center text-muted py-4">스케줄 목록을 불러오는 중...</div>

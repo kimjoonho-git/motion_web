@@ -71,6 +71,26 @@ class CoordinationWebBridge:
             'runtime': runtime,
         }
 
+    def session_summary(self) -> Dict[str, Any]:
+        """연동을 쓰는가 · 지금 그룹에 들어가 있는가 · §6-133
+
+        둘은 다른 값이다. `enabled` 는 설정 파일에 영구히 남고, `joined` 는
+        조정 노드의 메모리에만 있어 재시작하면 `enabled` 를 따라 되돌아간다.
+
+        스케줄은 `enabled` 를 보고 그룹으로 쏘는데, 실제 발화는 `joined` 가
+        아니면 조정 노드가 거부한다 · 그 어긋남이 로그에만 남아 "스케줄이
+        발화했는데 아무 일도 안 났다" 가 됐다 · §6-68 과 같은 모양이다.
+        """
+        snapshot = self.snapshot()
+        runtime = snapshot.get('runtime') or {}
+        runtime = runtime if isinstance(runtime, Mapping) else {}
+        config = runtime.get('config') if isinstance(runtime.get('config'), Mapping) else {}
+        return {
+            'enabled': bool(config.get('enabled', False)),
+            'joined': bool(runtime.get('joined', False)),
+            'node_connected': bool(snapshot.get('node_connected')),
+        }
+
     def local_execution_blocker(self) -> str:
         """Return why a local motion action conflicts with upper ownership."""
         runtime = self.snapshot().get('runtime') or {}

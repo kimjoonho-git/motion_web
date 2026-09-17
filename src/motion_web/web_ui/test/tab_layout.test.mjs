@@ -22,6 +22,8 @@ const coordination = readFileSync(
   new URL('../static/js/coordination.js', import.meta.url), 'utf8');
 const motionData = readFileSync(
   new URL('../static/js/motion_data.js', import.meta.url), 'utf8');
+const scheduleManager = readFileSync(
+  new URL('../static/js/schedule_manager.js', import.meta.url), 'utf8');
 
 /** 이 요소가 어느 탭 안에 있나. */
 function panelOf(id) {
@@ -48,9 +50,18 @@ test('그룹에 관한 것은 전부 PC 연동 설정 탭에 있다', () => {
   assert.equal(panelOf('motionRunPeerRows'), 'coordination', '각 PC 진행');
   assert.equal(panelOf('coordinationExecutionState'), 'coordination', '그룹 실행 상태');
   assert.equal(panelOf('coordinationAcknowledgeErrorButton'), 'coordination', '그룹 오류 확인');
-  assert.equal(panelOf('btnScheduleModalCoord'), 'coordination', '모션 스케줄');
   assert.equal(panelOf('coordinationAutoPlayToggle'), 'coordination', '부팅 시 자동 재생');
   assert.equal(panelOf('midiTargetChoices'), 'coordination', 'MIDI 사용 PC');
+});
+
+test('스케줄 진입점은 맨 위 한 곳뿐이다', () => {
+  // 스케줄은 연동 전용이 아니다 · 연동을 쓰면 그룹이 함께 움직이고 안 쓰면
+  // 이 PC 만 움직일 뿐, 같은 스케줄 한 벌이다 · 진입점이 둘이면 "연동
+  // 스케줄과 그냥 스케줄이 따로 있나" 로 읽힌다 · §6-133
+  assert.equal(panelOf('btnScheduleModal'), null, '맨 위 상단 바');
+  assert.doesNotMatch(html, /btnScheduleModalCoord/);
+  assert.doesNotMatch(html, /scheduleStatusBadgeCoord/);
+  assert.doesNotMatch(scheduleManager, /Coord'/);
 });
 
 test('탭 이름이 "설정" 이라고 말해 준다', () => {

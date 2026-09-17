@@ -166,19 +166,21 @@
           </div>
         </section>
 
-        <!-- 4. 예약 · 그룹 자동 재생과 스케줄은 그룹 일이다 -->
-        <section class="motion-file-subsection" id="coordinationAutoPlayGroup" style="display: none;" aria-label="그룹 예약 실행">
+        <!-- 4. 그룹 자동 재생 · 스케줄은 여기 없다 · §6-133
+             스케줄은 연동 전용이 아니다 · 연동을 쓰면 그룹이 함께 움직이고
+             안 쓰면 이 PC 만 움직일 뿐, 같은 스케줄 한 벌이다 · 진입점이
+             둘이면 "연동 스케줄과 그냥 스케줄이 따로 있나" 로 읽힌다. -->
+        <section class="motion-file-subsection" id="coordinationAutoPlayGroup" style="display: none;" aria-label="그룹 자동 재생">
           <div class="section-head compact">
-            <strong>4. 그룹 예약 실행</strong>
-            <span id="scheduleStatusBadgeCoord">스케줄러: 확인 중</span>
+            <strong>4. 그룹 자동 재생</strong>
           </div>
           <div class="registry-actions">
             <label class="motion-automation-toggle">
               <input id="coordinationAutoPlayToggle" type="checkbox">
               <span>그룹 부팅 시 자동 재생</span>
             </label>
-            <button id="btnScheduleModalCoord" type="button" class="primary">📅 모션 스케줄</button>
           </div>
+          <small>시각에 맞춘 실행은 화면 맨 위 「📅 모션 스케줄」에서 설정합니다 · 연동 중이면 그룹 전체가 함께 실행됩니다.</small>
         </section>
 
         <section class="motion-file-subsection" aria-label="MIDI 사용 PC">

@@ -92,6 +92,16 @@ def test_schedule_button_is_disabled_on_a_slave():
         / 'web_ui' / 'static' / 'js' / 'schedule_manager.js'
     ).read_text(encoding='utf-8')
     start = manager.index('updateStatusBadge()')
-    body = manager[start:start + 1400]
-    assert 'button.disabled = !owner' in body, '슬레이브에서 버튼이 잠기지 않는다'
-    assert '마스터 PC 에서 설정' in body, '왜 못 쓰는지 알려주지 않는다'
+    body = manager[start:start + 1600]
+    # 무엇을 잠글지는 `schedule_scope.js` 가 정한다 · 네 상태를 가른다 · §6-133
+    # (연동 안 씀 · 마스터 · 마스터인데 빠짐 · 슬레이브)
+    assert 'motionScheduleBadgeState(this.status)' in body, '상태 판단을 쓰지 않는다'
+    assert 'button.disabled = !state.canEdit' in body, '슬레이브에서 버튼이 잠기지 않는다'
+    assert 'state.blockedReason' in body, '왜 못 쓰는지 알려주지 않는다'
+
+    scope = (
+        Path(__file__).resolve().parents[2]
+        / 'web_ui' / 'static' / 'js' / 'schedule_scope.js'
+    ).read_text(encoding='utf-8')
+    assert '마스터 PC 에서 설정' in scope, '슬레이브에게 어디서 설정하는지 알려주지 않는다'
+    assert '시각이 되어도 실행되지 않습니다' in scope, '빠져 있을 때 조용히 실패한다'

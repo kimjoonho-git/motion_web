@@ -2,6 +2,10 @@
  * Motion Schedule Management Module
  * Connects with /api/schedule REST endpoints and handles Schedule Modal UI
  */
+import {
+    motionScheduleBadgeState,
+    motionScheduleScopeNote,
+} from './schedule_scope.js';
 
 const ScheduleManager = {
     schedules: [],
@@ -34,11 +38,6 @@ const ScheduleManager = {
         if (scheduleBtn) {
             scheduleBtn.addEventListener('click', () => this.openScheduleModal());
         }
-        const scheduleBtnCoord = document.getElementById('btnScheduleModalCoord');
-        if (scheduleBtnCoord) {
-            scheduleBtnCoord.addEventListener('click', () => this.openScheduleModal());
-        }
-
         const closeBtn = document.getElementById('btnCloseScheduleModal');
         if (closeBtn) {
             closeBtn.addEventListener('click', () => this.closeScheduleModal());
@@ -83,32 +82,35 @@ const ScheduleManager = {
     },
 
     updateStatusBadge() {
-        const badge = document.getElementById('scheduleStatusBadge');
-        const badgeCoord = document.getElementById('scheduleStatusBadgeCoord');
-        if (this.status) {
-            // 연동 슬레이브는 스케줄을 만들어도 발화하지 않는다 · 노드가 마스터가
-            // 아니면 타이머를 건너뛴다. "대기"로 읽히면 나중에 도는 줄 안다 · §6-69
-            const owner = this.status.is_master;
-            const text = owner
-                ? `스케줄러: 마스터 (${this.status.schedule_count || 0}개 등록)`
-                : '스케줄러: 슬레이브 · 마스터 PC 에서 설정';
-            const cls = owner ? 'badge bg-success me-2' : 'badge bg-secondary me-2';
-            const blockedTitle = '이 PC 는 연동 슬레이브라 스케줄을 설정할 수 없습니다 · 마스터 PC 에서 설정하세요';
-            ['btnScheduleModal', 'btnScheduleModalCoord'].forEach((id) => {
-                const button = document.getElementById(id);
-                if (!button) return;
-                button.disabled = !owner;
-                button.title = owner ? '' : blockedTitle;
-            });
+        // 네 가지 상태를 가른다 · 연동 안 씀 · 마스터 · 마스터인데 빠짐 ·
+        // 슬레이브 · 판단은 `schedule_scope.js` 가 한다 · §6-133
+        const state = motionScheduleBadgeState(this.status);
+        const TONE_CLASS = {
+            ok: 'badge bg-success me-2',
+            warn: 'badge bg-warning me-2',
+            muted: 'badge bg-secondary me-2',
+        };
 
-            if (badge) {
-                badge.className = cls;
-                badge.textContent = text;
-            }
-            if (badgeCoord) {
-                badgeCoord.className = cls;
-                badgeCoord.textContent = text;
-            }
+        const button = document.getElementById('btnScheduleModal');
+        if (button) {
+            button.disabled = !state.canEdit;
+            button.title = state.blockedReason || state.warning || '';
+        }
+
+        const badge = document.getElementById('scheduleStatusBadge');
+        if (badge) {
+            badge.className = TONE_CLASS[state.tone] || TONE_CLASS.muted;
+            badge.textContent = state.text;
+        }
+
+        // 발화해도 실행되지 않는 상태는 목록 위에 띄운다 · 전에는 로그에만
+        // 남아서 "스케줄이 발화했는데 아무 일도 안 났다" 가 됐다 · §6-68
+        const notice = document.getElementById('scheduleScopeNotice');
+        if (notice) {
+            const message = state.warning || state.blockedReason;
+            notice.textContent = message || motionScheduleScopeNote(this.status);
+            notice.classList.toggle('schedule-scope-warning', Boolean(state.warning));
+            notice.classList.toggle('schedule-scope-blocked', Boolean(state.blockedReason));
         }
     },
 

@@ -104,16 +104,37 @@ def register_schedule_routes(app: FastAPI, bridge, project_call) -> None:
             raise HTTPException(status_code=404, detail="Schedule not found.")
         return {"status": "ok", "schedule_id": schedule_id, "enabled": False}
 
+    def _coordination_session():
+        """연동을 쓰는가 · 지금 그룹에 들어가 있는가 · §6-133
+
+        스케줄은 `enabled` 를 보고 그룹으로 쏘지만, 실제 발화는 `joined` 가
+        아니면 조정 노드가 거부한다 · 화면이 그 어긋남을 말할 수 있게 둘 다
+        내려준다. 조정 노드가 없는 PC 에서도 status 는 떠야 하므로 실패는
+        "연동 안 씀" 으로 본다.
+        """
+        service = getattr(bridge, '_coordination_web_bridge', None)
+        if service is None:
+            return {'enabled': False, 'joined': False, 'node_connected': False}
+        try:
+            return service.session_summary()
+        except (OSError, ValueError) as exc:
+            logger.debug("연동 세션 상태 조회 실패 · %s", exc)
+            return {'enabled': False, 'joined': False, 'node_connected': False}
+
     @app.get('/api/schedule/status')
     async def get_schedule_status():
         _sync_store_project()
         role = resolve_master_role(package_hint=PACKAGE_HINT)
         if not role.is_master:
             logger.debug("마스터 아님 · %s", role.reason)
+        session = _coordination_session()
 
         return {
             "status": "ok",
             "is_master": role.is_master,
             "active_project_id": store.current_project_id,
-            "schedule_count": len(store.list_schedules())
+            "schedule_count": len(store.list_schedules()),
+            "coordination_enabled": session['enabled'],
+            "coordination_joined": session['joined'],
+            "coordination_node_connected": session['node_connected'],
         }
