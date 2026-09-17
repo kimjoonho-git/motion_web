@@ -1061,13 +1061,13 @@ export function createMotionStudioController({
         );
       },
       onPlay: ({ initialMoveTimeSec }) => {
-        if (!requireMotorActionReady('합성 미리보기 재생')) return;
+        if (!requireMotorActionReady('레이어 재생')) return;
         showLayerGraph({ composition: true });
         runMotorStart(
           () => startMotionStudioPlayback({
             initial_move_time_sec: initialMoveTimeSec,
           }),
-          '합성 미리보기 초기 위치 이동 요청 중',
+          '레이어 재생 초기 위치 이동 요청 중',
         );
       },
       // The helper disables duplicate stop clicks before this callback runs.
@@ -1333,9 +1333,22 @@ export function createMotionStudioController({
         state.mergeLayerIds.clear();
         state.mergeAppendLayerId = '';
         state.layerManagerTab = 'merge';
-        state.mergeResultMessage = appendLayerId
+        // 이음매에서 값이 얼마나 튀는지 알려 준다 · 막지는 않는다 · §6-116
+        //
+        // 앞 레이어의 마지막 값과 뒤 레이어의 첫 값 사이에는 아무것도 없다 ·
+        // 20ms 한 칸에 그 차이만큼 건너뛰고, 모터에 그대로 나간다.
+        const seam = (result.merge_report?.append_seam || [])
+          .filter((item) => Number(item.step_deg) >= 1);
+        const seamText = seam.length
+          ? ` · 이음매 ${Number(seam[0].time_sec).toFixed(2)}초에서 `
+            + seam.slice(0, 3).map(
+              (item) => `${item.motion_id} ${Number(item.step_deg).toFixed(1)}°`,
+            ).join(', ')
+            + `${seam.length > 3 ? ' 외' : ''} 튑니다 · 재생 전에 확인하세요`
+          : '';
+        state.mergeResultMessage = (appendLayerId
           ? `뒤에 이어 붙이기 성공 · '${name}' 레이어를 생성했습니다`
-          : `합치기 성공 · '${name}' 레이어를 생성했습니다`;
+          : `합치기 성공 · '${name}' 레이어를 생성했습니다`) + seamText;
         state.mergeResultError = false;
         render();
       } else {

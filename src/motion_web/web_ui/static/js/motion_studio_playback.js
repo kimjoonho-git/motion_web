@@ -51,7 +51,7 @@ export function motionStudioPlaybackView({
     playheadTime: playing || stopping || recording ? Math.min(total, elapsed) : 0,
     message: initializing && phase !== 'countdown' && phaseTotal > 0
       ? `초기 위치 이동 ${timeText(phaseElapsed)} / ${timeText(phaseTotal)} · 완료 후 3초 준비 뒤 재생합니다.`
-      : String(status?.message || '합성 미리보기를 시작하면 진행 위치가 그래프에 표시됩니다.'),
+      : String(status?.message || '레이어 재생을 시작하면 진행 위치가 그래프에 표시됩니다.'),
   };
 }
 

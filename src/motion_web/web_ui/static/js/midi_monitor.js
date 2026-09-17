@@ -14,6 +14,13 @@ import { showConfirm } from './ui_dialogs.js';
 const MIDI_MAX = 16383;
 const CHANNEL_COUNT = 8;
 const FILTER_LEVEL_MAX = 13;
+
+// 새 채널의 필터 기본값 · 파이썬 쪽 bank_manager.FILTER_LEVEL_DEFAULT 와 같은 값
+//
+// 0 이면 페이더 값이 그대로 나가 포인트가 많아지고 모터도 급하게 따라간다 ·
+// 실제 녹화 18.7초 한 축이 0단계 218개, 7단계 95개(0.5° 기준)다 · 대신 약
+// 0.4초 뒤처진다.
+const FILTER_LEVEL_DEFAULT = 7;
 const MOTION_ID_PATTERN = /^[1-9]\d*-[1-9]\d*$/;
 
 function numberValue(value, fallback = 0) {
@@ -46,7 +53,7 @@ function defaultMapping(channel) {
     min_percent: 0,
     max_percent: 100,
     reversed: false,
-    filter_level: 0,
+    filter_level: FILTER_LEVEL_DEFAULT,
   };
 }
 

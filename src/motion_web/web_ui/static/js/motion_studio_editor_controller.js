@@ -1,4 +1,12 @@
 import {
+  MOTION_STUDIO_SHORTCUT_BUTTONS,
+  MOTION_STUDIO_SHORTCUT_LABELS,
+  motionStudioEditorShortcut,
+  motionStudioNeighbourPointId,
+  motionStudioShortcutAllowed,
+  motionStudioTypingTarget,
+} from './motion_studio_editor_shortcuts.js';
+import {
   editMotionStudioLayer,
   saveMotionStudioLayerData,
 } from './api.js';
@@ -1554,6 +1562,65 @@ export function createMotionStudioEditorController({
         renderEditor();
       }
     };
+    function editorModalOpen() {
+      const modal = el.studioLayerEditorModal;
+      return Boolean(state.editor) && Boolean(modal)
+        && !modal.classList.contains('hidden');
+    }
+
+    function saveConfirmOpen() {
+      const modal = el.studioEditorSaveConfirmModal;
+      return Boolean(modal) && !modal.classList.contains('hidden');
+    }
+
+    function moveSelectedPoint(step) {
+      const editor = state.editor;
+      const points = editor?.pointDraft?.points;
+      const next = motionStudioNeighbourPointId(
+        points, editor?.selectedPointId, step,
+      );
+      if (!next || next === editor.selectedPointId) return false;
+      editor.selectedPointId = next;
+      renderEditor();
+      return true;
+    }
+
+    /** 버튼 설명에 키를 같이 적는다 · 키를 만들어도 모르면 없는 것과 같다 */
+    function labelEditorShortcuts() {
+      Object.entries(MOTION_STUDIO_SHORTCUT_LABELS).forEach(([name, keyText]) => {
+        const button = el[name];
+        if (!button || button.dataset.shortcutLabelled === '1') return;
+        const existing = button.getAttribute('title') || button.textContent || '';
+        button.setAttribute('title', `${existing.trim()} (${keyText})`.trim());
+        button.dataset.shortcutLabelled = '1';
+      });
+    }
+
+    function bindEditorShortcuts() {
+      labelEditorShortcuts();
+      document.addEventListener('keydown', (event) => {
+        // 편집 동작만 받는다 · 모터가 도는 것과 저장은 마우스로만 · §6-118
+        if (!motionStudioShortcutAllowed({
+          editorOpen: editorModalOpen(),
+          saveConfirmOpen: saveConfirmOpen(),
+          typing: motionStudioTypingTarget(event.target),
+        })) return;
+        const action = motionStudioEditorShortcut(event);
+        if (!action) return;
+        if (action === 'previousPoint' || action === 'nextPoint') {
+          if (moveSelectedPoint(action === 'nextPoint' ? 1 : -1)) {
+            event.preventDefault();
+          }
+          return;
+        }
+        const button = el[MOTION_STUDIO_SHORTCUT_BUTTONS[action]];
+        // 버튼이 막혀 있으면 키도 막힌다 · 조건은 한 곳에서만 정한다
+        if (!button || button.disabled) return;
+        event.preventDefault();
+        button.click();
+      });
+    }
+
     (el.studioEditorOperationButtons || []).forEach((button) => {
       button.addEventListener('click', () => onEditorOperationButton(button));
     });
@@ -1565,6 +1632,7 @@ export function createMotionStudioEditorController({
     el.studioEditorUndoButton?.addEventListener('click', onEditorUndo);
     el.studioEditorRedoButton?.addEventListener('click', onEditorRedo);
     el.studioEditorSaveButton?.addEventListener('click', onEditorSave);
+    bindEditorShortcuts();
     editorViewport.bind();
     const applyDraggedPoint = async () => {
       const editor = state.editor;

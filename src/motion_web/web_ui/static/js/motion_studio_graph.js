@@ -533,11 +533,23 @@ export function drawMotionStudioEditorGraph({
     }
   }
   if (legend) {
+    // 지금 그래프에 찍힌 포인트가 몇 개인지 · 축마다, 그리고 합계
+    const shownCurves = displayedCurves.filter(
+      (curve) => selected.has(curve.motion_id) && (curve.points || []).length,
+    );
+    const pointTotal = shownCurves.reduce(
+      (sum, curve) => sum + (curve.points || []).length, 0,
+    );
+    const countText = shownCurves.length === 0 ? '' : (shownCurves.length === 1
+      ? `<span>포인트 ${pointTotal}개</span>`
+      : `<span>포인트 ${shownCurves.map(
+        (curve) => `${escapeHtml(curve.motion_id)} ${(curve.points || []).length}`,
+      ).join(' · ')} · 합계 ${pointTotal}개</span>`);
     legend.innerHTML = ids.map((motionId, index) => (
       `<span><i style="background:${colors[index % colors.length]}"></i>${escapeHtml(motionId)}</span>`
     )).join('') + (editor.preview
       ? '<span>점선: 저장 원본 · 실선: 결과 미리보기</span>'
-      : '<span>점선: 저장 원본 · 실선: 현재 작업본</span>');
+      : '<span>점선: 저장 원본 · 실선: 현재 작업본</span>') + countText;
   }
   return true;
 }
