@@ -230,6 +230,51 @@ function drawTrackLines({
   context.restore();
 }
 
+/** 모션축 한계를 점선으로 · §6-120
+ *
+ * 이 축이 갈 수 있는 끝이 어디인지 그래프에 보이지 않았다 · 포인트를 옮기다
+ * 한계를 넘겨도 그 자리에서는 알 수 없고, 나중에 실행할 때에야 걸렸다.
+ *
+ * 화면에 보이는 값 범위 안에 있을 때만 그린다 · 밖이면 선이 테두리에 붙어
+ * 눈속임이 된다.
+ */
+export function drawMotionStudioAxisLimits(
+  context, padding, plotWidth, minValue, maxValue, yFor, limits,
+) {
+  const list = Array.isArray(limits) ? limits : [];
+  if (!list.length) return 0;
+  let drawn = 0;
+  context.save();
+  context.setLineDash([6, 4]);
+  context.lineWidth = 1;
+  context.font = '10px sans-serif';
+  list.forEach((limit) => {
+    const color = limit?.color || '#8a94a0';
+    [['최소', Number(limit?.minValue)], ['최대', Number(limit?.maxValue)]]
+      .forEach(([label, value]) => {
+        if (!Number.isFinite(value)) return;
+        if (value < minValue || value > maxValue) return;
+        const y = yFor(value);
+        context.strokeStyle = color;
+        context.globalAlpha = 0.75;
+        context.beginPath();
+        context.moveTo(padding.left, y);
+        context.lineTo(padding.left + plotWidth, y);
+        context.stroke();
+        context.globalAlpha = 1;
+        context.fillStyle = color;
+        context.fillText(
+          `${limit.motionId} ${label} ${value.toFixed(1)}°`,
+          padding.left + 4,
+          y - 3,
+        );
+        drawn += 1;
+      });
+  });
+  context.restore();
+  return drawn;
+}
+
 export function drawMotionStudioEditorGraph({
   editor,
   canvas,
@@ -240,6 +285,7 @@ export function drawMotionStudioEditorGraph({
   operation = '',
   selectionStartText = '',
   selectionEndText = '',
+  axisLimits = [],
   devicePixelRatio = globalThis.devicePixelRatio || 1,
 }) {
   if (!editor || !canvas) return false;
@@ -370,6 +416,20 @@ export function drawMotionStudioEditorGraph({
   context.fillText(`${viewStart.toFixed(3)}초`, padding.left, height - 12);
   context.fillText(`${viewEnd.toFixed(3)}초`, width - padding.right - 66, height - 12);
   const colors = ['#1f6feb', '#d97706', '#16803c', '#a23ab7', '#d33b3b', '#0f8b8d'];
+  // 모션축 한계 · 점선 · 지금 보이는 축만 · §6-120
+  //
+  // **`colors` 아래에 두어야 한다** · 위에서 부르면 아직 만들어지지 않은
+  // 이름을 건드려 예외가 나고, 그 뒤 그리기가 통째로 멈춘다 · 테두리와
+  // 0° 선만 남고 곡선도 눈금도 안 나왔다.
+  drawMotionStudioAxisLimits(
+    context, padding, plotWidth, minValue, maxValue, yFor,
+    (axisLimits || [])
+      .filter((limit) => selected.has(limit?.motionId))
+      .map((limit) => {
+        const index = ids.indexOf(limit.motionId);
+        return { ...limit, color: colors[(index < 0 ? 0 : index) % colors.length] };
+      }),
+  );
   const drawTracks = (tracks, dashed, alpha) => {
     ids.forEach((motionId, colorIndex) => {
       const points = tracks.get(motionId) || [];

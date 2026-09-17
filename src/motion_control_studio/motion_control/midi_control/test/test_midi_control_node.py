@@ -6,7 +6,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from midi_control.bank_manager import MIDI_CHANNEL_COUNT, MidiBankManager
+from midi_control.bank_manager import (
+    FILTER_LEVEL_DEFAULT,
+    MIDI_CHANNEL_COUNT,
+    MidiBankManager,
+)
 from midi_control.fader_state import FaderStateMachine
 from midi_control.pickup_policy import PickupPolicy
 from midi_control import midi_control_node as midi_node_module
@@ -808,6 +812,9 @@ def playback_follow_node():
     node._banks = MidiBankManager()
     mappings = node._banks.active_bank()['mappings']
     mappings[0]['motion_id'] = '1-1'
+    # 이 검사는 필터가 아니라 **명령 흐름**을 본다 · 기본 필터(7단계)는
+    # 한 번의 페이더 값으로 목표가 거의 안 움직인다 · 필터를 끄고 본다.
+    mappings[0]['filter_level'] = 0
     node._banks.update_bank('bank_1', mappings=mappings)
     node._execution_context_ready = True
     node._raw_channels = [8000] * MIDI_CHANNEL_COUNT
@@ -1246,6 +1253,9 @@ def test_one_selected_fader_creates_same_motion_value_for_two_linked_axes():
     mappings = node._banks.active_bank()['mappings']
     mappings[0]['motion_id'] = '1-1'
     mappings[0]['linked_motion_ids'] = ['1-2']
+    # 이 검사는 필터가 아니라 **명령 흐름**을 본다 · 기본 필터(7단계)는
+    # 한 번의 페이더 값으로 목표가 거의 안 움직인다 · 필터를 끄고 본다.
+    mappings[0]['filter_level'] = 0
     node._banks.update_bank('bank_1', mappings=mappings)
     node._raw_channels = [0] * MIDI_CHANNEL_COUNT
     node._channels = [0.0] * MIDI_CHANNEL_COUNT
@@ -1959,7 +1969,10 @@ def test_select_requires_matching_motion_axis_and_dial_updates_filter():
     node._midi_callback(message(select=True))
     assert node._control_enabled[0] is True
     node._midi_callback(message(select=False, dial=4))
-    assert node._banks.active_bank()['mappings'][0]['filter_level'] == 4
+    # 다이얼은 현재 단계에 **더한다** · 기본값 7 에서 4 를 돌리면 11 이다
+    assert node._banks.active_bank()['mappings'][0]['filter_level'] == (
+        FILTER_LEVEL_DEFAULT + 4
+    )
     node._last_select_toggle_at[0] = time.monotonic() - 1.0
     node._midi_callback(message(select=True, dial=4))
     assert node._control_enabled[0] is False
@@ -1995,6 +2008,9 @@ def test_hand_movement_commands_only_after_soft_takeover_pickup():
     node._banks = MidiBankManager()
     mappings = node._banks.active_bank()['mappings']
     mappings[0]['motion_id'] = '1-1'
+    # 이 검사는 필터가 아니라 **명령 흐름**을 본다 · 기본 필터(7단계)는
+    # 한 번의 페이더 값으로 목표가 거의 안 움직인다 · 필터를 끄고 본다.
+    mappings[0]['filter_level'] = 0
     node._banks.update_bank('bank_1', mappings=mappings)
     node._raw_channels = [0] * MIDI_CHANNEL_COUNT
     node._channels = [0.0] * MIDI_CHANNEL_COUNT
@@ -2315,6 +2331,11 @@ def _surface_node(*, device_connected):
     node._faders = FaderStateMachine(node)
     node._lock = threading.Lock()
     node._banks = MidiBankManager()
+    # 여기서 보는 것은 필터가 아니라 **장치 주인**이다 · 기본 필터(7단계)는
+    # 한 번의 페이더 값으로 목표가 거의 안 움직여 흐름이 가려진다.
+    surface_mappings = node._banks.active_bank()['mappings']
+    surface_mappings[0]['filter_level'] = 0
+    node._banks.update_bank('bank_1', mappings=surface_mappings)
     node._raw_channels = [0] * MIDI_CHANNEL_COUNT
     node._observed_raw_channels = [0] * MIDI_CHANNEL_COUNT
     node._channels = [0.0] * MIDI_CHANNEL_COUNT
@@ -2625,3 +2646,34 @@ def test_normal_playback_still_releases_every_channel():
     node._force_all_select_off_for_playback_locked('모션 동작 종료 · SELECT OFF')
 
     assert not any(node._control_enabled), '평소 재생은 전 채널을 놓아야 한다'
+
+
+# 새 채널의 필터 기본값 · §6-115
+#
+# 0 이면 페이더 값이 그대로 나간다 · 사람 손의 빠른 구간이 그대로 녹화되어
+# 포인트가 많아지고 모터도 급하게 따라간다 · 실제 녹화 18.7초 한 축이
+# 0단계 218개, 7단계 95개(0.5° 기준)다 · 대신 약 0.4초 뒤처진다.
+
+
+def test_a_new_bank_starts_with_the_filter_on():
+    banks = MidiBankManager()
+    levels = [
+        int(item['filter_level'])
+        for item in banks.active_bank()['mappings']
+    ]
+    assert levels == [FILTER_LEVEL_DEFAULT] * MIDI_CHANNEL_COUNT
+    assert FILTER_LEVEL_DEFAULT > 0, '필터가 꺼진 채로 시작한다'
+
+
+def test_a_saved_bank_keeps_its_own_filter_level():
+    """이미 저장한 뱅크는 건드리지 않는다 · 기본값은 새로 만들 때만이다."""
+    banks = MidiBankManager()
+    mappings = banks.active_bank()['mappings']
+    for item in mappings:
+        item['filter_level'] = 0
+    banks.update_bank('bank_1', mappings=mappings)
+
+    assert [
+        int(item['filter_level'])
+        for item in banks.active_bank()['mappings']
+    ] == [0] * MIDI_CHANNEL_COUNT

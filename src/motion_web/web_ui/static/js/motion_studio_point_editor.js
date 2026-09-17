@@ -91,8 +91,12 @@ export function applyMotionStudioCopiedPointRange(editor, curve, result, createP
     point_id: createPointId(),
   }));
   editor.pointDraft = structuredClone(curve);
+  // 붙이는 자리에 있던 포인트는 빼고 넣는다 · 같은 시간에 둘이 있을 수 없다
+  const replaced = new Set(result.replacedPointIds || []);
   editor.pointDraft.points = [
-    ...(editor.pointDraft.points || []),
+    ...(editor.pointDraft.points || []).filter(
+      (point) => !replaced.has(String(point.point_id || '')),
+    ),
     ...copiedPoints,
   ].sort((first, second) => Number(first.time_sec) - Number(second.time_sec));
   editor.selectedPointId = copiedPoints[0]?.point_id || '';
@@ -283,7 +287,7 @@ export function bindMotionStudioPointEditorEvents(context) {
       const errors = {
         invalid_range: '복사할 포인트 구간을 다시 선택하세요.',
         invalid_target: '복사 시작 시간은 0초 이상의 20ms 단위 값이어야 합니다.',
-        time_conflict: '복사 위치에 기존 포인트가 있습니다. 겹치지 않는 시간을 입력하세요.',
+        time_conflict: '복사한 포인트끼리 같은 시간에 겹칩니다. 구간을 다시 선택하세요.',
       };
       setEditorMessage(errors[result.reason] || '포인트 구간을 복사할 수 없습니다.', true);
       return;
@@ -292,11 +296,13 @@ export function bindMotionStudioPointEditorEvents(context) {
     const copiedPoints = applyMotionStudioCopiedPointRange(
       editor, selectedRange.curve, result, () => editorId('point'),
     );
+    const replacedCount = (result.replacedPointIds || []).length;
     activatePointDraftMutation(
       editor,
       `구간 복사 완료 · ${copiedPoints.length}개 포인트 · `
-        + `${result.startSec.toFixed(2)}초 ~ ${result.endSec.toFixed(2)}초 · `
-        + '결과 미리보기로 곡선을 확인하세요.',
+        + `${result.startSec.toFixed(2)}초 ~ ${result.endSec.toFixed(2)}초`
+        + (replacedCount ? ` · 그 자리 기존 포인트 ${replacedCount}개 대체` : '')
+        + ' · 결과 미리보기로 곡선을 확인하세요.',
     );
   });
   el.studioEditorRangeDeleteButton?.addEventListener('click', () => {

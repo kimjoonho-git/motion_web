@@ -13,6 +13,16 @@ OUTPUT_PERCENT_NORMAL_MAX = 100.0
 OUTPUT_PERCENT_MAX = 200.0
 FILTER_LEVEL_MIN = 0
 FILTER_LEVEL_MAX = 13
+
+#: 새 채널의 필터 기본값 · §6-115
+#:
+#: 0 이면 페이더 값이 그대로 나간다 · 사람 손의 빠른 구간이 그대로 녹화되어
+#: 포인트가 많아지고, 모터도 급하게 따라간다 · 실제 녹화로 재보면 18.7초
+#: 한 축이 0 단계 218개, 7 단계 95개(0.5° 기준)다.
+#:
+#: 대신 늦는다 · 7 단계는 2차 저역통과 시정수 0.27초로 약 **0.4초** 뒤처진다 ·
+#: 이미 저장된 뱅크는 건드리지 않는다 · 새로 만드는 채널에만 적용된다.
+FILTER_LEVEL_DEFAULT = 7
 MOTION_ID_PATTERN = re.compile(r'^[1-9]\d*-[1-9]\d*$')
 
 
@@ -50,7 +60,7 @@ class MidiBankManager:
                 'min_percent': OUTPUT_PERCENT_MIN,
                 'max_percent': OUTPUT_PERCENT_NORMAL_MAX,
                 'reversed': False,
-                'filter_level': 0,
+                'filter_level': FILTER_LEVEL_DEFAULT,
             }
             for channel in range(MIDI_CHANNEL_COUNT)
         ]

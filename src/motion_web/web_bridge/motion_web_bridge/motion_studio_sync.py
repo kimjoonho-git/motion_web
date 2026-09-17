@@ -6,6 +6,8 @@ import hashlib
 import json
 from typing import Any, Dict, Optional
 
+from .motion_studio_bridge import STUDIO_REQUEST_TIMEOUT_SEC
+
 
 def _project_tree_category_signature(tree: Any, category: str) -> str:
     rows = []
@@ -216,7 +218,8 @@ class MotionStudioSync:
                 self.session.status.get('state') or 'idle'
             )
         studio_busy = studio_state not in {'idle', 'error'}
-        result = self.transport.request('list', {}, timeout_sec=8.0)
+        result = self.transport.request(
+            'list', {}, timeout_sec=STUDIO_REQUEST_TIMEOUT_SEC)
         current_project = (
             result.get('project')
             if isinstance(result.get('project'), dict) else {}
@@ -255,7 +258,7 @@ class MotionStudioSync:
                     'mapping_file_id': mapping_name,
                     'layers': list(layers_by_id.values()),
                 },
-                timeout_sec=8.0,
+                timeout_sec=STUDIO_REQUEST_TIMEOUT_SEC,
             )
             if result.get('success') is not False:
                 workspace_signatures[project_id] = {
@@ -279,7 +282,7 @@ class MotionStudioSync:
         self,
         command: str,
         payload: Optional[Dict[str, Any]] = None,
-        timeout_sec: float = 4.0,
+        timeout_sec: float = STUDIO_REQUEST_TIMEOUT_SEC,
     ) -> Dict[str, Any]:
         """스튜디오에 쓰기 · 노드가 프로젝트를 놓쳤으면 다시 붙이고 한 번만 더 · §6-109
 
@@ -339,7 +342,7 @@ class MotionStudioSync:
         result = self.transport.request(
             'import_motion_layer',
             {'motion_file_id': payload.get('motion_file_id')},
-            timeout_sec=8.0,
+            timeout_sec=STUDIO_REQUEST_TIMEOUT_SEC,
         )
         result['unified_project'] = True
         result['workspace_project'] = prepared.get('workspace_project')

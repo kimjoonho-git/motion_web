@@ -1032,7 +1032,7 @@ def test_compacting_keeps_the_real_axis_numbers():
 
 
 def test_a_command_that_drives_every_axis_is_left_alone():
-    """합성 미리보기처럼 전 축을 모는 명령은 그대로 나간다."""
+    """레이어 재생처럼 전 축을 모는 명령은 그대로 나간다."""
     supervisor = _midi_supervisor([0, 1])
 
     supervisor._handle_midi_position_batch([

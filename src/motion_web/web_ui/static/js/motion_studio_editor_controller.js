@@ -813,6 +813,12 @@ export function createMotionStudioEditorController({
         ? String(editor.rangeSelection.start.timeSec) : '',
       selectionEndText: Number.isFinite(editor.rangeSelection?.end?.timeSec)
         ? String(editor.rangeSelection.end.timeSec) : '',
+      // 모션축 한계 · 그래프에 점선으로 · §6-120
+      axisLimits: editorSelectedMotionIds()
+        .map((motionId) => motionStudioMotionAxisRange(
+          activeMapping()?.rows || [], motionId,
+        ))
+        .filter(Boolean),
       devicePixelRatio: window.devicePixelRatio || 1,
     });
   }

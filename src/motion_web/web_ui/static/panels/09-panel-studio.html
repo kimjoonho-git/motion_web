@@ -257,7 +257,8 @@
               </section>
             </aside>
             <div class="studio-editor-main">
-              <div class="studio-editor-toolbar">
+            <div class="studio-editor-canvas-wrap"><canvas id="studioEditorGraph" height="360"></canvas>
+<div class="studio-editor-toolbar">
                 <div class="studio-editor-tool-group" aria-label="시간축 도구">
                   <span>시간</span>
                   <button id="studioEditorTimeZoomInButton" type="button">확대</button>
@@ -272,8 +273,8 @@
                 <button id="studioEditorFitSelectionButton" type="button">선택 포인트 맞춤</button>
                 <button id="studioEditorFitAllButton" type="button">전체 맞춤</button>
               </div>
-              <div class="studio-editor-canvas-wrap"><canvas id="studioEditorGraph" height="360"></canvas></div>
-              <div id="studioEditorLegend" class="studio-layer-graph-legend"></div>
+            </div>
+            <div id="studioEditorLegend" class="studio-layer-graph-legend"></div>
               <div class="studio-editor-feedback">
                 <div id="studioEditorSelectedPointSummary" class="studio-editor-selected-point hidden" aria-live="polite">
                   <strong id="studioEditorSelectedPointTitle">선택 포인트</strong>
@@ -368,7 +369,7 @@
                       <strong>포인트·구간 편집</strong>
                       <button id="studioEditorRangeSelectButton" type="button" aria-pressed="false">구간 선택</button>
                     </div>
-                    <span id="studioEditorRangeStatus" class="studio-editor-range-status" aria-live="polite">선택된 축에서 시작·종료 포인트를 선택하세요. 서로 다른 축도 가능합니다.</span>
+                    <span id="studioEditorRangeStatus" class="studio-editor-range-status" aria-live="polite">선택된 축에서 시작·종료 포인트를 선택하세요. 서로 다른 축도 가능합니다. 구간 복사는 「복사 시작(초)」에 적은 시간에 붙이며, 그 자리에 있던 포인트는 대체됩니다.</span>
                     <div class="studio-editor-point-action-row">
                       <strong>포인트</strong>
                       <button id="studioEditorPointAddButton" class="primary" type="button" disabled>포인트 추가</button>

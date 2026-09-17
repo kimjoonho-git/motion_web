@@ -11,6 +11,11 @@ from typing import Any, Callable
 
 from fastapi import FastAPI, HTTPException, Request
 
+from .motion_studio_bridge import (
+    STUDIO_EDITOR_TIMEOUT_SEC,
+    STUDIO_REQUEST_TIMEOUT_SEC,
+)
+
 
 def register_motion_studio_routes(
     app: FastAPI,
@@ -94,7 +99,8 @@ def register_motion_studio_routes(
         return await asyncio.to_thread(
             lambda: sync().sync_result(
                 sync().request_attached(
-                    'replace_layer_data', body, timeout_sec=8.0
+                    'replace_layer_data', body,
+                    timeout_sec=STUDIO_REQUEST_TIMEOUT_SEC
                 )
             )
         )
@@ -123,14 +129,14 @@ def register_motion_studio_routes(
     async def motion_studio_editor_transform(request: Request):
         body = await request.json()
         return await asyncio.to_thread(
-            transport().request_editor, 'edit', body, 12.0
+            transport().request_editor, 'edit', body, STUDIO_EDITOR_TIMEOUT_SEC
         )
 
     @app.post('/api/motion-studio/editor/merge-preview')
     async def motion_studio_editor_merge_preview(request: Request):
         body = await request.json()
         return await asyncio.to_thread(
-            transport().request_editor, 'merge', body, 20.0
+            transport().request_editor, 'merge', body, STUDIO_EDITOR_TIMEOUT_SEC
         )
 
     @app.post('/api/motion-studio/layers/merge')
@@ -139,7 +145,8 @@ def register_motion_studio_routes(
         return await asyncio.to_thread(
             lambda: sync().sync_result(
                 sync().request_attached(
-                    'commit_merged_layer', body, timeout_sec=12.0
+                    'commit_merged_layer', body,
+                    timeout_sec=STUDIO_EDITOR_TIMEOUT_SEC
                 )
             )
         )

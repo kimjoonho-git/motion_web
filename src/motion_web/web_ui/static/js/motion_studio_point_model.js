@@ -108,19 +108,26 @@ export function motionStudioCopyPointRange(
   )) {
     return { ok: false, reason: 'time_conflict' };
   }
-  const existingTimes = (curve?.points || []).map((point) => Number(point.time_sec));
-  if (copiedPoints.some(
-    (point) => existingTimes.some(
-      (timeSec) => Math.abs(timeSec - Number(point.time_sec)) < 0.01,
-    ),
-  )) {
-    return { ok: false, reason: 'time_conflict' };
-  }
+  // 붙이는 자리에 있던 포인트는 **대체한다** · §6-119
+  //
+  // 전에는 거기 포인트가 하나라도 있으면 거부했다 · 그런데 그래프 중간은
+  // 거의 언제나 포인트가 있으므로, 사실상 빈 자리에만 붙일 수 있었다.
+  //
+  // 이음매에서 값이 튀는지는 **검사하지 않는다** · 사용자가 보고 고칠 일이다.
+  const pasteStart = Number(copiedPoints[0].time_sec);
+  const pasteEnd = Number(copiedPoints[copiedPoints.length - 1].time_sec);
+  const replacedPointIds = (curve?.points || [])
+    .filter((point) => {
+      const timeSec = Number(point.time_sec);
+      return timeSec >= pasteStart - 0.01 && timeSec <= pasteEnd + 0.01;
+    })
+    .map((point) => String(point.point_id || ''));
   return {
     ok: true,
     points: copiedPoints,
-    startSec: Number(copiedPoints[0].time_sec),
-    endSec: Number(copiedPoints[copiedPoints.length - 1].time_sec),
+    replacedPointIds,
+    startSec: pasteStart,
+    endSec: pasteEnd,
   };
 }
 

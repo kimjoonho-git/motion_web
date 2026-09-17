@@ -14,6 +14,21 @@ from typing import Any, Dict, Optional
 from std_msgs.msg import String
 
 
+#: 스튜디오 요청을 기다리는 시간 · §6-114
+#:
+#: 10분짜리 모션(30,000프레임)은 저장 1.1초, 읽기 0.7초, 응답 6.5MB 다 ·
+#: 4초로는 조금 느린 PC 에서 아슬아슬하다.
+#:
+#: **시간 초과가 곧 취소는 아니다** · 노드는 하던 일을 끝내고 저장한다 ·
+#: 화면에만 "응답 시간 초과" 가 뜨고 실제로는 바뀌어 있는, 가장 나쁜 모양이
+#: 된다 · 그래서 넉넉하게 잡는다 · 노드가 정말 죽었을 때만 이 시간을 다 쓴다.
+STUDIO_REQUEST_TIMEOUT_SEC = 20.0
+
+#: 포인트 생성·편집은 표본 수에 비례해 오래 걸린다 · 10분 모션의 축 하나에
+#: 5초 안팎이고, 느린 PC 는 그 몇 배다.
+STUDIO_EDITOR_TIMEOUT_SEC = 60.0
+
+
 class MotionStudioRosBridge:
     def __init__(
         self, bridge: Any, session: Any, context_id: Any = None, project: Any = None
@@ -71,12 +86,12 @@ class MotionStudioRosBridge:
             self.session.editor_store.store(request_id, payload)
 
     def wait_for_result(
-        self, request_id: str, timeout_sec: float = 3.0
+        self, request_id: str, timeout_sec: float = STUDIO_REQUEST_TIMEOUT_SEC
     ) -> Optional[Dict[str, Any]]:
         return self.session.store.wait(request_id, timeout_sec)
 
     def wait_for_editor_result(
-        self, request_id: str, timeout_sec: float = 4.0
+        self, request_id: str, timeout_sec: float = STUDIO_EDITOR_TIMEOUT_SEC
     ) -> Optional[Dict[str, Any]]:
         return self.session.editor_store.wait(request_id, timeout_sec)
 
@@ -84,7 +99,7 @@ class MotionStudioRosBridge:
         self,
         command: str,
         payload: Optional[Dict[str, Any]] = None,
-        timeout_sec: float = 4.0,
+        timeout_sec: float = STUDIO_REQUEST_TIMEOUT_SEC,
         start_generation: Optional[int] = None,
     ) -> Dict[str, Any]:
         bridge = self.bridge
@@ -135,7 +150,7 @@ class MotionStudioRosBridge:
         self,
         command: str,
         payload: Optional[Dict[str, Any]] = None,
-        timeout_sec: float = 8.0,
+        timeout_sec: float = STUDIO_EDITOR_TIMEOUT_SEC,
     ) -> Dict[str, Any]:
         bridge = self.bridge
         request_id = bridge._new_project_request_id('studio-editor')

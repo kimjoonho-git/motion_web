@@ -37,6 +37,9 @@ import {
   motionStudioSelectRangePoint,
 } from '../static/js/motion_studio_editor_state.js';
 import {
+  applyMotionStudioCopiedPointRange,
+} from '../static/js/motion_studio_point_editor.js';
+import {
   motionStudioPanEditorGraph,
 } from '../static/js/motion_studio_graph_interactions.js';
 const motionStudioRuntimeSource = () => [
@@ -273,10 +276,52 @@ test('point range copy preserves shape metadata and blocks time collisions', () 
   assert.deepEqual(copied.points.map((point) => point.time_sec), [0.2, 0.24]);
   assert.deepEqual(copied.points[0].out_handle, { dt_sec: 0.01, dv_deg: 0.5 });
   assert.equal(copied.points[1].tangent_mode, 'broken');
-  assert.deepEqual(
-    motionStudioCopyPointRange(curve, 0, 0.04, 0.10),
-    { ok: false, reason: 'time_conflict' },
-  );
+  // 붙이는 자리에 있던 포인트는 **대체한다** · 그래프 중간에도 넣을 수 있다 · §6-119
+  const onto = motionStudioCopyPointRange(curve, 0, 0.04, 0.10);
+  assert.equal(onto.ok, true);
+  assert.deepEqual(onto.replacedPointIds, ['c']);
+});
+
+test('pasting into the middle replaces what was there and keeps the order', () => {
+  const curve = {
+    curve_id: 'curve-a',
+    motion_id: '1-1',
+    interpolation_order: 3,
+    points: Array.from({ length: 10 }, (_unused, index) => ({
+      point_id: `p${index}`,
+      time_sec: Number((index * 0.1).toFixed(3)),
+      value_deg: index,
+      tangent_mode: 'auto',
+    })),
+  };
+
+  const result = motionStudioCopyPointRange(curve, 0, 0.2, 0.5);
+
+  assert.equal(result.ok, true);
+  // 0.5~0.7초 자리에 있던 것들이 대체 대상이다
+  assert.deepEqual(result.replacedPointIds, ['p5', 'p6', 'p7']);
+  const editor = {};
+  let serial = 0;
+  applyMotionStudioCopiedPointRange(editor, curve, result, () => `new${serial++}`);
+  const times = editor.pointDraft.points.map((point) => point.time_sec);
+  assert.deepEqual(times, [...times].sort((a, b) => a - b), '시간 순서가 흐트러졌다');
+  assert.equal(new Set(times.map((t) => t.toFixed(3))).size, times.length, '같은 시간에 둘이 있다');
+  assert.equal(editor.pointDraft.points.length, 10, '대체가 아니라 덧붙였다');
+});
+
+test('a copy that collides with itself is still refused', () => {
+  const curve = {
+    curve_id: 'curve-a',
+    motion_id: '1-1',
+    points: [
+      { point_id: 'a', time_sec: 0, value_deg: 0 },
+      { point_id: 'b', time_sec: 0.02, value_deg: 1 },
+    ],
+  };
+  // 20ms 안에 두 포인트가 겹치도록 만드는 자리는 막는다
+  const result = motionStudioCopyPointRange(curve, 0, 0.02, -1);
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'invalid_target');
 });
 
 test('point range deletion removes the inclusive range and keeps two curve points', () => {
@@ -565,9 +610,10 @@ test('editor keeps the graph and compact range toolbar in one viewport layout', 
     styles,
     /grid-template-columns:\s*230px minmax\(0,\s*1fr\)/,
   );
+  // 도구 줄이 그래프 안으로 들어가 한 칸이 줄었다 · §6-120
   assert.match(
     styles,
-    /grid-template-rows:\s*auto minmax\(var\(--studio-editor-graph-min-height\), 1fr\) auto auto auto/,
+    /grid-template-rows:\s*minmax\(var\(--studio-editor-graph-min-height\), 1fr\) auto auto auto/,
   );
   assert.match(
     html,
@@ -581,9 +627,10 @@ test('editor keeps the graph and compact range toolbar in one viewport layout', 
     styles,
     /\.studio-editor-operation-panel \{[\s\S]*?border: 1px solid var\(--line\)/,
   );
+  // 높이 조건은 studio_graph_limits 검사가 지킨다
   assert.match(
     styles,
-    /--studio-editor-graph-min-height:\s*240px/,
+    /--studio-editor-graph-min-height:\s*\d+px/,
   );
   assert.match(
     styles,
