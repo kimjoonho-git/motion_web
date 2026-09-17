@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import heapq
 import uuid
+from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from .axis_operations import apply_axis_operation
@@ -139,6 +140,126 @@ def _overlapping_curves(
     return result
 
 
+#: 포인트를 고르는 네 단계가 함께 보는 사실 · §6-128
+#:
+#: 전에는 이 값들이 560줄짜리 함수의 지역 변수였고, 중첩 함수 열다섯 개가
+#: 그냥 집어 썼다 · 단계 하나만 떼어 시험할 수 없었고, 한 단계를 고치면 다른
+#: 단계가 같은 변수를 어떻게 쓰는지 일일이 봐야 했다.
+@dataclass
+class _FitContext:
+    ordered: List[tuple[float, float]]
+    tolerance: float
+    curve_order: int
+    point_limit: int
+    #: 솎아내기에 쓸 시도 횟수 · 한 칸짜리 목록인 것은 안에서 줄여야 하기 때문이다
+    prune_attempts: List[int]
+
+    @property
+    def tangent_mode(self) -> str:
+        return 'linear' if self.curve_order == 1 else 'auto'
+
+    def chord_error(self, index: int, left: int, right: int) -> float:
+        """직선으로 이었을 때 이 표본이 얼마나 벗어나는가."""
+        time_sec, value = self.ordered[index]
+        left_time, left_value = self.ordered[left]
+        right_time, right_value = self.ordered[right]
+        span = right_time - left_time
+        ratio = (time_sec - left_time) / span if span > EPSILON else 0.0
+        expected = left_value + ((right_value - left_value) * ratio)
+        return abs(value - expected)
+
+    def points_at(
+        self, indices: Sequence[int], stable_ids: bool = False
+    ) -> List[Dict[str, Any]]:
+        return [
+            {
+                'point_id': (
+                    f'point_{uuid.uuid4().hex[:8]}' if stable_ids else f'fit_{index}'
+                ),
+                'time_sec': self.ordered[index][0],
+                'value_deg': self.ordered[index][1],
+                'tangent_mode': self.tangent_mode,
+            }
+            for index in indices
+        ]
+
+    def errors_of(self, points: Sequence[Dict[str, Any]]) -> List[float]:
+        """이 포인트들로 그린 곡선이 원래 표본에서 벗어나는 정도."""
+        _normalized, rendered = render_point_curve(list(points), self.curve_order)
+        rendered_by_time = {
+            round(time_sec, 9): float(value) for time_sec, value in rendered
+        }
+        return [
+            abs(value - rendered_by_time[round(time_sec, 9)])
+            for time_sec, value in self.ordered
+            if round(time_sec, 9) in rendered_by_time
+        ]
+
+
+def _select_by_chords(context: _FitContext) -> set:
+    """1단계 · 직선으로 재어 뼈대를 잡는다 · §6-111 §6-112 §6-128
+
+    포인트 두 개를 **직선**으로 이었을 때 가장 벗어난 표본에 포인트를 하나
+    더한다 · 쪼갠 구간만 다시 재므로 표본이 많아도 빠르다.
+
+    멈추는 기준은 허용 오차의 몇 배다 · 실제 곡선은 3·5차라 직선보다 훨씬 잘
+    맞는다 · 직선 기준으로 빡빡하게 재면 필요 없는 포인트까지 잡는다.
+    """
+    ordered = context.ordered
+    selected = {0, len(ordered) - 1}
+    if len(ordered) > 2:
+        selected.add(len(ordered) // 2)
+
+    def worst_inside(left: int, right: int) -> tuple[float, int]:
+        """이 구간에서 가장 어긋난 표본 하나 · 같으면 앞쪽이 이긴다."""
+        candidate = -1
+        worst = -1.0
+        for index in range(left + 1, right):
+            error = context.chord_error(index, left, right)
+            if error > worst:
+                candidate = index
+                worst = error
+        return worst, candidate
+
+    linear_threshold = context.tolerance * (
+        1.0 if context.curve_order == 1 else LINEAR_PASS_RELAXATION
+    )
+    segment_end: Dict[int, int] = {}
+    queue: List[tuple[float, int, int, int]] = []
+    start_indices = sorted(selected)
+    for left, right in zip(start_indices, start_indices[1:]):
+        segment_end[left] = right
+        worst, candidate = worst_inside(left, right)
+        if candidate >= 0:
+            heapq.heappush(queue, (-worst, left, right, candidate))
+
+    while len(selected) < min(context.point_limit, len(ordered)):
+        head = None
+        while queue:
+            negative_error, left, right, candidate = queue[0]
+            if segment_end.get(left) != right:
+                heapq.heappop(queue)      # 이미 쪼개진 구간 · 버린다
+                continue
+            head = (-negative_error, left, right, candidate)
+            break
+        if head is None:
+            break
+        maximum_error, left, right, candidate = head
+        if maximum_error <= linear_threshold:
+            break
+        heapq.heappop(queue)
+        selected.add(candidate)
+        segment_end[left] = candidate
+        segment_end[candidate] = right
+        for piece_left, piece_right in ((left, candidate), (candidate, right)):
+            worst, next_candidate = worst_inside(piece_left, piece_right)
+            if next_candidate >= 0:
+                heapq.heappush(
+                    queue, (-worst, piece_left, piece_right, next_candidate)
+                )
+    return selected
+
+
 def approximate_motion_points(
     samples: Sequence[tuple[float, float]],
     tolerance_deg: Any = 0.1,
@@ -166,112 +287,20 @@ def approximate_motion_points(
         (round(_time(time_sec), 9), float(value))
         for time_sec, value in samples
     )
-    selected_indices = {0, len(ordered) - 1}
-    if len(ordered) > 2:
-        selected_indices.add(len(ordered) // 2)
-
-    def interpolation_error(index: int, left: int, right: int) -> float:
-        time_sec, value = ordered[index]
-        left_time, left_value = ordered[left]
-        right_time, right_value = ordered[right]
-        span = right_time - left_time
-        ratio = (time_sec - left_time) / span if span > EPSILON else 0.0
-        expected = left_value + ((right_value - left_value) * ratio)
-        return abs(value - expected)
-
-    def worst_inside(left: int, right: int) -> tuple[float, int]:
-        """이 구간에서 가장 어긋난 표본 하나 · 같으면 앞쪽이 이긴다."""
-        candidate = -1
-        worst = -1.0
-        for index in range(left + 1, right):
-            error = interpolation_error(index, left, right)
-            if error > worst:
-                candidate = index
-                worst = error
-        return worst, candidate
-
-    # 쪼갠 구간만 다시 본다 · §6-111
-    #
-    # 전에는 포인트를 하나 고를 때마다 **전체 표본**을 다시 훑었다 · 5분짜리
-    # 녹화(15,000 표본)에서 2,000 포인트를 고르면 2,800만 번을 재는 셈이라
-    # 20초가 넘게 걸렸다 · 그래서 상한이 200 에 묶여 있었고, 긴 모션은
-    # 「전체 포인트 생성」이 아예 되지 않았다.
-    #
-    # 구간의 오차는 그 구간을 쪼개기 전까지 변하지 않는다 · 구간마다 가장
-    # 어긋난 표본 하나를 들고 있다가, 쪼갠 두 구간만 다시 잰다.
-    #
-    # 고르는 순서는 예전과 같다 · 오차가 가장 큰 것, 같으면 앞쪽 구간, 구간
-    # 안에서도 앞쪽 표본.
-    # 1차 통과는 **직선**으로 재는데 실제 곡선은 3·5차다 · 완만한 구간은
-    # 직선보다 훨씬 잘 맞으므로, 직선 기준으로 재면 필요 없는 포인트까지 잡는다 ·
-    # 곡선일 때는 여기서 느슨하게 잡고, 실제 곡선을 그려 보는 2차 통과가 모자란
-    # 자리만 채우게 한다 · §6-112
-    linear_threshold = tolerance * (
-        1.0 if curve_order == 1 else LINEAR_PASS_RELAXATION
+    context = _FitContext(
+        ordered=ordered,
+        tolerance=tolerance,
+        curve_order=curve_order,
+        point_limit=point_limit,
+        prune_attempts=[max(400, 6_000_000 // max(1, len(ordered)))],
     )
-    segment_end: Dict[int, int] = {}
-    queue: List[tuple[float, int, int, int]] = []
-    start_indices = sorted(selected_indices)
-    for left, right in zip(start_indices, start_indices[1:]):
-        segment_end[left] = right
-        worst, candidate = worst_inside(left, right)
-        if candidate >= 0:
-            heapq.heappush(queue, (-worst, left, right, candidate))
-
-    while len(selected_indices) < min(point_limit, len(ordered)):
-        head = None
-        while queue:
-            negative_error, left, right, candidate = queue[0]
-            if segment_end.get(left) != right:
-                heapq.heappop(queue)      # 이미 쪼개진 구간 · 버린다
-                continue
-            head = (-negative_error, left, right, candidate)
-            break
-        if head is None:
-            break
-        maximum_error, left, right, candidate = head
-        if maximum_error <= linear_threshold:
-            break
-        heapq.heappop(queue)
-        selected_indices.add(candidate)
-        segment_end[left] = candidate
-        segment_end[candidate] = right
-        for piece_left, piece_right in ((left, candidate), (candidate, right)):
-            worst, next_candidate = worst_inside(piece_left, piece_right)
-            if next_candidate >= 0:
-                heapq.heappush(
-                    queue, (-worst, piece_left, piece_right, next_candidate)
-                )
-
+    selected_indices = _select_by_chords(context)
+    interpolation_error = context.chord_error
     initial_point_count = len(selected_indices)
 
-    def curve_points(
-        indices: Sequence[int], stable_ids: bool = False
-    ) -> List[Dict[str, Any]]:
-        tangent_mode = 'linear' if curve_order == 1 else 'auto'
-        return [
-            {
-                'point_id': (
-                    f'point_{uuid.uuid4().hex[:8]}'
-                    if stable_ids else f'fit_{index}'
-                ),
-                'time_sec': ordered[index][0],
-                'value_deg': ordered[index][1],
-                'tangent_mode': tangent_mode,
-            }
-            for index in indices
-        ]
-
-    def final_curve_errors_for(points: Sequence[Dict[str, Any]]) -> List[float]:
-        _normalized, rendered = render_point_curve(list(points), curve_order)
-        rendered_by_time = {
-            round(time_sec, 9): float(value) for time_sec, value in rendered
-        }
-        return [
-            abs(value - rendered_by_time[round(time_sec, 9)])
-            for time_sec, value in ordered
-            if round(time_sec, 9) in rendered_by_time
-        ]
+    # 문맥이 들고 있는 것을 그대로 쓴다 · 같은 절차를 두 곳에 적지 않는다 · §6-128
+    curve_points = context.points_at
+    final_curve_errors_for = context.errors_of
 
     def final_curve_errors(indices: Sequence[int]) -> List[float]:
         _normalized, rendered = render_point_curve(
@@ -336,7 +365,7 @@ def approximate_motion_points(
     #: **표본 수에 반비례**하게 잡아 어떤 길이든 비슷한 시간에 끝나게 한다 ·
     #: 18초짜리는 예산이 남아 완전히 최소까지 가고, 5분짜리는 예산 안에서
     #: 최대한 줄인다 · 예산이 다해도 결과는 언제나 허용 오차 안이다.
-    prune_attempts = [max(400, 6_000_000 // max(1, len(ordered)))]
+    prune_attempts = context.prune_attempts
 
     #: 조각만 그릴 때 양옆에 더 붙이는 여백 · 조각의 끝점은 기울기가 0 이 되어
     #: 값이 달라진다 · 여백을 두면 그 영향이 정작 볼 구간까지 닿지 않는다.
@@ -701,6 +730,48 @@ def approximate_motion_points(
     }
 
 
+def _rewrite_curve(
+    working: Dict[str, Any],
+    tracks: Dict[str, List[tuple[float, float]]],
+    curve_id: str,
+    motion_id: str,
+    interpolation_order: int,
+    points: Sequence[Any],
+) -> None:
+    """곡선 하나를 새 포인트로 갈아 끼우고 20ms 프레임을 맞춘다 · §6-122
+
+    `point_curve` 편집이 하던 일을 그대로 떼어낸 것이다 · 여러 축을 한 번에
+    고치는 편집이 같은 일을 축마다 되풀이해야 해서, 두 곳에 같은 절차를 적지
+    않으려고 함수로 뺐다.
+    """
+    normalized_points, rendered = render_point_curve(points, interpolation_order)
+    start_sec, end_sec = rendered[0][0], rendered[-1][0]
+    previous_curve = next((
+        curve for curve in working.get('point_curves') or []
+        if str(curve.get('curve_id') or '') == curve_id
+    ), None)
+    if previous_curve is not None:
+        previous_motion_id = str(previous_curve['motion_id'])
+        previous_start, previous_end = point_curve_bounds(previous_curve)
+        tracks[previous_motion_id] = [
+            point for point in tracks.get(previous_motion_id, [])
+            if not _inside(point[0], previous_start, previous_end)
+        ]
+    existing = tracks.get(motion_id, [])
+    tracks[motion_id] = [
+        point for point in existing if not _inside(point[0], start_sec, end_sec)
+    ] + rendered
+    working['point_curves'] = [
+        curve for curve in working.get('point_curves') or []
+        if str(curve.get('curve_id') or '') != curve_id
+    ] + [{
+        'curve_id': curve_id,
+        'motion_id': motion_id,
+        'interpolation_order': interpolation_order,
+        'points': normalized_points,
+    }]
+
+
 def edit_layer(layer: Dict[str, Any], request: Dict[str, Any]) -> Dict[str, Any]:
     """Apply one operation to a temporary layer and return a new layer."""
     working = normalize_layer(copy.deepcopy(layer))
@@ -752,12 +823,97 @@ def edit_layer(layer: Dict[str, Any], request: Dict[str, Any]) -> Dict[str, Any]
     if operation not in {
         'point_curve',
         'create_axis_point_curve',
+        'copy_point_range',
+        'delete_point_range',
         'time_shift',
         'time_scale',
         'value_offset',
         'value_scale',
     }:
         raise ValueError('지원하지 않는 레이어 편집 기능입니다')
+
+    if operation in {'copy_point_range', 'delete_point_range'}:
+        # 고른 축 **전부**의 그 시간대 포인트를 한 번에 다룬다 · §6-122
+        #
+        # 전에는 구간 복사·삭제가 곡선 하나만 봤다 · 시작·종료 포인트가 같은
+        # 축·같은 곡선이어야 했고, 축 셋을 골라도 한 축만 바뀌었다 · 시간
+        # 이동·배율은 이미 고른 축 전부를 처리하고 있었는데 여기만 달랐다.
+        #
+        # 그 시간대에 포인트가 없는 축은 **조용히 건너뛴다** · 오류로 막으면
+        # 나머지 축까지 못 바꾼다.
+        selected = unique_motion_ids(request.get('motion_ids') or [])
+        if not selected:
+            raise ValueError('편집할 Motion ID를 선택하세요')
+        start_sec = _finite(request.get('start_sec'), '구간 시작')
+        end_sec = _finite(request.get('end_sec'), '구간 끝')
+        if end_sec < start_sec:
+            start_sec, end_sec = end_sec, start_sec
+        copying = operation == 'copy_point_range'
+        target_start = (
+            _finite(request.get('target_start_sec'), '붙일 시간') if copying else 0.0
+        )
+        if copying and target_start < 0.0:
+            raise ValueError('붙일 시간은 0초 이상이어야 합니다')
+        changed: List[str] = []
+        for curve in list(working.get('point_curves') or []):
+            motion_id = str(curve.get('motion_id') or '')
+            if motion_id not in selected:
+                continue
+            points = list(curve.get('points') or [])
+            inside = [
+                point for point in points
+                if _inside(_finite(point.get('time_sec'), '포인트 시간'),
+                           start_sec, end_sec)
+            ]
+            if len(inside) < (2 if copying else 1):
+                continue
+            order = point_curve_order(curve)
+            if copying:
+                offset = round(
+                    target_start - _finite(inside[0].get('time_sec'), '포인트 시간'), 9
+                )
+                moved = []
+                for point in inside:
+                    copy_point = copy.deepcopy(point)
+                    copy_point['point_id'] = f'point_{uuid.uuid4().hex[:8]}'
+                    copy_point['time_sec'] = round(
+                        _finite(point.get('time_sec'), '포인트 시간') + offset, 9
+                    )
+                    moved.append(copy_point)
+                paste_start = _finite(moved[0].get('time_sec'), '포인트 시간')
+                paste_end = _finite(moved[-1].get('time_sec'), '포인트 시간')
+                kept = [
+                    point for point in points
+                    if not _inside(_finite(point.get('time_sec'), '포인트 시간'),
+                                   paste_start, paste_end)
+                ]
+                next_points = sorted(
+                    kept + moved,
+                    key=lambda item: _finite(item.get('time_sec'), '포인트 시간'),
+                )
+            else:
+                next_points = [
+                    point for point in points
+                    if not _inside(_finite(point.get('time_sec'), '포인트 시간'),
+                                   start_sec, end_sec)
+                ]
+                if len(next_points) < 2:
+                    # 곡선은 포인트가 둘 이상이어야 한다 · 이 축은 건너뛴다
+                    continue
+            _rewrite_curve(
+                working, tracks, str(curve.get('curve_id') or ''), motion_id,
+                order, next_points,
+            )
+            changed.append(motion_id)
+        if not changed:
+            raise ValueError(
+                '선택한 구간에서 다룰 포인트가 없습니다 · 축과 구간을 다시 보세요'
+            )
+        working['frames'] = _frames(tracks)
+        if len(working['frames']) > MAX_EDIT_FRAMES:
+            raise ValueError(f'편집 결과가 최대 {MAX_EDIT_FRAMES:,}프레임을 초과합니다')
+        working['edit_revision'] = int(working.get('edit_revision') or 0) + 1
+        return normalize_layer(working)
 
     if operation == 'point_curve':
         selected = unique_motion_ids(request.get('motion_ids') or [])
@@ -774,32 +930,10 @@ def edit_layer(layer: Dict[str, Any], request: Dict[str, Any]) -> Dict[str, Any]
             working, selected, start_sec, end_sec, excluding_curve_id=curve_id
         ):
             raise ValueError('같은 Motion ID의 포인트 곡선 구간이 서로 겹칩니다')
-        previous_curve = next((
-            curve for curve in working.get('point_curves') or []
-            if str(curve.get('curve_id') or '') == curve_id
-        ), None)
-        if previous_curve is not None:
-            previous_motion_id = str(previous_curve['motion_id'])
-            previous_start, previous_end = point_curve_bounds(previous_curve)
-            tracks[previous_motion_id] = [
-                point for point in tracks.get(previous_motion_id, [])
-                if not _inside(point[0], previous_start, previous_end)
-            ]
-        existing = tracks.get(motion_id, [])
-        tracks[motion_id] = [
-            point for point in existing if not _inside(point[0], start_sec, end_sec)
-        ] + rendered
-        curves = [
-            curve for curve in working.get('point_curves') or []
-            if str(curve.get('curve_id') or '') != curve_id
-        ]
-        curves.append({
-            'curve_id': curve_id,
-            'motion_id': motion_id,
-            'interpolation_order': interpolation_order,
-            'points': normalized_points,
-        })
-        working['point_curves'] = curves
+        _rewrite_curve(
+            working, tracks, curve_id, motion_id, interpolation_order,
+            request.get('points') or [],
+        )
         working['frames'] = _frames(tracks)
         if len(working['frames']) > MAX_EDIT_FRAMES:
             raise ValueError(f'편집 결과가 최대 {MAX_EDIT_FRAMES:,}프레임을 초과합니다')

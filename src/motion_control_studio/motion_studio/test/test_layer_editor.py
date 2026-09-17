@@ -1354,3 +1354,184 @@ def test_a_long_motion_still_finishes_with_free_values():
     )
     assert report['maximum_error_deg'] <= 0.5 + 1e-9
     assert time.monotonic() - started < 20.0
+
+
+# 구간 복사·삭제는 고른 축 전부를 한 번에 · §6-122
+#
+# 전에는 곡선 하나만 봤다 · 시작·종료 포인트가 같은 축·같은 곡선이어야 했고,
+# 축을 셋 골라도 한 축만 바뀌었다 · 시간 이동·배율은 이미 고른 축 전부를
+# 처리하고 있었는데 여기만 달랐다.
+
+
+def _two_axis_layer():
+    import math
+    frames = [
+        {'time_sec': round(index * 0.02, 3),
+         'values': {'1-1': 30.0 * math.sin(index * 0.15),
+                    '1-2': 20.0 * math.sin(index * 0.19 + 1.0)}}
+        for index in range(1, 301)
+    ]
+    layer = normalize_layer({
+        'layer_id': 'L', 'name': 'L', 'enabled': True, 'locked': False,
+        'point_curves': [], 'frames': frames,
+    })
+    for motion_id in ('1-1', '1-2'):
+        layer = edit_layer(layer, {
+            'operation': 'create_axis_point_curve', 'motion_ids': [motion_id],
+            'approximation_tolerance_deg': 1.0,
+            'approximation_maximum_points': 5000,
+            'approximation_interpolation_order': 3,
+        })
+    return layer
+
+
+def _counts(layer):
+    return {
+        str(curve['motion_id']): len(curve['points'])
+        for curve in layer['point_curves']
+    }
+
+
+def _times_in(layer, motion_id, start_sec, end_sec):
+    curve = next(
+        curve for curve in layer['point_curves']
+        if str(curve['motion_id']) == motion_id
+    )
+    return [
+        round(float(point['time_sec']), 9)
+        for point in curve['points']
+        if start_sec - 1e-9 <= float(point['time_sec']) <= end_sec + 1e-9
+    ]
+
+
+def _values_in(layer, motion_id, start_sec, end_sec):
+    curve = next(
+        curve for curve in layer['point_curves']
+        if str(curve['motion_id']) == motion_id
+    )
+    return [
+        round(float(point['value_deg']), 6)
+        for point in curve['points']
+        if start_sec - 1e-9 <= float(point['time_sec']) <= end_sec + 1e-9
+    ]
+
+
+def test_range_copy_touches_every_selected_axis():
+    layer = _two_axis_layer()
+    before = _counts(layer)
+
+    after = edit_layer(layer, {
+        'operation': 'copy_point_range', 'motion_ids': ['1-1', '1-2'],
+        'start_sec': 1.0, 'end_sec': 2.0, 'target_start_sec': 4.0,
+    })
+
+    assert set(_counts(after)) == {'1-1', '1-2'}
+    # 개수가 아니라 **내용**을 본다 · 대체 때문에 개수는 그대로일 수 있다
+    for motion_id in ('1-1', '1-2'):
+        source_times = _times_in(layer, motion_id, 1.0, 2.0)
+        assert source_times, f'{motion_id} 시험 자료에 복사할 포인트가 없다'
+        span = source_times[-1] - source_times[0]
+        source = _values_in(layer, motion_id, source_times[0], source_times[-1])
+        pasted = _values_in(after, motion_id, 4.0, round(4.0 + span, 9))
+        assert pasted == source, f'{motion_id} 축이 안 붙었다'
+    assert point_curve_frame_mismatches(after) == []
+
+
+def test_range_delete_touches_every_selected_axis():
+    layer = _two_axis_layer()
+    before = _counts(layer)
+
+    after = edit_layer(layer, {
+        'operation': 'delete_point_range', 'motion_ids': ['1-1', '1-2'],
+        'start_sec': 1.0, 'end_sec': 2.0,
+    })
+
+    counts = _counts(after)
+    assert counts['1-1'] < before['1-1'] and counts['1-2'] < before['1-2']
+    assert point_curve_frame_mismatches(after) == []
+
+
+def test_an_axis_without_points_in_the_range_is_skipped():
+    """그 시간대에 포인트가 없는 축은 조용히 건너뛴다 · 나머지 축은 바뀐다."""
+    layer = _two_axis_layer()
+    # 1-2 의 곡선을 앞쪽으로만 남긴다
+    trimmed = []
+    for curve in layer['point_curves']:
+        if str(curve['motion_id']) == '1-2':
+            curve = dict(curve, points=[
+                point for point in curve['points'] if point['time_sec'] <= 1.0
+            ])
+        trimmed.append(curve)
+    layer = dict(layer, point_curves=trimmed)
+    before = _counts(layer)
+
+    after = edit_layer(layer, {
+        'operation': 'delete_point_range', 'motion_ids': ['1-1', '1-2'],
+        'start_sec': 3.0, 'end_sec': 4.0,
+    })
+
+    counts = _counts(after)
+    assert counts['1-1'] < before['1-1'], '1-1 은 바뀌어야 한다'
+    assert counts['1-2'] == before['1-2'], '1-2 는 그대로여야 한다'
+
+
+def test_a_range_with_nothing_to_do_is_refused():
+    layer = _two_axis_layer()
+    with pytest.raises(ValueError, match='다룰 포인트가 없습니다'):
+        edit_layer(layer, {
+            'operation': 'delete_point_range', 'motion_ids': ['1-1', '1-2'],
+            'start_sec': 90.0, 'end_sec': 95.0,
+        })
+
+
+# 포인트 고르기 단계를 따로 시험한다 · §6-128
+#
+# 전에는 560줄짜리 함수 안에 중첩 함수 열다섯 개가 있어, 단계 하나만 떼어
+# 시험할 수 없었다 · 이제 1단계는 밖에서 부를 수 있다.
+
+
+def _fit_context(samples, tolerance=1.0, order=3, limit=5000):
+    from motion_studio.layer_editor import _FitContext
+    ordered = sorted((round(float(t), 9), float(v)) for t, v in samples)
+    return _FitContext(
+        ordered=ordered, tolerance=tolerance, curve_order=order,
+        point_limit=limit, prune_attempts=[10_000],
+    )
+
+
+def test_the_chord_stage_starts_from_three_points():
+    from motion_studio.layer_editor import _select_by_chords
+    flat = [(round(index * 0.02, 3), 5.0) for index in range(50)]
+    selected = _select_by_chords(_fit_context(flat))
+    # 곧은 자료는 더 넣을 이유가 없다 · 처음 셋 그대로
+    assert selected == {0, 25, 49}
+
+
+def test_the_chord_stage_respects_the_point_limit():
+    from motion_studio.layer_editor import _select_by_chords
+    context = _fit_context(_wiggly_samples(), tolerance=0.01, limit=20)
+    assert len(_select_by_chords(context)) <= 20
+
+
+def test_the_chord_stage_is_looser_for_curves():
+    """직선(1차)은 허용 오차 그대로, 곡선은 느슨하게 · 그래서 덜 잡는다."""
+    from motion_studio.layer_editor import _select_by_chords
+    samples = _wiggly_samples()
+    straight = _select_by_chords(_fit_context(samples, tolerance=1.0, order=1))
+    curved = _select_by_chords(_fit_context(samples, tolerance=1.0, order=3))
+    assert len(curved) < len(straight)
+
+
+def test_the_context_draws_points_on_the_recorded_samples():
+    from motion_studio.layer_editor import _select_by_chords
+    samples = _wiggly_samples()
+    context = _fit_context(samples)
+    indices = sorted(_select_by_chords(context))
+    points = context.points_at(indices)
+    recorded = {round(t, 9): v for t, v in samples}
+    assert all(round(p['time_sec'], 9) in recorded for p in points)
+    assert all(
+        abs(p['value_deg'] - recorded[round(p['time_sec'], 9)]) < 1e-9
+        for p in points
+    )
+    assert max(context.errors_of(points)) >= 0.0
