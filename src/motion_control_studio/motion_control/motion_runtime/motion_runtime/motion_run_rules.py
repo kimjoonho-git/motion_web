@@ -14,8 +14,8 @@ import math
 import time
 from bisect import bisect_left
 from typing import Any, Dict, List, Mapping, Optional
-from urllib.parse import quote
 
+from motion_common import motor_ref as motor_ref_rules
 from motion_common import repeat_policy
 from motion_control_msgs.msg import MotorStatus
 from std_msgs.msg import Int8MultiArray
@@ -135,37 +135,14 @@ def _empty_status() -> Dict[str, Any]:
         'updated_at': time.time(),
     }
 
-def _motor_ref_for_motor(motor: Dict[str, Any]) -> str:
-    motor_type = _motor_type(motor)
-    if motor_type == 'ac_servo':
-        alias = optional_int(
-            motor.get('alias', motor.get('ethercat_alias'))
-        )
-        master_index = optional_int(
-            motor.get('ethercat_master_index')
-        )
-        if master_index is None:
-            master_index = 0
-        if alias is not None and alias > 0 and master_index >= 0:
-            return f'ac_servo:master:{master_index}:alias:{alias}'
-        slave_position = optional_int(motor.get('slave_position'))
-        return (
-            f'ac_servo:master:{master_index}:slave:{slave_position}'
-            if slave_position is not None
-            and slave_position >= 0
-            and master_index >= 0
-            else ''
-        )
-    if motor_type == 'dynamixel':
-        bus_id = optional_int(
-            motor.get('bus_id', motor.get('node_id'))
-        )
-        serial_port = str(motor.get('serial_port') or '').strip()
-        return (
-            f'dynamixel:port:{quote(serial_port, safe="")}:id:{bus_id}'
-            if bus_id is not None and bus_id >= 0 and serial_port else ''
-        )
-    return ''
+
+# 모터 이름의 주인은 `motion_common.motor_ref` 다 · §6-141
+# 웹 브리지도 같은 이름을 만들 수 있어야 해서 옮겼다 · 부르는 이름은 그대로 둔다
+_motor_type = motor_ref_rules.motor_type
+_motor_ref_for_motor = motor_ref_rules.motor_ref_for_motor
+_motor_refs_for_motor = motor_ref_rules.motor_refs_for_motor
+_motors_for_ref = motor_ref_rules.motors_for_ref
+
 
 def _interpolated_value(
     records: List[Dict[str, Any]],
@@ -266,48 +243,7 @@ def _target_range_limit_error(
         return f'Axis {axis} target max {target_max:.3f} > upper {upper:.3f}'
     return ''
 
-def _motors_for_ref(
-    motor_ref: Any,
-    motors: List[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
-    target = str(motor_ref or '').strip().lower()
-    if not target:
-        return []
-    return [
-        motor for motor in motors
-        if target in {
-            ref.lower() for ref in _motor_refs_for_motor(motor)
-        }
-    ]
 
-def _motor_type(motor: Dict[str, Any]) -> str:
-    values = [
-        motor.get('motor_type'),
-        motor.get('motor_type_label'),
-        motor.get('driver_model'),
-        motor.get('driver_name'),
-        motor.get('transport'),
-    ]
-    text = ' '.join(str(value or '').lower() for value in values)
-    if 'dynamixel' in text:
-        return 'dynamixel'
-    if 'minas' in text or 'ac servo' in text or 'ac_servo' in text:
-        return 'ac_servo'
-    return 'unknown'
-
-def _motor_refs_for_motor(motor: Dict[str, Any]) -> List[str]:
-    canonical = _motor_ref_for_motor(motor)
-    if _motor_type(motor) == 'ac_servo':
-        alias = optional_int(
-            motor.get('alias', motor.get('ethercat_alias'))
-        )
-        legacy = f'ac_servo:alias:{alias}' if alias is not None and alias > 0 else ''
-    elif _motor_type(motor) == 'dynamixel':
-        bus_id = optional_int(motor.get('bus_id', motor.get('node_id')))
-        legacy = f'dynamixel:id:{bus_id}' if bus_id is not None and bus_id >= 0 else ''
-    else:
-        legacy = ''
-    return [item for item in (canonical, legacy) if item]
 
 def _clamp_motion_value(
     value: float,
@@ -353,14 +289,31 @@ def _motion_groups(
         groups[key] = sorted(groups[key], key=lambda item: item['time_sec'])
     return groups
 
-def _motion_auto_start_guard_error(plan: Dict[str, Any]) -> str:
+def _loop_gap_warning(plan: Dict[str, Any]) -> str:
+    """이어 붙일 때 값이 튀는가 · **막지 않고 알린다** · §6-142
+
+    전에는 시작값과 끝값이 5° 이상 벌어지면 연속 재생을 **거부**했다 · 그런데
+    이건 사용자가 보고 판단할 일이다 · 구간 붙여넣기에서 이미 그렇게 했다
+    (§6-119 "이음매에서 값이 튀는지는 검사하지 않는다").
+
+    실행을 막는 것은 **장비가 상하는 경우만** 남긴다 · 모터 알람, 미연결,
+    하드 리미트 초과.
+    """
     if (
         plan.get('run_mode') == 'continuous'
         and repeat_policy.needs_loop_value_match(plan.get('repeat_mode'))
     ):
         capability = plan.get('capabilities', {}).get('continuous_run', {})
         if not capability.get('available'):
-            return str(capability.get('reason') or '모션 시작값과 끝값이 달라 연속 동작할 수 없습니다')
+            return str(
+                capability.get('reason')
+                or '모션 시작값과 끝값이 다릅니다'
+            ) + ' · 회차가 이어질 때 값이 튑니다'
+    return ''
+
+
+def _motion_auto_start_guard_error(plan: Dict[str, Any]) -> str:
+    """실행을 막을 이유 · 이음매 값 차이는 더 이상 막지 않는다 · §6-142"""
     return ''
 
 def _initial_move_time_override_sec(payload: Dict[str, Any]) -> Optional[float]:

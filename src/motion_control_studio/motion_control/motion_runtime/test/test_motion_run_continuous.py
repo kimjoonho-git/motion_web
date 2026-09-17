@@ -752,19 +752,41 @@ def test_countdown_stop_prevents_motion_start():
     assert manager._status['state'] == 'stopped'
 
 
-def test_auto_start_rejects_unsafe_continuous_motion_before_initialization():
-    reason = motion_run_rules._motion_auto_start_guard_error({
+def test_a_loop_value_gap_no_longer_blocks_the_run():
+    """이음매에서 값이 튀는 것은 **막지 않는다** · §6-142
+
+    사용자가 보고 판단할 일이다 · 구간 붙여넣기에서 이미 그렇게 하고 있다
+    (§6-119 "이음매에서 값이 튀는지는 검사하지 않는다") · 재생만 막고 있었다.
+
+    실행을 막는 것은 장비가 상하는 경우만 남긴다 · 모터 알람, 미연결,
+    하드 리미트 초과.
+    """
+    unsafe = {
         'run_mode': 'continuous',
+        'repeat_mode': 'direct',
         'capabilities': {
             'continuous_run': {
                 'available': False,
                 'reason': '시작·종료값 차이 초과',
             },
         },
-    })
+    }
 
-    assert reason == '시작·종료값 차이 초과'
-    assert motion_run_rules._motion_auto_start_guard_error({
+    assert motion_run_rules._motion_auto_start_guard_error(unsafe) == ''
+
+    warning = motion_run_rules._loop_gap_warning(unsafe)
+    assert '시작·종료값 차이 초과' in warning
+    assert '값이 튑니다' in warning
+
+
+def test_reinitializing_repeat_has_nothing_to_warn_about():
+    """초기 위치로 돌아가면 시작값과 끝값이 달라도 튀지 않는다."""
+    assert motion_run_rules._loop_gap_warning({
+        'run_mode': 'continuous',
+        'repeat_mode': 'reinitialize',
+        'capabilities': {'continuous_run': {'available': False, 'reason': 'x'}},
+    }) == ''
+    assert motion_run_rules._loop_gap_warning({
         'run_mode': 'once',
         'capabilities': {},
     }) == ''

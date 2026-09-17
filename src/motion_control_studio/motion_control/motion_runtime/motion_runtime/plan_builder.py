@@ -219,6 +219,10 @@ class PlanBuilder:
         axes = []
         errors = []
         warnings = []
+        # 모터가 이 PC 에 없는 축 · 막지 않고 건너뛴다 · §6-139
+        missing_motor_motion_ids = []
+        # 모션 파일에 자료가 없는 축 · 이것도 막지 않는다 · §6-142
+        missing_motion_data_ids = []
         for row in rows:
             if not isinstance(row, dict) or row.get('enabled') is False:
                 continue
@@ -234,7 +238,17 @@ class PlanBuilder:
             if motor_ref:
                 matches = motion_run_rules._motors_for_ref(motor_ref, motors)
                 if len(matches) == 0:
-                    errors.append(f'Motion ID {motion_id}: Motor {motor_ref} not found')
+                    # 축 하나를 떼면 그 축만 빠진다 · 모션 전체가 못 돌 이유가
+                    # 없다 · §6-139
+                    #
+                    # 로보티즈 2축을 떼자 3축 모션이 통째로 거부됐다 · 멀쩡한
+                    # AC 서보 1축까지 같이 죽었다 · 바로 위에서 「이 PC 의
+                    # 모션축 설정에 없는 축은 읽자마자 버린다」 를 이미 하고
+                    # 있는데(§6-106), 모터가 빠진 것도 같은 모양이다.
+                    #
+                    # 조용히 넘어가지는 않는다 · 3축짜리가 1축만 도는 것을
+                    # 모르면 안 된다.
+                    missing_motor_motion_ids.append(motion_id)
                     continue
                 if len(matches) > 1:
                     errors.append(f'Motion ID {motion_id}: Motor {motor_ref} is duplicated')
@@ -250,7 +264,11 @@ class PlanBuilder:
             missing_motion_data = motion_id not in groups
             if missing_motion_data:
                 if not initialization_only:
-                    errors.append(f'Motion ID {motion_id}: motion file data not found')
+                    # 모션 파일에 이 축이 없으면 그 축만 빠진다 · §6-142
+                    #
+                    # 모터가 없을 때와 같은 일이다(§6-139) · 축 하나가 비었다고
+                    # 나머지가 못 돌 이유가 없다 · 사용자가 보고 판단한다.
+                    missing_motion_data_ids.append(motion_id)
                     continue
                 initial_mode = str(row.get('initial_mode') or 'first_frame')
                 fallback_value = (
@@ -374,6 +392,28 @@ class PlanBuilder:
             axis_plan['loop_tolerance_deg'] = CONTINUOUS_LOOP_TOLERANCE_DEG
             axes.append(axis_plan)
 
+        if missing_motion_data_ids:
+            warnings.append(
+                '모션 자료가 없어 건너뛴 Motion ID: '
+                + ', '.join(missing_motion_data_ids)
+                + ' · 모션 파일에 이 축이 없습니다'
+            )
+            requested_motion_ids = {
+                motion_id for motion_id in requested_motion_ids
+                if motion_id not in set(missing_motion_data_ids)
+            }
+        if missing_motor_motion_ids:
+            warnings.append(
+                '모터가 없어 건너뛴 Motion ID: '
+                + ', '.join(missing_motor_motion_ids)
+                + ' · 모터축 설정에서 지웠거나 연결되지 않았습니다'
+            )
+            # 건너뛴 축은 더 이상 「요구한 축」이 아니다 · 그대로 두면 아래에서
+            # `requested Motion ID is unavailable` 로 다시 막힌다
+            requested_motion_ids = {
+                motion_id for motion_id in requested_motion_ids
+                if motion_id not in set(missing_motor_motion_ids)
+            }
         if not axes:
             errors.append('enabled motion mappings not found')
         if requested_motion_ids:
@@ -459,6 +499,15 @@ class PlanBuilder:
                 **continuous_capability,
             },
         }
+
+        # 이어 붙일 때 값이 튀는지 · **막지 않고 알린다** · §6-142
+        loop_gap = motion_run_rules._loop_gap_warning({
+            'run_mode': run_mode,
+            'repeat_mode': repeat_mode,
+            'capabilities': capabilities,
+        })
+        if loop_gap:
+            warnings.append(loop_gap)
 
         return {
             'project_id': project_id,

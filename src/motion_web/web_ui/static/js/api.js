@@ -1,5 +1,21 @@
 const PROJECT_GENERATION_KEY = '__motionProjectGeneration';
 
+/** 서버가 앞서 갔을 때 알릴 곳 · §6-140
+ *
+ * 모터축 설정을 적용하면 프로젝트 세대가 오른다 · 그 순간 열려 있던 화면은
+ * 옛 세대를 들고 있어서, 그다음 요청의 응답이 전부 「이전 프로젝트의 늦은
+ * 응답」으로 버려졌다 · 버리는 쪽은 조용히 `return` 만 해서 화면이 빈칸으로
+ * 굳었다 · 「재생 등록된 파일 없음」이 그렇게 나왔다. 데이터는 멀쩡했다.
+ *
+ * 늦은 응답(세대가 **뒤진** 응답)은 버리는 게 맞다 · 그러나 세대가 **앞선**
+ * 응답은 버릴 것이 아니라 따라가야 할 신호다.
+ */
+let projectAheadHandler = null;
+
+export function setProjectAheadHandler(handler) {
+  projectAheadHandler = typeof handler === 'function' ? handler : null;
+}
+
 export function setProjectGeneration(value) {
   const parsed = Number(value);
   if (Number.isInteger(parsed) && parsed >= 0) {
@@ -75,6 +91,20 @@ async function readJson(response) {
     setProjectGeneration(responseGeneration);
     const error = new Error(payload?.message || '프로젝트가 다른 브라우저에서 변경되었습니다');
     error.projectBoundaryGeneration = responseGeneration;
+    throw error;
+  }
+  if (
+    !transition
+    && Number.isInteger(expected)
+    && Number.isInteger(responseGeneration)
+    && responseGeneration > expected
+  ) {
+    // 서버가 앞서 갔다 · 버릴 것이 아니라 따라가야 한다 · §6-140
+    setProjectGeneration(responseGeneration);
+    if (projectAheadHandler) projectAheadHandler(responseGeneration);
+    const error = new Error('프로젝트 설정이 바뀌어 다시 읽습니다');
+    error.staleProjectResponse = true;
+    error.projectMovedAhead = responseGeneration;
     throw error;
   }
   if (

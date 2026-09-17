@@ -9,6 +9,7 @@ import {
   setMonitoringEnabled,
   stopMotionRun,
   stopMotionStudio,
+  setProjectAheadHandler,
   setProjectGeneration,
   fetchSystemVersion,
 } from './api.js';
@@ -243,6 +244,11 @@ function clearBrowserProjectMemory(projectGeneration) {
     activeMonitoringDetailTab: appState.activeMonitoringDetailTab,
   });
 }
+
+// 서버가 앞서 가면 화면이 스스로 다시 읽는다 · §6-140
+setProjectAheadHandler((generation) => {
+  acceptProjectPayload({ project_generation: generation });
+});
 
 function acceptProjectPayload(payload) {
   const generation = Number(payload?.project_generation);

@@ -12,6 +12,7 @@ import uvicorn
 import yaml
 from fastapi import FastAPI, HTTPException, Request
 from motion_common import generation, rpc, topics
+from motion_common import motor_ref as motor_ref_rules
 from fastapi.responses import JSONResponse
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
@@ -1296,10 +1297,68 @@ class MotionWebBridge(Node):
             result['message'] = '현재 프로젝트 모션축 설정을 불러왔습니다'
         return result
 
+    def _present_motor_refs(self) -> set:
+        """지금 이 PC 에 달려 있는 모터의 `motor_ref` 들 · §6-141
+
+        매핑 검사는 `motion_mapping_manager` 가 하는데 그 노드는 모터 상태를
+        받지 않는다 · 무엇이 실제로 달려 있는지는 여기(브리지)만 안다.
+        """
+        with self._lock:
+            motion_state = copy.deepcopy(getattr(self, '_motion_state', None))
+            received_at = getattr(self, '_motion_state_received_at', None)
+        if not isinstance(motion_state, dict) or received_at is None:
+            return set()
+        if time.time() - float(received_at) > 3.0:
+            return set()
+        return motor_ref_rules.present_motor_refs(
+            motion_state.get('motors') or []
+        )
+
+    def _note_missing_motors(self, result: Dict[str, Any]) -> None:
+        """모터가 없는 매핑 줄에 표시를 남긴다 · 끄지는 않는다 · §6-141
+
+        모터축을 지우면 그 모터를 가리키던 줄이 남는다 · 재생은 그 축을
+        건너뛰는데(§6-139) 화면은 `ok` 라고 해서 둘이 달랐다.
+
+        줄을 **끄지 않는다** · 자동으로 끄면 모르는 사이 설정이 바뀌고, 모터를
+        다시 달았을 때 손으로 되켜야 한다 · 말만 하면 다시 달렸을 때 저절로
+        조용해진다.
+
+        모터 상태를 아직 못 받았으면 아무 말도 하지 않는다 · 프로그램이 막
+        떴을 때 「모터가 없습니다」가 전부 뜨면 없는 문제를 만든다.
+        """
+        validation = result.get('validation')
+        mapping = result.get('mapping')
+        if not isinstance(validation, dict) or not isinstance(mapping, dict):
+            return
+        present = self._present_motor_refs()
+        if not present:
+            return
+        rows = validation.get('rows')
+        if not isinstance(rows, dict):
+            return
+        message = '이 모터가 모터축 설정에 없습니다 · 재생할 때 이 축은 건너뜁니다'
+        warnings = validation.setdefault('warnings', [])
+        for row in mapping.get('mappings') or []:
+            if not isinstance(row, dict) or row.get('enabled') is False:
+                continue
+            motor_ref = str(row.get('motor_ref') or '').strip().lower()
+            if not motor_ref or motor_ref in present:
+                continue
+            motion_id = str(row.get('motion_id') or '').strip()
+            entry = rows.get(motion_id)
+            if not isinstance(entry, dict):
+                continue
+            entry['messages'] = [*(entry.get('messages') or []), message]
+            if entry.get('status') != 'error':
+                entry['status'] = 'warning'
+            warnings.append(f'{motion_id}: {message}')
+
     def load_motion_mapping(self, file_id: Any) -> Dict[str, Any]:
         result = self._request_motion_mapping('load', {'file_id': file_id})
         if result.get('success') is False:
             return result
+        self._note_missing_motors(result)
 
         loaded_file_id = motion_file_analysis.motion_mapping_file_id(result) or str(file_id or '').strip()
         if loaded_file_id:
