@@ -236,11 +236,17 @@ def test_merge_commit_rebuilds_all_source_points_when_editor_preview_omits_them(
         if curve['curve_id'] == 'curve-source-b'
     )
     assert [point['time_sec'] for point in appended_curve['points']] == [0.06, 0.08]
-    assert result['merge_report'] == {
+    report = result['merge_report']
+    assert {
+        key: report[key]
+        for key in ('mode', 'append_layer_id', 'append_offset_sec')
+    } == {
         'mode': 'append',
         'append_layer_id': 'source-b',
         'append_offset_sec': 0.04,
     }
+    # 이음매에서 얼마나 튀는지도 함께 알린다 · 여기서는 튀지 않는다 · §6-116
+    assert all(item['step_deg'] == 0.0 for item in report['append_seam'])
     assert project['layers'][0]['point_curves'] == [point_curve]
 
 
@@ -337,7 +343,7 @@ def test_motion_actions_are_blocked_until_point_curve_mismatch_is_resolved():
     }]}
 
     with pytest.raises(ValueError, match='포인트 곡선과 20ms 프레임이 다릅니다'):
-        MotionStudioNode._require_point_curve_consistency(project, '합성 미리보기')
+        MotionStudioNode._require_point_curve_consistency(project, '레이어 재생')
 
 
 def test_initial_position_uses_first_recorded_value_even_when_track_starts_late():

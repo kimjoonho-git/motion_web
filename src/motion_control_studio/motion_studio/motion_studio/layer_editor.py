@@ -8,8 +8,9 @@ the sole owner of final project persistence.
 from __future__ import annotations
 
 import copy
+import heapq
 import uuid
-from typing import Any, Dict, Iterable, List, Mapping, Sequence
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from .axis_operations import apply_axis_operation
 from .constants import DEFAULT_PERIOD_SEC
@@ -31,7 +32,43 @@ from .timeline import layer_conflicts, render_project
 
 
 MAX_EDIT_FRAMES = 500_000
-MAX_APPROXIMATION_POINTS = 200
+#: 포인트 상한 · §6-111
+#:
+#: 200 이던 시절에는 5분짜리 녹화가 「전체 포인트 생성」 자체가 되지 않았다 ·
+#: 그때는 포인트 하나를 고를 때마다 표본 전체를 다시 훑느라 2,000개를 고르는
+#: 데 54초가 걸려 상한을 올릴 수가 없었다.
+#:
+#: 이제 구간 캐시로 고르고 나쁜 구간을 한 번에 채운다 · 20분(60,000표본)에
+#: 5,000 포인트도 1.3초다 · 상한은 계산이 아니라 **편집 화면이 감당할 양**으로
+#: 정한다.
+MAX_APPROXIMATION_POINTS = 5000
+
+#: 1차 통과를 얼마나 느슨하게 잡을지 · §6-112
+#:
+#: 1차 통과는 **직선**으로 재는데 사용자가 실제로 편집할 곡선은 3·5차다 ·
+#: 완만한 구간은 직선보다 훨씬 잘 맞으므로 직선 기준으로 재면 필요 없는
+#: 포인트까지 잡는다 · 여기서 느슨하게 잡고, 실제 곡선을 그려 보는 2차 통과가
+#: 모자란 자리만 채운다.
+#:
+#: 실제 녹화(18.7초)에서 0.5° 288→247개, 1° 188→169개 · 최대 오차는 그대로
+#: 허용치 안이다 · 더 느슨하게(×3 이상) 잡으면 2차 통과가 도로 채워 이득이 없다.
+LINEAR_PASS_RELAXATION = 2.0
+
+#: 값을 풀어 줄 때 한 번에 함께 움직이는 이웃 포인트 수 · §6-117
+FREE_VALUE_WINDOW = 4
+
+#: 한 바퀴에 시도해 볼 후보 수 · 가장 덜 중요한 것부터
+FREE_VALUE_TRIES = 8
+
+#: 최소제곱을 다시 푸는 횟수 · 큰 오차에 무게를 실어 최대 오차 기준에 다가간다
+FREE_VALUE_SWEEPS = 3
+
+#: 한 번에 들여다보는 표본 수의 상한 · §6-117
+#:
+#: 포인트가 줄어들수록 이웃 여덟 개가 덮는 시간이 길어진다 · 상한이 없으면
+#: 끝물에 창이 수천 표본까지 벌어져 계산이 폭증한다(60초 신호에서 29초).
+#: 창이 넓어지면 함께 움직이는 이웃 수를 줄여 맞춘다.
+FREE_VALUE_MAX_SAMPLES = 240
 
 
 def _selected_ids(layer: Dict[str, Any], values: Iterable[Any]) -> List[str]:
@@ -142,19 +179,69 @@ def approximate_motion_points(
         expected = left_value + ((right_value - left_value) * ratio)
         return abs(value - expected)
 
+    def worst_inside(left: int, right: int) -> tuple[float, int]:
+        """이 구간에서 가장 어긋난 표본 하나 · 같으면 앞쪽이 이긴다."""
+        candidate = -1
+        worst = -1.0
+        for index in range(left + 1, right):
+            error = interpolation_error(index, left, right)
+            if error > worst:
+                candidate = index
+                worst = error
+        return worst, candidate
+
+    # 쪼갠 구간만 다시 본다 · §6-111
+    #
+    # 전에는 포인트를 하나 고를 때마다 **전체 표본**을 다시 훑었다 · 5분짜리
+    # 녹화(15,000 표본)에서 2,000 포인트를 고르면 2,800만 번을 재는 셈이라
+    # 20초가 넘게 걸렸다 · 그래서 상한이 200 에 묶여 있었고, 긴 모션은
+    # 「전체 포인트 생성」이 아예 되지 않았다.
+    #
+    # 구간의 오차는 그 구간을 쪼개기 전까지 변하지 않는다 · 구간마다 가장
+    # 어긋난 표본 하나를 들고 있다가, 쪼갠 두 구간만 다시 잰다.
+    #
+    # 고르는 순서는 예전과 같다 · 오차가 가장 큰 것, 같으면 앞쪽 구간, 구간
+    # 안에서도 앞쪽 표본.
+    # 1차 통과는 **직선**으로 재는데 실제 곡선은 3·5차다 · 완만한 구간은
+    # 직선보다 훨씬 잘 맞으므로, 직선 기준으로 재면 필요 없는 포인트까지 잡는다 ·
+    # 곡선일 때는 여기서 느슨하게 잡고, 실제 곡선을 그려 보는 2차 통과가 모자란
+    # 자리만 채우게 한다 · §6-112
+    linear_threshold = tolerance * (
+        1.0 if curve_order == 1 else LINEAR_PASS_RELAXATION
+    )
+    segment_end: Dict[int, int] = {}
+    queue: List[tuple[float, int, int, int]] = []
+    start_indices = sorted(selected_indices)
+    for left, right in zip(start_indices, start_indices[1:]):
+        segment_end[left] = right
+        worst, candidate = worst_inside(left, right)
+        if candidate >= 0:
+            heapq.heappush(queue, (-worst, left, right, candidate))
+
     while len(selected_indices) < min(point_limit, len(ordered)):
-        indices = sorted(selected_indices)
-        candidate = None
-        maximum_error = -1.0
-        for left, right in zip(indices, indices[1:]):
-            for index in range(left + 1, right):
-                error = interpolation_error(index, left, right)
-                if error > maximum_error:
-                    candidate = index
-                    maximum_error = error
-        if candidate is None or maximum_error <= tolerance:
+        head = None
+        while queue:
+            negative_error, left, right, candidate = queue[0]
+            if segment_end.get(left) != right:
+                heapq.heappop(queue)      # 이미 쪼개진 구간 · 버린다
+                continue
+            head = (-negative_error, left, right, candidate)
             break
+        if head is None:
+            break
+        maximum_error, left, right, candidate = head
+        if maximum_error <= linear_threshold:
+            break
+        heapq.heappop(queue)
         selected_indices.add(candidate)
+        segment_end[left] = candidate
+        segment_end[candidate] = right
+        for piece_left, piece_right in ((left, candidate), (candidate, right)):
+            worst, next_candidate = worst_inside(piece_left, piece_right)
+            if next_candidate >= 0:
+                heapq.heappush(
+                    queue, (-worst, piece_left, piece_right, next_candidate)
+                )
 
     initial_point_count = len(selected_indices)
 
@@ -175,6 +262,17 @@ def approximate_motion_points(
             for index in indices
         ]
 
+    def final_curve_errors_for(points: Sequence[Dict[str, Any]]) -> List[float]:
+        _normalized, rendered = render_point_curve(list(points), curve_order)
+        rendered_by_time = {
+            round(time_sec, 9): float(value) for time_sec, value in rendered
+        }
+        return [
+            abs(value - rendered_by_time[round(time_sec, 9)])
+            for time_sec, value in ordered
+            if round(time_sec, 9) in rendered_by_time
+        ]
+
     def final_curve_errors(indices: Sequence[int]) -> List[float]:
         _normalized, rendered = render_point_curve(
             curve_points(indices), curve_order
@@ -187,30 +285,405 @@ def approximate_motion_points(
             for time_sec, value in ordered
         ]
 
-    # The first pass selects candidates by fast linear tracking.  The second
-    # pass checks the curve the user will actually edit and inserts a control
-    # point at its largest remaining error.
+    def worst_per_gap(errors: Sequence[float]) -> List[int]:
+        """아직 오차가 큰 구간마다 가장 어긋난 표본 하나씩 · §6-111
+
+        구간 하나를 채울 때마다 곡선을 통째로 다시 그리면, 5분짜리 녹화에서
+        포인트 2,000개를 넣는 데 54초가 걸렸다 · 나쁜 구간을 **한꺼번에** 채우면
+        다시 그리는 횟수가 열 번 남짓으로 줄어든다.
+
+        고르는 자리는 그대로다 · 실제로 사용자가 편집할 곡선의 오차가 가장 큰
+        표본이다 · 다만 구간마다 하나씩 동시에 고른다.
+        """
+        picked: List[int] = []
+        indices = sorted(selected_indices)
+        for left, right in zip(indices, indices[1:]):
+            candidate = -1
+            worst = tolerance
+            for index in range(left + 1, right):
+                if errors[index] > worst:
+                    candidate = index
+                    worst = errors[index]
+            if candidate >= 0:
+                picked.append(candidate)
+        return picked
+
+    # 1차 통과는 직선 추적으로 후보를 고른다 · 2차 통과는 **사용자가 실제로
+    # 편집할 곡선**을 그려 보고 아직 어긋난 자리를 채운다.
     errors = final_curve_errors(sorted(selected_indices))
-    while (
-        max(errors, default=0.0) > tolerance
-        and len(selected_indices) < min(point_limit, len(ordered))
-    ):
-        candidate = max(
-            (
-                index for index in range(len(ordered))
-                if index not in selected_indices
-            ),
-            key=lambda index: errors[index],
-            default=None,
-        )
-        if candidate is None:
+    room = min(point_limit, len(ordered))
+    while max(errors, default=0.0) > tolerance and len(selected_indices) < room:
+        candidates = worst_per_gap(errors)
+        if not candidates:
             break
-        selected_indices.add(candidate)
+        for candidate in candidates:
+            if len(selected_indices) >= room:
+                break
+            selected_indices.add(candidate)
         errors = final_curve_errors(sorted(selected_indices))
 
+    sample_step = {
+        round(time_sec, 9): step for step, (time_sec, _value) in enumerate(ordered)
+    }
+
+    #: 포인트를 빼면 곡선이 달라지는 범위 · 기울기는 바로 옆 포인트만 보므로
+    #: ±2 면 충분하다 · 5차는 가속도까지 보므로 한 칸 더 넉넉히 잡는다.
+    AFFECTED_NEIGHBOURS = 3
+
+    #: 솎아내기에 쓸 시도 횟수 · §6-113
+    #:
+    #: 한 번 시도할 때마다 조각을 다시 그린다 · 표본이 많을수록 조각도 크므로,
+    #: **표본 수에 반비례**하게 잡아 어떤 길이든 비슷한 시간에 끝나게 한다 ·
+    #: 18초짜리는 예산이 남아 완전히 최소까지 가고, 5분짜리는 예산 안에서
+    #: 최대한 줄인다 · 예산이 다해도 결과는 언제나 허용 오차 안이다.
+    prune_attempts = [max(400, 6_000_000 // max(1, len(ordered)))]
+
+    #: 조각만 그릴 때 양옆에 더 붙이는 여백 · 조각의 끝점은 기울기가 0 이 되어
+    #: 값이 달라진다 · 여백을 두면 그 영향이 정작 볼 구간까지 닿지 않는다.
+    SLICE_MARGIN = 4
+
+    def changed_slots(
+        trial_length: int, dropped_slots: Sequence[int]
+    ) -> List[tuple[int, int]]:
+        """뺀 자리 주변에서 곡선이 달라지는 포인트 범위 · 겹치면 합친다."""
+        spans = sorted(
+            (
+                max(0, slot - AFFECTED_NEIGHBOURS),
+                min(trial_length - 1, slot + AFFECTED_NEIGHBOURS - 1),
+            )
+            for slot in dropped_slots
+        )
+        merged: List[tuple[int, int]] = []
+        for span in spans:
+            if merged and span[0] <= merged[-1][1] + 1:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], span[1]))
+            else:
+                merged.append(span)
+        return merged
+
+    def within_tolerance(
+        trial: Sequence[int], dropped_slots: Optional[Sequence[int]] = None
+    ) -> bool:
+        """이 포인트 집합이 허용 오차 안인가 · §6-113
+
+        `dropped_slots` 를 주면 **바뀐 자리만** 본다 · 빼기 전이 이미 허용 오차
+        안이었으므로 곡선이 그대로인 자리는 다시 볼 이유가 없다.
+
+        바뀐 자리도 **조각만** 그린다 · 전체 포인트로 기울기를 구하면 포인트가
+        많을수록 한 번 시험할 때마다 그만큼 든다 · 조각 양옆에 여백을 붙이면
+        전체로 그린 것과 값이 같다(끝점 기울기의 영향이 안 닿는다).
+        """
+        if dropped_slots is None:
+            return max(final_curve_errors(trial), default=0.0) <= tolerance
+        last = len(trial) - 1
+        for low, high in changed_slots(len(trial), dropped_slots):
+            slice_low = max(0, low - SLICE_MARGIN)
+            slice_high = min(last, high + SLICE_MARGIN)
+            piece = curve_points(trial[slice_low:slice_high + 1])
+            if len(piece) < 2:
+                return max(final_curve_errors(trial), default=0.0) <= tolerance
+            _normalized, rendered = render_point_curve(piece, curve_order)
+            window_start = ordered[trial[low]][0] - EPSILON
+            window_end = ordered[trial[high]][0] + EPSILON
+            for time_sec, value in rendered:
+                if time_sec < window_start or time_sec > window_end:
+                    continue
+                step = sample_step.get(round(time_sec, 9))
+                if step is None:
+                    continue
+                if abs(ordered[step][1] - value) > tolerance:
+                    return False
+        return True
+
+    def drop_group(kept: List[int], group: Sequence[int]) -> Optional[List[int]]:
+        """이 묶음을 빼 본다 · 안 되면 반으로 나눠 각각 다시 · 되는 것만 뺀다.
+
+        하나씩 빼 보고 곡선을 다시 그리면 5분짜리에서 수십 초가 걸린다 ·
+        한 번에 빼 보고 실패할 때만 쪼개면 다시 그리는 횟수가 확 준다 ·
+        실패한 묶음을 버리지 않고 **양쪽 다** 다시 보는 것이 핵심이다 ·
+        한쪽만 보면 뺄 수 있는 것을 놓친다.
+        """
+        if prune_attempts[0] <= 0:
+            return None
+        prune_attempts[0] -= 1
+        dropping = set(group)
+        trial: List[int] = []
+        dropped_slots: List[int] = []
+        for index in kept:
+            if index in dropping:
+                dropped_slots.append(len(trial))
+                continue
+            trial.append(index)
+        if within_tolerance(trial, dropped_slots):
+            return trial
+        if len(group) <= 1:
+            return None
+        middle = len(group) // 2
+        first = drop_group(kept, group[:middle])
+        base = kept if first is None else first
+        second = drop_group(base, group[middle:])
+        if second is not None:
+            return second
+        return first
+
+    def prune_redundant(indices: List[int]) -> List[int]:
+        """허용 오차를 지키면서 뺄 수 있는 포인트는 뺀다 · §6-113
+
+        앞에서부터 욕심내어 넣기 때문에, 나중에 넣은 포인트가 앞서 넣은 것을
+        필요 없게 만든다 · 그대로 두면 「정밀도 안에서 최소」가 아니다.
+
+        뺐을 때 이웃 사이에서 가장 덜 벗어나는 것부터, 서로 붙어 있지 않은
+        것끼리 묶어 시도한다 · 넘으면 되돌리므로 결과는 **언제나 허용 오차
+        안**이다.
+        """
+        kept = list(indices)
+        while len(kept) > 2:
+            ranked = sorted(
+                (
+                    interpolation_error(kept[slot], kept[slot - 1], kept[slot + 1]),
+                    kept[slot],
+                )
+                for slot in range(1, len(kept) - 1)
+            )
+            group: List[int] = []
+            blocked: set = set()
+            for _cost, index in ranked:
+                slot = kept.index(index)
+                if slot in blocked:
+                    continue
+                group.append(index)
+                blocked.update((slot - 1, slot, slot + 1))
+            reduced = drop_group(kept, group)
+            if reduced is not None and len(reduced) < len(kept):
+                kept = reduced
+                continue
+            # 묶음으로는 더 못 뺀다 · 이웃끼리 겹쳐 빠진 후보가 남아 있으므로
+            # 마지막에 하나씩 훑는다 · 여기서 아무것도 안 빠져야 「최소」다.
+            removed_alone = False
+            slot = 1
+            while slot < len(kept) - 1 and prune_attempts[0] > 0:
+                prune_attempts[0] -= 1
+                trial = kept[:slot] + kept[slot + 1:]
+                if within_tolerance(trial, [slot]):
+                    kept = trial
+                    removed_alone = True
+                else:
+                    slot += 1
+            if not removed_alone or prune_attempts[0] <= 0:
+                break
+        return kept
+
+    def free_points(
+        times: Sequence[float], values: Sequence[float], stable_ids: bool = False
+    ) -> List[Dict[str, Any]]:
+        tangent_mode = 'linear' if curve_order == 1 else 'auto'
+        return [
+            {
+                'point_id': (
+                    f'point_{uuid.uuid4().hex[:8]}' if stable_ids else f'free_{slot}'
+                ),
+                'time_sec': float(time_sec),
+                'value_deg': float(value),
+                'tangent_mode': tangent_mode,
+            }
+            for slot, (time_sec, value) in enumerate(zip(times, values))
+        ]
+
+    def free_curve(
+        times: Sequence[float], values: Sequence[float],
+        low: int, high: int,
+    ) -> Dict[float, float]:
+        """조각만 그린다 · 양옆 여백을 붙여 전체로 그린 것과 값이 같게 한다."""
+        slice_low = max(0, low - SLICE_MARGIN)
+        slice_high = min(len(times) - 1, high + SLICE_MARGIN)
+        piece = free_points(
+            times[slice_low:slice_high + 1], values[slice_low:slice_high + 1]
+        )
+        if len(piece) < 2:
+            piece = free_points(times, values)
+        _normalized, rendered = render_point_curve(piece, curve_order)
+        return {round(float(t), 9): float(v) for t, v in rendered}
+
+    def solve_normal_equations(
+        matrix: List[List[float]], vector: List[float]
+    ) -> Optional[List[float]]:
+        """작은 연립방정식 하나 · 자유 포인트가 여덟 남짓이라 이걸로 충분하다."""
+        size = len(vector)
+        rows = [list(matrix[index]) + [vector[index]] for index in range(size)]
+        for column in range(size):
+            pivot = max(range(column, size), key=lambda row: abs(rows[row][column]))
+            if abs(rows[pivot][column]) < 1e-12:
+                return None
+            rows[column], rows[pivot] = rows[pivot], rows[column]
+            head = rows[column][column]
+            for row in range(column + 1, size):
+                factor = rows[row][column] / head
+                if factor:
+                    for cell in range(column, size + 1):
+                        rows[row][cell] -= factor * rows[column][cell]
+        answer = [0.0] * size
+        for row in range(size - 1, -1, -1):
+            total = rows[row][size] - sum(
+                rows[row][cell] * answer[cell] for cell in range(row + 1, size)
+            )
+            answer[row] = total / rows[row][row]
+        return answer
+
+    def fit_free_values(
+        times: Sequence[float], values: Sequence[float], free: Sequence[int],
+    ) -> tuple[Optional[List[float]], float]:
+        """자유 포인트의 값을 움직여 그 언저리의 **최대 오차**를 줄인다 · §6-117
+
+        포인트를 녹화 표본 값에 묶어 두면, 곡선이 그 점을 반드시 지나야 해서
+        주변에 포인트가 더 필요하다 · 허용 오차 안에서 값을 조금 옮길 수 있게
+        하면 같은 모양을 더 적은 포인트로 낸다 · 실측 14~19% 감소.
+
+        곡선은 포인트 값에 대해 **선형**이다(1·3·5차 모두) · 그래서 값 하나씩
+        1 만큼 밀어 본 결과를 모으면 그것이 그대로 계수표가 된다 · 최소제곱으로
+        풀고, 큰 오차에 무게를 더 실어 몇 번 되풀면 최대 오차 기준에 가까워진다.
+        """
+        low = max(0, min(free) - AFFECTED_NEIGHBOURS)
+        high = min(len(times) - 1, max(free) + AFFECTED_NEIGHBOURS)
+        base = list(values)
+        zero = free_curve(times, base, low, high)
+        # 여백 구간은 세지 않는다 · 조각의 끝점은 기울기가 0 이 되어 값이
+        # 다르다 · 여백을 오차로 세면 멀쩡한 후보가 죄다 퇴짜를 맞는다.
+        window_start = times[low] - EPSILON
+        window_end = times[high] + EPSILON
+        window = [
+            step for step in range(len(ordered))
+            if round(ordered[step][0], 9) in zero
+            and window_start <= ordered[step][0] <= window_end
+        ]
+        if not window:
+            return None, float('inf')
+        residual = [
+            ordered[step][1] - zero[round(ordered[step][0], 9)] for step in window
+        ]
+        columns: List[List[float]] = []
+        for slot in free:
+            bumped = list(base)
+            bumped[slot] += 1.0
+            moved = free_curve(times, bumped, low, high)
+            columns.append([
+                moved[round(ordered[step][0], 9)] - zero[round(ordered[step][0], 9)]
+                for step in window
+            ])
+        weights = [1.0] * len(window)
+        best: Optional[List[float]] = None
+        best_error = float('inf')
+        for _sweep in range(FREE_VALUE_SWEEPS):
+            size = len(free)
+            normal = [
+                [
+                    sum(
+                        weights[k] * columns[i][k] * columns[j][k]
+                        for k in range(len(window))
+                    )
+                    for j in range(size)
+                ]
+                for i in range(size)
+            ]
+            for index in range(size):
+                normal[index][index] += 1e-9
+            right = [
+                sum(weights[k] * columns[i][k] * residual[k] for k in range(len(window)))
+                for i in range(size)
+            ]
+            delta = solve_normal_equations(normal, right)
+            if delta is None:
+                break
+            trial = list(base)
+            for index, slot in enumerate(free):
+                trial[slot] += delta[index]
+            got = free_curve(times, trial, low, high)
+            errors_here = [
+                abs(ordered[step][1] - got[round(ordered[step][0], 9)])
+                for step in window
+                if round(ordered[step][0], 9) in got
+            ]
+            if not errors_here:
+                break
+            worst = max(errors_here)
+            if worst < best_error:
+                best, best_error = trial, worst
+            peak = worst or 1.0
+            weights = [
+                weight * (0.2 + 0.8 * (error / peak) ** 2)
+                for weight, error in zip(weights, errors_here)
+            ]
+        return best, best_error
+
+    def free_value_pass(
+        indices: Sequence[int]
+    ) -> tuple[List[float], List[float]]:
+        """값을 허용 오차 안에서 풀어 주고 포인트를 더 뺀다 · §6-117"""
+        times = [ordered[index][0] for index in indices]
+        values = [ordered[index][1] for index in indices]
+        while len(times) > 3 and prune_attempts[0] > 0:
+            ranked = sorted(
+                range(1, len(times) - 1),
+                key=lambda slot: abs(
+                    values[slot] - (
+                        values[slot - 1]
+                        + (values[slot + 1] - values[slot - 1])
+                        * ((times[slot] - times[slot - 1])
+                           / max(times[slot + 1] - times[slot - 1], EPSILON))
+                    )
+                ),
+            )
+            progressed = False
+            for slot in ranked[:FREE_VALUE_TRIES]:
+                if prune_attempts[0] <= 0:
+                    break
+                prune_attempts[0] -= 1
+                trial_times = times[:slot] + times[slot + 1:]
+                trial_values = values[:slot] + values[slot + 1:]
+                free = list(range(
+                    max(1, slot - FREE_VALUE_WINDOW),
+                    min(len(trial_times) - 1, slot + FREE_VALUE_WINDOW),
+                ))
+                # 창이 너무 벌어지면 이웃을 줄인다 · 끝물에 포인트가 성길수록
+                # 같은 이웃 수가 훨씬 긴 시간을 덮는다
+                while len(free) > 2 and (
+                    trial_times[min(len(trial_times) - 1, max(free) + AFFECTED_NEIGHBOURS)]
+                    - trial_times[max(0, min(free) - AFFECTED_NEIGHBOURS)]
+                ) > FREE_VALUE_MAX_SAMPLES * DEFAULT_PERIOD_SEC:
+                    if max(free) - slot >= slot - min(free):
+                        free.pop()
+                    else:
+                        free.pop(0)
+                if not free:
+                    continue
+                tuned, worst = fit_free_values(trial_times, trial_values, free)
+                if tuned is None or worst > tolerance:
+                    continue
+                times, values = trial_times, tuned
+                progressed = True
+                break
+            if not progressed:
+                break
+        return times, values
+
     indices = sorted(selected_indices)
-    points = curve_points(indices, stable_ids=True)
-    errors = final_curve_errors(indices)
+    free_times: Optional[List[float]] = None
+    free_values: Optional[List[float]] = None
+    if max(errors, default=0.0) <= tolerance:
+        # 허용 오차를 못 맞춘 채 상한에 걸린 경우는 뺄 여유가 없다
+        indices = prune_redundant(indices)
+        free_times, free_values = free_value_pass(indices)
+        if len(free_times) >= len(indices):
+            free_times = free_values = None
+    if free_times is not None and free_values is not None:
+        points = free_points(free_times, free_values, stable_ids=True)
+        errors = final_curve_errors_for(points)
+        if max(errors, default=0.0) > tolerance:
+            # 값을 푼 결과가 허용 오차를 넘으면 쓰지 않는다 · 전체로 다시 확인한다
+            points = curve_points(indices, stable_ids=True)
+            errors = final_curve_errors(indices)
+    else:
+        points = curve_points(indices, stable_ids=True)
+        errors = final_curve_errors(indices)
     return points, {
         'operation': 'create_axis_point_curve',
         'interpolation_order': curve_order,
@@ -633,8 +1106,40 @@ def merge_layers(
                 f"레이어 합치기 중단 · '{layer.get('name') or layer.get('layer_id')}'의 "
                 f'포인트 곡선이 20ms 프레임과 어긋납니다: {axes}'
             )
+    # 한 축이 한쪽에만 포인트로 덮여 있으면 합치지 않는다 · §6-116
+    #
+    # 합치면 그 축은 **반쪽**이 된다 · 덮인 구간은 포인트로 편집되고 나머지는
+    # "포인트가 없는 모션은 편집할 수 없습니다" 로 막힌다 · 거기서 「전체 포인트
+    # 생성」을 누르면 축 전체를 새로 맞춘 곡선 하나로 덮어써, 앞쪽에서 손으로
+    # 다듬어 둔 포인트가 사라진다 · 합치고 나서는 되돌릴 방법이 없다.
+    #
+    # 축이 서로 다른 경우는 막지 않는다 · 그때는 축마다 상태가 한결같아서
+    # "이 축은 포인트로 편집, 저 축은 아직" 이 그대로 성립한다.
+    covered_by: Dict[str, List[str]] = {}
+    uncovered_by: Dict[str, List[str]] = {}
+    for layer in selected_layers:
+        normalized = normalize_layer(copy.deepcopy(layer))
+        gaps = set(layer_point_coverage_issues(normalized))
+        label = str(layer.get('name') or layer.get('layer_id') or '')
+        for motion_id in _tracks(normalized):
+            table = uncovered_by if motion_id in gaps else covered_by
+            table.setdefault(motion_id, []).append(label)
+    mixed_axes = sorted(set(covered_by) & set(uncovered_by))
+    if mixed_axes:
+        motion_id = mixed_axes[0]
+        with_points = ', '.join(covered_by[motion_id])
+        without_points = ', '.join(uncovered_by[motion_id])
+        raise ValueError(
+            f'레이어 합치기 중단 · 축 {motion_id} 은 한쪽에만 포인트가 있습니다 · '
+            f'포인트 있음: {with_points} · 포인트 없음: {without_points} · '
+            '이대로 합치면 그 축은 앞부분만 포인트로 편집되고 나머지는 편집할 수 '
+            '없습니다 · 합치기 전에 포인트 없는 레이어의 해당 축에 포인트를 '
+            '만들거나, 양쪽 모두 포인트 없이 합치세요'
+        )
+
     append_id = str(append_layer_id or '')
     append_offset_sec = 0.0
+    append_seam_sec = 0.0
     if append_id:
         if append_id not in selected_ids:
             raise ValueError('뒤로 이동할 레이어가 합치기 대상에 포함되지 않았습니다')
@@ -661,6 +1166,8 @@ def merge_layers(
         selected_layers[append_index] = _shift_layer_time(
             selected_layers[append_index], append_offset_sec
         )
+        # 이음매는 **뒤 레이어의 첫 프레임**이다 · 옮긴 양이 아니다
+        append_seam_sec = _layer_time_bounds(selected_layers[append_index])[0]
     temporary = {
         'period_sec': DEFAULT_PERIOD_SEC,
         'layers': selected_layers,
@@ -692,5 +1199,46 @@ def merge_layers(
         'mode': 'append' if append_id else 'preserve',
         'append_layer_id': append_id,
         'append_offset_sec': append_offset_sec,
+        'append_seam': _append_seam_steps(merged, append_seam_sec)
+        if append_id else [],
     }
     return merged
+
+
+def _append_seam_steps(
+    merged: Mapping[str, Any], seam_sec: float
+) -> List[Dict[str, Any]]:
+    """이어 붙인 자리에서 값이 얼마나 튀는가 · §6-116
+
+    앞 레이어의 마지막 값과 뒤 레이어의 첫 값 사이에는 아무것도 없다 · 섞어
+    주지 않으므로 20ms 한 칸에 그 차이만큼 건너뛴다 · 실제로 40° 가 튄 적이
+    있다(다른 칸은 최대 1.5°) · 모터에 계단 명령이 그대로 나간다.
+
+    **막지는 않는다** · 사용자가 보고 판단할 일이다 · 다만 말은 해 준다.
+    """
+    frames = list(merged.get('frames') or [])
+    if len(frames) < 2 or seam_sec <= EPSILON:
+        return []
+    seam_index = next(
+        (
+            index for index, frame in enumerate(frames)
+            if _finite(frame.get('time_sec'), '프레임 시간') >= seam_sec - EPSILON
+        ),
+        None,
+    )
+    if not seam_index:
+        return []
+    before = frames[seam_index - 1].get('values') or {}
+    after = frames[seam_index].get('values') or {}
+    steps = []
+    for motion_id in sorted(set(before) & set(after)):
+        delta = abs(float(after[motion_id]) - float(before[motion_id]))
+        steps.append({
+            'motion_id': motion_id,
+            'time_sec': round(
+                _finite(frames[seam_index].get('time_sec'), '프레임 시간'), 9
+            ),
+            'step_deg': round(delta, 4),
+        })
+    steps.sort(key=lambda item: -item['step_deg'])
+    return steps

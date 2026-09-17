@@ -256,6 +256,51 @@ def _sample_polynomial_segment(
     )
 
 
+def render_point_curve_window(
+    raw_points: Sequence[Any],
+    interpolation_order: int,
+    first_step: int,
+    last_step: int,
+) -> List[tuple[float, float]]:
+    """20ms 표본 중 [first_step, last_step] 칸만 그린다 · §6-113
+
+    포인트를 하나 빼면 곡선은 **그 주변에서만** 달라진다 · 기울기는 바로 옆
+    포인트만 보고 정해지기 때문이다 · 바뀐 자리만 다시 그리면, 포인트를 솎아낼
+    때 곡선을 통째로 다시 그리지 않아도 된다.
+
+    같은 칸을 물으면 `render_point_curve` 와 **같은 값**을 돌려준다 · 기울기를
+    전체 포인트에서 구하기 때문이다 · 잘라낸 토막으로 그리면 끝점 기울기가
+    달라져 값이 틀린다.
+    """
+    points = prepare_curve_points(raw_points, interpolation_order)
+    start = float(points[0]['time_sec'])
+    end = float(points[-1]['time_sec'])
+    count = int(round((end - start) / DEFAULT_PERIOD_SEC))
+    first = max(0, int(first_step))
+    last = min(count, int(last_step))
+    samples = []
+    segment_index = 0
+    for index in range(first, last + 1):
+        time_sec = round(start + (index * DEFAULT_PERIOD_SEC), 9)
+        while (
+            segment_index + 1 < len(points) - 1
+            and time_sec > points[segment_index + 1]['time_sec'] + EPSILON
+        ):
+            segment_index += 1
+        if index == 0:
+            samples.append((start, float(points[0]['value_deg'])))
+        elif index == count:
+            samples.append((end, float(points[-1]['value_deg'])))
+        else:
+            samples.append((
+                time_sec,
+                _sample_polynomial_segment(
+                    points, segment_index, time_sec, interpolation_order
+                ),
+            ))
+    return samples
+
+
 def render_point_curve(
     raw_points: Sequence[Any], interpolation_order: int = 3
 ) -> tuple[List[Dict[str, Any]], List[tuple[float, float]]]:

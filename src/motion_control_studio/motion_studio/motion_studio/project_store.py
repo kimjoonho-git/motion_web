@@ -249,7 +249,7 @@ class ProjectStore:
         떼어낼 곳이 **셋**이다. 하나라도 빠뜨리면 조용히 어긋난다:
         `motion_ids`, 프레임마다의 `values`, 그리고 `editor_layer` 의
         `point_curves`. 곡선만 남기면 `point_curve_frame_mismatches` 가 짝이
-        없는 시각마다 `inf` 를 내서 합성 미리보기와 내보내기가 막힌다.
+        없는 시각마다 `inf` 를 내서 레이어 재생와 내보내기가 막힌다.
 
         **읽을 때만 떼어낸다 · 파일은 건드리지 않는다.** 떨어져 나간 축은
         원본에 그대로 있고, 축을 가진 PC 로 돌아가면 다시 산다.

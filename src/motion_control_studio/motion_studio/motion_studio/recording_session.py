@@ -9,7 +9,7 @@ from typing import Any, Dict
 
 from .constants import DEFAULT_PERIOD_SEC
 
-#: 실행 노드가 돌리는 카운트다운 · 합성 미리보기와 같은 값
+#: 실행 노드가 돌리는 카운트다운 · 레이어 재생와 같은 값
 COUNTDOWN_SEC = 3.0
 from .layer_commands import next_numbered_layer_name
 from .procedure import ProcedureStopped, StudioProcedure
@@ -211,7 +211,7 @@ class StudioRecordingSession:
 
         전에는 스튜디오가 0 도 이동을 따로 시키고, 카운트다운도 직접 돌리고,
         그 다음 재생을 시켰다 · 그런데 실행 노드의 `start` 는 원래 그 셋을
-        이어서 한다(합성 미리보기가 이미 그렇게 쓴다). 그래서 **초기 이동이 두
+        이어서 한다(레이어 재생가 이미 그렇게 쓴다). 그래서 **초기 이동이 두
         번** 일어났다 · 0 도로 한 번, 합성 시작 위치로 또 한 번.
 
         이제 한 번만 움직인다 · 목적지는 합성의 0 초 값이고, 레이어에 없는 축은

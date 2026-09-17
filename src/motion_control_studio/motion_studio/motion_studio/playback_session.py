@@ -70,7 +70,7 @@ class StudioPlaybackSession:
             studio._require_idle_locked()
             project = studio._require_project_locked()
             mapping = studio._validate_mapping_locked(project)
-            studio._require_point_curve_consistency(project, '합성 미리보기')
+            studio._require_point_curve_consistency(project, '레이어 재생')
             motion_ids = project_motion_ids(project)
             if not motion_ids:
                 raise ValueError('재생할 모션 데이터가 없습니다')
@@ -85,7 +85,7 @@ class StudioPlaybackSession:
                 hidden=True,
             )
             operation_generation = studio._takes().begin(
-                'preview', '합성 미리보기 초기 위치 이동 중',
+                'preview', '레이어 재생 초기 위치 이동 중',
             )
             studio._takes().tick(0.0, max(
                 (float(frame.get('time_sec') or 0.0) for frame in frames),
@@ -105,7 +105,7 @@ class StudioPlaybackSession:
             ),
             daemon=True,
         ).start()
-        return {'success': True, 'message': '초기 위치 이동 후 합성 미리보기를 재생합니다'}
+        return {'success': True, 'message': '초기 위치 이동 후 레이어를 재생합니다'}
 
     def prepare_playback(
         self,
@@ -115,7 +115,7 @@ class StudioPlaybackSession:
         move_time: float,
         operation_generation: int,
     ) -> None:
-        """합성 미리보기 · 초기 이동과 카운트다운은 실행 노드가 맡는다 · §6-82"""
+        """레이어 재생 · 초기 이동과 카운트다운은 실행 노드가 맡는다 · §6-82"""
         studio = self.studio
 
         def start() -> None:
@@ -130,10 +130,10 @@ class StudioPlaybackSession:
                 'initializing',
             )
             if not result.get('success'):
-                raise ValueError(result.get('message') or '합성 미리보기 시작 실패')
+                raise ValueError(result.get('message') or '레이어 재생 시작 실패')
 
         StudioProcedure(studio, operation_generation).run([
-            ('합성 미리보기 시작', start),
+            ('레이어 재생 시작', start),
         ])
 
     def mirror_run_status_locked(self, payload: Dict[str, Any]) -> None:
@@ -161,7 +161,7 @@ class StudioPlaybackSession:
             and run_state in {'running', 'verifying'}
         ):
             # 단계만 옮긴다 · 종류는 테이크가 쥐고 있다 · §6-80
-            studio._takes().advance('running', '레이어 합성 미리보기 재생 중')
+            studio._takes().advance('running', '레이어 레이어 재생 재생 중')
             studio_state = studio._state_locked()
         elif (
             payload.get('request_source') == 'motion_studio'
@@ -191,7 +191,7 @@ class StudioPlaybackSession:
             and payload.get('request_source') == 'motion_studio'
             and payload.get('state') in {'completed', 'error', 'stopped'}
         ):
-            message = str(payload.get('message') or '합성 미리보기 종료')
+            message = str(payload.get('message') or '레이어 재생 종료')
             if payload.get('state') == 'error':
                 studio._takes().fail(message)
             else:

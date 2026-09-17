@@ -2,12 +2,14 @@ import pytest
 
 from motion_studio.curve_engine import interpolation_ratio, render_point_curve
 from motion_studio.layer_editor import (
+    MAX_APPROXIMATION_POINTS,
     approximate_motion_points,
     edit_layer,
     layer_point_coverage_issues,
     merge_layers,
 )
 from motion_studio.layer_validation import point_curve_frame_mismatches
+from motion_studio.motion_model import normalize_layer
 
 
 def layer():
@@ -574,7 +576,9 @@ def test_automatic_approximation_uses_more_points_for_complex_motion():
         for index in range(21)
     ], tolerance_deg=0.01, maximum_points=50)
 
-    assert len(simple) == 3
+    # 곧은 경사는 양 끝 두 개면 오차가 0 이다 · 가운데 포인트는 제 몫이
+    # 없으므로 솎여 나간다 · 「정밀도 안에서 최소」 · §6-113
+    assert len(simple) == 2
     assert len(complex_points) > len(simple)
     assert simple_report['maximum_error_deg'] <= 0.01
     assert complex_report['maximum_error_deg'] <= 0.01
@@ -869,9 +873,13 @@ def test_merge_append_moves_the_user_selected_whole_layer_after_the_other_layer(
         if curve['motion_id'] in {'1-1', '2-1'} and curve['curve_id'].startswith('curve-b-')
         for point in curve['points']
     } == {0.06, 0.08}
-    assert append_second['merge_report'] == {
-        'mode': 'append', 'append_layer_id': 'b', 'append_offset_sec': 0.04,
-    }
+    report = append_second['merge_report']
+    assert {
+        key: report[key]
+        for key in ('mode', 'append_layer_id', 'append_offset_sec')
+    } == {'mode': 'append', 'append_layer_id': 'b', 'append_offset_sec': 0.04}
+    # 이음매에서 얼마나 튀는지도 함께 알린다 · 막지는 않는다 · §6-116
+    assert [item['motion_id'] for item in report['append_seam']] == ['1-1', '2-1']
     assert values(append_first, '1-1') == [20.0, 21.0, 0.0, 1.0]
     assert append_first['merge_report']['append_layer_id'] == 'a'
     assert point_curve_frame_mismatches(append_second) == []
@@ -901,12 +909,12 @@ def test_merge_append_requires_the_moved_layer_to_be_selected():
         )
 
 
-def _recorded(layer_id, name, samples):
+def _recorded(layer_id, name, samples, motion_id='1-1'):
     """녹화가 내놓는 레이어 · 20ms 프레임만 있고 포인트 곡선은 없다."""
     return {
         'layer_id': layer_id, 'name': name,
         'frames': [
-            {'frame': i + 1, 'time_sec': t, 'values': {'1-1': v}}
+            {'frame': i + 1, 'time_sec': t, 'values': {motion_id: v}}
             for i, (t, v) in enumerate(samples)
         ],
     }
@@ -930,17 +938,21 @@ def test_recorded_layers_can_be_merged():
 
 
 def test_merging_a_recorded_layer_with_a_point_backed_one_keeps_both():
-    """한쪽만 포인트 곡선이 있어도 된다 · 합친 레이어는 곡선이 있는 축만
-    곡선을 물려받고, 나머지는 프레임 그대로 남는다."""
+    """한쪽만 포인트 곡선이 있어도 된다 · **축이 다를 때** 이야기다 · §6-116
+
+    같은 축을 한쪽만 포인트로 덮은 채 합치면 그 축이 반쪽이 되어 막는다 ·
+    축이 다르면 축마다 상태가 한결같으므로 그대로 합친다 · 합친 레이어는
+    곡선이 있는 축만 곡선을 물려받고 나머지는 프레임 그대로 남는다.
+    """
     recorded = _recorded('a', '녹화 1', [(0.02, 0.0), (0.04, 1.0)])
     edited = create_all_axis_points(
-        _recorded('c', '편집한 레이어', [(0.06, 20.0), (0.08, 21.0)])
+        _recorded('c', '편집한 레이어', [(0.06, 20.0), (0.08, 21.0)], motion_id='1-2')
     )
 
     merged = merge_layers({'layers': [recorded, edited]}, ['a', 'c'])
 
-    assert values(merged) == [0.0, 1.0, 20.0, 21.0]
     assert len(merged['point_curves']) == 1
+    assert merged['point_curves'][0]['motion_id'] == '1-2'
     # 합친 결과도 시스템의 불변식을 지킨다 · 다시 합칠 수 있다
     assert point_curve_frame_mismatches(merged) == []
 
@@ -972,3 +984,373 @@ def test_merge_rejects_exact_time_overlap():
 
     with pytest.raises(ValueError, match=r'합치기 중단 · 시간 충돌.*1-1.*0\.040~0\.040초'):
         merge_layers({'layers': [first, overlap]}, ['a', 'b'])
+
+
+# 거친 허용 오차가 있어야 빽빽한 녹화도 포인트로 바뀐다 · §6-110
+#
+# 포인트는 최대 200개까지만 만든다 · 굴곡이 많은 긴 녹화는 0.5° 안에 들어오지
+# 못해 「전체 포인트 생성」이 통째로 실패했다 · 실제 18.7초 녹화에서 0.5°는
+# 200개로도 못 맞췄고 1°는 186개로 들어왔다.
+
+
+def _wiggly_samples():
+    """빽빽한 녹화의 모양 · 20ms 간격 · 잔 굴곡이 많다."""
+    import math
+    return [
+        (round(index * 0.02, 3),
+         60.0 * math.sin(index * 0.05) + 5.0 * math.sin(index * 0.2))
+        for index in range(900)
+    ]
+
+
+def test_a_fine_tolerance_can_run_out_of_points():
+    """사용자가 본 실패 · 이 상태가 존재하기 때문에 거친 선택지가 필요하다."""
+    for tolerance in (0.02, 0.1):
+        _points, report = approximate_motion_points(
+            _wiggly_samples(), tolerance, 200, 3
+        )
+        assert report['point_limit_reached'] is True, (
+            f'{tolerance}° 가 들어와 버리면 이 시험이 아무것도 못 지킨다'
+        )
+
+
+def test_a_coarse_tolerance_fits_inside_the_point_budget():
+    for tolerance in (1.0, 2.0, 3.0):
+        points, report = approximate_motion_points(
+            _wiggly_samples(), tolerance, 200, 3
+        )
+        assert report['point_limit_reached'] is False, f'{tolerance}° 도 못 맞춘다'
+        assert 3 <= len(points) <= 200
+
+
+def test_a_coarser_tolerance_never_needs_more_points():
+    counts = [
+        len(approximate_motion_points(_wiggly_samples(), tolerance, 200, 3)[0])
+        for tolerance in (1.0, 2.0, 3.0)
+    ]
+    assert counts == sorted(counts, reverse=True), '거칠게 잡았는데 포인트가 늘었다'
+
+
+# 긴 모션도 포인트로 바뀐다 · §6-111
+#
+# 포인트 하나를 고를 때마다 표본 전체를 다시 훑었다 · 5분짜리(15,000표본)에서
+# 2,000개를 고르면 54초가 걸려, 상한을 200 에 묶어 둘 수밖에 없었고 긴 모션은
+# 「전체 포인트 생성」 자체가 되지 않았다.
+#
+# 구간의 오차는 그 구간을 쪼개기 전까지 변하지 않는다 · 쪼갠 구간만 다시 재고,
+# 아직 어긋난 구간은 한 번에 채운다.
+
+
+def _five_minute_samples():
+    """5분 · 20ms · 사람이 슬라이더로 만든 모양(느린 흔들림 + 잔떨림)."""
+    import math
+    return [
+        (round(index * 0.02, 3),
+         45.0 * math.sin(index * 0.004)
+         + 10.0 * math.sin(index * 0.017)
+         + 1.5 * math.sin(index * 0.09))
+        for index in range(15_000)
+    ]
+
+
+def test_a_five_minute_motion_converts_within_the_budget():
+    points, report = approximate_motion_points(
+        _five_minute_samples(), 0.5, MAX_APPROXIMATION_POINTS, 3
+    )
+    assert report['point_limit_reached'] is False, '5분짜리가 아직도 안 된다'
+    assert report['maximum_error_deg'] <= 0.5
+    assert 3 <= len(points) <= MAX_APPROXIMATION_POINTS
+
+
+def test_the_budget_is_large_enough_for_a_long_motion():
+    """200 으로는 5분짜리가 절대 들어오지 않는다 · 상한이 벽이었다."""
+    assert MAX_APPROXIMATION_POINTS >= 2000
+    _points, report = approximate_motion_points(
+        _five_minute_samples(), 0.5, 200, 3
+    )
+    assert report['point_limit_reached'] is True
+
+
+def test_a_long_motion_does_not_take_minutes():
+    """속도가 곧 기능이다 · 느리면 상한을 다시 못 올린다 · 넉넉하게 10초로 잡는다."""
+    import time
+    started = time.monotonic()
+    approximate_motion_points(
+        _five_minute_samples(), 0.02, MAX_APPROXIMATION_POINTS, 5
+    )
+    assert time.monotonic() - started < 10.0
+
+
+def test_the_choice_still_follows_the_largest_error():
+    """고르는 규칙은 그대로 · 직선에서 가장 벗어난 자리가 먼저 뽑힌다."""
+    samples = [(round(index * 0.02, 3), 0.0) for index in range(11)]
+    samples[3] = (samples[3][0], 10.0)
+    points, _report = approximate_motion_points(samples, 0.5, 4, 1)
+    assert 0.06 in [point['time_sec'] for point in points]
+
+
+# 직선 기준으로 재면 곡선에 필요 없는 포인트까지 잡는다 · §6-112
+
+
+def test_relaxing_the_linear_pass_costs_no_accuracy():
+    """느슨하게 잡아도 최종 결과는 허용 오차 안에 있어야 한다."""
+    for tolerance in (0.1, 0.5, 1.0):
+        for order in (3, 5):
+            _points, report = approximate_motion_points(
+                _wiggly_samples(), tolerance, MAX_APPROXIMATION_POINTS, order
+            )
+            assert report['point_limit_reached'] is False
+            assert report['maximum_error_deg'] <= tolerance + 1e-9
+
+
+def test_a_straight_line_curve_is_not_relaxed():
+    """1차(직선)는 1차 통과가 곧 최종 곡선이다 · 느슨하게 잡으면 오차를 넘긴다."""
+    points, report = approximate_motion_points(
+        _wiggly_samples(), 0.5, MAX_APPROXIMATION_POINTS, 1
+    )
+    assert report['maximum_error_deg'] <= 0.5 + 1e-9
+    assert len(points) <= report['initial_point_count']
+
+
+def test_the_relaxed_pass_really_reduces_points():
+    """긴 모션에서 값이 드러난다 · 솎아내기 예산이 한정되어 있기 때문이다.
+
+    짧은 모션은 솎아내기가 끝까지 가므로 1차 통과를 어떻게 잡든 결과가 같다 ·
+    긴 모션은 예산이 먼저 떨어지므로, 1차 통과가 덜 잡아 놓을수록 최종 포인트가
+    적다.
+    """
+    import motion_studio.layer_editor as editor_module
+    assert editor_module.LINEAR_PASS_RELAXATION > 1.0, (
+        '1차 통과를 직선 기준 그대로 재고 있다'
+    )
+    samples = _five_minute_samples()
+    shipped = editor_module.LINEAR_PASS_RELAXATION
+    try:
+        editor_module.LINEAR_PASS_RELAXATION = 1.0
+        tight, _ = approximate_motion_points(samples, 0.1, 5000, 3)
+    finally:
+        editor_module.LINEAR_PASS_RELAXATION = shipped
+    relaxed, report = approximate_motion_points(samples, 0.1, 5000, 3)
+    assert len(relaxed) < len(tight), '느슨하게 잡았는데 줄지 않았다'
+    assert report['maximum_error_deg'] <= 0.1 + 1e-9, '줄이면서 허용 오차를 넘겼다'
+
+
+# 정밀도 안에서 최소 포인트 · §6-113
+#
+# 앞에서부터 욕심내어 넣기 때문에, 나중에 넣은 포인트가 앞서 넣은 것을 필요
+# 없게 만든다 · 그대로 두면 「정밀도 안에서 최소」가 아니다.
+
+
+def test_no_point_can_be_removed_without_breaking_the_tolerance():
+    """남은 포인트는 전부 제 몫이 있어야 한다 · 하나라도 빼면 오차를 넘긴다."""
+    from motion_studio.curve_engine import render_point_curve
+    samples = _wiggly_samples()
+    tolerance = 1.0
+    points, report = approximate_motion_points(samples, tolerance, 5000, 3)
+    assert report['point_limit_reached'] is False
+
+    def worst_error(candidate_points):
+        _normalized, rendered = render_point_curve(candidate_points, 3)
+        by_time = {round(t, 9): v for t, v in rendered}
+        return max(
+            abs(value - by_time[round(time_sec, 9)])
+            for time_sec, value in samples
+        )
+
+    removable = [
+        slot for slot in range(1, len(points) - 1)
+        if worst_error(points[:slot] + points[slot + 1:]) <= tolerance
+    ]
+    assert removable == [], f'뺄 수 있는 포인트가 {len(removable)}개 남았다'
+
+
+def test_pruning_keeps_the_result_inside_the_tolerance():
+    for tolerance in (0.5, 1.0, 3.0):
+        for order in (1, 3, 5):
+            _points, report = approximate_motion_points(
+                _wiggly_samples(), tolerance, 5000, order
+            )
+            assert report['maximum_error_deg'] <= tolerance + 1e-9
+
+
+def test_a_long_motion_still_finishes_quickly_with_pruning():
+    import time
+    started = time.monotonic()
+    _points, report = approximate_motion_points(
+        _five_minute_samples(), 0.5, MAX_APPROXIMATION_POINTS, 3
+    )
+    assert report['maximum_error_deg'] <= 0.5 + 1e-9
+    assert time.monotonic() - started < 10.0
+
+
+# 한 축이 한쪽에만 포인트로 덮여 있으면 합치지 않는다 · §6-116
+#
+# 합치면 그 축은 반쪽이 된다 · 덮인 구간은 포인트로 편집되고 나머지는 막힌다 ·
+# 거기서 「전체 포인트 생성」을 누르면 축 전체를 새 곡선으로 덮어써, 앞쪽에서
+# 손으로 다듬어 둔 포인트가 사라진다 · 합치고 나서는 되돌릴 방법이 없다.
+
+
+def _recorded_sine(layer_id, name, motion_id, start_sec, count, phase=0.0):
+    import math
+    return normalize_layer({
+        'layer_id': layer_id, 'name': name, 'enabled': True, 'locked': False,
+        'point_curves': [],
+        'frames': [
+            {'time_sec': round(start_sec + index * 0.02, 3),
+             'values': {motion_id: 30.0 * math.sin(index * 0.05 + phase)}}
+            for index in range(count)
+        ],
+    })
+
+
+def _pointed_axis(layer, motion_id):
+    return edit_layer(layer, {
+        'operation': 'create_axis_point_curve', 'motion_ids': [motion_id],
+        'approximation_tolerance_deg': 1.0, 'approximation_maximum_points': 5000,
+        'approximation_interpolation_order': 3,
+    })
+
+
+def test_one_axis_pointed_on_only_one_side_is_refused():
+    pointed = _pointed_axis(_recorded_sine('A', '포인트', '1-1', 0.02, 200), '1-1')
+    raw = _recorded_sine('B', '생녹화', '1-1', 0.02, 200, phase=1.0)
+
+    with pytest.raises(ValueError) as caught:
+        merge_layers({'layers': [pointed, raw]}, ['A', 'B'], append_layer_id='B')
+
+    message = str(caught.value)
+    assert '1-1' in message, '어느 축인지 말하지 않는다'
+    assert '포인트' in message
+    assert '포인트 있음: 포인트' in message and '포인트 없음: 생녹화' in message, (
+        '어느 레이어가 어느 쪽인지 말하지 않는다'
+    )
+
+
+def test_both_sides_pointed_still_merges():
+    first = _pointed_axis(_recorded_sine('A', '앞', '1-1', 0.02, 200), '1-1')
+    second = _pointed_axis(_recorded_sine('B', '뒤', '1-1', 0.02, 200, phase=1.0), '1-1')
+
+    merged = merge_layers({'layers': [first, second]}, ['A', 'B'], append_layer_id='B')
+
+    assert len(merged['point_curves']) == 2
+    assert layer_point_coverage_issues(merged) == [], '축이 반쪽으로 남았다'
+
+
+def test_neither_side_pointed_still_merges():
+    """녹화한 레이어끼리 합치는 것은 막지 않는다 · §6-90 으로 이미 풀어 둔 길이다."""
+    first = _recorded_sine('A', '앞', '1-1', 0.02, 200)
+    second = _recorded_sine('B', '뒤', '1-1', 0.02, 200, phase=1.0)
+
+    merged = merge_layers({'layers': [first, second]}, ['A', 'B'], append_layer_id='B')
+
+    assert merged['point_curves'] == []
+
+
+def test_different_axes_are_not_affected():
+    """축이 다르면 축마다 상태가 한결같다 · 반쪽이 되지 않으므로 막지 않는다."""
+    pointed = _pointed_axis(_recorded_sine('A', '포인트', '1-1', 0.02, 200), '1-1')
+    raw = _recorded_sine('B', '생녹화', '1-2', 0.02, 200, phase=2.0)
+
+    merged = merge_layers({'layers': [pointed, raw]}, ['A', 'B'])
+
+    assert layer_point_coverage_issues(merged) == ['1-2']
+
+
+# 이음매에서 값이 튀는 것은 막지 않는다 · 다만 말해 준다 · §6-116
+
+
+def test_the_append_seam_step_is_reported():
+    first = _recorded_sine('A', '앞', '1-1', 0.02, 200)
+    second = _recorded_sine('B', '뒤', '1-1', 0.02, 200, phase=1.0)
+
+    merged = merge_layers({'layers': [first, second]}, ['A', 'B'], append_layer_id='B')
+
+    seam = merged['merge_report']['append_seam']
+    assert seam, '이음매를 알려 주지 않는다'
+    frames = {round(f['time_sec'], 3): f['values']['1-1'] for f in merged['frames']}
+    seam_time = round(float(seam[0]['time_sec']), 3)
+    measured = abs(frames[seam_time] - frames[round(seam_time - 0.02, 3)])
+    assert abs(seam[0]['step_deg'] - measured) < 1e-3, (
+        '알려 준 값이 실제 프레임 차이와 다르다'
+    )
+    assert seam[0]['step_deg'] > 1.0, '이 시험이 튀지 않는 자료를 쓰고 있다'
+
+
+def test_a_plain_merge_reports_no_seam():
+    first = _pointed_axis(_recorded_sine('A', '앞', '1-1', 0.02, 200), '1-1')
+    second = _pointed_axis(_recorded_sine('B', '다른축', '1-2', 0.02, 200, phase=2.0), '1-2')
+
+    merged = merge_layers({'layers': [first, second]}, ['A', 'B'])
+
+    assert merged['merge_report']['append_seam'] == []
+
+
+# 포인트 값을 허용 오차 안에서 푼다 · §6-117
+#
+# 포인트를 녹화 표본 값에 묶어 두면 곡선이 그 점을 반드시 지나야 해서 주변에
+# 포인트가 더 필요하다 · 값을 조금 옮길 수 있게 하면 같은 모양을 더 적은
+# 포인트로 낸다 · 실제 녹화에서 0.5° 218→186, 1° 154→133, 3° 90→63.
+
+
+def test_free_values_still_respect_the_tolerance():
+    """값을 풀어 주더라도 곡선은 허용 오차 안에 있어야 한다 · 전체로 다시 잰다."""
+    from motion_studio.curve_engine import render_point_curve
+    samples = _wiggly_samples()
+    for tolerance in (0.5, 1.0, 3.0):
+        for order in (1, 3, 5):
+            points, report = approximate_motion_points(
+                samples, tolerance, MAX_APPROXIMATION_POINTS, order
+            )
+            _normalized, rendered = render_point_curve(points, order)
+            by_time = {round(t, 9): v for t, v in rendered}
+            worst = max(
+                abs(value - by_time[round(time_sec, 9)])
+                for time_sec, value in samples
+                if round(time_sec, 9) in by_time
+            )
+            assert worst <= tolerance + 1e-9, f'{tolerance}° {order}차 에서 넘겼다'
+            assert abs(report['maximum_error_deg'] - worst) < 1e-6, (
+                '보고한 오차가 실제와 다르다'
+            )
+
+
+def test_point_times_stay_on_the_recorded_grid():
+    """값은 풀어 주지만 **시간은** 녹화 격자 위에 그대로 둔다."""
+    samples = _wiggly_samples()
+    grid = {round(time_sec, 9) for time_sec, _value in samples}
+    points, _report = approximate_motion_points(samples, 1.0, 5000, 3)
+    assert all(round(p['time_sec'], 9) in grid for p in points)
+
+
+def test_free_values_actually_leave_the_recorded_values():
+    """값이 하나도 안 움직였다면 이 기능이 꺼진 것이다."""
+    samples = _wiggly_samples()
+    recorded = {round(time_sec, 9): value for time_sec, value in samples}
+    points, _report = approximate_motion_points(samples, 1.0, 5000, 3)
+    moved = [
+        p for p in points
+        if abs(p['value_deg'] - recorded[round(p['time_sec'], 9)]) > 1e-9
+    ]
+    assert moved, '값이 전혀 안 움직였다 · 값 풀기가 동작하지 않는다'
+    # 옮긴 폭은 허용 오차를 크게 벗어나지 않는다
+    assert max(
+        abs(p['value_deg'] - recorded[round(p['time_sec'], 9)]) for p in moved
+    ) <= 1.0 + 1e-9
+
+
+def test_free_values_reduce_the_point_count():
+    samples = _wiggly_samples()
+    points, report = approximate_motion_points(samples, 1.0, 5000, 3)
+    assert len(points) < report['initial_point_count'], (
+        '1차 통과가 잡은 것보다 줄어야 한다'
+    )
+
+
+def test_a_long_motion_still_finishes_with_free_values():
+    import time
+    started = time.monotonic()
+    _points, report = approximate_motion_points(
+        _five_minute_samples(), 0.5, MAX_APPROXIMATION_POINTS, 3
+    )
+    assert report['maximum_error_deg'] <= 0.5 + 1e-9
+    assert time.monotonic() - started < 20.0

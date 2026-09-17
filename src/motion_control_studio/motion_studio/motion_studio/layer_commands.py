@@ -252,7 +252,7 @@ class StudioLayerCommands:
                     + ', '.join(inconsistent)
                 )
             if not isinstance(payload.get('layer'), dict):
-                raise ValueError('계산 노드가 만든 합성 미리보기 데이터가 필요합니다')
+                raise ValueError('계산 노드가 만든 레이어 재생 데이터가 필요합니다')
             expected_revisions = payload.get('source_revisions') or {}
             for item in sources:
                 item_id = str(item.get('layer_id') or '')
@@ -261,7 +261,7 @@ class StudioLayerCommands:
                 except (TypeError, ValueError) as exc:
                     raise ValueError('합칠 원본 레이어 버전이 올바르지 않습니다') from exc
                 if expected != int(item.get('edit_revision') or 0):
-                    raise ValueError('합성 미리보기 이후 원본 레이어가 변경되었습니다')
+                    raise ValueError('레이어 재생 이후 원본 레이어가 변경되었습니다')
             mapping = studio._store.mapping_check(project)
             merged = merge_layers(
                 project,
