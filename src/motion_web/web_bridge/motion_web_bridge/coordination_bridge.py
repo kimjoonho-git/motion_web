@@ -11,6 +11,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping
 
+from motion_common import repeat_policy
+
 import yaml
 
 from motion_common.group_config import (
@@ -212,7 +214,9 @@ class CoordinationWebBridge:
             if command in {'start_group', 'initialize_group'}:
                 request.update({
                     'run_mode': payload.get('run_mode', 'continuous'),
-                    'repeat_mode': payload.get('repeat_mode', 'direct'),
+                    'repeat_mode': payload.get(
+                        'repeat_mode', repeat_policy.DEFAULT_REPEAT_MODE,
+                    ),
                     'dwell_sec': payload.get('dwell_sec', 0.0),
                     'target_cycle_count': payload.get('target_cycle_count', 0),
                 })
@@ -360,7 +364,9 @@ def local_motion_control(bridge: Any, payload: Mapping[str, Any]) -> Dict[str, A
                 if isinstance(run_status, Mapping) else {}
             )
             automation = automation if isinstance(automation, Mapping) else {}
-            repeat_mode = str(automation.get('repeat_mode') or 'direct')
+            repeat_mode = repeat_policy.normalize_repeat_mode(
+                automation.get('repeat_mode')
+            )
             dwell_sec = float(automation.get('dwell_sec') or 0.0)
         request.update({
             'execution_id': str(payload.get('execution_id') or ''),

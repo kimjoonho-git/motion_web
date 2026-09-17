@@ -1346,7 +1346,10 @@ export function createMotionDataController({
    */
   function renderMotionAutomation() {
     const automation = motionRunStatus?.automation || {};
-    const repeatMode = String(automation.repeat_mode || 'direct');
+    // 안 적었으면 「초기 위치 이동 후 다음」이다 · §6-135 · 선택칸의
+    // 기본값(`selected`)과 같아야 한다 · 전에는 여기만 `direct` 라서
+    // 화면에 골라진 것과 실제로 나가는 값이 달랐다
+    const repeatMode = String(automation.repeat_mode || 'reinitialize');
     const dwellSec = Number(automation.dwell_sec);
     const busy = motionRunLoading;
 

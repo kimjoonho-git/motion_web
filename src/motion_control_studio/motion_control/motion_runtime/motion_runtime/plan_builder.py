@@ -16,6 +16,7 @@ import math
 import time
 from typing import Any, Dict, List, Mapping, Optional
 
+from motion_common import repeat_policy
 from motion_common.values import finite_float, optional_int
 
 from . import motion_run_rules
@@ -77,7 +78,11 @@ class PlanBuilder:
         if run_mode not in ('once', 'continuous'):
             raise ValueError('run_mode must be once or continuous')
         automation_run = bool(payload.get('automation_run', False))
-        repeat_mode = str(payload.get('repeat_mode') or 'direct').strip().lower()
+        # 안 적었으면 「초기 위치 이동 후 다음」이다 · §6-135 · 주인은
+        # `motion_common.repeat_policy` · 화면 선택칸의 기본값과 같다
+        repeat_mode = str(
+            payload.get('repeat_mode') or repeat_policy.DEFAULT_REPEAT_MODE
+        ).strip().lower()
         if repeat_mode not in REPEAT_MODES:
             raise ValueError(f'지원하지 않는 자동 반복 방식입니다: {repeat_mode}')
         dwell_sec = finite_float(payload.get('dwell_sec'))
@@ -115,7 +120,8 @@ class PlanBuilder:
             raise ValueError('작업 세대 값은 0 이상이어야 합니다')
         group_execution = bool(payload.get('group_execution'))
         if not automation_run and not group_execution and run_mode != 'continuous':
-            repeat_mode = 'direct'
+            # 한 번만 도는 실행은 이을 일이 없다 · 값을 쓰지 않는다
+            repeat_mode = repeat_policy.DIRECT
             dwell_sec = 0.0
         motion_file_id = str(payload.get('motion_file_id') or '').strip()
         mapping_file_id = str(payload.get('mapping_file_id') or '').strip()

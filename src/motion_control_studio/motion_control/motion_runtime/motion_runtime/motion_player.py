@@ -18,6 +18,8 @@ import time
 import traceback
 from typing import Any, Dict, List, Mapping, Optional
 
+from motion_common import repeat_policy
+
 from motion_common.values import finite_float
 from std_msgs.msg import Int8MultiArray, String
 
@@ -263,7 +265,7 @@ class MotionPlayer:
             run_mode = str(plan.get('run_mode') or 'once')
             continuous = run_mode == 'continuous'
             automation_run = bool(plan.get('automation_run'))
-            repeat_mode = str(plan.get('repeat_mode') or 'direct')
+            repeat_mode = repeat_policy.normalize_repeat_mode(plan.get('repeat_mode'))
             dwell_sec = max(float(plan.get('dwell_sec') or 0.0), 0.0)
             self._require_playback_command_allowed(self._playback_axes(plan))
             motors = self.manager._current_motors()

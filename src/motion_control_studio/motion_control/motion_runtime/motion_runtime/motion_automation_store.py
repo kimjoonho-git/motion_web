@@ -7,18 +7,21 @@ import math
 import time
 
 from motion_common import store
+from motion_common.repeat_policy import (
+    DEFAULT_REPEAT_MODE,
+    REPEAT_MODES,
+)
 from pathlib import Path
 from typing import Any, Dict
 
 
 AUTOMATION_VERSION = 1
-REPEAT_MODES = {'direct', 'dwell', 'reinitialize', 'dwell_reinitialize'}
 
 
 def default_automation_state() -> Dict[str, Any]:
     return {
         'version': AUTOMATION_VERSION,
-        'repeat_mode': 'direct',
+        'repeat_mode': DEFAULT_REPEAT_MODE,
         'dwell_sec': 0.0,
         'motion_file_id': '',
         'mapping_file_id': '',
@@ -32,7 +35,7 @@ def default_automation_state() -> Dict[str, Any]:
 def normalize_automation_state(value: Any) -> Dict[str, Any]:
     source = value if isinstance(value, dict) else {}
     state = default_automation_state()
-    repeat_mode = str(source.get('repeat_mode') or 'direct').strip().lower()
+    repeat_mode = str(source.get('repeat_mode') or DEFAULT_REPEAT_MODE).strip().lower()
     if repeat_mode not in REPEAT_MODES:
         raise ValueError(f'지원하지 않는 자동 반복 방식입니다: {repeat_mode}')
     state['repeat_mode'] = repeat_mode

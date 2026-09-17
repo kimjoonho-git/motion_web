@@ -16,6 +16,7 @@ from bisect import bisect_left
 from typing import Any, Dict, List, Mapping, Optional
 from urllib.parse import quote
 
+from motion_common import repeat_policy
 from motion_control_msgs.msg import MotorStatus
 from std_msgs.msg import Int8MultiArray
 
@@ -44,7 +45,7 @@ def _status_from_plan(state: str, message: str, plan: Dict[str, Any]) -> Dict[st
         'mapping_file_id': plan.get('mapping_file_id', ''),
         'run_mode': plan.get('run_mode', 'once'),
         'automation_run': bool(plan.get('automation_run')),
-        'repeat_mode': plan.get('repeat_mode', 'direct'),
+        'repeat_mode': repeat_policy.normalize_repeat_mode(plan.get('repeat_mode')),
         'dwell_sec': float(plan.get('dwell_sec') or 0.0),
         'countdown_sec': float(plan.get('countdown_sec') or 0.0),
         'scheduled_start_at': float(plan.get('scheduled_start_at') or 0.0),
@@ -100,7 +101,7 @@ def _empty_status() -> Dict[str, Any]:
         'mapping_file_id': '',
         'run_mode': 'once',
         'automation_run': False,
-        'repeat_mode': 'direct',
+        'repeat_mode': repeat_policy.DEFAULT_REPEAT_MODE,
         'dwell_sec': 0.0,
         'countdown_sec': 0.0,
         'operation_generation': 0,
@@ -355,7 +356,7 @@ def _motion_groups(
 def _motion_auto_start_guard_error(plan: Dict[str, Any]) -> str:
     if (
         plan.get('run_mode') == 'continuous'
-        and plan.get('repeat_mode') not in {'reinitialize', 'dwell_reinitialize'}
+        and repeat_policy.needs_loop_value_match(plan.get('repeat_mode'))
     ):
         capability = plan.get('capabilities', {}).get('continuous_run', {})
         if not capability.get('available'):

@@ -18,6 +18,7 @@ from motion_common.coordination import (
 from motion_common.paths import motion_projects_dir, workspace_root
 from motion_common import topics
 
+from motion_common.repeat_policy import DEFAULT_REPEAT_MODE, normalize_repeat_mode
 from motion_common.schedule_models import ScheduleItem
 from motion_common.schedule_store import ScheduleStore
 
@@ -205,14 +206,19 @@ class MotionScheduleNode(Node):
         self.get_logger().info(f"[SCHEDULE TRIGGER] START -> {item.schedule_name} ({item.schedule_id})")
         
         # 스케줄러 자체 판단을 제거하고, 연동 설정 파일에 사용자가 저장한 값을 그대로 가져와 웹 UI와 100% 동일하게 쏩니다.
-        req_repeat_mode = "direct"
+        # 반복 방식의 주인은 `motion_common.repeat_policy` 다 · §6-135
+        #
+        # 전에는 여기 기본값만 `direct` 였다 · 화면에는 「초기 위치 이동 후
+        # 다음」이 골라져 보이는데 스케줄은 `direct` 로 쐈고, 시작값과 끝값이
+        # 5° 이상 벌어진 모션은 "연속 동작할 수 없습니다" 로 죽었다.
+        req_repeat_mode = DEFAULT_REPEAT_MODE
         req_dwell_sec = 0.0
         automation_file = os.path.join(self.projects_dir, self.store.current_project_id, "runtime", "motion_automation.json")
         try:
             if os.path.exists(automation_file):
                 with open(automation_file, "r", encoding="utf-8") as f:
                     auto_config = json.load(f)
-                    req_repeat_mode = str(auto_config.get("repeat_mode", "direct"))
+                    req_repeat_mode = normalize_repeat_mode(auto_config.get("repeat_mode"))
                     req_dwell_sec = float(auto_config.get("dwell_sec", 0.0))
         except (OSError, ValueError) as exc:
             self.get_logger().warning(f"Failed to read motion_automation.json: {exc}")

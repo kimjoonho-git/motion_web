@@ -27,7 +27,8 @@ def test_default_automation_is_a_repeat_policy_only():
     """
     assert default_automation_state() == {
         'version': 1,
-        'repeat_mode': 'direct',
+        # 화면 선택칸의 기본값과 같다 · 초기 위치 이동 후 다음 · §6-135
+        'repeat_mode': 'reinitialize',
         'dwell_sec': 0.0,
         'motion_file_id': '',
         'mapping_file_id': '',

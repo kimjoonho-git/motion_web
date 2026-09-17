@@ -15,6 +15,7 @@ import time
 import traceback
 from typing import Any, Dict, List, Optional
 
+from motion_common import repeat_policy
 from motion_common.values import finite_float
 
 from . import motion_run_rules
@@ -266,8 +267,9 @@ class GroupSession:
                     if (
                         not payload.get('initialization_only')
                         and str(payload.get('run_mode') or 'once') == 'continuous'
-                        and str(payload.get('repeat_mode') or 'direct')
-                        in {'direct', 'dwell'}
+                        and repeat_policy.needs_loop_value_match(
+                            payload.get('repeat_mode')
+                        )
                     ) else 'once'
                 ),
             }
