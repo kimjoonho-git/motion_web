@@ -137,4 +137,9 @@ def register_schedule_routes(app: FastAPI, bridge, project_call) -> None:
             "coordination_enabled": session['enabled'],
             "coordination_joined": session['joined'],
             "coordination_node_connected": session['node_connected'],
+            # 사람이 멈춰 뒀으면 스케줄이 손대지 않는다 · §6-138
+            "schedule_hold_reason": (
+                bridge.schedule_hold_reason()
+                if hasattr(bridge, 'schedule_hold_reason') else ''
+            ),
         }

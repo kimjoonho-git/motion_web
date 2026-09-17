@@ -97,20 +97,13 @@
             <label style="display: block; margin-bottom: 4px;">시작 시각 (HH:MM:SS)</label>
             <input type="text" id="schedStartTime" value="09:00:00" style="width: 100%; padding: 6px; background: #1a202c; border: 1px solid #4a5568; color: white; border-radius: 4px;">
           </div>
+          <!-- 정지 방식은 하나다 · §6-137
+               「유지시간(초)」는 뺐다 · 시작한 순간부터 세는 값이라 프로그램이
+               재시작하면 카운트가 사라져, 상태로 보는 방식과 맞지 않았다. -->
           <div>
-            <label style="display: block; margin-bottom: 4px;">정지 방식 선택</label>
-            <select id="schedStopMode" onchange="ScheduleManager.onStopModeChange()" style="width: 100%; padding: 6px; background: #1a202c; border: 1px solid #4a5568; color: white; border-radius: 4px;">
-              <option value="time">지정 시각 정지 (Time)</option>
-              <option value="duration">지정 유지시간 정지 (Duration)</option>
-            </select>
-          </div>
-          <div id="schedStopTimeGroup">
             <label style="display: block; margin-bottom: 4px;">종료 시각 (HH:MM:SS)</label>
             <input type="text" id="schedStopTime" value="18:00:00" style="width: 100%; padding: 6px; background: #1a202c; border: 1px solid #4a5568; color: white; border-radius: 4px;">
-          </div>
-          <div id="schedDurationGroup" style="display: none;">
-            <label style="display: block; margin-bottom: 4px;">유지시간 (초)</label>
-            <input type="number" id="schedDurationSec" value="3600" style="width: 100%; padding: 6px; background: #1a202c; border: 1px solid #4a5568; color: white; border-radius: 4px;">
+            <small style="display: block; margin-top: 4px; color: #a0aec0;">시작보다 이른 시각이면 자정을 넘긴 것으로 봅니다 (예: 23:00 → 01:00)</small>
           </div>
           <div>
             <label style="display: block; margin-bottom: 4px;">반복 유형</label>

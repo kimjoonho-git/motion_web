@@ -274,6 +274,17 @@ class MotionWebBridge(Node):
         self._motion_run_store = rpc.ResultStore()
         self._motion_run_lock = threading.Lock()
         self._motion_run_status: Dict[str, Any] = {}
+        # 사람이 멈춰 둔 상태인가 · §6-138
+        #
+        # 스케줄은 1분마다 "구간 안인데 안 돈다" 를 보고 다시 시작시킨다 ·
+        # 사람이 「즉시 정지」를 눌렀는데 1분 뒤 다시 켜지면 정지가 무의미하고
+        # 정비 중에는 위험하다 · 그래서 사람이 멈추면 **사람이 다시 켤 때까지**
+        # 스케줄이 손대지 않는다.
+        #
+        # 누가 눌렀는지는 추측하지 않는다 · 스케줄이 보내는 요청에는
+        # `schedule_id` 가 들어 있고, 화면에서 누른 것에는 없다.
+        #
+        # 프로그램을 다시 켜면 풀린다 · 재부팅 뒤에는 스케줄이 기준이다.
         self._coordination_poll_lock = threading.Lock()
         self._coordination_poll_received_monotonic = 0.0
         self._coordination_watchdog_stop_execution_id = ''
@@ -1448,6 +1459,7 @@ class MotionWebBridge(Node):
         return self._request_motion_run('initialize', payload, timeout_sec=2.0)
 
     def motion_run_start(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        self.note_run_request_owner('start', payload)
         if str(payload.get('request_source') or '') != 'network_control':
             conflict = self._coordination_execution_blocker()
             if conflict:
@@ -1492,10 +1504,33 @@ class MotionWebBridge(Node):
             timeout_sec=2.0,
         )
 
-    def motion_run_stop(self) -> Dict[str, Any]:
+    def schedule_hold_reason(self) -> str:
+        """스케줄이 손대지 않는 이유 · 없으면 빈 문자열 · §6-138"""
+        return str(getattr(self, '_schedule_hold_reason', '') or '')
+
+    def note_run_request_owner(self, action: str, payload: Dict[str, Any]) -> None:
+        """이 시작·정지를 사람이 시켰는지 스케줄이 시켰는지 적어 둔다.
+
+        스케줄이 보내는 요청에만 `schedule_id` 가 있다 · 추측하지 않는다.
+        """
+        by_schedule = bool(str((payload or {}).get('schedule_id') or '').strip())
+        if by_schedule:
+            return
+        if action == 'stop':
+            self._schedule_hold_reason = (
+                '사람이 모션을 정지했습니다 · 다시 시작하면 스케줄이 이어받습니다'
+            )
+        elif action == 'start':
+            self._schedule_hold_reason = ''
+
+    def motion_run_stop(self, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        self.note_run_request_owner('stop', payload or {})
         return self._request_motion_run('stop', {}, timeout_sec=2.0)
 
-    def motion_run_stop_after_cycle(self) -> Dict[str, Any]:
+    def motion_run_stop_after_cycle(
+        self, payload: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        self.note_run_request_owner('stop', payload or {})
         return self._request_motion_run('stop_after_cycle', {}, timeout_sec=2.0)
 
     def motion_group_prepare(self, payload: Dict[str, Any]) -> Dict[str, Any]:

@@ -47,3 +47,22 @@ test('복구 기계장치가 코드에 남아 조용히 돌지 않는다', () =>
   assert.doesNotMatch(motionData, /automationResume/);
   assert.doesNotMatch(motionData, /automation\.armed/);
 });
+
+test('반복 방식 기본값이 화면 어디서나 같다', () => {
+  // 기본값이 여덟 곳에 적혀 있었고 답이 두 가지였다 · 화면은
+  // 「초기 위치 이동 후 다음」인데 스케줄만 `direct` 로 쐈다 · §6-135
+  const coordination = readFileSync(
+    new URL('../static/js/coordination.js', import.meta.url), 'utf8',
+  );
+  assert.match(html, /value="reinitialize" selected/);
+  for (const source of [motionData, coordination]) {
+    const fallbacks = [...source.matchAll(/repeat_?[Mm]ode[^\n]*\|\|\s*'(\w+)'/g)]
+      .map((match) => match[1]);
+    assert.ok(fallbacks.length, '반복 방식 기본값을 읽지 못했다');
+    assert.deepEqual(
+      [...new Set(fallbacks)],
+      ['reinitialize'],
+      `화면 기본값이 갈렸다: ${[...new Set(fallbacks)].join(', ')}`,
+    );
+  }
+});

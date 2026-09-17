@@ -110,17 +110,16 @@ def test_stop_is_stop_after_cycle_on_both_scopes(tmp_path):
 
 
 def test_a_slave_pc_never_fires_its_own_schedule(tmp_path, monkeypatch):
-    """연동 슬레이브는 마스터 명령을 따른다 · 제 스케줄을 돌리지 않는다."""
+    """연동 슬레이브는 마스터 명령을 따른다 · 제 스케줄도 점검도 하지 않는다."""
     # 주기 틱은 활성 프로젝트를 브리지에 물어본다 · 시험은 망을 타지 않는다
     monkeypatch.setattr(
         schedule_node.urllib.request, 'urlopen',
         lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError('시험은 망을 안 탄다')),
     )
     node = _node(tmp_path, coordination_enabled=True, is_master=False)
-    node.store.list_schedules = lambda: pytest.fail('슬레이브는 목록을 보지도 않는다')
-    node.engine = SimpleNamespace(
-        tick=lambda *_args: pytest.fail('슬레이브는 발화하지 않는다'),
-    )
+    node._last_reconcile_monotonic = 0.0
+    node._schedule_hold_reason = ''
+    node._reconcile = lambda _now: pytest.fail('슬레이브는 점검하지 않는다')
     node._publish_status = lambda _now: pytest.fail('슬레이브는 여기까지 오지 않는다')
 
     node._on_timer_tick()
@@ -131,7 +130,8 @@ def test_a_slave_pc_never_fires_its_own_schedule(tmp_path, monkeypatch):
 def test_status_reports_the_master_role_and_count(tmp_path):
     node = _node(tmp_path, coordination_enabled=True)
     node.store.list_schedules = lambda: [_item(), _item()]
-    node.engine = SimpleNamespace(active_schedule_id=None)
+    node.engine = SimpleNamespace(active=lambda _now, _schedules: None)
+    node._schedule_hold_reason = ''
     published = []
     node.status_pub = SimpleNamespace(publish=lambda msg: published.append(msg.data))
 

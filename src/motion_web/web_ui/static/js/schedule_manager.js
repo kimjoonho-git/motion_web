@@ -58,11 +58,6 @@ const ScheduleManager = {
             cancelFormBtn.addEventListener('click', () => this.closeEditModal());
         }
 
-        const stopModeSelect = document.getElementById('schedStopMode');
-        if (stopModeSelect) {
-            stopModeSelect.addEventListener('change', () => this.onStopModeChange());
-        }
-
         const repeatTypeSelect = document.getElementById('schedRepeatType');
         if (repeatTypeSelect) {
             repeatTypeSelect.addEventListener('change', () => this.onRepeatTypeChange());
@@ -160,9 +155,7 @@ const ScheduleManager = {
                 ? '<span class="badge bg-success" style="background-color: #38a169; color: #fff; padding: 2px 6px; border-radius: 4px; font-size: 11px;">활성</span>'
                 : '<span class="badge bg-secondary" style="background-color: #718096; color: #fff; padding: 2px 6px; border-radius: 4px; font-size: 11px;">비활성</span>';
 
-            const stopInfo = item.stop_mode === 'duration'
-                ? `유지시간: ${item.duration_sec || 0}초`
-                : `종료시각: ${item.stop_time || '설정안됨'}`;
+            const stopInfo = `종료시각: ${item.stop_time || '설정안됨'}`;
 
             const daysInfo = item.repeat_type === 'weekly'
                 ? `반복: 매주 [${(item.repeat_days || []).join(', ')}]`
@@ -205,9 +198,7 @@ const ScheduleManager = {
         document.getElementById('schedEditId').value = scheduleItem ? scheduleItem.schedule_id : '';
         document.getElementById('schedName').value = scheduleItem ? scheduleItem.schedule_name : '새 연동 스케줄';
         document.getElementById('schedStartTime').value = scheduleItem ? scheduleItem.start_time : '09:00:00';
-        document.getElementById('schedStopMode').value = scheduleItem ? scheduleItem.stop_mode : 'time';
         document.getElementById('schedStopTime').value = scheduleItem ? (scheduleItem.stop_time || '18:00:00') : '18:00:00';
-        document.getElementById('schedDurationSec').value = scheduleItem ? (scheduleItem.duration_sec || 3600) : 3600;
         document.getElementById('schedRepeatType').value = scheduleItem ? scheduleItem.repeat_type : 'daily';
 
         // Set date
@@ -222,7 +213,6 @@ const ScheduleManager = {
             chk.checked = days.includes(chk.value);
         });
 
-        this.onStopModeChange();
         this.onRepeatTypeChange();
         modal.style.display = 'block';
     },
@@ -234,19 +224,6 @@ const ScheduleManager = {
         }
     },
 
-    onStopModeChange() {
-        const mode = document.getElementById('schedStopMode').value;
-        const timeGroup = document.getElementById('schedStopTimeGroup');
-        const durationGroup = document.getElementById('schedDurationGroup');
-
-        if (mode === 'duration') {
-            if (timeGroup) timeGroup.style.display = 'none';
-            if (durationGroup) durationGroup.style.display = 'block';
-        } else {
-            if (timeGroup) timeGroup.style.display = 'block';
-            if (durationGroup) durationGroup.style.display = 'none';
-        }
-    },
 
     onRepeatTypeChange() {
         const type = document.getElementById('schedRepeatType').value;
@@ -269,9 +246,7 @@ const ScheduleManager = {
         const id = document.getElementById('schedEditId').value;
         const name = document.getElementById('schedName').value.trim() || '새 스케줄';
         const startTime = document.getElementById('schedStartTime').value.trim() || '09:00:00';
-        const stopMode = document.getElementById('schedStopMode').value;
         const stopTime = document.getElementById('schedStopTime').value.trim() || '18:00:00';
-        const durationSec = parseInt(document.getElementById('schedDurationSec').value, 10) || 3600;
         const repeatType = document.getElementById('schedRepeatType').value;
 
         // Selected days
@@ -285,9 +260,10 @@ const ScheduleManager = {
         const payload = {
             schedule_name: name,
             start_time: startTime,
-            stop_mode: stopMode,
-            stop_time: stopMode === 'time' ? stopTime : null,
-            duration_sec: stopMode === 'duration' ? durationSec : null,
+            // 정지 방식은 「지정 시각」 하나다 · §6-137
+            stop_mode: 'time',
+            stop_time: stopTime,
+            duration_sec: null,
             repeat_type: repeatType,
             repeat_days: repeatType === 'weekly' ? selectedDays : ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"],
             run_date: repeatType === 'once' ? runDate : null,

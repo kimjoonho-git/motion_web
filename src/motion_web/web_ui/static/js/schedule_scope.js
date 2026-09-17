@@ -20,6 +20,7 @@ function readStatus(status) {
     // 조정 노드가 안 붙으면 `joined` 는 마지막으로 받아 둔 값이거나 빈 값이다 ·
     // 그것으로 "빠져 있음" 이라 단정하면 없는 문제를 만든다 · §6-133
     nodeConnected: status.coordination_node_connected !== false,
+    hold: String(status.schedule_hold_reason || ''),
   };
 }
 
@@ -31,8 +32,24 @@ export function motionScheduleBadgeState(status) {
       canEdit: false, warning: '', blockedReason: '',
     };
   }
-  const { enabled, joined, isMaster, count, nodeConnected } = read;
+  const { enabled, joined, isMaster, count, nodeConnected, hold } = read;
   const registered = `(${count}개 등록)`;
+
+  // 사람이 멈춰 두면 스케줄이 손대지 않는다 · §6-138
+  //
+  // 점검은 1분마다 "구간 안인데 안 돈다" 를 보고 다시 시작시킨다 · 사람이
+  // 「즉시 정지」를 눌렀는데 1분 뒤 되살아나면 정지가 무의미하고 정비 중에는
+  // 위험하다 · 왜 안 도는지 화면에 없으면 "스케줄이 고장났다" 가 된다.
+  if (hold) {
+    return {
+      scope: 'held',
+      text: '스케줄러: 사람이 정지시킴',
+      tone: 'warn',
+      canEdit: true,
+      warning: hold,
+      blockedReason: '',
+    };
+  }
 
   if (!enabled) {
     return {
@@ -91,6 +108,9 @@ export function motionScheduleBadgeState(status) {
 /** 모달 설명 · 무엇이 함께 움직이는지 먼저 말한다 */
 export function motionScheduleScopeNote(status) {
   const state = motionScheduleBadgeState(status);
+  if (state.scope === 'held') {
+    return `${state.warning} · 모션 실행 화면에서 시작하면 스케줄이 다시 관리합니다.`;
+  }
   if (state.scope === 'local') {
     return '시각이 되면 이 PC 의 등록된 모션을 연속 시작하고, '
       + '종료 시각에 현재 회차 후 정지합니다.';

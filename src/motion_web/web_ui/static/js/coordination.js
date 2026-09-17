@@ -534,7 +534,10 @@ export function createCoordinationController({ el }) {
     const targetCycleCount = Number(overrides.target_cycle_count);
     return {
       run_mode: runMode,
-      repeat_mode: String(overrides.repeat_mode || 'direct'),
+      // 안 적었으면 「초기 위치 이동 후 다음」이다 · §6-135
+      // 지금은 `groupRunFields()` 가 늘 값을 채워 주지만, 기본값이 두 가지면
+      // 언젠가 갈라진다 · 스케줄이 바로 그렇게 죽었다
+      repeat_mode: String(overrides.repeat_mode || 'reinitialize'),
       dwell_sec: Number.isFinite(dwellSec) && dwellSec >= 0 ? dwellSec : 0,
       target_cycle_count: Number.isFinite(targetCycleCount) && targetCycleCount >= 0
         ? targetCycleCount

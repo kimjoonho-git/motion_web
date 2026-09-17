@@ -98,12 +98,25 @@ def register_motion_run_routes(app: FastAPI, bridge, safety_first_stop) -> None:
             bridge.get_logger().error(f'motion_automation_configure API error: {trace}')
             return {'success': False, 'message': f'서버 내부 오류: {exc}'}
 
+    async def _optional_body(request: Request) -> dict:
+        """스케줄이 보내면 `schedule_id` 가 들어 있다 · 화면에서 누르면 없다.
+
+        누가 멈췄는지 추측하지 않기 위해 본문을 받는다 · 본문이 없어도 된다.
+        """
+        try:
+            body = await request.json()
+        except Exception:
+            return {}
+        return body if isinstance(body, dict) else {}
+
     @app.post('/api/motion-run/stop')
-    async def motion_run_stop():
-        stop_fn = bridge.motion_run_stop
-        return await asyncio.to_thread(safety_first_stop, bridge, stop_fn)
+    async def motion_run_stop(request: Request):
+        payload = await _optional_body(request)
+        return await asyncio.to_thread(
+            safety_first_stop, bridge, lambda: bridge.motion_run_stop(payload),
+        )
 
     @app.post('/api/motion-run/stop-after-cycle')
-    async def motion_run_stop_after_cycle_api():
-        handler = bridge.motion_run_stop_after_cycle
-        return await asyncio.to_thread(handler)
+    async def motion_run_stop_after_cycle_api(request: Request):
+        payload = await _optional_body(request)
+        return await asyncio.to_thread(bridge.motion_run_stop_after_cycle, payload)

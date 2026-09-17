@@ -1,5 +1,6 @@
 import os
 import json
+import time
 import urllib.request
 import urllib.error
 import rclpy
@@ -19,6 +20,7 @@ from motion_common.paths import motion_projects_dir, workspace_root
 from motion_common import topics
 
 from motion_common.repeat_policy import DEFAULT_REPEAT_MODE, normalize_repeat_mode
+from motion_common.run_state import is_running
 from motion_common.schedule_models import ScheduleItem
 from motion_common.schedule_store import ScheduleStore
 
@@ -28,6 +30,13 @@ except ImportError:
     from .schedule_engine import ScheduleEngine
 
 PACKAGE_HINT = 'motion_schedule'
+
+#: 몇 초마다 「스케줄이 말하는 상태」와 실제를 맞출 것인가 · §6-137
+#:
+#: 짧게 하면 시작이 정확해지는 대신 브리지를 자주 두드린다 · 1분이면 전시·
+#: 무대에서 충분하고, 개장 시각을 정확히 맞춰야 하면 시작 시각을 1분 당겨
+#: 적으면 된다.
+RECONCILE_INTERVAL_SEC = 60.0
 
 
 class MotionScheduleNode(Node):
@@ -46,7 +55,9 @@ class MotionScheduleNode(Node):
         self._master_role_stamp = None
 
         self.store = ScheduleStore(projects_dir=self.projects_dir)
-        self.engine = ScheduleEngine(grace_period_sec=30)
+        self.engine = ScheduleEngine()
+        self._last_reconcile_monotonic = 0.0
+        self._schedule_hold_reason = ''
 
         # Status publisher
         self.status_pub = self.create_publisher(String, topics.SCHEDULE_STATUS, 10)
@@ -165,42 +176,81 @@ class MotionScheduleNode(Node):
             self.get_logger().error(f"HTTP Request [{endpoint}] failed: {exc}")
             return False
 
-    def _on_timer_tick(self):
-        # 0. Realtime Sync: Get current active project directly from Web Bridge
+    def _read_json(self, endpoint: str, timeout_sec: float = 0.5):
+        url = f"http://127.0.0.1:8000{endpoint}"
         try:
-            with urllib.request.urlopen("http://127.0.0.1:8000/api/schedule/status", timeout=0.5) as response:
-                data = json.loads(response.read().decode())
-                api_proj = data.get("active_project_id")
-                if api_proj and api_proj != self.store.current_project_id:
-                    self.get_logger().info(f"Syncing active project from Web API: {api_proj}")
-                    self.store.load_project(api_proj)
+            with urllib.request.urlopen(url, timeout=timeout_sec) as response:
+                return json.loads(response.read().decode())
         except (OSError, ValueError) as exc:
-            # 브리지 미기동·재시작 중에는 정상적으로 실패한다. 파일 기반 경로로 대체된다.
-            self.get_logger().debug(f"Active project sync from Web API skipped: {exc}")
+            self.get_logger().debug(f"조회 실패 [{endpoint}] · {exc}")
+            return None
+
+    def _local_run_state(self) -> str:
+        """이 PC 의 모션이 지금 어느 단계인가 · 못 읽으면 빈 문자열.
+
+        그룹 실행도 이 PC 의 모션 실행을 쓴다 · 연동이든 단독이든 여기 하나로
+        답이 나온다 · §6-136
+        """
+        payload = self._read_json('/api/motion-run/status')
+        if not isinstance(payload, dict):
+            return ''
+        status = payload.get('status') if isinstance(payload.get('status'), dict) else payload
+        return str(status.get('state') or '')
+
+    def _on_timer_tick(self):
+        # 0. 활성 프로젝트를 브리지에 맞춘다
+        data = self._read_json('/api/schedule/status')
+        if isinstance(data, dict):
+            api_proj = data.get("active_project_id")
+            if api_proj and api_proj != self.store.current_project_id:
+                self.get_logger().info(f"Syncing active project from Web API: {api_proj}")
+                self.store.load_project(api_proj)
+        self._schedule_hold_reason = str(
+            (data or {}).get('schedule_hold_reason') or ''
+        )
 
         if not self.store.current_project_id:
             self._load_active_project_from_file()
 
-        # 1. Realtime store mtime check & reload if store updated via web UI
         self.store.check_and_reload()
 
-        # 1. Master PC check
+        now = datetime.now().astimezone()
+
+        # 슬레이브는 아무것도 하지 않는다 · 마스터가 그룹 전체를 몬다 · §6-137
         if not self._is_master_pc():
-            # Slave PC: do not process local schedule triggers
             return
 
-        now = datetime.now().astimezone()
-        schedules = self.store.list_schedules()
-        actions = self.engine.tick(now, schedules)
+        if time.monotonic() - self._last_reconcile_monotonic >= RECONCILE_INTERVAL_SEC:
+            self._last_reconcile_monotonic = time.monotonic()
+            self._reconcile(now)
 
-        for action, item in actions:
-            if action == 'start':
-                self._execute_start(item)
-            elif action == 'stop-after-cycle':
-                self._execute_stop_after_cycle(item)
-
-        # Publish status
         self._publish_status(now)
+
+    def _reconcile(self, now: datetime) -> None:
+        """스케줄이 말하는 상태와 실제를 맞춘다 · §6-137
+
+        시각을 지나갔는지 보지 않는다 · **지금 구간 안인가**만 본다 · 그래서
+        재부팅해도, 시작을 놓쳐도, 어긋나도 다음 점검에서 스스로 맞춘다.
+        """
+        wanted = self.engine.active(now, self.store.list_schedules())
+        running = is_running(self._local_run_state())
+
+        if wanted is not None and not running:
+            if self._schedule_hold_reason:
+                # 사람이 멈춰 뒀다 · 사람이 다시 켤 때까지 손대지 않는다 · §6-138
+                self.get_logger().debug(
+                    f"시작하지 않음 · {self._schedule_hold_reason}"
+                )
+                return
+            self.get_logger().info(
+                f"[점검] 구간 안인데 멈춰 있다 · 시작 · {wanted.schedule_name}"
+            )
+            self._execute_start(wanted)
+            return
+
+        if wanted is None and running:
+            self.get_logger().info("[점검] 구간 밖인데 돌고 있다 · 회차 후 정지")
+            self._execute_stop_after_cycle(None)
 
     def _execute_start(self, item: ScheduleItem):
         self.get_logger().info(f"[SCHEDULE TRIGGER] START -> {item.schedule_name} ({item.schedule_id})")
@@ -245,16 +295,18 @@ class MotionScheduleNode(Node):
         }
         self._send_http_request("/api/motion-run/start", payload)
 
-    def _execute_stop_after_cycle(self, item: ScheduleItem):
-        self.get_logger().info(f"[SCHEDULE TRIGGER] STOP-AFTER-CYCLE -> '{item.schedule_name}' (ID: {item.schedule_id})")
+    def _execute_stop_after_cycle(self, item=None):
+        name = getattr(item, 'schedule_name', '구간 밖')
+        schedule_id = getattr(item, 'schedule_id', '')
+        self.get_logger().info(f"[SCHEDULE TRIGGER] STOP-AFTER-CYCLE -> '{name}'")
         if self._coordination_enabled():
             self._send_http_request("/api/coordination/control", {
                 "command": "stop_after_cycle",
-                "schedule_id": item.schedule_id,
+                "schedule_id": schedule_id or 'reconcile',
             })
             return
         self._send_http_request("/api/motion-run/stop-after-cycle", {
-            "schedule_id": item.schedule_id,
+            "schedule_id": schedule_id or 'reconcile',
         })
 
     def _publish_status(self, now: datetime):
@@ -263,7 +315,11 @@ class MotionScheduleNode(Node):
             "active_project_id": self.store.current_project_id,
             "current_time": now.isoformat(),
             "schedule_count": len(self.store.list_schedules()),
-            "active_schedule_id": self.engine.active_schedule_id
+            "active_schedule_id": getattr(
+                self.engine.active(now, self.store.list_schedules()),
+                'schedule_id', None,
+            ),
+            "schedule_hold_reason": self._schedule_hold_reason,
         }
         msg = String()
         msg.data = json.dumps(status)
