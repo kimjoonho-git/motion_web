@@ -8,12 +8,30 @@ from .schedule_models import ScheduleItem
 
 logger = logging.getLogger("motion_schedule.store")
 
+#: 스케줄이 실행을 관리하는가 · §6-143
+#:
+#: 전에는 「사람이 멈췄나」를 요청 내용으로 **추측**했다 · 그룹 정지·안전 정지·
+#: 모터 설정 적용도 로컬 모션 실행을 세우는데, 그것까지 사람이 멈춘 것으로
+#: 읽어서 1회 연동 실행만 해도 "사람이 모션을 정지했습니다" 가 떴다.
+#:
+#: 추측을 없애고 **스위치 하나**로 만든다 · 지금 어느 쪽인지 화면에 보인다.
+SCHEDULE_MODE = 'schedule'   # 스케줄이 1분마다 맞춘다 · 전시·공연
+MANUAL_MODE = 'manual'       # 스케줄은 아무것도 안 한다 · 정비·시험
+RUN_MODES = (SCHEDULE_MODE, MANUAL_MODE)
+DEFAULT_RUN_MODE = SCHEDULE_MODE
+
+
+def normalize_run_mode(value, default: str = DEFAULT_RUN_MODE) -> str:
+    mode = str(value or '').strip().lower()
+    return mode if mode in RUN_MODES else default
+
 
 class ScheduleStore:
     def __init__(self, projects_dir: str, current_project_id: Optional[str] = None):
         self.projects_dir = projects_dir
         self.current_project_id = current_project_id
         self._schedules: Dict[str, ScheduleItem] = {}
+        self._mode: str = DEFAULT_RUN_MODE
         self._last_mtime: float = 0.0
         if current_project_id:
             self.load_project(current_project_id)
@@ -26,6 +44,7 @@ class ScheduleStore:
     def load_project(self, project_id: str) -> None:
         self.current_project_id = project_id
         self._schedules.clear()
+        self._mode = DEFAULT_RUN_MODE
         file_path = self._get_store_path(project_id)
 
         if not os.path.exists(file_path):
@@ -38,10 +57,15 @@ class ScheduleStore:
             # 기록 측이 배타 락을 잡으므로 읽기는 공유 락으로 충분하다
             with common_store.file_lock(file_path, exclusive=False):
                 data = common_store.read_json(file_path, default=[])
-            if isinstance(data, list):
-                for item_data in data:
-                    item = ScheduleItem.from_dict(item_data)
-                    self._schedules[item.schedule_id] = item
+            # 옛 파일은 스케줄만 담은 목록이다 · 모드가 생기면서 꾸러미가 됐다
+            if isinstance(data, dict):
+                self._mode = normalize_run_mode(data.get('mode'))
+                items = data.get('schedules')
+            else:
+                items = data
+            for item_data in items if isinstance(items, list) else []:
+                item = ScheduleItem.from_dict(item_data)
+                self._schedules[item.schedule_id] = item
             logger.info(f"Loaded {len(self._schedules)} schedules for project {project_id}.")
         except (OSError, ValueError, TypeError, KeyError) as exc:
             logger.error(f"Failed to load schedule_store.json for project {project_id}: {exc}")
@@ -70,14 +94,27 @@ class ScheduleStore:
         file_path = self._get_store_path(self.current_project_id)
 
         try:
-            items_data = [item.to_dict() for item in self._schedules.values()]
+            payload = {
+                'version': 2,
+                'mode': self._mode,
+                'schedules': [item.to_dict() for item in self._schedules.values()],
+            }
             with common_store.locked_update(file_path):
-                common_store.atomic_write_json(file_path, items_data)
+                common_store.atomic_write_json(file_path, payload)
+            items_data = payload['schedules']
             logger.info(f"Saved {len(items_data)} schedules for project {self.current_project_id}.")
             return True
         except (OSError, ValueError, TypeError) as exc:
             logger.error(f"Failed to save schedule store: {exc}")
             return False
+
+    @property
+    def mode(self) -> str:
+        return self._mode
+
+    def set_mode(self, mode: str) -> bool:
+        self._mode = normalize_run_mode(mode)
+        return self.save()
 
     def list_schedules(self) -> List[ScheduleItem]:
         return list(self._schedules.values())

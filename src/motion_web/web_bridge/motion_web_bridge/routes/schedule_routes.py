@@ -4,7 +4,7 @@ from fastapi import FastAPI, HTTPException, Request
 from motion_common.coordination import resolve_master_role
 from motion_common.paths import motion_projects_dir
 from motion_common.schedule_models import ScheduleItem
-from motion_common.schedule_store import ScheduleStore
+from motion_common.schedule_store import ScheduleStore, normalize_run_mode
 
 logger = logging.getLogger("bridge.routes.schedule")
 
@@ -121,6 +121,24 @@ def register_schedule_routes(app: FastAPI, bridge, project_call) -> None:
             logger.debug("연동 세션 상태 조회 실패 · %s", exc)
             return {'enabled': False, 'joined': False, 'node_connected': False}
 
+    @app.put('/api/schedule/mode')
+    async def set_schedule_mode(request: Request):
+        """스케줄 모드 · 수동 모드 · §6-143
+
+        수동 모드에서는 스케줄이 아무것도 하지 않는다 · 정비·시험 중에 1분
+        점검이 모션을 되살리면 위험하다.
+        """
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="request body must be an object")
+        _sync_store_project()
+        mode = normalize_run_mode(body.get("run_mode"), default="")
+        if not mode:
+            raise HTTPException(status_code=400, detail="run_mode must be schedule or manual")
+        if not store.set_mode(mode):
+            raise HTTPException(status_code=500, detail="failed to save schedule mode")
+        return {"status": "ok", "run_mode": store.mode}
+
     @app.get('/api/schedule/status')
     async def get_schedule_status():
         _sync_store_project()
@@ -137,9 +155,6 @@ def register_schedule_routes(app: FastAPI, bridge, project_call) -> None:
             "coordination_enabled": session['enabled'],
             "coordination_joined": session['joined'],
             "coordination_node_connected": session['node_connected'],
-            # 사람이 멈춰 뒀으면 스케줄이 손대지 않는다 · §6-138
-            "schedule_hold_reason": (
-                bridge.schedule_hold_reason()
-                if hasattr(bridge, 'schedule_hold_reason') else ''
-            ),
+            # 스케줄이 실행을 관리하는가 · 사람이 정한다 · §6-143
+            "run_mode": store.mode,
         }

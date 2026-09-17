@@ -22,7 +22,12 @@ from motion_common import topics
 from motion_common.repeat_policy import DEFAULT_REPEAT_MODE, normalize_repeat_mode
 from motion_common.run_state import is_running
 from motion_common.schedule_models import ScheduleItem
-from motion_common.schedule_store import ScheduleStore
+from motion_common.schedule_store import (
+    DEFAULT_RUN_MODE,
+    SCHEDULE_MODE,
+    ScheduleStore,
+    normalize_run_mode,
+)
 
 try:
     from motion_schedule.schedule_engine import ScheduleEngine
@@ -57,7 +62,7 @@ class MotionScheduleNode(Node):
         self.store = ScheduleStore(projects_dir=self.projects_dir)
         self.engine = ScheduleEngine()
         self._last_reconcile_monotonic = 0.0
-        self._schedule_hold_reason = ''
+        self._run_mode = DEFAULT_RUN_MODE
 
         # Status publisher
         self.status_pub = self.create_publisher(String, topics.SCHEDULE_STATUS, 10)
@@ -205,9 +210,7 @@ class MotionScheduleNode(Node):
             if api_proj and api_proj != self.store.current_project_id:
                 self.get_logger().info(f"Syncing active project from Web API: {api_proj}")
                 self.store.load_project(api_proj)
-        self._schedule_hold_reason = str(
-            (data or {}).get('schedule_hold_reason') or ''
-        )
+        self._run_mode = normalize_run_mode((data or {}).get('run_mode'))
 
         if not self.store.current_project_id:
             self._load_active_project_from_file()
@@ -232,16 +235,18 @@ class MotionScheduleNode(Node):
         시각을 지나갔는지 보지 않는다 · **지금 구간 안인가**만 본다 · 그래서
         재부팅해도, 시작을 놓쳐도, 어긋나도 다음 점검에서 스스로 맞춘다.
         """
+        if self._run_mode != SCHEDULE_MODE:
+            # 수동 모드 · 스케줄은 아무것도 하지 않는다 · §6-143
+            #
+            # 전에는 「사람이 멈췄나」를 요청 내용으로 추측했다 · 그룹 정지나
+            # 안전 정지까지 사람이 멈춘 것으로 읽어서, 1회 연동 실행만 해도
+            # "사람이 모션을 정지했습니다" 가 떴다 · 추측을 없앴다.
+            return
+
         wanted = self.engine.active(now, self.store.list_schedules())
         running = is_running(self._local_run_state())
 
         if wanted is not None and not running:
-            if self._schedule_hold_reason:
-                # 사람이 멈춰 뒀다 · 사람이 다시 켤 때까지 손대지 않는다 · §6-138
-                self.get_logger().debug(
-                    f"시작하지 않음 · {self._schedule_hold_reason}"
-                )
-                return
             self.get_logger().info(
                 f"[점검] 구간 안인데 멈춰 있다 · 시작 · {wanted.schedule_name}"
             )
@@ -319,7 +324,7 @@ class MotionScheduleNode(Node):
                 self.engine.active(now, self.store.list_schedules()),
                 'schedule_id', None,
             ),
-            "schedule_hold_reason": self._schedule_hold_reason,
+            "run_mode": self._run_mode,
         }
         msg = String()
         msg.data = json.dumps(status)

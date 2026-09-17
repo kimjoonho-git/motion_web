@@ -434,3 +434,26 @@
   color: #90cdf4;
   background: rgba(144, 205, 244, 0.12);
 }
+
+/* 스케줄 실행 관리 스위치 · §6-143 */
+.schedule-mode-switch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 16px;
+}
+
+.schedule-mode-switch label {
+  font-size: 13px;
+  color: #a0aec0;
+  white-space: nowrap;
+}
+
+.schedule-mode-switch select {
+  flex: 1;
+  padding: 6px;
+  background: #1a202c;
+  border: 1px solid #4a5568;
+  color: #fff;
+  border-radius: 4px;
+}

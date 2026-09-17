@@ -61,8 +61,8 @@ test('슬레이브는 고칠 수 없고 왜인지 말한다', () => {
   const state = motionScheduleBadgeState(now);
   assert.equal(state.scope, 'slave');
   assert.equal(state.canEdit, false);
-  assert.match(state.blockedReason, /마스터 PC 에서 설정/);
-  assert.match(state.blockedReason, /이 PC 도 함께 실행됩니다/);
+  assert.match(state.blockedReason, /아무 일을 하지 않습니다/);
+  assert.match(state.blockedReason, /「지금 빠지기」/);
 });
 
 test('연동 노드가 안 붙으면 빠졌다고 단정하지 않는다', () => {
@@ -76,6 +76,54 @@ test('연동 노드가 안 붙으면 빠졌다고 단정하지 않는다', () =>
   const state = motionScheduleBadgeState(now);
   assert.match(state.text, /연동 상태 확인 중/);
   assert.equal(state.warning, '', '확인 중에는 경고하지 않는다');
+});
+
+test('수동 모드면 스케줄이 손대지 않는다고 말한다', () => {
+  // 전에는 「사람이 멈췄나」를 요청 내용으로 추측했다 · 그룹 정지나 안전
+  // 정지까지 사람이 멈춘 것으로 읽어 오판했다 · 스위치 하나로 바꿨다 · §6-143
+  const now = status({ run_mode: 'manual' });
+  const state = motionScheduleBadgeState(now);
+  assert.equal(state.scope, 'manual');
+  assert.match(state.text, /수동 모드/);
+  assert.match(state.blockedReason, /시작·정지시키지 않습니다/);
+  assert.match(motionScheduleScopeNote(now), /스케줄 모드로 바꾸면/);
+});
+
+test('슬레이브에서는 수동 모드가 앞에 나서지 않는다', () => {
+  // 슬레이브는 스케줄 자체가 안 돈다 · 거기서 「수동 모드」라고 띄우면
+  // 마스터가 보내는 그룹 실행까지 안 도는 것처럼 읽힌다 · §6-143
+  const state = motionScheduleBadgeState(status({
+    is_master: false,
+    coordination_enabled: true,
+    coordination_joined: true,
+    coordination_node_connected: true,
+    run_mode: 'manual',
+  }));
+  assert.equal(state.scope, 'slave');
+  assert.equal(state.canEdit, false, '슬레이브에서는 실행 관리도 잠겨야 한다');
+  assert.match(state.blockedReason, /「지금 빠지기」/);
+});
+
+test('슬레이브에서는 실행 관리 칸이 잠긴다', () => {
+  // 여기서 수동으로 바꿔 두면 막힌 줄 알게 된다 · 실제로 막으려면
+  // 그룹에서 나가야 한다 · §6-143
+  const manager = readFileSync(
+    new URL('../static/js/schedule_manager.js', import.meta.url), 'utf8',
+  );
+  assert.match(manager, /modeSelect\.disabled = !state\.canEdit/);
+});
+
+test('단독 PC 에서도 수동 모드가 보인다', () => {
+  const state = motionScheduleBadgeState(status({ run_mode: 'manual' }));
+  assert.equal(state.scope, 'manual');
+});
+
+test('없어진 「사람이 멈춤」 걸쇠가 되살아나지 않는다', () => {
+  const source = readFileSync(
+    new URL('../static/js/schedule_scope.js', import.meta.url), 'utf8',
+  );
+  assert.doesNotMatch(source, /schedule_hold_reason/);
+  assert.match(indexHtml, /id="scheduleRunMode"/);
 });
 
 test('상태를 못 받았으면 아무것도 단정하지 않는다', () => {

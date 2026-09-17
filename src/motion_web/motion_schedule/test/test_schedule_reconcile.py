@@ -29,7 +29,7 @@ class _Logger:
 DAY = datetime(2026, 9, 17)
 
 
-def _node(tmp_path, *, run_state, hold='', schedules=None):
+def _node(tmp_path, *, run_state, run_mode='schedule', schedules=None):
     node = MotionScheduleNode.__new__(MotionScheduleNode)
     node.projects_dir = str(tmp_path)
     node.coordination_file = str(tmp_path / 'motion_coordination.yaml')
@@ -40,7 +40,7 @@ def _node(tmp_path, *, run_state, hold='', schedules=None):
     node.get_logger = lambda: _Logger()
     node._coordination_enabled = lambda: False
     node._local_run_state = lambda: run_state
-    node._schedule_hold_reason = hold
+    node._run_mode = run_mode
     node.sent = []
     node._send_http_request = lambda endpoint, payload: (
         node.sent.append((endpoint, payload)) or True
@@ -95,21 +95,37 @@ def test_outside_the_window_and_stopped_does_nothing(tmp_path):
     assert node.sent == []
 
 
-def test_a_human_stop_is_not_undone(tmp_path):
-    """사람이 멈추면 사람이 다시 켤 때까지 스케줄이 손대지 않는다 · §6-138"""
+def test_manual_mode_does_nothing_at_all(tmp_path):
+    """수동 모드 · 정비·시험 중에 1분 점검이 모션을 되살리면 위험하다 · §6-143
+
+    전에는 「사람이 멈췄나」를 요청 내용으로 추측했다 · 그룹 정지나 안전 정지
+    까지 사람이 멈춘 것으로 읽어서, 1회 연동 실행만 해도 "사람이 모션을
+    정지했습니다" 가 떴다 · 추측을 없애고 스위치 하나로 만들었다.
+    """
     node = _node(
-        tmp_path, run_state='stopped', schedules=[_day_schedule()],
-        hold='사람이 모션을 정지했습니다 · 다시 시작하면 스케줄이 이어받습니다',
+        tmp_path, run_state='stopped', run_mode='manual',
+        schedules=[_day_schedule()],
     )
 
     node._reconcile(DAY.replace(hour=13))
 
-    assert node.sent == [], '사람이 멈춘 것을 1분 뒤에 되돌리면 정지가 무의미하다'
+    assert node.sent == [], '수동 모드인데 스케줄이 시작시켰다'
 
 
-def test_the_schedule_takes_over_again_once_a_human_starts_it(tmp_path):
-    """사람이 다시 켜면 브리지가 걸쇠를 풀고, 스케줄이 이어받는다."""
-    node = _node(tmp_path, run_state='running', schedules=[_day_schedule()], hold='')
+def test_manual_mode_does_not_stop_a_running_motion_either(tmp_path):
+    """손으로 돌리는 중인데 구간이 끝났다고 세우면 안 된다."""
+    node = _node(
+        tmp_path, run_state='running', run_mode='manual',
+        schedules=[_day_schedule()],
+    )
+
+    node._reconcile(DAY.replace(hour=20))
+
+    assert node.sent == []
+
+
+def test_switching_back_to_schedule_mode_resumes_management(tmp_path):
+    node = _node(tmp_path, run_state='running', schedules=[_day_schedule()])
 
     node._reconcile(DAY.replace(hour=20))
 

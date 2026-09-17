@@ -20,7 +20,7 @@ function readStatus(status) {
     // 조정 노드가 안 붙으면 `joined` 는 마지막으로 받아 둔 값이거나 빈 값이다 ·
     // 그것으로 "빠져 있음" 이라 단정하면 없는 문제를 만든다 · §6-133
     nodeConnected: status.coordination_node_connected !== false,
-    hold: String(status.schedule_hold_reason || ''),
+    manual: String(status.run_mode || 'schedule') === 'manual',
   };
 }
 
@@ -32,22 +32,41 @@ export function motionScheduleBadgeState(status) {
       canEdit: false, warning: '', blockedReason: '',
     };
   }
-  const { enabled, joined, isMaster, count, nodeConnected, hold } = read;
+  const { enabled, joined, isMaster, count, nodeConnected, manual } = read;
   const registered = `(${count}개 등록)`;
 
-  // 사람이 멈춰 두면 스케줄이 손대지 않는다 · §6-138
-  //
-  // 점검은 1분마다 "구간 안인데 안 돈다" 를 보고 다시 시작시킨다 · 사람이
-  // 「즉시 정지」를 눌렀는데 1분 뒤 되살아나면 정지가 무의미하고 정비 중에는
-  // 위험하다 · 왜 안 도는지 화면에 없으면 "스케줄이 고장났다" 가 된다.
-  if (hold) {
+  // 슬레이브가 맨 앞이다 · 여기서는 스케줄도 모드도 아무 일을 하지 않는다
+  // · 마스터가 보내는 그룹 실행만 이 PC 를 움직인다 · §6-143
+  if (enabled && !isMaster) {
     return {
-      scope: 'held',
-      text: '스케줄러: 사람이 정지시킴',
-      tone: 'warn',
+      scope: 'slave',
+      text: '스케줄러: 슬레이브 · 마스터 PC 에서 설정',
+      tone: 'muted',
+      canEdit: false,
+      warning: '',
+      blockedReason:
+        '이 PC 는 연동 슬레이브입니다 · 스케줄도 실행 관리도 여기서는 '
+        + '아무 일을 하지 않습니다 · 마스터가 보내는 그룹 실행만 이 PC 를 '
+        + '움직입니다 · 정비하려면 PC 연동 화면에서 「지금 빠지기」를 누르세요',
+    };
+  }
+  // 수동 모드면 스케줄은 아무것도 하지 않는다 · §6-143
+  //
+  // 슬레이브 판정 **뒤**에 본다 · 슬레이브에서는 스케줄 자체가 안 돌아서
+  // 모드가 아무 일도 하지 않는다 · 거기서 「수동 모드」라고 띄우면
+  // 마스터가 보내는 그룹 실행까지 안 도는 것처럼 읽힌다.
+  //
+  // 전에는 「사람이 멈췄나」를 요청 내용으로 추측했다 · 그룹 정지나 안전
+  // 정지까지 사람이 멈춘 것으로 읽어서, 1회 연동 실행만 해도 "사람이 모션을
+  // 정지했습니다" 가 떴다 · 추측을 없애고 스위치 하나로 만들었다.
+  if (manual) {
+    return {
+      scope: 'manual',
+      text: '스케줄러: 수동 모드',
+      tone: 'muted',
       canEdit: true,
-      warning: hold,
-      blockedReason: '',
+      warning: '',
+      blockedReason: '수동 모드입니다 · 스케줄이 시작·정지시키지 않습니다',
     };
   }
 
@@ -59,18 +78,6 @@ export function motionScheduleBadgeState(status) {
       canEdit: true,
       warning: '',
       blockedReason: '',
-    };
-  }
-  if (!isMaster) {
-    return {
-      scope: 'slave',
-      text: '스케줄러: 슬레이브 · 마스터 PC 에서 설정',
-      tone: 'muted',
-      canEdit: false,
-      warning: '',
-      blockedReason:
-        '이 PC 는 연동 슬레이브입니다 · 스케줄은 마스터 PC 에서 설정하며, '
-        + '발화하면 이 PC 도 함께 실행됩니다',
     };
   }
   if (!nodeConnected) {
@@ -108,8 +115,9 @@ export function motionScheduleBadgeState(status) {
 /** 모달 설명 · 무엇이 함께 움직이는지 먼저 말한다 */
 export function motionScheduleScopeNote(status) {
   const state = motionScheduleBadgeState(status);
-  if (state.scope === 'held') {
-    return `${state.warning} · 모션 실행 화면에서 시작하면 스케줄이 다시 관리합니다.`;
+  if (state.scope === 'manual') {
+    return '수동 모드입니다 · 스케줄이 시작·정지시키지 않습니다 · '
+      + '스케줄 모드로 바꾸면 시각에 맞춰 관리합니다.';
   }
   if (state.scope === 'local') {
     return '시각이 되면 이 PC 의 등록된 모션을 연속 시작하고, '

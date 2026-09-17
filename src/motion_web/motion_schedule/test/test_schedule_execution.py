@@ -118,7 +118,7 @@ def test_a_slave_pc_never_fires_its_own_schedule(tmp_path, monkeypatch):
     )
     node = _node(tmp_path, coordination_enabled=True, is_master=False)
     node._last_reconcile_monotonic = 0.0
-    node._schedule_hold_reason = ''
+    node._run_mode = 'schedule'
     node._reconcile = lambda _now: pytest.fail('슬레이브는 점검하지 않는다')
     node._publish_status = lambda _now: pytest.fail('슬레이브는 여기까지 오지 않는다')
 
@@ -131,7 +131,7 @@ def test_status_reports_the_master_role_and_count(tmp_path):
     node = _node(tmp_path, coordination_enabled=True)
     node.store.list_schedules = lambda: [_item(), _item()]
     node.engine = SimpleNamespace(active=lambda _now, _schedules: None)
-    node._schedule_hold_reason = ''
+    node._run_mode = 'schedule'
     published = []
     node.status_pub = SimpleNamespace(publish=lambda msg: published.append(msg.data))
 

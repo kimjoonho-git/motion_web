@@ -43,6 +43,11 @@ const ScheduleManager = {
             closeBtn.addEventListener('click', () => this.closeScheduleModal());
         }
 
+        const modeSelect = document.getElementById('scheduleRunMode');
+        if (modeSelect) {
+            modeSelect.addEventListener('change', () => this.saveRunMode(modeSelect.value));
+        }
+
         const addBtn = document.getElementById('btnAddSchedule');
         if (addBtn) {
             addBtn.addEventListener('click', () => this.openEditModal());
@@ -62,6 +67,24 @@ const ScheduleManager = {
         if (repeatTypeSelect) {
             repeatTypeSelect.addEventListener('change', () => this.onRepeatTypeChange());
         }
+    },
+
+    async saveRunMode(mode) {
+        try {
+            const res = await fetch('/api/schedule/mode', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ run_mode: mode }),
+            });
+            if (!res.ok) {
+                const detail = await res.json().catch(() => ({}));
+                alert(`실행 관리 변경 실패: ${detail.detail || res.status}`);
+            }
+        } catch (err) {
+            console.error('[ScheduleManager] Failed to save run mode:', err);
+            alert('실행 관리 변경 중 통신 오류가 발생했습니다.');
+        }
+        await this.loadStatus();
     },
 
     async loadStatus() {
@@ -100,6 +123,20 @@ const ScheduleManager = {
 
         // 발화해도 실행되지 않는 상태는 목록 위에 띄운다 · 전에는 로그에만
         // 남아서 "스케줄이 발화했는데 아무 일도 안 났다" 가 됐다 · §6-68
+        // 슬레이브에서는 실행 관리가 아무 일도 하지 않는다 · 잠근다 · §6-143
+        //
+        // 슬레이브는 스케줄 자체가 안 돈다 · 마스터가 보내는 그룹 실행만
+        // 이 PC 를 움직인다 · 여기서 수동으로 바꿔 두면 막힌 줄 알게 된다 ·
+        // 실제로 막으려면 「지금 빠지기」로 그룹에서 나가야 한다.
+        const modeSelect = document.getElementById('scheduleRunMode');
+        if (modeSelect) {
+            modeSelect.disabled = !state.canEdit;
+            modeSelect.title = state.blockedReason || '';
+            if (!modeSelect.matches(':focus')) {
+                modeSelect.value = String(this.status?.run_mode || 'schedule');
+            }
+        }
+
         const notice = document.getElementById('scheduleScopeNotice');
         if (notice) {
             const message = state.warning || state.blockedReason;

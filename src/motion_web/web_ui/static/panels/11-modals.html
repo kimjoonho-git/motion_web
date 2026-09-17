@@ -74,6 +74,16 @@
         <p id="scheduleScopeNotice" class="schedule-scope-notice">
           스케줄러 상태를 확인하고 있습니다.
         </p>
+        <!-- 스케줄이 실행을 관리하는가 · 사람이 정한다 · §6-143
+             전에는 「사람이 멈췄나」를 요청 내용으로 추측했다 · 그룹 정지나
+             안전 정지까지 사람이 멈춘 것으로 읽어 오판했다. -->
+        <div class="schedule-mode-switch">
+          <label for="scheduleRunMode">실행 관리</label>
+          <select id="scheduleRunMode">
+            <option value="schedule">스케줄 모드 · 시각에 맞춰 시작·정지</option>
+            <option value="manual">수동 모드 · 스케줄이 손대지 않음</option>
+          </select>
+        </div>
         <div id="scheduleListContainer" style="max-height: 350px; overflow-y: auto; margin-bottom: 20px; background: #2d3748; padding: 12px; border-radius: 6px;">
           <div class="text-center text-muted py-4">스케줄 목록을 불러오는 중...</div>
         </div>
