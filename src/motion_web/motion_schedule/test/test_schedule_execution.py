@@ -30,6 +30,8 @@ def _node(tmp_path, *, coordination_enabled, is_master=True):
     node.coordination_file = str(tmp_path / 'motion_coordination.yaml')
     node._master_role_cache = None
     node._master_role_stamp = None
+    # 마지막으로 거부당한 시도 · §6-147 · `__init__` 과 같이 둔다
+    node._last_failure = {}
     node.store = SimpleNamespace(
         current_project_id='proj-a',
         list_schedules=lambda: [],

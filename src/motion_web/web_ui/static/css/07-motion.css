@@ -1185,17 +1185,40 @@
 }
 
 /* 랜이 서비스보다 늦게 올라왔다 · §6-96 · 놓치면 원인을 영영 못 찾는다 */
+/* 색은 `01-base.css` 의 `--red` 를 쓴다 · `--color-danger` 는 이 프로젝트에
+   정의된 적이 없는 이름이라 아무 색도 안 나온다 */
 #coordinationNetworkStaleBanner {
   margin: 8px 0 12px;
   padding: 10px 12px;
   font-size: 14px;
   font-weight: 700;
-  color: var(--color-danger);
-  background-color: rgba(239, 68, 68, 0.1);
-  border: 1px solid var(--color-danger);
+  color: var(--red);
+  background-color: rgba(198, 40, 40, 0.10);
+  border: 1px solid var(--red);
   border-radius: 6px;
 }
 #coordinationNetworkStaleBanner:empty {
   display: none;
 }
 
+
+
+/* 스케줄러 배지 · §6-147
+   전에는 `badge bg-success` 같은 부트스트랩 이름을 붙였는데 이 프로젝트에는
+   부트스트랩이 없다 · 게다가 인라인 배경색이 클래스를 이겨서, 상태를 네
+   가지로 갈라 놓고도 **배지는 늘 회색**이었다 · 색 논리가 화면에 나온 적이
+   없다 · 실제 변수(`--green`/`--yellow`/`--red`)로 다시 세운다. */
+.schedule-badge {
+  display: inline-block;
+  margin-right: 8px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+  background-color: var(--muted);
+}
+.schedule-badge.tone-ok { background-color: var(--green); }
+.schedule-badge.tone-warn { background-color: var(--yellow); }
+.schedule-badge.tone-bad { background-color: var(--red); }
+.schedule-badge.tone-muted { background-color: var(--muted); }

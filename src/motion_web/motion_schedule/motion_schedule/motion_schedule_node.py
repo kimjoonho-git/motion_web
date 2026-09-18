@@ -63,6 +63,12 @@ class MotionScheduleNode(Node):
         self.engine = ScheduleEngine()
         self._last_reconcile_monotonic = 0.0
         self._run_mode = DEFAULT_RUN_MODE
+        # 마지막으로 거부당한 시도 · §6-147
+        #
+        # 전에는 아무 데도 안 남았다 · 스케줄이 발화하고 연동이 거부해도
+        # 로그에 `success` 라고 찍히고 끝이라, 화면 배지는 초록불이었다 ·
+        # 한 시간 내내 매분 거부당하는 동안 아무도 몰랐다.
+        self._last_failure = {}
 
         # Status publisher
         self.status_pub = self.create_publisher(String, topics.SCHEDULE_STATUS, 10)
@@ -175,11 +181,38 @@ class MotionScheduleNode(Node):
             )
             with urllib.request.urlopen(req, timeout=5.0) as resp:
                 result = json.loads(resp.read().decode('utf-8'))
-                self.get_logger().info(f"HTTP Request [{endpoint}] success: {result}")
-                return True
         except (OSError, ValueError) as exc:
+            self._remember_failure(endpoint, str(exc))
             self.get_logger().error(f"HTTP Request [{endpoint}] failed: {exc}")
             return False
+        # 200 이 왔다고 받아들여진 것이 아니다 · §6-147
+        #
+        # 전에는 여기서 바로 `success` 라고 찍고 True 를 돌려줬다 · 그래서
+        # 로그에 `success: {'success': False, ...}` 같은 자기모순이 남았고,
+        # 거부가 실패로 세어지지 않아 알람도 화면 표시도 생기지 않았다.
+        if isinstance(result, dict) and result.get('success') is False:
+            message = str(result.get('message') or '이유를 알려주지 않았습니다')
+            self._remember_failure(endpoint, message)
+            self.get_logger().warning(f"[거부] {endpoint} · {message}")
+            return False
+        self._forget_failure()
+        self.get_logger().info(f"HTTP Request [{endpoint}] success: {result}")
+        return True
+
+    def _remember_failure(self, endpoint: str, message: str) -> None:
+        """연달아 몇 번째인지까지 센다 · 한 번은 경합, 계속이면 고장이다."""
+        previous = self._last_failure.get('count') or 0
+        self._last_failure = {
+            'endpoint': endpoint,
+            'message': message,
+            'count': int(previous) + 1,
+            'at': datetime.now().astimezone().isoformat(),
+        }
+
+    def _forget_failure(self) -> None:
+        if self._last_failure:
+            self.get_logger().info('스케줄 시도가 다시 받아들여졌습니다')
+        self._last_failure = {}
 
     def _read_json(self, endpoint: str, timeout_sec: float = 0.5):
         url = f"http://127.0.0.1:8000{endpoint}"
@@ -342,6 +375,8 @@ class MotionScheduleNode(Node):
                 'schedule_id', None,
             ),
             "run_mode": self._run_mode,
+            # 마지막으로 거부당한 시도 · 비어 있으면 정상이다
+            "last_failure": dict(self._last_failure),
         }
         msg = String()
         msg.data = json.dumps(status)

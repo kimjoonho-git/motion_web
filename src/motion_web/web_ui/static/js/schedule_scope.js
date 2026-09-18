@@ -21,6 +21,8 @@ function readStatus(status) {
     // 그것으로 "빠져 있음" 이라 단정하면 없는 문제를 만든다 · §6-133
     nodeConnected: status.coordination_node_connected !== false,
     manual: String(status.run_mode || 'schedule') === 'manual',
+    // 시각이 되어 시도했는데 거부당했나 · §6-147
+    failure: status.last_failure || {},
   };
 }
 
@@ -67,6 +69,30 @@ export function motionScheduleBadgeState(status) {
       canEdit: true,
       warning: '',
       blockedReason: '수동 모드입니다 · 스케줄이 시작·정지시키지 않습니다',
+    };
+  }
+
+  // 시각이 됐는데 거부당했다 · §6-147
+  //
+  // 여기까지 왔다는 건 스케줄이 실제로 일하는 상태라는 뜻이다(수동도 슬레이브도
+  // 아니다) · 그런데도 시작이 거부되고 있으면 **화면이 말해야 한다**.
+  //
+  // 전에는 아무 데도 안 남았다 · 스케줄 노드가 60초마다 시도하고 연동이
+  // 「정상 연결된 PC 가 2대 이상 필요합니다」로 거부해도, 배지는 초록불이었다 ·
+  // 한 시간을 그러고 있었는데 아무도 몰랐다.
+  //
+  // 한 번은 경합일 수 있다(그룹 정리 중 등) · 노랑으로 두고, 세 번 연달아
+  // 거부당하면(3분) 빨강으로 올린다 · 처음부터 빨강이면 곧 아무도 안 읽는다.
+  const failCount = Number(read.failure.count) || 0;
+  if (failCount > 0) {
+    const reason = String(read.failure.message || '이유를 알려주지 않았습니다');
+    return {
+      scope: enabled ? 'group' : 'local',
+      text: `스케줄러: 시작 거부됨 (${failCount}회)`,
+      tone: failCount >= 3 ? 'bad' : 'warn',
+      canEdit: true,
+      warning: `시각이 되어 시작을 시도했지만 거부되었습니다 · ${reason}`,
+      blockedReason: '',
     };
   }
 

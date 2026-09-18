@@ -2,6 +2,7 @@ import asyncio
 import logging
 from fastapi import FastAPI, HTTPException, Request
 
+from motion_common import local_clock
 from motion_common.coordination import resolve_master_role
 from motion_common.paths import motion_projects_dir
 from motion_common.schedule_models import ScheduleItem
@@ -101,6 +102,13 @@ def register_schedule_routes(app: FastAPI, bridge, project_call) -> None:
             logger.debug("마스터 아님 · %s", role.reason)
         session = _coordination_session()
 
+        node = {}
+        reader = getattr(bridge, 'schedule_node_status', None)
+        if callable(reader):
+            try:
+                node = reader()
+            except Exception:
+                logger.debug("스케줄 노드 상태 조회 실패", exc_info=True)
         return {
             "status": "ok",
             "is_master": role.is_master,
@@ -111,6 +119,11 @@ def register_schedule_routes(app: FastAPI, bridge, project_call) -> None:
             "coordination_node_connected": session['node_connected'],
             # 스케줄이 실행을 관리하는가 · 사람이 정한다 · §6-143
             "run_mode": store.mode,
+            # 시각이 됐는데 거부당했는가 · 비어 있으면 정상 · §6-147
+            "last_failure": node.get('last_failure') or {},
+            "schedule_node_seen": bool(node.get('received')),
+            # 이 PC 가 몇 시라고 믿는가 · 해외 설치에서 시간대만 안 바뀐다
+            "clock": local_clock.snapshot(),
         }
 
     def _schedule_list_blocking():

@@ -276,6 +276,9 @@ class MotionWebBridge(Node):
         self._motion_run_store = rpc.ResultStore()
         self._motion_run_lock = threading.Lock()
         self._motion_run_status: Dict[str, Any] = {}
+        self._schedule_status_lock = threading.Lock()
+        self._schedule_status: Dict[str, Any] = {}
+        self._schedule_status_monotonic = 0.0
         self._coordination_poll_lock = threading.Lock()
         self._coordination_poll_received_monotonic = 0.0
         self._coordination_watchdog_stop_execution_id = ''
@@ -406,6 +409,17 @@ class MotionWebBridge(Node):
             String,
             self.motion_run_status_topic,
             self._motion_run_status_callback,
+            10,
+        )
+        # 스케줄 노드의 상태 · §6-147
+        #
+        # 이 토픽은 **구독자가 하나도 없었다** · 스케줄 노드가 1초마다 내보내는
+        # 값이 허공으로 갔고, 그래서 "시각이 됐는데 연동이 거부했다" 를 화면이
+        # 알 길이 없었다 · 배지는 초록불인 채 매분 거부당했다.
+        self._schedule_status_subscription = self.create_subscription(
+            String,
+            topics.SCHEDULE_STATUS,
+            self._schedule_status_callback,
             10,
         )
         self._midi_monitor_state_subscription = self.create_subscription(
@@ -586,6 +600,35 @@ class MotionWebBridge(Node):
                 self._motion_run_status = status
         if isinstance(status, dict) and self._project.payload_matches_selected(status):
             self._motor_event_log.record_motion_run_transition(status)
+
+    def _schedule_status_callback(self, msg: String) -> None:
+        """스케줄 노드가 내보낸 마지막 상태 · 화면이 읽을 수 있게 들고 있는다."""
+        try:
+            payload = json.loads(msg.data)
+        except json.JSONDecodeError:
+            self.get_logger().warn('스케줄 상태 JSON 을 읽지 못했습니다')
+            return
+        if not isinstance(payload, dict):
+            return
+        with self._schedule_status_lock:
+            self._schedule_status = payload
+            self._schedule_status_monotonic = time.monotonic()
+
+    def schedule_node_status(self) -> Dict[str, Any]:
+        """스케줄 노드가 살아 있는가 · 마지막으로 무엇을 말했나.
+
+        노드가 죽으면 값이 늙는다 · 늙은 값을 현재처럼 보여주면 "거부당한 적
+        없다" 로 읽혀서, 실제로는 스케줄이 아예 안 도는 상태를 놓친다.
+        """
+        with self._schedule_status_lock:
+            payload = dict(self._schedule_status)
+            stamp = self._schedule_status_monotonic
+        age = (time.monotonic() - stamp) if stamp else None
+        return {
+            'received': bool(stamp),
+            'age_sec': age,
+            'last_failure': dict(payload.get('last_failure') or {}),
+        }
 
     def _motion_run_status_callback(self, msg: String) -> None:
         try:

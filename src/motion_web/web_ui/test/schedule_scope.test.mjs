@@ -150,3 +150,63 @@ test('화면이 이 판단을 실제로 쓴다', () => {
   assert.doesNotMatch(indexHtml, /마스터 PC 전용 스케줄러/);
   assert.match(indexHtml, /id="scheduleScopeNotice"/);
 });
+
+/**
+ * 시각이 됐는데 거부당했으면 화면이 말해야 한다 · §6-147
+ *
+ * 실제로 겪었다 · 연동 PC 가 한 대뿐이라 스케줄이 60초마다 시도하고 매번
+ * 「정상 연결된 PC 가 2대 이상 필요합니다」로 거부당했는데, 배지는 한 시간
+ * 내내 초록불이었다 · 로그에도 `success` 라고 찍혀서 아무 단서가 없었다.
+ */
+
+const rejected = (count, extra = {}) => status({
+  coordination_enabled: true,
+  coordination_joined: true,
+  last_failure: {
+    count,
+    message: '그룹 연동에는 정상 연결된 PC가 2대 이상 필요합니다',
+  },
+  ...extra,
+});
+
+test('한 번 거부는 경합일 수 있다 · 노랑으로 말한다', () => {
+  const state = motionScheduleBadgeState(rejected(1));
+  assert.equal(state.tone, 'warn');
+  assert.equal(state.text, '스케줄러: 시작 거부됨 (1회)');
+  assert.match(state.warning, /2대 이상 필요/);
+  assert.equal(state.canEdit, true, '거부당했다고 설정을 못 고치게 하면 안 된다');
+});
+
+test('세 번 연달아 거부당하면 빨강으로 올린다', () => {
+  const state = motionScheduleBadgeState(rejected(3));
+  assert.equal(state.tone, 'bad');
+  assert.match(state.text, /3회/);
+});
+
+test('거부가 없으면 예전 그대로 초록이다', () => {
+  const state = motionScheduleBadgeState(rejected(0));
+  assert.equal(state.tone, 'ok');
+  assert.match(state.text, /마스터/);
+});
+
+test('수동 모드에서는 묵은 거부를 떠들지 않는다', () => {
+  // 스케줄이 손대지 않는 상태다 · 지난 거부는 지금 사실이 아니다
+  const state = motionScheduleBadgeState(rejected(5, { run_mode: 'manual' }));
+  assert.equal(state.scope, 'manual');
+  assert.equal(state.tone, 'muted');
+});
+
+test('슬레이브에서도 거부를 떠들지 않는다', () => {
+  // 여기서는 스케줄 자체가 돌지 않는다 · 마스터 화면에서 볼 일이다
+  const state = motionScheduleBadgeState(rejected(5, { is_master: false }));
+  assert.equal(state.scope, 'slave');
+});
+
+test('연동을 안 쓰는 단독 PC 의 거부도 말한다', () => {
+  const state = motionScheduleBadgeState(status({
+    last_failure: { count: 2, message: '모션 파일이 없습니다' },
+  }));
+  assert.equal(state.scope, 'local');
+  assert.equal(state.tone, 'warn');
+  assert.match(state.warning, /모션 파일이 없습니다/);
+});
