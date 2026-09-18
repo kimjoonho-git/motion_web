@@ -32,6 +32,7 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from .alarm_registry import AlarmRegistry
 from .command_dispatcher import CommandDispatcher
+from motion_common import net_ready
 from motion_common.group_config import (
     GroupConfig,
     load_group_config,
@@ -121,6 +122,9 @@ class MotionCoordinationNode(Node):
         self._system_info_cache: Dict[str, GroupSystemInfo] = {}
         self._cancelled_execution_ids: set[str] = set()
         self._coordination_error: Dict[str, Any] = {}
+        # 기동 시점의 랜 주소 · `_check_network_drift` 가 견주는 기준점
+        self._boot_lan_addresses = net_ready.lan_addresses()
+        self._network_stale: Dict[str, Any] = {}
         self._duplicate_pc_boot_id = ''
         self._registry = MemberRegistry(
             warning_timeout_sec=self._config.warning_timeout_sec,
@@ -238,8 +242,52 @@ class MotionCoordinationNode(Node):
             member.git_message = message.git_message
 
     def _heartbeat_tick(self) -> None:
+        self._check_network_drift()
         if self._config.configured and self._joined:
             self._publish_heartbeat(joined=True)
+
+    def _check_network_drift(self) -> None:
+        """기동 뒤에 랜 주소가 바뀌었는가 · §6-96
+
+        DDS 는 참가자를 만드는 그 순간의 랜카드만 보고 자기 주소를 정한다 ·
+        그래서 기동할 때와 지금의 주소가 다르면 이 노드는 **지금 없는 주소로
+        자기를 광고하고 있다** · 다른 PC 는 영영 못 찾는다.
+
+        이걸 말해 주지 않으면 아무도 원인을 모른다 · 상대 화면에도 내 화면에도
+        그냥 「통신 단절」로만 보이고, 설정도 네트워크도 멀쩡해 보인다.
+
+        고쳐 주지는 않는다 · 되살리는 길은 재시작뿐인데 모터가 도는 중일 수
+        있다 · 무엇을 언제 멈출지는 사람이 정한다.
+        """
+        current = net_ready.lan_addresses()
+        with self._lock:
+            if current == self._boot_lan_addresses:
+                if not self._network_stale:
+                    return
+                # 주소가 제자리로 돌아왔다 · 광고한 주소가 다시 맞는다
+                self._network_stale = {}
+                self.get_logger().info('랜 주소가 기동 시점과 같아졌습니다')
+                return
+            if self._network_stale.get('now') == list(current):
+                return  # 같은 말을 심장박동마다 되풀이하지 않는다
+            if self._boot_lan_addresses:
+                reason = '랜 주소가 기동 뒤에 바뀌었습니다'
+            else:
+                reason = '랜이 이 서비스보다 늦게 올라왔습니다'
+            message = (
+                f'{reason} · 기동 시점 '
+                f'{", ".join(self._boot_lan_addresses) or "없음"} · 지금 '
+                f'{", ".join(current) or "없음"} · 연동 서비스를 다시 '
+                '시작해야 다른 PC 가 보입니다'
+            )
+            self._network_stale = {
+                'active': True,
+                'reason': reason,
+                'message': message,
+                'boot': list(self._boot_lan_addresses),
+                'now': list(current),
+            }
+        self.get_logger().warn(message)
 
     def _publish_heartbeat(self, *, joined: bool) -> None:
         message = GroupHeartbeat()
@@ -2179,6 +2227,7 @@ class MotionCoordinationNode(Node):
                 },
                 'trigger_sync': dict(self._trigger_sync_status),
                 'coordination_error': dict(self._coordination_error),
+                'network_stale': dict(self._network_stale),
                 'midi_relay': self._midi_relay.snapshot(),
                 'timeouts': {
                     'heartbeat_sec': self._config.heartbeat_sec,

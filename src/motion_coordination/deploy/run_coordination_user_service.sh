@@ -33,6 +33,21 @@ if [[ ! -x "${EXECUTABLE}" ]]; then
   exit 1
 fi
 
+# 랜이 생기기 전에 뜨면 DDS 가 루프백에 갇힌다 · §6-96
+#
+# Fast DDS 는 참가자를 만드는 그 순간의 랜카드만 훑는다 · 주소가 없을 때 뜨면
+# `127.0.0.1` 만 광고하고, 나중에 랜이 살아나도 다시 보지 않는다 · 그래서 그 뒤로
+# **영영 다른 PC 를 못 본다** · 화면에는 그냥 「통신 단절」로만 보인다.
+#
+# 유닛의 `After=network-online.target` 으로는 못 막는다 · 그 타깃은 시스템
+# 스코프에만 있고 이건 사용자 서비스라, systemd 가 없는 유닛으로 보고 조용히
+# 넘어간다 · 그래서 여기서 직접 기다린다.
+#
+# 랜이 영영 없어도 서비스는 떠야 한다 · 도우미는 기다리다 포기하고 0 으로 끝낸다.
+NET_READY_HELPER="${WORKSPACE}/src/motion_common/motion_common/net_ready.py"
+if [[ -f "${NET_READY_HELPER}" ]]; then
+  python3 "${NET_READY_HELPER}" || true
+fi
 set +u
 source "${ROS_SETUP}"
 source "${WORKSPACE_SETUP}"

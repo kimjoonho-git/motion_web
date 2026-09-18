@@ -174,6 +174,15 @@ export function createCoordinationController({ el }) {
     const configured = config.enabled === true && Boolean(config.group_id);
     renderSettings(config);
     
+    // 랜이 이 서비스보다 늦게 올라왔는가 · §6-96 · 판정은 연동 노드가 한다 ·
+    // 화면이 주소를 따로 재면 주인이 둘이 된다
+    if (el.coordinationNetworkStaleBanner) {
+      const networkStale = runtime.network_stale || {};
+      el.coordinationNetworkStaleBanner.textContent = networkStale.active === true
+        ? `⚠️ ${networkStale.message || '랜 주소가 기동 뒤에 바뀌었습니다'}`
+        : '';
+    }
+
     // 이 모듈의 다른 요소는 모두 주입받은 등록부를 쓴다 · 여기만 전역
     // `document` 를 잡고 있어서 노드 없이 렌더를 검증할 수 없었다.
     const rosterBanner = el.coordinationConfirmedRosterBanner;

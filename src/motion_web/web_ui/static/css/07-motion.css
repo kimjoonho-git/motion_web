@@ -1184,3 +1184,18 @@
   display: none;
 }
 
+/* 랜이 서비스보다 늦게 올라왔다 · §6-96 · 놓치면 원인을 영영 못 찾는다 */
+#coordinationNetworkStaleBanner {
+  margin: 8px 0 12px;
+  padding: 10px 12px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--color-danger);
+  background-color: rgba(239, 68, 68, 0.1);
+  border: 1px solid var(--color-danger);
+  border-radius: 6px;
+}
+#coordinationNetworkStaleBanner:empty {
+  display: none;
+}
+

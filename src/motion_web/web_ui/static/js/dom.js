@@ -78,6 +78,7 @@ export function getElements() {
     workspaceTabs: document.getElementById('workspaceTabs'),
     workspacePanels: document.querySelectorAll('[data-workspace-panel]'),
     coordinationConfirmedRosterBanner: document.getElementById('coordinationConfirmedRosterBanner'),
+    coordinationNetworkStaleBanner: document.getElementById('coordinationNetworkStaleBanner'),
     coordinationNodeState: document.getElementById('coordinationNodeState'),
     coordinationPcId: document.getElementById('coordinationPcId'),
     coordinationDisplayName: document.getElementById('coordinationDisplayName'),

@@ -79,6 +79,14 @@ def _node():
     node._lock = threading.RLock()
     node._execution = GroupExecution()
     node._coordination_error = {}
+    # 기동 시점의 랜 주소 · `_check_network_drift` 가 견주는 기준점 · §6-96
+    node._boot_lan_addresses = ()
+    node._network_stale = {}
+    node.get_logger = lambda: SimpleNamespace(
+        error=lambda _message: None,
+        warn=lambda _message: None,
+        info=lambda _message: None,
+    )
     node._duplicate_pc_boot_id = ''
     node._alarm_registry = AlarmRegistry()
     node._alarm_registry.alarms = {}
@@ -1229,3 +1237,76 @@ def test_main_treats_external_shutdown_as_a_clean_stop(monkeypatch):
     coordination_node.main()
 
     assert calls == ['destroy']
+
+
+# 랜이 서비스보다 늦게 올라온 것을 알아채는가 · §6-96
+#
+# 실제로 겪은 고장이다 · 전원을 껐다 켜니 DHCP 가 서비스보다 5.6초 늦었고,
+# DDS 는 루프백만 광고한 채 30분을 돌았다 · 로그에도 화면에도 「통신 단절」
+# 말고는 아무것도 없어서 원인을 찾는 데만 한참 걸렸다 · 다시는 말없이 죽지
+# 않도록 이 네 가지를 못 박는다.
+
+def _drift(node, monkeypatch, addresses):
+    monkeypatch.setattr(
+        coordination_node.net_ready, 'lan_addresses', lambda: addresses,
+    )
+    node._check_network_drift()
+
+
+def test_says_so_when_the_lan_arrives_after_the_service(monkeypatch):
+    """주소 없이 떴는데 나중에 랜이 생겼다 · 이 PC 는 아무도 못 찾는다."""
+    node = _node()
+    node._boot_lan_addresses = ()
+
+    _drift(node, monkeypatch, ('172.16.21.10',))
+
+    assert node._network_stale['active'] is True
+    assert node._network_stale['reason'] == '랜이 이 서비스보다 늦게 올라왔습니다'
+    assert '172.16.21.10' in node._network_stale['message']
+    assert '다시' in node._network_stale['message']  # 무엇을 해야 하는지까지 말한다
+
+
+def test_says_so_when_the_address_changes_after_boot(monkeypatch):
+    """WiFi 가 끊겼다 다른 주소로 붙어도 같은 고장이 난다."""
+    node = _node()
+    node._boot_lan_addresses = ('172.16.21.10',)
+
+    _drift(node, monkeypatch, ('172.16.21.77',))
+
+    assert node._network_stale['reason'] == '랜 주소가 기동 뒤에 바뀌었습니다'
+    assert node._network_stale['boot'] == ['172.16.21.10']
+    assert node._network_stale['now'] == ['172.16.21.77']
+
+
+def test_clears_when_the_address_comes_back(monkeypatch):
+    """주소가 제자리로 돌아오면 광고한 주소가 다시 맞다 · 경고를 거둔다."""
+    node = _node()
+    node._boot_lan_addresses = ('172.16.21.10',)
+
+    _drift(node, monkeypatch, ('172.16.21.77',))
+    assert node._network_stale
+
+    _drift(node, monkeypatch, ('172.16.21.10',))
+    assert node._network_stale == {}
+
+
+def test_stays_quiet_while_the_address_is_unchanged(monkeypatch):
+    """멀쩡할 때 떠들면 아무도 경고를 안 읽게 된다."""
+    node = _node()
+    node._boot_lan_addresses = ('172.16.21.10',)
+
+    _drift(node, monkeypatch, ('172.16.21.10',))
+
+    assert node._network_stale == {}
+
+
+def test_snapshot_carries_the_network_warning(monkeypatch):
+    """화면이 읽을 수 있어야 한다 · 로그에만 있으면 아무도 안 본다."""
+    node = _node()
+    node._boot_lan_addresses = ()
+    node._joined = True
+    node._local_status = {}
+
+    _drift(node, monkeypatch, ('172.16.21.10',))
+
+    assert node.snapshot()['network_stale']['active'] is True
