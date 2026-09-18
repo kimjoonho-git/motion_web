@@ -101,11 +101,16 @@ test('file list registration is explicit and persists through mapping save', () 
   assert.match(dom, /registerMotionFileButton: document\.getElementById\('registerMotionFileButton'\)/);
   assert.match(controller, /registerMotionFileButton\?\.addEventListener\('click', registerSelectedMotionFile\)/);
 
+  // 등록은 **모션축 설정 저장을 타지 않는다** · §6-160
+  //
+  // 한 파일에 주인이 셋이다 (모션축 설정 · MIDI 뱅크 · 재생 등록) · 전에는
+  // 등록이 「설정 전체 저장」 길로 다녀서, 모션 파일만 바꿔도 편집 중인
+  // 설정까지 같이 저장되고 개정 검사에 걸려 저장 충돌 창이 떴다.
   const registerStart = controller.indexOf('async function registerSelectedMotionFile()');
-  const registerEnd = controller.indexOf('async function saveCurrentMapping()', registerStart);
+  const registerEnd = controller.indexOf('async function unregisterSelectedMotionFile()', registerStart);
   const registerBody = controller.slice(registerStart, registerEnd);
-  assert.match(registerBody, /mappingDraft\.motion_file_id = selectedFile\.id/);
-  assert.match(registerBody, /await saveCurrentMapping\(\)/);
+  assert.match(registerBody, /applyMotionFileRegistration\(\s*selectedFile\.id/);
+  assert.doesNotMatch(registerBody, /saveCurrentMapping/);
 });
 
 test('registered motion file can be explicitly unregistered without deleting the file', () => {
@@ -116,9 +121,20 @@ test('registered motion file can be explicitly unregistered without deleting the
   const unregisterStart = controller.indexOf('async function unregisterSelectedMotionFile()');
   const unregisterEnd = controller.indexOf('async function saveCurrentMapping()', unregisterStart);
   const unregisterBody = controller.slice(unregisterStart, unregisterEnd);
-  assert.match(unregisterBody, /mappingDraft\.motion_file_id = ''/);
-  assert.match(unregisterBody, /await saveCurrentMapping\(\)/);
+  assert.match(unregisterBody, /applyMotionFileRegistration\(\s*''/);
+  assert.doesNotMatch(unregisterBody, /saveCurrentMapping/);
   assert.doesNotMatch(unregisterBody, /deleteMotionFile/);
+});
+
+test('재생 등록은 제 길로만 다닌다', () => {
+  // 좁은 길 하나 · 화면부터 노드까지 · §6-160
+  const body = controller.match(
+    /async function applyMotionFileRegistration\([\s\S]*?\n  \}/,
+  )?.[0] || '';
+  assert.ok(body, '등록 함수를 읽지 못했다');
+  assert.match(body, /saveRegisteredMotionFile\(/);
+  assert.doesNotMatch(body, /markMappingDirty/,
+    '등록이 모션축 설정을 「편집 중」 으로 표시하면 버튼이 제 발에 묶인다');
 });
 
 test('registered motion file deletion is blocked with an alert before delete request', () => {
@@ -219,7 +235,7 @@ test('an imported motion file shows up in the run screen without a reload', () =
   assert.match(main, /onMotionFilesChange: async \(\) => \{\s*await motionData\.refreshMotionFiles\(\);\s*\},/);
 });
 
-test('DDS execution blocks show a recovery popup and expose local temporary disable', () => {
+test('DDS execution blocks show a recovery popup and expose the way out', () => {
   const coordination = readFileSync(
     new URL('../static/js/coordination.js', import.meta.url),
     'utf8',
@@ -227,13 +243,13 @@ test('DDS execution blocks show a recovery popup and expose local temporary disa
   assert.match(controller, /async function showMotionRunFailure/);
   assert.match(controller, /DDS 그룹 실행이 로컬 모션 실행을 사용 중입니다/);
   // 버튼 이름이 바뀌면 이 안내문도 같이 바뀌어야 한다 · §6-132
-  assert.match(controller, /「지금 빠지기」를 누른 뒤 다시 시도하세요/);
-  assert.match(html, /id="coordinationTemporaryDisableButton"[^>]*>지금 빠지기</);
-  assert.match(dom, /coordinationTemporaryDisableButton/);
-  assert.match(coordination, /control\('temporarily_disable'\)/);
-  assert.match(coordination, /다른 PC의 확인 없이 빠집니다/);
-  // 「그룹 나가기」는 화면에서 뺐다 · 실행 중이 아니면 「지금 빠지기」와 같은 일이었다
-  assert.doesNotMatch(html, /coordinationLeaveButton/);
-  assert.doesNotMatch(dom, /coordinationLeaveButton/);
-  assert.doesNotMatch(coordination, /coordinationLeaveButton/);
+  assert.match(controller, /「연동 탈퇴」를 누른 뒤 다시 시도하세요/);
+  assert.match(html, /id="coordinationLeaveButton"[^>]*>연동 탈퇴</);
+  assert.match(dom, /coordinationLeaveButton/);
+  assert.match(coordination, /control\('leave'\)/);
+  assert.match(coordination, /단독 모션·모션 스튜디오를 사용할 수 있습니다/);
+  // 들어오거나 나가거나 둘 뿐이다 · 「지금 빠지기」는 없앴다 · §6-164
+  assert.doesNotMatch(html, /coordinationTemporaryDisableButton/);
+  assert.doesNotMatch(dom, /coordinationTemporaryDisableButton/);
+  assert.doesNotMatch(coordination, /temporarily_disable/);
 });

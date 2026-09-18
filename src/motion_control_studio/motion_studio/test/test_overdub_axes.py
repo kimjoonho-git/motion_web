@@ -140,7 +140,9 @@ def test_the_recording_clock_waits_for_playback_in_the_step_list():
     gate = body.index('wait_for_run_state(')
     clock = body.index("studio._record_started = time.monotonic()")
     assert gate < clock, '녹화 시계가 재생보다 먼저 출발한다'
-    assert "{'running', 'verifying'}" in body, '재생이 도는 것을 확인하지 않는다'
+    # 상태 목록의 주인은 `run_state` 다 · §6-165 · 여기서는 그것을 기다리는지만
+    # 본다 · 목록을 다시 적으면 주인이 둘이 된다
+    assert 'run_state_rules.MOVING_STATES' in body, '재생이 도는 것을 확인하지 않는다'
 
 
 def test_a_finished_take_takes_its_ownership_with_it():

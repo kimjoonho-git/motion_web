@@ -7,6 +7,8 @@ import time
 import uuid
 from typing import Any, Dict
 
+from motion_common import run_state as run_state_rules
+
 from .constants import DEFAULT_PERIOD_SEC
 
 #: 실행 노드가 돌리는 카운트다운 · 레이어 재생와 같은 값
@@ -170,7 +172,7 @@ class StudioRecordingSession:
                 # 이 한 번의 요청이 초기 이동과 카운트다운까지 한다 · 그만큼
                 # 기다려 준다 · §6-87
                 steps.wait_for_run_state(
-                    {'running', 'verifying'},
+                    run_state_rules.MOVING_STATES,
                     timeout=max(40.0, move_time + COUNTDOWN_SEC + 25.0),
                     timeout_message='추가 녹화 재생 시작 확인',
                 )

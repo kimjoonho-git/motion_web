@@ -43,6 +43,36 @@ def is_idle(state) -> bool:
     return not is_running(state)
 
 
+#: 지금 **축이 실제로 움직이는** 상태 · §6-165
+#:
+#: `is_running` 과 다르다 · 저것은 「멈춰 있지 않다」라서 `initializing`(초기
+#: 위치로 가는 중)과 `countdown`(녹화 카운트다운)도 포함한다 · 여기는 **모션
+#: 자체가 재생되는 동안**만이다.
+#:
+#: 화면 표시와 스튜디오 진행이 이 구분을 쓴다 · 초기 이동 중에 「모션 동작
+#: 중」이라고 하면 사람이 잘못 읽고, 테이크 시계가 초기 이동 시간까지 세면
+#: 재생 길이가 틀린다.
+#:
+#: 전에는 이 목록이 **다섯 파일에 손으로** 적혀 있었다 · `bridge_helpers`,
+#: `midi_control_node`, `playback_session`(둘), `recording_session` · 새 상태가
+#: 하나 생기면 다섯 곳을 고쳐야 했고, 빠뜨린 곳만 조용히 틀렸다.
+MOVING_STATES = frozenset({
+    'running',
+    'verifying',
+})
+
+
+def is_moving(state) -> bool:
+    """지금 축이 실제로 움직이는가.
+
+    「멈춰 있지 않다」(`is_running`)보다 **좁다** · 초기 위치 이동과 카운트다운은
+    여기 들지 않는다 · 모르는 상태는 움직이지 **않는** 것으로 본다 (`is_running`
+    과 반대다) · 이 판정은 표시와 시계에 쓰이므로, 모를 때 「움직인다」고 하면
+    없는 진행을 그린다.
+    """
+    return str(state or '').strip().lower() in MOVING_STATES
+
+
 #: 그룹 실행이 살아 있는 단계 · §6-145
 #:
 #: 여기는 **살아 있는 쪽**을 적는다 · 로컬(`IDLE_STATES`)과 반대다 · 그룹은

@@ -49,6 +49,7 @@ from midi_control.motion_value_map import (
 )
 from motion_common import command_router, generation as generation_mod, topics
 from motion_common.timing import CONTROL_PERIOD_SEC
+from motion_common import run_state as run_state_rules
 
 
 MIDI_COMMAND_PERIOD_SEC = CONTROL_PERIOD_SEC
@@ -1110,7 +1111,7 @@ class MidiControlNode(Node):
             return 'stopping'
         if run_state == 'initializing':
             return 'initializing'
-        if run_state in {'running', 'verifying'}:
+        if run_state_rules.is_moving(run_state):
             return 'playing'
         if run_state == 'stopping':
             return 'stopping'

@@ -64,7 +64,7 @@ test('슬레이브는 고칠 수 없고 왜인지 말한다', () => {
   assert.equal(state.scope, 'slave');
   assert.equal(state.canEdit, false);
   assert.match(state.blockedReason, /아무 일을 하지 않습니다/);
-  assert.match(state.blockedReason, /「지금 빠지기」/);
+  assert.match(state.blockedReason, /「연동 탈퇴」/);
 });
 
 test('연동 노드가 안 붙으면 빠졌다고 단정하지 않는다', () => {
@@ -103,7 +103,7 @@ test('슬레이브에서는 수동 모드가 앞에 나서지 않는다', () => 
   }));
   assert.equal(state.scope, 'slave');
   assert.equal(state.canEdit, false, '슬레이브에서는 실행 관리도 잠겨야 한다');
-  assert.match(state.blockedReason, /「지금 빠지기」/);
+  assert.match(state.blockedReason, /「연동 탈퇴」/);
 });
 
 test('슬레이브에서는 실행 관리 칸이 잠긴다', () => {

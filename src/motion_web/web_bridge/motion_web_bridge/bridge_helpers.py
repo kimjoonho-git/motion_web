@@ -6,6 +6,7 @@ from urllib.parse import quote
 
 from ament_index_python.packages import get_package_share_directory
 from motion_common.timing import CONTROL_PERIOD_SEC
+from motion_common import run_state as run_state_rules
 
 #: 공용 커널이 단일 정의 · 기존 이름은 호환을 위해 남긴다
 MOTION_DATA_PERIOD_SEC = CONTROL_PERIOD_SEC
@@ -40,7 +41,7 @@ def motor_activity_snapshot(
 
     if run_state == 'initializing':
         return active('initializing', '초기 위치 이동 중', 'motion_run')
-    if run_state in {'running', 'verifying'}:
+    if run_state_rules.is_moving(run_state):
         if bool(run.get('automation_run')):
             return active('automation', '자동 반복 모션 동작 중', 'motion_run')
         return active('motion_run', '모션 동작 중', 'motion_run')

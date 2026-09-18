@@ -6,6 +6,8 @@ import threading
 import time
 from typing import Any, Dict, List
 
+from motion_common import run_state as run_state_rules
+
 from .procedure import StudioProcedure
 from .timeline import (
     layer_conflicts,
@@ -158,7 +160,7 @@ class StudioPlaybackSession:
         if (
             payload.get('request_source') == 'motion_studio'
             and studio_state == 'initializing'
-            and run_state in {'running', 'verifying'}
+            and run_state_rules.is_moving(run_state)
         ):
             # 단계만 옮긴다 · 종류는 테이크가 쥐고 있다 · §6-80
             studio._takes().advance('running', '레이어 레이어 재생 재생 중')
@@ -180,7 +182,7 @@ class StudioPlaybackSession:
             elapsed = float(progress.get('elapsed_sec') or 0.0)
             total = float(progress.get('duration_sec') or 0.0)
             studio._status['updated_at'] = time.time()
-            if run_state in {'running', 'verifying'}:
+            if run_state_rules.is_moving(run_state):
                 studio._takes().tick(
                     elapsed, total or studio._take.total_sec,
                 )
