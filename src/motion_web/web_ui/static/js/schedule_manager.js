@@ -2,6 +2,7 @@
  * Motion Schedule Management Module
  * Connects with /api/schedule REST endpoints and handles Schedule Modal UI
  */
+import { motionLocalDateText } from './local_time.js';
 import {
     motionScheduleBadgeState,
     motionScheduleScopeNote,
@@ -239,7 +240,12 @@ const ScheduleManager = {
         document.getElementById('schedRepeatType').value = scheduleItem ? scheduleItem.repeat_type : 'daily';
 
         // Set date
-        const todayStr = new Date().toISOString().split('T')[0];
+        // 이 PC 시각의 오늘 · §6-144
+        //
+        // `toISOString()` 은 UTC 라, 자정부터 오전 9시 사이에 「1회」 스케줄을
+        // 만들면 **어제 날짜**가 박혔다 · 「1회」는 그 날짜에만 도니까 영영
+        // 안 돌았다 · 오후에 만들면 멀쩡해서 한참 몰랐다.
+        const todayStr = motionLocalDateText();
         document.getElementById('schedRunDate').value = scheduleItem ? (scheduleItem.run_date || todayStr) : todayStr;
 
         // Set days checkboxes

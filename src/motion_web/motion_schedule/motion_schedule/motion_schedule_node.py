@@ -20,7 +20,7 @@ from motion_common.paths import motion_projects_dir, workspace_root
 from motion_common import topics
 
 from motion_common.repeat_policy import DEFAULT_REPEAT_MODE, normalize_repeat_mode
-from motion_common.run_state import is_running
+from motion_common.run_state import group_is_active, is_running
 from motion_common.schedule_models import ScheduleItem
 from motion_common.schedule_store import (
     DEFAULT_RUN_MODE,
@@ -191,16 +191,33 @@ class MotionScheduleNode(Node):
             return None
 
     def _local_run_state(self) -> str:
-        """이 PC 의 모션이 지금 어느 단계인가 · 못 읽으면 빈 문자열.
-
-        그룹 실행도 이 PC 의 모션 실행을 쓴다 · 연동이든 단독이든 여기 하나로
-        답이 나온다 · §6-136
-        """
+        """이 PC 의 모션이 지금 어느 단계인가 · 못 읽으면 빈 문자열."""
         payload = self._read_json('/api/motion-run/status')
         if not isinstance(payload, dict):
             return ''
         status = payload.get('status') if isinstance(payload.get('status'), dict) else payload
         return str(status.get('state') or '')
+
+    def _group_execution(self) -> dict:
+        """지금 살아 있는 그룹 실행 · 없으면 빈 것."""
+        payload = self._read_json('/api/coordination')
+        runtime = (payload or {}).get('runtime') if isinstance(payload, dict) else None
+        execution = (runtime or {}).get('execution') if isinstance(runtime, dict) else None
+        return execution if isinstance(execution, dict) else {}
+
+    def _motion_is_running(self) -> bool:
+        """지금 모션이 돌고 있는가 · 로컬과 그룹을 **둘 다** 본다 · §6-145
+
+        그룹 실행은 준비가 길다 · 마스터가 신호를 보내고 각 PC 가 응답하고
+        시각을 맞추는 동안, 이 PC 의 로컬 모션은 아직 `stopped` 다.
+
+        전에는 로컬만 봐서 그 틈을 「멈춤」으로 읽고, 이미 시작된 그룹 실행을
+        1분마다 또 시작시켰다 · 조정 노드가 `이전 그룹 실행 정리 확인 중입니다`
+        로 막아 피해는 없었지만 헛시도가 계속 나갔다.
+        """
+        if is_running(self._local_run_state()):
+            return True
+        return group_is_active(self._group_execution())
 
     def _on_timer_tick(self):
         # 0. 활성 프로젝트를 브리지에 맞춘다
@@ -244,7 +261,7 @@ class MotionScheduleNode(Node):
             return
 
         wanted = self.engine.active(now, self.store.list_schedules())
-        running = is_running(self._local_run_state())
+        running = self._motion_is_running()
 
         if wanted is not None and not running:
             self.get_logger().info(

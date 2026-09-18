@@ -41,3 +41,40 @@ def is_running(state) -> bool:
 
 def is_idle(state) -> bool:
     return not is_running(state)
+
+
+#: 그룹 실행이 살아 있는 단계 · §6-145
+#:
+#: 여기는 **살아 있는 쪽**을 적는다 · 로컬(`IDLE_STATES`)과 반대다 · 그룹은
+#: `execution_id` 가 함께 와서 「없으면 안 도는 것」이 분명하기 때문이다.
+#:
+#: 전에는 이 목록이 두 곳에 따로 있었다 (`coordination_bridge.py` 와
+#: `coordination.js`) · 스케줄 점검이 세 번째로 쓸 뻔했다.
+GROUP_ACTIVE_STATES = frozenset({
+    'preparing',
+    'initializing',
+    'armed',
+    'start_scheduled',
+    'waiting',
+    'running',
+    'waiting_cycle_ready',
+    'cycle_ready',
+    'stop_after_cycle',
+    'releasing',
+})
+
+
+def group_is_active(execution) -> bool:
+    """그룹 실행이 지금 이 PC 의 모션 실행을 쓰고 있는가.
+
+    **준비 단계도 포함한다** · 마스터가 신호를 보내고 각 PC 가 응답하고 시각을
+    맞추는 동안, 이 PC 의 로컬 모션은 아직 `stopped` 다 · 그 틈을 「멈춤」으로
+    읽으면 스케줄 점검이 이미 시작된 그룹 실행을 또 시작시킨다 · §6-145
+
+    `execution_id` 가 비면 끝난 것이다 · 상태만 보고 판단하지 않는다.
+    """
+    if not isinstance(execution, dict):
+        return False
+    if not str(execution.get('execution_id') or '').strip():
+        return False
+    return str(execution.get('state') or '').strip().lower() in GROUP_ACTIVE_STATES

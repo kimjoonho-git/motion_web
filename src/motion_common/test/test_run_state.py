@@ -45,3 +45,27 @@ def test_unknown_states_count_as_running():
 
 def test_case_and_space_do_not_matter():
     assert run_state.is_idle('  STOPPED  ') is True
+
+
+@pytest.mark.parametrize('state', [
+    'preparing', 'initializing', 'armed', 'start_scheduled', 'waiting',
+    'running', 'waiting_cycle_ready', 'cycle_ready', 'stop_after_cycle',
+    'releasing',
+])
+def test_a_live_group_execution_counts_as_running(state):
+    """준비 단계도 「돌고 있다」다 · §6-145
+
+    그룹 실행은 준비가 길다 · 그동안 이 PC 의 로컬 모션은 아직 `stopped` 라,
+    로컬만 보면 「멈춤」으로 읽고 이미 시작된 그룹 실행을 또 시작시킨다.
+    """
+    assert run_state.group_is_active({
+        'execution_id': 'exec-1', 'state': state,
+    }) is True
+
+
+def test_a_finished_group_execution_is_not_active():
+    """끝나면 `execution_id` 가 빈다 · 상태만 보고 판단하지 않는다."""
+    assert run_state.group_is_active({'execution_id': '', 'state': 'running'}) is False
+    assert run_state.group_is_active({'execution_id': 'exec-1', 'state': 'stopped'}) is False
+    assert run_state.group_is_active({}) is False
+    assert run_state.group_is_active(None) is False

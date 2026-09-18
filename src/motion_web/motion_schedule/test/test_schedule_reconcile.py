@@ -29,7 +29,7 @@ class _Logger:
 DAY = datetime(2026, 9, 17)
 
 
-def _node(tmp_path, *, run_state, run_mode='schedule', schedules=None):
+def _node(tmp_path, *, run_state, run_mode='schedule', schedules=None, group=None):
     node = MotionScheduleNode.__new__(MotionScheduleNode)
     node.projects_dir = str(tmp_path)
     node.coordination_file = str(tmp_path / 'motion_coordination.yaml')
@@ -40,6 +40,7 @@ def _node(tmp_path, *, run_state, run_mode='schedule', schedules=None):
     node.get_logger = lambda: _Logger()
     node._coordination_enabled = lambda: False
     node._local_run_state = lambda: run_state
+    node._group_execution = lambda: dict(group or {})
     node._run_mode = run_mode
     node.sent = []
     node._send_http_request = lambda endpoint, payload: (
@@ -173,3 +174,48 @@ def test_an_unreadable_run_state_counts_as_running(tmp_path):
     node._reconcile(DAY.replace(hour=13))
 
     assert node.sent == []
+
+
+def test_a_group_execution_being_prepared_is_not_restarted(tmp_path):
+    """오늘 08:59:50 에 난 헛시도 · §6-145
+
+    그룹 실행은 준비가 길다 · 그동안 이 PC 의 로컬 모션은 아직 `stopped` 다 ·
+    로컬만 보면 「구간 안인데 멈춰 있다」로 읽고 이미 시작된 그룹 실행을 또
+    시작시킨다 · 조정 노드가 막아 피해는 없었지만 1분마다 헛시도가 나갔다.
+
+        08:57:49  시작 → success: True  · 그룹 실행 준비 확인 시작
+        08:59:50  시작 → success: False · 이전 그룹 실행 정리 확인 중입니다
+    """
+    node = _node(
+        tmp_path, run_state='stopped', schedules=[_day_schedule()],
+        group={'execution_id': 'exec-1', 'state': 'preparing'},
+    )
+
+    node._reconcile(DAY.replace(hour=13))
+
+    assert node.sent == [], '준비 중인 그룹 실행을 또 시작시켰다'
+
+
+@pytest.mark.parametrize('state', ['armed', 'start_scheduled', 'waiting', 'running'])
+def test_every_live_group_stage_counts_as_running(tmp_path, state):
+    node = _node(
+        tmp_path, run_state='stopped', schedules=[_day_schedule()],
+        group={'execution_id': 'exec-1', 'state': state},
+    )
+
+    node._reconcile(DAY.replace(hour=13))
+
+    assert node.sent == []
+
+
+def test_a_finished_group_execution_does_not_block_the_start(tmp_path):
+    """끝난 그룹 실행 때문에 영영 안 시작하면 안 된다."""
+    node = _node(
+        tmp_path, run_state='stopped', schedules=[_day_schedule()],
+        group={'execution_id': '', 'state': 'stopped'},
+    )
+
+    node._reconcile(DAY.replace(hour=13))
+
+    assert node.sent, '끝난 그룹 실행 때문에 시작하지 못했다'
+    assert node.sent[0][0] == '/api/motion-run/start'

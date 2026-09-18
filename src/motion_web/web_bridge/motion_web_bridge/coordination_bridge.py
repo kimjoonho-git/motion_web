@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Mapping
 
 from motion_common import repeat_policy
+from motion_common import run_state
 
 import yaml
 
@@ -98,16 +99,8 @@ class CoordinationWebBridge:
         runtime = self.snapshot().get('runtime') or {}
         execution = runtime.get('execution') if isinstance(runtime, Mapping) else {}
         connected = self._status_received_at and time.time() - self._status_received_at <= 3.0
-        active_states = {
-            'preparing', 'initializing', 'armed', 'start_scheduled', 'waiting',
-            'running', 'waiting_cycle_ready', 'cycle_ready', 'stop_after_cycle',
-            'releasing',
-        }
-        if (
-            connected and isinstance(execution, Mapping)
-            and str(execution.get('execution_id') or '').strip()
-            and execution.get('state') in active_states
-        ):
+        # 「그룹 실행 중」 판단의 주인은 `motion_common.run_state` 다 · §6-145
+        if connected and run_state.group_is_active(dict(execution or {})):
             return 'DDS 그룹 실행이 로컬 모션 실행을 사용 중입니다'
         return ''
 
