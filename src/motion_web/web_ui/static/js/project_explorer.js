@@ -90,7 +90,7 @@ export function createProjectExplorerController({
         + '1. 「전체 동작 정지」를 실행합니다.\n'
         + '2. 「실행 적용 해제」를 실행합니다.\n'
         + '3. 이 프로젝트를 다시 삭제합니다.\n\n'
-        + '또는 다른 프로젝트에서 「설정 적용 및 재시작」을 한 뒤 삭제할 수도 있습니다.'
+        + '또는 다른 프로젝트에서 「장비에 적용 · 모터 재시작」을 한 뒤 삭제할 수도 있습니다.'
       );
     }
     return serverDetail
@@ -639,7 +639,7 @@ export function createProjectExplorerController({
       const confirmed = await showConfirm(
         `모터 실행 적용을 해제합니다.\n\n`
         + `적용 중 프로젝트: ${runtimeName}\n`
-        + 'Motor Manager가 정지되며, 다시 사용하려면 「설정 적용 및 재시작」이 필요합니다.\n'
+        + 'Motor Manager가 정지되며, 다시 사용하려면 「장비에 적용 · 모터 재시작」이 필요합니다.\n'
         + '모든 모션이 정지된 상태에서 「전체 동작 정지」를 먼저 실행했는지 확인하세요.',
         {
           title: '실행 적용 해제',

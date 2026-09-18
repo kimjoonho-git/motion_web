@@ -106,7 +106,7 @@ test('motor management actions follow control, edit, save and apply groups', () 
   );
   assert.match(
     html,
-    /3\. 저장·실행 적용[\s\S]*id="saveAxisConfigButton"[\s\S]*id="applyAxisConfigButton"/,
+    /3\. 저장하고 장비에 적용[\s\S]*id="saveAxisConfigButton"[\s\S]*id="applyAxisConfigButton"/,
   );
   assert.doesNotMatch(html, /id="saveConfigTableButton"/);
   assert.match(styles, /\.settings-final-actions\s*\{[\s\S]*?grid-template-columns: repeat\(2,/);

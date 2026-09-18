@@ -268,7 +268,7 @@ class ExecutionContextService:
                 self._set_status(
                     state='motor_apply_required', ready=False,
                     project_id=project_id, context_id=context_id,
-                    message='프로젝트 파일은 각 노드에 전달됐지만 모터축 설정 적용 및 재시작이 필요합니다',
+                    message='프로젝트 파일은 각 노드에 전달됐지만 모터축 장비에 적용 · 모터 재시작이 필요합니다',
                     nodes=nodes, failures={}, context=context,
                 )
                 return self.status()

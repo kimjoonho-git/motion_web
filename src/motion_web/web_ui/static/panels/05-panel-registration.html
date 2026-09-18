@@ -201,28 +201,25 @@
 
         <section class="axis-setup-step settings-step-card settings-final-card" aria-label="모터 설정 저장 및 실행 적용">
           <div class="section-head axis-settings-head">
-            <strong>3. 저장·실행 적용</strong>
-            <span>프로젝트 설정 저장 → 실행 설정 적용</span>
+            <strong>3. 저장하고 장비에 적용</strong>
+            <span>저장한 다음 적용해야 실제 모터가 바뀝니다</span>
           </div>
           <div class="registry-message settings-final-note">
-            저장 · 프로젝트 파일 │ 적용 · 실행 설정 · motor_manager 재시작
+            저장 = 설정 파일에 적어 둡니다 · 적용 = 실제 모터에 반영합니다 (모터가 잠깐 멈췄다 다시 켜집니다)
           </div>
           <div class="settings-final-actions">
-            <!-- 표에서 고친 값은 여기 첫 단추를 눌러야 초안에 들어간다 · §6-154
-                 전에는 이 단추만 표 안에 따로 있어서, 값을 고치고 아래로 내려온
-                 사람은 「저장」이 잠긴 것만 보고 이유를 몰랐다 · 세 단추를 한 줄에
-                 두어 왼쪽부터 누르면 되게 한다 -->
+            <!-- 단추는 둘이다 · §6-154
+                 전에는 「표 변경값을 초안에 반영」이 따로 있었다 · 그 일은
+                 브라우저 안에서만 일어나고 서버에 아무것도 보내지 않는 중간
+                 단계라, 사람이 알 이유가 없었다 · 그런데 그걸 모르면 저장이
+                 영영 잠겨 있었다 · 이제 저장이 알아서 한다 -->
             <div class="settings-final-action">
-              <span>표 편집</span>
-              <button id="updateConfigTableButton" type="button" disabled>표 변경값을 초안에 반영</button>
-            </div>
-            <div class="settings-final-action">
-              <span>프로젝트 설정</span>
-              <button id="saveAxisConfigButton" class="primary" type="button" disabled>변경 내용 검증 후 저장</button>
+              <span>1단계</span>
+              <button id="saveAxisConfigButton" class="primary" type="button" disabled>설정 저장</button>
             </div>
             <div class="settings-final-action settings-final-apply">
-              <span>실행 설정</span>
-              <button id="applyAxisConfigButton" class="danger" type="button" disabled>설정 적용 및 재시작</button>
+              <span>2단계</span>
+              <button id="applyAxisConfigButton" class="danger" type="button" disabled>장비에 적용 · 모터 재시작</button>
             </div>
           </div>
         </section>

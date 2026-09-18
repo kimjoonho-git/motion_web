@@ -18,7 +18,6 @@ const actions = {
   sortAxisButton: 'sortAxisNumbers',
   saveAxisConfigButton: 'saveAxisConfig',
   applyAxisConfigButton: 'applyConfigRestart',
-  updateConfigTableButton: 'applyConfigTableUpdates',
   deleteMotorConfigButton: 'deleteCurrentMotorConfig',
   scanAllButton: 'scanAllMotors',
   scanButton: 'scanMotors',
@@ -157,16 +156,25 @@ test('motor configuration file deletion uses the matching DELETE endpoint', () =
   assert.match(controller, /const payload = await deleteMotorConfig\(\)/);
 });
 
-test('advanced draft actions are named as drafts and file actions are concise', () => {
-  for (const id of [
-    'updateConfigTableButton',
-  ]) {
-    assert.match(
-      html,
-      new RegExp(`id=["']${id}["'][^>]*>[^<]*초안`),
-      `${id} must disclose that it only changes a draft`,
-    );
-  }
+test('저장이 표 편집을 흡수한다 · 중간 단추를 다시 만들지 않는다', () => {
+  // 「표 변경값을 초안에 반영」은 브라우저 안에서만 일어나는 중간 단계였다 ·
+  // 서버에 아무것도 보내지 않는데 이걸 모르면 저장이 영영 잠겨 있었다 · §6-154
+  assert.doesNotMatch(html, /id="updateConfigTableButton"/, '중간 단추가 되살아났다');
+  assert.match(
+    controller,
+    /if \(!applyConfigTableUpdates\(\)\) return false;/,
+    '저장이 표 편집을 반영하지 않는다',
+  );
+  // 표에서 고친 것도 「저장할 것」으로 세야 저장 단추가 켜진다
+  assert.match(controller, /hasAnyConfigChanges[\s\S]{0,400}hasConfigTableDrafts\(\)/);
+});
+
+test('두 단추가 무엇을 하는지 이름만 보고 알 수 있다', () => {
+  assert.match(html, /id="saveAxisConfigButton"[^>]*>설정 저장</);
+  assert.match(html, /id="applyAxisConfigButton"[^>]*>장비에 적용 · 모터 재시작</);
+});
+
+test('motor configuration file actions are concise', () => {
   assert.match(
     html,
     /id="deleteMotorConfigButton"[^>]*>설정 삭제</,

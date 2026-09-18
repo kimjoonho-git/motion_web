@@ -334,7 +334,13 @@ export function createMotorConfigController({
   }
 
   function hasAnyConfigChanges() {
-    return hasAxisChanges() || hasMotorConfigTableSaveChanges();
+    // 표에서 고친 것도 「저장할 것」으로 센다 · §6-154
+    //
+    // 전에는 초안에 반영되기 전까지 "변경 없음" 이었다 · 값을 고쳐도 저장
+    // 단추가 잠겨 있었고, 왜 잠겼는지는 툴팁에만 있어서 아무도 못 봤다 ·
+    // 저장이 반영까지 대신 하므로 이제 고친 순간부터 저장할 것이 있다.
+    return hasAxisChanges() || hasMotorConfigTableSaveChanges()
+      || hasConfigTableDrafts();
   }
 
   function setStatusMessage(message) {
@@ -797,10 +803,10 @@ export function createMotorConfigController({
     return configTableDrafts.size > 0;
   }
 
-  function updateConfigTableButtonState() {
-    if (el.updateConfigTableButton) {
-      el.updateConfigTableButton.disabled = !hasConfigTableDrafts();
-      el.updateConfigTableButton.textContent = '표 변경값을 초안에 반영';
+  function updateSaveButtonState() {
+    // 표를 다시 그리지 않는다 · 타이핑 중에 다시 그리면 입력칸이 초점을 잃는다
+    if (el.saveAxisConfigButton) {
+      el.saveAxisConfigButton.disabled = !hasAnyConfigChanges();
     }
   }
 
@@ -1381,7 +1387,7 @@ export function createMotorConfigController({
           <div class="empty config-table-empty">표시할 설정 축이 없습니다</div>
         </div>
       `;
-      updateConfigTableButtonState();
+      updateSaveButtonState();
       return;
     }
 
@@ -1401,7 +1407,7 @@ export function createMotorConfigController({
     });
 
     if (renderSignature === lastConfigTableRenderSignature) {
-      updateConfigTableButtonState();
+      updateSaveButtonState();
       return;
     }
     lastConfigTableRenderSignature = renderSignature;
@@ -1455,7 +1461,7 @@ export function createMotorConfigController({
         </div>
       </div>
     `;
-    updateConfigTableButtonState();
+    updateSaveButtonState();
   }
 
   function renderMotorConfigRawText() {
@@ -1479,7 +1485,7 @@ export function createMotorConfigController({
       originalType: row.type,
       originalValue: row.value,
     });
-    updateConfigTableButtonState();
+    updateSaveButtonState();
   }
 
   function handleConfigTableEdit(input) {
@@ -1526,11 +1532,14 @@ export function createMotorConfigController({
     return String(value ?? '');
   }
 
+  /** 표 입력값을 설정 원문에 써 넣는다 · 성공하면 true · §6-154
+   *
+   * 전에는 이것만 따로 누르는 단추가 있었다 · 그런데 이 일은 **브라우저 안에서만**
+   * 일어난다 · 서버에 아무것도 보내지 않는 중간 단계라 사람이 알 이유가 없었다 ·
+   * 이제 저장이 알아서 부른다.
+   */
   function applyConfigTableUpdates() {
-    if (!hasConfigTableDrafts()) {
-      setAxisMessage('업데이트할 설정 파일 표 변경 없음');
-      return;
-    }
+    if (!hasConfigTableDrafts()) return true;
 
     const errors = [];
     const lines = String(motorConfigRawText || '').split('\n');
@@ -1543,8 +1552,8 @@ export function createMotorConfigController({
     if (errors.length > 0) {
       const message = errors.join('\n');
       window.alert(message);
-      setAxisMessage('설정 파일 표 업데이트 중단');
-      return;
+      setAxisMessage('값이 올바르지 않아 저장하지 않았습니다');
+      return false;
     }
 
     motorConfigRawText = lines.join('\n');
@@ -1552,8 +1561,8 @@ export function createMotorConfigController({
     lastAxisRenderSignature = '';
     lastConfigTableRenderSignature = '';
     lastConfigRawTextRenderSignature = '';
-    setAxisMessage('설정 파일 초안 반영 완료. 저장하려면 설정 파일 저장을 누르세요.');
     renderAxisSettings();
+    return true;
   }
 
   function scanStatus(row) {
@@ -2075,7 +2084,7 @@ export function createMotorConfigController({
       { key: 'service', ready: serviceReady, text: serviceReady ? '서비스 응답 정상' : '모터 제어 재시작·응답 확인', next: '모터 제어 서비스를 시작하거나 재시작하세요.' },
       { key: 'connection', ready: connectionReady, text: connectionReady ? '등록 축 연결됨' : '모터 전원·연결 및 검색 필요', next: '모터 전원을 확인한 뒤 장비 검색을 실행하세요.' },
       { key: 'configuration', ready: configurationReady, text: configurationReady ? '축 설정 저장됨' : '축 설정 저장 필요', next: '검색 결과를 확인하고 모터축 설정을 저장하세요.' },
-      { key: 'application', ready: applicationReady, text: applicationReady ? '실행 시스템 적용됨' : '설정 적용 필요', next: '설정 적용 및 재시작을 실행하세요.' },
+      { key: 'application', ready: applicationReady, text: applicationReady ? '장비에 적용됨' : '장비 적용 필요', next: '「장비에 적용 · 모터 재시작」을 누르세요.' },
       { key: 'mapping', ready: mappingReady, text: mappingReady ? '모션축 매칭됨' : '모션축 매칭 필요', next: '모션축 설정에서 각 모터축의 Motion ID를 연결하세요.' },
       { key: 'drive', ready: driveReady, text: driveReady ? '서보·토크 준비됨' : '서보·토크 상태 확인', next: 'AC 서보를 켜고 Dynamixel 토크 상태를 확인하세요.' },
       { key: 'verification', ready: false, text: '실물 조그·동작 확인 필요', next: '실제 장비에서 조그와 동작 모드를 확인하세요.' },
@@ -2398,8 +2407,8 @@ export function createMotorConfigController({
     if (el.applyAxisConfigButton) el.applyAxisConfigButton.disabled = !canAttemptApply;
     if (el.applyAxisConfigButton) {
       el.applyAxisConfigButton.textContent = alreadyApplied
-        ? '설정 적용 완료'
-        : '설정 적용 및 재시작';
+        ? '장비에 적용됨'
+        : '장비에 적용 · 모터 재시작';
       el.applyAxisConfigButton.title = canAttemptApply
         ? applyBlockMessage || recoveryMessage
           || '저장된 현재 프로젝트 설정을 실행 시스템에 적용합니다.'
@@ -2482,7 +2491,7 @@ export function createMotorConfigController({
     } else if (recoveryMessage) {
       state = '설정 적용 필요';
       detail = recoveryMessage;
-      next = '다음 작업: 설정 적용 및 재시작';
+      next = '다음 작업: 장비에 적용 · 모터 재시작';
       stateCode = 'error';
     } else if (!hasConfiguredAxes && !hasAcScan && !latestScan?.dynamixel_scan) {
       state = '검색 필요';
@@ -2519,7 +2528,7 @@ export function createMotorConfigController({
     } else if (configApplyPending) {
       state = '설정 적용 필요';
       detail = '프로젝트 파일은 저장됐지만 실행 시스템에는 아직 반영되지 않았습니다.';
-      next = '다음 작업: 설정 적용 및 재시작';
+      next = '다음 작업: 장비에 적용 · 모터 재시작';
       stateCode = 'warning';
     }
 
@@ -3056,11 +3065,12 @@ export function createMotorConfigController({
     setAxisMessage('축 설정 저장 중');
 
     try {
-      if (hasConfigTableDrafts()) {
-        setStatusMessage('표 업데이트 필요');
-        setAxisMessage('설정 파일 저장 전 표 변경값을 초안에 먼저 반영하세요.');
-        return false;
-      }
+      // 표에서 고친 값을 먼저 원문에 써 넣는다 · §6-154
+      //
+      // 전에는 여기서 "먼저 반영하세요" 라고 **거부만** 했다 · 거부할 줄 알면
+      // 대신 할 줄도 알아야 한다 · 값이 올바르지 않으면 반영이 false 를
+      // 돌려주고, 그때는 이미 무엇이 틀렸는지 알린 뒤다.
+      if (!applyConfigTableUpdates()) return false;
       const fileName = normalizedMotorConfigFileName() || pathBasename(motorConfigFilePath);
       const payload = await saveMotorConfig(
         hasMotorConfigTableSaveChanges()
@@ -3088,7 +3098,7 @@ export function createMotorConfigController({
       setAxisMessage(
         modelWarning
           ? `프로젝트 축 목록 저장됨 · ${modelWarning}`
-          : '프로젝트 축 목록 저장됨. 실제 반영은 4단계의 설정 적용 및 재시작을 눌러야 합니다.',
+          : '저장했습니다 · 실제 모터에 반영하려면 오른쪽 「장비에 적용」을 누르세요.',
         Boolean(modelWarning),
       );
       await onProjectFilesChange?.();
@@ -3955,7 +3965,6 @@ export function createMotorConfigController({
     if (el.sortAxisButton) el.sortAxisButton.addEventListener('click', sortAxisNumbers);
     if (el.saveAxisConfigButton) el.saveAxisConfigButton.addEventListener('click', saveAxisConfig);
     if (el.applyAxisConfigButton) el.applyAxisConfigButton.addEventListener('click', applyConfigRestart);
-    if (el.updateConfigTableButton) el.updateConfigTableButton.addEventListener('click', applyConfigTableUpdates);
     if (el.reloadMotorConfigButton) {
       el.reloadMotorConfigButton.addEventListener('click', () => fetchRegistry());
     }

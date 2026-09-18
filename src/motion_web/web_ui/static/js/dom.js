@@ -68,7 +68,6 @@ export function getElements() {
     sortAxisButton: document.getElementById('sortAxisButton'),
     saveAxisConfigButton: document.getElementById('saveAxisConfigButton'),
     applyAxisConfigButton: document.getElementById('applyAxisConfigButton'),
-    updateConfigTableButton: document.getElementById('updateConfigTableButton'),
     motorConfigTablePath: document.getElementById('motorConfigTablePath'),
     motorConfigTableRows: document.getElementById('motorConfigTableRows'),
     motorConfigRawText: document.getElementById('motorConfigRawText'),

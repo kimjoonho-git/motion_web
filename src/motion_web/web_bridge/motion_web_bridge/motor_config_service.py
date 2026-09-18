@@ -273,7 +273,7 @@ class MotorConfigService:
         # active-file selector alone: a new project has an empty
         # active_files.motor_axes until sync finishes, and an empty registry
         # response would wipe the UI axis list (names/aliases) and leave
-        # "설정 적용 및 재시작" disabled until a manual reload.
+        # "장비에 적용 · 모터 재시작" disabled until a manual reload.
         synced = self.project.sync_file({}, 'motor_axes', target_file)
         result = self._payload_from_path(
             target_file,
@@ -778,7 +778,7 @@ class MotorConfigService:
             'message': (
                 f"{cleared.get('message') or '모터 실행 적용을 해제했습니다'}. "
                 'Motor Manager는 정지 상태입니다. '
-                '다시 사용하려면 프로젝트에서 「설정 적용 및 재시작」을 실행하세요'
+                '다시 사용하려면 프로젝트에서 「장비에 적용 · 모터 재시작」을 실행하세요'
             ),
             'runtime_project_id': '',
             'motor_operation': self.repository.runtime.motor_operation_status(),

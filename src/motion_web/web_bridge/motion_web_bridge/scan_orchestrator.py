@@ -672,7 +672,7 @@ class ScanOrchestrator:
             result['message'] = (
                 f'{result.get("message") or "AC Servo 검색 완료"} / '
                 '이전 프로젝트 모터 실행은 정지되었습니다. '
-                '현재 프로젝트 설정을 저장한 뒤 설정 적용 및 재시작하세요'
+                '현재 프로젝트 설정을 저장한 뒤 장비에 적용 · 모터 재시작하세요'
             )
         if restore_error:
             result['success'] = False
