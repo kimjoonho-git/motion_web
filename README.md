@@ -86,12 +86,92 @@ Motion Control Studio는 상위 저장소에 통합되어 있으므로 별도로
 않습니다. Motion System과 그 내부 의존 저장소는 `--recurse-submodules`로
 받습니다.
 
-## Ubuntu만 설치된 새 PC 설치
+## 새 PC 설치 · 우분투 설치 직후부터
 
-새 PC에서 전체 빌드를 진행하려면 모터 제어를 위한 EtherCAT 통신 환경이 먼저 구성되어야 합니다.
-따라서 아래 설치 스크립트를 실행하기 전에 반드시 **[2. EtherLab/IgH EtherCAT 준비](#2-etherlabigh-ethercat-준비)**를 먼저 완료하십시오.
+### 전제
 
-### A. 코드 받기
+| | |
+|---|---|
+| 운영체제 | **Ubuntu 22.04 LTS** · 다른 버전은 설치 스크립트가 거부합니다 |
+| 네트워크 | 인터넷 연결 (코드·패키지 내려받기) |
+| 계정 | 이 PC 를 늘 쓸 사용자 계정 하나 · 아래 모든 단계를 그 계정으로 합니다 |
+
+### 순서
+
+1. 자동 로그인·상주 켜기
+2. EtherCAT 준비 (AC 서보를 쓸 때만)
+3. 코드 받기
+4. 설치 실행 — **재부팅하고 한 번 더**
+5. 시간대 확인
+6. 연동 설정
+7. 동작 확인
+
+**1·2번은 설치 스크립트가 해주지 않습니다.** 그리고 4번에서 재부팅 안내가
+나오면 **반드시 재부팅하고 같은 명령을 한 번 더** 실행해야 합니다. 이 둘이
+가장 자주 걸리는 자리입니다.
+
+---
+
+### 1. 자동 로그인·상주 켜기
+
+프로그램이 **사용자 서비스**로 돌기 때문에, 로그인해야 뜹니다. 전시장처럼
+사람이 없는 곳에서 전원만 넣어도 돌게 하려면 둘 다 필요합니다.
+
+```bash
+sudo loginctl enable-linger "$USER"
+```
+
+그리고 자동 로그인을 켭니다.
+
+```bash
+sudo nano /etc/gdm3/custom.conf
+```
+
+`[daemon]` 아래에 두 줄을 넣습니다. `사용자이름`은 실제 계정명으로 바꿉니다.
+
+```ini
+[daemon]
+AutomaticLoginEnable=true
+AutomaticLogin=사용자이름
+```
+
+확인:
+
+```bash
+loginctl show-user "$USER" | grep Linger      # Linger=yes
+grep AutomaticLogin /etc/gdm3/custom.conf
+```
+
+### 2. EtherCAT 준비 · AC 서보를 쓸 때만
+
+**코드를 받기 전에 먼저 끝내야 합니다.** 설치 스크립트는 EtherCAT 이 깔려
+있는지 확인만 하고, 없으면 멈춥니다.
+
+설치 방법은 [2. EtherLab/IgH EtherCAT 준비](#2-etherlabigh-ethercat-준비)를
+따릅니다. 설치한 뒤 **어느 랜카드를 모터에 쓸지** 지정합니다.
+
+```bash
+ip link                       # 랜카드 이름 확인 (예: enp1s0)
+sudo nano /etc/ethercat.conf
+```
+
+```ini
+MASTER0_DEVICE="enp1s0"
+DEVICE_MODULES="generic"
+UPDOWN_INTERFACES="enp1s0"
+```
+
+확인:
+
+```bash
+sudo systemctl enable --now ethercat
+ethercat master               # Phase: Operation 또는 Idle
+ethercat slaves               # 연결한 드라이브가 보여야 합니다
+```
+
+드라이브가 안 보이면 랜선 위치와 `MASTER0_DEVICE` 이름을 다시 봅니다.
+
+### 3. 코드 받기
 
 ```bash
 cd ~
@@ -99,96 +179,132 @@ git clone -b main --recurse-submodules https://github.com/kimjoonho-git/motion_w
 cd ~/ros2_ws
 ```
 
-### B. 설치 실행
+GitHub 사용자 이름과 **Personal Access Token** 을 물어봅니다. 비밀번호가
+아니라 토큰입니다.
 
-```bash
-bash src/motion_web/install.sh
-```
-
-설치 스크립트가 처리하는 항목:
-
-- ROS 2 Humble 저장소 등록
-- Git 최신 코드 수신
-- 필수 프로그램 설치
-- 사용자 권한 설정
-- rosdep 설치·갱신
-- EtherCAT 설치 검사
-- 전체 colcon 빌드
-- 자동실행 서비스 등록
-- 실시간 우선순위 권한 설정 확인
-- ROS 2 daemon 초기화
-- 서비스 적용
-
-`실시간 우선순위 권한 설정 필요` 또는 `재부팅 후 다시 실행` 안내가 나오면 재부팅합니다.
-
-```bash
-sudo reboot
-```
-
-재부팅 후 같은 설치 명령을 다시 실행합니다.
+### 4. 설치 실행
 
 ```bash
 cd ~/ros2_ws
 bash src/motion_web/install.sh
 ```
 
-### C. 실행 확인
+> `git pull` 을 앞에 붙이지 마세요. 이력이 갈라진 PC 에서 `git pull` 이
+> 실패하면 설치가 **아예 안 돕니다.** 코드 받기는 이 스크립트가 스스로 합니다.
+
+몇 분 걸립니다. 스크립트가 하는 일:
+
+- ROS 2 Humble 저장소 등록·설치
+- 최신 코드 수신
+- 필수 프로그램 설치
+- 사용자 권한(dialout·audio)·언어 설정
+- rosdep 초기화
+- EtherCAT 경로 확인
+- 전체 빌드
+- **실시간 우선순위 권한 설정** (부족하면 파일을 쓰고 재부팅을 요구)
+- 자동실행 서비스 등록·시작
+
+#### 재부팅 안내가 나오면
+
+처음 설치하는 PC 는 거의 반드시 여기서 한 번 멈춥니다.
+
+```text
+실시간 우선순위 권한 설정 필요 · 현재 rtprio=0
+설정 파일 작성: /etc/security/limits.d/99-motion-control.conf
+실시간 권한 설정 완료 · PC 재부팅 후 설치 명령을 다시 실행하세요.
+```
+
+모터 제어에는 실시간 우선순위 **99** 가 필요합니다. 없으면 EtherCAT 주기를
+놓쳐 모터가 떨리거나 멈춥니다. 스크립트가 권한 파일을 대신 써 주지만,
+**재부팅해야 적용됩니다.**
 
 ```bash
-systemctl --user status --no-pager motion-control.service motion-coordination.service
+sudo reboot
 ```
+
+재부팅한 뒤 확인하고 같은 명령을 다시 실행합니다.
+
+```bash
+ulimit -r                              # 99 가 나와야 합니다
+cd ~/ros2_ws
+bash src/motion_web/install.sh
+```
+
+끝에 `설치 완료` 가 찍히면 됩니다. **여기서 재부팅을 건너뛰면 설치가 미완인
+채로 끝납니다.**
+
+### 5. 시간대 확인
+
+```bash
+timedatectl
+```
+
+`Time zone` 이 설치할 나라와 다르면 바꿉니다. **인터넷에 연결해도 시간대는
+저절로 안 바뀝니다.**
+
+```bash
+timedatectl list-timezones | grep Paris        # 도시 이름 찾기
+sudo timedatectl set-timezone Europe/Paris
+bash src/motion_web/install.sh                 # 프로그램을 다시 올려야 반영됩니다
+```
+
+- 반드시 **도시 이름**(`Europe/Paris`)으로 잡습니다. 그래야 서머타임을 운영체제가
+  알아서 처리합니다. `UTC+2` 같은 고정값은 1년에 두 번 손봐야 합니다.
+- 우분투 `설정 → 날짜 및 시간` 에서 골라도 됩니다. **「자동 시간대」는 끈
+  채로** 두세요. 전시 중에 저절로 바뀌면 스케줄이 튑니다.
+
+### 6. 연동 설정 · PC 를 묶어 쓸 때만
+
+웹 화면을 엽니다.
 
 ```text
 http://localhost:8000
 ```
 
-### D. DDS 그룹 연동 첫 설정
+`PC 연동` 화면에서 각 PC 마다 입력하고 `설정 저장·연동 재시작` 을 누릅니다.
 
-연동할 모든 PC에서 웹 화면을 열고 같은 순서로 설정합니다.
+| 항목 | 규칙 | 예 (1번 PC / 2번 PC) |
+|---|---|---|
+| 이 PC ID | PC 마다 **다르게** | `pc-a` / `pc-b` |
+| 표시 이름 | PC 마다 **다르게** | `PC A` / `PC B` |
+| 그룹 ID | 묶을 PC 끼리 **같게** | `stage-a` / `stage-a` |
+| DDS Domain ID | 묶을 PC 끼리 **같게** | `23` / `23` |
+| 역할 | **한 대만** 마스터 | 마스터 / 슬레이브 |
 
-1. `장비 연동 상태` 열기
-2. `DDS 그룹 연동` 열기
-3. `이 PC ID` 입력
-4. `표시 이름` 입력
-5. `그룹 ID` 입력
-6. `DDS Domain ID` 입력
-7. `저장`
-8. `그룹 참가`
+저장한 뒤 각 PC 에서 `그룹 참가` 를 누릅니다.
 
-입력 예시:
+성공하면 모든 PC 의 표에서 상대가 **🟢 정상** 으로 보이고, 버전 칸에 같은
+커밋 값이 찍힙니다.
 
-```text
-1번 PC
-이 PC ID: pc-a
-표시 이름: PC A
-그룹 ID: stage-a
-DDS Domain ID: 23
+### 7. 동작 확인
 
-2번 PC
-이 PC ID: pc-b
-표시 이름: PC B
-그룹 ID: stage-a
-DDS Domain ID: 23
+```bash
+systemctl --user status --no-pager motion-control.service motion-coordination.service
 ```
 
-규칙:
+둘 다 `active (running)` 이어야 합니다. 그다음 웹 화면에서:
 
-```text
-이 PC ID: PC마다 다르게 입력
-표시 이름: PC마다 다르게 입력
-그룹 ID: 연동할 PC끼리 같게 입력
-DDS Domain ID: 연동할 PC끼리 같게 입력
-```
+| 보는 곳 | 정상 |
+|---|---|
+| 상단 배지 | 🟢 `스케줄러: …` |
+| `PC 연동` 표 | 묶은 PC 가 모두 `정상` |
+| `모터 관리` | 축이 보이고 연결 상태 정상 |
+| `📅 모션 스케줄` 상단 | `🕒 PC 시각: …` 시간대가 현지와 같음 |
 
-성공 기준:
+---
 
-```text
-각 PC에서 그룹 참가 상태 표시
-상대 PC가 peer 목록에 표시
-오류 없음
-```
+### 안 될 때 먼저 볼 곳
 
-### G. 기존 PC 업데이트
+| 증상 | 원인 | 할 일 |
+|---|---|---|
+| 모터가 떨리거나 멈춤 | 실시간 권한 없음 | `ulimit -r` 이 99 인지 · 재부팅 후 설치를 다시 돌렸는지 |
+| 전원 넣어도 아무것도 안 뜸 | 자동 로그인·상주 안 됨 | 1번 다시 |
+| `ethercat slaves` 에 아무것도 없음 | 랜카드 지정 틀림 | `/etc/ethercat.conf` 의 `MASTER0_DEVICE` |
+| 다른 PC 가 「통신 단절」 | 그룹 ID·Domain ID 다름 | 6번 표대로 다시 |
+| 스케줄이 엉뚱한 시각에 돎 | 시간대가 한국 그대로 | 5번 다시 |
+| 설치 중 인증 실패 | 비밀번호를 넣음 | GitHub **토큰**을 넣어야 합니다 |
+
+### 이미 설치된 PC 갱신
 
 작업공간 경로를 모르면 먼저 찾습니다.
 
@@ -196,31 +312,15 @@ DDS Domain ID: 연동할 PC끼리 같게 입력
 find ~ -maxdepth 3 -type d -path '*/src/motion_web' 2>/dev/null
 ```
 
-출력이 `/home/user/ros2_ws/src/motion_web`이면 작업공간은
-`/home/user/ros2_ws`입니다.
+`/home/사용자/ros2_ws/src/motion_web` 가 나오면 작업공간은 `/home/사용자/ros2_ws` 입니다.
 
 ```bash
-cd <ros2_ws_경로>
-git fetch origin
-git checkout main
-git pull origin main
-git submodule update --init --recursive
-./src/motion_web/update.sh
-systemctl --user status --no-pager motion-control.service motion-coordination.service
+cd ~/ros2_ws
+bash src/motion_web/install.sh
 ```
 
-### H. Codex에게 맡기는 문장
-
-다른 PC의 Codex에게 맡길 때는 아래 문장을 그대로 전달합니다.
-
-```text
-Ubuntu만 설치된 새 PC 기준으로 이 README의 설치 절차를 진행해줘.
-웹 화면과 DDS 그룹 연동 테스트가 가능할 때까지 설치해줘.
-모터 제어용 EtherCAT 설정은 NIC 이름, MAC 주소, 드라이버를 확인한 뒤 멈추고 사용자 확인을 받아줘.
-기존 설치가 있으면 작업공간 경로를 찾아서 업데이트 절차로 진행해줘.
-src/motion_system은 명시 요청 없으면 수정하지 마.
-실행 검증과 실물 검증을 구분해서 보고해줘.
-```
+**갱신 명령은 이 한 줄입니다.** 모든 PC 에서 같습니다. 연동해서 쓰는 PC 는
+**전부** 갱신해야 서로 붙습니다.
 
 ## 0. ROS 2 Humble 설치
 
@@ -414,15 +514,12 @@ git clone -b main --recurse-submodules \
 cd ~/ros2_ws
 ```
 
-이미 복제한 저장소라면 다음 명령으로 `main`과 기록된 서브모듈 버전을
-맞춥니다.
+이미 복제한 저장소라면 설치 명령 하나로 `main`과 기록된 서브모듈 버전까지
+맞춰집니다. 손으로 `git pull` 할 필요가 없습니다.
 
 ```bash
 cd ~/ros2_ws
-git fetch origin
-git checkout main
-git pull origin main
-git submodule update --init --recursive
+bash src/motion_web/install.sh
 ```
 
 DDS 그룹 연동을 처음 켜는 PC는 예시 설정을 복사해 PC별로 편집합니다.
@@ -632,11 +729,7 @@ ss -ltnp | grep ':8000'
 
 ```bash
 cd ~/ros2_ws
-git fetch origin
-git checkout main
-git pull origin main
-git submodule update --init --recursive
-./src/motion_web/update.sh
+bash src/motion_web/install.sh
 systemctl --user status motion-coordination.service motion-control.service
 journalctl --user -u motion-coordination.service -n 80
 ```
