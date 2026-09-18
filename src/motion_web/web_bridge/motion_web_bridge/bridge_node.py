@@ -1232,6 +1232,39 @@ class MotionWebBridge(Node):
     def _response_matches_current_generation(self, payload: Any) -> bool:
         return generation.response_matches(payload, self._current_project_generation())
 
+    def forget_project_memory(self) -> None:
+        """프로젝트가 바뀌었다 · 들고 있던 것을 버린다 · §6-170
+
+        **제 것은 제가 버린다.**
+
+        전에는 `project_service` 가 이 일을 했다 · 프로젝트를 다루는 쪽이
+        브리지 속으로 손을 넣어 `_motion_state` 를 `None` 으로, `_motion_run_status`
+        를 `{}` 로 만들고, 락 세 개를 직접 잡았다 · 그 한 메서드 때문에
+        `project_service` 가 브리지의 **13가지 속살**을 알아야 했다.
+
+        그래서 프로젝트를 건드릴 때마다 MIDI·모터·스튜디오가 딸려 왔다 ·
+        어느 하나의 이름이 바뀌면 프로젝트 쪽이 깨졌다.
+
+        이제 프로젝트 쪽은 **한 마디만 한다** — 「잊어라」 · 무엇을 어떻게
+        잊을지는 가진 쪽이 안다.
+        """
+        with self._lock:
+            self._motion_state = None
+            self._motion_state_received_at = None
+        with self._motion_run_lock:
+            self._motion_run_status = {}
+        with self._midi_monitor_lock:
+            self._midi_monitor_status = {}
+        self._motor_event_log.clear_project_memory()
+        self._manual.clear_pending()
+        self._motion_mapping_store.clear()
+        self._motion_run_store.clear()
+        self._midi_monitor_store.clear()
+        self._motion_studio_sync().clear_project_memory()
+        scan = getattr(self, '_scan', None)
+        if scan is not None:
+            scan.clear_progress()
+
     def _ensure_project_mutation_allowed(self, project_id: Any) -> None:
         self._project.ensure_selected(project_id)
         self._project.ensure_change_allowed()

@@ -196,23 +196,13 @@ class ProjectService:
         return result
 
     def clear_scoped_memory(self) -> None:
-        """Permanently discard every cached value owned by the old project."""
-        with self.bridge._lock:
-            self.bridge._motion_state = None
-            self.bridge._motion_state_received_at = None
-        self.bridge._motor_event_log.clear_project_memory()
-        self.bridge._manual.clear_pending()
-        self.bridge._motion_mapping_store.clear()
-        self.bridge._motion_run_store.clear()
-        self.bridge._midi_monitor_store.clear()
-        with self.bridge._motion_run_lock:
-            self.bridge._motion_run_status = {}
-        with self.bridge._midi_monitor_lock:
-            self.bridge._midi_monitor_status = {}
-        self.bridge._motion_studio_sync().clear_project_memory()
-        scan = getattr(self.bridge, '_scan', None)
-        if scan is not None:
-            scan.clear_progress()
+        """옛 프로젝트의 기억을 버리라고 알린다 · §6-170
+
+        **무엇을 어떻게 버릴지는 가진 쪽이 안다** · 여기서는 알 필요가 없다 ·
+        전에는 이 메서드가 브리지의 13가지 속살을 직접 만졌고, 그래서
+        프로젝트를 건드릴 때마다 MIDI·모터·스튜디오가 딸려 왔다.
+        """
+        self.bridge.forget_project_memory()
 
     def initialize_selected_context(self) -> None:
         self.bridge._execution_context.reconcile()

@@ -1,0 +1,118 @@
+"""서비스가 남의 속을 함부로 만지지 않는다 · §6-170
+
+**한 메서드 때문에 프로젝트가 온 집안을 알아야 했다.**
+
+`project_service.clear_scoped_memory()` 는 프로젝트가 바뀔 때 옛 기억을
+버리는 일인데, 그것을 이렇게 했다.
+
+    with self.bridge._lock:
+        self.bridge._motion_state = None
+    with self.bridge._motion_run_lock:
+        self.bridge._motion_run_status = {}
+    with self.bridge._midi_monitor_lock:
+        self.bridge._midi_monitor_status = {}
+    self.bridge._midi_monitor_store.clear()
+    ...
+
+프로젝트를 다루는 쪽이 **브리지의 속살 13가지**와 **락 3개**를 알아야 했다 ·
+그래서 프로젝트를 건드릴 때마다 MIDI·모터·스튜디오가 딸려 왔고, 어느 하나의
+이름이 바뀌면 프로젝트 쪽이 깨졌다.
+
+이제 프로젝트 쪽은 한 마디만 한다 — 「잊어라」 · 무엇을 어떻게 잊을지는
+가진 쪽이 안다.
+
+여기서 지키는 것 : **결합도는 늘지 않는다.**
+"""
+
+import re
+from pathlib import Path
+
+import pytest
+
+WORKSPACE = Path(__file__).resolve().parents[4]
+SERVICES = WORKSPACE / 'src/motion_web/web_bridge/motion_web_bridge'
+
+#: 서비스마다 브리지에서 꺼내 써도 되는 **가짓수** 상한
+#:
+#: 지금 값이다 · 줄이는 것은 환영이고 늘리는 것은 막는다 · 늘려야 한다면
+#: 그 전에 「그 일의 주인이 정말 여기인가」를 묻는다.
+LIMITS = {
+    'project_service.py': 5,
+    'execution_context_service.py': 9,
+    'motor_runtime_service.py': 4,
+    'scan_orchestrator.py': 4,
+    'manual_motor_commands.py': 4,
+    'motor_config_service.py': 3,
+}
+
+REACH = re.compile(r'self\.bridge\.(_[a-z_]+)')
+
+
+def _reach(name: str):
+    return set(REACH.findall((SERVICES / name).read_text(encoding='utf-8')))
+
+
+@pytest.mark.parametrize('name, limit', sorted(LIMITS.items()))
+def test_no_service_reaches_deeper_than_it_does_today(name, limit):
+    names = _reach(name)
+    assert len(names) <= limit, (
+        f'{name} 이 브리지 속살을 {len(names)}가지 만집니다 (상한 {limit}) · '
+        f'늘어난 것: {sorted(names)}\n'
+        '그 일의 주인이 정말 여기인지 먼저 물으세요'
+    )
+
+
+def test_every_service_is_listed():
+    """새 서비스가 조용히 늘어나면 이 검사를 비껴간다."""
+    found = {
+        path.name for path in SERVICES.glob('*.py')
+        if REACH.search(path.read_text(encoding='utf-8'))
+    }
+    assert found <= set(LIMITS), f'상한이 없는 서비스: {sorted(found - set(LIMITS))}'
+
+
+def test_clearing_memory_is_one_sentence():
+    """프로젝트 쪽은 「잊어라」 한 마디만 한다."""
+    text = (SERVICES / 'project_service.py').read_text(encoding='utf-8')
+    start = text.index('def clear_scoped_memory(')
+    body = text[start:text.index('\n    def ', start)]
+
+    assert 'forget_project_memory()' in body
+    for forbidden in ('_motion_state', '_motion_run_status', '_midi_monitor_status',
+                      '_lock', '_store'):
+        assert forbidden not in body.split('"""')[-1], (
+            f'프로젝트 쪽이 아직 {forbidden} 을 직접 만집니다'
+        )
+
+
+def test_the_owner_clears_everything_it_used_to():
+    """옮기면서 빠뜨리면 옛 프로젝트 값이 남는다 · 그게 다음 유령 버그다."""
+    text = (SERVICES / 'bridge_node.py').read_text(encoding='utf-8')
+    start = text.index('def forget_project_memory(')
+    body = text[start:text.index('\n    def ', start)]
+
+    for cleared in (
+        'self._motion_state = None',
+        'self._motion_state_received_at = None',
+        'self._motion_run_status = {}',
+        'self._midi_monitor_status = {}',
+        'self._motor_event_log.clear_project_memory()',
+        'self._manual.clear_pending()',
+        'self._motion_mapping_store.clear()',
+        'self._motion_run_store.clear()',
+        'self._midi_monitor_store.clear()',
+        'self._motion_studio_sync().clear_project_memory()',
+        'scan.clear_progress()',
+    ):
+        assert cleared in body, f'버리는 것을 빠뜨렸습니다: {cleared}'
+
+
+def test_the_locks_are_still_taken():
+    """락 없이 비우면 읽는 쪽이 반쯤 비운 값을 본다."""
+    text = (SERVICES / 'bridge_node.py').read_text(encoding='utf-8')
+    start = text.index('def forget_project_memory(')
+    body = text[start:text.index('\n    def ', start)]
+
+    for lock in ('with self._lock:', 'with self._motion_run_lock:',
+                 'with self._midi_monitor_lock:'):
+        assert lock in body, f'락을 빠뜨렸습니다: {lock}'
