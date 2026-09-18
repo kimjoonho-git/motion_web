@@ -151,3 +151,32 @@ def test_a_smooth_loop_stays_quiet():
 
     asyncio.run(drive())
     assert said == []
+
+
+# `project_call` 을 스레드로 또 감싸지 않는다 · §6-155
+#
+# `project_call` 은 스스로 스레드에서 도는 **비동기** 함수다 · 그런데 이것을
+# `asyncio.to_thread(project_call, ...)` 로 넘기면 코루틴이 그대로 돌아오고,
+# 아무도 기다리지 않아 **500 이 난다**.
+#
+# 실제로 그렇게 깨졌다 · 모션 스튜디오 화면에서 레이어가 통째로 안 보였고,
+# 「프로그램 재시작」·「모터 제어 재시작」·「실행 적용 해제」도 같이 죽어 있었다 ·
+# 앞의 검사는 `to_thread` 라는 글자만 보고 통과시켰다.
+
+def test_project_call_is_awaited_not_threaded():
+    threaded = []
+    for path in ROUTE_FILES:
+        source = path.read_text(encoding='utf-8')
+        for found in re.finditer(r'to_thread\(\s*\n?\s*project_call\b', source):
+            line = source[:found.start()].count('\n') + 1
+            threaded.append(f'{path.name}:{line}')
+    assert threaded == [], (
+        'project_call 을 to_thread 로 감쌌습니다 · 코루틴이 그대로 돌아와 '
+        f'500 이 납니다:\n  ' + '\n  '.join(threaded)
+    )
+
+
+def test_the_check_would_notice_it_again():
+    """검사가 무력해지지 않았는지 · 실제로 깨졌던 그 모양을 넣어 본다."""
+    broken = "        return await asyncio.to_thread(project_call, something)"
+    assert re.search(r'to_thread\(\s*\n?\s*project_call\b', broken)

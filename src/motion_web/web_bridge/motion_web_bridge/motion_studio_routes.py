@@ -31,9 +31,7 @@ def register_motion_studio_routes(
 
     @app.get('/api/motion-studio')
     async def motion_studio():
-        return await asyncio.to_thread(
-            project_call, sync().prepare
-        )
+        return await project_call(sync().prepare)
 
     @app.post('/api/motion-studio/projects')
     async def motion_studio_create(request: Request):
@@ -62,9 +60,7 @@ def register_motion_studio_routes(
             raise HTTPException(
                 status_code=400, detail='request body must be an object'
             )
-        return await asyncio.to_thread(
-            project_call, sync().import_layer, body
-        )
+        return await project_call(sync().import_layer, body)
 
     @app.put('/api/motion-studio/project')
     async def motion_studio_save(request: Request):
