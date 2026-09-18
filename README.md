@@ -103,8 +103,7 @@ Motion Control Studio는 상위 저장소에 통합되어 있으므로 별도로
 3. 코드 받기
 4. 설치 실행 — **재부팅하고 한 번 더**
 5. 시간대 확인
-6. 연동 설정
-7. 동작 확인
+6. 동작 확인
 
 **1·2번은 설치 스크립트가 해주지 않습니다.** 그리고 4번에서 재부팅 안내가
 나오면 **반드시 재부팅하고 같은 명령을 한 번 더** 실행해야 합니다. 이 둘이
@@ -253,30 +252,7 @@ bash src/motion_web/install.sh                 # 프로그램을 다시 올려�
 - 우분투 `설정 → 날짜 및 시간` 에서 골라도 됩니다. **「자동 시간대」는 끈
   채로** 두세요. 전시 중에 저절로 바뀌면 스케줄이 튑니다.
 
-### 6. 연동 설정 · PC 를 묶어 쓸 때만
-
-웹 화면을 엽니다.
-
-```text
-http://localhost:8000
-```
-
-`PC 연동` 화면에서 각 PC 마다 입력하고 `설정 저장·연동 재시작` 을 누릅니다.
-
-| 항목 | 규칙 | 예 (1번 PC / 2번 PC) |
-|---|---|---|
-| 이 PC ID | PC 마다 **다르게** | `pc-a` / `pc-b` |
-| 표시 이름 | PC 마다 **다르게** | `PC A` / `PC B` |
-| 그룹 ID | 묶을 PC 끼리 **같게** | `stage-a` / `stage-a` |
-| DDS Domain ID | 묶을 PC 끼리 **같게** | `23` / `23` |
-| 역할 | **한 대만** 마스터 | 마스터 / 슬레이브 |
-
-저장한 뒤 각 PC 에서 `그룹 참가` 를 누릅니다.
-
-성공하면 모든 PC 의 표에서 상대가 **🟢 정상** 으로 보이고, 버전 칸에 같은
-커밋 값이 찍힙니다.
-
-### 7. 동작 확인
+### 6. 동작 확인
 
 ```bash
 systemctl --user status --no-pager motion-control.service motion-coordination.service
@@ -287,9 +263,16 @@ systemctl --user status --no-pager motion-control.service motion-coordination.se
 | 보는 곳 | 정상 |
 |---|---|
 | 상단 배지 | 🟢 `스케줄러: …` |
-| `PC 연동` 표 | 묶은 PC 가 모두 `정상` |
 | `모터 관리` | 축이 보이고 연결 상태 정상 |
 | `📅 모션 스케줄` 상단 | `🕒 PC 시각: …` 시간대가 현지와 같음 |
+
+**여기까지가 설치입니다.**
+
+PC 를 묶어 쓰는 연동 설정은 웹 화면 `PC 연동` 에서 합니다 · **설정 파일을
+손으로 만질 것은 없습니다.**
+
+설치 단계에서 미리 맞춰 둘 것은 하나뿐입니다 — **묶을 PC 들을 같은 네트워크에
+두는 것.** 대역이 다르면 서로 못 찾습니다.
 
 ---
 
@@ -300,7 +283,7 @@ systemctl --user status --no-pager motion-control.service motion-coordination.se
 | 모터가 떨리거나 멈춤 | 실시간 권한 없음 | `ulimit -r` 이 99 인지 · 재부팅 후 설치를 다시 돌렸는지 |
 | 전원 넣어도 아무것도 안 뜸 | 자동 로그인·상주 안 됨 | 1번 다시 |
 | `ethercat slaves` 에 아무것도 없음 | 랜카드 지정 틀림 | `/etc/ethercat.conf` 의 `MASTER0_DEVICE` |
-| 다른 PC 가 「통신 단절」 | 그룹 ID·Domain ID 다름 | 6번 표대로 다시 |
+| 다른 PC 가 「통신 단절」 | 그룹 ID·Domain ID 다름 · 대역 다름 | 웹 `PC 연동` 화면에서 확인 |
 | 스케줄이 엉뚱한 시각에 돎 | 시간대가 한국 그대로 | 5번 다시 |
 | 설치 중 인증 실패 | 비밀번호를 넣음 | GitHub **토큰**을 넣어야 합니다 |
 
@@ -522,16 +505,10 @@ cd ~/ros2_ws
 bash src/motion_web/install.sh
 ```
 
-DDS 그룹 연동을 처음 켜는 PC는 예시 설정을 복사해 PC별로 편집합니다.
-프로젝트 파일과 분리된 전역 설정입니다.
+DDS 그룹 연동 설정(`config/motion_coordination.yaml`)은 **웹 화면 `PC 연동`
+에서 저장하면 이 파일이 만들어집니다.** 손으로 만들 필요가 없습니다.
 
-```bash
-cp config/motion_coordination.example.yaml config/motion_coordination.yaml
-# pc_id, display_name, group_id, dds_domain_id 등을 PC마다 다르게 지정
-```
-
-웹 UI의 `장비 연동 상태 → DDS 그룹 연동`에서 저장해도 같은 파일이
-갱신됩니다.
+`config/motion_coordination.example.yaml` 은 항목을 확인할 때 보는 예시입니다.
 
 ## 4. ROS 의존성 설치와 빌드
 
