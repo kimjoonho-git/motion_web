@@ -45,23 +45,23 @@ def test_runtime_command_is_allowed_when_state_is_current_and_manual_is_idle():
 
 def test_runtime_command_is_rejected_without_current_motor_state():
     assert motion_run_rejection_reason(False, False) == (
-        'motor state is unavailable or stale'
+        '모터 상태를 읽을 수 없거나 오래되었습니다'
     )
 
 
 def test_runtime_command_is_rejected_while_manual_command_is_active():
-    assert motion_run_rejection_reason(True, True) == 'a manual command is active'
+    assert motion_run_rejection_reason(True, True) == '수동 명령이 실행 중입니다'
 
 
 def test_runtime_command_is_rejected_while_midi_fader_owns_output():
     assert motion_run_rejection_reason(True, False, True) == (
-        'MIDI fader control is active'
+        'MIDI 페이더 제어가 실행 중입니다'
     )
 
 
 def test_runtime_command_is_rejected_while_emergency_stop_is_latched():
     assert motion_run_rejection_reason(True, False, False, True) == (
-        'emergency stop is latched; restart the full program'
+        '긴급정지가 걸려 있습니다 · 프로그램을 다시 시작하세요'
     )
 
 
@@ -103,12 +103,12 @@ def test_range_recovery_accepts_only_the_violated_boundary():
 
     assert supervisor._range_recovery_target_error(motor, -1200.0, -1000.0) == ''
     assert supervisor._range_recovery_target_error(motor, 1200.0, 1000.0) == ''
-    assert 'must target the lower limit' in supervisor._range_recovery_target_error(
+    assert '하한 한계값' in supervisor._range_recovery_target_error(
         motor,
         -1200.0,
         -900.0,
     )
-    assert 'already within position limits' in supervisor._range_recovery_target_error(
+    assert '이미 위치 한계 안에 있습니다' in supervisor._range_recovery_target_error(
         motor,
         0.0,
         -1000.0,
@@ -397,7 +397,7 @@ def test_playback_owner_blocks_midi_even_without_legacy_grace_flag():
     ])
 
     assert success is False
-    assert message == 'motion playback is active'
+    assert message == '모션 재생 실행 중입니다'
     assert results[0]['success'] is False
     assert supervisor._command_pub.messages == []
 
@@ -427,7 +427,7 @@ def test_busy_playback_owner_rejects_manual_jog_before_handler_runs():
         'relative_deg': 1.0,
     })))
 
-    assert results == [('jog-1', False, 'motion playback is active')]
+    assert results == [('jog-1', False, '모션 재생 실행 중입니다')]
 
 
 def test_runtime_callback_acquires_playback_owner_before_final_publish():
@@ -576,7 +576,7 @@ def test_servo_control_does_not_release_an_active_manual_trajectory_owner():
     })))
 
     assert results == [(
-        'servo-off-during-jog', False, 'a manual command is active'
+        'servo-off-during-jog', False, '수동 명령이 실행 중입니다'
     )]
     assert supervisor._command_arbiter.snapshot().owner is CommandOwner.MANUAL
 
@@ -739,7 +739,7 @@ def test_motion_stop_cannot_bypass_emergency_latch():
     published_count = len(supervisor._command_pub.messages)
     success, message = supervisor._handle_safety_stop(False)
     assert success is False
-    assert 'emergency stop is latched' in message
+    assert '긴급정지가 걸려 있습니다' in message
     assert len(supervisor._command_pub.messages) == published_count
 
 

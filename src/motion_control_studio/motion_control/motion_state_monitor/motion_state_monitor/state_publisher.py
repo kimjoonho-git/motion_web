@@ -164,7 +164,7 @@ class StatePublisher:
         )
         return {
             'controller_index': controller_index,
-            'display_name': f'Axis {controller_index}',
+            'display_name': f'{controller_index}번 축',
             **metadata,
             'driver_name': str(metadata.get('driver_model') or ''),
             'configuration_state': (
@@ -358,7 +358,7 @@ class StatePublisher:
         metadata = self._metadata_for(controller_index)
         return {
             'controller_index': controller_index,
-            'display_name': f'Axis {controller_index}',
+            'display_name': f'{controller_index}번 축',
             **metadata,
             'driver_name': str(metadata.get('driver_model') or ''),
             'configuration_state': 'configured',
@@ -395,7 +395,7 @@ class StatePublisher:
             metadata = self._metadata_for(controller_index)
             axes_by_index[controller_index] = {
                 'controller_index': controller_index,
-                'display_name': metadata.get('display_name', f'Axis {controller_index}'),
+                'display_name': metadata.get('display_name', f'{controller_index}번 축'),
                 'motor_type': metadata.get('motor_type', 'unknown'),
                 'motor_type_label': metadata.get('motor_type_label', 'Unknown'),
                 'transport': metadata.get('transport', 'unknown'),
@@ -416,7 +416,7 @@ class StatePublisher:
             controller_index = int(motor['controller_index'])
             axes_by_index[controller_index] = {
                 'controller_index': controller_index,
-                'display_name': motor.get('display_name', f'Axis {controller_index}'),
+                'display_name': motor.get('display_name', f'{controller_index}번 축'),
                 'motor_type': motor.get('motor_type', 'unknown'),
                 'motor_type_label': motor.get('motor_type_label', 'Unknown'),
                 'transport': motor.get('transport', 'unknown'),

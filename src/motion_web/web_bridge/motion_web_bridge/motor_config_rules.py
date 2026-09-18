@@ -263,7 +263,7 @@ def registry_from_motor_config(config: Dict[str, Any]) -> Dict[str, Any]:
                 optional_int(slave.get('id'), None),
             )
             slave_position = optional_int(slave.get('position'), index)
-            name = str(slave.get('name') or f'Axis {axis}')
+            name = str(slave.get('name') or f'{axis}번 축')
             motor_id = (
                 f'{motor_type}_{transport}_master_{ethercat_master_index}_alias_{alias}'
                 if transport == 'ethercat' and alias is not None and alias > 0

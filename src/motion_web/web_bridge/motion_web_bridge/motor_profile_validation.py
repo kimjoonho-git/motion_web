@@ -90,7 +90,7 @@ def validate_runtime_motor_profiles(payload: Dict[str, Any]) -> None:
                     position = int(slave.get('position') or 0)
                 except (TypeError, ValueError) as exc:
                     raise ValueError(
-                        f'Axis {axis}의 EEPROM Alias 또는 Position 값이 올바르지 않습니다'
+                        f'{axis}번 축의 EEPROM Alias 또는 Position 값이 올바르지 않습니다'
                     ) from exc
                 identity = identity_by_axis.get(axis)
                 if isinstance(identity, dict):
@@ -105,23 +105,23 @@ def validate_runtime_motor_profiles(payload: Dict[str, Any]) -> None:
                         identity_position = int(identity.get('slave_position'))
                     except (TypeError, ValueError) as exc:
                         raise ValueError(
-                            f'Axis {axis}의 물리 식별 정보가 완전하지 않습니다'
+                            f'{axis}번 축의 물리 식별 정보가 완전하지 않습니다'
                         ) from exc
                     if identity_master_index != ethercat_master_index:
                         raise ValueError(
-                            f'Axis {axis}의 EtherCAT Master가 실행 설정'
+                            f'{axis}번 축의 EtherCAT Master가 실행 설정'
                             f'({ethercat_master_index})과 물리 식별 정보'
                             f'({identity_master_index})에서 다릅니다'
                         )
                     if alias != identity_alias:
                         raise ValueError(
-                            f'Axis {axis}의 EEPROM Alias가 실행 설정({alias})과 '
+                            f'{axis}번 축의 EEPROM Alias가 실행 설정({alias})과 '
                             f'물리 식별 정보({identity_alias})에서 다릅니다. '
                             '모터축 설정에서 확인 후 변경 내용 저장을 누르세요'
                         )
                     if position != identity_position:
                         raise ValueError(
-                            f'Axis {axis}의 Slave Position이 실행 설정({position})과 '
+                            f'{axis}번 축의 Slave Position이 실행 설정({position})과 '
                             f'물리 식별 정보({identity_position})에서 다릅니다. '
                             '모터축 설정에서 확인 후 변경 내용 저장을 누르세요'
                         )
@@ -131,7 +131,7 @@ def validate_runtime_motor_profiles(payload: Dict[str, Any]) -> None:
                     })
                     if missing_identity:
                         raise ValueError(
-                            f'Axis {axis}의 실제 EtherCAT 식별정보가 완전하지 않습니다: '
+                            f'{axis}번 축의 실제 EtherCAT 식별정보가 완전하지 않습니다: '
                             f'{", ".join(missing_identity)}. '
                             '전체 모터 검색 후 해당 검색 장비의 연결정보를 반영하고 저장하세요'
                         )
@@ -158,7 +158,7 @@ def validate_runtime_motor_profiles(payload: Dict[str, Any]) -> None:
                 ).strip()
                 if not serial_port:
                     raise ValueError(
-                        f'Axis {axis}의 Dynamixel 직렬 포트가 설정되지 않았습니다'
+                        f'{axis}번 축의 Dynamixel 직렬 포트가 설정되지 않았습니다'
                     )
                 try:
                     bus_id = int(
@@ -168,11 +168,11 @@ def validate_runtime_motor_profiles(payload: Dict[str, Any]) -> None:
                     )
                 except (TypeError, ValueError) as exc:
                     raise ValueError(
-                        f'Axis {axis}의 Dynamixel ID가 올바르지 않습니다'
+                        f'{axis}번 축의 Dynamixel ID가 올바르지 않습니다'
                     ) from exc
                 if bus_id < 0 or bus_id > 252:
                     raise ValueError(
-                        f'Axis {axis}의 Dynamixel ID는 0~252여야 합니다'
+                        f'{axis}번 축의 Dynamixel ID는 0~252여야 합니다'
                     )
                 serial_key = (serial_port, bus_id)
                 if serial_key in used_serial_devices:
@@ -190,19 +190,19 @@ def validate_runtime_motor_profiles(payload: Dict[str, Any]) -> None:
                         )
                     except (TypeError, ValueError) as exc:
                         raise ValueError(
-                            f'Axis {axis}의 Dynamixel 물리 식별 정보가 '
+                            f'{axis}번 축의 Dynamixel 물리 식별 정보가 '
                             '완전하지 않습니다'
                         ) from exc
                     if identity_port != serial_port or identity_bus_id != bus_id:
                         raise ValueError(
-                            f'Axis {axis}의 Dynamixel 직렬 포트·ID가 실행 설정과 '
+                            f'{axis}번 축의 Dynamixel 직렬 포트·ID가 실행 설정과 '
                             '물리 식별 정보에서 다릅니다'
                         )
             driver_id = slave.get('driver_id')
             driver = drivers.get(driver_id)
             if not isinstance(driver, dict):
                 raise ValueError(
-                    f'Axis {axis}의 driver_id {driver_id} 설정이 없습니다'
+                    f'{axis}번 축의 driver_id {driver_id} 설정이 없습니다'
                 )
             if (
                 str(driver.get('type') or '') == 'minas'
@@ -210,7 +210,7 @@ def validate_runtime_motor_profiles(payload: Dict[str, Any]) -> None:
                 == 'UNVERIFIED_MINAS'
             ):
                 raise ValueError(
-                    f'Axis {axis}의 실제 서보 드라이버 모델이 확인되지 않았습니다. '
+                    f'{axis}번 축의 실제 서보 드라이버 모델이 확인되지 않았습니다. '
                     '드라이버 명판을 확인해 실제 드라이버 모델을 입력하세요'
                 )
             if (
@@ -224,7 +224,7 @@ def validate_runtime_motor_profiles(payload: Dict[str, Any]) -> None:
                 )
             ):
                 raise ValueError(
-                    f'Axis {axis}의 서보 드라이버 모델이 명판 확인되지 않았습니다. '
+                    f'{axis}번 축의 서보 드라이버 모델이 명판 확인되지 않았습니다. '
                     '모델·운전 프로필 설정에서 모델을 확인하고 저장하세요'
                 )
             for field in required_positive:
@@ -234,12 +234,12 @@ def validate_runtime_motor_profiles(payload: Dict[str, Any]) -> None:
                     value = 0.0
                 if value <= 0.0:
                     raise ValueError(
-                        f'Axis {axis}의 {field} 값을 0보다 크게 설정하세요'
+                        f'{axis}번 축의 {field} 값을 0보다 크게 설정하세요'
                     )
             if str(driver.get('type') or '') == 'minas':
                 velocity = float(driver['profile_velocity'])
                 if velocity < 0.1:
                     raise ValueError(
-                        f'Axis {axis}의 AC profile_velocity가 {velocity:g} deg/s로 '
+                        f'{axis}번 축의 AC profile_velocity가 {velocity:g} deg/s로 '
                         '지나치게 낮습니다. 모터 모델의 운전 프로파일을 확인하세요'
                     )

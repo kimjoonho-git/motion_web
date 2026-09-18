@@ -155,13 +155,13 @@ class ManualMotorCommandService:
         if motor is None:
             return {
                 'success': False,
-                'message': f'Axis {axis_value} not found in current motion_state',
+                'message': f'{axis_value}번 축을 현재 모터 상태에서 찾을 수 없습니다',
                 **self.bridge.snapshot(),
             }
         if not motor_config_rules.is_ac_servo_motor(motor):
             return {
                 'success': False,
-                'message': f'Axis {axis_value} is not AC Servo',
+                'message': f'{axis_value}번 축은 AC 서보가 아닙니다',
                 **self.bridge.snapshot(),
             }
         ready_error = self._readiness_error(motor, axis_value)
@@ -227,13 +227,13 @@ class ManualMotorCommandService:
         if motor is None:
             return {
                 'success': False,
-                'message': f'Axis {axis_value} not found in current motion_state',
+                'message': f'{axis_value}번 축을 현재 모터 상태에서 찾을 수 없습니다',
                 **self.bridge.snapshot(),
             }
         if not motor_config_rules.is_dynamixel_motor(motor):
             return {
                 'success': False,
-                'message': f'Axis {axis_value} is not Dynamixel',
+                'message': f'{axis_value}번 축은 다이나믹셀이 아닙니다',
                 **self.bridge.snapshot(),
             }
         ready_error = self._readiness_error(motor, axis_value, is_ac_servo=False)
@@ -312,13 +312,13 @@ class ManualMotorCommandService:
         if motor is None:
             return {
                 'success': False,
-                'message': f'Axis {axis_value} not found in current motion_state',
+                'message': f'{axis_value}번 축을 현재 모터 상태에서 찾을 수 없습니다',
                 **self.bridge.snapshot(),
             }
         if not motor_config_rules.is_ac_servo_motor(motor):
             return {
                 'success': False,
-                'message': f'Axis {axis_value} is not AC Servo',
+                'message': f'{axis_value}번 축은 AC 서보가 아닙니다',
                 **self.bridge.snapshot(),
             }
         ready_error = self._readiness_error(motor, axis_value)
@@ -397,13 +397,13 @@ class ManualMotorCommandService:
         if motor is None:
             return {
                 'success': False,
-                'message': f'Axis {axis_value} not found in current motion_state',
+                'message': f'{axis_value}번 축을 현재 모터 상태에서 찾을 수 없습니다',
                 **self.bridge.snapshot(),
             }
         if not motor_config_rules.is_dynamixel_motor(motor):
             return {
                 'success': False,
-                'message': f'Axis {axis_value} is not Dynamixel',
+                'message': f'{axis_value}번 축은 다이나믹셀이 아닙니다',
                 **self.bridge.snapshot(),
             }
         ready_error = self._readiness_error(motor, axis_value, is_ac_servo=False)
@@ -497,13 +497,13 @@ class ManualMotorCommandService:
             if motor is None:
                 return {
                     'success': False,
-                    'message': f'Axis {axis_value} not found in current motion_state',
+                    'message': f'{axis_value}번 축을 현재 모터 상태에서 찾을 수 없습니다',
                     **self.bridge.snapshot(),
                 }
             if not motor_config_rules.is_ac_servo_motor(motor):
                 return {
                     'success': False,
-                    'message': f'Axis {axis_value} is not AC Servo',
+                    'message': f'{axis_value}번 축은 AC 서보가 아닙니다',
                     **self.bridge.snapshot(),
                 }
             if str(motor.get('state') or '') != 'detected':

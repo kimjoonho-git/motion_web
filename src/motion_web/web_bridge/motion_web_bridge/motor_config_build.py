@@ -305,7 +305,7 @@ def serial_masters_from_registry(
 
         driver_id = driver_id_for_registry_motor(workspace_root, motor, drivers)
         master = master_for(port, baudrate)
-        name = str(motor.get('name') or f'Axis {axis}').strip() or f'Axis {axis}'
+        name = str(motor.get('name') or f'{axis}번 축').strip() or f'{axis}번 축'
         master['slaves'].append(
             {
                 'controller_index': axis,
@@ -359,7 +359,7 @@ def motor_config_from_registry(
         axis = optional_int(motor_config.get('controller_index'), motor.get('axis'))
         if axis is None:
             continue
-        name = str(motor.get('name') or f'Axis {axis}').strip() or f'Axis {axis}'
+        name = str(motor.get('name') or f'{axis}번 축').strip() or f'{axis}번 축'
         identity = motor.get('identity') if isinstance(motor.get('identity'), dict) else {}
         profile = motor.get('profile') if isinstance(motor.get('profile'), dict) else {}
         ethercat_master_index = optional_int(
@@ -368,7 +368,7 @@ def motor_config_from_registry(
         )
         if ethercat_master_index is None or ethercat_master_index < 0:
             raise ValueError(
-                f'Axis {axis}의 EtherCAT Master 번호가 올바르지 않습니다'
+                f'{axis}번 축의 EtherCAT Master 번호가 올바르지 않습니다'
             )
         eeprom_alias = optional_int(
             identity.get('ethercat_alias'),

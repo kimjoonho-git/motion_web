@@ -223,7 +223,7 @@ class MotionStateMonitor(Node):
                     or driver.get('model')
                     or ''
                 )
-                display_name = str(slave.get('name') or f'Axis {controller_index}')
+                display_name = str(slave.get('name') or f'{controller_index}번 축')
                 raw_model = self._dynamixel_raw_model_info(driver) if motor_type == 'dynamixel' else {}
                 pulse_per_revolution = driver.get('pulse_per_revolution')
                 self._motor_metadata[controller_index] = {

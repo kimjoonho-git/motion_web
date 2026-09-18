@@ -238,9 +238,9 @@ def _target_range_limit_error(
     upper = finite_float(motor.get('upper'))
     axis = optional_int(motor.get('controller_index'))
     if lower is not None and target_min < lower:
-        return f'Axis {axis} target min {target_min:.3f} < lower {lower:.3f}'
+        return f'{axis}번 축 목표 최소 {target_min:.3f} 가 하한 {lower:.3f} 보다 작습니다'
     if upper is not None and target_max > upper:
-        return f'Axis {axis} target max {target_max:.3f} > upper {upper:.3f}'
+        return f'{axis}번 축 목표 최대 {target_max:.3f} 가 상한 {upper:.3f} 보다 큽니다'
     return ''
 
 

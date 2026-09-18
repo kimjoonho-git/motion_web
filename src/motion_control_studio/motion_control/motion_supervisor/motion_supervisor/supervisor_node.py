@@ -21,6 +21,15 @@ from motion_supervisor.servo_alarm_guard import ServoAlarmGuard
 from motion_common import motor_readiness, values, topics
 
 
+#: 긴급정지가 걸렸을 때 하는 말 · §6-178
+#:
+#: 같은 문장이 **일곱 곳**에 적혀 있었다 · 한 곳만 고치면 같은 상황에 두 가지
+#: 말이 나온다 · 게다가 영어라서 사용자가 화면에서 그대로 봤다.
+EMERGENCY_LATCHED_MESSAGE = '긴급정지가 걸려 있습니다 · 프로그램을 다시 시작하세요'
+
+#: 수동 명령이 최종 출력을 쥐고 있을 때 · §6-178 · 이것도 네 곳에 따로 있었다
+MANUAL_COMMAND_ACTIVE_MESSAGE = '수동 명령이 실행 중입니다'
+
 ID_CONTROLWORD = 0
 ID_TARGET_POSITION = 1
 CW_SHUTDOWN_MINAS = 0x0006
@@ -60,10 +69,11 @@ MIDI_COMMAND_OWNERSHIP_SEC = 0.15
 MOTION_RUN_ACTIVE_GRACE_SEC = 0.15
 MANUAL_CONTROL_OWNERSHIP_SEC = 1.0
 
+#: 지금 최종 출력을 쥐고 있는 쪽 · 사용자에게 보인다 · §6-178
 COMMAND_OWNER_LABELS = {
-    CommandOwner.MANUAL: 'manual jog/action control',
-    CommandOwner.MIDI: 'MIDI fader control',
-    CommandOwner.PLAYBACK: 'motion playback',
+    CommandOwner.MANUAL: '수동 조그·동작',
+    CommandOwner.MIDI: 'MIDI 페이더',
+    CommandOwner.PLAYBACK: '모션 재생',
 }
 
 
@@ -75,13 +85,13 @@ def motion_run_rejection_reason(
 ) -> Optional[str]:
     """Return why a runtime command cannot own the final command output."""
     if emergency_latched:
-        return 'emergency stop is latched; restart the full program'
+        return EMERGENCY_LATCHED_MESSAGE
     if not motor_state_available:
-        return 'motor state is unavailable or stale'
+        return '모터 상태를 읽을 수 없거나 오래되었습니다'
     if manual_command_active:
-        return 'a manual command is active'
+        return MANUAL_COMMAND_ACTIVE_MESSAGE
     if midi_command_active:
-        return 'MIDI fader control is active'
+        return 'MIDI 페이더 제어가 실행 중입니다'
     return None
 
 
@@ -243,7 +253,7 @@ class MotionSupervisor(Node):
 
     @staticmethod
     def _command_owner_label(owner: CommandOwner) -> str:
-        return COMMAND_OWNER_LABELS.get(owner, 'another command source')
+        return COMMAND_OWNER_LABELS.get(owner, '다른 명령')
 
     @staticmethod
     def _commanded_axes(msg: Any) -> list:
@@ -278,7 +288,7 @@ class MotionSupervisor(Node):
         )
         if acquired:
             return True, ''
-        return False, f'{self._command_owner_label(current_owner)} is active'
+        return False, f'{self._command_owner_label(current_owner)} 실행 중입니다'
 
     def _release_manual_owner_if_idle(self) -> None:
         if not self._active_jogs and not self._active_actions:
@@ -342,7 +352,7 @@ class MotionSupervisor(Node):
         if not acquired:
             self.get_logger().warning(
                 'Rejected motion runtime command because '
-                f'{self._command_owner_label(current_owner)} is active.',
+                f'{self._command_owner_label(current_owner)} 실행 중입니다.',
                 throttle_duration_sec=1.0,
             )
             return
@@ -382,7 +392,7 @@ class MotionSupervisor(Node):
             or self._servo_alarm_guard_instance().snapshot()['grade3_latched']
         ):
             self._publish_midi_position_result(
-                request, False, 'emergency stop is latched; restart the full program'
+                request, False, EMERGENCY_LATCHED_MESSAGE
             )
             return
         alarm_reason = self._servo_alarm_block_reason(
@@ -475,7 +485,7 @@ class MotionSupervisor(Node):
         # 재생 여부는 **축마다** 따진다 · 전에는 재생이 돌면 MIDI 전체를 막아서
         # 오버더빙이 불가능했다 · §6-72
         if self._active_jogs or self._active_actions:
-            global_error = 'a manual command is active'
+            global_error = MANUAL_COMMAND_ACTIVE_MESSAGE
 
         motors = self._current_motors()
         if not global_error and not motors:
@@ -503,9 +513,9 @@ class MotionSupervisor(Node):
             elif target_position is None:
                 error = 'target_deg is required'
             elif axis in commanded_axes:
-                error = f'Axis {axis} is duplicated in MIDI batch'
+                error = f'{axis}번 축이 MIDI 묶음에 두 번 들어 있습니다'
             elif motor is None:
-                error = f'Axis {axis} not found in current motion_state'
+                error = f'{axis}번 축을 현재 모터 상태에서 찾을 수 없습니다'
             elif self._is_ac_servo(motor):
                 error = self._midi_readiness_error(
                     motor,
@@ -523,7 +533,7 @@ class MotionSupervisor(Node):
             else:
                 error = self._midi_readiness_error(motor, axis, is_ac_servo=False)
                 if not error:
-                    error = f'Axis {axis} motor type is unsupported for MIDI control'
+                    error = f'{axis}번 축은 MIDI 로 제어할 수 없는 모터 종류입니다'
 
             if (
                 not error
@@ -664,12 +674,12 @@ class MotionSupervisor(Node):
             return False, 'target_deg is required'
         # 재생 여부는 축마다 따진다 · 소유권 획득에서 걸린다 · §6-72
         if self._active_jogs or self._active_actions:
-            return False, 'a manual command is active'
+            return False, MANUAL_COMMAND_ACTIVE_MESSAGE
 
         motors = self._current_motors()
         motor = self._motor_for_axis(axis, motors)
         if motor is None:
-            return False, f'Axis {axis} not found in current motion_state'
+            return False, f'{axis}번 축을 현재 모터 상태에서 찾을 수 없습니다'
         if self._is_ac_servo(motor):
             error = self._midi_readiness_error(motor, axis)
             if error:
@@ -684,7 +694,7 @@ class MotionSupervisor(Node):
             error = self._midi_readiness_error(motor, axis, is_ac_servo=False)
             if error:
                 return False, error
-            return False, f'Axis {axis} motor type is unsupported for MIDI control'
+            return False, f'{axis}번 축은 MIDI 로 제어할 수 없는 모터 종류입니다'
 
         acquired, owner_error = self._acquire_command_owner(
             CommandOwner.MIDI,
@@ -753,7 +763,7 @@ class MotionSupervisor(Node):
             self._emergency_latched
             or self._servo_alarm_guard_instance().snapshot()['grade3_latched']
         ):
-            success, message = False, 'emergency stop is latched; restart the full program'
+            success, message = False, EMERGENCY_LATCHED_MESSAGE
         elif (
             command != 'ac_servo_control'
             and self._servo_alarm_block_reason(self._optional_int(request.get('axis')))
@@ -766,7 +776,7 @@ class MotionSupervisor(Node):
         elif command == 'ac_servo_control' and (
             self._active_jogs or self._active_actions
         ):
-            success, message = False, 'a manual command is active'
+            success, message = False, MANUAL_COMMAND_ACTIVE_MESSAGE
         elif command in ('ac_servo_control', 'ac_servo_jog', 'dynamixel_jog'):
             lease_sec = (
                 MANUAL_CONTROL_OWNERSHIP_SEC
@@ -812,7 +822,7 @@ class MotionSupervisor(Node):
         elif command == 'safety_motion_stop' and not self._emergency_latched:
             success, message = self._handle_safety_stop(emergency=False)
         elif self._emergency_latched:
-            success, message = False, 'emergency stop is latched; restart the full program'
+            success, message = False, EMERGENCY_LATCHED_MESSAGE
         else:
             success, message = False, f'unknown safety command: {command}'
         self._publish_result(request_id, success, message)
@@ -834,7 +844,7 @@ class MotionSupervisor(Node):
             self._emergency_latched
             or self._servo_alarm_guard_instance().snapshot()['grade3_latched']
         ):
-            success, message = False, 'emergency stop is latched; restart the full program'
+            success, message = False, EMERGENCY_LATCHED_MESSAGE
         elif self._servo_alarm_block_reason(self._optional_int(request.get('axis'))):
             success, message = False, self._servo_alarm_block_reason(
                 self._optional_int(request.get('axis'))
@@ -975,9 +985,9 @@ class MotionSupervisor(Node):
         motors = self._current_motors()
         motor = self._motor_for_axis(axis, motors)
         if motor is None:
-            return False, f'Axis {axis} not found in motion_state'
+            return False, f'{axis}번 축을 모터 상태에서 찾을 수 없습니다'
         if not self._is_ac_servo(motor):
-            return False, f'Axis {axis} is not AC Servo'
+            return False, f'{axis}번 축은 AC 서보가 아닙니다'
         ready_error = self._manual_readiness_error(motor, axis)
         if ready_error:
             return False, ready_error
@@ -986,22 +996,22 @@ class MotionSupervisor(Node):
             motor.get('position_deg', motor.get('position'))
         )
         if current_position is None:
-            return False, f'Axis {axis} position is unavailable'
+            return False, f'{axis}번 축의 현재 위치를 읽을 수 없습니다'
 
         self._clear_completed_jogs()
         if axis in self._active_jogs:
             active = self._active_jogs[axis]
             return (
                 False,
-                f'Axis {axis} previous jog is still running: '
-                f'target {active["target_position"]:.3f} deg',
+                f'{axis}번 축의 이전 조그가 아직 돌고 있습니다 · '
+                f'목표 {active["target_position"]:.3f} deg',
             )
         if axis in self._active_actions:
             active = self._active_actions[axis]
             return (
                 False,
-                f'Axis {axis} previous action is still running: '
-                f'target {active["target_position"]:.3f} deg',
+                f'{axis}번 축의 이전 동작이 아직 돌고 있습니다 · '
+                f'목표 {active["target_position"]:.3f} deg',
             )
 
         target_position = current_position + relative_deg
@@ -1058,9 +1068,9 @@ class MotionSupervisor(Node):
         motors = self._current_motors()
         motor = self._motor_for_axis(axis, motors)
         if motor is None:
-            return False, f'Axis {axis} not found in motion_state'
+            return False, f'{axis}번 축을 모터 상태에서 찾을 수 없습니다'
         if not self._is_dynamixel(motor):
-            return False, f'Axis {axis} is not Dynamixel'
+            return False, f'{axis}번 축은 다이나믹셀이 아닙니다'
         ready_error = self._manual_readiness_error(motor, axis, is_ac_servo=False)
         if ready_error:
             return False, ready_error
@@ -1069,7 +1079,7 @@ class MotionSupervisor(Node):
             motor.get('position_deg', motor.get('position'))
         )
         if current_position is None:
-            return False, f'Axis {axis} position is unavailable'
+            return False, f'{axis}번 축의 현재 위치를 읽을 수 없습니다'
 
         self._clear_completed_jogs()
         self._clear_completed_actions()
@@ -1077,15 +1087,15 @@ class MotionSupervisor(Node):
             active = self._active_jogs[axis]
             return (
                 False,
-                f'Axis {axis} previous jog is still running: '
-                f'target {active["target_position"]:.3f} deg',
+                f'{axis}번 축의 이전 조그가 아직 돌고 있습니다 · '
+                f'목표 {active["target_position"]:.3f} deg',
             )
         if axis in self._active_actions:
             active = self._active_actions[axis]
             return (
                 False,
-                f'Axis {axis} previous action is still running: '
-                f'target {active["target_position"]:.3f} deg',
+                f'{axis}번 축의 이전 동작이 아직 돌고 있습니다 · '
+                f'목표 {active["target_position"]:.3f} deg',
             )
 
         target_position = current_position + relative_deg
@@ -1124,9 +1134,9 @@ class MotionSupervisor(Node):
         motors = self._current_motors()
         motor = self._motor_for_axis(axis, motors)
         if motor is None:
-            return False, f'Axis {axis} not found in motion_state'
+            return False, f'{axis}번 축을 모터 상태에서 찾을 수 없습니다'
         if not self._is_ac_servo(motor):
-            return False, f'Axis {axis} is not AC Servo'
+            return False, f'{axis}번 축은 AC 서보가 아닙니다'
         ready_error = self._manual_readiness_error(motor, axis)
         if ready_error:
             return False, ready_error
@@ -1134,7 +1144,7 @@ class MotionSupervisor(Node):
             motor.get('position_deg', motor.get('position'))
         )
         if current_position is None:
-            return False, f'Axis {axis} position is unavailable'
+            return False, f'{axis}번 축의 현재 위치를 읽을 수 없습니다'
 
         self._clear_completed_jogs()
         self._clear_completed_actions()
@@ -1142,15 +1152,15 @@ class MotionSupervisor(Node):
             active = self._active_jogs[axis]
             return (
                 False,
-                f'Axis {axis} previous jog is still running: '
-                f'target {active["target_position"]:.3f} deg',
+                f'{axis}번 축의 이전 조그가 아직 돌고 있습니다 · '
+                f'목표 {active["target_position"]:.3f} deg',
             )
         if axis in self._active_actions:
             active = self._active_actions[axis]
             return (
                 False,
-                f'Axis {axis} previous action is still running: '
-                f'target {active["target_position"]:.3f} deg',
+                f'{axis}번 축의 이전 동작이 아직 돌고 있습니다 · '
+                f'목표 {active["target_position"]:.3f} deg',
             )
 
         if request.get('range_recovery') is True:
@@ -1238,9 +1248,9 @@ class MotionSupervisor(Node):
         motors = self._current_motors()
         motor = self._motor_for_axis(axis, motors)
         if motor is None:
-            return False, f'Axis {axis} not found in motion_state'
+            return False, f'{axis}번 축을 모터 상태에서 찾을 수 없습니다'
         if not self._is_dynamixel(motor):
-            return False, f'Axis {axis} is not Dynamixel'
+            return False, f'{axis}번 축은 다이나믹셀이 아닙니다'
         ready_error = self._manual_readiness_error(motor, axis, is_ac_servo=False)
         if ready_error:
             return False, ready_error
@@ -1248,7 +1258,7 @@ class MotionSupervisor(Node):
             motor.get('position_deg', motor.get('position'))
         )
         if current_position is None:
-            return False, f'Axis {axis} position is unavailable'
+            return False, f'{axis}번 축의 현재 위치를 읽을 수 없습니다'
 
         self._clear_completed_jogs()
         self._clear_completed_actions()
@@ -1256,15 +1266,15 @@ class MotionSupervisor(Node):
             active = self._active_jogs[axis]
             return (
                 False,
-                f'Axis {axis} previous jog is still running: '
-                f'target {active["target_position"]:.3f} deg',
+                f'{axis}번 축의 이전 조그가 아직 돌고 있습니다 · '
+                f'목표 {active["target_position"]:.3f} deg',
             )
         if axis in self._active_actions:
             active = self._active_actions[axis]
             return (
                 False,
-                f'Axis {axis} previous action is still running: '
-                f'target {active["target_position"]:.3f} deg',
+                f'{axis}번 축의 이전 동작이 아직 돌고 있습니다 · '
+                f'목표 {active["target_position"]:.3f} deg',
             )
 
         if range_recovery:
@@ -1869,13 +1879,13 @@ class MotionSupervisor(Node):
         upper = self._optional_float(motor.get('upper'))
         if lower is not None and target_position < lower:
             return (
-                f'Axis {axis} position target {target_position:.3f} deg '
-                f'is below lower limit {lower:.3f} deg'
+                f'{axis}번 축 목표 위치 {target_position:.3f} deg 가 '
+                f'하한 {lower:.3f} deg 보다 작습니다'
             )
         if upper is not None and target_position > upper:
             return (
-                f'Axis {axis} position target {target_position:.3f} deg '
-                f'is above upper limit {upper:.3f} deg'
+                f'{axis}번 축 목표 위치 {target_position:.3f} deg 가 '
+                f'상한 {upper:.3f} deg 보다 큽니다'
             )
         return ''
 
@@ -1889,23 +1899,23 @@ class MotionSupervisor(Node):
         lower = self._optional_float(motor.get('lower'))
         upper = self._optional_float(motor.get('upper'))
         if lower is None or upper is None or lower > upper:
-            return f'Axis {axis} has invalid position limits'
+            return f'{axis}번 축의 위치 한계값이 올바르지 않습니다'
 
         expected_target: Optional[float] = None
         boundary_name = ''
         if current_position < lower:
             expected_target = lower
-            boundary_name = 'lower'
+            boundary_name = '하한'
         elif current_position > upper:
             expected_target = upper
-            boundary_name = 'upper'
+            boundary_name = '상한'
         else:
-            return f'Axis {axis} is already within position limits'
+            return f'{axis}번 축은 이미 위치 한계 안에 있습니다'
 
         if not math.isclose(target_position, expected_target, abs_tol=1e-6):
             return (
-                f'Axis {axis} range recovery must target the {boundary_name} '
-                f'limit {expected_target:.3f} deg'
+                f'{axis}번 축 한계 복구는 {boundary_name} '
+                f'한계값 {expected_target:.3f} deg 를 목표로 해야 합니다'
             )
         return ''
 
@@ -2020,7 +2030,7 @@ class MotionSupervisor(Node):
                 self._emergency_latched
                 or self._servo_alarm_guard_instance().snapshot()['grade3_latched']
             ):
-                return False, 'emergency stop is latched; restart the full program'
+                return False, EMERGENCY_LATCHED_MESSAGE
             if time.monotonic() < self._motion_stop_block_until:
                 return False, 'motion stop is settling'
             self._command_pub.publish(self._only_driven_axes(command))
@@ -2133,9 +2143,9 @@ class MotionSupervisor(Node):
         for axis in requested_axes:
             motor = self._motor_for_axis(axis, motors)
             if motor is None:
-                return [], f'Axis {axis} not found in motion_state'
+                return [], f'{axis}번 축을 모터 상태에서 찾을 수 없습니다'
             if not self._is_ac_servo(motor):
-                return [], f'Axis {axis} is not AC Servo'
+                return [], f'{axis}번 축은 AC 서보가 아닙니다'
             if str(motor.get('state') or '') != 'detected':
                 return [], f'{axis}번 축이 감지되지 않았습니다'
             axes.append(axis)
@@ -2170,7 +2180,7 @@ class MotionSupervisor(Node):
     def _handle_safety_stop(self, emergency: bool) -> tuple[bool, str]:
         """Cancel every upper-level command and publish one final safe command."""
         if self._emergency_latched and not emergency:
-            return False, 'emergency stop is latched; restart the full program'
+            return False, EMERGENCY_LATCHED_MESSAGE
         cancelled_actions = []
         with self._command_lock:
             if emergency:
