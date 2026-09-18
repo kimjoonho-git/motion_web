@@ -81,12 +81,46 @@ def scoped(path: str) -> str:
 # /motion_control · 제어 평면
 # --------------------------------------------------------------------------- #
 
-#: 모터 상태 브로드캐스트
+#: 모터 상태 브로드캐스트 · **우리 것** (motion_state_monitor 가 만든다)
 MOTION_STATE = scoped('/motion_control/motion_state')
-#: 모터 하드웨어 상태
+
+# --------------------------------------------------------------------------- #
+# 모터 시스템과 만나는 자리 · §6-176
+# --------------------------------------------------------------------------- #
+#
+# **이 둘은 우리가 지은 이름이 아니다.**
+#
+# `motion_system` 은 **별도 저장소**다 (`src/motion_system`) · 그쪽
+# `motor_manager_node` 가 이 이름을 **코드에 그대로 박아** 두고 있다.
+#
+#     motion_system/.../robot_manager_node.py
+#         create_subscription(MotorStatus, 'motion_control/motor_command', ...)
+#         create_publisher(MotorStatus,    'motion_control/motor_status', ...)
+#
+# 여기서 이름을 바꾸면 **모터가 통째로 안 돈다** · 오류도 안 난다 · 그냥
+# 아무도 듣지 않는 곳에 말하게 된다.
+#
+# `motion_control/` 이라는 묶음 이름 자체가 그 경계에서 온 것이다 · 그 아래
+# 우리 내부 통로 18개가 같이 얹혀 있어서, 이름만 보고는 어디까지가 남의
+# 집인지 알 수 없다 · 그래서 여기 적어 둔다.
+#
+# 바꾸려면 **양쪽 저장소를 같이** 고쳐야 한다 · `motion_system` 은 별도 지시
+# 없이 손대지 않는다.
+#
+# `/motion_control/request` 도 그쪽 이름이지만 **우리는 쓰지 않는다** ·
+# 발행도 구독도 하지 않으므로 여기 두지 않는다 · 쓰려 하기 전에 그쪽
+# 저장소를 먼저 볼 것.
+
+#: 모터 하드웨어 상태 · **모터 시스템이 발행** · 이름 고정
 MOTOR_STATUS = scoped('/motion_control/motor_status')
-#: 최종 하드웨어 명령 · motion_supervisor 단독 발행
+#: 최종 하드웨어 명령 · motion_supervisor 단독 발행 · **모터 시스템이 구독** · 이름 고정
 MOTOR_COMMAND = scoped('/motion_control/motor_command')
+
+#: 모터 시스템과 만나는 통로 · 이름을 바꾸면 조용히 끊긴다 · §6-176
+MOTOR_SYSTEM_BOUNDARY = {
+    'MOTOR_STATUS': '/motion_control/motor_status',
+    'MOTOR_COMMAND': '/motion_control/motor_command',
+}
 #: 모터 스캔 진행률
 MOTOR_SCAN_PROGRESS = scoped('/motion_control/motor_scan_progress')
 
