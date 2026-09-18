@@ -4,7 +4,15 @@
  * 표는 제 안에서만 가로로 밀리게 하며, 차례는 따라다닌다.
  */
 
-.docs-panel {
+/* `:not(.hidden)` 를 꼭 붙인다 · §6-161
+ *
+ * `.hidden { display: none }` 은 09-midi.css 에 있고 이 파일은 **그다음에**
+ * 실린다 · 클래스 하나끼리는 나중에 실린 쪽이 이기므로, 그냥 `display: flex`
+ * 라고 쓰면 숨김을 이겨 버린다.
+ *
+ * 실제로 그렇게 됐다 · 사용법 화면이 **모든 탭 아래에 붙어** 나왔다 ·
+ * 다른 패널들은 `display` 를 아예 안 정해서 이 일이 없었다. */
+.docs-panel:not(.hidden) {
   display: flex;
   flex-direction: column;
   gap: 12px;

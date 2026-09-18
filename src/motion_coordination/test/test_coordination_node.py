@@ -710,14 +710,15 @@ def test_leave_publishes_explicit_not_joined_heartbeat():
     assert node._heartbeat_pub.messages[-1].joined is False
 
 
-def test_temporary_disable_releases_stale_prepare_without_peer_approval():
+def test_leaving_releases_stale_prepare_without_peer_approval():
+    # 「지금 빠지기」를 없애고 탈퇴 하나로 합쳤다 · §6-164
     node = _node()
     node._joined = True
     node._heartbeat_pub = _Publisher()
     node._execution.state = 'preparing'
     node._coordination_error = {'active': True, 'code': 'GROUP_START_REJECTED'}
 
-    result = node._handle_local_request({'command': 'temporarily_disable'})
+    result = node._handle_local_request({'command': 'leave'})
 
     assert result['success'] is True
     assert node._joined is False

@@ -41,21 +41,17 @@
                     <strong id="coordinationGroupDomain">-</strong>
                   </div>
                 </div>
-                <!-- 버튼 세 개가 한 줄을 통째로 쓰고 있었다 · 뱃지와 같은 줄에
-                     둔다 · §6-100 -->
-                <!-- 셋을 둘로 · §6-132
-                     「그룹 나가기」와 「연동 일시 해제」는 그룹이 돌고 있지 않으면
-                     **완전히 같은 일**이었다 · 차이는 실행 중일 때 하나뿐인데
-                     (나가기는 거부, 일시 해제는 강제 정지 후 나감) 그 선택을
-                     버튼 이름으로 하게 해 두었다 · 이제 확인창이 묻는다. -->
+                <!-- 들어오거나 나가거나 둘 뿐이다 · §6-164
+                     전에는 「그룹 나가기」와 「지금 빠지기」가 따로 있었다 ·
+                     멈춰 있을 때는 완전히 같은 일이었고 도는 중일 때만 갈렸다 ·
+                     사용자가 매번 어느 쪽인지 골라야 했다 · 하나로 합친다. -->
                 <div class="coord-badge coord-badge-actions">
-                  <button id="coordinationJoinButton" type="button" disabled>다시 참가</button>
-                  <button id="coordinationTemporaryDisableButton" type="button" disabled>지금 빠지기</button>
+                  <button id="coordinationJoinButton" type="button" disabled>연동 참가</button>
+                  <button id="coordinationLeaveButton" type="button" disabled>연동 탈퇴</button>
                 </div>
               </div>
-              <!-- 무엇이 남고 무엇이 풀리는지 · §6-132 -->
               <p class="coordination-persistence-note">
-                「지금 빠지기」는 이 PC 만 잠시 그룹에서 뺍니다 ·
+                연동 모션이 도는 중에는 탈퇴할 수 없습니다 · 먼저 정지하세요 ·
                 프로그램을 다시 켜면 아래 「연동 사용」 설정을 따라 자동으로 다시 참가합니다.
               </p>
             <details class="coordination-settings-details" open>

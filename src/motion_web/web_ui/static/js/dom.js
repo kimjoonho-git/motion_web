@@ -114,7 +114,7 @@ export function getElements() {
     midiTargetMessage: document.getElementById('midiTargetMessage'),
     coordinationExecutionState: document.getElementById('coordinationExecutionState'),
     coordinationJoinButton: document.getElementById('coordinationJoinButton'),
-    coordinationTemporaryDisableButton: document.getElementById('coordinationTemporaryDisableButton'),
+    coordinationLeaveButton: document.getElementById('coordinationLeaveButton'),
     coordinationAcknowledgeErrorButton: document.getElementById('coordinationAcknowledgeErrorButton'),
     coordinationControlSummary: document.getElementById('coordinationControlSummary'),
     coordinationErrorSummary: document.getElementById('coordinationErrorSummary'),

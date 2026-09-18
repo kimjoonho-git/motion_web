@@ -1198,27 +1198,31 @@ class MotionCoordinationNode(Node):
             self._alarm_pub.publish(alarm)
         return {'success': True, 'message': '그룹 동기화 오류 확인 완료'}
 
-    def _temporarily_disable_coordination(self) -> Dict[str, Any]:
-        """Stop any owned group run, then leave this PC without peer approval."""
-        with self._lock:
-            execution_id = str(self._execution.execution_id or '')
-            execution_state = str(self._execution.state or 'idle')
+    def _leave_group(self) -> Dict[str, Any]:
+        """이 PC 를 그룹에서 뺀다 · §6-164
 
-        stop_message = ''
-        if execution_id:
-            stopped = self._request_group_stop(after_cycle=False)
-            stop_message = str(stopped.get('message') or '')
-        elif execution_state not in {'idle', 'stopped', 'error'}:
-            # A failed prepare can leave a display-only state with no execution
-            # lease. Release it locally so the user can continue standalone work.
-            with self._lock:
-                self._execution.reset()
-                self._clear_active_execution()
-        else:
-            with self._lock:
-                self._clear_active_execution()
+        **들어오거나 나가거나 둘 뿐이다.**
 
+        전에는 「그룹 나가기」와 「지금 빠지기」가 따로 있었다 · 멈춰 있을
+        때는 둘이 완전히 같은 일이었고, 도는 중일 때만 갈렸다 (나가기는
+        거부, 빠지기는 강제로 세우고 나감) · 사용자는 어느 쪽을 눌러야
+        하는지를 매번 골라야 했다.
+
+        규칙 하나로 간다 · **도는 중에는 못 나간다** · 먼저 세운다 ·
+        연동 설정을 바꿀 때도 같은 규칙이다 (§6-163).
+
+        나갈 때는 **조건 없이 비운다** · 「이럴 때만 치운다」 를 두면 안
+        치우는 경우가 생기고, 그 상태로는 단독 작업으로 돌아갈 길이 막힌다 ·
+        어차피 나가는 마당이라 남겨 둘 것이 없다.
+        """
         with self._lock:
+            if self._execution.execution_id:
+                raise ValueError(
+                    '연동 모션이 도는 중에는 그룹에서 나갈 수 없습니다 · '
+                    '먼저 정지한 뒤 나가세요'
+                )
+            self._execution.reset()
+            self._clear_active_execution()
             self._coordination_error = {}
             self._alarm_registry.clear_coordination()
             joined = self._joined
@@ -1228,9 +1232,8 @@ class MotionCoordinationNode(Node):
         return {
             'success': True,
             'message': (
-                '이 PC의 DDS 연동을 일시 해제했습니다. '
+                '이 PC 를 그룹에서 뺐습니다 · '
                 '단독 모션·모션 스튜디오를 사용할 수 있습니다.'
-                + (f' {stop_message}' if stop_message else '')
             ),
         }
 
@@ -1294,14 +1297,7 @@ class MotionCoordinationNode(Node):
                 self._joined = True
                 result = {'success': True, 'message': 'DDS 그룹 참가'}
             elif command == 'leave':
-                if self._execution.execution_id:
-                    raise ValueError('그룹 실행 중에는 그룹에서 나갈 수 없습니다')
-                if self._joined and self._config.configured:
-                    self._publish_heartbeat(joined=False)
-                self._joined = False
-                result = {'success': True, 'message': 'DDS 그룹 나가기'}
-            elif command == 'temporarily_disable':
-                result = self._temporarily_disable_coordination()
+                result = self._leave_group()
             elif command in {'start_group', 'synchronized_run'}:
                 result = self._start_group_execution(request=request)
             elif command == 'initialize_group':

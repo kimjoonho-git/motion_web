@@ -186,7 +186,7 @@ const ScheduleManager = {
         //
         // 슬레이브는 스케줄 자체가 안 돈다 · 마스터가 보내는 그룹 실행만
         // 이 PC 를 움직인다 · 여기서 수동으로 바꿔 두면 막힌 줄 알게 된다 ·
-        // 실제로 막으려면 「지금 빠지기」로 그룹에서 나가야 한다.
+        // 실제로 막으려면 「연동 탈퇴」로 그룹에서 나가야 한다.
         const modeSelect = document.getElementById('scheduleRunMode');
         if (modeSelect) {
             modeSelect.disabled = !state.canEdit;

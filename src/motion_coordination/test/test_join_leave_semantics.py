@@ -1,11 +1,15 @@
-"""연동 사용 · 그룹 참가 · 일시 해제가 각각 무엇을 바꾸는가 · §6-132.
+"""연동 사용 · 참가 · 탈퇴가 각각 무엇을 바꾸는가 · §6-164
 
-화면에서 이 셋을 정리하기 전에 **지금 되는 것을 잠근다** · 세 가지가 서로
-무엇이 다른지는 코드에만 있고 화면에는 없다. 정리하다 뜻이 바뀌면 여기서 걸린다.
+**들어오거나 나가거나 둘 뿐이다.**
 
-    연동 사용      `enabled` · 설정 파일에 영구히 남는다
-    그룹 참가/나가기  `_joined` · 노드 메모리만 · 재시작하면 `configured` 로 되돌아간다
-    연동 일시 해제  `_joined` 를 끄되, 돌고 있는 그룹 실행을 **먼저 세운다**
+전에는 「그룹 나가기」와 「지금 빠지기」가 따로 있었다 · 멈춰 있을 때는 둘이
+완전히 같은 일이었고 도는 중일 때만 갈렸다 (나가기는 거부, 빠지기는 강제로
+세우고 나감) · 사용자는 매번 어느 쪽인지 골라야 했다 · 하나로 합쳤다.
+
+    연동 사용   `enabled` · 설정 파일에 영구히 남는다
+    참가/탈퇴   `_joined` · 노드 메모리만 · 재시작하면 `configured` 로 되돌아간다
+
+**도는 중에는 못 나간다** · 먼저 세운다 · 연동 설정을 바꿀 때도 같다 (§6-163).
 """
 
 from types import SimpleNamespace
@@ -70,7 +74,7 @@ def test_leave_is_refused_while_the_group_is_running():
     result = node._handle_local_request({'command': 'leave'})
 
     assert result['success'] is False
-    assert result['message'] == '그룹 실행 중에는 그룹에서 나갈 수 없습니다'
+    assert '먼저 정지' in result['message']
     assert node._joined is True, '거부됐으면 참가 상태가 그대로여야 한다'
 
 
@@ -85,30 +89,34 @@ def test_leave_when_idle_tells_the_peers():
     assert node._heartbeat_pub.messages[0].joined is False
 
 
-def test_temporary_disable_stops_the_group_first():
-    """「일시 해제」가 「나가기」와 다른 점은 이것 하나뿐이다."""
+def test_leaving_never_stops_the_group_for_the_user():
+    """탈퇴가 남의 모션을 세우면 안 된다 · 세우는 것은 사람이 정한다.
+
+    전에 「지금 빠지기」는 도는 중에 **세 대를 다 세우고** 나갔다 · 한 대만
+    빼려던 사람이 공연을 멈췄다 · 이제는 거부하고 먼저 세우라고 말한다.
+    """
     node = _idle_node()
     node._execution.execution_id = 'exec-a'
-    stopped = []
-    node._request_group_stop = lambda after_cycle: (
-        stopped.append(after_cycle) or {'success': True, 'message': '그룹 정지'}
-    )
+    node._request_group_stop = lambda after_cycle: pytest.fail('탈퇴가 세우면 안 된다')
 
-    result = node._handle_local_request({'command': 'temporarily_disable'})
+    result = node._handle_local_request({'command': 'leave'})
 
-    assert result['success'] is True
-    assert stopped == [False], '회차를 기다리지 않고 즉시 세운다'
-    assert node._joined is False
+    assert result['success'] is False
+    assert node._joined is True
 
 
-def test_temporary_disable_without_a_run_is_the_same_as_leaving():
+def test_leaving_clears_what_is_left_behind():
+    """나갈 때는 조건 없이 비운다 · 찌꺼기가 남으면 단독 작업 길이 막힌다."""
     node = _idle_node()
-    node._request_group_stop = lambda after_cycle: pytest.fail('세울 것이 없다')
+    node._execution.state = 'preparing'
+    node._coordination_error = {'code': 'GROUP_ERROR', 'message': '뭔가'}
 
-    result = node._handle_local_request({'command': 'temporarily_disable'})
+    result = node._handle_local_request({'command': 'leave'})
 
     assert result['success'] is True
     assert node._joined is False
+    assert node._coordination_error == {}
+    assert not node._execution.execution_id
 
 
 def test_group_start_needs_the_pc_to_be_joined():

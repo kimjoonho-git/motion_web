@@ -635,7 +635,7 @@ export function createMotionDataController({
     await showAlert(
       blockedByCoordination
         ? `${detail}\n\n`
-          + 'PC 연동 화면에서 그룹 실행을 종료하거나 「지금 빠지기」를 누른 뒤 다시 시도하세요.'
+          + 'PC 연동 화면에서 그룹 실행을 종료하거나 「연동 탈퇴」를 누른 뒤 다시 시도하세요.'
         : detail,
       {
         title: blockedByCoordination ? 'DDS 그룹 실행 중' : title,

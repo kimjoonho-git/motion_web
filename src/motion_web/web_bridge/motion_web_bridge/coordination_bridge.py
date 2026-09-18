@@ -105,9 +105,27 @@ class CoordinationWebBridge:
         return ''
 
     def update_settings(self, payload: Mapping[str, Any]) -> Dict[str, Any]:
-        """Save project-independent DDS group settings and restart the node."""
+        """Save project-independent DDS group settings and restart the node.
+
+        **모션이 도는 중에는 받지 않는다** · §6-163
+
+        이 저장은 끝에서 **연동 서비스를 재시작한다** · 도는 중에 재시작하면
+        이 PC 가 그룹에서 사라지고, 남은 PC 들은 참가 PC 가 죽은 것으로 보아
+        `GROUP_PARTICIPANT_FAILURE` 로 **세 대가 통째로** 선다 · 명단에서 PC
+        하나 빼려던 일이 공연을 멈춘다.
+
+        연동 탈퇴도 같은 규칙이다 · 도는 중에는 못 나간다 (§6-164) ·
+        설정 저장만 아무것도 안 보고 있었다 · 같은 규칙을 준다 ·
+        「그룹이 도는가」의 판정은 `run_state` 가 한다 (§6-145).
+        """
         if not isinstance(payload, Mapping):
             raise ValueError('연동 설정 요청은 객체여야 합니다')
+        running = self.local_execution_blocker()
+        if running:
+            raise ValueError(
+                '연동 모션이 도는 중에는 연동 설정을 바꿀 수 없습니다 · '
+                '먼저 정지한 뒤 바꾸세요'
+            )
         allowed = {'enabled', 'group_id', 'dds_domain_id', 'display_name', 'is_master', 'required_peers'}
         if set(payload).difference(allowed):
             raise ValueError('허용되지 않은 연동 설정 항목이 있습니다')
@@ -191,7 +209,7 @@ class CoordinationWebBridge:
         command = str(payload.get('command') or '').strip()
         allowed = {
             'join', 'leave', 'start_group', 'stop_after_cycle', 'stop_now',
-            'acknowledge_group_error', 'temporarily_disable', 'initialize_group',
+            'acknowledge_group_error', 'initialize_group',
             # MIDI 를 쓸 PC 를 정한다 · §6-94 · 장치를 든 PC 만 정할 수 있고
             # 그 판정은 조정 노드가 한다 · 여기서는 통로만 연다
             'set_midi_target',

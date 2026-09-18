@@ -42,9 +42,8 @@ def test_coordination_lives_in_one_screen():
     # 그룹에 관한 것은 전부 연동 화면에 있다
     for marker in (
         'id="coordinationGroupId"', 'id="coordinationDomainId"',
-        # 「그룹 나가기」는 화면에서 뺐다 · 실행 중이 아니면 「지금 빠지기」와
-        # 같은 일이었다 · §6-132
-        'id="coordinationJoinButton"', 'id="coordinationTemporaryDisableButton"',
+        # 들어오거나 나가거나 둘 뿐이다 · 「지금 빠지기」는 없앴다 · §6-164
+        'id="coordinationJoinButton"', 'id="coordinationLeaveButton"',
         'id="coordinationPeerRows"', 'id="coordinationRunAvailability"',
         'id="coordinationAcknowledgeErrorButton"',
         'id="coordinationErrorSummary"', '실행 참가',
@@ -101,13 +100,14 @@ def test_user_web_exposes_only_local_high_level_group_control():
 def test_frontend_uses_manual_group_commands_without_repeat_count():
     controller = (UI / 'js/coordination.js').read_text(encoding='utf-8')
     for command in (
-        # 빠지기는 `temporarily_disable` 하나로 나간다 · `leave` 는 노드에
-        # 남아 있지만 화면은 쓰지 않는다 · §6-132
-        'join', 'temporarily_disable', 'start_group', 'stop_after_cycle',
+        # 참가와 탈퇴 둘뿐이다 · §6-164
+        'join', 'leave', 'start_group', 'stop_after_cycle',
         'stop_now', 'acknowledge_group_error',
     ):
         assert command in controller
-    assert "control('leave')" not in controller
+    assert 'temporarily_disable' not in controller, (
+        '「지금 빠지기」가 화면에 남아 있습니다 · 참가/탈퇴 둘로 갑니다'
+    )
     assert 'groupErrorActive' in controller
     assert "peer.state !== 'online'" in controller
     assert 'repeat_count' not in controller

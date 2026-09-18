@@ -100,12 +100,13 @@ export function createCoordinationController({ el }) {
       el.midiTargetMessage.textContent = view.reason;
       el.midiTargetMessage.classList.toggle('hidden', !view.reason);
     }
-    el.midiTargetChoices.innerHTML = view.choices.map((choice) => {
+    // 여기도 누를 것이 들어 있다 · 매초 갈아 끼우면 클릭이 빗나간다 · §6-162
+    setHtml(el.midiTargetChoices, view.choices.map((choice) => {
       const label = choice.isDevice ? `${choice.label} · 장치` : choice.label;
       return `<button type="button" class="midi-target-choice${choice.active ? ' active' : ''}"`
         + ` data-midi-target="${text(choice.pc_id)}"${choice.disabled ? ' disabled' : ''}>`
         + `${text(label)}</button>`;
-    }).join('');
+    }).join(''));
   }
 
   function peerRow(peer = {}, requiredPeers = new Set(), fixedParticipants = new Set()) {
@@ -156,6 +157,26 @@ export function createCoordinationController({ el }) {
       <td class="${Number(peer.servo_alarm_grade || 0) > 0 ? 'coordination-state-bad' : 'coordination-state-ok'}">${text(alarmText)}</td>
     </tr>`,
     };
+  }
+
+  /** 내용이 그대로면 손대지 않는다 · §6-162
+   *
+   * 이 화면은 **1초마다** 통째로 다시 그린다 · 그런데 표 안에는 누를 것이
+   * 들어 있다 (`명단 등록`·`명단 제외`).
+   *
+   * `innerHTML` 로 갈아 끼우면 그 버튼은 **사라졌다 새로 생긴다** · 누르는
+   * 동안(누름→뗌 사이) 갈리면 클릭이 빗나가 아무 일도 안 일어난다 · 손을
+   * 올려 둔 표시도 매초 풀리고, 표가 깜빡인다.
+   *
+   * 대개 1초 전과 글자 하나 안 다르다 · 그러니 달라졌을 때만 갈아 끼운다.
+   */
+  const lastHtml = new Map();
+
+  function setHtml(element, html) {
+    if (!element) return;
+    if (lastHtml.get(element) === html) return;
+    lastHtml.set(element, html);
+    element.innerHTML = html;
   }
 
   function render() {
@@ -295,13 +316,14 @@ export function createCoordinationController({ el }) {
     if (el.coordinationJoinButton) {
       el.coordinationJoinButton.hidden = joined;
       el.coordinationJoinButton.disabled = loading || !nodeReady || joined || active;
-      el.coordinationJoinButton.title = '이 PC 를 그룹에 다시 넣습니다';
+      el.coordinationJoinButton.title = '이 PC 를 그룹에 넣습니다';
     }
-    if (el.coordinationTemporaryDisableButton) {
-      el.coordinationTemporaryDisableButton.hidden = !joined;
-      el.coordinationTemporaryDisableButton.disabled = loading || !nodeReady || !joined;
-      el.coordinationTemporaryDisableButton.title = active
-        ? '이 PC와 다른 PC의 그룹 모션을 즉시 정지한 뒤 이 PC 를 그룹에서 뺍니다'
+    // 도는 중에는 못 나간다 · 먼저 정지 · §6-164
+    if (el.coordinationLeaveButton) {
+      el.coordinationLeaveButton.hidden = !joined;
+      el.coordinationLeaveButton.disabled = loading || !nodeReady || !joined || active;
+      el.coordinationLeaveButton.title = active
+        ? '연동 모션이 도는 중입니다 · 먼저 정지한 뒤 탈퇴하세요'
         : '이 PC 를 그룹에서 빼 단독 모션·모션 스튜디오를 사용합니다';
     }
     // 실행 제어는 모션 실행 화면으로 옮겼다 · 여기서는 왜 못 하는지만 알린다 · §6-65
@@ -387,16 +409,12 @@ export function createCoordinationController({ el }) {
         }
       });
       
-      if (el.coordinationPeerRows) {
-        el.coordinationPeerRows.innerHTML = rows.length
-          ? rows.map((row) => row.setup).join('')
-          : '<tr><td colspan="5" class="empty">그룹에 참가하면 PC 상태가 표시됩니다</td></tr>';
-      }
-      if (el.motionRunPeerRows) {
-        el.motionRunPeerRows.innerHTML = rows.length
-          ? rows.map((row) => row.progress).join('')
-          : '<tr><td colspan="8" class="empty">그룹에 참가하면 각 PC 진행이 표시됩니다</td></tr>';
-      }
+      setHtml(el.coordinationPeerRows, rows.length
+        ? rows.map((row) => row.setup).join('')
+        : '<tr><td colspan="5" class="empty">그룹에 참가하면 PC 상태가 표시됩니다</td></tr>');
+      setHtml(el.motionRunPeerRows, rows.length
+        ? rows.map((row) => row.progress).join('')
+        : '<tr><td colspan="8" class="empty">그룹에 참가하면 각 PC 진행이 표시됩니다</td></tr>');
       // 명단은 그룹에 참가했으면 늘 보인다
       el.coordinationRosterSection?.classList.toggle('hidden', !joined);
       // 그룹 실행은 **마스터에서만** 보인다 · 조정 노드가 슬레이브를 거부한다
@@ -456,9 +474,23 @@ export function createCoordinationController({ el }) {
       if (el.coordinationConfigMessage) {
         el.coordinationConfigMessage.textContent = 'DDS 연동 서비스 재시작 확인 중';
       }
-      await new Promise((resolve) => window.setTimeout(resolve, 2000));
-      await refresh();
-      const restarted = snapshot?.node_connected === true;
+      // 다 되면 바로 끝낸다 · 기다리는 상한(2초)은 그대로 · §6-162
+      //
+      // 전에는 무조건 2초를 잤다 · 명단에서 PC 하나 빼는 일도, 그룹 이름을
+      // 고치는 일도 전부 2초 넘게 화면이 굳었다 · 그동안 버튼은 다 꺼져 있다.
+      //
+      // 재시작은 대개 그보다 빨리 끝난다 · 끝난 것을 확인하면 더 잘 이유가
+      // 없다 · 못 끝내면 예전처럼 2초를 채우고 「확인 실패」 로 알린다.
+      const deadline = Date.now() + 2000;
+      let restarted = false;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => window.setTimeout(resolve, 200));
+        await refresh();
+        if (snapshot?.node_connected === true) {
+          restarted = true;
+          break;
+        }
+      }
       await showAlert(
         restarted
           ? (customSuccessMessage || 'DDS 연동 설정 저장 및 재시작 완료')
@@ -523,25 +555,21 @@ export function createCoordinationController({ el }) {
     }
   }
 
-  async function temporarilyDisable() {
+  /** 연동 탈퇴 · 도는 중에는 못 나간다 · §6-164 */
+  async function leaveGroup() {
     if (loading) return;
-    const active = Boolean(snapshot?.runtime?.execution?.execution_id);
     const confirmed = await showConfirm(
-      active
-        ? '지금 그룹 모션이 돌고 있습니다.\n\n'
-          + '참가한 모든 PC 의 모션이 즉시 정지된 뒤 이 PC 가 그룹에서 빠집니다.\n'
-          + '회차가 끝나기를 기다리지 않습니다.'
-        : '이 PC 를 그룹에서 뺍니다.\n\n'
-          + '다른 PC의 확인 없이 빠집니다. 단독 모션·모션 스튜디오를 사용할 수 있습니다.\n'
-          + '프로그램을 다시 켜면 「연동 사용」 설정을 따라 자동으로 다시 참가합니다.',
+      '이 PC 를 그룹에서 뺍니다.\n\n'
+      + '단독 모션·모션 스튜디오를 사용할 수 있습니다.\n'
+      + '프로그램을 다시 켜면 「연동 사용」 설정을 따라 자동으로 다시 참가합니다.',
       {
-        title: '그룹에서 빠지기',
-        confirmLabel: '빠지기',
+        title: '연동 탈퇴',
+        confirmLabel: '탈퇴',
         tone: 'warning',
       },
     );
     if (!confirmed) return;
-    await control('temporarily_disable');
+    await control('leave');
   }
 
   /** 그룹 실행에 넘길 반복 옵션 · 이 화면의 입력값을 그대로 쓴다. */
@@ -622,7 +650,7 @@ export function createCoordinationController({ el }) {
       'click', () => groupRun.stopNow());
     el.coordinationStopAfterButton?.addEventListener(
       'click', () => groupRun.stopAfterCycle());
-    el.coordinationTemporaryDisableButton?.addEventListener('click', temporarilyDisable);
+    el.coordinationLeaveButton?.addEventListener('click', leaveGroup);
 
     el.coordinationAcknowledgeErrorButton?.addEventListener('click', () => control('acknowledge_group_error'));
     [el.coordinationDisplayName, el.coordinationGroupId, el.coordinationDomainId, el.coordinationEnabled, el.coordinationIsMaster, el.coordinationRequiredPeers]
