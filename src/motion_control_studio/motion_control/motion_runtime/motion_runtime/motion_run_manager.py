@@ -956,7 +956,51 @@ class MotionRunManager(Node):
                 return motor
         return None
 
+    #: 읽어 둔 모션 파일을 몇 개나 들고 있을 것인가 · §6-173
+    #:
+    #: 한 번 시작할 때 계획을 여러 번 만든다 · 단독 재생은 둘(재생 + 초기
+    #: 이동), 연동은 셋(검증 + 재생 + 초기 이동) · 그때마다 같은 파일을 다시
+    #: 읽고 파싱했다 · 183KB 짜리로 재 보니 **한 번에 45ms**, 세 번이면 135ms 다.
+    #:
+    #: 그 135ms 가 하필 **그룹 동기 시작 직전**에 놓인다.
+    #:
+    #: 파일이 바뀌면 자동으로 버린다 (`mtime` 과 크기를 같이 본다) · 그래서
+    #: 스튜디오가 새로 내보낸 파일을 옛것으로 돌릴 일이 없다.
+    MOTION_CACHE_SIZE = 4
+
     def _load_motion_records(self, path: Path) -> List[Dict[str, Any]]:
+        """모션 파일을 읽어 행 목록으로 · 같은 파일이면 다시 안 읽는다 · §6-173
+
+        **돌려주는 목록은 매번 새로 만든다** · 부르는 쪽이 여기에 덧붙이기
+        때문이다 (`plan_builder` 가 초기 이동 대체값을 넣는다) · 같은 목록을
+        돌려주면 그 값이 다음 계획에 쌓인다.
+
+        행 하나하나(`dict`)는 나눠 쓴다 · 읽은 뒤에 그것을 고치는 곳은 없다.
+        """
+        try:
+            stat = path.stat()
+            key = (str(path), stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            key = None
+        if key is not None:
+            cache = getattr(self, '_motion_record_cache', None)
+            if cache is None:
+                cache = {}
+                self._motion_record_cache = cache
+            cached = cache.get(key)
+            if cached is not None:
+                return list(cached)
+
+        records = self._parse_motion_records(path)
+
+        if key is not None:
+            cache = self._motion_record_cache
+            cache[key] = records
+            while len(cache) > self.MOTION_CACHE_SIZE:
+                cache.pop(next(iter(cache)))
+        return list(records)
+
+    def _parse_motion_records(self, path: Path) -> List[Dict[str, Any]]:
         first_line = ''
         with path.open('r', encoding='utf-8') as handle:
             for raw_line in handle:
