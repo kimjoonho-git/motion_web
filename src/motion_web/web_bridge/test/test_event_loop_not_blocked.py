@@ -95,3 +95,59 @@ def test_the_check_accepts_work_moved_to_a_thread():
         return await asyncio.to_thread(bridge.snapshot)
 """
     assert _offenders(fine) == []
+
+
+# 루프가 막힌 시간을 재는가 · §6-153
+#
+# 막혔다는 사실은 **밖에서는 안 보인다** · 요청이 늦게 처리될 뿐이고, 로그에는
+# 아무것도 안 남는다 · 그래서 그룹이 멈춘 뒤에도 브리지 탓인지 아닌지 몰랐다.
+
+def test_the_bridge_measures_how_long_the_loop_was_blocked():
+    import asyncio
+    import time as clock
+
+    from motion_web_bridge import bridge_node
+
+    said = []
+
+    class FakeBridge:
+        @staticmethod
+        def get_logger():
+            return type('L', (), {'warn': staticmethod(said.append)})()
+
+    async def drive():
+        task = asyncio.create_task(bridge_node._watch_event_loop_lag(FakeBridge()))
+        await asyncio.sleep(0)
+        # 루프를 실제로 막는다 · 재는 쪽이 이걸 알아채야 한다
+        clock.sleep(bridge_node.EVENT_LOOP_LAG_PROBE_SEC
+                    + bridge_node.EVENT_LOOP_LAG_WARN_SEC + 0.05)
+        await asyncio.sleep(0.05)
+        task.cancel()
+
+    asyncio.run(drive())
+
+    assert said, '루프가 막혔는데 아무 말도 안 했다'
+    assert '루프 지연' in said[0]
+    assert 'ms 막힘' in said[0]
+
+
+def test_a_smooth_loop_stays_quiet():
+    """멀쩡할 때 떠들면 진짜 막혔을 때의 기록이 묻힌다."""
+    import asyncio
+
+    from motion_web_bridge import bridge_node
+
+    said = []
+
+    class FakeBridge:
+        @staticmethod
+        def get_logger():
+            return type('L', (), {'warn': staticmethod(said.append)})()
+
+    async def drive():
+        task = asyncio.create_task(bridge_node._watch_event_loop_lag(FakeBridge()))
+        await asyncio.sleep(bridge_node.EVENT_LOOP_LAG_PROBE_SEC * 3)
+        task.cancel()
+
+    asyncio.run(drive())
+    assert said == []

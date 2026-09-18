@@ -2014,8 +2014,49 @@ def _safety_first_stop(bridge: MotionWebBridge, method, *args):
     return result
 
 
+#: 이벤트 루프가 이만큼 늦으면 적어 둔다 · §6-153
+#:
+#: 연동 노드는 그룹 실행 중 로컬 상태를 300ms 안에 받아야 하고, 0.5초 못 받으면
+#: **전체를 정지시킨다** · 그 길이 이 루프다 · 루프가 100ms 막혔다면 예산의
+#: 5분의 1을 한 번에 까먹은 것이니 남길 값어치가 있다.
+EVENT_LOOP_LAG_WARN_SEC = 0.10
+
+#: 얼마나 자주 재는가 · 재는 일 자체는 거의 공짜다(잠들었다 깨어날 뿐)
+EVENT_LOOP_LAG_PROBE_SEC = 0.10
+
+
+async def _watch_event_loop_lag(bridge) -> None:
+    """루프가 막힌 시간을 잰다 · §6-153
+
+    0.1초 자고 일어나 **실제로 얼마나 지났는지** 본다 · 0.15초가 지났다면
+    루프가 0.05초 막혀 있었다는 뜻이다 · 다른 방법으로는 알 수 없다.
+
+    왜 필요한가 · 그룹이 멈춘 뒤 남는 것은 「응답 없음: timed out」 한 줄이었다 ·
+    브리지가 느렸는지, 죽었는지, 무엇 때문에 느렸는지 알 길이 없어서 원인 찾기에
+    반나절이 갔고 재현도 안 됐다 · 이제 그 순간 루프가 몇 ms 막혔는지가 남는다 ·
+    연동 노드 쪽 기록과 시각을 맞춰 보면 둘 중 누구 탓인지 바로 갈린다.
+    """
+    worst = 0.0
+    while True:
+        started = time.monotonic()
+        await asyncio.sleep(EVENT_LOOP_LAG_PROBE_SEC)
+        lag = time.monotonic() - started - EVENT_LOOP_LAG_PROBE_SEC
+        if lag < EVENT_LOOP_LAG_WARN_SEC:
+            continue
+        worst = max(worst, lag)
+        bridge.get_logger().warn(
+            f'[루프 지연] {lag * 1000:.0f}ms 막힘 · 이번 기동 최악 '
+            f'{worst * 1000:.0f}ms · 연동 예산은 500ms 입니다'
+        )
+
+
 def create_app(bridge: MotionWebBridge) -> FastAPI:
     app = FastAPI(title='Motion Web Bridge')
+
+    @app.on_event('startup')
+    async def _start_lag_watch():
+        # 루프 위에서 도는 유일한 상시 작업 · 자고 깨는 것이 전부라 부담이 없다
+        asyncio.create_task(_watch_event_loop_lag(bridge))
 
     @app.middleware('http')
     async def project_generation_boundary(request: Request, call_next):

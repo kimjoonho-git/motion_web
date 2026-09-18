@@ -79,6 +79,14 @@ def _node():
     node._lock = threading.RLock()
     node._execution = GroupExecution()
     node._coordination_error = {}
+    # 로컬 상태를 받는 형편 · 상태에 실린다 · §6-153
+    node._local_runtime_monitor = SimpleNamespace(
+        snapshot=lambda: {
+            'recent_ms': [], 'worst_ms': 0.0,
+            'consecutive_failures': 0, 'failures_total': 0,
+        },
+        diagnosis=lambda: '검사용',
+    )
     # 기동 시점의 랜 주소 · `_check_network_drift` 가 견주는 기준점 · §6-96
     node._boot_lan_addresses = ()
     node._network_stale = {}
@@ -181,15 +189,25 @@ def test_stale_local_runtime_status_stops_only_active_group_execution():
             'received_monotonic': time.monotonic() - 1.0,
             'error': 'bridge timeout',
         },
+        # 터진 순간의 숫자 · §6-153 · 이게 없으면 원인을 못 찾는다
+        diagnosis=lambda: (
+            '마지막 성공 1000ms 전 · 연속 실패 4회 · '
+            '최근 응답(ms) 12, 14, 300, 300 · 사유 bridge timeout'
+        ),
     )
     failures = []
     node._stop_for_peer_failure = failures.append
 
     node._consume_local_runtime_status()
 
-    assert failures == [
-        '로컬 Web Bridge 상태 수신 중단: bridge timeout'
-    ]
+    assert len(failures) == 1
+    said = failures[0]
+    assert said.startswith('로컬 Web Bridge 상태 수신 중단: ')
+    # 「몇 ms 걸렸나 · 몇 번 연속인가 · 직전은 어땠나」가 다 남아야 한다
+    assert '마지막 성공 1000ms 전' in said
+    assert '연속 실패 4회' in said
+    assert '최근 응답(ms)' in said
+    assert 'bridge timeout' in said
 
 
 def test_stale_local_runtime_status_does_not_affect_standalone_mode():

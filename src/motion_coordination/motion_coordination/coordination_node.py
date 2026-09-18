@@ -2065,7 +2065,13 @@ class MotionCoordinationNode(Node):
                 > LOCAL_RUNTIME_ACTIVE_TIMEOUT_SEC
             )
         ):
-            detail = str(sample.get('error') or '상태 갱신 제한시간 초과')
+            # 숫자를 같이 남긴다 · §6-153
+            #
+            # 전에는 `timed out` 한 마디가 전부였다 · 브리지가 느렸는지 죽었는지,
+            # 한 번 튄 건지 계속 그런 건지 가릴 수가 없어서 원인 찾기에 반나절이
+            # 갔고, 재현이 안 되니 고쳤는지도 확인할 수 없었다.
+            detail = self._local_runtime_monitor.diagnosis()
+            self.get_logger().error(f'[로컬 상태 끊김] {detail}')
             self._stop_for_peer_failure(
                 f'로컬 Web Bridge 상태 수신 중단: {detail}'
             )
@@ -2251,6 +2257,8 @@ class MotionCoordinationNode(Node):
                     'start_within_tolerance': self._execution.trigger_within_tolerance(),
                 },
                 'trigger_sync': dict(self._trigger_sync_status),
+                # 로컬 상태를 받는 형편 · 터지기 전에 여유를 볼 수 있어야 한다
+                'local_runtime': self._local_runtime_health(),
                 'coordination_error': dict(self._coordination_error),
                 'network_stale': dict(self._network_stale),
                 'midi_relay': self._midi_relay.snapshot(),
@@ -2264,6 +2272,24 @@ class MotionCoordinationNode(Node):
                     ),
                 },
             }
+
+    def _local_runtime_health(self) -> Dict[str, Any]:
+        """로컬 상태를 얼마나 잘 받고 있나 · §6-153
+
+        판정에는 안 쓴다 · 오직 사람이 **터지기 전에** 여유를 보라고 둔다 ·
+        `worst_ms` 가 제한시간(300ms)에 가까워지고 있으면 곧 터진다는 뜻이다.
+        """
+        sample = self._local_runtime_monitor.snapshot()
+        recent = list(sample.get('recent_ms') or ())
+        return {
+            'recent_ms': recent,
+            'last_ms': recent[-1] if recent else None,
+            'worst_ms': sample.get('worst_ms'),
+            'consecutive_failures': sample.get('consecutive_failures'),
+            'failures_total': sample.get('failures_total'),
+            'timeout_ms': round(LOCAL_RUNTIME_HTTP_TIMEOUT_SEC * 1000.0),
+            'budget_ms': round(LOCAL_RUNTIME_ACTIVE_TIMEOUT_SEC * 1000.0),
+        }
 
     def _local_group_state(self) -> str:
         status = self._local_status.get('motion_run_status')
