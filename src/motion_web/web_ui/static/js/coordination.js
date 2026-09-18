@@ -116,7 +116,12 @@ export function createCoordinationController({ el }) {
     
     const isRequired = requiredPeers.has(peer.pc_id);
     const pcNameHtml = `<strong>${text(peer.display_name || peer.pc_id || '-')}</strong><small>${peer.display_name ? text(peer.pc_id || '') : ''}</small>`;
-    const badgeHtml = isRequired ? `<span style="display: inline-block; margin-left: 6px; padding: 2px 6px; background-color: var(--color-primary); color: white; border-radius: 4px; font-size: 10px; font-weight: bold;">⭐ 필수</span>` : '';
+    // 색 이름은 `01-base.css` 의 것을 쓴다 · §6-147
+    //
+    // 전에는 `--color-primary` 를 썼는데 **이 프로젝트에 없는 이름**이다 ·
+    // 배경색이 통째로 비고 글씨는 흰색이라, 흰 바탕에 흰 글씨가 찍혀서
+    // 「필수」가 안 보였다 · 이모지만 자기 색이라 ⭐ 하나만 남았다.
+    const badgeHtml = isRequired ? `<span style="display: inline-block; margin-left: 6px; padding: 2px 6px; background-color: var(--green); color: white; border-radius: 4px; font-size: 10px; font-weight: bold;">⭐ 필수</span>` : '';
     
     const executionStateText = fixedParticipants.has(peer.pc_id) ? '고정 참가' : (isRequired ? '명단 포함' : '대기');
     const executionStateClass = fixedParticipants.has(peer.pc_id) ? 'coordination-state-ok' : (isRequired ? 'coordination-state-ok' : 'coordination-state-warn');
@@ -188,14 +193,17 @@ export function createCoordinationController({ el }) {
     const rosterBanner = el.coordinationConfirmedRosterBanner;
     if (rosterBanner) {
       if (requiredPeersList.length > 0) {
-        rosterBanner.innerHTML = `<span style="color: var(--color-primary);">✅ 현재 그룹 필수 참가 명단:</span> ${requiredPeersList.join(', ')}`;
-        rosterBanner.style.backgroundColor = 'rgba(16, 185, 129, 0.1)';
-        rosterBanner.style.border = '1px solid var(--color-primary)';
+        // 색조도 실제 팔레트(`--green` #16834a)에 맞춘다 · 전에는 테두리만
+        // 없는 변수라 바탕과 테두리가 서로 다른 초록이었다
+        rosterBanner.innerHTML = `<span style="color: var(--green);">✅ 현재 그룹 필수 참가 명단:</span> ${requiredPeersList.join(', ')}`;
+        rosterBanner.style.backgroundColor = 'rgba(22, 131, 74, 0.10)';
+        rosterBanner.style.border = '1px solid var(--green)';
+        rosterBanner.style.color = '';
       } else {
         rosterBanner.innerHTML = `⚠️ 시스템을 시작하려면 아래 표에서 명단을 확정하세요 (명단 미확정)`;
-        rosterBanner.style.backgroundColor = 'rgba(239, 68, 68, 0.1)';
-        rosterBanner.style.border = '1px solid var(--color-danger)';
-        rosterBanner.style.color = 'var(--color-danger)';
+        rosterBanner.style.backgroundColor = 'rgba(198, 40, 40, 0.10)';
+        rosterBanner.style.border = '1px solid var(--red)';
+        rosterBanner.style.color = 'var(--red)';
       }
     }
 

@@ -264,7 +264,7 @@
   gap: 12px;
   cursor: pointer;
   list-style-position: inside;
-  color: var(--text);
+  color: var(--text, inherit);
 }
 
 .studio-axis-panel > summary span {

@@ -460,7 +460,7 @@ th {
   overflow: auto;
   border: 1px solid var(--line);
   background: #f8fafc;
-  color: var(--text);
+  color: var(--text, inherit);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
   line-height: 1.45;
