@@ -153,7 +153,14 @@ class MotionMappingManager(Node):
         self._publish(command_router.finalize(response, request))
 
     #: 실행 컨텍스트를 새로 세우는 명령 · 이때만 세대가 오를 수 있다
-    CONTEXT_COMMANDS = frozenset({'apply_context', 'invalidate_context'})
+    #:
+    #: 목록의 주인은 `generation` 이다 · §6-166 · 세 노드가 똑같이 적어 두고
+    #: 있었다 · 새 명령이 생기면 세 곳을 고쳐야 하고, 빠뜨린 노드만 세대를
+    #: 안 올려 그 노드의 응답이 「이전 프로젝트의 늦은 응답」으로 버려진다.
+    #:
+    #: MIDI 노드는 `select_project` 를 쓰므로 **진짜로 다르다** · 거기는
+    #: 제 목록을 갖는다.
+    CONTEXT_COMMANDS = generation.CONTEXT_COMMANDS
 
     def _validate_request_generation(
         self, command: str, request_generation: Any, payload: Dict[str, Any]

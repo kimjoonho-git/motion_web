@@ -1,5 +1,8 @@
 import { releaseAfterTimelineChange } from './motion_studio_editor_selection.js';
-import { MOTION_STUDIO_PERIOD_SEC } from './motion_studio_constants.js';
+import {
+  MOTION_STUDIO_BUSY_STATES,
+  MOTION_STUDIO_PERIOD_SEC,
+} from './motion_studio_constants.js';
 import { motionStudioLayerDuration } from './motion_studio_project_model.js';
 
 export function motionStudioEditorValueBounds(
@@ -118,7 +121,7 @@ export function motionStudioRuntimeStatusMessage(previousStatus, nextStatus) {
   const nextState = String(nextStatus?.state || '');
   const previousMessage = String(previousStatus?.message || '');
   const nextMessage = String(nextStatus?.message || '');
-  const activeStates = new Set(['initializing', 'playing', 'recording', 'stopping']);
+  const activeStates = new Set(MOTION_STUDIO_BUSY_STATES);
   if (nextState === 'error' && (
     previousState !== nextState || previousMessage !== nextMessage
   )) {

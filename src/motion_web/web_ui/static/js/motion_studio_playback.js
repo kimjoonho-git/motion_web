@@ -1,4 +1,7 @@
-import { MOTION_STUDIO_PERIOD_SEC } from './motion_studio_constants.js';
+import {
+  MOTION_STUDIO_MOVING_STATES,
+  MOTION_STUDIO_PERIOD_SEC,
+} from './motion_studio_constants.js';
 
 export function motionStudioPlaybackView({
   status = {},
@@ -58,7 +61,7 @@ export function motionStudioPlaybackView({
 export function syncMotionStudioPlaybackClock(state, currentTime) {
   const runtimeState = String(state.status?.state || 'idle');
   const sourceElapsed = Math.max(0, Number(state.status?.elapsed_sec) || 0);
-  const running = ['playing', 'recording'].includes(runtimeState);
+  const running = MOTION_STUDIO_MOVING_STATES.includes(runtimeState);
   const previous = state.playbackClock;
   if (!running) {
     state.playbackClock = null;
@@ -226,7 +229,7 @@ export function createMotionStudioPlaybackController({
       const runtimeState = String(state.status?.state || 'idle');
       const playback = renderMonitor();
       updatePlayhead(playback);
-      if (['playing', 'recording'].includes(runtimeState)) {
+      if (MOTION_STUDIO_MOVING_STATES.includes(runtimeState)) {
         state.playbackAnimationFrame = requestFrame(tick);
       }
     };

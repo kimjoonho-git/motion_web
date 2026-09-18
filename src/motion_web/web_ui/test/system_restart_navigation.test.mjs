@@ -165,7 +165,7 @@ test('motor apply and restart use the backend motor operation state', () => {
     /payload\?\.motor_operation\?\.operation_id[\s\S]*?appState\.restartOperationId = operationId/,
   );
   assert.match(main, /motorOperation\.type === 'motor_apply'/);
-  assert.match(main, /\['failure', 'timeout', 'cancelled'\]\.includes\(operationStatus\)/);
+  assert.match(main, /TERMINAL_FAILURES\.has\(operationStatus\)/);
   assert.match(main, /operationStatus === 'running'/);
 });
 

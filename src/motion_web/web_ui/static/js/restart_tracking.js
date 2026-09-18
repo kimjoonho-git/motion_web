@@ -1,4 +1,5 @@
-const TERMINAL_FAILURES = new Set(['failure', 'timeout', 'cancelled']);
+//: 더 기다려도 소용없는 결말 · §6-167 · `main.js` 도 이것을 쓴다
+export const TERMINAL_FAILURES = new Set(['failure', 'timeout', 'cancelled']);
 
 export function trackedMotorRestartState(operation, expectedOperationId) {
   const expectedId = String(expectedOperationId || '').trim();

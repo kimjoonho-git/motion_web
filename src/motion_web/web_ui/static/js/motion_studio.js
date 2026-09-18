@@ -59,6 +59,7 @@ import {
   renderMotionStudioLayerManager,
 } from './motion_studio_layer_manager.js';
 import {
+  MOTION_STUDIO_BUSY_STATES,
   MOTION_STUDIO_PERIOD_SEC,
 } from './motion_studio_constants.js';
 import {
@@ -518,7 +519,7 @@ export function createMotionStudioController({
     const layer = selectedLayer();
     const runtimeState = String(state.status?.state || 'idle');
     const running = (
-      ['initializing', 'recording', 'playing', 'stopping'].includes(runtimeState)
+      MOTION_STUDIO_BUSY_STATES.includes(runtimeState)
       || pendingMotorStartAt > 0
     );
     const blocked = state.busy || running;
@@ -745,7 +746,7 @@ export function createMotionStudioController({
 
   function renderControls() {
     const runtimeState = String(state.status?.state || 'idle');
-    const running = ['initializing', 'recording', 'playing', 'stopping'].includes(runtimeState);
+    const running = MOTION_STUDIO_BUSY_STATES.includes(runtimeState);
     const hasProject = Boolean(state.project);
     const hasMotionAxes = Boolean(activeMapping()?.rows?.length);
     const hasEnabledLayer = Boolean(

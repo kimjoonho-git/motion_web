@@ -2,6 +2,9 @@ import { motionStudioPointRangePoints } from './motion_studio_point_model.js';
 import { MOTION_STUDIO_PERIOD_SEC } from './motion_studio_constants.js';
 import { MOTION_STUDIO_TIME_EPSILON } from './motion_studio_constants.js';
 
+//: 범위를 고르는 중인 단계 · 시작점을 기다리거나 끝점을 기다린다
+const RANGE_PICKING_PHASES = ['awaiting_start', 'awaiting_end'];
+
 const clone = structuredClone;
 const layerDirtyCache = new WeakMap();
 
@@ -149,7 +152,7 @@ export function motionStudioResetRangeSelection(editor, active = false) {
 }
 
 export function motionStudioRangeSelectionActive(editor) {
-  return ['awaiting_start', 'awaiting_end'].includes(editor?.rangeSelection?.phase);
+  return RANGE_PICKING_PHASES.includes(editor?.rangeSelection?.phase);
 }
 
 /** 지금 「구간 선택」 쪽에 서 있는가 · §6-123
@@ -194,7 +197,7 @@ export function motionStudioSelectRangePoint(editor, pointTarget) {
     return { ok: false, reason: 'missing_target' };
   }
   const phase = editor.rangeSelection?.phase;
-  if (!['awaiting_start', 'awaiting_end'].includes(phase)) {
+  if (!RANGE_PICKING_PHASES.includes(phase)) {
     return { ok: false, reason: 'inactive' };
   }
   const target = {

@@ -21,6 +21,24 @@ class _Node:
         self.change_generation_on_publish = False
 
 
+def _idle_service(node, root):
+    """이 PC 에서 도는 연동 서비스에 붙지 않는다 · §6-168
+
+    `_local_api` 를 막지 않으면 진짜 `localhost:8011` 로 나간다 · 이 PC 에서
+    그룹이 돌고 있으면 시험이 「도는 중」을 읽고, 아무도 시작한 적 없는 실행
+    때문에 설정 저장이 거부된다 · 실제로 그렇게 두 시험이 깨졌다.
+
+    시험은 제 손으로 세운 상태만 본다.
+    """
+    service = CoordinationWebBridge(node, root, lambda: 1)
+    service._local_api = lambda path, payload=None: {
+        'success': True,
+        'joined': True,
+        'execution': {'state': 'stopped', 'execution_id': ''},
+    }
+    return service
+
+
 class _Repository:
     def __init__(self, root: Path, *, selected='project-a'):
         self.root = root
@@ -216,7 +234,7 @@ def test_global_group_settings_do_not_modify_project_files(tmp_path, monkeypatch
     project.parent.mkdir(parents=True)
     project.write_text('name: A\n', encoding='utf-8')
     node = _Node()
-    service = CoordinationWebBridge(node, tmp_path, lambda: 1)
+    service = _idle_service(node, tmp_path)
     monkeypatch.setattr(service, '_restart_coordination_service', lambda: {
         'service_installed': False, 'restart_pending': False, 'message': 'not installed',
     })
@@ -231,7 +249,7 @@ def test_global_group_settings_do_not_modify_project_files(tmp_path, monkeypatch
 
 def test_invalid_group_settings_do_not_replace_valid_file(tmp_path, monkeypatch):
     node = _Node()
-    service = CoordinationWebBridge(node, tmp_path, lambda: 1)
+    service = _idle_service(node, tmp_path)
     monkeypatch.setattr(service, '_restart_coordination_service', lambda: {
         'service_installed': True, 'restart_pending': True, 'message': 'ok',
     })

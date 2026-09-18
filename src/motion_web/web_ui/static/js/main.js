@@ -25,7 +25,7 @@ import { renderAccess, renderMonitoring } from './monitoring.js';
 import { createOperationProgressManager } from './operation_progress.js';
 import { installDialogManager } from './ui_dialogs.js';
 import { StatusSocket } from './socket.js';
-import { trackedMotorRestartState } from './restart_tracking.js';
+import { TERMINAL_FAILURES, trackedMotorRestartState } from './restart_tracking.js';
 import {
   canChangeProjectInWorkspace,
   createWorkspaceRouteState,
@@ -779,7 +779,7 @@ function restartReadyState(payload) {
       motorOperation,
       appState.restartOperationId,
     );
-    if (['failure', 'timeout', 'cancelled'].includes(tracked.state)) {
+    if (TERMINAL_FAILURES.has(tracked.state)) {
       return {
         ready: false,
         failed: true,
@@ -817,7 +817,7 @@ function restartReadyState(payload) {
     const operationDetail = motorOperation.error
       || motorOperation.message
       || `작업 단계 · ${motorOperation.phase || '확인 중'}`;
-    if (['failure', 'timeout', 'cancelled'].includes(operationStatus)) {
+    if (TERMINAL_FAILURES.has(operationStatus)) {
       return {
         ready: false,
         failed: true,
