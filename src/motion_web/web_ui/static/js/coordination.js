@@ -215,7 +215,8 @@ export function createCoordinationController({ el }) {
       el.coordinationConfigMessage.textContent = snapshot?.config_error
         || (
           'PC 전역 설정 · 같은 그룹 ID와 DDS Domain ID를 입력한 PC끼리 통신합니다. '
-          + `트리거 동기화 허용값 ${Number(runtimeConfig.max_trigger_sync_uncertainty_ms ?? 20).toFixed(0)} ms`
+          + `시각 추정 불확실성 허용 ${Number(runtimeConfig.max_trigger_sync_uncertainty_ms ?? 20).toFixed(0)} ms`
+          + ' (시작 전 검사) · 실제 시작 편차 허용은 아래 그룹 실행 줄에 나옵니다'
         );
     }
     if (el.coordinationUpdatedAt) {
@@ -253,9 +254,17 @@ export function createCoordinationController({ el }) {
       } else if (Number(execution.cycle_number || 0) > 0) {
         cycle = ` · ${execution.cycle_number}회차${stopAfter ? '(정지 중)' : ''}`;
       }
-      const spread = execution.start_spread_ms == null ? '' : ` · 시작 편차 ${Number(execution.start_spread_ms).toFixed(3)}ms`;
+      // 편차 옆에 **허용값을 같이 적는다** · §6-148
+      //
+      // 전에는 편차만 띄웠다 · 화면 다른 곳에는 「20 ms」 라고 적혀 있어서,
+      // 22.5ms 가 24회차 내내 나와도 "20 안에 든 줄" 알았다 · 실제 정지
+      // 기준은 70ms 다 · 허용값은 연동 노드가 내려주는 것을 그대로 쓴다.
+      const tolerance = Number(execution.spread_tolerance_ms);
+      const limit = Number.isFinite(tolerance) ? ` / 허용 ${tolerance.toFixed(0)}ms` : '';
+      const spread = execution.start_spread_ms == null
+        ? '' : ` · 시작 편차 ${Number(execution.start_spread_ms).toFixed(3)}ms${limit}`;
       el.coordinationExecutionState.textContent = `그룹 실행 · ${stateText(execution.state)}${coordinator}${cycle}${spread}`;
-      el.coordinationExecutionState.className = execution.start_within_20ms === false
+      el.coordinationExecutionState.className = execution.start_within_tolerance === false
         ? 'coordination-state-bad' : stateClass(execution.state);
     }
     const nodeReady = snapshot?.node_connected === true && configured;

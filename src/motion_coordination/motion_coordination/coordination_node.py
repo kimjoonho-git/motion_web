@@ -2221,9 +2221,16 @@ class MotionCoordinationNode(Node):
                     'target_cycle_count': self._execution.target_cycle_count,
                     'stop_after_cycle': self._execution.stop_after_cycle,
                     'initialize_spread_ms': self._execution.last_initialize_spread_ms,
-                    'initialize_within_20ms': self._execution.initialize_within_tolerance(),
                     'start_spread_ms': self._execution.last_start_spread_ms,
-                    'start_within_20ms': self._execution.trigger_within_tolerance(),
+                    # 허용값을 **같이 내려준다** · §6-148
+                    #
+                    # 전에는 열쇠 이름이 `start_within_20ms` 였는데 판정은
+                    # `max_start_spread_ms`(70ms)로 했다 · 화면·문서는 20ms 라
+                    # 적혀 있고 실제로는 22.5ms 가 24회차 내내 그냥 통과했다 ·
+                    # 숫자를 두 군데 적으면 반드시 갈린다 · 여기서만 적는다.
+                    'spread_tolerance_ms': self._execution.max_start_spread_ms,
+                    'initialize_within_tolerance': self._execution.initialize_within_tolerance(),
+                    'start_within_tolerance': self._execution.trigger_within_tolerance(),
                 },
                 'trigger_sync': dict(self._trigger_sync_status),
                 'coordination_error': dict(self._coordination_error),

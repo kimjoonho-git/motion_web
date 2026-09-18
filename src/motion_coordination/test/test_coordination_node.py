@@ -999,9 +999,9 @@ def test_snapshot_reports_software_trigger_spreads():
     snapshot = node.snapshot()
 
     assert snapshot['execution']['initialize_spread_ms'] == pytest.approx(12.0)
-    assert snapshot['execution']['initialize_within_20ms'] is True
+    assert snapshot['execution']['initialize_within_tolerance'] is True
     assert snapshot['execution']['start_spread_ms'] == pytest.approx(19.0)
-    assert snapshot['execution']['start_within_20ms'] is True
+    assert snapshot['execution']['start_within_tolerance'] is True
 
 
 def test_sync_result_maps_coordinator_deadline_to_local_monotonic():
@@ -1310,3 +1310,30 @@ def test_snapshot_carries_the_network_warning(monkeypatch):
     _drift(node, monkeypatch, ('172.16.21.10',))
 
     assert node.snapshot()['network_stale']['active'] is True
+
+
+# 20ms 와 70ms · 두 숫자가 갈리지 않게 · §6-148
+#
+# 상태 열쇠 이름이 `start_within_20ms` 였는데 판정은 `max_start_spread_ms`
+# (70ms)로 했다 · 화면과 문서는 20ms 라 적혀 있어서, 실측 22.5ms 가 24회차
+# 내내 나와도 "20 안에 들었겠거니" 하고 넘어갔다 · 숫자를 두 군데 적으면
+# 반드시 갈린다 · 허용값은 연동 노드가 내려주는 것 하나만 쓴다.
+
+def test_the_snapshot_says_which_tolerance_it_judged_by():
+    node = _node()
+    node._joined = True
+    node._local_status = {}
+
+    execution = node.snapshot()['execution']
+
+    assert execution['spread_tolerance_ms'] == node._execution.max_start_spread_ms
+    assert 'start_within_20ms' not in execution, '이름이 다시 숫자를 박았다'
+    assert 'start_within_tolerance' in execution
+    assert 'initialize_within_tolerance' in execution
+
+
+def test_the_tolerance_is_not_twenty():
+    """20ms 는 다른 것을 재는 값이다 · 둘을 같은 숫자로 만들면 또 헷갈린다."""
+    node = _node()
+    assert node._execution.max_start_spread_ms == 70.0
+    assert node._config.max_trigger_sync_uncertainty_ms == 20.0

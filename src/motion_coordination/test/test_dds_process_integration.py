@@ -402,7 +402,7 @@ def test_two_processes_complete_two_barrier_cycles_over_typed_dds(tmp_path):
             is not None
         ))
         synchronized = _get(ports[0])
-        assert synchronized['execution']['start_within_20ms'] is True
+        assert synchronized['execution']['start_within_tolerance'] is True
         assert synchronized['trigger_sync']['trigger_sync_source'] == (
             'dds_relative_monotonic'
         )

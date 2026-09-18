@@ -41,12 +41,16 @@
 3. 자동 반복을 정지하고 두 PC를 그룹에 참가시킨다.
 4. `그룹 모션 시작` 후 두 PC의 실행 준비가 모두 통과하는지 확인한다.
 5. 두 PC 초기위치 이동 완료 후에만 전체 `ARMED`가 되는지 확인한다.
-6. 초기화 트리거 편차가 20ms 이내인지 로그로 판정한다.
+6. 초기화 트리거 편차를 로그로 기록한다 · 실행을 멈추는 기준은 **70ms**
+   (`GroupExecution.max_start_spread_ms`)다 · 20ms 는 DDS 시각 추정
+   **불확실성**의 허용값(`max_trigger_sync_uncertainty_ms`)으로, 시작
+   전에 따로 보는 다른 값이다 · §6-148
 
 ## 4. 단일·연속 회차
 
 1. 첫 `START_AT`당 각 PC의 `motion_started_monotonic`이 한 번만 기록되는지 확인한다.
-2. 예약시각이 아닌 실제 콜백 `motion_started_monotonic`의 `max-min`이 20ms 이내인지 판정한다.
+2. 예약시각이 아닌 실제 콜백 `motion_started_monotonic`의 `max-min`을 기록한다 ·
+   전체 정지 기준은 **70ms** 다.
 3. 모션시간이 서로 다른 파일을 사용해 먼저 끝난 PC만 `CYCLE_READY`로 대기하는지 확인한다.
 4. 늦은 PC의 `CYCLE_READY` 전에는 다음 `START_AT`이 없는지 확인한다.
 5. 전체 `CYCLE_READY` 후 다음 회차가 각 PC에서 정확히 한 번 실행되는지 확인한다.
@@ -118,6 +122,17 @@ systemctl --user restart motion-coordination.service motion-control.service
 | `MOTION_NET_WAIT_SEC` | 랜을 기다리는 최대 초 · 기본 60 · DHCP 가 느린 현장은 늘린다 |
 | `MOTION_NET_WAIT_SEC=0` | 기다리지 않는다 · 랜을 아예 안 쓰는 PC |
 
+## 헷갈리는 두 숫자 · 20ms 와 70ms · §6-148
+
+| 값 | 무엇 | 언제 본다 | 넘으면 |
+|---|---|---|---|
+| `max_trigger_sync_uncertainty_ms` = **20ms** | DDS 시각 추정이 얼마나 불확실한가 | 시작 **전** | 시작을 취소한다 |
+| `max_start_spread_ms` = **70ms** | 각 PC 가 실제로 얼마나 벌어져 시작했나 | 시작 **후** | 전체 정지 |
+
+전에는 화면과 이 문서가 둘 다 20ms 만 말했다 · 그래서 실측 22.5ms 가 24회차
+내내 나와도 "20 안에 들었겠거니" 하고 넘겼다 · 실제로는 70ms 기준을 지난 것이고,
+20ms 기준은 애초에 다른 것을 재고 있었다.
+
 ## 완료 기록
 
 다음 항목을 PC별로 기록한다.
@@ -125,9 +140,9 @@ systemctl --user restart motion-coordination.service motion-control.service
 | 항목 | PC A | PC B | 판정 |
 |---|---|---|---|
 | 코드 버전 |  |  |  |
-| DDS 추정 불확실성 |  |  | 20ms 이내 |
-| 초기화 트리거 편차 |  |  | 20ms 이내 |
-| 모션 시작 최대 편차 |  |  | 20ms 이내 |
+| DDS 추정 불확실성 |  |  | 20ms 이내 (시작 전 검사) |
+| 초기화 트리거 편차 |  |  | 70ms 이내 (넘으면 전체 정지) |
+| 모션 시작 최대 편차 |  |  | 70ms 이내 (넘으면 전체 정지) |
 | 실행 회차 수 |  |  | 동일 |
 | 중복 실행 수 |  |  | 0 |
 | 두 종류 정지 |  |  | 모두 확인 |
