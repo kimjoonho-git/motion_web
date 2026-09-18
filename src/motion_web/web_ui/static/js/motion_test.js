@@ -407,34 +407,36 @@ function acServoReadyBlockReason(motor, actionText) {
   return '';
 }
 
-function acServoJogBlockReason(motor) {
-  return acServoReadyBlockReason(motor, '조그 동작');
+/** 다이나믹셀은 서보 ON 이 없다 · 감지와 에러만 본다.
+ *
+ * 서버도 같은 순서다 (`motor_readiness.MANUAL_ORDER` · `servo_on` 은
+ * AC 서보에만 적용) · 전에는 이 두 줄이 조그와 절대 위치 동작에 **똑같이
+ * 한 번씩** 적혀 있었다.
+ */
+function dynamixelReadyBlockReason(motor) {
+  if (String(motor.state || '') !== 'detected') return '선택 축이 감지되지 않았습니다';
+  if (Boolean(motor.fault)) return '선택 축에 에러가 있습니다';
+  return '';
+}
+
+/** 이 축으로 그 동작을 할 수 있는가 · 못 하면 사유 · §6-172
+ *
+ * 조그와 절대 위치 동작은 **마지막 한 문장만** 달랐는데 함수 두 개가 통째로
+ * 따로 있었다 · 한쪽에 검사를 더하면 다른 쪽은 모른 채로 남는다.
+ */
+function axisActionBlockReason(motor, actionText) {
+  if (!motor) return '축을 선택하세요';
+  if (isAcServoMotor(motor)) return acServoReadyBlockReason(motor, actionText);
+  if (isDynamixelMotor(motor)) return dynamixelReadyBlockReason(motor);
+  return `AC 서보 또는 다이나믹셀 축만 ${actionText} 가능합니다`;
 }
 
 function jogBlockReason(motor) {
-  if (!motor) return '축을 선택하세요';
-  if (isAcServoMotor(motor)) return acServoJogBlockReason(motor);
-  if (isDynamixelMotor(motor)) {
-    if (String(motor.state || '') !== 'detected') return '선택 축이 감지되지 않았습니다';
-    if (Boolean(motor.fault)) return '선택 축에 에러가 있습니다';
-    return '';
-  }
-  return 'AC 서보 또는 다이나믹셀 축만 조그 동작 가능합니다';
-}
-
-function acServoActionBlockReason(motor) {
-  return acServoReadyBlockReason(motor, '절대 위치 동작');
+  return axisActionBlockReason(motor, '조그 동작');
 }
 
 function actionBlockReason(motor) {
-  if (!motor) return '축을 선택하세요';
-  if (isAcServoMotor(motor)) return acServoActionBlockReason(motor);
-  if (isDynamixelMotor(motor)) {
-    if (String(motor.state || '') !== 'detected') return '선택 축이 감지되지 않았습니다';
-    if (Boolean(motor.fault)) return '선택 축에 에러가 있습니다';
-    return '';
-  }
-  return 'AC 서보 또는 다이나믹셀 축만 절대 위치 동작 가능합니다';
+  return axisActionBlockReason(motor, '절대 위치 동작');
 }
 
 function positionLimitBlockReason(plan) {
