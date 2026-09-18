@@ -45,6 +45,14 @@ def register_motion_run_routes(app: FastAPI, bridge, safety_first_stop) -> None:
             raise HTTPException(status_code=400, detail='request body must be an object')
         return await asyncio.to_thread(bridge.validate_motion_mapping, body)
 
+    @app.post('/api/motion-mappings/motion-file')
+    async def save_registered_motion_file(request: Request):
+        # 재생 등록만 바꾸는 좁은 길 · 모션축 설정은 안 건드린다 · §6-160
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail='request body must be an object')
+        return await asyncio.to_thread(bridge.save_registered_motion_file, body)
+
     @app.get('/api/motion-mappings/{file_id}')
     async def motion_mapping(file_id: str):
         return await asyncio.to_thread(bridge.load_motion_mapping, file_id)

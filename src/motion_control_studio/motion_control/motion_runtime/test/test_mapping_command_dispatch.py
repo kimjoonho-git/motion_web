@@ -24,6 +24,8 @@ EXPECTED_COMMANDS = {
     'delete',
     'load_midi_banks',
     'save_midi_banks',
+    # 재생 등록도 제 길로 다닌다 · 모션축 설정과 남남이다 · §6-160
+    'save_motion_file',
 }
 
 
@@ -59,7 +61,7 @@ def _manager(monkeypatch) -> tuple:
     for name in (
         '_apply_context', '_list_mappings', '_load_mapping', '_save_mapping',
         '_validate_mapping_request', '_delete_mapping', '_load_midi_banks',
-        '_save_midi_banks',
+        '_save_midi_banks', '_save_registered_motion_file',
     ):
         setattr(manager, name, (
             lambda label: lambda *args, **kwargs: {'success': True, 'called': label}

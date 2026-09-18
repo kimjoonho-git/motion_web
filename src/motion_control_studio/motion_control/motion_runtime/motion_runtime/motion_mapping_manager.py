@@ -20,6 +20,10 @@ from motion_runtime.midi_bank_store import (
     load_midi_banks,
     save_midi_banks,
 )
+from motion_runtime.registered_motion_file import (
+    load_registered_motion_file,
+    save_registered_motion_file,
+)
 
 
 DEFAULT_MOTION_PROJECTS_DIR = (
@@ -98,6 +102,8 @@ class MotionMappingManager(Node):
             'load_midi_banks', lambda payload: self._load_midi_banks(payload.get('file_id'))
         )
         router.register('save_midi_banks', self._save_midi_banks)
+        # 재생 등록도 제 길로 다닌다 · MIDI 와 같은 모양 · §6-160
+        router.register('save_motion_file', self._save_registered_motion_file)
         return router
 
     def _invalidate_context(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -406,6 +412,33 @@ class MotionMappingManager(Node):
             'backup_file': str(backup),
         }
 
+    def _save_registered_motion_file(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """재생 등록 칸 하나만 바꾼다 · §6-160
+
+        모션축 설정은 건드리지 않는다 · 그래서 편집 중이어도 되고, 개정 번호도
+        오르지 않는다 · 모션 실행 화면에서 파일만 갈아 끼우는 일이 「모션축 설정
+        저장 충돌」 로 막히던 것을 끊는다.
+        """
+        path = self._mapping_file_path(payload.get('file_id'))
+        motion_file_id = str(payload.get('motion_file_id') or '').strip()
+        backup = save_registered_motion_file(
+            path,
+            motion_file_id,
+            self.mappings_dir.parent / 'runtime' / 'history' / 'motion_axis_matching',
+        )
+        verified = load_registered_motion_file(path)
+        if verified != motion_file_id:
+            raise ValueError('저장 후 재생 등록 파일 검증에 실패했습니다')
+        return {
+            'success': True,
+            'message': (
+                f'재생 등록 완료: {verified}' if verified else '재생 등록을 해제했습니다'
+            ),
+            'file': self._mapping_file_summary(path),
+            'motion_file_id': verified,
+            'backup_file': str(backup) if backup else '',
+        }
+
     @staticmethod
     def _midi_banks_from_file(path: Optional[Path]) -> Optional[Dict[str, Any]]:
         if path is None or not path.is_file():
@@ -496,9 +529,30 @@ class MotionMappingManager(Node):
 
     @staticmethod
     def _mapping_revision(mapping: Dict[str, Any]) -> str:
-        """Hash only motion-axis settings, excluding the MIDI-owned section."""
+        """모션축 설정만 센다 · MIDI 뱅크도 재생 등록도 빼고 · §6-160
+
+        한 파일에 **주인이 셋**이다.
+
+            mappings        모션축 설정 화면
+            midi_banks      MIDI 입력 설정 화면
+            motion_file_id  모션 실행 화면 (재생 등록)
+
+        MIDI 는 처음부터 빠져 있었다 · 그런데 `motion_file_id` 는 남아 있어서,
+        모션 실행 화면에서 **재생 등록 하나 바꿨을 뿐인데** 모션축 설정을 고친
+        것으로 세어졌다.
+
+        그래서 모션 데이터만 건드린 사람에게 「모션축 설정 저장 충돌 · 현재
+        편집 내용은 저장되지 않았습니다」 라는 창이 떴다 · 편집한 적도 없는
+        설정을 되돌릴지 물으니 무슨 말인지 알 수가 없다.
+
+        셋은 서로 상관이 없다 · 개정 번호는 **제 주인의 것만** 센다.
+        """
+        counted = {
+            key: value for key, value in mapping.items()
+            if key != 'motion_file_id'
+        }
         encoded = json.dumps(
-            mapping,
+            counted,
             ensure_ascii=False,
             sort_keys=True,
             separators=(',', ':'),

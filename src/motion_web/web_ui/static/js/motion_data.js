@@ -13,6 +13,7 @@ import {
   initializeMotionRun,
   projectFileDownloadUrl,
   saveMotionMapping,
+  saveRegisteredMotionFile,
   startMotionRun,
   fetchScheduleStatus,
   stopMotionRun,
@@ -1577,21 +1578,26 @@ export function createMotionDataController({
         ? '이 파일을 지금 보고 있는 PC 에 저장합니다'
         : '모션 파일을 먼저 선택하세요';
     }
+    // 재생 등록은 **모션축 설정 편집과 상관없다** · §6-160
+    //
+    // 전에는 두 버튼이 `mappingDirty` 로 꺼졌다 · 모션축 설정을 편집 중이면
+    // 모션 파일도 못 바꿨고, 등록이 한 번 실패하면 프로그램이 제 손으로 세운
+    // 그 표시 때문에 **되돌아갈 길까지 사라졌다**.
+    //
+    // 한 파일에 들어 있을 뿐 둘은 남남이다 · MIDI 뱅크가 이미 그렇게
+    // 떨어져 있다.
     if (el.registerMotionFileButton) {
       el.registerMotionFileButton.disabled = (
-        !file || !selectedMappingId || loading || mappingLoading
-        || mappingDirty || registered
+        !file || !selectedMappingId || loading || mappingLoading || registered
       );
-      el.registerMotionFileButton.textContent = registered
-        ? '재생 등록됨'
-        : (mappingDirty ? '설정 저장 필요' : '재생 등록');
+      el.registerMotionFileButton.textContent = registered ? '재생 등록됨' : '재생 등록';
       el.registerMotionFileButton.title = !selectedMappingId
         ? '저장된 모션축 설정을 먼저 선택하세요'
-        : (mappingDirty ? '모션축 설정의 편집 내용을 먼저 저장하거나 되돌리세요' : '');
+        : '이 파일을 재생 등록합니다 · 모션축 설정 편집과는 무관합니다';
     }
     if (el.unregisterMotionFileButton) {
       el.unregisterMotionFileButton.disabled = (
-        !registered || !selectedMappingId || loading || mappingLoading || mappingDirty
+        !registered || !selectedMappingId || loading || mappingLoading
       );
       el.unregisterMotionFileButton.title = registered
         ? '현재 모션축 설정에서 이 파일의 재생 등록을 해제합니다'
@@ -2221,13 +2227,67 @@ export function createMotionDataController({
     setMessage(`내 PC로 저장: ${file.filename || file.id}`);
   }
 
+  /** 재생 등록·해제를 걸고 **실패하면 되돌린다** · §6-159
+   *
+   * 전에는 이랬다 · 등록을 누르면 먼저 초안을 고치고 `markMappingDirty()` 를
+   * 세운 다음 저장했다 · 저장이 실패하면 **그 「고쳐진 중」 표시가 그대로
+   * 남았다**.
+   *
+   * 그러면 등록 버튼도 해제 버튼도 `mappingDirty` 때문에 꺼진다 · 버튼에는
+   * 「설정 저장 필요」 라고 뜨는데, 사용자는 아무것도 편집한 적이 없다 ·
+   * 프로그램이 제 손으로 세운 표시 때문에 **되돌아갈 길이 사라진다**.
+   *
+   * 실제로 그렇게 막혔다 · 모션축 설정 파일이 화면을 띄운 뒤 바뀌어
+   * (`revision conflict`) 저장이 거부됐고, 그 뒤로는 등록도 해제도 안 됐다.
+   *
+   * 여기 들어올 때 `mappingDirty` 는 반드시 거짓이다(두 함수가 먼저 막는다) ·
+   * 그러니 실패하면 우리가 세운 것만 지우면 된다.
+   */
+  /** 재생 등록·해제 · **모션축 설정은 건드리지 않는다** · §6-160
+   *
+   * 전에는 `saveCurrentMapping()` 을 불렀다 · 그것은 모션축 설정 **전체**를
+   * 보내는 길이라 두 가지가 딸려 왔다.
+   *
+   *   하나 · 편집 중인 모션축 설정까지 같이 저장된다 (원하지 않은 저장)
+   *   둘  · 설정 개정 검사에 걸려 「모션축 설정 저장 충돌」 창이 뜬다
+   *
+   * 모션 데이터만 건드린 사람에게 편집한 적도 없는 설정을 되돌릴지 묻는
+   * 창이 떴다 · 셋(모션축 설정 · MIDI 뱅크 · 재생 등록)은 한 파일에 들어
+   * 있을 뿐 서로 남남이다 · MIDI 가 이미 제 길로 다닌다.
+   */
+  async function applyMotionFileRegistration(fileId, detail, label) {
+    setMappingMessage(label);
+    mappingLoading = true;
+    renderMappingPanel();
+    try {
+      const payload = await saveRegisteredMotionFile({
+        file_id: selectedMappingId,
+        motion_file_id: fileId,
+      });
+      if (payload.success === false) {
+        setMappingMessage(`재생 등록 실패: ${payload.message || '저장하지 못했습니다'}`);
+        return false;
+      }
+      // 편집 중인 모션축 설정은 **그대로 둔다** · 우리가 바꾼 칸만 반영한다
+      mappingDraft.motion_file_id = fileId;
+      mappingMotionFileDetail = detail;
+      registeredMotionFileIdValue = registeredMotionFileId(mappingDraft);
+      syncMappingFileRevision(payload.file);
+      setMappingMessage(payload.message || label);
+      await onProjectFilesChange?.();
+      return true;
+    } catch (error) {
+      setMappingMessage(`재생 등록 실패: ${error?.message || error}`);
+      return false;
+    } finally {
+      mappingLoading = false;
+      renderMappingPanel();
+    }
+  }
+
   async function registerSelectedMotionFile() {
     if (!selectedFile || !selectedMappingId) {
       setMessage('재생 등록할 모션 파일과 저장된 모션축 설정을 먼저 선택하세요');
-      return;
-    }
-    if (mappingDirty) {
-      setMessage('모션축 설정의 편집 내용을 먼저 저장하거나 되돌린 뒤 재생 등록하세요');
       return;
     }
     const analysis = analysisOf(selectedFile);
@@ -2241,23 +2301,17 @@ export function createMotionDataController({
       { title: '모션 파일 재생 등록', confirmLabel: '재생 등록', tone: 'primary' },
     );
     if (!confirmed) return;
-    mappingDraft.motion_file_id = selectedFile.id;
-    mappingMotionFileDetail = selectedFile;
-    mappingRawText = '';
-    mappingValidation = null;
-    markMappingDirty();
-    setMappingMessage(`재생 등록 저장 중: ${selectedFile.filename}`);
-    await saveCurrentMapping();
+    await applyMotionFileRegistration(
+      selectedFile.id,
+      selectedFile,
+      `재생 등록 저장 중: ${selectedFile.filename}`,
+    );
     render();
   }
 
   async function unregisterSelectedMotionFile() {
     if (!selectedFile || !selectedMappingId || selectedFile.id !== registeredMotionFileIdValue) {
       setMessage('현재 재생 등록된 모션 파일을 선택하세요');
-      return;
-    }
-    if (mappingDirty) {
-      setMessage('모션축 설정의 편집 내용을 먼저 저장하거나 되돌린 뒤 재생 등록을 해제하세요');
       return;
     }
     const registeredFilename = selectedFile.filename;
@@ -2267,13 +2321,11 @@ export function createMotionDataController({
       { title: '모션 파일 재생 등록 해제', confirmLabel: '등록 해제', tone: 'danger' },
     );
     if (!confirmed) return;
-    mappingDraft.motion_file_id = '';
-    mappingMotionFileDetail = null;
-    mappingRawText = '';
-    mappingValidation = null;
-    markMappingDirty();
-    setMappingMessage(`재생 등록 해제 저장 중: ${registeredFilename}`);
-    await saveCurrentMapping();
+    await applyMotionFileRegistration(
+      '',
+      null,
+      `재생 등록 해제 저장 중: ${registeredFilename}`,
+    );
     if (!registeredMotionFileIdValue) {
       motionRunStatus = null;
       motionRunLastResult = null;
@@ -2282,19 +2334,24 @@ export function createMotionDataController({
     render();
   }
 
+  /** 저장하고 **됐는지 알려준다** · §6-159
+   *
+   * 전에는 아무것도 안 돌려줬다 · 부르는 쪽은 실패를 알 길이 없어 성공한 셈
+   * 치고 넘어갔고, 그 사이 「고쳐진 중」 표시만 남아 버튼이 죽었다.
+   */
   async function saveCurrentMapping() {
     if (mappingRevisionConflict) {
       await resolveMappingRevisionConflict(
         '최신 저장 내용을 다시 불러와야 저장할 수 있습니다.',
       );
-      return;
+      return false;
     }
     const draftError = validateMappingDraft();
     if (draftError) {
       mappingValidation = null;
       setMappingMessage(`매핑 저장 중단: ${draftError}`);
       renderMappingPanel();
-      return;
+      return false;
     }
     mappingLoading = true;
     setMappingMessage('매핑 저장 중');
@@ -2312,7 +2369,7 @@ export function createMotionDataController({
         setMappingMessage(
           `검증 실패 · 저장하지 않음: ${validated.message || '설정 오류를 확인하세요'}`,
         );
-        return;
+        return false;
       }
       const payload = await saveMotionMapping({
         file_id: selectedMappingId || '',
@@ -2324,10 +2381,10 @@ export function createMotionDataController({
         mappingDraft = payload.mapping || mappingDraft;
         if (isMappingRevisionConflict(payload.message)) {
           await resolveMappingRevisionConflict(payload.message);
-          return;
+          return false;
         }
         setMappingMessage(`매핑 저장 실패: ${payload.message || '검증 실패'}`);
-        return;
+        return false;
       }
       mappingFiles = Array.isArray(payload.files) ? payload.files : mappingFiles;
       mappingDraft = payload.mapping || mappingDraft;
@@ -2343,12 +2400,14 @@ export function createMotionDataController({
           : `모션축 설정 저장 완료: ${selectedMappingId}`
       ));
       await onProjectFilesChange?.();
+      return true;
     } catch (error) {
       if (isMappingRevisionConflict(error?.message || error)) {
         await resolveMappingRevisionConflict(error?.message || error);
-        return;
+        return false;
       }
       setMappingMessage(`매핑 저장 실패: ${error?.message || error}`);
+      return false;
     } finally {
       mappingLoading = false;
       renderMappingPanel();

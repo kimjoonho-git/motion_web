@@ -1405,6 +1405,38 @@ class MotionWebBridge(Node):
                 result['midi_banks_warning'] = str(midi_result.get('message') or '')
         return result
 
+    def save_registered_motion_file(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """재생 등록 파일만 바꾼다 · §6-160
+
+        `save_motion_mapping` 과 갈라놓는다 · 저것은 모션축 설정 **전체**를
+        보내는 길이라, 모션 실행 화면에서 파일만 갈아 끼우려 해도 설정 개정
+        검사에 걸려 「모션축 설정 저장 충돌」 창이 떴다 · 편집한 적도 없는
+        설정을 되돌릴지 묻는 창이었다.
+
+        모션이 도는 중인지는 여전히 본다 · 도는 중에 재생 파일이 바뀌면
+        다음 회차가 무엇을 돌지 알 수 없다.
+        """
+        blocker = self._project.change_blocker()
+        if blocker:
+            return {'success': False, 'message': blocker, 'files': []}
+        result = self._request_motion_mapping('save_motion_file', payload)
+        if result.get('success') is False:
+            return result
+        file_id = str(payload.get('file_id') or '').strip()
+        if file_id and getattr(self, 'project_repository', None) is not None:
+            project_id = self.project_repository.selected_project_id()
+            result = self._project.sync_file(
+                result,
+                'motion_axis_matching',
+                self.project_repository.export_path(
+                    project_id, 'motion_axis_matching', file_id
+                ),
+            )
+            execution_context = self._execution_context.reconcile()
+            result['execution_context'] = execution_context
+            result['runtime_applied'] = bool(execution_context.get('ready'))
+        return result
+
     def save_motion_mapping(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         blocker = self._project.change_blocker()
         if blocker:
