@@ -9,7 +9,6 @@
 소스에서 확인한다.
 """
 
-import re
 from pathlib import Path
 
 NODE = (
@@ -59,58 +58,10 @@ def test_local_run_fills_active_project_files():
     assert '_with_active_project_files(payload)' in body
 
 
-def test_slave_pc_cannot_own_schedules():
-    """연동 슬레이브는 스케줄을 만들 수 없다 · §6-69
-
-    슬레이브는 스케줄을 저장해도 발화하지 않는다 · `_on_timer_tick` 이 마스터가
-    아니면 바로 돌아간다. 그런데 API 와 화면은 저장을 받아 줬다 · 돌지 않는
-    스케줄이 조용히 쌓이고 마스터의 목록과도 따로 놀았다.
-    """
-    routes = (
-        Path(__file__).resolve().parents[2]
-        / 'web_bridge' / 'motion_web_bridge' / 'routes' / 'schedule_routes.py'
-    ).read_text(encoding='utf-8')
-
-    assert 'def _require_schedule_owner()' in routes
-
-    def inside(name: str) -> str:
-        """정의 줄을 뺀 본문 · 그 줄은 자기 이름을 품고 있어 검사를 무력하게 한다."""
-        start = routes.index(f'def {name}(')
-        nxt = routes.find('\n    def ', start)
-        nxt2 = routes.find('\n    @app.', start)
-        ends = [x for x in (nxt, nxt2) if x > 0]
-        body = routes[start:min(ends) if ends else len(routes)]
-        return body.split('\n', 1)[1] if '\n' in body else ''
-
-    def reaches(name: str, needle: str, depth: int = 2) -> bool:
-        """한 다리 건너 불러도 관문을 지난 것으로 본다 · §6-146
-
-        조회를 스레드로 옮기면서 본문이 `_..._blocking` 으로 갈라졌다 · 글자만
-        보면 깨지고, 검사를 지우면 "슬레이브가 스케줄을 만든다" 를 못 잡는다 ·
-        `to_thread(_save_schedule_blocking, ...)` 처럼 이름만 넘기는 것도 센다.
-        """
-        body = inside(name)
-        if needle in body:
-            return True
-        if depth <= 0:
-            return False
-        for callee in sorted(set(re.findall(r'\b(_[a-z][a-z0-9_]*)\b', body))):
-            if callee == name:
-                continue
-            try:
-                if reaches(callee, needle, depth - 1):
-                    return True
-            except ValueError:
-                continue
-        return False
-
-    # 쓰기 네 곳이 모두 관문을 지난다 · 읽기는 열어 둔다
-    for handler in ('save_schedule', 'delete_schedule', 'enable_schedule', 'disable_schedule'):
-        assert reaches(handler, '_require_schedule_owner()'), f'{handler} 에 관문이 없다'
-    for reader in ('get_schedule_list', 'get_schedule_status'):
-        assert not reaches(reader, '_require_schedule_owner()'), (
-            f'{reader} 는 열려 있어야 한다 · 슬레이브도 무엇이 걸려 있는지 볼 수 있어야 한다'
-        )
+# 「슬레이브는 스케줄을 못 고친다」(§6-69) 는 이제 `schedule_service.py` 가 지킨다.
+# 라우트 글자를 대조하던 검사가 여기 있었는데, 로직이 서비스로 내려가면서
+# 대조가 깨졌다 · 같은 사실을 `web_bridge/test/test_schedule_service.py` 가
+# 실제 호출로 검사한다 (쓰기 셋은 막히고 읽기 둘은 열린다) · §6-182
 
 
 def test_schedule_button_is_disabled_on_a_slave():
@@ -134,25 +85,9 @@ def test_schedule_button_is_disabled_on_a_slave():
     assert '시각이 되어도 실행되지 않습니다' in scope, '빠져 있을 때 조용히 실패한다'
 
 
-def test_a_saved_schedule_remembers_which_timezone_it_was_born_in():
-    """들고 나갔는데 시간대만 안 바뀐 경우를 잡는 지문 · §6-150
-
-    NTP 는 절대 시각(UTC)만 맞춘다 · 시간대는 사람이 정하는 값이라 다른 나라에
-    가서 네트워크에 붙여도 안 바뀐다 · 한국에서 만든 09:17 스케줄이 파리에서
-    현지 02:17 에 돈다 · 시계는 맞아서 화면 어디에도 이상이 없다.
-
-    **찍는 것은 이 PC 다** · 브라우저가 정하게 두면 한국에서 원격으로 파리 PC 를
-    설정할 때 한국 시간대가 박힌다 · 어긋남을 잡으려던 값이 되레 어긋남을 만든다.
-    """
-    routes = (
-        Path(__file__).resolve().parents[2]
-        / 'web_bridge' / 'motion_web_bridge' / 'routes' / 'schedule_routes.py'
-    ).read_text(encoding='utf-8')
-
-    start = routes.index('def _save_schedule_blocking(')
-    body = routes[start:routes.index('\n    def ', start)]
-    assert 'saved_timezone' in body, '저장할 때 지문을 안 찍는다'
-    assert 'local_clock.timezone_name()' in body, '지문을 이 PC 에서 안 가져온다'
+# 「지문은 이 PC 가 찍는다」(§6-150) 도 `schedule_service.save_schedule()` 로
+# 옮겼다 · `test_schedule_service.py` 가 저장된 항목에 시간대가 실제로
+# 박히는지 본다 · 아래 두 시험은 그 값이 오가며 살아남는지를 맡는다.
 
 
 def test_the_fingerprint_survives_a_round_trip():
