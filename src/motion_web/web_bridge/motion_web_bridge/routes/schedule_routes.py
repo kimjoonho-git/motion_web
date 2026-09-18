@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from fastapi import FastAPI, HTTPException, Request
 
@@ -54,55 +55,88 @@ def register_schedule_routes(app: FastAPI, bridge, project_call) -> None:
                 ),
             )
 
-    @app.get('/api/schedule/list')
-    async def get_schedule_list():
+    def _set_mode_blocking(body):
         _sync_store_project()
-        items = store.list_schedules()
-        return [item.to_dict() for item in items]
+        mode = normalize_run_mode(body.get("run_mode"), default="")
+        if not mode:
+            raise HTTPException(status_code=400, detail="run_mode must be schedule or manual")
+        if not store.set_mode(mode):
+            raise HTTPException(status_code=500, detail="failed to save schedule mode")
+        return {"status": "ok", "run_mode": store.mode}
 
-    @app.post('/api/schedule/save')
-    async def save_schedule(request: Request):
+    def _save_schedule_blocking(data):
         _sync_store_project()
         _require_schedule_owner()
         try:
-            data = await request.json()
             if not isinstance(data, dict):
                 raise ValueError("Request body must be a JSON object")
             item = ScheduleItem.from_dict(data)
-            success = store.upsert_schedule(item)
-            if not success:
+            if not store.upsert_schedule(item):
                 raise HTTPException(status_code=500, detail=f"Failed to save schedule to store for project '{store.current_project_id}'.")
             return {"status": "ok", "schedule": item.to_dict()}
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Error saving schedule: {e}", exc_info=True)
             raise HTTPException(status_code=400, detail=str(e))
 
-    @app.delete('/api/schedule/{schedule_id}')
-    async def delete_schedule(schedule_id: str):
+    def _delete_schedule_blocking(schedule_id: str):
         _sync_store_project()
         _require_schedule_owner()
-        success = store.delete_schedule(schedule_id)
-        if not success:
+        if not store.delete_schedule(schedule_id):
             raise HTTPException(status_code=404, detail="Schedule not found or delete failed.")
         return {"status": "ok", "deleted_id": schedule_id}
 
-    @app.post('/api/schedule/{schedule_id}/enable')
-    async def enable_schedule(schedule_id: str):
+    def _set_enabled_blocking(schedule_id: str, enabled: bool):
         _sync_store_project()
         _require_schedule_owner()
-        success = store.set_enabled(schedule_id, True)
-        if not success:
+        if not store.set_enabled(schedule_id, enabled):
             raise HTTPException(status_code=404, detail="Schedule not found.")
-        return {"status": "ok", "schedule_id": schedule_id, "enabled": True}
+        return {"status": "ok", "schedule_id": schedule_id, "enabled": enabled}
+
+    def _schedule_status_blocking():
+        _sync_store_project()
+        role = resolve_master_role(package_hint=PACKAGE_HINT)
+        if not role.is_master:
+            logger.debug("마스터 아님 · %s", role.reason)
+        session = _coordination_session()
+
+        return {
+            "status": "ok",
+            "is_master": role.is_master,
+            "active_project_id": store.current_project_id,
+            "schedule_count": len(store.list_schedules()),
+            "coordination_enabled": session['enabled'],
+            "coordination_joined": session['joined'],
+            "coordination_node_connected": session['node_connected'],
+            # 스케줄이 실행을 관리하는가 · 사람이 정한다 · §6-143
+            "run_mode": store.mode,
+        }
+
+    def _schedule_list_blocking():
+        _sync_store_project()
+        return [item.to_dict() for item in store.list_schedules()]
+
+    @app.get('/api/schedule/list')
+    async def get_schedule_list():
+        return await asyncio.to_thread(_schedule_list_blocking)
+
+    @app.post('/api/schedule/save')
+    async def save_schedule(request: Request):
+        data = await request.json()
+        return await asyncio.to_thread(_save_schedule_blocking, data)
+
+    @app.delete('/api/schedule/{schedule_id}')
+    async def delete_schedule(schedule_id: str):
+        return await asyncio.to_thread(_delete_schedule_blocking, schedule_id)
+
+    @app.post('/api/schedule/{schedule_id}/enable')
+    async def enable_schedule(schedule_id: str):
+        return await asyncio.to_thread(_set_enabled_blocking, schedule_id, True)
 
     @app.post('/api/schedule/{schedule_id}/disable')
     async def disable_schedule(schedule_id: str):
-        _sync_store_project()
-        _require_schedule_owner()
-        success = store.set_enabled(schedule_id, False)
-        if not success:
-            raise HTTPException(status_code=404, detail="Schedule not found.")
-        return {"status": "ok", "schedule_id": schedule_id, "enabled": False}
+        return await asyncio.to_thread(_set_enabled_blocking, schedule_id, False)
 
     def _coordination_session():
         """연동을 쓰는가 · 지금 그룹에 들어가 있는가 · §6-133
@@ -131,30 +165,8 @@ def register_schedule_routes(app: FastAPI, bridge, project_call) -> None:
         body = await request.json()
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="request body must be an object")
-        _sync_store_project()
-        mode = normalize_run_mode(body.get("run_mode"), default="")
-        if not mode:
-            raise HTTPException(status_code=400, detail="run_mode must be schedule or manual")
-        if not store.set_mode(mode):
-            raise HTTPException(status_code=500, detail="failed to save schedule mode")
-        return {"status": "ok", "run_mode": store.mode}
+        return await asyncio.to_thread(_set_mode_blocking, body)
 
     @app.get('/api/schedule/status')
     async def get_schedule_status():
-        _sync_store_project()
-        role = resolve_master_role(package_hint=PACKAGE_HINT)
-        if not role.is_master:
-            logger.debug("마스터 아님 · %s", role.reason)
-        session = _coordination_session()
-
-        return {
-            "status": "ok",
-            "is_master": role.is_master,
-            "active_project_id": store.current_project_id,
-            "schedule_count": len(store.list_schedules()),
-            "coordination_enabled": session['enabled'],
-            "coordination_joined": session['joined'],
-            "coordination_node_connected": session['node_connected'],
-            # 스케줄이 실행을 관리하는가 · 사람이 정한다 · §6-143
-            "run_mode": store.mode,
-        }
+        return await asyncio.to_thread(_schedule_status_blocking)

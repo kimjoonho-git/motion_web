@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from fastapi import FastAPI
@@ -29,30 +30,35 @@ def register_safety_routes(app: FastAPI, bridge) -> None:
             logger.error('%s · 그룹 정지 요청 실패 · %s', kind, exc, exc_info=True)
             return ' · 그룹 정지 요청 실패 · 연동 화면에서 확인하세요'
 
-    @app.post('/api/safety/motion-stop')
-    async def safety_motion_stop():
+    def _stop_blocking(emergency: bool, kind: str, message: str) -> dict:
+        """정지 한 벌 · **이벤트 루프 밖에서** 돈다 · §6-146
+
+        `_stop_group_too` 는 로컬 연동 노드에 HTTP 로 묻는다 · 이벤트 루프에서
+        그대로 하면 그 동안 웹 서버가 통째로 멈추고, 연동 노드가 50ms 마다
+        묻는 `local-status` 가 굶어 **정지시키려다 그룹 고장을 만든다**.
+        """
         cancel_pending = getattr(bridge, 'cancel_pending_motion_studio_start', None)
         if callable(cancel_pending):
             cancel_pending()
-        request_id = bridge.publish_safety_stop(False)
-        group_note = _stop_group_too('전체 동작 정지')
+        request_id = bridge.publish_safety_stop(emergency)
+        group_note = _stop_group_too(kind)
         return {
             'success': True,
-            'message': '전체 동작 정지 명령 우선 전송 완료' + group_note,
+            'message': message + group_note,
             'request_id': request_id,
             'acknowledgement_pending': True,
         }
 
+    @app.post('/api/safety/motion-stop')
+    async def safety_motion_stop():
+        return await asyncio.to_thread(
+            _stop_blocking, False, '전체 동작 정지',
+            '전체 동작 정지 명령 우선 전송 완료',
+        )
+
     @app.post('/api/safety/emergency-stop')
     async def safety_emergency_stop():
-        cancel_pending = getattr(bridge, 'cancel_pending_motion_studio_start', None)
-        if callable(cancel_pending):
-            cancel_pending()
-        request_id = bridge.publish_safety_stop(True)
-        group_note = _stop_group_too('긴급 정지')
-        return {
-            'success': True,
-            'message': '긴급정지 명령 우선 전송 완료' + group_note,
-            'request_id': request_id,
-            'acknowledgement_pending': True,
-        }
+        return await asyncio.to_thread(
+            _stop_blocking, True, '긴급 정지',
+            '긴급정지 명령 우선 전송 완료',
+        )

@@ -25,37 +25,37 @@ def register_motion_run_routes(app: FastAPI, bridge, safety_first_stop) -> None:
 
     @app.delete('/api/motion-files/{file_id}')
     async def delete_motion_file(file_id: str):
-        return bridge.delete_motion_file(file_id)
+        return await asyncio.to_thread(bridge.delete_motion_file, file_id)
 
     @app.get('/api/motion-mappings')
     async def motion_mappings():
-        return bridge.list_motion_mappings()
+        return await asyncio.to_thread(bridge.list_motion_mappings)
 
     @app.post('/api/motion-mappings')
     async def save_motion_mapping(request: Request):
         body = await request.json()
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail='request body must be an object')
-        return bridge.save_motion_mapping(body)
+        return await asyncio.to_thread(bridge.save_motion_mapping, body)
 
     @app.post('/api/motion-mappings/validate')
     async def validate_motion_mapping(request: Request):
         body = await request.json()
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail='request body must be an object')
-        return bridge.validate_motion_mapping(body)
+        return await asyncio.to_thread(bridge.validate_motion_mapping, body)
 
     @app.get('/api/motion-mappings/{file_id}')
     async def motion_mapping(file_id: str):
-        return bridge.load_motion_mapping(file_id)
+        return await asyncio.to_thread(bridge.load_motion_mapping, file_id)
 
     @app.delete('/api/motion-mappings/{file_id}')
     async def delete_motion_mapping(file_id: str):
-        return bridge.delete_motion_mapping(file_id)
+        return await asyncio.to_thread(bridge.delete_motion_mapping, file_id)
 
     @app.get('/api/motion-run/status')
     async def motion_run_status():
-        return bridge.motion_run_status()
+        return await asyncio.to_thread(bridge.motion_run_status)
 
     @app.post('/api/motion-run/check')
     async def motion_run_check(request: Request):

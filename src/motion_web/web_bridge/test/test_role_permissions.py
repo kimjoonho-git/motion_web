@@ -7,6 +7,7 @@
 각자 앞의 PC 에서 눌렀을 때 그룹이 어느 명령을 따르는지 알 수 없다.
 """
 
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -26,6 +27,41 @@ def _body(source: str, name: str) -> str:
     start = source.index(f'def {name}(')
     nxt = source.find('\n    def ', start)
     return source[start:nxt if nxt > 0 else len(source)]
+
+
+def _inside(source: str, name: str) -> str:
+    """정의 줄을 뺀 본문 · **이름이 적힌 그 줄은 빼야 한다**.
+
+    안 빼면 `def _stop_group_too(` 가 `_stop_group_too(` 를 품어서, 그 함수가
+    자기 자신에 닿는다고 나온다 · 그러면 실제로 호출을 지워도 검사가 통과한다.
+    """
+    body = _body(source, name)
+    return body.split('\n', 1)[1] if '\n' in body else ''
+
+
+def _reaches(source: str, name: str, needle: str, depth: int = 2) -> bool:
+    """그 함수가 `needle` 에 닿는가 · **한 다리 건너 불러도** 인정한다.
+
+    본문을 글자로 보는 검사라, 로직을 헬퍼로 옮기면 그대로 깨진다 · 실제로
+    정지 경로를 스레드로 옮기면서(§6-146) 깨졌다 · 그렇다고 검사를 지우면
+    "정지가 그룹을 안 세운다" 를 아무도 못 잡는다 · 부르는 곳을 따라간다.
+
+    `to_thread(_stop_blocking, ...)` 처럼 **이름만 넘기는** 것도 호출로 본다.
+    """
+    inside = _inside(source, name)
+    if needle in inside:
+        return True
+    if depth <= 0:
+        return False
+    for callee in sorted(set(re.findall(r'\b(_[a-z][a-z0-9_]*)\b', inside))):
+        if callee == name:
+            continue
+        try:
+            if _reaches(source, callee, needle, depth - 1):
+                return True
+        except ValueError:
+            continue          # 이 파일에 없는 이름 · 남의 것이다
+    return False
 
 
 def test_only_the_master_starts_a_group_run():
@@ -50,7 +86,9 @@ def test_safety_stop_also_stops_the_group():
     assert "'command': 'stop_now'" in body, '그룹 정지를 보내지 않는다'
     assert 'is_master' not in body, '정지는 역할과 무관해야 한다'
     for handler in ('safety_motion_stop', 'safety_emergency_stop'):
-        assert '_stop_group_too(' in _body(SAFETY, handler), f'{handler} 가 그룹을 세우지 않는다'
+        assert _reaches(SAFETY, handler, '_stop_group_too('), (
+            f'{handler} 가 그룹을 세우지 않는다'
+        )
 
 
 def test_no_pc_revives_playback_on_boot():

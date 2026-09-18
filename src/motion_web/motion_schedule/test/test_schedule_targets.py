@@ -9,6 +9,7 @@
 소스에서 확인한다.
 """
 
+import re
 from pathlib import Path
 
 NODE = (
@@ -72,16 +73,42 @@ def test_slave_pc_cannot_own_schedules():
 
     assert 'def _require_schedule_owner()' in routes
 
-    def handler_body(name: str) -> str:
-        start = routes.index(f'async def {name}(')
-        nxt = routes.find('\n    @app.', start)
-        return routes[start:nxt if nxt > 0 else len(routes)]
+    def inside(name: str) -> str:
+        """정의 줄을 뺀 본문 · 그 줄은 자기 이름을 품고 있어 검사를 무력하게 한다."""
+        start = routes.index(f'def {name}(')
+        nxt = routes.find('\n    def ', start)
+        nxt2 = routes.find('\n    @app.', start)
+        ends = [x for x in (nxt, nxt2) if x > 0]
+        body = routes[start:min(ends) if ends else len(routes)]
+        return body.split('\n', 1)[1] if '\n' in body else ''
+
+    def reaches(name: str, needle: str, depth: int = 2) -> bool:
+        """한 다리 건너 불러도 관문을 지난 것으로 본다 · §6-146
+
+        조회를 스레드로 옮기면서 본문이 `_..._blocking` 으로 갈라졌다 · 글자만
+        보면 깨지고, 검사를 지우면 "슬레이브가 스케줄을 만든다" 를 못 잡는다 ·
+        `to_thread(_save_schedule_blocking, ...)` 처럼 이름만 넘기는 것도 센다.
+        """
+        body = inside(name)
+        if needle in body:
+            return True
+        if depth <= 0:
+            return False
+        for callee in sorted(set(re.findall(r'\b(_[a-z][a-z0-9_]*)\b', body))):
+            if callee == name:
+                continue
+            try:
+                if reaches(callee, needle, depth - 1):
+                    return True
+            except ValueError:
+                continue
+        return False
 
     # 쓰기 네 곳이 모두 관문을 지난다 · 읽기는 열어 둔다
     for handler in ('save_schedule', 'delete_schedule', 'enable_schedule', 'disable_schedule'):
-        assert '_require_schedule_owner()' in handler_body(handler), f'{handler} 에 관문이 없다'
+        assert reaches(handler, '_require_schedule_owner()'), f'{handler} 에 관문이 없다'
     for reader in ('get_schedule_list', 'get_schedule_status'):
-        assert '_require_schedule_owner()' not in handler_body(reader), (
+        assert not reaches(reader, '_require_schedule_owner()'), (
             f'{reader} 는 열려 있어야 한다 · 슬레이브도 무엇이 걸려 있는지 볼 수 있어야 한다'
         )
 

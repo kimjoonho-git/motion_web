@@ -136,7 +136,7 @@ def register_system_routes(app: FastAPI, bridge, project_call) -> None:
 
     @app.get('/api/status')
     async def status():
-        return bridge.snapshot()
+        return await asyncio.to_thread(bridge.snapshot)
 
     @app.get('/api/system/version')
     async def system_version():
@@ -181,7 +181,7 @@ def register_system_routes(app: FastAPI, bridge, project_call) -> None:
 
     @app.get('/api/coordination')
     async def coordination_status():
-        return bridge._coordination_web_bridge.snapshot()
+        return await asyncio.to_thread(bridge._coordination_web_bridge.snapshot)
 
     @app.put('/api/coordination/settings')
     async def update_coordination_settings(request: Request):
@@ -202,7 +202,9 @@ def register_system_routes(app: FastAPI, bridge, project_call) -> None:
         remote_ip = request.client.host if request.client else ''
         if remote_ip not in {'127.0.0.1', '::1'}:
             raise HTTPException(status_code=403, detail='loopback only')
-        return bridge.coordination_local_status()
+        # 연동 노드가 50ms 마다 묻는 길 · 이벤트 루프에 두면 다른 요청이
+        # 몰릴 때 0.25초 제한을 넘기고 그룹이 통째로 선다 · §6-146
+        return await asyncio.to_thread(bridge.coordination_local_status)
 
     @app.post('/api/coordination/control')
     async def coordination_control(request: Request):
@@ -252,7 +254,7 @@ def register_system_routes(app: FastAPI, bridge, project_call) -> None:
     async def set_monitoring(request: Request):
         body = await request.json()
         enabled = bool(body.get('enabled', True))
-        return bridge.set_monitoring(enabled)
+        return await asyncio.to_thread(bridge.set_monitoring, enabled)
 
     @app.websocket('/ws/status')
     async def websocket_status(websocket: WebSocket):

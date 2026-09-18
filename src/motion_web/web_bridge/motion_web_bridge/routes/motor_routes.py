@@ -18,7 +18,7 @@ def register_motor_routes(app: FastAPI, bridge, project_call) -> None:
 
     @app.get('/api/motors/scan/progress')
     async def motor_scan_progress():
-        return bridge._scan.progress()
+        return await asyncio.to_thread(bridge._scan.progress)
 
     @app.post('/api/motors/scan/cancel')
     async def cancel_motor_scan():
@@ -38,18 +38,18 @@ def register_motor_routes(app: FastAPI, bridge, project_call) -> None:
 
     @app.get('/api/motor-config')
     async def motor_config():
-        return bridge._motor_config.load()
+        return await asyncio.to_thread(bridge._motor_config.load)
 
     @app.put('/api/motor-config')
     async def save_motor_config(request: Request):
         body = await request.json()
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail='request body must be an object')
-        return bridge._motor_config.save(body)
+        return await asyncio.to_thread(bridge._motor_config.save, body)
 
     @app.delete('/api/motor-config')
     async def delete_motor_config():
-        return project_call(bridge._motor_config.delete)
+        return await project_call(bridge._motor_config.delete)
 
     @app.post('/api/motor-config/apply')
     async def apply_motor_config():
@@ -59,28 +59,30 @@ def register_motor_routes(app: FastAPI, bridge, project_call) -> None:
     async def motor_events(
         limit: int = 200, category: str = 'all', file_name: str = 'all'
     ):
-        return bridge._motor_event_log.events(
-            limit=limit, category=category, file_name=file_name
+        return await asyncio.to_thread(
+            lambda: bridge._motor_event_log.events(
+                limit=limit, category=category, file_name=file_name,
+            )
         )
 
     @app.delete('/api/motor-events')
     async def clear_motor_events():
-        return bridge._motor_event_log.clear()
+        return await asyncio.to_thread(bridge._motor_event_log.clear)
 
     @app.delete('/api/motor-events/files/{file_name}')
     async def delete_motor_event_file(file_name: str):
-        return project_call(bridge._motor_event_log.delete_file, file_name)
+        return await project_call(bridge._motor_event_log.delete_file, file_name)
 
     @app.get('/api/servo-alarm-policy')
     async def servo_alarm_policy():
-        return project_call(bridge.servo_alarm_policy)
+        return await project_call(bridge.servo_alarm_policy)
 
     @app.put('/api/servo-alarm-policy')
     async def save_servo_alarm_policy(request: Request):
         body = await request.json()
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail='request body must be an object')
-        return project_call(bridge.save_servo_alarm_policy, body)
+        return await project_call(bridge.save_servo_alarm_policy, body)
 
     @app.post('/api/motion-test/ac-servo/jog')
     async def ac_servo_jog(request: Request):

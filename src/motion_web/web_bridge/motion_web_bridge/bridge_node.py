@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import json
 import os
@@ -1997,11 +1998,27 @@ def create_app(bridge: MotionWebBridge) -> FastAPI:
         )
         return response
 
-    def project_call(method, *args):
+    def _project_call_blocking(method, *args):
         try:
             return method(*args)
         except (OSError, UnicodeDecodeError, ValueError, yaml.YAMLError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    async def project_call(method, *args):
+        """프로젝트 파일 작업은 **스레드에서** 한다 · §6-146
+
+        여기 있는 일은 거의 다 디스크를 읽고 쓴다 · 이벤트 루프에서 그대로
+        하면 그 동안 **웹 서버 전체가 멈춘다** · 화면에서 탭 하나를 눌러
+        패널 조회가 몰리면 루프가 막히고, 그 틈에 연동 노드가 50ms 마다 묻는
+        `/api/coordination/local-status` 가 0.25초 제한을 넘긴다 · 그게 0.5초
+        이어지면 **그룹 실행이 통째로 정지한다**(`GROUP_PARTICIPANT_FAILURE`).
+
+        실제로 그렇게 멈췄다 · 24회차까지 멀쩡히 돌던 3대 연동이, 사람이 웹
+        탭을 누른 순간 섰다 · 재보니 평상시 3.8ms 이던 응답이 475ms 로 뛰었다.
+
+        고치는 자리는 여기 하나다 · 프로젝트 조회는 모두 이 문을 지난다.
+        """
+        return await asyncio.to_thread(_project_call_blocking, method, *args)
 
     register_system_routes(app, bridge, project_call)
     register_project_routes(app, bridge, project_call)
