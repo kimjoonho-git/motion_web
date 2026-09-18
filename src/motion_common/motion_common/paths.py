@@ -13,6 +13,17 @@ from typing import Optional
 
 WORKSPACE_ENV = 'MOTION_WORKSPACE'
 
+#: 고른 프로젝트가 없을 때 하는 말 · §6-169
+#:
+#: 같은 두 줄이 여덟 곳에 붙어 있었고, 같은 상황인데 화면마다 말이 달랐다 ·
+#: 한 곳은 「왼쪽에서」 가 붙고 다른 곳은 안 붙었다 · 묻는 것이 하나면 답도
+#: 하나여야 한다.
+#:
+#: 여기 두는 이유 · 「어느 프로젝트인가」의 주인은 웹 브리지의 저장소지만,
+#: 그것을 못 가져오는 **순수 모듈**(`motion_file_analysis`)도 같은 말을 한다 ·
+#: 양쪽이 볼 수 있는 곳은 여기뿐이다.
+NO_PROJECT_SELECTED = '통합 프로젝트를 먼저 선택하세요'
+
 PROJECTS_DIRNAME = 'motion_projects'
 CONFIG_DIRNAME = 'config'
 SCRIPTS_DIRNAME = 'scripts'

@@ -25,6 +25,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from motion_common.paths import NO_PROJECT_SELECTED
+
 import yaml
 
 from motion_common import store
@@ -147,9 +149,7 @@ class MotorConfigService:
         }
 
     def _file_from_payload(self, payload: Dict[str, Any]) -> Path:
-        project_id = self.repository.selected_project_id()
-        if not project_id:
-            raise ValueError('통합 프로젝트를 먼저 선택하세요')
+        project_id = self.repository.require_selected_project_id()
         detail = self.repository.get_project(project_id)
         project = detail.get('project') or {}
         active = project.get('active_files') or {}
@@ -307,7 +307,7 @@ class MotorConfigService:
         if not project_id:
             return {
                 'success': False,
-                'message': '통합 프로젝트를 먼저 선택하세요',
+                'message': NO_PROJECT_SELECTED,
                 'config_file': '',
                 'content': '',
                 'registry': motor_config_rules.empty_motor_registry(),

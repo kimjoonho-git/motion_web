@@ -683,9 +683,7 @@ def schedule_managed_service_restart(*managed_services: str) -> None:
 # --------------------------------------------------------------------------- #
 
 def selected_motor_config_path(repository) -> Path:
-    project_id = repository.selected_project_id()
-    if not project_id:
-        raise ValueError('통합 프로젝트를 먼저 선택하세요')
+    project_id = repository.require_selected_project_id()
     detail = repository.get_project(project_id)
     active = detail.get('project', {}).get('active_files') or {}
     file_name = str(active.get('motor_axes') or '').strip()
@@ -697,9 +695,7 @@ def selected_motor_config_path(repository) -> Path:
 
 
 def write_motor_config_selection(repository, path: Path) -> None:
-    project_id = repository.selected_project_id()
-    if not project_id:
-        raise ValueError('통합 프로젝트를 먼저 선택하세요')
+    project_id = repository.require_selected_project_id()
     project = repository.get_project(project_id)['project']
     selection_file = Path(project['path']) / 'runtime' / 'selected_motor_config_path.txt'
     store.atomic_write_text(selection_file, str(path) + '\n')

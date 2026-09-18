@@ -19,6 +19,7 @@ from typing import Any, Dict, List
 import yaml
 
 from motion_common import motion_table
+from motion_common.paths import NO_PROJECT_SELECTED
 from motion_common.timing import CONTROL_PERIOD_SEC
 
 
@@ -299,9 +300,7 @@ def motion_file_entry(path: Path, *, include_detail: bool) -> Dict[str, Any]:
 
 
 def _selected_motion_files_dir(repository: Any, motion_projects_dir: Path) -> Path:
-    project_id = repository.selected_project_id()
-    if not project_id:
-        raise ValueError('통합 프로젝트를 먼저 선택하세요')
+    project_id = repository.require_selected_project_id()
     return motion_projects_dir / project_id / 'motions'
 
 
@@ -312,7 +311,7 @@ def list_motion_files(
     if not project_id:
         return {
             'success': True,
-            'message': '통합 프로젝트를 먼저 선택하세요',
+            'message': NO_PROJECT_SELECTED,
             'project_id': '',
             'project_dir': '',
             'files_dir': '',
@@ -339,7 +338,7 @@ def list_motion_files(
         'message': (
             '현재 프로젝트 모션 파일을 불러왔습니다'
             if repository.selected_project_id()
-            else '통합 프로젝트를 먼저 선택하세요'
+            else NO_PROJECT_SELECTED
         ),
         # 파일로 저장할 때 쓰는 주소가 프로젝트 번호를 쓴다 · 화면은 이 응답 말고는
         # 번호를 알 길이 없어서 폴더 경로에서 끊어 쓰고 있었다.

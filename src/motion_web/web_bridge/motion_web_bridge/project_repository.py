@@ -18,6 +18,7 @@ from typing import Any, Dict, Iterable, Optional
 import yaml
 
 from motion_common import store
+from motion_common.paths import NO_PROJECT_SELECTED
 
 from .motor_runtime_store import MotorRuntimeStore
 from .project_tree import build_tree
@@ -64,6 +65,8 @@ def _text_limit(category: str) -> tuple[int, str]:
     if category == 'motions':
         return MAX_MOTION_TEXT_BYTES, '256MB'
     return MAX_TEXT_BYTES, '10MB'
+
+
 
 
 class ProjectRepository:
@@ -377,6 +380,24 @@ class ProjectRepository:
         payload = self._read_selection()
         project_id = str(payload.get('project_id') or '').strip()
         return project_id if project_id == Path(project_id).name else ''
+
+    def require_selected_project_id(self) -> str:
+        """고른 프로젝트가 있어야 하는 일에 쓴다 · §6-169
+
+        `selected_project_id()` 뒤에 **똑같은 두 줄**이 여덟 곳에 붙어 있었다.
+
+            project_id = repository.selected_project_id()
+            if not project_id:
+                raise ValueError(NO_PROJECT_SELECTED)
+
+        같은 말을 여덟 번 적으면 한 번은 다르게 적는다 · 실제로 한 곳은
+        「왼쪽에서」 가 붙고 다른 곳은 안 붙어서, 같은 상황인데 화면마다
+        다른 말이 나왔다 · 묻는 것이 하나면 답도 하나여야 한다.
+        """
+        project_id = self.selected_project_id()
+        if not project_id:
+            raise ValueError(NO_PROJECT_SELECTED)
+        return project_id
 
     def project_generation(self) -> int:
         """Return the durable generation shared by the bridge and browser."""

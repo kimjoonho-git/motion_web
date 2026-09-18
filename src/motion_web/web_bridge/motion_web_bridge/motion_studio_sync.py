@@ -7,6 +7,7 @@ import json
 from typing import Any, Dict, Optional
 
 from .motion_studio_bridge import STUDIO_REQUEST_TIMEOUT_SEC
+from motion_common.paths import NO_PROJECT_SELECTED
 
 
 def _project_tree_category_signature(tree: Any, category: str) -> str:
@@ -163,7 +164,7 @@ class MotionStudioSync:
         if not project_id:
             return {
                 'success': False,
-                'message': '왼쪽에서 통합 프로젝트를 먼저 선택하세요',
+                'message': NO_PROJECT_SELECTED,
                 'unified_project': True,
                 'workspace_project': None,
                 'projects': [],

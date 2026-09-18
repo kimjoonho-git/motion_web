@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from motion_common.paths import NO_PROJECT_SELECTED
 from motion_web_bridge.coordination_bridge import (
     CoordinationWebBridge,
     local_motion_control,
@@ -45,6 +46,12 @@ class _Repository:
         self.selected = selected
 
     def selected_project_id(self):
+        return self.selected
+
+    def require_selected_project_id(self):
+        # 검사와 문구를 함께 하는 주인 · §6-169
+        if not self.selected:
+            raise ValueError(NO_PROJECT_SELECTED)
         return self.selected
 
     def get_project(self, _project_id):

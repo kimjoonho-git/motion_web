@@ -56,7 +56,7 @@ from .motion_studio_sync import (
     # 재수출 · 외부에서 bridge_node 경유로 참조한다
     _project_tree_category_signature,  # noqa: F401
 )
-from .project_repository import ProjectRepository
+from .project_repository import NO_PROJECT_SELECTED, ProjectRepository
 from .servo_alarm_policy import (
     CATALOG_VERSION as SERVO_ALARM_CATALOG_VERSION,
     catalog_payload,
@@ -1266,9 +1266,7 @@ class MotionWebBridge(Node):
         }
 
     def save_servo_alarm_policy(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        project_id = self.project_repository.selected_project_id()
-        if not project_id:
-            raise ValueError('서보 에러 등급을 저장할 프로젝트를 먼저 선택하세요')
+        project_id = self.project_repository.require_selected_project_id()
         self._project.ensure_change_allowed()
         overrides = normalize_overrides(payload.get('overrides'))
         previous = self.servo_alarm_policy()
@@ -1329,7 +1327,7 @@ class MotionWebBridge(Node):
     def list_motion_mappings(self) -> Dict[str, Any]:
         result = self._request_motion_mapping('list', {})
         if not self.project_repository.selected_project_id():
-            result['message'] = '통합 프로젝트를 먼저 선택하세요'
+            result['message'] = NO_PROJECT_SELECTED
         else:
             result['message'] = '현재 프로젝트 모션축 설정을 불러왔습니다'
         return result
@@ -1510,7 +1508,7 @@ class MotionWebBridge(Node):
     def delete_motion_mapping(self, file_id: Any) -> Dict[str, Any]:
         project_id = self.project_repository.selected_project_id()
         if not project_id:
-            return {'success': False, 'message': '통합 프로젝트를 먼저 선택하세요', 'files': []}
+            return {'success': False, 'message': NO_PROJECT_SELECTED, 'files': []}
         blocker = self._project.change_blocker()
         if blocker:
             return {'success': False, 'message': blocker, 'files': []}
@@ -1920,9 +1918,7 @@ class MotionWebBridge(Node):
 
     def delete_motion_file(self, file_id: Any) -> Dict[str, Any]:
         try:
-            project_id = self.project_repository.selected_project_id()
-            if not project_id:
-                raise ValueError('통합 프로젝트를 먼저 선택하세요')
+            project_id = self.project_repository.require_selected_project_id()
             self._ensure_project_mutation_allowed(project_id)
             target = motion_file_analysis.motion_file_path(
                 file_id, self.motion_projects_dir / project_id / 'motions'

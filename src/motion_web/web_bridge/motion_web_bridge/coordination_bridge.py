@@ -412,9 +412,7 @@ def local_motion_control(bridge: Any, payload: Mapping[str, Any]) -> Dict[str, A
 
 
 def _local_motion_selection(bridge: Any) -> Dict[str, str]:
-    project_id = bridge.project_repository.selected_project_id()
-    if not project_id:
-        raise ValueError('로컬 프로젝트를 먼저 선택하세요')
+    project_id = bridge.project_repository.require_selected_project_id()
     try:
         project = bridge.project_repository.get_project(project_id).get('project') or {}
         active = project.get('active_files') or {}
