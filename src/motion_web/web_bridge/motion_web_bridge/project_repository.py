@@ -35,6 +35,30 @@ from .motor_profile_validation import validate_runtime_motor_profiles
 
 
 PROJECT_VERSION = 1
+
+#: 노드들이 **함께 맞춰야 하는** 파일 · 실행 컨텍스트 ID 는 이것만 센다 · §6-175
+#:
+#: 전에는 프로젝트의 **네 종류 전부**를 세었다 (모터축·모션축·모션 파일·레이어) ·
+#: 그런데 노드에게 실제로 보내는 것은 **모션축 설정 하나**뿐이다.
+#:
+#: 그래서 스튜디오에서 **레이어를 저장할 때마다** ID 가 바뀌었고 네 노드가
+#: 전부 재적용을 받았다 · 하나라도 2초 안에 응답 못 하면 MIDI·모션 실행·
+#: 스튜디오의 기억이 통째로 지워졌다 · 코드에 이런 주석이 남아 있다.
+#:
+#:     Treating that rejection as a node failure used to invalidate MIDI,
+#:     motion_run and studio **in the middle of recording**.
+#:
+#: 빼도 되는 이유
+#:
+#:     motions  재생할 파일은 **요청마다** 이름으로 받는다 · 재생 등록 자체는
+#:              모션축 설정 파일 안에 있어 그쪽 해시가 이미 잡는다
+#:     layers   스튜디오가 제 안에서 쓰는 자료다 · 노드끼리 맞출 것이 없다
+#:
+#: 남기는 이유
+#:
+#:     motor_axes            축 구성이 바뀌면 모든 노드의 전제가 달라진다
+#:     motion_axis_matching  노드에게 보내는 바로 그것
+SHARED_CONTEXT_CATEGORIES = ('motor_axes', 'motion_axis_matching')
 MAX_TEXT_BYTES = 10 * 1024 * 1024
 MAX_MOTION_TEXT_BYTES = 256 * 1024 * 1024
 DEFAULT_MOTOR_FILE = 'motor_axes.yaml'
@@ -449,12 +473,13 @@ class ProjectRepository:
         identity = {
             'version': 1,
             'project_id': project_dir.name,
+            # 함께 맞춰야 하는 것만 센다 · §6-175
             'files': {
                 category: {
-                    'name': item['name'],
-                    'sha256': item['sha256'],
+                    'name': files[category]['name'],
+                    'sha256': files[category]['sha256'],
                 }
-                for category, item in files.items()
+                for category in SHARED_CONTEXT_CATEGORIES
             },
         }
         encoded = json.dumps(
