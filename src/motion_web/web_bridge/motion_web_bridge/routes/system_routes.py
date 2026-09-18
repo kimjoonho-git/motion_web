@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import json
 import os
 import re
 import subprocess
@@ -272,13 +273,29 @@ def register_system_routes(app: FastAPI, bridge, project_call) -> None:
         enabled = bool(body.get('enabled', True))
         return await asyncio.to_thread(bridge.set_monitoring, enabled)
 
+    def _snapshot_text() -> str:
+        """스냅샷을 만들고 글자로 바꾸는 일까지 한 번에 · §6-152
+
+        둘 다 무겁다 · 실측 66KB, 만드는 데만 17ms · 그런데 이걸 **이벤트
+        루프에서** 하고 있었다 · 화면 탭 하나가 초당 10번 부르니 탭 하나당
+        루프를 초당 170ms 씩 막는다 · 탭 두셋이면 루프가 거의 서 있다.
+
+        그동안 연동 노드가 50ms 마다 묻는 `local-status` 가 굶는다 · 0.5초
+        못 받으면 **그룹 실행이 통째로 정지한다**(`GROUP_PARTICIPANT_FAILURE`) ·
+        실제로 `실시간 모니터링` 탭을 누를 때마다 그렇게 멈췄다.
+
+        `@app.get` 들은 스레드로 옮겼는데(§6-146) 여기만 남아 있었다 ·
+        `@app.websocket` 은 그때 훑은 대상이 아니었다.
+        """
+        return json.dumps(bridge.snapshot())
+
     @app.websocket('/ws/status')
     async def websocket_status(websocket: WebSocket):
         await websocket.accept()
         period_sec = 1.0 / max(bridge.web_publish_hz, 0.1)
         try:
             while True:
-                await websocket.send_json(bridge.snapshot())
+                await websocket.send_text(await asyncio.to_thread(_snapshot_text))
                 try:
                     event = await asyncio.wait_for(
                         websocket.receive(), timeout=period_sec

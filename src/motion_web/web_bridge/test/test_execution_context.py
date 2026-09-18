@@ -647,8 +647,10 @@ def test_status_websocket_reads_disconnect_and_finishes():
         async def accept(self):
             self.accepted = True
 
-        async def send_json(self, payload):
-            self.sent.append(payload)
+        async def send_text(self, payload):
+            # 스냅샷을 만드는 일도, 글자로 바꾸는 일도 스레드에서 한다 · §6-152
+            # 루프에서 하면 탭 하나가 초당 10번 서버를 막는다
+            self.sent.append(json.loads(payload))
 
         @staticmethod
         async def receive():
