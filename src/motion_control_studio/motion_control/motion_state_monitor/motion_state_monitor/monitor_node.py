@@ -44,7 +44,7 @@ MOTOR_SCAN_CONTRACT_VERSION = 3
 
 
 class MotionStateMonitor(Node):
-    """Read-only monitor that converts motion_system status into /motion_control/motion_state JSON."""
+    """Read-only monitor that converts motion_system status into /motor/state JSON."""
 
     def __init__(self) -> None:
         super().__init__('motion_state_monitor')

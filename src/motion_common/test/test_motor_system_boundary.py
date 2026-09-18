@@ -91,6 +91,18 @@ def test_we_do_not_reach_into_their_own_channel():
     )
 
 
+def test_a_name_that_only_looks_shared_is_recorded_as_such():
+    """`/xtouch/midi` 는 저쪽 이름이지만 그 노드는 여기서 안 돈다 · §6-176
+
+    「저쪽에도 있다」와 「지금 저쪽과 만난다」는 다르다 · 섞어 두면 바꿔도
+    되는 이름을 못 바꾸거나, 바꾸면 안 되는 이름을 바꾼다.
+    """
+    assert topics.MOTOR_SYSTEM_SHARED_NAMES == {'XTOUCH_MIDI': '/xtouch/midi'}
+    assert topics.XTOUCH_MIDI.endswith('/xtouch/midi')
+    # 진짜 경계와 섞이지 않았는지
+    assert not set(topics.MOTOR_SYSTEM_SHARED_NAMES) & set(topics.MOTOR_SYSTEM_BOUNDARY)
+
+
 def test_our_own_channels_are_not_mistaken_for_the_boundary():
     """같은 문패 아래 있지만 우리 것인 통로들 · 이건 바꿔도 된다."""
     for name in ('MOTION_STATE', 'MOTOR_SCAN_PROGRESS'):

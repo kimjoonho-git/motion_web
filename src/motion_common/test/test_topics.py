@@ -38,7 +38,7 @@ def test_run_command_and_motor_command_stay_distinct():
     """혼동의 근원 · 최종 하드웨어 출력과 supervisor 요청은 다른 토픽이다."""
     assert topics.MOTOR_COMMAND != topics.MOTION_RUN_COMMAND
     assert topics.MOTOR_COMMAND == '/motion_control/motor_command'
-    assert topics.MOTION_RUN_COMMAND == '/motion_control/motion_run_command'
+    assert topics.MOTION_RUN_COMMAND == '/motion_run/command'
 
 
 def test_every_request_topic_has_a_reply_channel():

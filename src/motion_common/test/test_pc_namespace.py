@@ -46,13 +46,13 @@ def _topics(namespace=None):
 
 #: 지금 도는 시스템이 쓰는 이름 · 하나라도 달라지면 통신이 끊긴다
 HISTORICAL = {
-    'MOTION_STATE': '/motion_control/motion_state',
+    'MOTION_STATE': '/motor/state',
     'MOTOR_STATUS': '/motion_control/motor_status',
     'MOTOR_COMMAND': '/motion_control/motor_command',
-    'MOTION_RUN_REQUEST': '/motion_control/motion_run_request',
-    'MOTION_RUN_STATUS': '/motion_control/motion_run_status',
-    'MIDI_POSITION_REQUEST': '/motion_control/midi_position_request',
-    'SAFETY_REQUEST': '/motion_control/safety_request',
+    'MOTION_RUN_REQUEST': '/motion_run/request',
+    'MOTION_RUN_STATUS': '/motion_run/status',
+    'MIDI_POSITION_REQUEST': '/midi/position_request',
+    'SAFETY_REQUEST': '/safety/request',
     'STUDIO_REQUEST': '/motion_studio/request',
     'STUDIO_STATUS': '/motion_studio/status',
     'MIDI_MONITOR_STATE': '/motion_web/midi_monitor/state',

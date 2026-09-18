@@ -50,7 +50,7 @@ class MotionRunManager(Node):
 
     This node owns the motion-file lifecycle but never publishes to the final
     hardware command topic. Combined setpoints are submitted to the supervisor
-    through /motion_control/motion_run_command.
+    through /motion_run/command.
     """
 
     def __init__(self) -> None:

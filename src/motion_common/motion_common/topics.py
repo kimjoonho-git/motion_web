@@ -82,7 +82,7 @@ def scoped(path: str) -> str:
 # --------------------------------------------------------------------------- #
 
 #: 모터 상태 브로드캐스트 · **우리 것** (motion_state_monitor 가 만든다)
-MOTION_STATE = scoped('/motion_control/motion_state')
+MOTION_STATE = scoped('/motor/state')
 
 # --------------------------------------------------------------------------- #
 # 모터 시스템과 만나는 자리 · §6-176
@@ -116,13 +116,25 @@ MOTOR_STATUS = scoped('/motion_control/motor_status')
 #: 최종 하드웨어 명령 · motion_supervisor 단독 발행 · **모터 시스템이 구독** · 이름 고정
 MOTOR_COMMAND = scoped('/motion_control/motor_command')
 
-#: 모터 시스템과 만나는 통로 · 이름을 바꾸면 조용히 끊긴다 · §6-176
+#: 모터 시스템과 **지금 실제로 만나는** 통로 · 바꾸면 조용히 끊긴다 · §6-176
 MOTOR_SYSTEM_BOUNDARY = {
     'MOTOR_STATUS': '/motion_control/motor_status',
     'MOTOR_COMMAND': '/motion_control/motor_command',
 }
+
+#: 이름만 저쪽에서 온 것 · **지금은 우리 노드끼리만 쓴다** · §6-176
+#:
+#: `/xtouch/midi` 는 `motion_system` 의 `xtouch_midi` 패키지가 기본값으로
+#: 쓰는 이름이다 · 그 노드는 이 시스템에서 **안 돈다** (우리
+#: `midi_input_bridge` 가 대신한다) · 그래서 지금 바꿔도 아무것도 안 끊긴다.
+#:
+#: 다만 언젠가 저쪽 노드를 같이 돌리면 그때 이름이 맞아야 한다 · 바꾸기 전에
+#: 그 계획이 없는지 확인할 것.
+MOTOR_SYSTEM_SHARED_NAMES = {
+    'XTOUCH_MIDI': '/xtouch/midi',
+}
 #: 모터 스캔 진행률
-MOTOR_SCAN_PROGRESS = scoped('/motion_control/motor_scan_progress')
+MOTOR_SCAN_PROGRESS = scoped('/motor/scan_progress')
 
 # --------------------------------------------------------------------------- #
 # 모터 검색·감시 서비스 · **이름표가 반드시 붙어야 한다** · §6-103
@@ -151,34 +163,34 @@ SCAN_DYNAMIXEL_MOTORS = scoped('/scan_dynamixel_motors')
 #: 상태 감시 켜고 끄기
 SET_MONITORING = scoped('/set_monitoring')
 #: 선택 프로젝트 전파
-ACTIVE_PROJECT = scoped('/motion_control/active_project')
+ACTIVE_PROJECT = scoped('/motion_run/active_project')
 
 #: 모션 재생 합산 요청 · motion_run_manager → motion_supervisor
-MOTION_RUN_COMMAND = scoped('/motion_control/motion_run_command')
-MOTION_RUN_REQUEST = scoped('/motion_control/motion_run_request')
-MOTION_RUN_RESPONSE = scoped('/motion_control/motion_run_response')
-MOTION_RUN_STATUS = scoped('/motion_control/motion_run_status')
+MOTION_RUN_COMMAND = scoped('/motion_run/command')
+MOTION_RUN_REQUEST = scoped('/motion_run/request')
+MOTION_RUN_RESPONSE = scoped('/motion_run/response')
+MOTION_RUN_STATUS = scoped('/motion_run/status')
 
 #: 모션 축 매핑
-MOTION_MAPPING_REQUEST = scoped('/motion_control/motion_mapping_request')
-MOTION_MAPPING_RESPONSE = scoped('/motion_control/motion_mapping_response')
+MOTION_MAPPING_REQUEST = scoped('/motion_mapping/request')
+MOTION_MAPPING_RESPONSE = scoped('/motion_mapping/response')
 #: 모션값 상태
-MOTION_VALUE_STATE = scoped('/motion_control/motion_value_state')
+MOTION_VALUE_STATE = scoped('/midi/value_state')
 
 #: 수동 조그
-MANUAL_JOG_REQUEST = scoped('/motion_control/manual_jog_request')
-MANUAL_JOG_RESULT = scoped('/motion_control/manual_jog_result')
+MANUAL_JOG_REQUEST = scoped('/manual/jog_request')
+MANUAL_JOG_RESULT = scoped('/manual/jog_response')
 #: 수동 동작
-MANUAL_ACTION_REQUEST = scoped('/motion_control/manual_action_request')
-MANUAL_ACTION_RESULT = scoped('/motion_control/manual_action_result')
+MANUAL_ACTION_REQUEST = scoped('/manual/action_request')
+MANUAL_ACTION_RESULT = scoped('/manual/action_response')
 
 #: MIDI 위치 지정
-MIDI_POSITION_REQUEST = scoped('/motion_control/midi_position_request')
-MIDI_POSITION_RESULT = scoped('/motion_control/midi_position_result')
+MIDI_POSITION_REQUEST = scoped('/midi/position_request')
+MIDI_POSITION_RESULT = scoped('/midi/position_response')
 
 #: 안전
-SAFETY_REQUEST = scoped('/motion_control/safety_request')
-SAFETY_STATUS = scoped('/motion_control/safety_status')
+SAFETY_REQUEST = scoped('/safety/request')
+SAFETY_STATUS = scoped('/safety/status')
 
 # --------------------------------------------------------------------------- #
 # /motion_studio · 편집
