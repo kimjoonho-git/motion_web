@@ -223,8 +223,24 @@ class PlanBuilder:
         missing_motor_motion_ids = []
         # 모션 파일에 자료가 없는 축 · 이것도 막지 않는다 · §6-142
         missing_motion_data_ids = []
+        # 재생 선택이 꺼진 축 · 이것도 막지 않는다 · §6-158
+        #
+        # 앞의 둘과 **같은 병의 세 번째 문**이다 · 모션 파일에 1-1·1-2·1-3 이
+        # 들어 있는데 모션축 설정에서 1-2·1-3 의 체크를 꺼 두면, 그 둘은 이
+        # 반복문 첫 줄에서 조용히 빠져나가 어느 통에도 안 담겼다 · 그래서
+        # 아래에서 `requested Motion ID is unavailable: 1-2, 1-3` 로 **모션
+        # 전체가** 거부됐다 · 켜 둔 1-1 까지 같이 죽었다.
+        #
+        # 체크를 끈 것은 「이 축은 빼고 돌려라」는 뜻이지 「돌리지 말라」가
+        # 아니다 · 그러니 그 축만 빼고 돈다.
+        disabled_motion_ids = []
         for row in rows:
-            if not isinstance(row, dict) or row.get('enabled') is False:
+            if not isinstance(row, dict):
+                continue
+            if row.get('enabled') is False:
+                skipped_id = str(row.get('motion_id') or '').strip()
+                if skipped_id and skipped_id in requested_motion_ids:
+                    disabled_motion_ids.append(skipped_id)
                 continue
             motion_id = str(row.get('motion_id') or '').strip()
             if requested_motion_ids and motion_id not in requested_motion_ids:
@@ -413,6 +429,16 @@ class PlanBuilder:
             requested_motion_ids = {
                 motion_id for motion_id in requested_motion_ids
                 if motion_id not in set(missing_motor_motion_ids)
+            }
+        if disabled_motion_ids:
+            warnings.append(
+                '재생 선택이 꺼져 건너뛴 Motion ID: '
+                + ', '.join(sorted(set(disabled_motion_ids)))
+                + ' · 모션축 설정에서 체크하면 같이 돕니다'
+            )
+            requested_motion_ids = {
+                motion_id for motion_id in requested_motion_ids
+                if motion_id not in set(disabled_motion_ids)
             }
         if not axes:
             errors.append('enabled motion mappings not found')

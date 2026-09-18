@@ -203,3 +203,85 @@ def test_a_loop_value_gap_does_not_block_continuous_play():
 
     assert len(plan['axes']) == 3, '값이 튄다고 실행을 막으면 안 된다'
     assert any('튑니다' in text for text in plan['warnings'])
+
+
+# 재생 선택을 끈 축 · 세 번째 문 · §6-158
+#
+# 현장에서 그대로 겪었다 · 모션 파일에 1-1·1-2·1-3 이 들어 있고 모션축
+# 설정에서 1-2·1-3 의 체크만 껐는데, 레이어 재생이 통째로 거부됐다.
+#
+#     ValueError: requested Motion ID is unavailable: 1-2, 1-3
+#
+# 켜 둔 1-1 까지 같이 죽었다 · 위의 §6-139(모터 없음)·§6-142(자료 없음)와
+# 같은 병인데, 체크를 끈 줄은 반복문 첫 줄에서 빠져나가 **어느 통에도 안
+# 담겨** 그 두 고침이 안 닿았다.
+
+DISABLED_TWO = {
+    'motion_file_id': 'motion.json',
+    'mappings': [
+        _row('1-1', 'ac_servo:master:0:alias:103'),
+        _row('1-2', 'dynamixel:id:3', enabled=False),
+        _row('1-3', 'dynamixel:id:5', enabled=False),
+    ],
+}
+
+ONLY_ONE_ROW = {
+    'motion_file_id': 'motion.json',
+    'mappings': [_row('1-1', 'ac_servo:master:0:alias:103')],
+}
+
+
+def test_unchecked_axes_do_not_block_the_checked_one():
+    """체크를 끈 것은 「빼고 돌려라」지 「돌리지 말라」가 아니다."""
+    manager = _manager(DISABLED_TWO, [
+        'ac_servo:master:0:alias:103', 'dynamixel:id:3', 'dynamixel:id:5',
+    ])
+
+    plan = _build(manager)
+
+    assert [axis['motion_id'] for axis in plan['axes']] == ['1-1']
+
+
+def test_the_unchecked_axes_are_reported():
+    """조용히 빼면 3축인 줄 알고 1축만 도는 것을 모른다."""
+    manager = _manager(DISABLED_TWO, [
+        'ac_servo:master:0:alias:103', 'dynamixel:id:3', 'dynamixel:id:5',
+    ])
+
+    skipped = ' '.join(_build(manager)['warnings'])
+
+    assert '1-2' in skipped and '1-3' in skipped
+    assert '재생 선택' in skipped
+
+
+def test_an_axis_with_no_mapping_row_at_all_was_already_dropped():
+    """줄 자체가 없는 축은 **더 위에서** 버려진다 · §6-106
+
+    연동은 한 모션 파일을 여러 PC 가 나눠 갖는다 · 남의 축은 읽자마자
+    버리므로 여기까지 오지 않는다 · 경고도 안 난다 (남의 축이 빠진 것은
+    사고가 아니라 설계다).
+    """
+    manager = _manager(ONLY_ONE_ROW, ['ac_servo:master:0:alias:103'])
+
+    plan = _build(manager)
+
+    assert [axis['motion_id'] for axis in plan['axes']] == ['1-1']
+    assert plan['warnings'] == []
+
+
+def test_everything_unchecked_is_still_an_error():
+    """전부 끄면 돌릴 것이 없다 · 이건 조용히 넘기면 안 된다."""
+    mapping = {
+        'motion_file_id': 'motion.json',
+        'mappings': [
+            _row('1-1', 'ac_servo:master:0:alias:103', enabled=False),
+            _row('1-2', 'dynamixel:id:3', enabled=False),
+            _row('1-3', 'dynamixel:id:5', enabled=False),
+        ],
+    }
+    manager = _manager(mapping, [
+        'ac_servo:master:0:alias:103', 'dynamixel:id:3', 'dynamixel:id:5',
+    ])
+
+    with pytest.raises(ValueError, match='enabled motion mappings not found'):
+        _build(manager)
