@@ -104,7 +104,7 @@ Motion Control Studio는 상위 저장소에 통합되어 있으므로 별도로
 | | 단계 | 왜 |
 |---|---|---|
 | 1 | BIOS · 전원 들어오면 켜지게 | 정전 후 사람 없이 복구 |
-| 2 | 저절로 방해되는 것 끄기 | 업데이트 창·화면 꺼짐·절전이 전시를 망칩니다 |
+| 2 | 저절로 방해되는 것 끄기 | 업데이트 창·화면 꺼짐·절전·WiFi 졸기가 전시를 망칩니다 |
 | 3 | 전원만 넣으면 프로그램이 뜨게 | 없으면 켜도 아무것도 안 뜹니다 |
 | 4 | 시간대 맞추기 | 스케줄 시각의 기준 · **설치 전에** 하면 편합니다 |
 | 5 | EtherCAT 준비 | AC 서보를 쓸 때만 · 코드 받기 **전에** |
@@ -153,6 +153,11 @@ gsettings set org.gnome.desktop.screensaver lock-enabled false
 gsettings set org.gnome.desktop.screensaver idle-activation-enabled false
 gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type 'nothing'
 
+# WiFi 를 쓴다면 절전 끄기 (유선만 쓰면 건너뜀)
+#   랜카드가 틈틈이 졸면 PC 끼리 주고받는 신호가 늦거나 끊깁니다
+nmcli connection modify "연결이름" 802-11-wireless.powersave 2
+nmcli connection up "연결이름"
+
 # 업데이트 알림 팝업 끄기
 mkdir -p ~/.config/autostart
 printf '[Desktop Entry]\nType=Application\nName=Update Notifier\nHidden=true\nX-GNOME-Autostart-enabled=false\n' \
@@ -164,7 +169,10 @@ printf '[Desktop Entry]\nType=Application\nName=Update Notifier\nHidden=true\nX-
 ```bash
 gsettings get org.gnome.desktop.session idle-delay     # uint32 0
 systemctl is-enabled unattended-upgrades               # masked
+iwconfig 2>/dev/null | grep -i "power management"      # off (WiFi 를 쓸 때)
 ```
+
+> `연결이름` 은 `nmcli connection show` 로 확인합니다. WiFi 이름과 같습니다.
 
 > 전원 버튼을 잘못 눌러 꺼지는 것까지 막으려면
 > `gsettings set org.gnome.settings-daemon.plugins.power power-button-action 'nothing'` ·
@@ -249,6 +257,13 @@ ethercat slaves                # 연결한 드라이브가 보여야 합니다
 비어 있으면 랜선 위치와 `MASTER0_DEVICE` 이름을 다시 봅니다.
 
 ### 6. 코드 받기
+
+갓 설치한 우분투에는 `git` 이 없을 수 있습니다. 먼저 깔아 둡니다.
+
+```bash
+sudo apt update
+sudo apt install -y git
+```
 
 ```bash
 cd ~
@@ -344,6 +359,14 @@ systemctl --user status --no-pager motion-control.service motion-coordination.se
 합니다. 서로 다른 망에 있으면 상대를 못 찾습니다. 이건 설치할 때 정해지는
 것이라 웹 화면에서는 못 고칩니다.
 
+그래도 서로 못 찾으면 **방화벽**을 봅니다. 우분투는 기본이 「들어오는 것 막기」
+입니다.
+
+```bash
+sudo ufw status                        # 켜져 있는지 확인
+sudo ufw allow from 192.168.0.0/16     # 같은 망 안에서는 허용 (대역은 현장에 맞게)
+```
+
 ---
 
 ### 안 될 때 먼저 볼 곳
@@ -356,7 +379,9 @@ systemctl --user status --no-pager motion-control.service motion-coordination.se
 | 전시 중 화면이 꺼짐 | 화면보호기 | 2단계 |
 | 업데이트 창이 뜸 | 자동 업데이트 | 2단계 |
 | 스케줄이 엉뚱한 시각에 돎 | 시간대 | 4단계 |
-| 다른 PC 가 「통신 단절」 | 그룹 ID·Domain ID 다름 · 다른 공유기 | 웹 `PC 연동` |
+| 다른 PC 가 「통신 단절」 | 그룹 ID·Domain ID 다름 · 다른 공유기 · 방화벽 | 웹 `PC 연동` · `sudo ufw status` |
+| 연동이 자꾸 끊기거나 느림 | WiFi 절전이 켜짐 | 2단계의 `powersave 2` |
+| `git: command not found` | git 이 안 깔림 | 6단계 첫 명령 |
 | 설치 중 인증 실패 | 계정 비밀번호를 넣음 | GitHub **토큰**을 넣어야 합니다 |
 
 ### 이미 설치된 PC 갱신
