@@ -367,7 +367,7 @@ def test_midi_blocks_every_ac_axis_with_live_internal_limit_status():
 
     assert success is False
     assert results[0]['success'] is False
-    assert 'internal limit is active' in results[0]['message']
+    assert '내부 리밋이 걸려 있습니다' in results[0]['message']
     assert supervisor._command_pub.messages == []
 
 

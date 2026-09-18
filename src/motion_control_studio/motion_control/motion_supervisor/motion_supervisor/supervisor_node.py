@@ -2074,7 +2074,10 @@ class MotionSupervisor(Node):
                 if bool((self._motor_for_axis(axis, motors) or {}).get('fault', False))
             ]
             if fault_axes:
-                return False, f'Axis {fault_axes[0]} has error; run Fault Reset first'
+                return False, (
+                    f'{fault_axes[0]}번 축에 에러가 있습니다 · '
+                    '먼저 알람 해제(Fault Reset)를 하세요'
+                )
             self._publish_controlword(motors, axes, CW_SHUTDOWN_MINAS)
             time.sleep(CONTROLWORD_SEQUENCE_DELAY_SEC)
             self._publish_controlword(motors, axes, CW_SWITCH_ON_MINAS)
@@ -2134,7 +2137,7 @@ class MotionSupervisor(Node):
             if not self._is_ac_servo(motor):
                 return [], f'Axis {axis} is not AC Servo'
             if str(motor.get('state') or '') != 'detected':
-                return [], f'Axis {axis} is not detected'
+                return [], f'{axis}번 축이 감지되지 않았습니다'
             axes.append(axis)
         return sorted(set(axes)), ''
 

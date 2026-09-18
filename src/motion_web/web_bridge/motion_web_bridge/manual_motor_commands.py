@@ -509,7 +509,7 @@ class ManualMotorCommandService:
             if str(motor.get('state') or '') != 'detected':
                 return {
                     'success': False,
-                    'message': f'Axis {axis_value} is not detected',
+                    'message': f'{axis_value}번 축이 감지되지 않았습니다',
                     **self.bridge.snapshot(),
                 }
             axes = [axis_value]

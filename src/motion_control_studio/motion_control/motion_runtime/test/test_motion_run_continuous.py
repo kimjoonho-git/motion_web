@@ -238,7 +238,7 @@ def test_motor_alarm_is_reported_even_when_fault_flag_is_missing():
         'error_text': 'Error 21.0',
     })
 
-    assert error == 'Axis 0 motor alarm 0xFF15 (Error 21.0)'
+    assert error == '0번 축 모터 알람 0xFF15 (Error 21.0)'
 
 
 def test_motor_target_applies_reference_scale_direction_and_gear_ratio():
