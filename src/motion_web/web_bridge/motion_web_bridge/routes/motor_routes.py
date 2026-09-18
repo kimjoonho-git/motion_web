@@ -23,11 +23,11 @@ def register_motor_routes(app: FastAPI, bridge, project_call) -> None:
     @app.post('/api/motors/scan/cancel')
     async def cancel_motor_scan():
         # 진행 중인 물리 검색은 끝까지 간다 · 다음 장치 종류부터 중단된다 (§6-26)
+        #
+        # **화면에 취소 버튼이 없다** · §6-180 · 죽은 길처럼 보이지만 지운 것이
+        # 아니라 아직 안 붙인 것이다 · 모터 검색은 몇 분씩 걸리는데 시작하면
+        # 끝날 때까지 기다리는 수밖에 없다 · 버튼을 붙이면 바로 쓸 수 있다.
         return await asyncio.to_thread(bridge._scan.cancel)
-
-    @app.get('/api/motors/ethercat-aliases')
-    async def read_ethercat_aliases():
-        return await asyncio.to_thread(bridge.read_ethercat_aliases)
 
     @app.post('/api/motors/ethercat-alias')
     async def write_ethercat_alias(request: Request):

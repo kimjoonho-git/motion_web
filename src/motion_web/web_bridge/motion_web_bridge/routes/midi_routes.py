@@ -8,13 +8,6 @@ def register_midi_routes(app: FastAPI, bridge) -> None:
     async def midi_monitor_status():
         return await asyncio.to_thread(bridge.midi_monitor_status)
 
-    @app.put('/api/midi-monitor/mapping')
-    async def save_midi_monitor_mapping(request: Request):
-        body = await request.json()
-        if not isinstance(body, dict):
-            raise HTTPException(status_code=400, detail='request body must be an object')
-        return await asyncio.to_thread(bridge.save_midi_monitor_mapping, body)
-
     @app.post('/api/midi-monitor/banks')
     async def create_midi_bank(request: Request):
         body = await request.json()
@@ -36,10 +29,6 @@ def register_midi_routes(app: FastAPI, bridge) -> None:
     @app.delete('/api/midi-monitor/banks/{bank_id}')
     async def delete_midi_bank(bank_id: str):
         return await asyncio.to_thread(bridge.delete_midi_bank, bank_id)
-
-    @app.post('/api/midi-monitor/banks/file/save')
-    async def save_midi_banks_to_file():
-        return await asyncio.to_thread(bridge.save_midi_banks_to_file)
 
     @app.post('/api/midi-monitor/banks/file/load')
     async def load_midi_banks_from_file():

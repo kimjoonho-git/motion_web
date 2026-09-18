@@ -7,10 +7,6 @@ def register_project_routes(app: FastAPI, bridge, project_call) -> None:
     async def motion_projects():
         return await project_call(bridge._project.list_projects)
 
-    @app.post('/api/execution-context/apply')
-    async def apply_execution_context():
-        return await project_call(bridge._execution_context.reconcile)
-
     @app.post('/api/projects')
     async def create_motion_project(request: Request):
         body = await request.json()

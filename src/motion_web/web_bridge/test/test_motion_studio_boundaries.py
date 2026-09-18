@@ -28,10 +28,10 @@ def test_motion_studio_routes_are_registered_from_the_route_module():
         for method in route.methods
     }
 
+    # `projects`·`projects/load` 는 2026-09-18 에 뺐다 · §6-180
+    # 화면이 한 번도 안 불렀다 · 스튜디오 프로젝트는 `prepare` 가 알아서 만든다
     assert routes == {
         ('/api/motion-studio', 'GET'),
-        ('/api/motion-studio/projects', 'POST'),
-        ('/api/motion-studio/projects/load', 'POST'),
         ('/api/motion-studio/import', 'POST'),
         ('/api/motion-studio/project', 'PUT'),
         ('/api/motion-studio/layers', 'PUT'),

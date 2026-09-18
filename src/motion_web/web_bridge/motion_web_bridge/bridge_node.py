@@ -1192,17 +1192,6 @@ class MotionWebBridge(Node):
             **self.snapshot(),
         }
 
-    def read_ethercat_aliases(self) -> Dict[str, Any]:
-        try:
-            slaves = self.ethercat_alias_manager.read_slaves()
-        except EthercatAliasError as exc:
-            return {'success': False, 'message': str(exc), 'slaves': []}
-        return {
-            'success': True,
-            'message': f'EtherCAT EEPROM Alias {len(slaves)}축 읽기 완료',
-            'slaves': slaves,
-        }
-
     def write_ethercat_alias(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         if payload.get('confirmed') is not True:
             return {
@@ -1766,10 +1755,6 @@ class MotionWebBridge(Node):
             result['motor_output_enabled'] = False
         return result
 
-    def save_midi_monitor_mapping(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        updated = self._request_midi_monitor('update_bank', payload, timeout_sec=2.0)
-        return self._persist_midi_bank_result(updated)
-
     def create_midi_bank(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         created = self._request_midi_monitor('create_bank', payload, timeout_sec=2.0)
         return self._persist_midi_bank_result(created)
@@ -1797,9 +1782,6 @@ class MotionWebBridge(Node):
             timeout_sec=2.0,
         )
         return self._persist_midi_bank_result(deleted)
-
-    def save_midi_banks_to_file(self) -> Dict[str, Any]:
-        return self._persist_midi_bank_result(self.midi_monitor_status())
 
     def load_midi_banks_from_file(self) -> Dict[str, Any]:
         status = self.midi_monitor_status()

@@ -33,26 +33,6 @@ def register_motion_studio_routes(
     async def motion_studio():
         return await project_call(sync().prepare)
 
-    @app.post('/api/motion-studio/projects')
-    async def motion_studio_create(request: Request):
-        body = await request.json()
-        if not isinstance(body, dict):
-            raise HTTPException(
-                status_code=400, detail='request body must be an object'
-            )
-        return await asyncio.to_thread(
-            lambda: sync().sync_result(
-                transport().request('create', body)
-            )
-        )
-
-    @app.post('/api/motion-studio/projects/load')
-    async def motion_studio_load(request: Request):
-        body = await request.json()
-        return await asyncio.to_thread(
-            transport().request, 'load', body
-        )
-
     @app.post('/api/motion-studio/import')
     async def motion_studio_import(request: Request):
         body = await request.json()
