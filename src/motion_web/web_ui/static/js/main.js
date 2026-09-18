@@ -67,6 +67,9 @@ const appState = {
   restartPreviousBridgeInstanceId: '',
   restartOperationId: '',
   restartProgressTimer: null,
+  //: 「모터를 움직일 수 있나」의 답 · 판단은 서버가 한다 · §6-171
+  //: `null` 은 「아직 안 받았다」 · 「막힘 없음」 과 구별해야 한다
+  motorActionBlocker: null,
   motorIdentityBlockMessage: '',
   motorErrorActiveKeys: new Set(),
   motorErrorDismissedKeys: new Set(),
@@ -94,32 +97,31 @@ function blockWorkspaceForMotorIdentity(workspace) {
   return true;
 }
 
+/** 모터를 움직이는 기능을 지금 쓸 수 있는가 · 못 쓰면 그 이유 · §6-171
+ *
+ * **판단은 서버가 한다** · 여기서는 받아서 보여 주기만 한다.
+ *
+ * 전에는 이 함수가 같은 판단을 브라우저에서 처음부터 다시 했다 · 긴급정지 ·
+ * 안전 차단 · 실행 컨텍스트 · 상태 수신 · 모니터링 · 모터 연결을 순서대로
+ * 보고 제 나름의 문구를 만들었다 · 「상태가 오래됐나」의 임계값까지 따로
+ * 들고 있었다 (서버 1.0초 · 화면 1.5초).
+ *
+ * 같은 질문에 두 답이 있으면 언젠가 갈린다 · 버튼은 켜져 있는데 눌러 보면
+ * 서버가 거절하거나, 그 반대가 된다 · 그때 사용자는 프로그램이 고장 났다고
+ * 본다.
+ *
+ * **화면만 아는 것 하나** : 모터 등록 중의 신원 불일치 · 아직 서버에 올라오지
+ * 않은 화면 안의 일이라 여기서 덧붙인다.
+ *
+ * 긴급정지를 누른 직후도 화면이 먼저 안다 · 서버 응답을 기다리는 동안
+ * 버튼이 살아 있으면 안 되므로 그 한 번은 앞세운다.
+ */
 function studioMotorActionBlockReason() {
   if (appState.emergencyLatched) return '긴급정지 잠김 상태입니다. 프로그램 재시작이 필요합니다.';
-  const safety = appState.latestState?.safety_status || {};
-  if (safety.commands_blocked) {
-    return safety.message || '서보 에러로 모터 동작이 제한된 상태입니다.';
-  }
   if (appState.motorIdentityBlockMessage) return appState.motorIdentityBlockMessage;
-  if (!appState.executionContext?.ready) {
-    return appState.executionContext?.message || '현재 프로젝트 실행 설정 적용 대기 중입니다.';
-  }
-  const state = appState.latestState;
-  if (!state) return '모터 상태를 아직 수신하지 못했습니다.';
-  if (state.monitoring_enabled !== true) return '모터 상태 모니터링이 꺼져 있습니다.';
-  const generatedAt = Number(state.generated_at);
-  const lastStatusAt = Number(state.last_motor_status_at);
-  if (
-    !Number.isFinite(lastStatusAt)
-    || lastStatusAt <= 0
-    || (Number.isFinite(generatedAt) && generatedAt - lastStatusAt > 1.5)
-  ) return '최신 모터 상태를 확인할 수 없습니다.';
-  const motors = Array.isArray(state.motors) ? state.motors : [];
-  const online = motors.filter((motor) => String(
-    motor.connection_state || (motor.state === 'detected' ? 'online' : motor.state) || '',
-  ) === 'online');
-  if (!online.length) return '현재 연결되어 동작 가능한 모터가 없습니다.';
-  return '';
+  const answered = appState.motorActionBlocker;
+  if (typeof answered === 'string') return answered;
+  return '모터 동작 가능 상태를 아직 확인하지 못했습니다.';
 }
 
 function renderWorkspacePanel() {
@@ -223,6 +225,8 @@ function clearBrowserProjectMemory(projectGeneration) {
   appState.projectGeneration = getProjectGeneration();
   appState.latestState = null;
   appState.executionContext = null;
+  // 아직 안 받았다 · 「막힘 없음」 으로 오해하면 버튼이 살아난다 · §6-171
+  appState.motorActionBlocker = null;
   appState.motorIdentityBlockMessage = '';
   appState.motorErrorActiveKeys.clear();
   appState.motorErrorDismissedKeys.clear();
@@ -383,6 +387,10 @@ function renderServiceManagement(payload) {
     el.headerProgramRestartButton.title = programRestartBlockedReason || '상위 프로그램을 재시작합니다';
   }
   appState.emergencyLatched = Boolean(payload?.safety_status?.emergency_latched);
+  // 「모터를 움직일 수 있나」의 답 · 판단은 서버가 한다 · §6-171
+  appState.motorActionBlocker = typeof payload?.motor_action_blocker === 'string'
+    ? payload.motor_action_blocker
+    : null;
   appState.executionContext = payload?.execution_context || null;
   const contextReady = Boolean(appState.executionContext?.ready);
   const contextText = contextReady ? '저장 = 실행' : (

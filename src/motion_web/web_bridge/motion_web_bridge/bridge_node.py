@@ -821,6 +821,11 @@ class MotionWebBridge(Node):
                 'max_jog_delta_deg': self.max_jog_delta_deg,
             },
             'web_access': self._web_access,
+            # 「모터를 움직일 수 있나」의 답 · 화면은 이것을 그대로 보여준다 · §6-171
+            'motor_action_blocker': self.motor_action_blocker(
+                safety_status=safety_status,
+                execution_context=execution_context,
+            ),
             'motion_run_status': motion_run_status,
             'motor_activity': motor_activity_snapshot(
                 motion_run_status,
@@ -993,6 +998,46 @@ class MotionWebBridge(Node):
             self._monitoring_motion_mapping_context_id = context_id
             self._monitoring_motion_mapping_rows = rows
             return copy.deepcopy(rows)
+
+    def motor_action_blocker(
+        self, *, safety_status=None, execution_context=None
+    ) -> str:
+        """모터를 움직이는 기능을 지금 쓸 수 있는가 · 못 쓰면 그 이유 · §6-171
+
+        **화면이 이 판단을 브라우저에서 처음부터 다시 하고 있었다.**
+
+        `main.js` 에 같은 판단이 통째로 또 있었다 · 긴급정지 · 안전 차단 ·
+        실행 컨텍스트 · 상태 수신 · 모니터링 · 모터 연결을 순서대로 보고
+        제 나름의 문구를 만들었다 · 심지어 「상태가 오래됐나」의 임계값까지
+        따로 들고 있었다 (서버 1.0초 · 화면 1.5초).
+
+        같은 질문에 두 답이 있으면 언젠가 갈린다 · 버튼은 켜져 있는데 눌러
+        보면 서버가 거절하거나, 그 반대가 된다 · 그때 사용자는 프로그램이
+        고장 났다고 본다.
+
+        판단은 여기 하나다 · 화면은 받아서 보여 주기만 한다.
+
+        **화면만 아는 것 하나** : 모터 등록 중의 신원 불일치 · 그것은 아직
+        서버에 올라오지 않은 화면 안의 일이라 화면이 덧붙인다.
+        """
+        if safety_status is None:
+            with self._safety_status_lock:
+                safety_status = dict(self._safety_status or {})
+        if safety_status.get('emergency_latched'):
+            return '긴급정지 잠김 상태입니다. 프로그램 재시작이 필요합니다.'
+        if safety_status.get('commands_blocked'):
+            return str(
+                safety_status.get('message')
+                or '서보 에러로 모터 동작이 제한된 상태입니다.'
+            )
+        if execution_context is None:
+            execution_context = self._execution_context.status(validate_files=False)
+        if not execution_context.get('ready'):
+            return str(
+                execution_context.get('message')
+                or '현재 프로젝트 실행 설정 적용 대기 중입니다.'
+            )
+        return self._motor_runtime_control_blocker()
 
     def _motor_runtime_control_blocker(self) -> str:
         lock = getattr(self, '_lock', None)
