@@ -9,6 +9,7 @@
  * `다시 읽기` 를 둔다.
  */
 
+import { fetchDocument, fetchDocumentList } from './api.js';
 import { renderMarkdown } from './markdown.js';
 
 const panel = document.querySelector('[data-workspace-panel="docs"]');
@@ -36,12 +37,6 @@ if (panel) {
     paragraph.textContent = text;
     article.appendChild(paragraph);
     outline.innerHTML = '';
-  }
-
-  async function fetchJson(url) {
-    const response = await fetch(url, { headers: { 'Cache-Control': 'no-cache' } });
-    if (!response.ok) throw new Error(`${response.status}`);
-    return response.json();
   }
 
   function renderPicker() {
@@ -118,7 +113,7 @@ if (panel) {
     renderPicker();
     setArticleMessage('문서를 읽는 중입니다');
     try {
-      const payload = await fetchJson(`/api/docs/${encodeURIComponent(docId)}`);
+      const payload = await fetchDocument(docId);
       if (!payload.success) {
         setArticleMessage(payload.message || '문서를 읽지 못했습니다', 'docs-error');
         if (sourceLabel) sourceLabel.textContent = payload.source || '';
@@ -149,7 +144,7 @@ if (panel) {
   async function load(force = false) {
     if (state.loadedOnce && !force) return;
     try {
-      const payload = await fetchJson('/api/docs');
+      const payload = await fetchDocumentList();
       state.documents = payload.documents || [];
       state.loadedOnce = true;
       const first = state.documents.find((item) => item.available) || state.documents[0];

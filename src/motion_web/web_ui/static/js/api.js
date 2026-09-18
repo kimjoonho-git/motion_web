@@ -60,7 +60,17 @@ async function projectFetch(input, options = {}) {
   }
 }
 
-async function readJson(response) {
+/** 응답을 읽는다 · §6-181
+ *
+ * **프로젝트에 매이지 않는 호출도 있다.** 시스템 시각과 사용법 문서는 어느
+ * 프로젝트를 고르든 같은 답이다 · 그런데 응답 헤더에는 프로젝트 세대가 늘
+ * 붙어 있어서, 그대로 검사하면 프로젝트를 바꾸는 순간 **아무 상관 없는
+ * 호출이 실패**한다.
+ *
+ * 그래서 `projectScoped: false` 를 주면 세대를 보지 않는다 · 관문은 하나로
+ * 두되, 그 관문이 「이 호출이 프로젝트에 매이나」를 안다.
+ */
+async function readJson(response, { projectScoped = true } = {}) {
   let payload = null;
   try {
     payload = await response.json();
@@ -69,6 +79,13 @@ async function readJson(response) {
       throw new Error(`HTTP ${response.status}`);
     }
     throw error;
+  }
+  if (!projectScoped) {
+    if (!response.ok) {
+      const detail = payload?.message || payload?.detail || `HTTP ${response.status}`;
+      throw new Error(detail);
+    }
+    return payload;
   }
   const expected = response.projectGenerationExpected;
   const headerGeneration = Number(response.headers.get('X-Project-Generation'));
@@ -135,6 +152,45 @@ export const fetchStatusSnapshot = (timeoutMs = 5000) =>
 
 export const fetchSystemVersion = () => request('GET', '/api/system/version');
 
+// --------------------------------------------------------------------------- //
+// 스케줄 · 프로젝트에 매인다 (`active_project_id` 를 갖는다) · §6-181
+// --------------------------------------------------------------------------- //
+
+export const fetchScheduleStatus = () => request('GET', '/api/schedule/status');
+
+export const fetchScheduleList = () => request('GET', '/api/schedule/list');
+
+export const saveScheduleRunMode = (mode) =>
+  request('PUT', '/api/schedule/mode', { body: { run_mode: mode } });
+
+export const saveSchedule = (payload) =>
+  request('POST', '/api/schedule/save', { body: payload });
+
+//: 주소를 조건식으로 이어 붙이지 않는다 · §6-181 · 글자로 남아 있어야
+//: 「이 길을 누가 쓰나」를 찾을 수 있다 · 조립하면 죽은 길 검사가 못 본다
+const enableSchedule = (scheduleId) =>
+  request('POST', `/api/schedule/${encodeURIComponent(scheduleId)}/enable`);
+
+const disableSchedule = (scheduleId) =>
+  request('POST', `/api/schedule/${encodeURIComponent(scheduleId)}/disable`);
+
+export const setScheduleEnabled = (scheduleId, enabled) =>
+  (enabled ? enableSchedule : disableSchedule)(scheduleId);
+
+export const deleteSchedule = (scheduleId) =>
+  request('DELETE', `/api/schedule/${encodeURIComponent(scheduleId)}`);
+
+// --------------------------------------------------------------------------- //
+// 프로젝트와 무관한 것 · 어느 프로젝트를 골라도 답이 같다 · §6-181
+// --------------------------------------------------------------------------- //
+
+export const fetchSystemTime = () => request('GET', '/api/system/time', { projectScoped: false });
+
+export const fetchDocumentList = () => request('GET', '/api/docs', { projectScoped: false });
+
+export const fetchDocument = (documentId) =>
+  request('GET', `/api/docs/${encodeURIComponent(documentId)}`, { projectScoped: false });
+
 export const fetchCoordinationStatus = () => request('GET', '/api/coordination');
 
 export const saveCoordinationSettings = (payload) => request('PUT', '/api/coordination/settings', { body: payload });
@@ -160,14 +216,14 @@ export const clearMotorRuntimeApplication = () => request('POST', '/api/system/m
  * 어떤 화면이 어느 엔드포인트를 쓰는지 한눈에 보인다. 이 파일 안에 이미
  * `motionStudioRequest` 로 같은 꼴이 있었다 · 그 관례를 파일 전체로 넓힌다.
  */
-async function request(method, path, { body, timeoutMs } = {}) {
+async function request(method, path, { body, timeoutMs, projectScoped = true } = {}) {
   const options = { method };
   if (body !== undefined) {
     options.headers = { 'Content-Type': 'application/json' };
     options.body = JSON.stringify(body);
   }
   if (timeoutMs !== undefined) options.timeoutMs = timeoutMs;
-  return readJson(await projectFetch(path, options));
+  return readJson(await projectFetch(path, options), { projectScoped });
 }
 
 
@@ -312,7 +368,6 @@ export const startMotionRun = (payload) => request('POST', '/api/motion-run/star
 export const configureMotionAutomation = (payload) => request('PUT', '/api/motion-run/automation', { body: payload });
 
 
-export const fetchScheduleStatus = () => request('GET', '/api/schedule/status');
 export const stopMotionRun = () => request('POST', '/api/motion-run/stop');
 
 export const stopMotionRunAfterCycle = () => request('POST', '/api/motion-run/stop-after-cycle');

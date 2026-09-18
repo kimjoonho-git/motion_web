@@ -1,3 +1,5 @@
+import { fetchSystemTime } from './api.js';
+
 /** 시간대 바꾸기 · §6-150
  *
  * 해외 설치에서 사람이 직접 해야 하는 유일한 일이다 · NTP 는 절대 시각(UTC)만
@@ -93,9 +95,8 @@ const SystemTime = {
 
   async load() {
     try {
-      const res = await fetch('/api/system/time');
-      if (!res.ok) return;
-      const payload = await res.json();
+      // 서버를 부르는 길은 `api.js` 하나다 · §6-181
+      const payload = await fetchSystemTime();
       this.zones = Array.isArray(payload.timezones) ? payload.timezones : [];
       this.current = payload.clock?.timezone || '';
       this.render(payload.clock || {});

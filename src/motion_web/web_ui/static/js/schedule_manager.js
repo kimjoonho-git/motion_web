@@ -2,6 +2,14 @@
  * Motion Schedule Management Module
  * Connects with /api/schedule REST endpoints and handles Schedule Modal UI
  */
+import {
+    deleteSchedule as requestDeleteSchedule,
+    fetchScheduleList,
+    fetchScheduleStatus,
+    saveSchedule as requestSaveSchedule,
+    saveScheduleRunMode,
+    setScheduleEnabled,
+} from './api.js';
 import { motionLocalDateText } from './local_time.js';
 import {
     motionScheduleBadgeState,
@@ -118,38 +126,31 @@ const ScheduleManager = {
 
     async saveRunMode(mode) {
         try {
-            const res = await fetch('/api/schedule/mode', {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ run_mode: mode }),
-            });
-            if (!res.ok) {
-                const detail = await res.json().catch(() => ({}));
-                alert(`실행 관리 변경 실패: ${detail.detail || res.status}`);
-            }
+            await saveScheduleRunMode(mode);
         } catch (err) {
-            console.error('[ScheduleManager] Failed to save run mode:', err);
-            alert('실행 관리 변경 중 통신 오류가 발생했습니다.');
+            // 프로젝트가 바뀌는 중이면 다음 회에 맞는다 · 사람을 부르지 않는다
+            if (!err?.staleProjectResponse) {
+                console.error('[ScheduleManager] Failed to save run mode:', err);
+                alert(`실행 관리 변경 실패: ${err?.message || err}`);
+            }
         }
         await this.loadStatus();
     },
 
     async loadStatus() {
         try {
-            const res = await fetch('/api/schedule/status');
-            if (res.ok) {
-                this.status = await res.json();
-                const stamp = Date.parse(this.status?.clock?.local_time || '');
-                this.clockAnchor = Number.isNaN(stamp) ? null : {
-                    at: stamp,
-                    received: Date.now(),
-                    offset: this.status.clock.utc_offset || '',
-                };
-                this.updateStatusBadge();
-                this.updateClock();
-                this.renderTimezoneDrift();
-            }
+            this.status = await fetchScheduleStatus();
+            const stamp = Date.parse(this.status?.clock?.local_time || '');
+            this.clockAnchor = Number.isNaN(stamp) ? null : {
+                at: stamp,
+                received: Date.now(),
+                offset: this.status.clock.utc_offset || '',
+            };
+            this.updateStatusBadge();
+            this.updateClock();
+            this.renderTimezoneDrift();
         } catch (err) {
+            if (err?.staleProjectResponse) return;
             console.warn('[ScheduleManager] Failed to load schedule status:', err);
         }
     },
@@ -222,13 +223,11 @@ const ScheduleManager = {
 
     async loadSchedules() {
         try {
-            const res = await fetch('/api/schedule/list');
-            if (res.ok) {
-                this.schedules = await res.json();
-                this.renderScheduleList();
-                this.renderTimezoneDrift();
-            }
+            this.schedules = await fetchScheduleList();
+            this.renderScheduleList();
+            this.renderTimezoneDrift();
         } catch (err) {
+            if (err?.staleProjectResponse) return;
             console.error('[ScheduleManager] Failed to fetch schedules:', err);
         }
     },
@@ -386,41 +385,26 @@ const ScheduleManager = {
         }
 
         try {
-            const res = await fetch('/api/schedule/save', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-
-            if (res.ok) {
-                this.closeEditModal();
-                await this.loadSchedules();
-                await this.loadStatus();
-            } else {
-                const errData = await res.json().catch(() => ({}));
-                const msg = errData.detail || '스케줄 저장에 실패했습니다.';
-                alert(`스케줄 저장 실패: ${msg}`);
-            }
+            await requestSaveSchedule(payload);
+            this.closeEditModal();
+            await this.loadSchedules();
+            await this.loadStatus();
         } catch (err) {
+            if (err?.staleProjectResponse) return;
             console.error('[ScheduleManager] Save error:', err);
-            alert('스케줄 저장 중 통신 오류가 발생했습니다.');
+            alert(`스케줄 저장 실패: ${err?.message || err}`);
         }
     },
 
     async toggleEnable(scheduleId, targetEnable) {
-        const endpoint = targetEnable ? `/api/schedule/${scheduleId}/enable` : `/api/schedule/${scheduleId}/disable`;
         try {
-            const res = await fetch(endpoint, { method: 'POST' });
-            if (res.ok) {
-                await this.loadSchedules();
-                await this.loadStatus();
-            } else {
-                const errData = await res.json().catch(() => ({}));
-                alert(`상태 변경 실패: ${errData.detail || '오류 발생'}`);
-            }
+            await setScheduleEnabled(scheduleId, targetEnable);
+            await this.loadSchedules();
+            await this.loadStatus();
         } catch (err) {
+            if (err?.staleProjectResponse) return;
             console.error('[ScheduleManager] Toggle enable error:', err);
-            alert('상태 변경 중 통신 오류가 발생했습니다.');
+            alert(`상태 변경 실패: ${err?.message || err}`);
         }
     },
 
@@ -428,17 +412,13 @@ const ScheduleManager = {
         if (!confirm('이 스케줄을 삭제하시겠습니까?')) return;
 
         try {
-            const res = await fetch(`/api/schedule/${scheduleId}`, { method: 'DELETE' });
-            if (res.ok) {
-                await this.loadSchedules();
-                await this.loadStatus();
-            } else {
-                const errData = await res.json().catch(() => ({}));
-                alert(`스케줄 삭제 실패: ${errData.detail || '오류 발생'}`);
-            }
+            await requestDeleteSchedule(scheduleId);
+            await this.loadSchedules();
+            await this.loadStatus();
         } catch (err) {
+            if (err?.staleProjectResponse) return;
             console.error('[ScheduleManager] Delete schedule error:', err);
-            alert('스케줄 삭제 중 통신 오류가 발생했습니다.');
+            alert(`스케줄 삭제 실패: ${err?.message || err}`);
         }
     },
 
