@@ -93,40 +93,91 @@ Motion Control Studio는 상위 저장소에 통합되어 있으므로 별도로
 | | |
 |---|---|
 | 운영체제 | **Ubuntu 22.04 LTS** · 다른 버전은 설치 스크립트가 거부합니다 |
-| 네트워크 | 인터넷 연결 (코드·패키지 내려받기) |
-| 계정 | 이 PC 를 늘 쓸 사용자 계정 하나 · 아래 모든 단계를 그 계정으로 합니다 |
+| 네트워크 | 인터넷 연결 |
+| 계정 | 이 PC 를 늘 쓸 계정 하나 · **모든 단계를 그 계정으로** 합니다 |
+| GitHub | 사용자 이름과 **Personal Access Token** (비밀번호 아님) |
 
-### 순서
+### 전체 순서
 
-1. 자동 로그인·상주 켜기
-2. EtherCAT 준비 (AC 서보를 쓸 때만)
-3. 코드 받기
-4. 설치 실행 — **재부팅하고 한 번 더**
-5. 시간대 확인
-6. 동작 확인
+**위에서부터 차례로** 합니다. 건너뛰면 뒤에서 막힙니다.
 
-**1·2번은 설치 스크립트가 해주지 않습니다.** 그리고 4번에서 재부팅 안내가
-나오면 **반드시 재부팅하고 같은 명령을 한 번 더** 실행해야 합니다. 이 둘이
-가장 자주 걸리는 자리입니다.
+| | 단계 | 왜 |
+|---|---|---|
+| 1 | BIOS · 전원 들어오면 켜지게 | 정전 후 사람 없이 복구 |
+| 2 | 우분투 굳히기 | 업데이트·화면보호기·절전이 전시를 망칩니다 |
+| 3 | 자동 로그인·상주 켜기 | 없으면 전원 넣어도 프로그램이 안 뜹니다 |
+| 4 | 시간대 맞추기 | 스케줄 시각의 기준 · **설치 전에** 하면 편합니다 |
+| 5 | EtherCAT 준비 | AC 서보를 쓸 때만 · 코드 받기 **전에** |
+| 6 | 코드 받기 | |
+| 7 | 설치 실행 → 재부팅 → **한 번 더** | 재부팅을 건너뛰면 미완으로 끝납니다 |
+| 8 | 확인 | |
+
+3번과 7번의 재부팅이 가장 자주 걸리는 자리입니다.
 
 ---
 
-### 1. 자동 로그인·상주 켜기
+### 1. BIOS · 전원 들어오면 켜지게
 
-프로그램이 **사용자 서비스**로 돌기 때문에, 로그인해야 뜹니다. 전시장처럼
-사람이 없는 곳에서 전원만 넣어도 돌게 하려면 둘 다 필요합니다.
+전원을 넣거나 정전이 복구되면 **사람 없이 스스로 켜져야** 합니다.
+
+부팅 중 `Del` 또는 `F2` 로 BIOS 에 들어가, 전원 항목에서 다음을 찾아 바꿉니다.
+이름은 메인보드마다 조금씩 다릅니다.
+
+| 찾을 이름 | 값 |
+|---|---|
+| `Restore on AC Power Loss` / `AC Back` / `After Power Failure` | **Power On** |
+| `Wake on LAN`, `Deep Sleep` | 필요 없으면 Disabled |
+
+**확인** — 전원 케이블을 뽑았다 꽂아서 저절로 켜지는지 봅니다.
+
+### 2. 우분투 굳히기
+
+전시 중에 업데이트 창이 뜨거나 화면이 꺼지면 안 됩니다. **그래픽 화면에
+로그인한 상태에서** 실행합니다.
+
+```bash
+# 자동 업데이트 끄기
+sudo systemctl mask --now unattended-upgrades
+sudo tee /etc/apt/apt.conf.d/20auto-upgrades >/dev/null <<'EOF'
+APT::Periodic::Update-Package-Lists "0";
+APT::Periodic::Unattended-Upgrade "0";
+EOF
+sudo sed -i 's/^Prompt=.*/Prompt=never/' /etc/update-manager/release-upgrades
+
+# 화면 꺼짐·잠금·절전 끄기
+gsettings set org.gnome.desktop.session idle-delay 0
+gsettings set org.gnome.desktop.screensaver lock-enabled false
+gsettings set org.gnome.desktop.screensaver idle-activation-enabled false
+gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type 'nothing'
+
+# 업데이트 알림 팝업 끄기
+mkdir -p ~/.config/autostart
+printf '[Desktop Entry]\nType=Application\nName=Update Notifier\nHidden=true\nX-GNOME-Autostart-enabled=false\n' \
+  > ~/.config/autostart/update-notifier.desktop
+```
+
+**확인**
+
+```bash
+gsettings get org.gnome.desktop.session idle-delay     # uint32 0
+systemctl is-enabled unattended-upgrades               # masked
+```
+
+> 전원 버튼을 잘못 눌러 꺼지는 것까지 막으려면
+> `gsettings set org.gnome.settings-daemon.plugins.power power-button-action 'nothing'` ·
+> 대신 버튼으로 끌 수 없게 되니 현장에 맞춰 정하세요.
+
+### 3. 자동 로그인·상주 켜기
+
+프로그램이 **사용자 서비스**로 돌기 때문에, 로그인해야 뜹니다. 사람이 없는
+곳에서 전원만 넣어도 돌게 하려면 둘 다 필요합니다.
 
 ```bash
 sudo loginctl enable-linger "$USER"
-```
-
-그리고 자동 로그인을 켭니다.
-
-```bash
 sudo nano /etc/gdm3/custom.conf
 ```
 
-`[daemon]` 아래에 두 줄을 넣습니다. `사용자이름`은 실제 계정명으로 바꿉니다.
+`[daemon]` 아래에 두 줄을 넣습니다. `사용자이름` 은 실제 계정명으로 바꿉니다.
 
 ```ini
 [daemon]
@@ -134,23 +185,40 @@ AutomaticLoginEnable=true
 AutomaticLogin=사용자이름
 ```
 
-확인:
+**확인**
 
 ```bash
-loginctl show-user "$USER" | grep Linger      # Linger=yes
+loginctl show-user "$USER" | grep Linger     # Linger=yes
 grep AutomaticLogin /etc/gdm3/custom.conf
 ```
 
-### 2. EtherCAT 준비 · AC 서보를 쓸 때만
+### 4. 시간대 맞추기
 
-**코드를 받기 전에 먼저 끝내야 합니다.** 설치 스크립트는 EtherCAT 이 깔려
-있는지 확인만 하고, 없으면 멈춥니다.
+스케줄은 **이 PC 의 시각**을 기준으로 돕니다. 인터넷에 연결해도 **시간대는
+저절로 안 바뀝니다.**
+
+```bash
+timedatectl                                    # Time zone 확인
+timedatectl list-timezones | grep Seoul        # 도시 이름 찾기
+sudo timedatectl set-timezone Asia/Seoul
+```
+
+- 반드시 **도시 이름**(`Europe/Paris`)으로 잡습니다. 그래야 서머타임을
+  운영체제가 알아서 처리합니다. `UTC+2` 같은 고정값은 1년에 두 번 손봐야 합니다.
+- 우분투 `설정 → 날짜 및 시간` 에서 골라도 됩니다. **「자동 시간대」는 끈 채로**
+  두세요. 전시 중에 저절로 바뀌면 스케줄이 튑니다.
+- **설치 전에** 해두면 편합니다. 나중에 바꾸면 프로그램을 다시 올려야 합니다.
+
+### 5. EtherCAT 준비 · AC 서보를 쓸 때만
+
+**코드를 받기 전에 끝내야 합니다.** 설치 스크립트는 EtherCAT 이 깔려 있는지
+확인만 하고, 없으면 멈춥니다.
 
 설치 방법은 [2. EtherLab/IgH EtherCAT 준비](#2-etherlabigh-ethercat-준비)를
 따릅니다. 설치한 뒤 **어느 랜카드를 모터에 쓸지** 지정합니다.
 
 ```bash
-ip link                       # 랜카드 이름 확인 (예: enp1s0)
+ip link                        # 랜카드 이름 확인 (예: enp1s0)
 sudo nano /etc/ethercat.conf
 ```
 
@@ -160,17 +228,17 @@ DEVICE_MODULES="generic"
 UPDOWN_INTERFACES="enp1s0"
 ```
 
-확인:
+**확인**
 
 ```bash
 sudo systemctl enable --now ethercat
-ethercat master               # Phase: Operation 또는 Idle
-ethercat slaves               # 연결한 드라이브가 보여야 합니다
+ethercat master                # Phase 가 보이면 정상
+ethercat slaves                # 연결한 드라이브가 보여야 합니다
 ```
 
-드라이브가 안 보이면 랜선 위치와 `MASTER0_DEVICE` 이름을 다시 봅니다.
+비어 있으면 랜선 위치와 `MASTER0_DEVICE` 이름을 다시 봅니다.
 
-### 3. 코드 받기
+### 6. 코드 받기
 
 ```bash
 cd ~
@@ -178,10 +246,9 @@ git clone -b main --recurse-submodules https://github.com/kimjoonho-git/motion_w
 cd ~/ros2_ws
 ```
 
-GitHub 사용자 이름과 **Personal Access Token** 을 물어봅니다. 비밀번호가
-아니라 토큰입니다.
+GitHub 사용자 이름과 **Personal Access Token** 을 물어봅니다.
 
-### 4. 설치 실행
+### 7. 설치 실행
 
 ```bash
 cd ~/ros2_ws
@@ -191,21 +258,11 @@ bash src/motion_web/install.sh
 > `git pull` 을 앞에 붙이지 마세요. 이력이 갈라진 PC 에서 `git pull` 이
 > 실패하면 설치가 **아예 안 돕니다.** 코드 받기는 이 스크립트가 스스로 합니다.
 
-몇 분 걸립니다. 스크립트가 하는 일:
+스크립트가 하는 일 — ROS 2 Humble 설치 · 최신 코드 수신 · 필수 프로그램 설치 ·
+사용자 권한·언어 설정 · rosdep 초기화 · EtherCAT 경로 확인 · 전체 빌드 ·
+**실시간 우선순위 권한 설정** · 자동실행 서비스 등록·시작.
 
-- ROS 2 Humble 저장소 등록·설치
-- 최신 코드 수신
-- 필수 프로그램 설치
-- 사용자 권한(dialout·audio)·언어 설정
-- rosdep 초기화
-- EtherCAT 경로 확인
-- 전체 빌드
-- **실시간 우선순위 권한 설정** (부족하면 파일을 쓰고 재부팅을 요구)
-- 자동실행 서비스 등록·시작
-
-#### 재부팅 안내가 나오면
-
-처음 설치하는 PC 는 거의 반드시 여기서 한 번 멈춥니다.
+#### 7-1. 재부팅 안내가 나오면 (거의 반드시 나옵니다)
 
 ```text
 실시간 우선순위 권한 설정 필요 · 현재 rtprio=0
@@ -214,17 +271,17 @@ bash src/motion_web/install.sh
 ```
 
 모터 제어에는 실시간 우선순위 **99** 가 필요합니다. 없으면 EtherCAT 주기를
-놓쳐 모터가 떨리거나 멈춥니다. 스크립트가 권한 파일을 대신 써 주지만,
+놓쳐 모터가 떨리거나 멈춥니다. 권한 파일은 스크립트가 써 주지만
 **재부팅해야 적용됩니다.**
 
 ```bash
 sudo reboot
 ```
 
-재부팅한 뒤 확인하고 같은 명령을 다시 실행합니다.
+재부팅한 뒤 확인하고 **같은 명령을 다시** 실행합니다.
 
 ```bash
-ulimit -r                              # 99 가 나와야 합니다
+ulimit -r                          # 99
 cd ~/ros2_ws
 bash src/motion_web/install.sh
 ```
@@ -232,33 +289,13 @@ bash src/motion_web/install.sh
 끝에 `설치 완료` 가 찍히면 됩니다. **여기서 재부팅을 건너뛰면 설치가 미완인
 채로 끝납니다.**
 
-### 5. 시간대 확인
-
-```bash
-timedatectl
-```
-
-`Time zone` 이 설치할 나라와 다르면 바꿉니다. **인터넷에 연결해도 시간대는
-저절로 안 바뀝니다.**
-
-```bash
-timedatectl list-timezones | grep Paris        # 도시 이름 찾기
-sudo timedatectl set-timezone Europe/Paris
-bash src/motion_web/install.sh                 # 프로그램을 다시 올려야 반영됩니다
-```
-
-- 반드시 **도시 이름**(`Europe/Paris`)으로 잡습니다. 그래야 서머타임을 운영체제가
-  알아서 처리합니다. `UTC+2` 같은 고정값은 1년에 두 번 손봐야 합니다.
-- 우분투 `설정 → 날짜 및 시간` 에서 골라도 됩니다. **「자동 시간대」는 끈
-  채로** 두세요. 전시 중에 저절로 바뀌면 스케줄이 튑니다.
-
-### 6. 동작 확인
+### 8. 확인
 
 ```bash
 systemctl --user status --no-pager motion-control.service motion-coordination.service
 ```
 
-둘 다 `active (running)` 이어야 합니다. 그다음 웹 화면에서:
+둘 다 `active (running)` 이어야 합니다. 그다음 웹 화면(`http://localhost:8000`)에서:
 
 | 보는 곳 | 정상 |
 |---|---|
@@ -266,13 +303,24 @@ systemctl --user status --no-pager motion-control.service motion-coordination.se
 | `모터 관리` | 축이 보이고 연결 상태 정상 |
 | `📅 모션 스케줄` 상단 | `🕒 PC 시각: …` 시간대가 현지와 같음 |
 
-**여기까지가 설치입니다.**
+마지막으로 **전원을 껐다 켜서** 사람 손 없이 웹 화면까지 올라오는지 봅니다.
+여기까지 되면 설치 끝입니다.
 
-PC 를 묶어 쓰는 연동 설정은 웹 화면 `PC 연동` 에서 합니다 · **설정 파일을
-손으로 만질 것은 없습니다.**
+---
 
-설치 단계에서 미리 맞춰 둘 것은 하나뿐입니다 — **묶을 PC 들을 같은 네트워크에
-두는 것.** 대역이 다르면 서로 못 찾습니다.
+### 설치 뒤에 하는 일 (웹 화면에서)
+
+설정 파일을 손으로 만질 일은 없습니다.
+
+| 무엇 | 어디서 |
+|---|---|
+| 모터 축 등록·설정 | `모터 관리` |
+| PC 묶어 쓰기 (연동) | `PC 연동` |
+| 모션 편집·실행 | `모션 데이터` · `모션 실행` |
+| 스케줄 | `📅 모션 스케줄` |
+
+연동을 쓰려면 **묶을 PC 들이 같은 네트워크에 있어야** 합니다. 대역이 다르면
+서로 못 찾습니다. 이건 설치할 때 정해지는 것이라 웹에서 못 고칩니다.
 
 ---
 
@@ -280,22 +328,16 @@ PC 를 묶어 쓰는 연동 설정은 웹 화면 `PC 연동` 에서 합니다 ·
 
 | 증상 | 원인 | 할 일 |
 |---|---|---|
-| 모터가 떨리거나 멈춤 | 실시간 권한 없음 | `ulimit -r` 이 99 인지 · 재부팅 후 설치를 다시 돌렸는지 |
-| 전원 넣어도 아무것도 안 뜸 | 자동 로그인·상주 안 됨 | 1번 다시 |
-| `ethercat slaves` 에 아무것도 없음 | 랜카드 지정 틀림 | `/etc/ethercat.conf` 의 `MASTER0_DEVICE` |
-| 다른 PC 가 「통신 단절」 | 그룹 ID·Domain ID 다름 · 대역 다름 | 웹 `PC 연동` 화면에서 확인 |
-| 스케줄이 엉뚱한 시각에 돎 | 시간대가 한국 그대로 | 5번 다시 |
-| 설치 중 인증 실패 | 비밀번호를 넣음 | GitHub **토큰**을 넣어야 합니다 |
+| 전원 넣어도 아무것도 안 뜸 | 자동 로그인·상주 | 3단계 |
+| 모터가 떨리거나 멈춤 | 실시간 권한 | `ulimit -r` 이 99 인지 · 7-1 |
+| `ethercat slaves` 가 비어 있음 | 랜카드 지정 | 5단계 |
+| 전시 중 화면이 꺼짐 | 화면보호기 | 2단계 |
+| 업데이트 창이 뜸 | 자동 업데이트 | 2단계 |
+| 스케줄이 엉뚱한 시각에 돎 | 시간대 | 4단계 |
+| 다른 PC 가 「통신 단절」 | 그룹 ID·Domain ID · 대역 | 웹 `PC 연동` |
+| 설치 중 인증 실패 | 비밀번호를 넣음 | GitHub **토큰** |
 
 ### 이미 설치된 PC 갱신
-
-작업공간 경로를 모르면 먼저 찾습니다.
-
-```bash
-find ~ -maxdepth 3 -type d -path '*/src/motion_web' 2>/dev/null
-```
-
-`/home/사용자/ros2_ws/src/motion_web` 가 나오면 작업공간은 `/home/사용자/ros2_ws` 입니다.
 
 ```bash
 cd ~/ros2_ws
@@ -304,6 +346,12 @@ bash src/motion_web/install.sh
 
 **갱신 명령은 이 한 줄입니다.** 모든 PC 에서 같습니다. 연동해서 쓰는 PC 는
 **전부** 갱신해야 서로 붙습니다.
+
+작업공간 경로를 모르면:
+
+```bash
+find ~ -maxdepth 3 -type d -path '*/src/motion_web' 2>/dev/null
+```
 
 ## 0. ROS 2 Humble 설치
 
