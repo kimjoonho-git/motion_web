@@ -1337,3 +1337,31 @@ def test_the_tolerance_is_not_twenty():
     node = _node()
     assert node._execution.max_start_spread_ms == 70.0
     assert node._config.max_trigger_sync_uncertainty_ms == 20.0
+
+
+# 로컬 상태를 기다리는 시간 · §6-151
+#
+# 8대까지 늘어나면 각 PC 의 일이 늘고 로컬 응답도 느려진다 · 250ms 일 때는
+# 262ms 에 돌아온 응답이 **성공인데도 제한시간에 걸려 버려졌다**(§6-146).
+
+def test_a_slow_but_real_answer_is_not_thrown_away():
+    """실측 262ms 짜리 응답이 살아남아야 한다 · 버리면 안전 타이머가 굶는다."""
+    assert coordination_node.LOCAL_RUNTIME_HTTP_TIMEOUT_SEC >= 0.30
+
+
+def test_one_try_still_fits_in_the_budget():
+    """한 번도 못 해보고 전체 정지가 나면 안 된다 · 제한시간이 예산을 넘으면 그렇게 된다."""
+    assert (
+        coordination_node.LOCAL_RUNTIME_HTTP_TIMEOUT_SEC
+        < coordination_node.LOCAL_RUNTIME_ACTIVE_TIMEOUT_SEC
+    )
+
+
+def test_the_status_path_uses_the_named_timeout():
+    """숫자를 코드 속에 박아 두면 늘려도 여기만 안 늘어난다."""
+    from pathlib import Path
+    source = Path(coordination_node.__file__).read_text(encoding='utf-8')
+    start = source.index('def _fetch_local_runtime_status(')
+    body = source[start:source.index('\n    def ', start)]
+    assert 'LOCAL_RUNTIME_HTTP_TIMEOUT_SEC' in body
+    assert 'timeout_sec=0.' not in body, '숫자를 다시 박았다'

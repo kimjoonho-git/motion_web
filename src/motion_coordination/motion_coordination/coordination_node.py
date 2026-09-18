@@ -53,7 +53,24 @@ from .trigger_sync import (
 
 
 MAX_LOCAL_BODY_BYTES = 64 * 1024
+
+#: 그룹 실행 중 로컬 상태를 못 받은 채 버티는 시간 · 넘으면 전체 정지
 LOCAL_RUNTIME_ACTIVE_TIMEOUT_SEC = 0.5
+
+#: 로컬 상태 한 번을 기다리는 시간 · §6-151
+#:
+#: 250ms 였다 · 그런데 그 언저리에서 돌아오는 응답이 실제로 있었다 · 웹 탭을
+#: 누르면 조회가 몰려 최대 262ms 까지 잰 적이 있다(§6-146) · 250ms 면 그런
+#: 응답이 **성공인데도 제한시간에 걸려 실패로 버려진다**.
+#:
+#: 앞으로 참가 PC 가 8대까지 늘어난다 · 그만큼 각 PC 의 일이 늘고 로컬 응답도
+#: 느려진다 · 300ms 로 여유를 준다.
+#:
+#: `LOCAL_RUNTIME_ACTIVE_TIMEOUT_SEC` 과 같이 봐야 한다 · 0.5초 안에 300ms
+#: 짜리 시도는 한 번하고 조금뿐이다 · 늦되 돌아오는 응답은 이제 살아남지만,
+#: **아예 안 오는 경우의 재시도 여유는 줄었다** · 둘을 같이 늘릴지는 현장에서
+#: 8대를 돌려 보고 정한다.
+LOCAL_RUNTIME_HTTP_TIMEOUT_SEC = 0.30
 
 
 def _stamp_to_float(stamp: Any) -> float:
@@ -2014,7 +2031,8 @@ class MotionCoordinationNode(Node):
 
     def _fetch_local_runtime_status(self) -> Dict[str, Any]:
         result = self._local_http(
-            '/api/coordination/local-status', timeout_sec=0.25,
+            '/api/coordination/local-status',
+            timeout_sec=LOCAL_RUNTIME_HTTP_TIMEOUT_SEC,
         )
         if result.get('bridge_state') != 'ok':
             raise OSError(result.get('message') or '로컬 Web Bridge 상태 응답 없음')

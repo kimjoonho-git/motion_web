@@ -132,13 +132,14 @@ def test_the_screen_can_read_the_failure(monkeypatch):
 
 # 멈추면 얼마 만에 되살아나는가 · §6-149
 #
-# 1분이었다 · "전시·무대에 충분" 하다고 적어 뒀는데, 정작 1분이 아쉬운 순간이
-# 공연 중에 멈췄을 때다 · 관객 앞에서 최대 1분을 죽어 있는다.
+# 간격 자체는 현장 운영이 정하는 값이라 검사가 못 박지 않는다 · 대신 **화면이
+# 그 값을 사람에게 알려주는가** 를 지킨다 · 「최대 N초 뒤 다시 시작합니다」를
+# 화면이 지어내면 안 되고, 값이 바뀌면 화면도 같이 바뀌어야 한다.
 
-def test_the_gap_after_a_stop_is_short():
-    """줄인 값이 다시 늘어나면 여기서 걸린다."""
+def test_the_gap_is_a_real_number():
+    """0 이나 음수면 점검이 쉬지 않고 돈다 · 브리지를 계속 두드린다."""
     from motion_schedule.motion_schedule_node import RECONCILE_INTERVAL_SEC
-    assert RECONCILE_INTERVAL_SEC <= 10.0
+    assert RECONCILE_INTERVAL_SEC > 0
 
 
 def test_the_screen_is_told_how_long_the_gap_is(monkeypatch):
