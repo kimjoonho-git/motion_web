@@ -188,16 +188,7 @@
           </div>
 
           <div class="axis-settings-tab-panel hidden" data-axis-settings-panel="table">
-            <div class="registry-message">값 수정 → 초안 반영 → 변경 내용 검증 후 저장</div>
             <div id="motorConfigTablePath" class="registry-message config-file-path">설정 파일: -</div>
-            <div class="registry-message">파일 관리 · 프로젝트 파일 ⋮</div>
-            <div class="registry-actions">
-              <button id="updateConfigTableButton" type="button" disabled>표 변경값을 초안에 반영</button>
-            </div>
-            <div class="config-profile-help">
-              <strong>프로파일 값 기준</strong>
-              <span>profile_position_value / profile_velocity_value / profile_effort_value는 위치, 속도, 토크 명령에 사용할 내부 인터페이스 ID입니다. AC 서보에서는 보통 목표 위치(Target position), 목표 속도(Target velocity), 목표 토크(Target effort) PDO 항목과 연결됩니다.</span>
-            </div>
             <div id="motorConfigTableRows" class="config-table-groups">
               <div class="empty config-table-empty">설정 파일을 불러오는 중</div>
             </div>
@@ -217,6 +208,14 @@
             저장 · 프로젝트 파일 │ 적용 · 실행 설정 · motor_manager 재시작
           </div>
           <div class="settings-final-actions">
+            <!-- 표에서 고친 값은 여기 첫 단추를 눌러야 초안에 들어간다 · §6-154
+                 전에는 이 단추만 표 안에 따로 있어서, 값을 고치고 아래로 내려온
+                 사람은 「저장」이 잠긴 것만 보고 이유를 몰랐다 · 세 단추를 한 줄에
+                 두어 왼쪽부터 누르면 되게 한다 -->
+            <div class="settings-final-action">
+              <span>표 편집</span>
+              <button id="updateConfigTableButton" type="button" disabled>표 변경값을 초안에 반영</button>
+            </div>
             <div class="settings-final-action">
               <span>프로젝트 설정</span>
               <button id="saveAxisConfigButton" class="primary" type="button" disabled>변경 내용 검증 후 저장</button>

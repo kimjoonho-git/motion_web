@@ -796,23 +796,6 @@
   border-color: #7ca2e8;
 }
 
-.config-profile-help {
-  display: grid;
-  gap: 4px;
-  margin: 8px 0 14px;
-  padding: 10px 12px;
-  border: 1px solid #d8e2ef;
-  border-radius: 6px;
-  background: #f7fafc;
-  color: var(--muted);
-  line-height: 1.45;
-}
-
-.config-profile-help strong {
-  color: var(--ink);
-}
-
-
 /* 모션 실행 통합 화면 · 파일 관리와 재생을 한 화면에서
    매번 쓰는 것(파일 고르기 · 실행)은 위쪽 2열에 두고,
    가끔 보는 것(검사 · 원본 · 실행 축)은 접어 둔다. */
