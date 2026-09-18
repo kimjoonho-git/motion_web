@@ -1,6 +1,6 @@
 """거부를 성공으로 세지 않는다 · §6-147
 
-실제로 겪은 고장이다 · 연동 PC 가 한 대뿐이라 스케줄이 60초마다 시도하고
+실제로 겪은 고장이다 · 연동 PC 가 한 대뿐이라 스케줄이 점검마다 시도하고
 매번 거부당했는데, 로그에는 이렇게 찍혔다.
 
     HTTP Request [...] success: {'success': False, 'message': '...2대 이상 필요합니다'}
@@ -128,3 +128,34 @@ def test_the_screen_can_read_the_failure(monkeypatch):
     payload = json.loads(published[0])
     assert payload['last_failure']['count'] == 1
     assert '안 됩니다' in payload['last_failure']['message']
+
+
+# 멈추면 얼마 만에 되살아나는가 · §6-149
+#
+# 1분이었다 · "전시·무대에 충분" 하다고 적어 뒀는데, 정작 1분이 아쉬운 순간이
+# 공연 중에 멈췄을 때다 · 관객 앞에서 최대 1분을 죽어 있는다.
+
+def test_the_gap_after_a_stop_is_short():
+    """줄인 값이 다시 늘어나면 여기서 걸린다."""
+    from motion_schedule.motion_schedule_node import RECONCILE_INTERVAL_SEC
+    assert RECONCILE_INTERVAL_SEC <= 10.0
+
+
+def test_the_screen_is_told_how_long_the_gap_is(monkeypatch):
+    """화면이 「최대 N초 뒤」라고 말하려면 그 N 을 알아야 한다 · 지어내면 안 된다."""
+    from datetime import datetime
+    from motion_schedule.motion_schedule_node import RECONCILE_INTERVAL_SEC
+
+    node = _node(monkeypatch, {'success': True})
+    published = []
+    node.store = SimpleNamespace(
+        current_project_id='proj-a', list_schedules=lambda: [],
+    )
+    node.engine = SimpleNamespace(active=lambda _now, _items: None)
+    node._is_master_pc = lambda: True
+    node._run_mode = 'schedule'
+    node.status_pub = SimpleNamespace(publish=lambda msg: published.append(msg.data))
+
+    node._publish_status(datetime.now().astimezone())
+
+    assert json.loads(published[0])['reconcile_interval_sec'] == RECONCILE_INTERVAL_SEC

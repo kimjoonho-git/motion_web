@@ -36,12 +36,15 @@ except ImportError:
 
 PACKAGE_HINT = 'motion_schedule'
 
-#: 몇 초마다 「스케줄이 말하는 상태」와 실제를 맞출 것인가 · §6-137
+#: 몇 초마다 「스케줄이 말하는 상태」와 실제를 맞출 것인가 · §6-149
 #:
-#: 짧게 하면 시작이 정확해지는 대신 브리지를 자주 두드린다 · 1분이면 전시·
-#: 무대에서 충분하고, 개장 시각을 정확히 맞춰야 하면 시작 시각을 1분 당겨
-#: 적으면 된다.
-RECONCILE_INTERVAL_SEC = 60.0
+#: 1분이었다 · "전시·무대에 충분하다" 고 적어 뒀는데, 정작 1분이 아쉬운
+#: 순간이 **공연 중에 멈췄을 때**다 · 관객 앞에서 최대 1분을 죽어 있는다.
+#:
+#: 10초로 줄인다 · 한 번 맞출 때 조회 두 번(`motion-run/status`,
+#: `coordination`)이고, 이 노드는 이미 1초마다 브리지를 두드리고 있어서
+#: 늘어나는 부담이 거의 없다.
+RECONCILE_INTERVAL_SEC = 10.0
 
 
 class MotionScheduleNode(Node):
@@ -377,6 +380,8 @@ class MotionScheduleNode(Node):
             "run_mode": self._run_mode,
             # 마지막으로 거부당한 시도 · 비어 있으면 정상이다
             "last_failure": dict(self._last_failure),
+            # 멈춰도 몇 초 뒤에 다시 맞추는가 · 화면이 사람에게 알려준다 · §6-149
+            "reconcile_interval_sec": RECONCILE_INTERVAL_SEC,
         }
         msg = String()
         msg.data = json.dumps(status)

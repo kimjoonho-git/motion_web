@@ -158,3 +158,29 @@ export function motionScheduleScopeNote(status) {
   }
   return '스케줄러 상태를 확인하고 있습니다.';
 }
+
+
+/** 지금 멈추면 스케줄이 되돌리는가 · §6-149
+ *
+ * 스케줄 모드에서는 사람이 정지를 눌러도 다음 점검에서 다시 시작한다 ·
+ * **이건 버그가 아니라 설계다** · 「사람이 멈췄나」를 요청 내용으로 추측하다가
+ * 그룹 정지·안전 정지까지 사람이 멈춘 것으로 읽는 오판이 나서, 추측을 없애고
+ * 모드 스위치 하나로 만들었다(§6-143).
+ *
+ * 문제는 그걸 아는 사람만 안다는 것이다 · 무대에서 "잠깐 멈춰" 하고 눌렀는데
+ * 얼마 뒤 저절로 도로 돌면 위험하다 · 그래서 멈출 때 말해 준다.
+ *
+ * 빈 문자열이면 되돌리지 않는다는 뜻이다.
+ */
+export function motionScheduleResumeNote(status) {
+  const read = readStatus(status);
+  if (!read) return '';
+  if (read.manual) return '';                       // 스케줄이 손대지 않는다
+  if (read.enabled && !read.isMaster) return '';    // 여기서는 스케줄이 안 돈다
+  if (!status?.active_schedule_id) return '';       // 지금은 돌아야 할 구간이 아니다
+  const seconds = Number(status?.reconcile_interval_sec);
+  const within = Number.isFinite(seconds) && seconds > 0
+    ? `최대 ${seconds.toFixed(0)}초 뒤` : '잠시 뒤';
+  return `스케줄 모드입니다 · ${within} 다시 시작합니다 · `
+    + '계속 멈춰 두려면 「📅 모션 스케줄」에서 수동 모드로 바꾸세요';
+}

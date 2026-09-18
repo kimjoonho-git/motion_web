@@ -1,4 +1,5 @@
 import { createMotionFileManager } from './motion_file_manager.js';
+import { motionScheduleResumeNote } from './schedule_scope.js';
 import {
   checkMotionRun,
   configureMotionAutomation,
@@ -13,6 +14,7 @@ import {
   projectFileDownloadUrl,
   saveMotionMapping,
   startMotionRun,
+  fetchScheduleStatus,
   stopMotionRun,
   stopMotionRunAfterCycle,
   requestMotionSafetyStop,
@@ -2696,6 +2698,19 @@ export function createMotionDataController({
     }
   }
 
+  /** 멈췄는데 스케줄이 되돌릴 거라면 그 자리에서 말해 준다 · §6-149
+   *
+   * 누를 때 한 번만 묻는다 · 상시로 두드리면 보여주려던 안내가 서버를 느리게
+   * 만든다 · 실제로 그것 때문에 그룹 실행이 통째로 멈춘 적이 있다(§6-146).
+   */
+  async function scheduleResumeNote() {
+    try {
+      return motionScheduleResumeNote(await fetchScheduleStatus());
+    } catch (error) {
+      return '';                 // 안내를 못 해도 정지 자체는 이미 됐다
+    }
+  }
+
   async function stopCurrentMotionRun() {
     motionRunLoading = true;
     setMotionRunMessage('정지 요청 중');
@@ -2704,7 +2719,10 @@ export function createMotionDataController({
       const payload = await stopMotionRun();
       motionRunStatus = payload.status || motionRunStatus || null;
       motionRunLastResult = payload;
-      setMotionRunMessage(payload.message || '정지 요청 완료');
+      const note = await scheduleResumeNote();
+      setMotionRunMessage(
+        `${payload.message || '정지 요청 완료'}${note ? ` · ${note}` : ''}`,
+      );
     } catch (error) {
       setMotionRunMessage(`정지 요청 실패: ${error?.message || error}`);
     } finally {
@@ -2721,7 +2739,10 @@ export function createMotionDataController({
       const payload = await stopMotionRunAfterCycle();
       motionRunStatus = payload.status || motionRunStatus || null;
       motionRunLastResult = payload;
-      setMotionRunMessage(payload.message || '회차 후 정지 대기 중');
+      const note = await scheduleResumeNote();
+      setMotionRunMessage(
+        `${payload.message || '회차 후 정지 대기 중'}${note ? ` · ${note}` : ''}`,
+      );
     } catch (error) {
       setMotionRunMessage(`정지 요청 실패: ${error?.message || error}`);
     } finally {

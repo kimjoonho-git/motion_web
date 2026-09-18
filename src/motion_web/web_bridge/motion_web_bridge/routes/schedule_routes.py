@@ -122,6 +122,9 @@ def register_schedule_routes(app: FastAPI, bridge, project_call) -> None:
             # 시각이 됐는데 거부당했는가 · 비어 있으면 정상 · §6-147
             "last_failure": node.get('last_failure') or {},
             "schedule_node_seen": bool(node.get('received')),
+            # 지금 멈추면 스케줄이 되돌리는가 · §6-149
+            "active_schedule_id": node.get('active_schedule_id') or '',
+            "reconcile_interval_sec": node.get('reconcile_interval_sec'),
             # 이 PC 가 몇 시라고 믿는가 · 해외 설치에서 시간대만 안 바뀐다
             "clock": local_clock.snapshot(),
         }

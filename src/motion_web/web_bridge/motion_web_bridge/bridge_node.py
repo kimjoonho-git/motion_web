@@ -628,6 +628,9 @@ class MotionWebBridge(Node):
             'received': bool(stamp),
             'age_sec': age,
             'last_failure': dict(payload.get('last_failure') or {}),
+            # 지금 돌아야 하는 구간 안인가 · 멈춰도 다시 시작되는지의 근거 · §6-149
+            'active_schedule_id': payload.get('active_schedule_id') or '',
+            'reconcile_interval_sec': payload.get('reconcile_interval_sec'),
         }
 
     def _motion_run_status_callback(self, msg: String) -> None:

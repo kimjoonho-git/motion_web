@@ -4,6 +4,7 @@ import test from 'node:test';
 import { indexHtml } from '../tools/index_html.mjs';
 import {
   motionScheduleBadgeState,
+  motionScheduleResumeNote,
   motionScheduleScopeNote,
 } from '../static/js/schedule_scope.js';
 
@@ -209,4 +210,45 @@ test('연동을 안 쓰는 단독 PC 의 거부도 말한다', () => {
   assert.equal(state.scope, 'local');
   assert.equal(state.tone, 'warn');
   assert.match(state.warning, /모션 파일이 없습니다/);
+});
+
+/**
+ * 멈춰도 스케줄이 되돌린다면 그 자리에서 말해야 한다 · §6-149
+ *
+ * 스케줄 모드에서는 사람이 정지를 눌러도 다음 점검에 다시 시작한다 · 설계가
+ * 그렇다(§6-143) · 문제는 아는 사람만 안다는 것이고, 무대에서 「잠깐 멈춰」
+ * 하고 눌렀는데 저절로 도로 도는 건 위험하다.
+ */
+
+const inWindow = (extra = {}) => status({
+  run_mode: 'schedule',
+  active_schedule_id: 'sched-1',
+  reconcile_interval_sec: 10,
+  ...extra,
+});
+
+test('스케줄이 되돌릴 상황이면 몇 초 뒤인지까지 말한다', () => {
+  const note = motionScheduleResumeNote(inWindow());
+  assert.match(note, /최대 10초 뒤 다시 시작/);
+  assert.match(note, /수동 모드/, '어떻게 해야 안 돌아오는지도 말해야 한다');
+});
+
+test('수동 모드면 되돌리지 않는다 · 겁줄 필요 없다', () => {
+  assert.equal(motionScheduleResumeNote(inWindow({ run_mode: 'manual' })), '');
+});
+
+test('구간 밖이면 되돌리지 않는다', () => {
+  assert.equal(motionScheduleResumeNote(inWindow({ active_schedule_id: '' })), '');
+});
+
+test('슬레이브에서는 스케줄이 손대지 않는다', () => {
+  assert.equal(motionScheduleResumeNote(inWindow({
+    coordination_enabled: true, is_master: false,
+  })), '');
+});
+
+test('주기를 모르면 숫자를 지어내지 않는다', () => {
+  const note = motionScheduleResumeNote(inWindow({ reconcile_interval_sec: null }));
+  assert.match(note, /잠시 뒤 다시 시작/);
+  assert.doesNotMatch(note, /\d+초/);
 });

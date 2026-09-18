@@ -309,6 +309,7 @@ export const startMotionRun = (payload) => request('POST', '/api/motion-run/star
 export const configureMotionAutomation = (payload) => request('PUT', '/api/motion-run/automation', { body: payload });
 
 
+export const fetchScheduleStatus = () => request('GET', '/api/schedule/status');
 export const stopMotionRun = () => request('POST', '/api/motion-run/stop');
 
 export const stopMotionRunAfterCycle = () => request('POST', '/api/motion-run/stop-after-cycle');
