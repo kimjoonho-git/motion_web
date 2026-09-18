@@ -86,6 +86,8 @@ Motion Control Studio는 상위 저장소에 통합되어 있으므로 별도로
 않습니다. Motion System과 그 내부 의존 저장소는 `--recurse-submodules`로
 받습니다.
 
+> **설치가 끝난 뒤 쓰는 법은 [사용법](docs/사용법.md) 을 보세요.**
+
 ## 새 PC 설치 · 우분투 설치 직후부터
 
 ### 준비할 것
