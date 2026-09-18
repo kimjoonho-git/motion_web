@@ -1222,3 +1222,17 @@
 .schedule-badge.tone-warn { background-color: var(--yellow); }
 .schedule-badge.tone-bad { background-color: var(--red); }
 .schedule-badge.tone-muted { background-color: var(--muted); }
+
+
+/* 스케줄이 태어난 시간대와 이 PC 가 어긋났다 · §6-150 */
+#scheduleTimezoneDrift {
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-weight: 700;
+  color: #fff;
+  background-color: var(--yellow);
+}
+#scheduleTimezoneDrift:empty {
+  display: none;
+}

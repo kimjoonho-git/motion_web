@@ -72,6 +72,12 @@ def register_schedule_routes(app: FastAPI, bridge, project_call) -> None:
             if not isinstance(data, dict):
                 raise ValueError("Request body must be a JSON object")
             item = ScheduleItem.from_dict(data)
+            # 지문은 **이 PC** 가 찍는다 · §6-150
+            #
+            # 브라우저가 정하게 두면 한국에서 원격으로 파리 PC 를 설정할 때
+            # 한국 시간대가 박힌다 · 어긋남을 잡으려고 둔 값이 되레 어긋남을
+            # 만든다 · 스케줄이 실제로 해석되는 곳은 이 PC 다.
+            item.saved_timezone = local_clock.timezone_name() or None
             if not store.upsert_schedule(item):
                 raise HTTPException(status_code=500, detail=f"Failed to save schedule to store for project '{store.current_project_id}'.")
             return {"status": "ok", "schedule": item.to_dict()}

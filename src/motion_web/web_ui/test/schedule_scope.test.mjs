@@ -6,6 +6,7 @@ import {
   motionScheduleBadgeState,
   motionScheduleResumeNote,
   motionScheduleScopeNote,
+  motionScheduleTimezoneDrift,
 } from '../static/js/schedule_scope.js';
 
 /**
@@ -251,4 +252,47 @@ test('주기를 모르면 숫자를 지어내지 않는다', () => {
   const note = motionScheduleResumeNote(inWindow({ reconcile_interval_sec: null }));
   assert.match(note, /잠시 뒤 다시 시작/);
   assert.doesNotMatch(note, /\d+초/);
+});
+
+/**
+ * 들고 나갔는데 시간대만 안 바뀐 경우 · §6-150
+ *
+ * NTP 는 절대 시각(UTC)만 맞춘다 · 시간대는 사람이 정하는 값이라 네트워크에
+ * 붙여도 안 바뀐다 · 한국에서 만든 09:17 스케줄이 파리에서 현지 02:17 에 돈다.
+ */
+
+const stamped = (zone) => ({ enabled: true, saved_timezone: zone });
+
+test('스케줄이 태어난 곳과 지금이 다르면 말한다', () => {
+  const note = motionScheduleTimezoneDrift([stamped('Asia/Seoul')], 'Europe/Paris');
+  assert.match(note, /Asia\/Seoul/);
+  assert.match(note, /Europe\/Paris/);
+});
+
+test('같으면 아무 말도 하지 않는다', () => {
+  assert.equal(motionScheduleTimezoneDrift([stamped('Asia/Seoul')], 'Asia/Seoul'), '');
+});
+
+test('꺼 둔 스케줄은 따지지 않는다', () => {
+  // 안 도는 스케줄 때문에 경고가 떠 있으면 곧 아무도 안 읽는다
+  const off = { enabled: false, saved_timezone: 'Asia/Seoul' };
+  assert.equal(motionScheduleTimezoneDrift([off], 'Europe/Paris'), '');
+});
+
+test('지문이 없는 옛 스케줄은 따지지 않는다', () => {
+  // 이 값이 생기기 전에 만든 스케줄이 있다 · 그걸로 겁주면 안 된다
+  assert.equal(motionScheduleTimezoneDrift([{ enabled: true }], 'Europe/Paris'), '');
+});
+
+test('지금 시간대를 모르면 따지지 않는다', () => {
+  assert.equal(motionScheduleTimezoneDrift([stamped('Asia/Seoul')], ''), '');
+});
+
+test('여러 곳에서 만들어졌으면 전부 적는다', () => {
+  const note = motionScheduleTimezoneDrift(
+    [stamped('Asia/Seoul'), stamped('America/New_York'), stamped('Europe/Paris')],
+    'Europe/Paris',
+  );
+  assert.match(note, /America\/New_York, Asia\/Seoul/);
+  assert.doesNotMatch(note, /Europe\/Paris 에서/, '지금과 같은 것은 빼야 한다');
 });

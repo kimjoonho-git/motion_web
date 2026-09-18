@@ -603,3 +603,35 @@
   user-select: all;
 }
 
+
+
+/* 시간대 바꾸기 · §6-150 · 해외 설치에서 사람이 직접 하는 유일한 일 */
+.timezone-howto .timezone-now {
+  font-size: 14px;
+}
+.timezone-howto .timezone-pick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.timezone-howto .timezone-pick input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+}
+.timezone-howto .timezone-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.timezone-howto .timezone-copied {
+  font-size: 13px;
+  color: var(--green);
+}
+.timezone-howto .timezone-mismatch {
+  font-weight: 700;
+  color: var(--yellow);
+}
+.timezone-howto .timezone-mismatch:empty {
+  display: none;
+}

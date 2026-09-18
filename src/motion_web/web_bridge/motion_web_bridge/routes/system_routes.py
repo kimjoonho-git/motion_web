@@ -9,6 +9,7 @@ from typing import List
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response
 from ament_index_python.packages import get_package_share_directory
+from motion_common import local_clock
 
 from motion_web_bridge import desktop_shortcut
 
@@ -137,6 +138,21 @@ def register_system_routes(app: FastAPI, bridge, project_call) -> None:
     @app.get('/api/status')
     async def status():
         return await asyncio.to_thread(bridge.snapshot)
+
+    @app.get('/api/system/time')
+    async def system_time():
+        """이 PC 의 시각·시간대와 고를 수 있는 지역 목록 · §6-150
+
+        **바꾸지는 않는다** · `timedatectl` 은 root 권한이 필요하고, 그 권한을
+        웹 서비스에 주는 것이 시간대를 잘못 잡는 것보다 위험하다 · 화면은
+        고를 거리와 **칠 명령**까지만 만들고, 치는 일은 사람이 터미널에서 한다.
+        """
+        return await asyncio.to_thread(
+            lambda: {
+                'clock': local_clock.snapshot(),
+                'timezones': list(local_clock.timezones()),
+            }
+        )
 
     @app.get('/api/system/version')
     async def system_version():

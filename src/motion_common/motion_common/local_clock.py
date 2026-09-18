@@ -91,6 +91,38 @@ def ntp_synced() -> Any:
     return result
 
 
+#: 고를 수 있는 지역 이름 · 목록은 바뀌지 않으므로 한 번만 읽는다
+_zones_cache: tuple = ()
+
+
+def timezones() -> tuple:
+    """고를 수 있는 지역 이름 전부 · 못 읽으면 빈 목록.
+
+    화면이 여기서 고르게 해야 오타가 없다 · `Europe/Pari` 처럼 한 글자만
+    틀려도 `timedatectl` 이 거부하고, 사람은 왜 안 되는지 모른 채 시간이 간다.
+
+    **자동으로 고르지는 않는다** · 위치 기반 자동 시간대는 전시장 네트워크에서
+    자주 틀리고, 더 나쁜 건 전시 중에 저절로 바뀔 수 있다는 것이다 · 고르는
+    일은 사람이 하고, 여기서는 고를 거리만 준다.
+    """
+    global _zones_cache
+    if _zones_cache:
+        return _zones_cache
+    try:
+        done = subprocess.run(
+            ['timedatectl', 'list-timezones'],
+            capture_output=True, text=True, timeout=5.0, check=False,
+        )
+        found = tuple(
+            line.strip() for line in (done.stdout or '').splitlines()
+            if line.strip()
+        )
+    except (OSError, subprocess.SubprocessError):
+        found = ()
+    _zones_cache = found
+    return found
+
+
 def snapshot() -> Dict[str, Any]:
     """화면이 한 줄로 보여줄 것 · 스케줄 엔진이 보는 것과 같은 시각이다.
 

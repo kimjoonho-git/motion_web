@@ -184,3 +184,32 @@ export function motionScheduleResumeNote(status) {
   return `스케줄 모드입니다 · ${within} 다시 시작합니다 · `
     + '계속 멈춰 두려면 「📅 모션 스케줄」에서 수동 모드로 바꾸세요';
 }
+
+
+/** 스케줄이 태어난 시간대와 이 PC 의 시간대가 어긋났는가 · §6-150
+ *
+ * PC 를 들고 나가서 네트워크에 붙여도 시간대는 안 바뀐다 · NTP 는 절대
+ * 시각(UTC)만 맞춘다 · 그래서 한국에서 만든 09:17 스케줄이 파리에서 현지
+ * 02:17 에 돈다 · 시계는 맞는데 화면 어디에도 이상이 없다.
+ *
+ * 스케줄은 **저장될 때 그 PC 의 시간대를 지문으로 적어 둔다** · 판단에는 쓰지
+ * 않는다 · 시각은 지금 이 PC 기준으로 해석한다 · 이 함수는 오직 지문과 지금이
+ * 다른지만 본다.
+ *
+ * 빈 문자열이면 어긋나지 않았다는 뜻이다.
+ */
+export function motionScheduleTimezoneDrift(schedules, timezone) {
+  const now = String(timezone || '').trim();
+  if (!now) return '';
+  const stamps = new Set(
+    (Array.isArray(schedules) ? schedules : [])
+      .filter((item) => item?.enabled !== false)
+      .map((item) => String(item?.saved_timezone || '').trim())
+      .filter(Boolean),
+  );
+  stamps.delete(now);
+  if (stamps.size === 0) return '';
+  const names = [...stamps].sort().join(', ');
+  return `⚠️ 이 스케줄은 ${names} 에서 만들어졌는데 이 PC 는 지금 ${now} 입니다 · `
+    + '시각을 다시 확인하세요 · 시간대를 바꾸려면 「터미널」 화면에서';
+}

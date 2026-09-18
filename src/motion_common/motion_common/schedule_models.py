@@ -24,6 +24,15 @@ class ScheduleItem:
     run_date: Optional[str] = None  # "YYYY-MM-DD" for "once"
     motion_config: MotionConfig = field(default_factory=MotionConfig)
     enabled: bool = True
+    #: 이 스케줄을 저장할 때 그 PC 의 시간대 · §6-150
+    #:
+    #: **판단에는 쓰지 않는다** · 시각은 지금 이 PC 의 시간대로 해석한다 ·
+    #: 전시장 운영자가 원하는 건 "현지 09시" 지 "서울 기준 몇 시" 가 아니다.
+    #:
+    #: 이 값은 오직 **어긋남을 알아채는 지문**이다 · PC 를 들고 나가서
+    #: 네트워크에 붙였는데 시간대가 안 바뀐 경우, 스케줄이 자기와 PC 가
+    #: 어긋난 걸 스스로 알 수 있다 · NTP 는 시간대를 안 고쳐준다.
+    saved_timezone: Optional[str] = None
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ScheduleItem":
@@ -45,6 +54,7 @@ class ScheduleItem:
             run_date=data.get("run_date"),
             motion_config=mc,
             enabled=data.get("enabled", True),
+            saved_timezone=data.get("saved_timezone"),
         )
 
     def to_dict(self) -> Dict[str, Any]:

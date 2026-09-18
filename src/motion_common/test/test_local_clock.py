@@ -78,3 +78,42 @@ def test_a_broken_timedatectl_does_not_crash_the_status(monkeypatch):
     monkeypatch.setattr(local_clock.subprocess, 'run', explode)
     assert local_clock.ntp_synced() is None
     assert local_clock.snapshot()['timezone']
+
+
+# 고를 거리를 준다 · 자동으로 고르지는 않는다 · §6-150
+
+def test_the_list_offers_region_names():
+    """`Asia/Seoul` 같은 지역 이름이라야 서머타임을 OS 가 알아서 처리한다."""
+    zones = local_clock.timezones()
+    if not zones:
+        pytest.skip('이 PC 에서 시간대 목록을 못 읽는다')
+    assert 'Asia/Seoul' in zones
+    assert all('/' in zone or zone in {'UTC'} for zone in zones[:20])
+
+
+def test_the_list_is_read_once(monkeypatch):
+    """목록은 안 바뀐다 · 화면이 열릴 때마다 프로세스를 띄울 이유가 없다."""
+    local_clock._zones_cache = ()
+    calls = {'count': 0}
+
+    def counted(*_args, **_kwargs):
+        calls['count'] += 1
+        return type('R', (), {'stdout': 'Asia/Seoul\nEurope/Paris\n'})()
+
+    monkeypatch.setattr(local_clock.subprocess, 'run', counted)
+    for _ in range(20):
+        local_clock.timezones()
+    assert calls['count'] == 1
+    local_clock._zones_cache = ()
+
+
+def test_a_missing_list_does_not_block_the_screen(monkeypatch):
+    """목록을 못 읽어도 사람이 손으로 칠 수 있어야 한다 · 막으면 설치를 못 한다."""
+    local_clock._zones_cache = ()
+
+    def explode(*_args, **_kwargs):
+        raise OSError('timedatectl 없음')
+
+    monkeypatch.setattr(local_clock.subprocess, 'run', explode)
+    assert local_clock.timezones() == ()
+    local_clock._zones_cache = ()

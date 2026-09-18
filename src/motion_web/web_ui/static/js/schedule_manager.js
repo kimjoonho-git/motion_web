@@ -6,6 +6,7 @@ import { motionLocalDateText } from './local_time.js';
 import {
     motionScheduleBadgeState,
     motionScheduleScopeNote,
+    motionScheduleTimezoneDrift,
 } from './schedule_scope.js';
 
 /** 그 PC 의 벽시계 글자 · 브라우저 시간대로 옮기지 않는다 · §6-147 */
@@ -146,6 +147,7 @@ const ScheduleManager = {
                 };
                 this.updateStatusBadge();
                 this.updateClock();
+                this.renderTimezoneDrift();
             }
         } catch (err) {
             console.warn('[ScheduleManager] Failed to load schedule status:', err);
@@ -224,10 +226,20 @@ const ScheduleManager = {
             if (res.ok) {
                 this.schedules = await res.json();
                 this.renderScheduleList();
+                this.renderTimezoneDrift();
             }
         } catch (err) {
             console.error('[ScheduleManager] Failed to fetch schedules:', err);
         }
+    },
+
+    /** 들고 나갔는데 시간대만 안 바뀌었는가 · §6-150 */
+    renderTimezoneDrift() {
+        const box = document.getElementById('scheduleTimezoneDrift');
+        if (!box) return;
+        box.textContent = motionScheduleTimezoneDrift(
+            this.schedules, this.status?.clock?.timezone,
+        );
     },
 
     renderScheduleList() {

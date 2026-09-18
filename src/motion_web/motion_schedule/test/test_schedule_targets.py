@@ -132,3 +132,40 @@ def test_schedule_button_is_disabled_on_a_slave():
     ).read_text(encoding='utf-8')
     assert '마스터 PC 에서 설정' in scope, '슬레이브에게 어디서 설정하는지 알려주지 않는다'
     assert '시각이 되어도 실행되지 않습니다' in scope, '빠져 있을 때 조용히 실패한다'
+
+
+def test_a_saved_schedule_remembers_which_timezone_it_was_born_in():
+    """들고 나갔는데 시간대만 안 바뀐 경우를 잡는 지문 · §6-150
+
+    NTP 는 절대 시각(UTC)만 맞춘다 · 시간대는 사람이 정하는 값이라 다른 나라에
+    가서 네트워크에 붙여도 안 바뀐다 · 한국에서 만든 09:17 스케줄이 파리에서
+    현지 02:17 에 돈다 · 시계는 맞아서 화면 어디에도 이상이 없다.
+
+    **찍는 것은 이 PC 다** · 브라우저가 정하게 두면 한국에서 원격으로 파리 PC 를
+    설정할 때 한국 시간대가 박힌다 · 어긋남을 잡으려던 값이 되레 어긋남을 만든다.
+    """
+    routes = (
+        Path(__file__).resolve().parents[2]
+        / 'web_bridge' / 'motion_web_bridge' / 'routes' / 'schedule_routes.py'
+    ).read_text(encoding='utf-8')
+
+    start = routes.index('def _save_schedule_blocking(')
+    body = routes[start:routes.index('\n    def ', start)]
+    assert 'saved_timezone' in body, '저장할 때 지문을 안 찍는다'
+    assert 'local_clock.timezone_name()' in body, '지문을 이 PC 에서 안 가져온다'
+
+
+def test_the_fingerprint_survives_a_round_trip():
+    """저장했다 읽으면 남아 있어야 한다 · 안 남으면 경고가 영영 안 뜬다."""
+    from motion_common.schedule_models import ScheduleItem
+
+    item = ScheduleItem.from_dict({'saved_timezone': 'Europe/Paris'})
+    assert item.saved_timezone == 'Europe/Paris'
+    assert ScheduleItem.from_dict(item.to_dict()).saved_timezone == 'Europe/Paris'
+
+
+def test_an_old_schedule_without_a_fingerprint_still_loads():
+    """이 값이 생기기 전에 만든 스케줄이 있다 · 그것 때문에 안 열리면 안 된다."""
+    from motion_common.schedule_models import ScheduleItem
+
+    assert ScheduleItem.from_dict({'schedule_name': '옛것'}).saved_timezone is None
