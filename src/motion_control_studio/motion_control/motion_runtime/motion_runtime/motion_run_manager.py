@@ -726,7 +726,19 @@ class MotionRunManager(Node):
         while time.monotonic() < deadline:
             if self._stop_event.is_set():
                 raise InterruptedError()
-            time.sleep(min(0.02, deadline - time.monotonic()))
+            # 시계를 두 번 본다 · 위의 `while` 에서 한 번, 여기서 또 한 번.
+            # 그 사이에 마감이 지나가면 남은 시간이 음수가 되고
+            # `time.sleep()` 이 터진다 · 기다림의 **마지막 한 바퀴**는 늘
+            # 남은 시간이 0 에 가까우므로 매 회차가 이 외줄을 한 번씩 탄다.
+            #
+            # 실제로 터졌다 · 2026-09-18 15:04 · 그룹 11회차의 「회차 후
+            # 초기화 대기」에서 `sleep length must be non-negative` 가 나고
+            # 세 대 연동이 통째로 정지했다 · 그전에는 6회차였다 · 확률이
+            # 낮아 재현이 안 됐다.
+            #
+            # 이미 지났으면 안 자고 넘어가면 된다 · 바로 다음 `while` 이
+            # 거짓이 되어 빠져나간다.
+            time.sleep(max(min(0.02, deadline - time.monotonic()), 0.0))
 
     def _wait_for_automation_ready(self, payload: Dict[str, Any], timeout_sec: float = 60.0) -> None:
         deadline = time.monotonic() + timeout_sec

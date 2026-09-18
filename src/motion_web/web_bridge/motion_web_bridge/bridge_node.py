@@ -49,6 +49,7 @@ from .routes import (
     register_safety_routes,
     register_system_routes,
     register_schedule_routes,
+    register_docs_routes,
 )
 from .motion_studio_sync import (
     MotionStudioSync,
@@ -2114,6 +2115,7 @@ def create_app(bridge: MotionWebBridge) -> FastAPI:
     register_safety_routes(app, bridge)
     register_midi_routes(app, bridge)
     register_schedule_routes(app, bridge, project_call)
+    register_docs_routes(app, bridge)
     register_motion_studio_routes(app, bridge, project_call, _safety_first_stop)
 
     return app

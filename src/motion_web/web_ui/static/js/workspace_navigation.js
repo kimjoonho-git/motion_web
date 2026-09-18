@@ -1,5 +1,7 @@
 export const WORKSPACE_GROUPS = Object.freeze({
-  operations: Object.freeze(['monitoring', 'servo-errors', 'log', 'btop', 'terminal']),
+  operations: Object.freeze([
+    'monitoring', 'servo-errors', 'log', 'btop', 'terminal', 'docs',
+  ]),
   setup: Object.freeze(['system', 'project', 'config']),
   creation: Object.freeze([
     'motion-mapping',
