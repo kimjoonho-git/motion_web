@@ -80,3 +80,41 @@ def test_no_topic_literals_remain_outside_this_module():
         for match in TOPIC_LITERAL.finditer(text):
             offenders.append(f'{path.relative_to(SOURCE_ROOT)}: {match.group(1)}')
     assert not offenders, '토픽 리터럴 잔존:\n' + '\n'.join(offenders)
+
+
+# 통로는 묶음 이름 아래 산다 · §6-179
+#
+# 모터 검색은 **시작 명령 넷이 맨 바깥**에 있고 진행률만 `motion_control/`
+# 안에 있었다 · 같은 기능인데 사는 곳이 달랐다 · 다른 통로는 전부 묶음
+# 이름이 붙어 있어서, 목록을 볼 때마다 이 넷만 「이건 뭐지」가 됐다.
+
+def test_every_channel_lives_under_a_group():
+    """묶음 없이 맨 바깥에 사는 통로가 없어야 한다."""
+    loose = []
+    for name in dir(topics):
+        if not name.isupper():
+            continue
+        value = getattr(topics, name)
+        if not isinstance(value, str) or not value.startswith('/'):
+            continue
+        # `/묶음/이름` 이어야 한다 · 시험에서는 PC 이름공간이 비어 있으므로
+        # 빗금이 둘이면 묶음이 있는 것이다 (`/motor/scan_all`)
+        if value.count('/') < 2:
+            loose.append(f'{name} = {value}')
+    assert loose == [], (
+        '묶음 이름 없이 맨 바깥에 있는 통로가 있습니다 · '
+        f'기능 이름 아래로 넣으세요:\n  ' + '\n  '.join(loose)
+    )
+
+
+def test_motor_scan_start_and_progress_live_together():
+    """시작 명령과 진행률이 흩어져 있으면 한쪽만 옮겨진다 · 실제로 그랬다."""
+    starts = [
+        topics.MOTOR_SCAN_ACTION,
+        topics.SCAN_MOTORS,
+        topics.SCAN_AC_SERVO_MOTORS,
+        topics.SCAN_DYNAMIXEL_MOTORS,
+        topics.SET_MONITORING,
+    ]
+    for value in starts + [topics.MOTOR_SCAN_PROGRESS]:
+        assert '/motor/' in value, f'모터 묶음 밖에 있습니다: {value}'

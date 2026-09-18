@@ -191,8 +191,8 @@ def test_scan_and_monitoring_services_carry_the_pc_nameplate():
 def test_scan_services_keep_their_old_names_when_the_nameplate_is_off():
     """켜지 않은 시스템은 글자 하나도 달라지면 안 된다."""
     plain = _topics('')
-    assert plain.MOTOR_SCAN_ACTION == '/motor_scan'
-    assert plain.SCAN_MOTORS == '/scan_motors'
-    assert plain.SCAN_AC_SERVO_MOTORS == '/scan_ac_servo_motors'
-    assert plain.SCAN_DYNAMIXEL_MOTORS == '/scan_dynamixel_motors'
-    assert plain.SET_MONITORING == '/set_monitoring'
+    assert plain.MOTOR_SCAN_ACTION == '/motor/scan'
+    assert plain.SCAN_MOTORS == '/motor/scan_all'
+    assert plain.SCAN_AC_SERVO_MOTORS == '/motor/scan_ac_servo'
+    assert plain.SCAN_DYNAMIXEL_MOTORS == '/motor/scan_dynamixel'
+    assert plain.SET_MONITORING == '/motor/set_monitoring'

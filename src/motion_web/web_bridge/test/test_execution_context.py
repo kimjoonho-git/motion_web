@@ -179,9 +179,9 @@ def _scan_of(bridge, **overrides):
             scan_client=None,
             scan_ac_servo_client=None,
             scan_dynamixel_client=None,
-            scan_service='/scan_motors',
-            scan_ac_servo_service='/scan_ac_servo_motors',
-            scan_dynamixel_service='/scan_dynamixel_motors',
+            scan_service='/motor/scan_all',
+            scan_ac_servo_service='/motor/scan_ac_servo',
+            scan_dynamixel_service='/motor/scan_dynamixel',
             load_motor_config=lambda: _motor_config_of(bridge).load(),
         )
         bridge._scan = scan
@@ -960,7 +960,7 @@ def test_scan_request_is_rejected_while_another_motor_type_scan_is_running():
         def wait_for_service(self, **_kwargs):
             raise AssertionError('busy scan must not call another ROS scan service')
 
-    result = _scan_of(bridge)._call_service(Client(), '/scan_dynamixel_motors', 1.0)
+    result = _scan_of(bridge)._call_service(Client(), '/motor/scan_dynamixel', 1.0)
 
     assert result['success'] is False
     assert result['scan'] is None
@@ -996,7 +996,7 @@ def test_physical_scan_is_allowed_without_a_selected_project():
         def call_async(self, _request):
             return Future()
 
-    result = _scan_of(bridge)._call_service(Client(), '/scan_ac_servo_motors', 1.0)
+    result = _scan_of(bridge)._call_service(Client(), '/motor/scan_ac_servo', 1.0)
 
     assert result['success'] is True
     assert result['project_id'] == ''
@@ -1348,9 +1348,9 @@ def test_scan_entrypoints_use_distinct_operation_types():
     bridge._scan_client = object()
     bridge._scan_ac_servo_client = object()
     bridge._scan_dynamixel_client = object()
-    bridge.scan_service = '/scan_motors'
-    bridge.scan_ac_servo_service = '/scan_ac_servo_motors'
-    bridge.scan_dynamixel_service = '/scan_dynamixel_motors'
+    bridge.scan_service = '/motor/scan_all'
+    bridge.scan_ac_servo_service = '/motor/scan_ac_servo'
+    bridge.scan_dynamixel_service = '/motor/scan_dynamixel'
     captured = []
 
     def call(_client, service_name, _timeout_sec, **kwargs):
@@ -1364,15 +1364,15 @@ def test_scan_entrypoints_use_distinct_operation_types():
     _scan_of(bridge).scan_dynamixel()
 
     assert captured == [
-        ('/scan_motors', {
+        ('/motor/scan_all', {
             'release_ethercat': True,
             'operation_type': 'full_scan',
         }),
-        ('/scan_ac_servo_motors', {
+        ('/motor/scan_ac_servo', {
             'release_ethercat': True,
             'operation_type': 'ac_servo_scan',
         }),
-        ('/scan_dynamixel_motors', {
+        ('/motor/scan_dynamixel', {
             'operation_type': 'dynamixel_scan',
         }),
     ]
@@ -1401,7 +1401,7 @@ def test_full_scan_returns_terminal_partial_operation():
 
     result = _scan_of(bridge)._call_service(
         object(),
-        '/scan_motors',
+        '/motor/scan_all',
         20.0,
         release_ethercat=True,
         operation_type='full_scan',
@@ -1462,7 +1462,7 @@ def test_ac_servo_scan_temporarily_releases_and_restores_motor_service(monkeypat
     monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
 
     result = _scan_of(bridge)._call_ethercat_service_locked(
-        object(), '/scan_ac_servo_motors', 10.0
+        object(), '/motor/scan_ac_servo', 10.0
     )
 
     assert result['success'] is True
@@ -1527,7 +1527,7 @@ def test_ac_servo_scan_fails_when_motor_runtime_does_not_recover(monkeypatch):
 
     result = _scan_of(bridge)._call_ethercat_service_locked(
         object(),
-        '/scan_ac_servo_motors',
+        '/motor/scan_ac_servo',
         10.0,
         operation_id=operation['operation_id'],
     )
@@ -1580,7 +1580,7 @@ def test_ac_servo_scan_restores_service_even_when_stop_command_times_out(monkeyp
     monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
 
     result = _scan_of(bridge)._call_ethercat_service_locked(
-        object(), '/scan_ac_servo_motors', 10.0
+        object(), '/motor/scan_ac_servo', 10.0
     )
 
     assert result['success'] is False
@@ -1649,7 +1649,7 @@ def test_ac_servo_scan_restores_service_even_when_status_update_fails(monkeypatc
 
     result = _scan_of(bridge)._call_ethercat_service_locked(
         object(),
-        '/scan_ac_servo_motors',
+        '/motor/scan_ac_servo',
         10.0,
         operation_id=operation['operation_id'],
     )
@@ -1822,7 +1822,7 @@ def test_ac_servo_scan_is_blocked_while_runtime_velocity_is_nonzero(monkeypatch)
     monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
 
     result = _scan_of(bridge)._call_ethercat_service_locked(
-        object(), '/scan_ac_servo_motors', 10.0
+        object(), '/motor/scan_ac_servo', 10.0
     )
 
     assert result['success'] is False
@@ -1854,7 +1854,7 @@ def test_ac_servo_scan_is_blocked_when_running_motor_state_is_not_fresh(
     monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
 
     result = _scan_of(bridge)._call_ethercat_service_locked(
-        object(), '/scan_ac_servo_motors', 10.0
+        object(), '/motor/scan_ac_servo', 10.0
     )
 
     assert result['success'] is False
@@ -1902,7 +1902,7 @@ def test_ac_servo_scan_retires_previous_project_runtime_without_feedback(
     monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
 
     result = _scan_of(bridge)._call_ethercat_service_locked(
-        object(), '/scan_ac_servo_motors', 10.0
+        object(), '/motor/scan_ac_servo', 10.0
     )
 
     assert result['success'] is True
@@ -1957,7 +1957,7 @@ def test_ac_servo_scan_still_blocks_observed_motion_during_project_handoff(
     monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
 
     result = _scan_of(bridge)._call_ethercat_service_locked(
-        object(), '/scan_ac_servo_motors', 10.0
+        object(), '/motor/scan_ac_servo', 10.0
     )
 
     assert result['success'] is False

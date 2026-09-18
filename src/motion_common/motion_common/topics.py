@@ -152,16 +152,31 @@ MOTOR_SCAN_PROGRESS = scoped('/motor/scan_progress')
 #
 # 진행률(`MOTOR_SCAN_PROGRESS`)은 처음부터 이름표가 있었다 · 요청 쪽만 빠져
 # 있었다. 같은 사실을 두 곳에 적으면 이렇게 한쪽만 어긋난다.
+#
+# 2026-09-18 에 `motor/` 아래로 모았다 · §6-179
+#
+# 진행률만 `/motion_control/motor_scan_progress` 에 있고 시작 명령 넷은
+# **맨 바깥**에 있었다 · 같은 기능인데 사는 곳이 달랐다 · 다른 통로는 전부
+# 묶음 이름이 붙어 있는데 이 넷만 없어서, 목록을 볼 때마다 「이건 뭐지」가 됐다.
+#
+#     /motor_scan              → /motor/scan
+#     /scan_motors             → /motor/scan_all
+#     /scan_ac_servo_motors    → /motor/scan_ac_servo
+#     /scan_dynamixel_motors   → /motor/scan_dynamixel
+#     /set_monitoring          → /motor/set_monitoring
+#
+# 전부 이 PC 안에서만 쓴다 · 그룹 통로가 아니므로 PC 끼리 주고받는 것과
+# 무관하다.
 #: 모터 검색 Action · 장기 작업
-MOTOR_SCAN_ACTION = scoped('/motor_scan')
+MOTOR_SCAN_ACTION = scoped('/motor/scan')
 #: 전체 검색 · Trigger
-SCAN_MOTORS = scoped('/scan_motors')
+SCAN_MOTORS = scoped('/motor/scan_all')
 #: AC 서보만 검색
-SCAN_AC_SERVO_MOTORS = scoped('/scan_ac_servo_motors')
+SCAN_AC_SERVO_MOTORS = scoped('/motor/scan_ac_servo')
 #: 다이나믹셀만 검색
-SCAN_DYNAMIXEL_MOTORS = scoped('/scan_dynamixel_motors')
+SCAN_DYNAMIXEL_MOTORS = scoped('/motor/scan_dynamixel')
 #: 상태 감시 켜고 끄기
-SET_MONITORING = scoped('/set_monitoring')
+SET_MONITORING = scoped('/motor/set_monitoring')
 #: 선택 프로젝트 전파
 ACTIVE_PROJECT = scoped('/motion_run/active_project')
 

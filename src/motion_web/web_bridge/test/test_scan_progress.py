@@ -56,9 +56,9 @@ def scan_orchestrator(bridge) -> ScanOrchestrator:
         scan_client=None,
         scan_ac_servo_client=None,
         scan_dynamixel_client=None,
-        scan_service='/scan_motors',
-        scan_ac_servo_service='/scan_ac_servo_motors',
-        scan_dynamixel_service='/scan_dynamixel_motors',
+        scan_service='/motor/scan_all',
+        scan_ac_servo_service='/motor/scan_ac_servo',
+        scan_dynamixel_service='/motor/scan_dynamixel',
         load_motor_config=lambda: {'success': False},
     )
 
