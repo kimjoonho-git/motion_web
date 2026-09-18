@@ -6,7 +6,6 @@ import json
 import os
 import threading
 import time
-import traceback
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -242,8 +241,8 @@ class MotionStudioNode(Node):
             )
             result = command_router.error_response(exc, project_attached=False)
         except Exception as exc:
-            self.get_logger().error(
-                f'studio command failed: {request.command}\n{traceback.format_exc()}'
+            command_router.log_command_failure(
+                self.get_logger(), f'studio command failed: {request.command}', exc,
             )
             result = command_router.error_response(exc)
         self._publish_json(self._response_pub, command_router.finalize(result, request))

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import traceback
 from typing import Any, Dict
 
 import rclpy
@@ -19,7 +18,7 @@ from .layer_validation import point_curve_frame_mismatches, validate_ranges
 from .mapping_model import manual_initial_values, motion_ranges
 from .motion_model import layer_motion_ids
 from .timeline import layer_conflicts
-from motion_common import topics
+from motion_common import command_router, topics
 
 
 class MotionStudioEditorNode(Node):
@@ -47,7 +46,10 @@ class MotionStudioEditorNode(Node):
             payload = request.get('payload') if isinstance(request.get('payload'), dict) else {}
             result = self._handle(command, payload)
         except Exception as exc:
-            self.get_logger().error(traceback.format_exc())
+            # 막은 것인가 고장 난 것인가 · §6-174
+            command_router.log_command_failure(
+                self.get_logger(), f'studio editor command failed: {locals().get("command", "")}', exc,
+            )
             request_id = locals().get('request_id', '')
             project_generation = locals().get('project_generation')
             result = {'success': False, 'message': str(exc)}

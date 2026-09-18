@@ -143,8 +143,8 @@ class MotionMappingManager(Node):
             # RcutilsLogger does not implement logging.Logger.exception().
             # Keep the manager alive so one invalid/missing file request does
             # not disable every later mapping and MIDI-bank operation.
-            self.get_logger().error(
-                f'motion mapping command failed: {command}: {exc}'
+            command_router.log_command_failure(
+                self.get_logger(), f'motion mapping command failed: {command}', exc,
             )
             response = command_router.error_response(
                 f'motion mapping command failed: {exc}'

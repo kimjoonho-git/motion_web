@@ -365,8 +365,8 @@ class MotionRunManager(Node):
                     self._require_execution_context(payload)
                 response = handler(payload)
         except Exception as exc:  # Defensive boundary for the web bridge.
-            self.get_logger().error(
-                f'motion run command failed: {command}\n{traceback.format_exc()}'
+            command_router.log_command_failure(
+                self.get_logger(), f'motion run command failed: {command}', exc,
             )
             response = command_router.error_response(
                 f'motion run command failed: {exc}'

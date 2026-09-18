@@ -15,12 +15,20 @@
 from __future__ import annotations
 
 import json
+import traceback
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional
 
 from . import generation as generation_mod
 
-__all__ = ['CommandRouter', 'Request', 'error_response', 'finalize', 'parse_request']
+__all__ = [
+    'CommandRouter',
+    'Request',
+    'error_response',
+    'finalize',
+    'log_command_failure',
+    'parse_request',
+]
 
 
 @dataclass(frozen=True)
@@ -59,6 +67,31 @@ def parse_request(data: Any, *, default_command: str = '') -> Optional[Request]:
         generation=raw.get('project_generation'),
         raw=raw,
     )
+
+
+def log_command_failure(logger: Any, label: str, exc: BaseException) -> None:
+    """막은 것인가 · 고장 난 것인가 · §6-174
+
+    **정상 거부를 스택 추적과 함께 ERROR 로 남기면 진짜 고장이 묻힌다.**
+
+    이 저장소에서 `ValueError` 는 「사용자에게 보일 거부」의 뜻으로 쓴다 ·
+    그 문구는 이미 사람이 읽을 말이고, 어디서 났는지는 도움이 안 된다.
+
+        포인트 곡선을 만들 Motion ID를 하나만 선택하세요
+        현재 프로젝트 세대와 다른 요청을 폐기했습니다
+        연동 모션이 도는 중에는 그룹에서 나갈 수 없습니다
+
+    전에는 이런 것도 열넉 줄짜리 스택 추적과 함께 ERROR 로 남았다 · 이틀치
+    로그에서 ERROR·WARN 의 **절반 이상**이 그것이었다 · 그래서 2026-09-18 에
+    그룹을 세운 진짜 버그(`sleep length must be non-negative`)를 찾는 데
+    반나절이 걸렸다.
+
+    거부는 남기되 조용히, 고장은 크게 · 아무것도 숨기지 않는다.
+    """
+    if isinstance(exc, ValueError):
+        logger.warn(f'{label}: {exc}')
+        return
+    logger.error(f'{label}\n{traceback.format_exc()}')
 
 
 def error_response(message: str, **extra: Any) -> Dict[str, Any]:

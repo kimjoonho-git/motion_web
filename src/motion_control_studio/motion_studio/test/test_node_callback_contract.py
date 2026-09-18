@@ -20,7 +20,13 @@ class CapturePublisher:
 
 
 def quiet_logger():
-    return SimpleNamespace(error=lambda _message: None)
+    # 실제 rclpy 로거와 같은 이름들 · 정상 거부는 `warn` 으로 나간다 · §6-174
+    return SimpleNamespace(
+        error=lambda _message: None,
+        warn=lambda _message: None,
+        warning=lambda _message: None,
+        info=lambda _message: None,
+    )
 
 
 def test_studio_request_callback_preserves_request_and_project_generation():
@@ -129,9 +135,7 @@ def _callback_node():
     node._project_generation = 1
     node._response_pub = CapturePublisher()
     node._publish_status = lambda: None
-    node.get_logger = lambda: SimpleNamespace(
-        error=lambda _message: None, warning=lambda _message: None,
-    )
+    node.get_logger = quiet_logger
     return node
 
 
