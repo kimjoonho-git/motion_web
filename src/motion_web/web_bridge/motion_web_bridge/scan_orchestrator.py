@@ -357,11 +357,19 @@ class ScanOrchestrator:
     # 장기 작업 Action · §6-26
     # ------------------------------------------------------------------ #
 
-    #: 서비스 이름 → Action 목표의 검색 종류
+    #: 서비스 이름 → Action 목표의 검색 종류 · §6-202
+    #:
+    #: **이름을 바꿀 때 이 표를 같이 고쳐야 한다** · 못 찾으면 조용히
+    #: `'all'` 로 떨어져 **AC 서보 검색이 전체 검색으로 바뀐다** · 전체는
+    #: 다이나믹셀까지 뒤지므로 AC 서보용 10초 제한을 넘겨 「scan service
+    #: timeout」이 난다 · 실제로 통로 이름을 `/motor/` 아래로 옮기면서
+    #: (§6-3) 이 표를 안 고쳐 그 일이 났다.
+    #:
+    #: 이름에서 직접 끌어내 표와 실제가 갈릴 수 없게 한다.
     TRANSPORT_BY_SERVICE = {
-        'scan_motors': 'all',
-        'scan_ac_servo_motors': 'ac_servo',
-        'scan_dynamixel_motors': 'dynamixel',
+        topics.SCAN_MOTORS.rsplit('/', 1)[-1]: 'all',
+        topics.SCAN_AC_SERVO_MOTORS.rsplit('/', 1)[-1]: 'ac_servo',
+        topics.SCAN_DYNAMIXEL_MOTORS.rsplit('/', 1)[-1]: 'dynamixel',
     }
 
     def _scan_action_client(self) -> Any:

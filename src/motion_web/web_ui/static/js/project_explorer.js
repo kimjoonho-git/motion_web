@@ -354,8 +354,12 @@ export function createProjectExplorerController({
         : '해제할 모터 실행 적용이 없습니다';
     }
     if (el.projectDeleteButton) el.projectDeleteButton.disabled = state.busy || !hasProject;
-    if (el.projectExplorerRefreshButton) el.projectExplorerRefreshButton.disabled = state.busy;
-    if (el.projectUsbRescanButton) el.projectUsbRescanButton.disabled = state.busy;
+    // **보기만 하는 것은 막지 않는다** · §6-203
+    //
+    // 다른 일이 도는 중(`state.busy`)이라고 목록 갱신까지 막았다 · 정작
+    // 그 「다른 일」이 멎었나 보려고 누르고 싶은 버튼이다.
+    if (el.projectExplorerRefreshButton) el.projectExplorerRefreshButton.disabled = false;
+    if (el.projectUsbRescanButton) el.projectUsbRescanButton.disabled = false;
     if (el.projectMemoInput) {
       el.projectMemoInput.disabled = state.busy || !hasProject || !memoSupported();
     }

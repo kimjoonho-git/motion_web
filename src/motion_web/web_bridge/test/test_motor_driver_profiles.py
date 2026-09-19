@@ -222,7 +222,16 @@ def test_ac_identity_metadata_round_trips_in_project_config(tmp_path):
     restored = motor_config_rules.registry_from_motor_config(config)['motors'][0]
 
     assert config['masters'][0]['slaves'][0]['alias'] == 403
-    assert config['masters'][0]['slaves'][0]['position'] == 1
+    # **alias 가 있으면 position 은 0 이다** · §6-201
+    #
+    # `ecrt_master_slave_config(master, alias, position, ...)` 의 position 은
+    # **alias 로부터의 상대 위치**다 (IgH 규약) · ring 위치가 아니다 ·
+    # 전에는 ring 위치 1 을 그대로 넣어 `403:1` 이 됐고, 그런 슬레이브는
+    # 없으므로 마스터가 끝내 못 붙였다 (`ethercat config` 에 `- -`) ·
+    # 슬레이브는 PREOP 에 머물고 알람도 안 떴다.
+    assert config['masters'][0]['slaves'][0]['position'] == 0
+    # 사람이 보는 ring 위치는 그대로 남는다 · 화면과 검색이 쓰는 값이다
+    assert config['web_axis_identities'][0]['slave_position'] == 1
     assert config['web_axis_identities'] == [{
         'controller_index': 0,
         'ethercat_master_index': 0,

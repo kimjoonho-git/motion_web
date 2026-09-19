@@ -119,7 +119,19 @@ def validate_runtime_motor_profiles(payload: Dict[str, Any]) -> None:
                             f'물리 식별 정보({identity_alias})에서 다릅니다. '
                             '모터축 설정에서 확인 후 변경 내용 저장을 누르세요'
                         )
-                    if position != identity_position:
+                    # **alias 를 쓰면 이 둘은 원래 다르다** · §6-201
+                    #
+                    # 실행 설정의 `position` 은 **alias 로부터의 상대 위치**라
+                    # 항상 0 이고, 물리 식별의 `slave_position` 은 사람이 보는
+                    # **링 위치**다 (0, 1, 2 …) · 같은 이름이지만 다른 값이다.
+                    #
+                    # 전에는 같아야 한다고 보고 견줬다 · 그래서 두 번째 서보의
+                    # 주소를 바로잡자 이 검사가 막았다 · alias 로 찾을 때는
+                    # 링 위치가 바뀌어도(체인 순서를 바꿔도) 그대로 찾아야
+                    # 하므로, 애초에 견줄 값이 아니다.
+                    #
+                    # alias 가 없으면 링 위치로 찾으므로 그때는 같아야 한다.
+                    if not alias and position != identity_position:
                         raise ValueError(
                             f'{axis}번 축의 Slave Position이 실행 설정({position})과 '
                             f'물리 식별 정보({identity_position})에서 다릅니다. '

@@ -72,7 +72,11 @@ export function createServoAlarmController({ el, getLatestState }) {
       el.servoAlarmProjectName.textContent = projectId || '프로젝트 선택 필요';
     }
     if (el.servoAlarmSaveButton) {
-      el.servoAlarmSaveButton.disabled = loading || !dirty || !projectId;
+      // 「바뀐 게 없으면」으로 막지 않는다 · §6-203 · 다시 저장해도 무해하다
+      el.servoAlarmSaveButton.disabled = loading || !projectId;
+      el.servoAlarmSaveButton.title = dirty
+        ? '변경한 서보 에러 정책을 저장합니다.'
+        : '바뀐 내용은 없지만 지금 값 그대로 다시 저장합니다.';
     }
     if (el.servoAlarmResetAllButton) {
       el.servoAlarmResetAllButton.disabled = loading || current.modified === 0;

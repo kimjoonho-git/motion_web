@@ -654,25 +654,52 @@ def test_web_only_motor_identity_change_does_not_require_motor_runtime_restart(t
     assert repository.execution_context(project_id)['motor_applied'] is False
 
 
-def test_runtime_motor_config_rejects_identity_position_mismatch(tmp_path):
-    repository = ProjectRepository(tmp_path / 'projects')
-    project_id = repository.create_project('불일치 검사')['project']['project_id']
-    repository.save_file(
-        project_id,
-        'motor_axes',
-        'motor_axes.yaml',
+def _motor_axes_yaml(alias: int, position: int, slave_position: int) -> str:
+    return (
         'period: 1000000\nmasters:\n- id: 0\n  type: ethercat\n  slaves:\n'
-        '  - controller_index: 0\n    driver_id: 0\n    alias: 403\n    position: 0\n'
-        'web_axis_identities:\n- controller_index: 0\n  eeprom_alias: 403\n'
-        '  rotary_alias: 3\n  slave_position: 1\n  vendor_id: 1647\n'
+        f'  - controller_index: 0\n    driver_id: 0\n    alias: {alias}\n'
+        f'    position: {position}\n'
+        'web_axis_identities:\n- controller_index: 0\n'
+        f'  eeprom_alias: {alias}\n'
+        f'  rotary_alias: 3\n  slave_position: {slave_position}\n  vendor_id: 1647\n'
         '  product_id: 1614282756\n  revision_number: 65536\n'
         '  serial_number: 123456\n  identity_source: physical_sii\n'
         'drivers:\n- id: 0\n  type: minas\n'
-        '  profile_velocity: 10\n  profile_acceleration: 20\n  profile_deceleration: 20\n',
+        '  profile_velocity: 10\n  profile_acceleration: 20\n  profile_deceleration: 20\n'
+    )
+
+
+def test_a_ring_position_mismatch_is_rejected_when_there_is_no_alias(tmp_path):
+    """alias 가 없으면 링 위치로 찾는다 · 그때는 둘이 같아야 한다."""
+    repository = ProjectRepository(tmp_path / 'projects')
+    project_id = repository.create_project('불일치 검사')['project']['project_id']
+    repository.save_file(
+        project_id, 'motor_axes', 'motor_axes.yaml',
+        _motor_axes_yaml(alias=0, position=0, slave_position=1),
     )
 
     with pytest.raises(ValueError, match='Slave Position'):
         repository.prepare_runtime_motor_config(project_id)
+
+
+def test_an_aliased_slave_may_differ_from_the_ring_position(tmp_path):
+    """**alias 를 쓰면 이 둘은 원래 다르다** · §6-201
+
+    실행 설정의 `position` 은 alias 로부터의 상대 위치라 항상 0 이고,
+    물리 식별의 `slave_position` 은 사람이 보는 링 위치다 (0, 1, 2 …) ·
+    같은 이름이지만 다른 값이다.
+
+    전에는 같아야 한다고 보고 견줬다 · 그래서 두 번째 서보의 주소를
+    바로잡자 이 검사가 막았다.
+    """
+    repository = ProjectRepository(tmp_path / 'projects')
+    project_id = repository.create_project('별칭 주소')['project']['project_id']
+    repository.save_file(
+        project_id, 'motor_axes', 'motor_axes.yaml',
+        _motor_axes_yaml(alias=403, position=0, slave_position=1),
+    )
+
+    repository.prepare_runtime_motor_config(project_id)   # 막지 않는다
 
 
 def test_same_named_files_remain_isolated_between_projects(tmp_path):

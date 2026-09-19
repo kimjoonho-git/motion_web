@@ -387,10 +387,24 @@ def motor_config_from_registry(
                 'name': name,
                 'driver_id': driver_id,
                 'alias': eeprom_alias,
-                # The motion-system position field is the physical
-                # EtherCAT Slave Position. Keep it identical to the
-                # user-visible identity instead of retaining stale data.
-                'position': slave_position,
+                # **alias 가 있으면 position 은 0 이다** · §6-201
+                #
+                # `ecrt_master_slave_config(master, alias, position, ...)` 에서
+                # `position` 은 **alias 로부터의 상대 위치**다 (IgH 규약) ·
+                # ring 위치가 아니다.
+                #
+                #     403:0  →  alias 403 인 바로 그 슬레이브    ← 맞다
+                #     403:1  →  alias 403 에서 한 칸 뒤          ← 그런 건 없다
+                #
+                # 전에는 ring 위치를 그대로 넣었다 · ring 0번은 `103:0` 이라
+                # 우연히 맞았지만 **2번째 이후 서보는 영영 안 붙었다** ·
+                # `ethercat config` 가 `403:1 ... - -` 로 보여 준다 (미결합) ·
+                # 슬레이브는 PREOP 에 머물고 알람은 뜨지 않는다 · 마스터가
+                # 그 슬레이브를 제 것으로 여기지 않으니 올릴 이유가 없다.
+                #
+                # alias 가 0 이면(=EEPROM 에 안 써 넣었으면) ring 위치로
+                # 찾아야 하므로 그대로 쓴다.
+                'position': 0 if eeprom_alias else slave_position,
                 'vendor_id': optional_int(
                     identity.get('vendor_id'),
                     optional_int(motor_config.get('vendor_id'), None),

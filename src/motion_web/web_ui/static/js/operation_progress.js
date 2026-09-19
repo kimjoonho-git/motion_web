@@ -41,7 +41,8 @@ export function createOperationProgressManager({
         ? (cancelable ? '확인 중단' : '진행 중')
         : '완료';
     }
-    if (el?.operationProgressClearButton) el.operationProgressClearButton.disabled = running;
+    // 내용 지우기는 화면만 비운다 · 도는 일을 건드리지 않는다 · §6-203
+    if (el?.operationProgressClearButton) el.operationProgressClearButton.disabled = false;
   }
 
   function update({

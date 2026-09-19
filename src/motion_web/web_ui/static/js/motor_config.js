@@ -803,10 +803,20 @@ export function createMotorConfigController({
     return configTableDrafts.size > 0;
   }
 
+  /** 저장 버튼은 **끄지 않는다** · §6-203
+   *
+   * 전에는 「바뀐 게 없으면」 껐다 · 그런데 다시 저장해서 나쁠 일이 없다 ·
+   * 오히려 파일이 어긋났나 싶을 때 다시 눌러 맞추고 싶어진다 · 그때 회색이면
+   * 사용자는 「왜 막지」만 남는다.
+   *
+   * 무엇이 바뀌었는지는 **글로** 알린다 · 버튼을 막아서 말하지 않는다.
+   */
   function updateSaveButtonState() {
     // 표를 다시 그리지 않는다 · 타이핑 중에 다시 그리면 입력칸이 초점을 잃는다
     if (el.saveAxisConfigButton) {
-      el.saveAxisConfigButton.disabled = !hasAnyConfigChanges();
+      el.saveAxisConfigButton.title = hasAnyConfigChanges()
+        ? '변경한 내용을 설정 파일에 씁니다.'
+        : '바뀐 내용은 없지만 지금 값 그대로 다시 저장합니다.';
     }
   }
 
@@ -2372,7 +2382,15 @@ export function createMotorConfigController({
     const modelApplyBlockMessage = modelProfileApplyBlockMessage();
     const applyBlockMessage = modelApplyBlockMessage || identityApplyBlockMessage;
     const alreadyApplied = selectedMotorConfigAlreadyApplied();
-    const canAttemptApply = hasConfiguredAxes && !alreadyApplied && !changed;
+    // **적용은 언제든 누를 수 있다** · §6-203
+    //
+    // 전에는 「이미 적용됐거나 저장 안 한 변경이 있으면」 껐다 · 그런데 적용은
+    // 곧 **모터 재시작**이다 · 장비가 이상할 때 사람이 가장 먼저 하고 싶은
+    // 일인데 그때 회색이었다.
+    //
+    // 저장 안 한 변경이 있으면 **저장된 파일**이 적용된다 · 그건 막을 일이
+    // 아니라 알려줄 일이다 (아래 title).
+    const canAttemptApply = hasConfiguredAxes;
     onIdentityStatusChange?.(motionControlBlockMessage());
 
     if (el.addAxisButton) el.addAxisButton.disabled = !canAdd;
@@ -2397,7 +2415,13 @@ export function createMotorConfigController({
         el.toggleAxisButton.textContent = '선택 축 사용상태 변경';
       }
     }
-    if (el.saveAxisConfigButton) el.saveAxisConfigButton.disabled = !changed;
+    // 저장은 언제나 누를 수 있다 · §6-203 · 다시 저장해서 나쁠 일이 없다
+    if (el.saveAxisConfigButton) {
+      el.saveAxisConfigButton.disabled = false;
+      el.saveAxisConfigButton.title = changed
+        ? '변경한 내용을 설정 파일에 씁니다.'
+        : '바뀐 내용은 없지만 지금 값 그대로 다시 저장합니다.';
+    }
     if (el.deleteMotorConfigButton) {
       el.deleteMotorConfigButton.disabled = !motorConfigFilePath;
       el.deleteMotorConfigButton.title = motorConfigFilePath
@@ -2406,17 +2430,18 @@ export function createMotorConfigController({
     }
     if (el.applyAxisConfigButton) el.applyAxisConfigButton.disabled = !canAttemptApply;
     if (el.applyAxisConfigButton) {
+      // 눌리는 버튼에 「적용됨」이라 쓰면 상태인지 동작인지 모른다 · §6-203
       el.applyAxisConfigButton.textContent = alreadyApplied
-        ? '장비에 적용됨'
+        ? '다시 적용 · 모터 재시작'
         : '장비에 적용 · 모터 재시작';
-      el.applyAxisConfigButton.title = canAttemptApply
-        ? applyBlockMessage || recoveryMessage
-          || '저장된 현재 프로젝트 설정을 실행 시스템에 적용합니다.'
-        : alreadyApplied
-          ? '현재 프로젝트의 저장 설정이 실행 시스템에 이미 적용됐습니다.'
-          : changed
-            ? '변경 내용을 먼저 저장하세요.'
-            : applyBlockMessage || '적용할 프로젝트 축 설정이 없습니다.';
+      el.applyAxisConfigButton.title = !hasConfiguredAxes
+        ? (applyBlockMessage || '적용할 프로젝트 축 설정이 없습니다.')
+        : changed
+          ? '저장하지 않은 변경이 있습니다 · **저장된 파일**이 적용됩니다.'
+          : alreadyApplied
+            ? '이미 적용된 설정입니다 · 다시 누르면 모터를 재시작합니다.'
+            : applyBlockMessage || recoveryMessage
+              || '저장된 현재 프로젝트 설정을 실행 시스템에 적용합니다.';
     }
     if (el.addAxisButton) {
       el.addAxisButton.title = canAdd

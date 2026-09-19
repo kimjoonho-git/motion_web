@@ -81,7 +81,20 @@ def annotate_ethercat_project_compatibility(
             config.get('ethercat_master_index'),
             optional_int(identity.get('ethercat_master_index'), 0),
         )
-        position = optional_int(config.get('position'), None)
+        # **짝은 링 위치로 맞춘다** · §6-201
+        #
+        # 실행 설정의 `position` 은 alias 를 쓰면 **alias 로부터의 상대 위치**라
+        # 항상 0 이다 · 그것으로 물리 검색 결과와 짝지으면 두 축이 모두
+        # 「Slave 0」을 찾아 두 번째가 「응답 없음」이 된다.
+        #
+        # 사람이 보는 링 위치는 `identity.slave_position` 이다 · 검색이
+        # 돌려주는 값도 그것이다 · 그러니 짝은 그것으로 맞춘다.
+        #
+        # alias 를 안 쓰면 둘이 같으므로 어느 쪽을 봐도 된다.
+        position = optional_int(
+            identity.get('slave_position'),
+            optional_int(config.get('position'), None),
+        )
         if master_index is None or master_index < 0 or position is None:
             continue
         expected_by_master.setdefault(master_index, []).append({

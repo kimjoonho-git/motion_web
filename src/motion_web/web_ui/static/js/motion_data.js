@@ -1430,7 +1430,12 @@ export function createMotionDataController({
     }
     if (el.motionRunCheckButton) {
       // 실행 준비 검사는 이 PC 기준이다 · 그룹 범위에서는 쓰지 않는다
-      el.motionRunCheckButton.disabled = motionRunLoading || !contextReady
+      // **준비 검사는 상태를 보는 일이다** · §6-203
+      //
+      // 「실행 컨텍스트가 준비 안 됐으면」 막았다 · 그런데 무엇이 모자란지
+      // 보려고 누르는 버튼이다 · 안 되는 이유를 알려면 눌러야 하는데
+      // 안 된다고 막으면 알 길이 없다.
+      el.motionRunCheckButton.disabled = motionRunLoading
         || !hasRequiredFiles || running || scope === 'group';
       el.motionRunCheckButton.title = scope === 'group'
         ? '실행 준비 검사는 이 PC 단독 범위에서만 사용합니다'

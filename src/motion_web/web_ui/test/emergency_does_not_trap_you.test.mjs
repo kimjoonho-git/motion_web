@@ -110,3 +110,66 @@ test('프로그램 재시작은 제 사정으로만 꺼진다', () => {
   assert.match(body, /자동 실행 서비스가 설치되지 않았습니다/);
   assert.doesNotMatch(body, /emergencyLatched/);
 });
+
+// --------------------------------------------------------------------------- //
+// 저장·적용은 막지 않는다 · §6-203
+// --------------------------------------------------------------------------- //
+
+const MOTOR_CONFIG = readFileSync(new URL('../static/js/motor_config.js', import.meta.url), 'utf8');
+
+test('저장 버튼은 끄지 않는다', () => {
+  // 전에는 「바뀐 게 없으면」 껐다 · 다시 저장해서 나쁠 일이 없다
+  assert.doesNotMatch(
+    codeOnly(MOTOR_CONFIG),
+    /saveAxisConfigButton\.disabled = !/,
+    '저장을 조건부로 막고 있습니다',
+  );
+  assert.match(MOTOR_CONFIG, /saveAxisConfigButton\.disabled = false/);
+});
+
+test('적용(모터 재시작)은 언제든 누를 수 있다', () => {
+  // 적용은 곧 모터 재시작이다 · 장비가 이상할 때 가장 먼저 하고 싶은 일이다
+  assert.match(MOTOR_CONFIG, /const canAttemptApply = hasConfiguredAxes;/);
+  assert.doesNotMatch(
+    codeOnly(MOTOR_CONFIG),
+    /canAttemptApply = .*alreadyApplied/,
+    '이미 적용됐다고 막고 있습니다',
+  );
+});
+
+test('눌리는 버튼에 상태를 쓰지 않는다', () => {
+  // 「장비에 적용됨」은 상태다 · 누를 수 있는 버튼에는 할 일을 쓴다
+  assert.match(MOTOR_CONFIG, /'다시 적용 · 모터 재시작'/);
+});
+
+test('보기만 하는 버튼은 막지 않는다', () => {
+  // 다른 일이 도는 중이라고 목록 갱신까지 막았다 · 정작 그 일이 멎었나
+  // 보려고 누르는 버튼이다
+  const explorer = readFileSync(new URL('../static/js/project_explorer.js', import.meta.url), 'utf8');
+  for (const button of ['projectExplorerRefreshButton', 'projectUsbRescanButton']) {
+    assert.match(
+      codeOnly(explorer),
+      new RegExp(`${button}\\.disabled = false`),
+      `${button} 을 조건부로 막고 있습니다`,
+    );
+  }
+});
+
+test('안 되는 이유를 보는 버튼을 막지 않는다', () => {
+  // 실행 준비 검사는 무엇이 모자란지 보려고 누른다 · 준비가 안 됐다고
+  // 막으면 이유를 알 길이 없다
+  const data = readFileSync(new URL('../static/js/motion_data.js', import.meta.url), 'utf8');
+  const start = data.indexOf('el.motionRunCheckButton.disabled');
+  const line = data.slice(start, data.indexOf(';', start));
+
+  assert.doesNotMatch(line, /contextReady/, '준비 안 됐다고 검사를 막습니다');
+});
+
+test('다시 저장은 언제나 된다', () => {
+  // 「바뀐 게 없으면」으로 막던 곳들 · 다시 저장해서 나쁠 일이 없다
+  const alarm = readFileSync(new URL('../static/js/servo_alarm.js', import.meta.url), 'utf8');
+  const start = alarm.indexOf('el.servoAlarmSaveButton.disabled');
+  const line = alarm.slice(start, alarm.indexOf(';', start));
+
+  assert.doesNotMatch(line, /!dirty/, '바뀐 게 없다고 저장을 막습니다');
+});
