@@ -71,7 +71,46 @@ from .servo_alarm_policy import (
 
 class MotionWebBridge(Node):
     def __init__(self) -> None:
+        """네 마디로 뜬다 · §6-193
+
+        **전에는 424줄이 한 줄로 이어져 있었다.**
+
+        브리지가 뜰 때 문제가 생기면 — 구독 이름이 틀렸다, 파라미터가 빠졌다,
+        순서가 꼬였다 — 424줄을 눈으로 훑어야 했다 · 실제로 「노드가 다 서기
+        전에 작업공간을 물어서」 터진 일이 이 근처였다.
+
+        **파일을 쪼개지는 않았다** · 브리지는 원래 모든 것을 잇는 자리라
+        넓은 것이 맞다 · 나누면 「무엇이 어디에 꽂혀 있나」를 찾으려고 파일
+        여럿을 오가야 한다 · 여기서는 **읽는 순서만** 드러낸다.
+
+        **순서가 곧 뜻이다.**
+
+            1  이름을 정한다      통로 이름·경로 · 아직 아무것도 안 만든다
+            2  제 것을 만든다     상태 칸·락·파일을 다루는 서비스
+            3  통로를 연다        ROS 구독·발행·클라이언트, 그리고 그 통로를
+                                 쥔 서비스 · 타이머는 맨 끝
+            4  떴다고 알린다
+
+        3번에서 통로와 서비스가 섞여 있는 것은 **일부러다** · 검색 클라이언트
+        넷을 만들고 그것을 쥔 `ScanOrchestrator` 를 바로 만든다 · 떼어 놓으면
+        「무엇을 쥐고 있나」가 안 보인다.
+
+        타이머가 맨 끝인 이유 · 타이머는 **일을 시작한다** · 아직 안 만든
+        것을 건드리면 뜨는 도중에 터진다.
+        """
         super().__init__('motion_web_bridge')
+        self._name_the_channels()
+        self._create_own_state()
+        self._open_channels()
+        self._log_started()
+
+    def _name_the_channels(self) -> None:
+        """통로 이름과 경로를 정한다 · 아직 아무것도 만들지 않는다 · §6-193
+
+        이름은 `topics` 가 단독으로 정한다 · 여기 글자로 적으면 PC 이름표가
+        빠져 **남의 PC 가 대답한다** (§6-103) · 파라미터로 열어 두는 것은
+        현장에서 런치 파일로 갈아끼울 수 있게 하기 위해서다.
+        """
         self.ethercat_alias_manager = EthercatAliasManager()
         self.motion_state_topic = self.declare_parameter(
             'motion_state_topic',
@@ -180,12 +219,15 @@ class MotionWebBridge(Node):
         self.port = int(self.declare_parameter('port', 8000).value)
         self.access_host = str(self.declare_parameter('access_host', '').value)
         self.workspace_root = _workspace_root()
+        # 이 둘은 **다음 마디에서 쓴다** · `_create_own_state()` 가
+        # `MotorConfigService` 를 만들 때 쥐여 준다 · 마디를 넘으므로
+        # 지역 변수로 두면 안 된다 · §6-193
         default_config = self.workspace_root / 'config' / 'bootstrap_motor_config.yaml'
-        launch_motor_config_file = Path(
+        self.launch_motor_config_file = Path(
             str(self.declare_parameter('motor_config_file', str(default_config)).value)
         ).expanduser()
         default_restart_script = self.workspace_root / 'scripts' / 'restart_motion_monitor.sh'
-        restart_script = Path(
+        self.restart_script = Path(
             str(self.declare_parameter('restart_script', str(default_restart_script)).value)
         ).expanduser()
         default_motion_projects_dir = self.workspace_root / 'motion_projects'
@@ -196,6 +238,13 @@ class MotionWebBridge(Node):
         ).expanduser()
         self.project_repository = ProjectRepository(self.motion_projects_dir)
         self._motor_lifecycle_lock = threading.Lock()
+
+    def _create_own_state(self) -> None:
+        """제 상태 칸과 락, 파일을 다루는 서비스를 만든다 · §6-193
+
+        아직 ROS 통로는 열지 않는다 · 여기서 만드는 서비스들은 파일과
+        저장소만 다루므로 통로가 없어도 선다.
+        """
         # 기동 시점의 파일과 선택 프로젝트의 편집 파일을 분리해 둔다. 적용·재시작
         # 전까지는 실행 중인 모터 스택이 기동 시점 파일을 물고 있다.
         self._project = ProjectService(
@@ -222,9 +271,9 @@ class MotionWebBridge(Node):
             lifecycle_lock=self._motor_lifecycle_lock,
             repository=self.project_repository,
             workspace_root=self.workspace_root,
-            selected=launch_motor_config_file,
-            applied=launch_motor_config_file.resolve(),
-            restart_script=restart_script,
+            selected=self.launch_motor_config_file,
+            applied=self.launch_motor_config_file.resolve(),
+            restart_script=self.restart_script,
         )
         self._project.bind_selected_sources()
         default_event_log_dir = self.workspace_root / 'log' / 'motor_events'
@@ -308,6 +357,17 @@ class MotionWebBridge(Node):
         self._bridge_instance_id = f'{os.getpid()}-{time.time_ns()}'
         self._bridge_started_at = time.time()
 
+    def _open_channels(self) -> None:
+        """ROS 통로를 열고, 그 통로를 쥔 서비스를 만든다 · §6-193
+
+        **통로와 서비스가 섞여 있는 것은 일부러다** · 검색 클라이언트 넷을
+        만들고 그것을 쥔 `ScanOrchestrator` 를 바로 만든다 · 발행 통로를
+        만들고 그것을 쥔 `ManualMotorCommandService` 를 바로 만든다 ·
+        떼어 놓으면 「무엇을 쥐고 있나」가 안 보인다.
+
+        **타이머는 맨 끝이다** · 타이머는 일을 시작한다 · 아직 안 만든 것을
+        건드리면 뜨는 도중에 터진다.
+        """
         self._subscription = self.create_subscription(
             String,
             self.motion_state_topic,
@@ -475,6 +535,8 @@ class MotionWebBridge(Node):
             0.1, self._coordination_watchdog_callback
         )
 
+    def _log_started(self) -> None:
+        """무엇을 물고 떴는지 남긴다 · 현장에서 이 줄 하나로 원인을 찾는다."""
         self.get_logger().info(
             f'motion_web_bridge started: topic={self.motion_state_topic}, '
             f'scan_service={self.scan_service}, '
