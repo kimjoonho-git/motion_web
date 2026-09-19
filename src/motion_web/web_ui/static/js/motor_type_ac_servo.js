@@ -218,7 +218,19 @@ export function scanRowToMotor(row, nextAvailableAxis) {
   const name = ethercatAlias !== null && ethercatAlias !== undefined
     ? `alias ${ethercatAlias}`
     : `slave ${row.slave_position ?? '-'}`;
+  // **검색이 읽은 모델을 쓴다** · §6-208
+  //
+  // `VERIFIED_AC_SERVO_MODELS` 는 비어 있다 · 그래서 여기서만 카탈로그를 보면
+  // 새로 추가한 서보는 **언제나** 「모델 미확인」이 됐고, 그것을 풀어 주는 길이
+  // 「선택 축 검색값 반영」 하나뿐이었다 · 사람이 그 순서를 알아야만 진도가
+  // 나갔다.
+  //
+  // 검색은 SII EEPROM 에서 모델을 이미 읽어 온다 (화면에 「SII 참고값」으로
+  // 보이던 그 값) · 「검색값 반영」 쪽은 진작 그것을 쓰고 있었다 · 두 길이
+  // 같은 규칙을 쓰게 맞춘다.
   const catalogModel = verifiedAcServoModel(row);
+  const siiModel = siiReportedAcServoModel(row);
+  const confirmedModel = catalogModel || siiModel;
   return normalizeMotor({
     id: motorIdFromScan(row),
     enabled: true,
@@ -243,9 +255,11 @@ export function scanRowToMotor(row, nextAvailableAxis) {
       sii_device_name: row.sii_device_name || row.device_name || '',
     },
     profile: {
-      driver_model: catalogModel,
-      model_confirmed: Boolean(catalogModel),
-      model_source: catalogModel ? 'verified_catalog' : '',
+      driver_model: confirmedModel,
+      model_confirmed: Boolean(confirmedModel),
+      model_source: catalogModel
+        ? 'verified_catalog'
+        : (siiModel ? 'physical_sii' : ''),
     },
     config: {
       controller_index: axis,

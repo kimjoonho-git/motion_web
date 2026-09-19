@@ -372,7 +372,20 @@ def test_runtime_rejects_duplicate_ethercat_master_index():
         validate_runtime_motor_profiles(payload)
 
 
-def test_runtime_rejects_unverified_ac_servo_profile(tmp_path):
+def test_an_ac_servo_whose_model_nobody_knows_still_applies(tmp_path):
+    """**모델을 몰라도 적용은 막지 않는다** · §6-213
+
+    AC 서보는 모델 이름이 **라벨일 뿐**이다 · minas 드라이버의 운전 값은
+    전부 템플릿에서 오고 모델 이름은 맨 끝에 라벨로만 덮인다 · 이 검사가
+    지키던 기계적 값이 하나도 없었다.
+
+    반대로 막히는 비용은 컸다 · SII 를 못 읽은 축 하나 때문에 **잘 붙은
+    축까지 전부** 못 올렸다 · 장비가 이상할 때 사람이 가장 먼저 누르고
+    싶은 것이 적용(모터 재시작)이다.
+
+    운전 값이 위험한 경우는 아래 `test_runtime_motor_config_rejects_unusable_ac_profile`
+    가 따로 막는다 · 그건 이름이 아니라 **값**을 본다.
+    """
     repository = ProjectRepository(tmp_path / 'projects')
     project_id = repository.create_project('unverified driver')['project']['project_id']
     repository.save_file(
@@ -382,26 +395,26 @@ def test_runtime_rejects_unverified_ac_servo_profile(tmp_path):
         'period: 1000000\nmasters:\n- id: 0\n  type: ethercat\n  slaves:\n'
         '  - controller_index: 0\n    driver_id: 0\n    alias: 0\n    position: 0\n'
         'drivers:\n- id: 0\n  type: minas\n  driver_model: UNVERIFIED_MINAS\n'
-        '  profile_velocity: 10\n  profile_acceleration: 20\n'
-        '  profile_deceleration: 20\n',
+        '  profile_velocity: 18000\n  profile_acceleration: 180000\n'
+        '  profile_deceleration: 180000\n',
     )
 
-    with pytest.raises(ValueError, match='실제 서보 드라이버 모델'):
-        repository.prepare_runtime_motor_config(project_id)
+    assert repository.prepare_runtime_motor_config(project_id)['success'] is True
 
 
-# 「서보 드라이버 명판 확인」 요구를 걷었다 · §6-205
+# 「서보 드라이버 명판 확인」 요구를 걷었다 · §6-205 · §6-213
 #
 # 사람이 명판을 보고 모델명을 다시 입력해야 적용이 됐다 · 모델은 검색이
 # SII 에서 직접 읽어 오므로 같은 값을 손으로 한 번 더 받는 단계였다 ·
 # 확인이 안 됐다고 적용을 막으니 축을 늘릴 때마다 거기서 멈췄다.
 #
-# 「모델을 아예 모른다」(UNVERIFIED_MINAS)는 여전히 막는다 · 그건 다른 일이다.
+# 「모델을 아예 모른다」도 이제 막지 않는다 · 모른다는 사실은 화면이 말로
+# 알린다 · 막아야 하는 것은 **값이 위험할 때**지 이름을 모를 때가 아니다.
 
 
 
 
-def test_unconfirmed_ac_servo_can_be_saved_but_not_applied(tmp_path):
+def test_an_ac_servo_with_no_model_saves_and_applies(tmp_path):
     repository = ProjectRepository(tmp_path / 'projects')
     project_id = repository.create_project('save before model confirmation')['project']['project_id']
     bridge = MotionWebBridge.__new__(MotionWebBridge)
@@ -436,8 +449,7 @@ def test_unconfirmed_ac_servo_can_be_saved_but_not_applied(tmp_path):
     assert repository.get_project(project_id)['project']['active_files']['motor_axes'] == (
         'motor_axes.yaml'
     )
-    with pytest.raises(ValueError, match='실제 서보 드라이버 모델'):
-        repository.prepare_runtime_motor_config(project_id)
+    assert repository.prepare_runtime_motor_config(project_id)['success'] is True
 
 
 def test_first_motor_config_save_returns_persisted_axes_before_apply(tmp_path):

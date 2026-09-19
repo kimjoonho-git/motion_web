@@ -106,24 +106,30 @@ test('motor management actions follow control, edit, save and apply groups', () 
   );
   assert.match(
     html,
-    /3\. 저장하고 장비에 적용[\s\S]*id="saveAxisConfigButton"[\s\S]*id="applyAxisConfigButton"/,
+    /3\. 저장하고 설정 적용[\s\S]*id="saveAxisConfigButton"[\s\S]*id="applyAxisConfigButton"/,
   );
   assert.doesNotMatch(html, /id="saveConfigTableButton"/);
   assert.match(styles, /\.settings-final-actions\s*\{[\s\S]*?grid-template-columns: repeat\(2,/);
 });
 
-test('unconfirmed model profiles can be stored but cannot be applied to runtime', () => {
+// 모델을 몰라도 저장도 적용도 된다 · §6-213
+// 못 읽은 축이 있으면 확인창에서 말로 알린다 · 막지는 않는다.
+test('an unreadable model stops neither the save nor the apply', () => {
   const saveFlow = controller.match(
     /async function saveAxisConfig\(\)[\s\S]*?async function applyConfigRestart\(\)/,
   )?.[0] || '';
   const applyFlow = controller.match(
-    /async function applyConfigRestart\(\)[\s\S]*?const recoveryWarning/,
+    /async function applyConfigRestart\(\)[\s\S]*?const confirmed = await showConfirm/,
   )?.[0] || '';
 
   assert.doesNotMatch(saveFlow, /unverifiedAcModels/);
   assert.match(saveFlow, /await saveMotorConfig/);
-  assert.match(applyFlow, /modelProfileApplyBlockMessage\(\)/);
-  assert.match(applyFlow, /window\.alert\(applyBlockMessage\)/);
+  assert.match(applyFlow, /modelProfileWarningMessage\(\)/);
+  assert.match(applyFlow, /const modelWarning = /);
+  assert.doesNotMatch(
+    applyFlow.match(/const applyBlockMessage[\s\S]*?;/)?.[0] || '',
+    /modelWarning/,
+  );
 });
 
 test('project selection lives in the left project sidebar only', () => {

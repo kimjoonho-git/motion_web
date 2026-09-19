@@ -31,6 +31,8 @@
 alias 를 알고 있는데 **설정만 딴 곳을 가리킨다.**
 """
 
+from pathlib import Path
+
 import pytest
 
 from motion_web_bridge import motor_config_build
@@ -147,3 +149,48 @@ def test_the_table_is_derived_not_retyped():
     assert 'topics.SCAN_MOTORS' in body
     assert 'topics.SCAN_AC_SERVO_MOTORS' in body
     assert 'topics.SCAN_DYNAMIXEL_MOTORS' in body
+
+
+# --------------------------------------------------------------------------- #
+# 주소값과 Slave 값은 다른 숫자다 · §6-207
+# --------------------------------------------------------------------------- #
+
+def test_the_ring_position_travels_with_the_runtime_config(tmp_path):
+    """**사람이 보는 Slave 값을 따로 실어 보낸다.**
+
+    실행 설정의 `position` 은 마스터가 쓰는 주소값이라 alias 를 쓰면 늘 0 이다 ·
+    상태 감시기가 그것을 「Slave Position」으로 내보내는 바람에 서보 두 대가
+    모두 0 으로 보였다.
+
+    `web_axis_identities` 는 실행 설정에서 떨어져 나가므로(모터 노드가 안 쓰는
+    값이라 뺀다) 슬레이브에 `ring_position` 으로 같이 적어 보낸다 · 모터
+    매니저는 이름으로 읽는 키만 보므로 모르는 키는 그냥 지나간다.
+    """
+    slave, config = _slave(tmp_path, 403, 1)
+
+    assert slave['position'] == 0, '마스터가 쓰는 주소값'
+    assert slave['ring_position'] == 1, '사람이 보는 Slave 값'
+    assert config['web_axis_identities'][0]['slave_position'] == 1
+
+
+def test_without_an_alias_both_numbers_agree(tmp_path):
+    """alias 를 안 쓰면 주소값이 곧 Slave 값이다."""
+    slave, _config = _slave(tmp_path, 0, 2)
+
+    assert slave['position'] == 2
+    assert slave['ring_position'] == 2
+
+
+SRC = Path(__file__).resolve().parents[3]
+
+
+def test_the_state_monitor_reads_the_ring_position():
+    """상태 감시기가 주소값을 Slave 값이라고 내보내면 안 된다."""
+    source = (
+        SRC / 'motion_control_studio/motion_control/motion_state_monitor'
+        / 'motion_state_monitor/monitor_node.py'
+    ).read_text(encoding='utf-8')
+    start = source.index("'slave_position':")
+    body = source[start:start + 260]
+
+    assert "'ring_position'" in body, '주소값을 그대로 내보냅니다'

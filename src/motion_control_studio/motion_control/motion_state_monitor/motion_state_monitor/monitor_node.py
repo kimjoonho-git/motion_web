@@ -203,6 +203,20 @@ class MotionStateMonitor(Node):
             if isinstance(driver, dict) and driver.get('id') is not None
         }
 
+        # 사람이 보는 **링 위치**는 여기 있다 · §6-207
+        #
+        # 실행 설정의 `slaves[].position` 은 alias 를 쓰면 **alias 로부터의
+        # 상대 위치**라 늘 0 이다 (IgH 규약 · §6-201) · 그것을 그대로
+        # `slave_position` 으로 내보내면 서보 두 대가 모두 0 으로 보인다.
+        #
+        # 링 위치는 `web_axis_identities` 가 들고 있다 · 검색이 돌려주는 값도
+        # 그것이라, 화면의 런타임 대조가 이 값으로 짝을 맞춘다.
+        ring_position_by_axis = {
+            int(item.get('controller_index')): item.get('slave_position')
+            for item in (config.get('web_axis_identities') or [])
+            if isinstance(item, dict) and item.get('controller_index') is not None
+        }
+
         for master in config.get('masters', []):
             if not isinstance(master, dict):
                 continue
@@ -253,7 +267,12 @@ class MotionStateMonitor(Node):
                     'lower': unchecked_float(driver.get('lower')),
                     'upper': unchecked_float(driver.get('upper')),
                     'alias': slave.get('alias'),
-                    'slave_position': slave.get('position'),
+                    'slave_position': slave.get(
+                        'ring_position',
+                        ring_position_by_axis.get(
+                            int(slave['controller_index']), slave.get('position')
+                        ),
+                    ),
                     'node_id': slave.get(
                         'node_id', slave.get('bus_id', slave.get('id'))
                     ),

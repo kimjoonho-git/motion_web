@@ -216,24 +216,25 @@ def validate_runtime_motor_profiles(payload: Dict[str, Any]) -> None:
                 raise ValueError(
                     f'{axis}번 축의 driver_id {driver_id} 설정이 없습니다'
                 )
-            if (
-                str(driver.get('type') or '') == 'minas'
-                and str(driver.get('driver_model') or '').strip().upper()
-                == 'UNVERIFIED_MINAS'
-            ):
-                raise ValueError(
-                    f'{axis}번 축의 실제 서보 드라이버 모델이 확인되지 않았습니다. '
-                    '드라이버 명판을 확인해 실제 드라이버 모델을 입력하세요'
-                )
-            # 「명판 확인」 요구를 걷었다 · §6-205
+            # **모델을 몰라도 적용은 막지 않는다** · §6-213
             #
-            # 사람이 드라이버 명판을 눈으로 보고 모델명을 다시 입력해야
-            # 적용이 됐다 · 그런데 모델은 검색이 SII 에서 직접 읽어 온다 ·
-            # 같은 값을 손으로 한 번 더 받는 단계였다.
+            # 「명판 확인」 요구는 §6-205 에서 걷었고, 남겨 뒀던
+            # 「모델을 아예 모른다」 검사도 여기서 걷는다.
             #
-            # 확인이 안 됐다고 **적용을 막으니**, 축을 늘리거나 드라이버를
-            # 바꿀 때마다 거기서 멈췄다 · 아래 `UNVERIFIED_MINAS` 검사는
-            # 남긴다 · 그건 「모델을 아예 모른다」는 뜻이라 다르다.
+            # AC 서보는 **모델 이름이 라벨일 뿐**이기 때문이다 ·
+            # `append_driver_for_registry_motor` 를 보면 minas 드라이버의
+            # 운전 값(pulse_per_revolution · profile_velocity · 가감속 …)은
+            # 전부 템플릿에서 오고, 모델 이름은 맨 끝에 라벨로만 덮인다 ·
+            # 이 검사가 지키던 기계적 값이 하나도 없다.
+            #
+            # 반대로 막히는 비용은 컸다 · 검색이 SII 를 못 읽은 축 하나
+            # 때문에 **잘 붙은 축까지 전부** 못 올렸다 · 장비가 이상할 때
+            # 사람이 가장 먼저 누르고 싶은 것이 적용(모터 재시작)이다.
+            #
+            # 모른다는 사실은 화면이 말로 알린다 (`motorModelProfileWarning`).
+            #
+            # 다이나믹셀은 모델이 param_file 과 정격 속도를 고르므로 사정이
+            # 다르지만, 이 검사는 애초에 minas 만 보고 있었다.
             for field in required_positive:
                 try:
                     value = float(driver.get(field))

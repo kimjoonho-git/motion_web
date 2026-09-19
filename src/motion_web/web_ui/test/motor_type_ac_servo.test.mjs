@@ -224,7 +224,14 @@ test('runtime feedback cannot confirm a different or stale slave', () => {
 });
 
 
-test('physical SII name is not promoted to verified driver model', () => {
+test('SII 가 읽어 온 모델을 쓰되 출처는 구분한다 · §6-208', () => {
+  // 전에는 SII 이름을 모델로 쓰지 않았다 · 사람이 명판을 보고 다시
+  // 입력해야 「확인됨」이 됐다 · 그런데 「확인된 모델 목록」이 비어 있어
+  // 새 서보는 **언제나** 「모델 미확인」이었고, 그것을 푸는 길이 하나뿐이라
+  // 그 순서를 모르면 진도가 안 나갔다.
+  //
+  // 이제 검색이 읽은 값을 쓴다 · 다만 카탈로그로 확인한 것과 장치가 말한
+  // 것은 `model_source` 로 구분해 남긴다.
   const motor = scanRowToMotor({
     master_index: 0,
     slave_position: 2,
@@ -240,8 +247,9 @@ test('physical SII name is not promoted to verified driver model', () => {
 
   assert.equal(motor.identity.driver_model, undefined);
   assert.equal(motor.identity.nameplate_confirmed, undefined);
-  assert.equal(motor.profile.driver_model, '');
-  assert.equal(motor.profile.model_confirmed, false);
+  assert.equal(motor.profile.driver_model, 'SII-ORDER');
+  assert.equal(motor.profile.model_confirmed, true);
+  assert.equal(motor.profile.model_source, 'physical_sii', '카탈로그 확인은 아니다');
   assert.equal(motor.identity.sii_order_number, 'SII-ORDER');
   assert.equal(motor.identity.sii_device_name, 'SII-DEVICE');
   assert.equal(motor.identity.serial_number, 123456);

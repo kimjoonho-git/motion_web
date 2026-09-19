@@ -150,10 +150,14 @@ test('project-compatible physical scan gaps are displayed as partial, not failur
     controller,
     /scanPartial \? 'partial' : ''/,
   );
-  assert.match(
-    controller,
-    /const scanPartial = payload\.partial === true\s*\|\| payload\.scan\?\.scan_outcome === 'partial'/,
-  );
+  // 전체 검색도 **서버 판정**을 따른다 · §6-206
+  //
+  // `scan.scan_outcome` / `scan.scan_complete` 는 「등록된 Master 가 전부
+  // 응답했나」다 · 프로젝트가 쓰지 않는 Master 가 비어 있으면 늘 partial 이라
+  // 다 찾았는데도 「일부 검색만 완료됐습니다」가 떴다 · 서버가 프로젝트
+  // 기준으로 다시 판정해 success/partial 로 보낸다 (§6-198).
+  assert.match(controller, /const scanComplete = payload\.success === true;/);
+  assert.match(controller, /const scanPartial = payload\.partial === true;/);
 });
 
 test('motor configuration file deletion uses the matching DELETE endpoint', () => {
@@ -176,7 +180,7 @@ test('저장이 표 편집을 흡수한다 · 중간 단추를 다시 만들지 
 
 test('두 단추가 무엇을 하는지 이름만 보고 알 수 있다', () => {
   assert.match(html, /id="saveAxisConfigButton"[^>]*>설정 저장</);
-  assert.match(html, /id="applyAxisConfigButton"[^>]*>장비에 적용 · 모터 재시작</);
+  assert.match(html, /id="applyAxisConfigButton"[^>]*>설정 적용 · 모터 재시작</);
 });
 
 test('motor configuration file actions are concise', () => {

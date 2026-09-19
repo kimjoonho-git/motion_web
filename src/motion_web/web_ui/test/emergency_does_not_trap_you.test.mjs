@@ -129,7 +129,7 @@ test('저장 버튼은 끄지 않는다', () => {
 
 test('적용(모터 재시작)은 언제든 누를 수 있다', () => {
   // 적용은 곧 모터 재시작이다 · 장비가 이상할 때 가장 먼저 하고 싶은 일이다
-  assert.match(MOTOR_CONFIG, /const canAttemptApply = hasConfiguredAxes;/);
+  assert.match(MOTOR_CONFIG, /const canAttemptApply = true;/);
   assert.doesNotMatch(
     codeOnly(MOTOR_CONFIG),
     /canAttemptApply = .*alreadyApplied/,
@@ -139,7 +139,7 @@ test('적용(모터 재시작)은 언제든 누를 수 있다', () => {
 
 test('눌리는 버튼에 상태를 쓰지 않는다', () => {
   // 「장비에 적용됨」은 상태다 · 누를 수 있는 버튼에는 할 일을 쓴다
-  assert.match(MOTOR_CONFIG, /'다시 적용 · 모터 재시작'/);
+  assert.match(MOTOR_CONFIG, /'설정 다시 적용 · 모터 재시작'/);
 });
 
 test('보기만 하는 버튼은 막지 않는다', () => {
@@ -199,5 +199,51 @@ test('검색하면 나온 것을 전부 고른다', () => {
   const start = config.indexOf('function autoSelectNewScanAxes');
   const body = config.slice(start, config.indexOf('\n  }', start));
 
-  assert.match(body, /rows\.filter\(\(row\) => row\.scanRow \|\| row\.proposedMotor\)/);
+  // 검색 결과가 담기는 칸이 둘이다 · AC 서보 scanRow · 다이나믹셀 scanDevice
+  assert.match(body, /row\.scanRow \|\| row\.scanDevice \|\| row\.proposedMotor/);
+});
+
+test('전체 검색도 서버 판정을 따른다', () => {
+  // scan.scan_complete 는 「등록된 Master 가 전부 응답했나」다 · 프로젝트가
+  // 쓰지 않는 Master 가 비면 늘 false 라, 다 찾았는데 「일부만 완료」가 떴다
+  const config = readFileSync(new URL('../static/js/motor_config.js', import.meta.url), 'utf8');
+
+  assert.doesNotMatch(codeOnly(config), /scan_complete/, '옛 칸을 봅니다');
+  assert.match(config, /const scanComplete = payload\.success === true;/);
+});
+
+// --------------------------------------------------------------------------- //
+// 축 id 는 화면과 서버가 같아야 한다 · §6-209
+// --------------------------------------------------------------------------- //
+
+test('다이나믹셀 축 id 가 서버 규칙과 같다', async () => {
+  // 저장하면 서버가 설정 파일을 읽어 id 를 다시 만든다 · 규칙이 다르면
+  // 저장 직후 id 가 바뀌고 그 id 로 기억하던 선택이 통째로 풀린다
+  const { dynamixelMotorIdFromDevice } = await import('../static/js/motor_type_dynamixel.js');
+  const port = '/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_X-if00-port0';
+
+  // 서버: f'{motor_type}_{transport}_port_{quote(port, safe="")}_id_{bus_id}'
+  assert.equal(
+    dynamixelMotorIdFromDevice({ port, id: 3 }),
+    `dynamixel_serial_port_${encodeURIComponent(port)}_id_3`,
+  );
+});
+
+test('서버의 id 규칙이 바뀌지 않았다', () => {
+  // 화면이 이 규칙을 그대로 옮겨 적었다 · 서버가 바뀌면 여기서 걸린다
+  const rules = readFileSync(
+    new URL('../../web_bridge/motion_web_bridge/motor_config_rules.py', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(rules, /\{motor_type\}_\{transport\}_port_/);
+  assert.match(rules, /quote\(str\(serial_port or ""\), safe=""\)\}_id_\{bus_id\}/);
+});
+
+test('AC 서보 축 id 도 서버 규칙과 같다', async () => {
+  const { scanRowToMotor } = await import('../static/js/motor_type_ac_servo.js');
+  const motor = scanRowToMotor({ master_index: 0, ethercat_alias: 103, slave_position: 0 }, () => 0);
+
+  // 서버: f'{motor_type}_{transport}_master_{index}_alias_{alias}'
+  assert.equal(motor.id, 'ac_servo_ethercat_master_0_alias_103');
 });

@@ -14,6 +14,12 @@ from typing import Any, Dict, List
 
 from motion_common.values import optional_int
 
+from motion_web_bridge.motor_identity import (
+    UNKNOWN_DRIVER_MODEL,
+    driver_model_from,
+    model_is_unknown,
+)
+
 from motion_web_bridge.motor_config_rules import (
     expand_shared_driver_profiles,
     prune_unused_drivers,
@@ -100,7 +106,7 @@ def default_motor_config(workspace_root: Path) -> Dict[str, Any]:
         'drivers': [
             {
                 'id': 0,
-                'driver_model': 'UNVERIFIED_MINAS',
+                'driver_model': UNKNOWN_DRIVER_MODEL,
                 'pulse_per_revolution': 8388608,
                 'rated_effort': 0.16,
                 'unit_effort': 0.1,
@@ -128,24 +134,62 @@ def default_motor_config(workspace_root: Path) -> Dict[str, Any]:
     }
 
 
+def resolved_motor_profile(
+    motor: Dict[str, Any],
+    driver: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    """축 하나의 **모델 사실을 여기서 한 번만 정한다** · §6-210
+
+    전에는 이 판단이 `driver_id_for_registry_motor` 안의 **사본**에서만
+    일어났다 · 드라이버 고르기에는 쓰이고 그대로 버려졌다 · 그래서 생성된
+    드라이버는 `MADLN05BE` 인데 프로젝트 파일의 `web_axis_profiles` 에는
+    「모름」 표식이 그대로 남았다.
+
+        drivers:            driver 4  minas  'MADLN05BE'
+        web_axis_profiles:  0번 축    driver_model 「모름」 표식
+
+    같은 사실이 두 곳에 다른 값으로 적히면 화면은 「모델 미확인」을 띄우고
+    적용은 통과한다 · 어느 쪽이 맞는지 사람이 알 길이 없다.
+
+    모델을 알면 확인된 것이다 · `model_confirmed` 를 따로 들고 다니지 않고
+    모델에서 끌어낸다 · 두 값이 갈릴 자리를 없앤다.
+    """
+    identity = motor.get('identity') if isinstance(motor.get('identity'), dict) else {}
+    profile = dict(motor.get('profile')) if isinstance(motor.get('profile'), dict) else {}
+    # 옛 프로젝트는 모델을 물리 식별 정보에 적어 두었다.
+    if not profile.get('driver_model') and identity.get('driver_model'):
+        profile['driver_model'] = identity.get('driver_model')
+    model = driver_model_from(profile, identity)
+    # **읽는 쪽과 같은 순서로 되짚는다** · §6-210
+    #
+    # 축이 가리키는 드라이버가 모델을 알고 있으면 그것이 답이다 · 읽는 쪽
+    # (`motor_config_rules.axis_profile`)은 이미 그렇게 되짚는데 쓰는 쪽이
+    # 안 그랬다 · 그래서 파일 안에서 프로필은 빈 값, 드라이버는 `MADLN05BE`
+    # 로 갈렸다 · 읽을 때 가려져 보이지 않을 뿐 같은 사고다.
+    if not model and isinstance(driver, dict):
+        model = '' if model_is_unknown(driver.get('driver_model')) else str(
+            driver.get('driver_model')
+        ).strip()
+    source = str(profile.get('model_source') or '')
+    if not source:
+        if profile.get('model_confirmed') is True or identity.get('nameplate_confirmed') is True:
+            source = 'user_nameplate'
+        elif model:
+            source = 'physical_sii'
+    return {
+        'driver_model': model,
+        'model_confirmed': bool(model),
+        'model_source': source if model else '',
+    }
+
+
 def driver_id_for_registry_motor(
     workspace_root: Path,
     motor: Dict[str, Any],
     drivers: List[Dict[str, Any]],
 ) -> int:
     motor_config = motor.get('config') if isinstance(motor.get('config'), dict) else {}
-    identity = dict(motor.get('identity')) if isinstance(motor.get('identity'), dict) else {}
-    profile = dict(motor.get('profile')) if isinstance(motor.get('profile'), dict) else {}
-    # Accept older registries, but normalize the model/profile facts out of
-    # the physical discovery identity before any further processing.
-    if not profile.get('driver_model') and identity.get('driver_model'):
-        profile['driver_model'] = identity.get('driver_model')
-    if 'model_confirmed' not in profile and 'nameplate_confirmed' in identity:
-        profile['model_confirmed'] = identity.get('nameplate_confirmed') is True
-    if not profile.get('model_source') and profile.get('model_confirmed') is True:
-        profile['model_source'] = 'user_nameplate'
-    identity.pop('driver_model', None)
-    identity.pop('nameplate_confirmed', None)
+    profile = resolved_motor_profile(motor)
     driver_type = str(motor.get('driver_family') or motor.get('motor_type') or 'unknown')
     driver_model = str(profile.get('driver_model') or '').strip()
     requested_id = optional_int(motor_config.get('driver_id'), None)
@@ -361,7 +405,6 @@ def motor_config_from_registry(
             continue
         name = str(motor.get('name') or f'{axis}번 축').strip() or f'{axis}번 축'
         identity = motor.get('identity') if isinstance(motor.get('identity'), dict) else {}
-        profile = motor.get('profile') if isinstance(motor.get('profile'), dict) else {}
         ethercat_master_index = optional_int(
             motor_config.get('ethercat_master_index'),
             optional_int(identity.get('ethercat_master_index'), 0),
@@ -405,6 +448,17 @@ def motor_config_from_registry(
                 # alias 가 0 이면(=EEPROM 에 안 써 넣었으면) ring 위치로
                 # 찾아야 하므로 그대로 쓴다.
                 'position': 0 if eeprom_alias else slave_position,
+                # 사람이 보는 **링 위치** · §6-207
+                #
+                # 위 `position` 은 마스터가 쓰는 주소값이라 alias 를 쓰면 늘
+                # 0 이다 · 그것을 화면에 「Slave Position」으로 내보내면 서보
+                # 두 대가 모두 0 으로 보인다.
+                #
+                # 실행 설정에서는 `web_axis_identities` 가 떨어져 나가므로
+                # (§6-22 · 모터 노드가 안 쓰는 값이라 뺀다) 슬레이브에 같이
+                # 적어 보낸다 · 모터 매니저는 이름으로 읽는 키만 보므로
+                # 모르는 키는 그냥 지나간다.
+                'ring_position': slave_position,
                 'vendor_id': optional_int(
                     identity.get('vendor_id'),
                     optional_int(motor_config.get('vendor_id'), None),
@@ -442,11 +496,26 @@ def motor_config_from_registry(
             'sii_order_number': str(identity.get('sii_order_number') or ''),
             'sii_device_name': str(identity.get('sii_device_name') or ''),
         })
+        # **드라이버에 적은 것과 같은 값을 적는다** · §6-210
+        #
+        # 전에는 레지스트리의 원본 프로필을 그대로 옮겨 적었다 · 모델을
+        # SII 에서 풀어낸 것은 드라이버 고르기에만 쓰이고 버려졌으므로
+        # 여기엔 「모름」 표식이 남았다 · 화면은 그걸 읽어 영영
+        # 「모델 미확인」을 띄웠다.
         web_axis_profiles.append({
             'controller_index': axis,
-            'driver_model': str(profile.get('driver_model') or ''),
-            'model_confirmed': profile.get('model_confirmed') is True,
-            'model_source': str(profile.get('model_source') or ''),
+            **resolved_motor_profile(
+                motor,
+                next(
+                    (
+                        item
+                        for item in drivers
+                        if isinstance(item, dict)
+                        and optional_int(item.get('id'), None) == driver_id
+                    ),
+                    None,
+                ),
+            ),
         })
 
     existing_ethercat_masters = {

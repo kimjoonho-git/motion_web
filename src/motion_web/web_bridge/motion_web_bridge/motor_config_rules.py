@@ -21,6 +21,8 @@ from typing import Any, Dict, List
 from motion_common import store
 from motion_common.values import optional_float, optional_int
 
+from motion_web_bridge.motor_identity import driver_model_from, model_is_unknown
+
 
 def is_ac_servo_motor(motor: Dict[str, Any]) -> bool:
     values = [
@@ -212,6 +214,36 @@ def prune_unused_drivers(
     ]
 
 
+def axis_profile(
+    web_profile: Dict[str, Any],
+    web_identity: Dict[str, Any],
+    driver: Dict[str, Any],
+) -> Dict[str, Any]:
+    """저장된 설정에서 축 하나의 모델 사실을 읽는다 · §6-210
+
+    읽는 순서는 하나다 · 프로필 → 드라이버 → SII 검색값 · 「모름」 표식은
+    어느 자리에 있든 없는 것으로 친다 · `model_confirmed` 는 모델에서
+    끌어낸다 (모델을 알면 확인된 것이다) · 두 값이 갈릴 자리를 없앤다.
+    """
+    model = driver_model_from(web_profile, web_identity)
+    if not model:
+        model = '' if model_is_unknown(driver.get('driver_model')) else str(
+            driver.get('driver_model')
+        ).strip()
+    source = str(web_profile.get('model_source') or '')
+    if not source and model:
+        source = (
+            'user_nameplate'
+            if web_identity.get('nameplate_confirmed') is True
+            else 'physical_sii'
+        )
+    return {
+        'driver_model': model,
+        'model_confirmed': bool(model),
+        'model_source': source if model else '',
+    }
+
+
 def registry_from_motor_config(config: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(config, dict):
         config = {}
@@ -262,7 +294,14 @@ def registry_from_motor_config(config: Dict[str, Any]) -> Dict[str, Any]:
                 slave.get('bus_id'),
                 optional_int(slave.get('id'), None),
             )
-            slave_position = optional_int(slave.get('position'), index)
+            # **사람이 보는 Slave 값을 쓴다** · §6-207
+            #
+            # `position` 은 마스터가 쓰는 주소값이라 alias 를 쓰면 늘 0 이다 ·
+            # 레지스트리는 화면이 보는 모델이므로 여기엔 Slave 값이 들어가야
+            # 한다 · 같은 이름에 두 뜻이 섞여 오늘 사고가 여럿 났다.
+            slave_position = optional_int(
+                slave.get('ring_position', slave.get('position')), index
+            )
             name = str(slave.get('name') or f'{axis}번 축')
             motor_id = (
                 f'{motor_type}_{transport}_master_{ethercat_master_index}_alias_{alias}'
@@ -336,27 +375,13 @@ def registry_from_motor_config(config: Dict[str, Any]) -> Dict[str, Any]:
                                 web_identity.get('sii_device_name') or ''
                             ),
                         },
-                        'profile': {
-                            'driver_model': str(
-                                web_profile.get('driver_model')
-                                or driver.get('driver_model')
-                                or ''
-                            ),
-                            'model_confirmed': (
-                                web_profile.get(
-                                    'model_confirmed',
-                                    web_identity.get('nameplate_confirmed'),
-                                ) is True
-                            ),
-                            'model_source': str(
-                                web_profile.get('model_source')
-                                or (
-                                    'user_nameplate'
-                                    if web_identity.get('nameplate_confirmed') is True
-                                    else ''
-                                )
-                            ),
-                        },
+                        # **모름 표식은 값이 아니다** · §6-210
+                        #
+                        # 전에는 `web_profile` 의 모델이 「있으면」 그대로
+                        # 썼다 · `UNVERIFIED_MINAS` 도 글자라서 있는 것으로
+                        # 세어졌고, 옆에 놓인 드라이버가 `MADLN05BE` 를
+                        # 알고 있어도 끝내 「모델 미확인」이 떴다.
+                        'profile': axis_profile(web_profile, web_identity, driver),
                         'config': {
                             'controller_index': axis,
                             'ethercat_master_index': (

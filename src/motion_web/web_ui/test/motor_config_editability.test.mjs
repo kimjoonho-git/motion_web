@@ -7,7 +7,7 @@ import {
   conciseMotorScanMessage,
   motorControlConfigurationError,
   motorConfigApplyIdentityBlock,
-  motorModelProfileApplyBlock,
+  motorModelProfileWarning,
   motorRuntimeReadyForAppliedConfig,
 } from '../static/js/motor_config.js';
 
@@ -107,8 +107,11 @@ test('missing scan history does not deadlock saved motor config application', ()
 });
 
 
-test('unconfirmed model profile blocks runtime application without blocking project storage', () => {
-  const message = motorModelProfileApplyBlock([
+// 모델을 몰라도 적용을 막지 않는다 · §6-213
+// AC 서보는 모델 이름이 라벨일 뿐이라 이 막음이 지키던 값이 없었다 ·
+// 이제는 확인창에 함께 띄우는 알림이고, 어느 축인지만 이름을 댄다.
+test('an unreadable model is named but does not stop the apply', () => {
+  const message = motorModelProfileWarning([
     {
       enabled: true,
       deleted: false,
@@ -133,8 +136,8 @@ test('unconfirmed model profile blocks runtime application without blocking proj
     },
   ]);
 
-  assert.match(message, /실행 적용 불가/);
-  assert.match(message, /미확인 축: 0/);
-  assert.match(message, /프로젝트 저장은 가능/);
-  assert.doesNotMatch(message, /미확인 축: 0, 1/);
+  assert.match(message, /모델을 읽지 못한 축: 0/);
+  assert.match(message, /적용은 진행됩니다/);
+  assert.doesNotMatch(message, /적용 불가/);
+  assert.doesNotMatch(message, /축: 0, 1/);
 });

@@ -20,6 +20,7 @@ import {
   activeRegistryMotors as selectActiveRegistryMotors,
   activeVisibleRegistryMotors as selectActiveVisibleRegistryMotors,
   hasRegistryChanges,
+  modelIsUnknown,
   normalizeMotor,
   normalizeRegistry,
   registryMotorById as selectRegistryMotorById,
@@ -103,27 +104,66 @@ export function motorConfigApplyIdentityBlock(identityError, scanAvailable, alia
   return scanAvailable ? String(identityError || '') : '';
 }
 
-export function motorModelProfileApplyBlock(motors) {
+// **이번 검색값이 먼저다** · §6-211
+//
+// 한 행 안에서 칸마다 보는 순서가 달랐다 · Slave·EEPROM·Station 은
+// `row.scanRow ? 검색값 : 저장값` 으로 **검색을 먼저** 보는데 모델 칸만
+// 저장값만 봤다 · 그래서 방금 검색을 해도 모델만 옛 값이 남았다.
+//
+//     검색 직후    Slave 1 · EEPROM 403    ← 방금 읽은 값
+//                  모델 미확인             ← 프로젝트에 저장된 옛 값
+//
+// 「새로 검색했는데 왜 지금 것이 안 나오냐」가 여기였다 · 모델을 못 읽던
+// 시절에 저장된 프로젝트는 「검색값 반영」을 누르기 전까지 영영 옛 값을
+// 보여 줬다 · 다이나믹셀도 같다 (검색은 XM540-W150 을 읽어 왔다).
+export function axisRowScannedModel(row) {
+  if (!row) return '';
+  if (row.scanRow) return siiReportedAcServoModel(row.scanRow);
+  if (row.scanDevice) return modelTextFromDevice(row.scanDevice);
+  return '';
+}
+
+//: 한 행의 드라이버 모델 · 이번 검색값 → 프로젝트 저장값 · 모르면 빈 글자
+export function axisRowDriverModel(row) {
+  const scanned = axisRowScannedModel(row);
+  if (scanned) return scanned;
+  const motor = row?.motor || row?.proposedMotor;
+  const stored = String(motor?.profile?.driver_model || '').trim();
+  return modelIsUnknown(stored) ? '' : stored;
+}
+
+// **모델을 몰라도 막지 않는다** · §6-213
+//
+// 전에는 이 글이 적용을 **거부**했다 · 그런데 AC 서보는 모델 이름이
+// 라벨일 뿐이다 · minas 드라이버의 운전 값(pulse_per_revolution ·
+// profile_velocity · 가감속 …)은 전부 템플릿에서 오고 모델 이름은 맨 끝에
+// 라벨로만 덮인다 (`append_driver_for_registry_motor`) · 이 막음이 지키던
+// 기계적 값이 하나도 없었다.
+//
+// 반대로 막히는 비용은 컸다 · 검색이 SII 를 못 읽은 축 하나 때문에 **잘
+// 붙은 축까지 전부** 못 올렸다 · 장비가 이상할 때 사람이 가장 먼저 누르고
+// 싶은 것이 적용(모터 재시작)이다.
+//
+// 서버도 같이 걷었다 (`motor_profile_validation`) · 값이 위험한 경우는
+// 거기서 **값을 보고** 따로 막는다 · 이름을 모르는 것과는 다른 일이다.
+//
+// 이제 이 글은 적용 확인창에 함께 띄우는 **알림**이다.
+export function motorModelProfileWarning(motors) {
   const axes = (Array.isArray(motors) ? motors : [])
     .filter((motor) => (
       motor &&
       motor.enabled &&
       !motor.deleted &&
       motor.transport === 'ethercat' &&
-      (
-        ['', 'UNVERIFIED_MINAS'].includes(
-          String(motor.profile?.driver_model || '').trim().toUpperCase(),
-        ) ||
-        motor.profile?.model_confirmed !== true
-      )
+      modelIsUnknown(motor.profile?.driver_model)
     ))
     .map((motor) => {
       const axis = Number(motor.config?.controller_index ?? motor.axis);
       return Number.isInteger(axis) ? axis : '?';
     });
   if (axes.length === 0) return '';
-  return `실행 적용 불가 · 모델·운전 프로필 미확인 축: ${axes.join(', ')}. `
-    + '프로젝트 저장은 가능하지만 모터 실행 설정으로 적용할 수 없습니다.';
+  return `모델을 읽지 못한 축: ${axes.join(', ')}. `
+    + '적용은 진행됩니다 · 운전 프로필은 등록된 드라이버 값을 그대로 씁니다.';
 }
 
 export function motorRuntimeReadyForAppliedConfig(state) {
@@ -414,8 +454,8 @@ export function createMotorConfigController({
     );
   }
 
-  function modelProfileApplyBlockMessage() {
-    return motorModelProfileApplyBlock(activeAxisMotors());
+  function modelProfileWarningMessage() {
+    return motorModelProfileWarning(activeAxisMotors());
   }
 
   function motionControlBlockMessage() {
@@ -772,8 +812,7 @@ export function createMotorConfigController({
   function rowDriverModelRaw(row) {
     const draft = rowDraft(row);
     if (draft.driver_model !== undefined) return draft.driver_model;
-    const motor = row.motor || row.proposedMotor;
-    return String(motor?.profile?.driver_model || '');
+    return axisRowDriverModel(row);
   }
 
   function axisSortValue(row) {
@@ -784,7 +823,7 @@ export function createMotorConfigController({
   function driverLabel(row) {
     if (row.motor) {
       return firstDefined(
-        row.motor.profile?.driver_model,
+        axisRowScannedModel(row) || row.motor.profile?.driver_model,
         row.motor.driver_family,
         row.motor.config?.driver_id !== null && row.motor.config?.driver_id !== undefined
           ? `driver ${row.motor.config.driver_id}`
@@ -1742,15 +1781,18 @@ export function createMotorConfigController({
         detail: siiName ? `SII 참고값 ${siiName}` : '모델·운전 프로필 미설정',
       };
     }
-    const model = String(motor.profile?.driver_model || '').trim();
-    const confirmed = motor.profile?.model_confirmed === true;
-    const source = String(motor.profile?.model_source || '');
+    const scanned = axisRowScannedModel(row);
+    const model = scanned || String(motor.profile?.driver_model || '').trim();
+    const confirmed = !modelIsUnknown(model);
+    const source = scanned ? 'physical_sii' : String(motor.profile?.model_source || '');
     const sourceLabel = source === 'verified_catalog'
       ? '카탈로그 확인'
       : source === 'physical_protocol'
         ? '장치 프로토콜 확인'
         : source === 'physical_sii_user_confirmed'
           ? 'SII 검색값 사용자 확인'
+        : source === 'physical_sii'
+          ? 'SII 검색값'
         : source === 'user_nameplate'
           ? '사용자 명판 확인'
           : '확인 근거 없음';
@@ -2094,7 +2136,7 @@ export function createMotorConfigController({
       { key: 'service', ready: serviceReady, text: serviceReady ? '서비스 응답 정상' : '모터 제어 재시작·응답 확인', next: '모터 제어 서비스를 시작하거나 재시작하세요.' },
       { key: 'connection', ready: connectionReady, text: connectionReady ? '등록 축 연결됨' : '모터 전원·연결 및 검색 필요', next: '모터 전원을 확인한 뒤 장비 검색을 실행하세요.' },
       { key: 'configuration', ready: configurationReady, text: configurationReady ? '축 설정 저장됨' : '축 설정 저장 필요', next: '검색 결과를 확인하고 모터축 설정을 저장하세요.' },
-      { key: 'application', ready: applicationReady, text: applicationReady ? '장비에 적용됨' : '장비 적용 필요', next: '「장비에 적용 · 모터 재시작」을 누르세요.' },
+      { key: 'application', ready: applicationReady, text: applicationReady ? '설정 적용됨' : '장비 적용 필요', next: '「설정 적용 · 모터 재시작」을 누르세요.' },
       { key: 'mapping', ready: mappingReady, text: mappingReady ? '모션축 매칭됨' : '모션축 매칭 필요', next: '모션축 설정에서 각 모터축의 Motion ID를 연결하세요.' },
       { key: 'drive', ready: driveReady, text: driveReady ? '서보·토크 준비됨' : '서보·토크 상태 확인', next: 'AC 서보를 켜고 Dynamixel 토크 상태를 확인하세요.' },
       { key: 'verification', ready: false, text: '실물 조그·동작 확인 필요', next: '실제 장비에서 조그와 동작 모드를 확인하세요.' },
@@ -2324,8 +2366,13 @@ export function createMotorConfigController({
     //
     // 검색을 눌렀다는 것은 「지금 붙어 있는 것을 다루겠다」는 뜻이다 ·
     // 나온 것을 전부 골라 두고, 뺄 것은 사람이 뺀다.
+    //
+    // **검색 결과가 담기는 칸이 둘이다** · AC 서보는 `scanRow`, 다이나믹셀은
+    // `scanDevice` · 처음에 `scanRow` 만 보다가 다이나믹셀이 빠졌다.
     selectedAxisIds = new Set(
-      rows.filter((row) => row.scanRow || row.proposedMotor).map((row) => row.id),
+      rows
+        .filter((row) => row.scanRow || row.scanDevice || row.proposedMotor)
+        .map((row) => row.id),
     );
     lastAxisRenderSignature = '';
     renderAxisSettings();
@@ -2390,8 +2437,8 @@ export function createMotorConfigController({
     const recoveryMessage = acHardwareRecoveryMessage();
     const identityError = acHardwareIdentityErrorMessage();
     const identityApplyBlockMessage = acHardwareApplyBlockMessage();
-    const modelApplyBlockMessage = modelProfileApplyBlockMessage();
-    const applyBlockMessage = modelApplyBlockMessage || identityApplyBlockMessage;
+    const modelWarningMessage = modelProfileWarningMessage();
+    const applyBlockMessage = identityApplyBlockMessage || modelWarningMessage;
     const alreadyApplied = selectedMotorConfigAlreadyApplied();
     // **적용은 언제든 누를 수 있다** · §6-203
     //
@@ -2401,7 +2448,9 @@ export function createMotorConfigController({
     //
     // 저장 안 한 변경이 있으면 **저장된 파일**이 적용된다 · 그건 막을 일이
     // 아니라 알려줄 일이다 (아래 title).
-    const canAttemptApply = hasConfiguredAxes;
+    // 축이 없어도 누를 수 있다 · 왜 안 되는지는 서버가 말한다 · §6-203
+    // (「등록된 모터축이 없어 설정을 적용할 수 없습니다」)
+    const canAttemptApply = true;
     onIdentityStatusChange?.(motionControlBlockMessage());
 
     if (el.addAxisButton) el.addAxisButton.disabled = !canAdd;
@@ -2443,8 +2492,8 @@ export function createMotorConfigController({
     if (el.applyAxisConfigButton) {
       // 눌리는 버튼에 「적용됨」이라 쓰면 상태인지 동작인지 모른다 · §6-203
       el.applyAxisConfigButton.textContent = alreadyApplied
-        ? '다시 적용 · 모터 재시작'
-        : '장비에 적용 · 모터 재시작';
+        ? '설정 다시 적용 · 모터 재시작'
+        : '설정 적용 · 모터 재시작';
       el.applyAxisConfigButton.title = !hasConfiguredAxes
         ? (applyBlockMessage || '적용할 프로젝트 축 설정이 없습니다.')
         : changed
@@ -2527,7 +2576,7 @@ export function createMotorConfigController({
     } else if (recoveryMessage) {
       state = '설정 적용 필요';
       detail = recoveryMessage;
-      next = '다음 작업: 장비에 적용 · 모터 재시작';
+      next = '다음 작업: 설정 적용 · 모터 재시작';
       stateCode = 'error';
     } else if (!hasConfiguredAxes && !hasAcScan && !latestScan?.dynamixel_scan) {
       state = '검색 필요';
@@ -2564,7 +2613,7 @@ export function createMotorConfigController({
     } else if (configApplyPending) {
       state = '설정 적용 필요';
       detail = '프로젝트 파일은 저장됐지만 실행 시스템에는 아직 반영되지 않았습니다.';
-      next = '다음 작업: 장비에 적용 · 모터 재시작';
+      next = '다음 작업: 설정 적용 · 모터 재시작';
       stateCode = 'warning';
     }
 
@@ -3077,11 +3126,11 @@ export function createMotorConfigController({
   }
 
   async function saveAxisConfig() {
-    if (!hasAnyConfigChanges()) {
-      setStatusMessage('저장할 축 설정 변경 없음');
-      setAxisMessage('저장할 축 설정 변경 없음');
-      return false;
-    }
+    // **바뀐 게 없어도 저장한다** · §6-203
+    //
+    // 버튼은 풀었는데 여기서 첫 줄에 거부하고 있었다 · 눌러도 아무 일이
+    // 일어나지 않아 「고장인가」로 보였다 · 같은 값을 다시 적는 것이라
+    // 해로울 일이 없고, 파일이 어긋났나 싶을 때 다시 눌러 맞출 수 있어야 한다.
 
     const axisError = hasAxisChanges() ? axisOrderErrorMessage() : '';
     if (axisError) {
@@ -3131,11 +3180,11 @@ export function createMotorConfigController({
       applyMotorConfigPayload(payload);
       configApplyPending = true;
       setStatusMessage('축 설정 저장됨');
-      const modelWarning = modelProfileApplyBlockMessage();
+      const modelWarning = modelProfileWarningMessage();
       setAxisMessage(
         modelWarning
           ? `프로젝트 축 목록 저장됨 · ${modelWarning}`
-          : '저장했습니다 · 실제 모터에 반영하려면 오른쪽 「장비에 적용」을 누르세요.',
+          : '저장했습니다 · 실제 모터에 반영하려면 오른쪽 「설정 적용」을 누르세요.',
         Boolean(modelWarning),
       );
       await onProjectFilesChange?.();
@@ -3176,7 +3225,7 @@ export function createMotorConfigController({
       && row.scanRow
       && (
         row.identityConfirmationRequired
-        || row.motor.profile?.model_confirmed !== true
+        || modelIsUnknown(row.motor.profile?.driver_model)
       )
     ));
     if (pendingScanRows.length > 0) {
@@ -3197,10 +3246,11 @@ export function createMotorConfigController({
       return false;
     }
     const recoveryMessage = acHardwareRecoveryMessage();
-    const modelApplyBlockMessage = modelProfileApplyBlockMessage();
+    const modelWarningMessage = modelProfileWarningMessage();
     const identityApplyBlockMessage = acHardwareApplyBlockMessage();
-    const applyBlockMessage = modelApplyBlockMessage
-      || (identityApplyBlockMessage && !recoveryMessage ? identityApplyBlockMessage : '');
+    const applyBlockMessage = identityApplyBlockMessage && !recoveryMessage
+      ? identityApplyBlockMessage
+      : '';
     if (applyBlockMessage) {
       window.alert(applyBlockMessage);
       setAxisMessage(applyBlockMessage, true);
@@ -3211,8 +3261,11 @@ export function createMotorConfigController({
     const recoveryWarning = recoveryMessage
       ? `복구 적용 안내:\n${recoveryMessage}\n\n`
       : '';
+    // 모델을 몰라도 막지 않는다 · 확인창에서 말로 알린다 · §6-213
+    const modelWarning = modelWarningMessage ? `${modelWarningMessage}\n\n` : '';
     const confirmed = await showConfirm(
-      recoveryWarning
+      modelWarning
+      + recoveryWarning
       + '주의: 설정 적용 중 motor_manager_node를 재시작합니다.\n\n'
       + '재시작 중에는 AC 서보 / 다이나믹셀 통신이 잠시 끊기거나 재초기화될 수 있습니다.\n'
       + '현재 서보가 부하를 잡고 있는 축은 순간적으로 토크가 해제되어 부하가 풀릴 수 있습니다.\n'
@@ -3875,9 +3928,17 @@ export function createMotorConfigController({
       const selection = autoSelectNewScanAxes();
       const summary = getDiscoverySummary();
       const identityError = acHardwareIdentityErrorMessage();
-      const scanComplete = payload.scan?.scan_complete === true;
-      const scanPartial = payload.partial === true
-        || payload.scan?.scan_outcome === 'partial';
+      // **서버 판정을 따른다** · §6-206
+      //
+      // 전에는 `scan.scan_complete` 를 봤다 · 그 값은 「등록된 Master 가 전부
+      // 응답했나」라서, 프로젝트가 쓰지 않는 Master 하나가 비어 있으면 늘
+      // false 다 · 그래서 다 찾았는데도 「일부 검색만 완료됐습니다」가 떴다.
+      //
+      // 서버는 프로젝트 기준으로 다시 판정해 `success`/`partial` 에 담아
+      // 보낸다 (§6-198) · AC 서보 검색은 그것을 보고 있었는데 전체 검색만
+      // 옛 칸을 보고 있었다.
+      const scanComplete = payload.success === true;
+      const scanPartial = payload.partial === true;
       const dynamixelError = payload.scan?.dynamixel_scan?.error || '';
       if (el.scanAllResult) {
         el.scanAllResult.textContent = scanComplete

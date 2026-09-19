@@ -1,5 +1,14 @@
 import { clone } from './format.js';
 
+//: 서버가 「모델을 모른다」고 적는 표식 · 값이 아니다 · §6-210
+//: `motion_web_bridge/motor_identity.py` 의 `UNKNOWN_DRIVER_MODEL` 과 같은 글자다.
+const UNKNOWN_DRIVER_MODEL = 'UNVERIFIED_MINAS';
+
+export function modelIsUnknown(value) {
+  const text = String(value ?? '').trim().toUpperCase();
+  return text === '' || text === UNKNOWN_DRIVER_MODEL;
+}
+
 export function normalizeRegistry(value) {
   const motors = Array.isArray(value && value.motors) ? value.motors : [];
   return {
@@ -21,11 +30,25 @@ export function normalizeMotor(motor, index = 0) {
   if (!profile.driver_model && identity.driver_model) {
     profile.driver_model = identity.driver_model;
   }
-  if (profile.model_confirmed === undefined && identity.nameplate_confirmed !== undefined) {
-    profile.model_confirmed = identity.nameplate_confirmed === true;
+  // **「모름」 표식은 값이 아니다** · §6-210
+  //
+  // 서버는 기본 minas 드라이버에 `UNVERIFIED_MINAS` 를 달아 「모델을
+  // 모른다」고 적는다 · 화면은 그것을 모델 이름으로 받아 들고 다녔고,
+  // 옆의 드라이버가 `MADLN05BE` 를 알고 있어도 영영 「모델 미확인」이
+  // 떴다 · 여기서 한 번 걷어내면 아래 화면 전부가 같은 값을 본다.
+  if (modelIsUnknown(profile.driver_model)) {
+    profile.driver_model = String(
+      identity.sii_order_number || identity.sii_device_name || '',
+    ).trim();
   }
-  if (!profile.model_source && profile.model_confirmed === true) {
-    profile.model_source = 'user_nameplate';
+  // 모델을 알면 확인된 것이다 · 두 값이 갈릴 자리를 없앤다.
+  profile.model_confirmed = String(profile.driver_model || '').trim().length > 0;
+  if (!profile.model_confirmed) {
+    profile.model_source = '';
+  } else if (!profile.model_source) {
+    profile.model_source = identity.nameplate_confirmed === true
+      ? 'user_nameplate'
+      : 'physical_sii';
   }
   delete identity.driver_model;
   delete identity.nameplate_confirmed;

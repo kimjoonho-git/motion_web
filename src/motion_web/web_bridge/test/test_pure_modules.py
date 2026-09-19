@@ -19,10 +19,12 @@ from motion_web_bridge import (
     motion_file_analysis,
     motor_config_build,
     motor_config_rules,
+    motor_identity,
 )
 
 #: 검사 대상 순수 모듈 · 분해가 진행되면 여기에 추가한다
 PURE_MODULES = [
+    motor_identity,
     motor_config_rules,
     motor_config_build,
     motion_file_analysis,

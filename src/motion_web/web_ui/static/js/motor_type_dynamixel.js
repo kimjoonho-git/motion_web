@@ -22,12 +22,38 @@ function normalizedModelName(value) {
   return String(value || '').trim().toLowerCase();
 }
 
+/** 서버와 **같은 이름으로 부른다** · §6-212
+ *
+ * 검색기는 모델 번호 1120 을 `XM540-W270` 이라고 읽는다 · 서버는 드라이버를
+ * 만들 때 그것을 `XM540-W270-R` 로 적는다
+ * (`motor_config_build.default_dynamixel_driver`).
+ *
+ * 그래서 같은 모터를 두 곳이 다른 이름으로 불렀다 · 화면은 검색한 이름,
+ * 파일은 정규 이름 · 검색할 때마다 모델 칸의 글자가 왔다 갔다 했다.
+ *
+ * 표가 두 언어에 나뉘어 있으므로 `dynamixel_model_names.test.mjs` 가 두
+ * 쪽이 같은 글자인지 지킨다.
+ */
+const DYNAMIXEL_CANONICAL_MODELS = [
+  ['XM540-W150', 'XM540-W150'],
+  ['XM540-W270', 'XM540-W270-R'],
+];
+
+export function canonicalDynamixelModel(value) {
+  const text = String(value ?? '').trim();
+  const model = text.toUpperCase().replace(/_/g, '-');
+  const hit = DYNAMIXEL_CANONICAL_MODELS.find(([needle]) => model.includes(needle));
+  return hit ? hit[1] : text;
+}
+
 export function modelTextFromDevice(device) {
   if (!device) return '';
-  return device.model_name ||
+  return canonicalDynamixelModel(
+    device.model_name ||
     device.model ||
     device.driver_model ||
-    (device.model_number ? `Model ${Number(device.model_number).toLocaleString('ko-KR', { maximumFractionDigits: 0 })}` : '');
+    (device.model_number ? `Model ${Number(device.model_number).toLocaleString('ko-KR', { maximumFractionDigits: 0 })}` : ''),
+  );
 }
 
 export function dynamixelScanDeviceKey(device) {
@@ -38,9 +64,30 @@ export function dynamixelScanDeviceKey(device) {
   ].join('|');
 }
 
+/** 다이나믹셀 축의 id · **서버와 글자까지 같아야 한다** · §6-209
+ *
+ * 저장하면 서버가 설정 파일을 읽어 id 를 **다시 만들어** 돌려준다 · 화면이
+ * 다른 규칙으로 만들면 저장 직후 id 가 바뀌고, 그 id 로 기억하던 **선택이
+ * 통째로 풀린다** · 실제로 축을 추가하고 저장하면 다이나믹셀 두 줄의 체크가
+ * 사라졌다.
+ *
+ * AC 서보는 두 쪽 규칙이 이미 같아서(`ac_servo_ethercat_master_0_alias_103`)
+ * 선택이 살아남았다 · 그래서 다이나믹셀만 풀리는 것으로 보였다.
+ *
+ * 서버 규칙 (`motor_config_rules.registry_from_motor_config`):
+ *
+ *     f'{motor_type}_{transport}_port_{quote(serial_port, safe="")}_id_{bus_id}'
+ *
+ * `quote(safe='')` 와 `encodeURIComponent` 는 이 경로에 쓰이는 글자
+ * (영숫자 · `/` · `-` · `_`)에 대해 같은 결과를 낸다.
+ */
 export function dynamixelMotorIdFromDevice(device) {
-  const port = String(device?.port || 'serial').replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-  return `dynamixel_${port}_id_${device?.id ?? 'unknown'}_${device?.baudrate ?? 'baud'}`;
+  const port = encodeURIComponent(String(device?.port || ''));
+  const busId = device?.id;
+  if (busId === null || busId === undefined) {
+    return `dynamixel_serial_axis_${device?.controller_index ?? 'unknown'}`;
+  }
+  return `dynamixel_serial_port_${port}_id_${busId}`;
 }
 
 export function dynamixelScanDeviceToMotor(device, baseMotor = null, options = {}) {
