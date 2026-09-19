@@ -31,6 +31,7 @@ import yaml
 
 from motion_common import store
 
+from motion_web_bridge.motor_runtime_store import MOTOR_BUSY_MESSAGE
 from motion_web_bridge import (
     motion_file_analysis,
     motion_studio_session,
@@ -384,7 +385,7 @@ class MotorConfigService:
         if not lifecycle_lock.acquire(blocking=False):
             return {
                 'success': False,
-                'message': '다른 모터 설정·검색·재시작 작업이 진행 중입니다',
+                'message': MOTOR_BUSY_MESSAGE,
                 **self.bridge.snapshot(),
             }
         project_id = self.repository.selected_project_id()
@@ -613,7 +614,7 @@ class MotorConfigService:
             self.clear_stopping_release_state()
             return {
                 'success': False,
-                'message': '다른 모터 설정·검색·재시작 작업이 진행 중입니다',
+                'message': MOTOR_BUSY_MESSAGE,
                 **self.bridge.snapshot(),
             }
         try:
@@ -716,7 +717,7 @@ class MotorConfigService:
         if not lifecycle_lock.acquire(blocking=False):
             return {
                 'success': False,
-                'message': '다른 모터 설정·검색·재시작 작업이 진행 중입니다',
+                'message': MOTOR_BUSY_MESSAGE,
                 **self.bridge.snapshot(),
             }
         operation: Dict[str, Any] = {}

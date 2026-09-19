@@ -39,6 +39,9 @@ class SafetyBridge:
     port = 8000
     web_publish_hz = 10.0
 
+    #: 연동을 쓰지 않는 PC · 진짜 브리지도 그때 `None` 을 준다 · §6-187
+    coordination = None
+
     def __init__(self):
         self.calls = []
 

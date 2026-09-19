@@ -198,7 +198,7 @@ def register_system_routes(app: FastAPI, bridge, project_call) -> None:
 
     @app.get('/api/coordination')
     async def coordination_status():
-        return await asyncio.to_thread(bridge._coordination_web_bridge.snapshot)
+        return await asyncio.to_thread(bridge.coordination.snapshot)
 
     @app.put('/api/coordination/settings')
     async def update_coordination_settings(request: Request):
@@ -206,7 +206,7 @@ def register_system_routes(app: FastAPI, bridge, project_call) -> None:
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail='request body must be an object')
         try:
-            return await asyncio.to_thread(bridge._coordination_web_bridge.update_settings, body)
+            return await asyncio.to_thread(bridge.coordination.update_settings, body)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -229,7 +229,7 @@ def register_system_routes(app: FastAPI, bridge, project_call) -> None:
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail='request body must be an object')
         try:
-            return await asyncio.to_thread(bridge._coordination_web_bridge.request_control, body)
+            return await asyncio.to_thread(bridge.coordination.request_control, body)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -245,7 +245,7 @@ def register_system_routes(app: FastAPI, bridge, project_call) -> None:
 
     @app.post('/api/system/program/restart')
     async def restart_managed_program():
-        return await project_call(bridge._motor_config.restart_managed_program)
+        return await project_call(bridge.motor_config.restart_managed_program)
 
     @app.post('/api/system/desktop-shortcut')
     async def create_desktop_shortcut():
@@ -255,11 +255,11 @@ def register_system_routes(app: FastAPI, bridge, project_call) -> None:
 
     @app.post('/api/system/motor-control/restart')
     async def restart_motor_control_system():
-        return await project_call(bridge._motor_config.restart_motor_control)
+        return await project_call(bridge.motor_config.restart_motor_control)
 
     @app.post('/api/system/motor-runtime/clear')
     async def clear_motor_runtime_application():
-        return await project_call(bridge._motor_config.clear_runtime_application)
+        return await project_call(bridge.motor_config.clear_runtime_application)
 
     @app.post('/api/monitoring/enabled')
     async def set_monitoring(request: Request):

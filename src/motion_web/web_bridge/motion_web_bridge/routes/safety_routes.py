@@ -18,7 +18,7 @@ def register_safety_routes(app: FastAPI, bridge) -> None:
         정지는 역할과 무관하게 누구나 할 수 있어야 하므로 마스터를 요구하지
         않는다 · 시작만 마스터로 제한한다.
         """
-        service = getattr(bridge, '_coordination_web_bridge', None)
+        service = bridge.coordination
         if service is None:
             return ''
         if not service.local_execution_blocker():

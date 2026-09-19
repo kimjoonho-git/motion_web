@@ -1261,6 +1261,48 @@ class MotionWebBridge(Node):
             self._project_generation = next_generation
             return int(self._project_generation)
 
+    # ----------------------------------------------------------------- #
+    # 서비스 창구 · 길목이 밑줄 붙은 칸 이름을 알 필요는 없다 · §6-187
+    #
+    # 라우트 파일들이 `bridge._project` · `bridge._scan` 처럼 속살을 집어
+    # 공개 메서드를 불렀다 · **38회** · 서비스 하나의 칸 이름을 바꾸면
+    # 길목이 우수수 깨진다.
+    #
+    # 서비스 쪽 결합을 0으로 만들어 놓고도 **옆문이 열려 있었다** ·
+    # 감시 시험이 `motion_web_bridge/*.py` 만 보고 `routes/*.py` 는
+    # 안 봤기 때문에 아무도 몰랐다.
+    # ----------------------------------------------------------------- #
+
+    @property
+    def project(self):
+        """프로젝트 생성·전환·삭제와 파일 조작"""
+        return self._project
+
+    @property
+    def scan(self):
+        """모터 찾기"""
+        return self._scan
+
+    @property
+    def manual(self):
+        """수동 조그·동작"""
+        return self._manual
+
+    @property
+    def motor_config(self):
+        """모터 설정 저장·적용"""
+        return self._motor_config
+
+    @property
+    def motor_event_log(self):
+        """모터 사건 기록"""
+        return self._motor_event_log
+
+    @property
+    def coordination(self):
+        """연동 창구 · **없을 수 있다** · 쓰지 않는 PC 에서는 `None` 이다"""
+        return getattr(self, '_coordination_web_bridge', None)
+
     def settle_stopping_run_state(self, message: str) -> bool:
         """정지 중이던 실행을 「정지」로 매듭짓는다 · §6-186
 

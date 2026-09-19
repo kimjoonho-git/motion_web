@@ -28,6 +28,7 @@ from std_srvs.srv import Trigger
 from motion_common import topics
 from motion_coordination_interfaces.action import MotorScan
 
+from motion_web_bridge.motor_runtime_store import MOTOR_BUSY_MESSAGE
 from motion_web_bridge import (
     ethercat_project_compat,
     motion_file_analysis,
@@ -215,7 +216,7 @@ class ScanOrchestrator:
         if not lifecycle_lock.acquire(blocking=False):
             return {
                 'success': False,
-                'message': '다른 모터 설정·검색·재시작 작업이 진행 중입니다',
+                'message': MOTOR_BUSY_MESSAGE,
                 'scan': None,
                 'project_id': self.repository.selected_project_id(),
                 'project_generation': self.bridge.current_project_generation(),

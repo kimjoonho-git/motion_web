@@ -33,6 +33,15 @@ MOTOR_RUNTIME_TARGET_FIELDS = {
 }
 
 
+#: 모터 작업이 겹칠 때 하는 말 · §6-188
+#:
+#: 이 자물쇠의 주인은 `MotorRuntimeStore` 다 · 그런데 이 문구가 **파일 셋에
+#: 여섯 번** 흩어져 있었다 (여기 둘 · `motor_config_service` 셋 ·
+#: `scan_orchestrator` 하나) · 하나만 고치면 **어느 길로 거절당했느냐에 따라
+#: 화면이 다른 말을 한다** · 사용자는 같은 상황인데 다른 안내를 본다.
+MOTOR_BUSY_MESSAGE = '다른 모터 설정·검색·재시작 작업이 진행 중입니다'
+
+
 def _motor_runtime_locked(method):
     """모터 실행 상태 파일 갱신을 프로세스 간 락으로 감싼다.
 
@@ -228,7 +237,7 @@ class MotorRuntimeStore:
             and current.get('status') == 'running'
             and float(current.get('deadline_at') or 0.0) > now
         ):
-            raise ValueError('다른 모터 설정·검색·재시작 작업이 진행 중입니다')
+            raise ValueError(MOTOR_BUSY_MESSAGE)
         operation = {
             'operation_id': f'motor-{uuid.uuid4().hex}',
             'type': str(operation_type),
@@ -350,7 +359,7 @@ class MotorRuntimeStore:
             and float(operation.get('deadline_at') or 0.0) > now
             and operation.get('type') != 'motor_runtime_clear'
         ):
-            raise ValueError('다른 모터 설정·검색·재시작 작업이 진행 중입니다')
+            raise ValueError(MOTOR_BUSY_MESSAGE)
         previous_project_id = str(existing.get('target_project_id') or '').strip()
         if not previous_project_id:
             return {
