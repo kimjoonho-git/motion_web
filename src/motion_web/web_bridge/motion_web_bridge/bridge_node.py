@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import copy
 import json
 import os
@@ -6,7 +7,7 @@ import socket
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 import rclpy
 import uvicorn
@@ -462,7 +463,7 @@ class MotionWebBridge(Node):
         self._coordination_web_bridge = CoordinationWebBridge(
             self,
             self.workspace_root,
-            self._current_project_generation,
+            self.current_project_generation,
         )
         self._startup_project_context_timer = self.create_timer(
             1.0, self._execution_context.schedule_reconcile
@@ -528,7 +529,7 @@ class MotionWebBridge(Node):
             return
         if (
             project_id != self.project_repository.selected_project_id()
-            or generation != self._current_project_generation()
+            or generation != self.current_project_generation()
         ):
             return
         raw_values = payload.get('values')
@@ -780,7 +781,7 @@ class MotionWebBridge(Node):
                 execution_context,
                 selected_project_id,
             )
-            current_generation = self._current_project_generation()
+            current_generation = self.current_project_generation()
             if (
                 motion_value_state.get('project_id') != selected_project_id
                 or motion_value_state.get('project_generation') != current_generation
@@ -798,7 +799,7 @@ class MotionWebBridge(Node):
             'bridge_state': 'ok',
             'bridge_instance_id': str(getattr(self, '_bridge_instance_id', '')),
             'bridge_started_at': getattr(self, '_bridge_started_at', None),
-            'project_generation': self._current_project_generation(),
+            'project_generation': self.current_project_generation(),
             'system_info': {
                 'hostname': socket.gethostname(),
                 'workspace_root': str(Path(getattr(self, 'workspace_root', Path.cwd())).resolve()),
@@ -1088,7 +1089,7 @@ class MotionWebBridge(Node):
         generation.  Establish the boundary before any project consumer can
         become ready so valid MIDI commands are not rejected after restart.
         """
-        generation = self._current_project_generation()
+        generation = self.current_project_generation()
         if (
             not force
             and int(getattr(self, '_supervisor_project_generation', 0) or 0)
@@ -1246,7 +1247,7 @@ class MotionWebBridge(Node):
 
 
 
-    def _current_project_generation(self) -> int:
+    def current_project_generation(self) -> int:
         lock = getattr(self, '_project_generation_lock', None)
         if lock is None:
             return int(getattr(self, '_project_generation', 1))
@@ -1260,11 +1261,63 @@ class MotionWebBridge(Node):
             self._project_generation = next_generation
             return int(self._project_generation)
 
+    @contextlib.contextmanager
+    def changing_project(self) -> Iterator[None]:
+        """프로젝트가 바뀐다 · 세대를 올리고 실행 컨텍스트를 멈춘다 · §6-183
+
+        **한 마디로 끝난다.**
+
+        전에는 프로젝트를 만들 때·고를 때·지울 때 세 곳에서 같은 춤을 손으로
+        췄다.
+
+            bridge._execution_context._apply_lock.acquire()
+            try:
+                bridge._advance_project_generation()
+                bridge._execution_context.invalidate_nodes()
+                <할 일>
+            finally:
+                bridge._execution_context._apply_lock.release()
+
+        여섯 줄 중 다섯 줄이 남의 속살이다 · 순서가 하나라도 어긋나면(자물쇠
+        전에 세대를 올린다든지) 노드들이 옛 세대를 붙든 채 남는다 · 세 곳이
+        따로 적혀 있으니 한 곳만 고치는 실수가 나기 쉬웠다.
+
+        **순서가 왜 이런가** · 자물쇠를 먼저 잡아 재조정을 멈추고, 그 다음
+        세대를 올리고, 그 세대로 노드들을 무효화한다 · 반대로 하면 재조정이
+        옛 세대와 새 세대 사이에 끼어든다.
+        """
+        with self._execution_context.paused_for_project_change():
+            self._advance_project_generation()
+            self._execution_context.invalidate_nodes()
+            yield
+
+    def select_motor_axes_file(self, path: Any = None) -> None:
+        """이 모터 축 파일을 쓴다 · 빈 값이면 고른 것 없음 · §6-183"""
+        self._motor_config.select_file(path)
+
+    def selected_motor_axes_file(self) -> Path:
+        return self._motor_config.selected_file()
+
+    def applied_motor_axes_file(self) -> Path:
+        return self._motor_config.applied_file()
+
+    def mark_project_selected(self, project_id: Any) -> None:
+        """골랐지만 아직 적용 전이다 · 판정은 실행 컨텍스트가 한다 · §6-183"""
+        self._execution_context.mark_project_selected(str(project_id))
+
+    def reconcile_execution_context(self) -> Dict[str, Any]:
+        """실행 컨텍스트를 지금 상태에 맞춘다 · §6-183
+
+        실행 컨텍스트가 브리지의 어느 칸에 사는지는 브리지만 안다 ·
+        프로젝트 쪽은 「맞춰라」만 말한다.
+        """
+        return self._execution_context.reconcile()
+
     def _new_project_request_id(self, prefix: str) -> str:
-        return generation.new_request_id(prefix, self._current_project_generation())
+        return generation.new_request_id(prefix, self.current_project_generation())
 
     def _response_matches_current_generation(self, payload: Any) -> bool:
-        return generation.response_matches(payload, self._current_project_generation())
+        return generation.response_matches(payload, self.current_project_generation())
 
     def forget_project_memory(self) -> None:
         """프로젝트가 바뀌었다 · 들고 있던 것을 버린다 · §6-170
@@ -1300,8 +1353,13 @@ class MotionWebBridge(Node):
             scan.clear_progress()
 
     def _ensure_project_mutation_allowed(self, project_id: Any) -> None:
-        self._project.ensure_selected(project_id)
-        self._project.ensure_change_allowed()
+        """검사는 프로젝트 쪽이 한다 · 여기서는 넘기기만 · §6-183
+
+        브리지 밖(`motor_config_service`)에서도 이 검사가 필요해서 남겨 둔
+        통로다 · **판정은 `ProjectService` 가 한다** · 프로젝트 쪽이 이 길로
+        돌아오면 제자리 돌기가 되므로, 거기서는 제 것을 직접 부른다.
+        """
+        self._project.ensure_mutation_allowed(project_id)
 
     def servo_alarm_policy(self) -> Dict[str, Any]:
         project_id = self.project_repository.selected_project_id()
@@ -1319,7 +1377,7 @@ class MotionWebBridge(Node):
         return {
             'success': True,
             'project_id': project_id,
-            'project_generation': self._current_project_generation(),
+            'project_generation': self.current_project_generation(),
             'catalog_version': SERVO_ALARM_CATALOG_VERSION,
             'grade_definitions': GRADE_DEFINITIONS,
             'overrides': overrides,
@@ -1368,7 +1426,7 @@ class MotionWebBridge(Node):
         request_id = self._new_project_request_id('servo-alarm-policy')
         payload = {
             'request_id': request_id,
-            'project_generation': self._current_project_generation(),
+            'project_generation': self.current_project_generation(),
             'project_id': policy.get('project_id', ''),
             'command': 'servo_alarm_policy_update',
             'catalog_version': policy['catalog_version'],
@@ -1597,7 +1655,7 @@ class MotionWebBridge(Node):
         timeout_sec: float = 2.0,
     ) -> Dict[str, Any]:
         request_id = self._new_project_request_id('mapping')
-        project_generation = self._current_project_generation()
+        project_generation = self.current_project_generation()
         msg = String()
         request_payload = dict(payload) if isinstance(payload, dict) else {}
         request_payload['project_id'] = self.project_repository.selected_project_id()
@@ -1855,7 +1913,7 @@ class MotionWebBridge(Node):
         timeout_sec: float = 2.0,
     ) -> Dict[str, Any]:
         request_id = self._new_project_request_id('midi')
-        project_generation = self._current_project_generation()
+        project_generation = self.current_project_generation()
         msg = String()
         request_payload = dict(payload) if isinstance(payload, dict) else {}
         request_payload['project_id'] = self.project_repository.selected_project_id()
@@ -1886,7 +1944,7 @@ class MotionWebBridge(Node):
         timeout_sec: float = 2.0,
     ) -> Dict[str, Any]:
         request_id = self._new_project_request_id('run')
-        project_generation = self._current_project_generation()
+        project_generation = self.current_project_generation()
         msg = String()
         request_payload = dict(payload) if isinstance(payload, dict) else {}
         request_payload['project_id'] = self.project_repository.selected_project_id()
@@ -2055,7 +2113,7 @@ class MotionWebBridge(Node):
         request_id = self._new_project_request_id('safety-stop')
         payload = {
             'request_id': request_id,
-            'project_generation': self._current_project_generation(),
+            'project_generation': self.current_project_generation(),
             'command': 'safety_emergency_stop' if emergency else 'safety_motion_stop',
         }
         self._safety_request_publisher.publish(
@@ -2150,7 +2208,7 @@ def create_app(bridge: MotionWebBridge) -> FastAPI:
     @app.middleware('http')
     async def project_generation_boundary(request: Request, call_next):
         request_generation = request.headers.get('X-Project-Generation')
-        start_generation = bridge._current_project_generation()
+        start_generation = bridge.current_project_generation()
         if request_generation not in (None, ''):
             try:
                 if int(request_generation) != start_generation:
@@ -2170,7 +2228,7 @@ def create_app(bridge: MotionWebBridge) -> FastAPI:
                 )
         response = await call_next(request)
         response.headers['X-Project-Generation'] = str(
-            bridge._current_project_generation()
+            bridge.current_project_generation()
         )
         return response
 

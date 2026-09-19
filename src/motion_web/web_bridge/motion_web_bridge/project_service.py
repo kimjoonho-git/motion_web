@@ -3,13 +3,32 @@
 `MotionWebBridge`에서 떼어냈다 · §5 분해 목표안의 `ProjectService` · §6-23
 이것으로 §5가 적어둔 서비스 6개가 모두 섰다.
 
-노드에 남긴 것 · 프로젝트 **세대 번호**(`_current_project_generation` ·
-`_advance_project_generation`)와 `_ensure_project_mutation_allowed`.
+노드에 남긴 것 · 프로젝트 **세대 번호**(`current_project_generation`) ·
 세대는 노드 전역 개념이라 §6-20에서 남기기로 정했고 여기서도 같다.
+
+**브리지 속살을 더는 만지지 않는다** · §6-183
+
+전에는 이 파일이 브리지의 밑줄 붙은 칸 다섯을 직접 열었다 (43회).
+
+    _execution_context        12회  ← 남의 자물쇠를 직접 잡았다 놓았다
+    _motor_config             11회  ← 남의 칸에 직접 값을 적었다
+    _current_project_generation 9회
+    _ensure_project_mutation_allowed 7회  ← 브리지를 돌아 제자리로 왔다
+    _advance_project_generation 3회
+
+지금은 공개된 동사만 부른다.
+
+    bridge.changing_project()            프로젝트가 바뀐다 (세대·무효화·자물쇠)
+    bridge.select_motor_axes_file(path)  이 모터 축 파일을 쓴다
+    bridge.mark_project_selected(id)     골랐지만 아직 적용 전이다
+    bridge.reconcile_execution_context() 실행 컨텍스트를 맞춘다
+    bridge.current_project_generation()  지금 몇 세대인가
+    self.ensure_mutation_allowed(id)     제 검사는 제가 부른다
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 from pathlib import Path
 from typing import Any, Dict
@@ -39,6 +58,20 @@ class ProjectService:
         blocker = self.change_blocker()
         if blocker:
             raise ValueError(blocker)
+
+    def ensure_mutation_allowed(self, project_id: Any) -> None:
+        """고른 프로젝트인가 · 지금 바꿔도 되나 · §6-183
+
+        **제 검사는 제가 부른다** · 전에는 `bridge._ensure_project_mutation_allowed()`
+        를 거쳤는데, 그 메서드가 하는 일은 `self._project` — 곧 이 객체 — 의
+        같은 두 메서드를 부르는 것이었다 · 일곱 자리에서 브리지를 한 바퀴 돌아
+        제자리로 왔다.
+
+        돌아오는 길이 있으면 「누가 검사의 주인인가」가 흐려진다 · 브리지에
+        있는 것처럼 보이지만 실은 여기 있다.
+        """
+        self.ensure_selected(project_id)
+        self.ensure_change_allowed()
 
     def change_blocker(
         self,
@@ -119,7 +152,7 @@ class ProjectService:
             generation_matches = True
         else:
             try:
-                generation_matches = int(generation) == self.bridge._current_project_generation()
+                generation_matches = int(generation) == self.bridge.current_project_generation()
             except (TypeError, ValueError):
                 generation_matches = False
         return bool(
@@ -144,7 +177,7 @@ class ProjectService:
         ``_runtime_project_id`` and perform the full repository validation.
         """
         try:
-            relative = self.bridge._motor_config.applied.relative_to(
+            relative = self.bridge.applied_motor_axes_file().relative_to(
                 self.motion_projects_dir.resolve()
             )
         except (AttributeError, ValueError):
@@ -165,20 +198,20 @@ class ProjectService:
     def bind_selected_sources(self) -> None:
         project_id = self.repository.selected_project_id()
         if not project_id:
-            self.bridge._motor_config.selected = Path()
+            self.bridge.select_motor_axes_file()
             return
         try:
             detail = self.repository.get_project(project_id)
             active = detail.get('project', {}).get('active_files') or {}
             motor_name = str(active.get('motor_axes') or '')
             if motor_name:
-                self.bridge._motor_config.selected = self.repository.export_path(
+                self.bridge.select_motor_axes_file(self.repository.export_path(
                     project_id, 'motor_axes', motor_name
-                )
+                ))
             else:
-                self.bridge._motor_config.selected = Path()
+                self.bridge.select_motor_axes_file()
         except (OSError, ValueError, json.JSONDecodeError):
-            self.bridge._motor_config.selected = Path()
+            self.bridge.select_motor_axes_file()
             return
 
     def sync_file(
@@ -205,11 +238,11 @@ class ProjectService:
         self.bridge.forget_project_memory()
 
     def initialize_selected_context(self) -> None:
-        self.bridge._execution_context.reconcile()
+        self.bridge.reconcile_execution_context()
 
     def list_projects(self) -> Dict[str, Any]:
         result = self.repository.list_projects()
-        result['project_generation'] = self.bridge._current_project_generation()
+        result['project_generation'] = self.bridge.current_project_generation()
         runtime_project_id = self.runtime_project_id()
         result['runtime_project_id'] = runtime_project_id
         for project in result.get('projects') or []:
@@ -218,22 +251,17 @@ class ProjectService:
 
     def load_project(self, project_id: Any) -> Dict[str, Any]:
         result = self.repository.get_project(project_id)
-        result['project_generation'] = self.bridge._current_project_generation()
+        result['project_generation'] = self.bridge.current_project_generation()
         return result
 
     def create_project(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         self.ensure_change_allowed()
-        previous_generation = self.bridge._current_project_generation()
-        self.bridge._execution_context._apply_lock.acquire()
-        try:
-            self.bridge._advance_project_generation()
-            self.bridge._execution_context.invalidate_nodes()
+        previous_generation = self.bridge.current_project_generation()
+        with self.bridge.changing_project():
             created = self.repository.create_project(payload.get('name'))
-        finally:
-            self.bridge._execution_context._apply_lock.release()
         result = self.select_project(created['project']['project_id'])
         result['previous_project_generation'] = previous_generation
-        result['project_generation'] = self.bridge._current_project_generation()
+        result['project_generation'] = self.bridge.current_project_generation()
         return result
 
     def update_project(self, project_id: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -241,64 +269,50 @@ class ProjectService:
         return self.repository.update_project_memo(project_id, payload.get('memo'))
 
     def select_project(self, project_id: Any) -> Dict[str, Any]:
-        previous_generation = self.bridge._current_project_generation()
+        previous_generation = self.bridge.current_project_generation()
         changing_project = (
             str(project_id or '') != self.repository.selected_project_id()
         )
-        if changing_project:
-            self.ensure_change_allowed()
-            self.bridge._execution_context._apply_lock.acquire()
-        try:
+        # 같은 프로젝트를 다시 고르는 것은 「바뀜」이 아니다 · 세대를 올리면
+        # 화면들이 통째로 새로고침된다 · §6-183
+        with contextlib.ExitStack() as stack:
             if changing_project:
-                self.bridge._advance_project_generation()
-                self.bridge._execution_context.invalidate_nodes()
+                self.ensure_change_allowed()
+                stack.enter_context(self.bridge.changing_project())
             result = self.repository.select_project(project_id)
             result['previous_project_generation'] = previous_generation
-            result['project_generation'] = self.bridge._current_project_generation()
+            result['project_generation'] = self.bridge.current_project_generation()
             active = result.get('project', {}).get('active_files') or {}
             motor_name = str(active.get('motor_axes') or '')
-            if motor_name:
-                self.bridge._motor_config.selected = self.repository.export_path(
-                    project_id, 'motor_axes', motor_name
-                )
-            else:
-                self.bridge._motor_config.selected = Path()
-            self.bridge._execution_context._set_status(
-                state='selected', ready=False, project_id=str(project_id), context_id='',
-                message='프로젝트 선택 완료 · 실행 컨텍스트 적용 대기 중', nodes={},
+            self.bridge.select_motor_axes_file(
+                self.repository.export_path(project_id, 'motor_axes', motor_name)
+                if motor_name else None
             )
-        finally:
-            if changing_project:
-                self.bridge._execution_context._apply_lock.release()
+            self.bridge.mark_project_selected(project_id)
         policy_result = self.bridge.publish_servo_alarm_policy()
         if policy_result.get('success') is not True:
             raise ValueError(
                 '선택 프로젝트의 서보 에러 정책을 적용하지 못했습니다: '
                 f'{policy_result.get("message") or "응답 없음"}'
             )
-        result['execution_context'] = self.bridge._execution_context.reconcile()
+        result['execution_context'] = self.bridge.reconcile_execution_context()
         return result
 
     def delete_project(self, project_id: Any) -> Dict[str, Any]:
-        self.bridge._ensure_project_mutation_allowed(project_id)
+        self.ensure_mutation_allowed(project_id)
         if str(project_id or '') == self.runtime_project_id():
             raise ValueError(
                 '현재 모터에 적용된 프로젝트는 삭제할 수 없습니다. '
                 '「전체 동작 정지」 후 「실행 적용 해제」를 실행하거나, '
                 '다른 프로젝트를 적용한 뒤 삭제하세요'
             )
-        previous_generation = self.bridge._current_project_generation()
-        self.bridge._execution_context._apply_lock.acquire()
-        try:
-            self.bridge._advance_project_generation()
-            self.bridge._execution_context.invalidate_nodes()
+        previous_generation = self.bridge.current_project_generation()
+        with self.bridge.changing_project():
             result = self.repository.delete_project(project_id)
-        finally:
-            self.bridge._execution_context._apply_lock.release()
         result['previous_project_generation'] = previous_generation
-        result['project_generation'] = self.bridge._current_project_generation()
+        result['project_generation'] = self.bridge.current_project_generation()
         if not self.repository.selected_project_id():
-            self.bridge._motor_config.selected = Path()
+            self.bridge.select_motor_axes_file()
         return result
 
     def load_file(
@@ -322,7 +336,7 @@ class ProjectService:
     def save_file(
         self, project_id: Any, category: Any, file_name: Any, payload: Dict[str, Any]
     ) -> Dict[str, Any]:
-        self.bridge._ensure_project_mutation_allowed(project_id)
+        self.ensure_mutation_allowed(project_id)
         return self.repository.save_file(
             project_id, category, file_name, payload.get('content')
         )
@@ -330,7 +344,7 @@ class ProjectService:
     def rename_file(
         self, project_id: Any, category: Any, file_name: Any, payload: Dict[str, Any]
     ) -> Dict[str, Any]:
-        self.bridge._ensure_project_mutation_allowed(project_id)
+        self.ensure_mutation_allowed(project_id)
         return self.repository.rename_file(
             project_id, category, file_name, payload.get('new_name')
         )
@@ -338,7 +352,7 @@ class ProjectService:
     def import_file(
         self, project_id: Any, payload: Dict[str, Any]
     ) -> Dict[str, Any]:
-        self.bridge._ensure_project_mutation_allowed(project_id)
+        self.ensure_mutation_allowed(project_id)
         # 밖에서 들어올 수 있는 것은 모션 파일 하나뿐이다.
         #
         # 모터축·모션축 설정은 그 PC 의 하드웨어 배선에 매인 값이라 옮기면
@@ -376,7 +390,7 @@ class ProjectService:
     def activate_file(
         self, project_id: Any, category: Any, file_name: Any
     ) -> Dict[str, Any]:
-        self.bridge._ensure_project_mutation_allowed(project_id)
+        self.ensure_mutation_allowed(project_id)
         # This only selects a file in project metadata.  It does not apply a
         # motor configuration or publish a motion command.
         result = self.repository.set_active(project_id, category, file_name)
@@ -389,7 +403,7 @@ class ProjectService:
     def delete_file(
         self, project_id: Any, category: Any, file_name: Any
     ) -> Dict[str, Any]:
-        self.bridge._ensure_project_mutation_allowed(project_id)
+        self.ensure_mutation_allowed(project_id)
         result = self.repository.delete_file(project_id, category, file_name)
         if self.repository.selected_project_id() == str(project_id):
             replacement = str(result.get('replacement_active_file') or '')
@@ -398,20 +412,22 @@ class ProjectService:
                     self.open_file_for_editing(
                         project_id, category, replacement
                     )
-                    motor_config_rules.write_motor_config_selection(self.repository, self.bridge._motor_config.selected)
+                    motor_config_rules.write_motor_config_selection(
+                        self.repository, self.bridge.selected_motor_axes_file()
+                    )
                 else:
-                    self.bridge._motor_config.selected = Path()
+                    self.bridge.select_motor_axes_file()
                     motor_config_rules.clear_motor_config_selection(self.repository)
         return result
 
     def open_file_for_editing(
         self, project_id: Any, category: Any, file_name: Any
     ) -> Dict[str, Any]:
-        self.bridge._ensure_project_mutation_allowed(project_id)
+        self.ensure_mutation_allowed(project_id)
         path = self.repository.export_path(project_id, category, file_name)
         category_text = str(category)
         if category_text == 'motor_axes':
-            self.bridge._motor_config.selected = path
+            self.bridge.select_motor_axes_file(path)
             return {
                 'success': True,
                 'workspace': 'config',

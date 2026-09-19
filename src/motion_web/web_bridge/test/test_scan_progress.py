@@ -66,7 +66,7 @@ def scan_orchestrator(bridge) -> ScanOrchestrator:
 def test_scan_progress_groups_events_and_marks_completion():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge.project_repository = SimpleNamespace(selected_project_id=lambda: 'project-1')
-    bridge._current_project_generation = lambda: 7
+    bridge.current_project_generation = lambda: 7
     bridge.get_logger = lambda: SimpleNamespace(warn=lambda _message: None)
     scan = scan_orchestrator(bridge)
 
@@ -96,7 +96,7 @@ def test_progress_records_each_event_once_from_both_channels():
     """
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge.project_repository = SimpleNamespace(selected_project_id=lambda: 'project-1')
-    bridge._current_project_generation = lambda: 3
+    bridge.current_project_generation = lambda: 3
     bridge.get_logger = lambda: SimpleNamespace(warn=lambda _message: None)
     scan = scan_orchestrator(bridge)
 

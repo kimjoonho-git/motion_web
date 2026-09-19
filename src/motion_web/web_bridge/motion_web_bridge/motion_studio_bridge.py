@@ -104,7 +104,7 @@ class MotionStudioRosBridge:
     ) -> Dict[str, Any]:
         bridge = self.bridge
         request_id = bridge._new_project_request_id('studio')
-        project_generation = bridge._current_project_generation()
+        project_generation = bridge.current_project_generation()
         msg = String()
         request_payload = dict(payload) if isinstance(payload, dict) else {}
         request_payload['project_id'] = (
@@ -154,7 +154,7 @@ class MotionStudioRosBridge:
     ) -> Dict[str, Any]:
         bridge = self.bridge
         request_id = bridge._new_project_request_id('studio-editor')
-        project_generation = bridge._current_project_generation()
+        project_generation = bridge.current_project_generation()
         msg = String()
         msg.data = json.dumps({
             'request_id': request_id,

@@ -412,7 +412,7 @@ def test_group_motion_commands_include_execution_context_id():
         'status': {},
     }
     bridge._new_project_request_id = lambda _prefix: 'req-1'
-    bridge._current_project_generation = lambda: 1
+    bridge.current_project_generation = lambda: 1
 
     assert bridge.motion_group_prepare({
         'execution_id': 'exec-a',
@@ -488,7 +488,7 @@ def test_range_recovery_flag_is_forwarded_to_motion_supervisor():
         'fault': False,
     }
     bridge._new_project_request_id = lambda _prefix: 'recovery-1'
-    bridge._current_project_generation = lambda: 1
+    bridge.current_project_generation = lambda: 1
     bridge._action_request_publisher = type('Publisher', (), {
         'publish': lambda _self, message: published.append(json.loads(message.data)),
     })()
@@ -567,7 +567,7 @@ def test_snapshot_reads_motor_operation_without_reconciling_it(tmp_path):
     _patch_runtime_service_status({'phase': 'ready'})
     _execution_context_of(bridge).status = lambda **_kwargs: {'ready': True}
     bridge._safety_adjusted_midi_status = lambda status, **_kwargs: status
-    bridge._current_project_generation = lambda: 1
+    bridge.current_project_generation = lambda: 1
     _project_of(bridge).runtime_project_id_from_path = lambda _selected='': 'project-a'
     _runtime_of(bridge).reconcile_operation_status = lambda *_args: (
         pytest.fail('snapshot must be read-only')
@@ -1436,7 +1436,7 @@ def test_ac_servo_scan_temporarily_releases_and_restores_motor_service(monkeypat
     bridge._motion_studio_session.status = {}
     bridge.project_repository = operation_repository(lambda: 'project-a')
     bridge.snapshot = lambda: {}
-    bridge._current_project_generation = lambda: 3
+    bridge.current_project_generation = lambda: 3
     _runtime_of(bridge).managed_service_active = lambda _service: True
     bridge._expected_runtime_ethercat_axes = lambda: [0]
     calls = []
@@ -1504,7 +1504,7 @@ def test_ac_servo_scan_fails_when_motor_runtime_does_not_recover(monkeypatch):
         'preparing',
     )
     bridge.snapshot = lambda: {}
-    bridge._current_project_generation = lambda: 3
+    bridge.current_project_generation = lambda: 3
     _runtime_of(bridge).managed_service_active = lambda _service: True
     _runtime_of(bridge).run_managed_service = lambda _action, _service: None
     monkeypatch.setattr(
@@ -1559,7 +1559,7 @@ def test_ac_servo_scan_restores_service_even_when_stop_command_times_out(monkeyp
     bridge._motion_studio_session.status = {}
     bridge.project_repository = operation_repository(lambda: 'project-a')
     bridge.snapshot = lambda: {}
-    bridge._current_project_generation = lambda: 3
+    bridge.current_project_generation = lambda: 3
     _runtime_of(bridge).managed_service_active = lambda _service: True
     bridge._expected_runtime_ethercat_axes = lambda: [0]
     calls = []
@@ -1623,7 +1623,7 @@ def test_ac_servo_scan_restores_service_even_when_status_update_fails(monkeypatc
     repository.runtime.update_motor_operation = update
     bridge.project_repository = repository
     bridge.snapshot = lambda: {}
-    bridge._current_project_generation = lambda: 3
+    bridge.current_project_generation = lambda: 3
     _runtime_of(bridge).managed_service_active = lambda _service: True
     bridge._expected_runtime_ethercat_axes = lambda: [0]
     calls = []
@@ -1815,7 +1815,7 @@ def test_ac_servo_scan_is_blocked_while_runtime_velocity_is_nonzero(monkeypatch)
     bridge._motion_studio_session.status = {}
     bridge.project_repository = operation_repository(lambda: 'project-a')
     bridge.snapshot = lambda: {}
-    bridge._current_project_generation = lambda: 3
+    bridge.current_project_generation = lambda: 3
     _runtime_of(bridge).managed_service_active = lambda _service: (
         pytest.fail('moving motor must be rejected before checking systemd')
     )
@@ -1846,7 +1846,7 @@ def test_ac_servo_scan_is_blocked_when_running_motor_state_is_not_fresh(
     bridge._motion_studio_session.status = {}
     bridge.project_repository = operation_repository(lambda: 'project-a')
     bridge.snapshot = lambda: {}
-    bridge._current_project_generation = lambda: 3
+    bridge.current_project_generation = lambda: 3
     _runtime_of(bridge).managed_service_active = lambda _service: True
     _runtime_of(bridge).run_managed_service = lambda *_args: pytest.fail(
         'stale motor state must be rejected before stopping Motor Manager'
@@ -1881,7 +1881,7 @@ def test_ac_servo_scan_retires_previous_project_runtime_without_feedback(
     }
     bridge.project_repository = repository
     bridge.snapshot = lambda: {}
-    bridge._current_project_generation = lambda: 4
+    bridge.current_project_generation = lambda: 4
     _runtime_of(bridge).managed_service_active = lambda _service: True
     calls = []
     _runtime_of(bridge).run_managed_service = (
@@ -1950,7 +1950,7 @@ def test_ac_servo_scan_still_blocks_observed_motion_during_project_handoff(
     }
     bridge.project_repository = repository
     bridge.snapshot = lambda: {}
-    bridge._current_project_generation = lambda: 4
+    bridge.current_project_generation = lambda: 4
     _runtime_of(bridge).managed_service_active = lambda _service: (
         pytest.fail('moving motor must be rejected before checking systemd')
     )
@@ -1990,7 +1990,7 @@ def test_ac_servo_scan_ignores_stopped_servo_velocity_quantization_noise():
         'selected_project_id': lambda _self: 'project-a',
     })()
     bridge.snapshot = lambda: {}
-    bridge._current_project_generation = lambda: 3
+    bridge.current_project_generation = lambda: 3
 
     assert _runtime_of(bridge).ethercat_scan_safety_blocker() == ''
 
@@ -2019,7 +2019,7 @@ def test_ac_servo_scan_blocks_clear_motion_even_when_target_is_reached():
         'selected_project_id': lambda _self: 'project-a',
     })()
     bridge.snapshot = lambda: {}
-    bridge._current_project_generation = lambda: 3
+    bridge.current_project_generation = lambda: 3
 
     blocker = _runtime_of(bridge).ethercat_scan_safety_blocker()
 

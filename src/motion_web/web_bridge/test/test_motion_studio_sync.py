@@ -438,7 +438,7 @@ def test_motion_studio_stop_cancels_start_still_in_preparation():
 
     bridge._motion_studio_request_publisher = Publisher()
     bridge._new_project_request_id = lambda prefix: f'{prefix}-request'
-    bridge._current_project_generation = lambda: 1
+    bridge.current_project_generation = lambda: 1
     _execution_context_of(bridge).context_id = lambda: 'context'
     bridge.project_repository = type(
         'Repository',
@@ -480,7 +480,7 @@ def test_motion_studio_start_publishes_before_a_later_stop_generation():
 
     bridge._motion_studio_request_publisher = Publisher()
     bridge._new_project_request_id = lambda prefix: f'{prefix}-request'
-    bridge._current_project_generation = lambda: 1
+    bridge.current_project_generation = lambda: 1
     _execution_context_of(bridge).context_id = lambda: 'context'
     bridge.project_repository = type(
         'Repository',

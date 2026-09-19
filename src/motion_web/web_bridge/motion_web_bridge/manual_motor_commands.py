@@ -94,7 +94,7 @@ class ManualMotorCommandService:
 
     def _request_matches_current_generation(self, request_id: Any) -> bool:
         return generation.request_id_matches(
-            request_id, self.bridge._current_project_generation()
+            request_id, self.bridge.current_project_generation()
         )
 
     def _motion_state_motors(self) -> List[Dict[str, Any]]:
@@ -175,7 +175,7 @@ class ManualMotorCommandService:
         request_id = self.bridge._new_project_request_id('jog')
         payload = {
             'request_id': request_id,
-            'project_generation': self.bridge._current_project_generation(),
+            'project_generation': self.bridge.current_project_generation(),
             'command': 'ac_servo_jog',
             'axis': axis_value,
             'relative_deg': relative_value,
@@ -247,7 +247,7 @@ class ManualMotorCommandService:
         request_id = self.bridge._new_project_request_id('dynamixel-jog')
         payload = {
             'request_id': request_id,
-            'project_generation': self.bridge._current_project_generation(),
+            'project_generation': self.bridge.current_project_generation(),
             'command': 'dynamixel_jog',
             'axis': axis_value,
             'relative_deg': relative_value,
@@ -332,7 +332,7 @@ class ManualMotorCommandService:
         request_id = self.bridge._new_project_request_id('ac-servo-action')
         payload = {
             'request_id': request_id,
-            'project_generation': self.bridge._current_project_generation(),
+            'project_generation': self.bridge.current_project_generation(),
             'command': 'ac_servo_absolute_move',
             'axis': axis_value,
             'target_deg': target_value,
@@ -417,7 +417,7 @@ class ManualMotorCommandService:
         request_id = self.bridge._new_project_request_id('dynamixel-action')
         payload = {
             'request_id': request_id,
-            'project_generation': self.bridge._current_project_generation(),
+            'project_generation': self.bridge.current_project_generation(),
             'command': 'dynamixel_absolute_move',
             'axis': axis_value,
             'target_deg': target_value,
@@ -517,7 +517,7 @@ class ManualMotorCommandService:
         request_id = self.bridge._new_project_request_id('ac-servo-control')
         payload = {
             'request_id': request_id,
-            'project_generation': self.bridge._current_project_generation(),
+            'project_generation': self.bridge.current_project_generation(),
             'command': 'ac_servo_control',
             'action': action_value,
             'scope': scope_value,

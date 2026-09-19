@@ -133,7 +133,7 @@ class ScanOrchestrator:
                     'started_at': event.get('timestamp') or now,
                     'updated_at': now,
                     'project_id': self.repository.selected_project_id(),
-                    'project_generation': self.bridge._current_project_generation(),
+                    'project_generation': self.bridge.current_project_generation(),
                 }
                 self._seen_events = set()
             # 같은 이벤트가 토픽과 Action feedback 양쪽으로 온다 · 한 번만 센다
@@ -170,7 +170,7 @@ class ScanOrchestrator:
             'success': True,
             'progress': progress,
             'project_id': self.repository.selected_project_id(),
-            'project_generation': self.bridge._current_project_generation(),
+            'project_generation': self.bridge.current_project_generation(),
         }
 
     def scan_all(self, timeout_sec: float = FULL_SCAN_TIMEOUT_SEC) -> Dict[str, Any]:
@@ -218,7 +218,7 @@ class ScanOrchestrator:
                 'message': '다른 모터 설정·검색·재시작 작업이 진행 중입니다',
                 'scan': None,
                 'project_id': self.repository.selected_project_id(),
-                'project_generation': self.bridge._current_project_generation(),
+                'project_generation': self.bridge.current_project_generation(),
                 **self.bridge.snapshot(),
             }
         scan_lock = getattr(self, '_scan_request_lock', None)
@@ -232,7 +232,7 @@ class ScanOrchestrator:
                 'message': '다른 모터 검색이 진행 중입니다. 완료 후 다시 시도하세요',
                 'scan': None,
                 'project_id': self.repository.selected_project_id(),
-                'project_generation': self.bridge._current_project_generation(),
+                'project_generation': self.bridge.current_project_generation(),
                 **self.bridge.snapshot(),
             }
         operation: Dict[str, Any] = {}
@@ -298,7 +298,7 @@ class ScanOrchestrator:
                 'message': str(exc),
                 'scan': None,
                 'project_id': self.repository.selected_project_id(),
-                'project_generation': self.bridge._current_project_generation(),
+                'project_generation': self.bridge.current_project_generation(),
                 **self.bridge.snapshot(),
             }
         except Exception as exc:
@@ -440,7 +440,7 @@ class ScanOrchestrator:
         timeout_sec: float,
     ) -> Dict[str, Any]:
         scan_project_id = self.repository.selected_project_id()
-        scan_generation = self.bridge._current_project_generation()
+        scan_generation = self.bridge.current_project_generation()
         if not client.wait_for_service(timeout_sec=0.2):
             return {
                 'success': False,
@@ -461,14 +461,14 @@ class ScanOrchestrator:
             }
         if (
             self.repository.selected_project_id() != scan_project_id
-            or self.bridge._current_project_generation() != scan_generation
+            or self.bridge.current_project_generation() != scan_generation
         ):
             return {
                 'success': False,
                 'message': '프로젝트가 변경되어 이전 프로젝트의 검색 결과를 폐기했습니다',
                 'scan': None,
                 'project_id': self.repository.selected_project_id(),
-                'project_generation': self.bridge._current_project_generation(),
+                'project_generation': self.bridge.current_project_generation(),
                 **self.bridge.snapshot(),
             }
         scan = None
@@ -526,7 +526,7 @@ class ScanOrchestrator:
                 'scan': None,
                 'scan_blocked': True,
                 'project_id': self.repository.selected_project_id(),
-                'project_generation': self.bridge._current_project_generation(),
+                'project_generation': self.bridge.current_project_generation(),
                 **self.bridge.snapshot(),
             }
 
@@ -544,7 +544,7 @@ class ScanOrchestrator:
                     'scan': None,
                     'scan_blocked': True,
                     'project_id': self.repository.selected_project_id(),
-                    'project_generation': self.bridge._current_project_generation(),
+                    'project_generation': self.bridge.current_project_generation(),
                     **self.bridge.snapshot(),
                 }
 
@@ -575,7 +575,7 @@ class ScanOrchestrator:
                 'scan': None,
                 'scan_blocked': True,
                 'project_id': self.repository.selected_project_id(),
-                'project_generation': self.bridge._current_project_generation(),
+                'project_generation': self.bridge.current_project_generation(),
                 **self.bridge.snapshot(),
             }
         if restore_runtime and not expected_recovery_axes:
@@ -588,7 +588,7 @@ class ScanOrchestrator:
                 'scan': None,
                 'scan_blocked': True,
                 'project_id': self.repository.selected_project_id(),
-                'project_generation': self.bridge._current_project_generation(),
+                'project_generation': self.bridge.current_project_generation(),
                 **self.bridge.snapshot(),
             }
         result: Dict[str, Any]
@@ -628,7 +628,7 @@ class ScanOrchestrator:
                 'scan': None,
                 'scan_blocked': True,
                 'project_id': self.repository.selected_project_id(),
-                'project_generation': self.bridge._current_project_generation(),
+                'project_generation': self.bridge.current_project_generation(),
                 **self.bridge.snapshot(),
             }
         finally:

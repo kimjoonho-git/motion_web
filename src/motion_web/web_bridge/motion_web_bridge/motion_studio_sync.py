@@ -68,7 +68,7 @@ class MotionStudioSync:
         if result_generation is not None:
             try:
                 generation_matches = (
-                    int(result_generation) == bridge._current_project_generation()
+                    int(result_generation) == bridge.current_project_generation()
                 )
             except (TypeError, ValueError):
                 generation_matches = False

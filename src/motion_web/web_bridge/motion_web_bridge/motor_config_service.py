@@ -96,6 +96,25 @@ class MotorConfigService:
             }
         return self._payload_from_path(self.selected)
 
+    def select_file(self, path: Any = None) -> None:
+        """어느 모터 축 파일을 쓸 것인가 · §6-183
+
+        **고르는 것과 적용하는 것은 다르다** · `selected` 는 「화면에서 고른
+        것」이고 `applied` 는 「모터에 들어간 것」이다 · 빈 값이면 고른 것이
+        없다는 뜻이다.
+
+        전에는 `project_service` 가 `bridge._motor_config.selected = Path()`
+        처럼 남의 칸에 직접 적었다 · 일곱 자리다 · 그중 다섯은 「비운다」는
+        같은 뜻인데 `Path()` 라는 **표현**을 일곱 곳이 똑같이 알아야 했다.
+        """
+        self.selected = Path(path) if path else Path()
+
+    def selected_file(self) -> Path:
+        return self.selected
+
+    def applied_file(self) -> Path:
+        return self.applied
+
     def _payload_from_path(
         self,
         config_file: Path,

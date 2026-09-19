@@ -9,12 +9,13 @@
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import json
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Iterator
 
 from motion_web_bridge import motor_config_rules
 
@@ -77,6 +78,39 @@ class ExecutionContextService:
             self._status.update(values)
             self._status['updated_at'] = time.time()
 
+    @contextlib.contextmanager
+    def paused_for_project_change(self) -> Iterator[None]:
+        """프로젝트가 바뀌는 동안 적용을 멈춘다 · §6-183
+
+        **자물쇠는 주인이 연다.**
+
+        전에는 `project_service` 가 `bridge._execution_context._apply_lock`
+        를 직접 잡았다 놓았다 · 남의 객체의, 그것도 밑줄 붙은 자물쇠를 두 겹
+        건너 잡는 것이라 세 자리에서 `acquire` / `try` / `finally` 를 손으로
+        적어야 했다 · 한 곳에서 `finally` 를 빠뜨리면 실행 컨텍스트가 영영
+        잠긴다 (`reconcile` 이 조용히 건너뛴다).
+
+        이 자물쇠의 뜻은 「지금 바뀌는 중이니 재조정하지 마라」다 · 그 뜻을
+        아는 것은 이 객체뿐이므로, 멈추는 방법도 여기서 내준다.
+        """
+        self._apply_lock.acquire()
+        try:
+            yield
+        finally:
+            self._apply_lock.release()
+
+    def mark_project_selected(self, project_id: str) -> None:
+        """골랐지만 아직 적용 전이다 · §6-183
+
+        `_set_status` 는 이 객체의 속살이다 · 무엇을 「선택 완료」 상태라
+        부를지는 여기서 정한다 · 부르는 쪽이 여섯 칸을 직접 채우면, 칸이
+        하나 늘 때 부르는 쪽이 깨진다.
+        """
+        self._set_status(
+            state='selected', ready=False, project_id=str(project_id), context_id='',
+            message='프로젝트 선택 완료 · 실행 컨텍스트 적용 대기 중', nodes={},
+        )
+
     def context_id(self) -> str:
         status = self.status()
         return str(status.get('context_id') or '') if status.get('ready') else ''
@@ -131,7 +165,7 @@ class ExecutionContextService:
             acknowledged_generation = status_context.get('project_generation')
         try:
             generation_matches = (
-                int(acknowledged_generation) == self.bridge._current_project_generation()
+                int(acknowledged_generation) == self.bridge.current_project_generation()
             )
         except (TypeError, ValueError):
             generation_matches = False
@@ -208,7 +242,7 @@ class ExecutionContextService:
                 return self.status()
             payload = {
                 'context_id': context_id,
-                'project_generation': self.bridge._current_project_generation(),
+                'project_generation': self.bridge.current_project_generation(),
                 'mapping_file_id': mapping['name'],
                 'mapping_sha256': mapping['sha256'],
             }
