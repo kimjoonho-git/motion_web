@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from motion_common.execution_context import MAPPING_FILE_MISSING, confirm_context_id, verify_mapping_fingerprint
+from motion_common.paths import project_dir_for
+
 import hashlib
 from pathlib import Path
 from typing import Any, Dict
@@ -27,20 +30,7 @@ class StudioWorkspaceSession:
         project_id = str(
             payload.get('project_id') or payload.get('workspace_project_id') or ''
         ).strip()
-        if (
-            not project_id
-            or project_id != Path(project_id).name
-            or project_id.startswith('.')
-            or '/' in project_id
-            or '\\' in project_id
-        ):
-            raise ValueError('유효한 통합 프로젝트 ID가 필요합니다')
-        project_dir = (studio.motion_projects_dir / project_id).resolve()
-        if (
-            project_dir.parent != studio.motion_projects_dir
-            or not (project_dir / 'project.json').is_file()
-        ):
-            raise ValueError(f'통합 프로젝트를 찾을 수 없습니다: {project_id}')
+        project_dir = project_dir_for(studio.motion_projects_dir, project_id)
         if project_id == studio._workspace_project_id:
             return
         with studio._lock:
@@ -65,11 +55,9 @@ class StudioWorkspaceSession:
             / 'motion_axis_matching'
         )
         path = mapping_dir / mapping_file_id
-        if path.parent != mapping_dir or not path.is_file():
-            raise ValueError('현재 프로젝트의 모션축 설정 파일을 찾을 수 없습니다')
-        actual_sha = hashlib.sha256(path.read_bytes()).hexdigest()
-        if actual_sha != mapping_sha256:
-            raise ValueError('모션축 설정 파일 버전이 실행 컨텍스트와 다릅니다')
+        if path.parent != mapping_dir:
+            raise ValueError(MAPPING_FILE_MISSING)
+        actual_sha = verify_mapping_fingerprint(path, mapping_sha256)
         with studio._lock:
             next_context = {
                 'context_id': context_id,
@@ -91,13 +79,8 @@ class StudioWorkspaceSession:
 
     def confirm_execution_context(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         studio = self.studio
-        context_id = str(payload.get('context_id') or '').strip()
         with studio._lock:
-            if (
-                not context_id
-                or context_id != studio._execution_context.get('context_id')
-            ):
-                raise ValueError('확인하려는 실행 컨텍스트가 적용된 설정과 다릅니다')
+            confirm_context_id(studio._execution_context, payload)
             studio._execution_context_ready = True
             confirmed_context = dict(studio._execution_context)
         return {

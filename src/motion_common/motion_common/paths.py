@@ -110,3 +110,51 @@ def scripts_dir(package_hint: Optional[str] = None) -> Path:
 def log_dir(package_hint: Optional[str] = None) -> Path:
     """워크스페이스 로그 디렉터리."""
     return workspace_root(package_hint) / LOG_DIRNAME
+
+
+#: 프로젝트 ID 가 이름 하나가 아닐 때 · `../` 같은 것이 들어온 경우다
+INVALID_PROJECT_ID = '유효한 통합 프로젝트 ID가 필요합니다'
+
+
+def project_dir_for(projects_dir: Path, project_id: str) -> Path:
+    """그 프로젝트 폴더를 돌려준다 · 우리 폴더 밖이면 거부한다 · §6-194
+
+    **같은 검사가 네 벌 복사돼 있었고, 둘이 틀렸다.**
+
+        workspace_session      (스튜디오)      ❌
+        motion_mapping_manager (모션축 매핑)    ❌
+        motion_run_manager     (모션 실행)      ✅
+        midi_control_node      (MIDI)          ✅
+
+    틀린 둘은 **푼 경로와 안 푼 경로를 견주었다.**
+
+        project_dir = (projects_dir / project_id).resolve()   ← 풀었다
+        if project_dir.parent != projects_dir:                ← 안 풀었다
+
+    작업공간 경로에 심링크가 하나라도 끼면 이 둘은 **모든 프로젝트를 거부**
+    한다 · 모션 실행과 MIDI 는 멀쩡히 도는데 스튜디오와 매핑만 「통합
+    프로젝트를 찾을 수 없습니다」를 낸다 · 반쪽만 도는 상태이고, 문구가
+    「없다」라서 진짜 원인을 짐작하기 어렵다.
+
+    **두 단계다.**
+
+        1  이름이 이름인가      `../`·`/`·숨김파일을 여기서 막는다
+        2  정말 그 안에 있나    푼 경로끼리 견준다 · 심링크를 넘어서 본다
+
+    1번만으로는 부족하다 · `projects_dir` 자체가 심링크를 타고 엉뚱한 곳을
+    가리킬 수 있다 · 2번이 마지막 빗장이다.
+    """
+    name = str(project_id or '').strip()
+    if (
+        not name
+        or name != Path(name).name
+        or name.startswith('.')
+        or '/' in name
+        or '\\' in name
+    ):
+        raise ValueError(INVALID_PROJECT_ID)
+    root = Path(projects_dir).resolve()
+    project_dir = (root / name).resolve()
+    if project_dir.parent != root or not (project_dir / 'project.json').is_file():
+        raise ValueError(f'통합 프로젝트를 찾을 수 없습니다: {name}')
+    return project_dir

@@ -13,6 +13,8 @@ import yaml
 from rclpy.node import Node
 from std_msgs.msg import String
 
+from motion_common.execution_context import verify_mapping_fingerprint
+from motion_common.paths import project_dir_for
 from motion_common import command_router, generation, topics, values
 from motion_common import store as common_store
 from motion_runtime.midi_bank_store import (
@@ -178,17 +180,7 @@ class MotionMappingManager(Node):
 
     def _select_project(self, payload: Dict[str, Any]) -> str:
         project_id = str(payload.get('project_id') or '').strip()
-        if (
-            not project_id
-            or project_id != Path(project_id).name
-            or project_id.startswith('.')
-            or '/' in project_id
-            or '\\' in project_id
-        ):
-            raise ValueError('유효한 통합 프로젝트 ID가 필요합니다')
-        project_dir = (self.motion_projects_dir / project_id).resolve()
-        if project_dir.parent != self.motion_projects_dir or not (project_dir / 'project.json').is_file():
-            raise ValueError(f'통합 프로젝트를 찾을 수 없습니다: {project_id}')
+        project_dir = project_dir_for(self.motion_projects_dir, project_id)
         self.mappings_dir = project_dir / 'motion_axis_matching'
         self.motion_files_dir = project_dir / 'motions'
         self.mappings_dir.mkdir(parents=True, exist_ok=True)
@@ -202,9 +194,7 @@ class MotionMappingManager(Node):
         if not context_id or not file_id or not expected_sha:
             raise ValueError('실행 컨텍스트 ID와 모션축 설정 버전이 필요합니다')
         path = self._mapping_file_path(file_id)
-        actual_sha = hashlib.sha256(path.read_bytes()).hexdigest()
-        if actual_sha != expected_sha:
-            raise ValueError('모션축 설정 파일 버전이 실행 컨텍스트와 다릅니다')
+        actual_sha = verify_mapping_fingerprint(path, expected_sha)
         mapping = self._normalize_mapping(
             yaml.safe_load(path.read_text(encoding='utf-8')) or {},
             fallback_name=path.stem,

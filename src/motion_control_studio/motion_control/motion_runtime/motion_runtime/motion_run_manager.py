@@ -12,6 +12,8 @@ from typing import Any, Dict, List, Optional
 
 import rclpy
 import yaml
+from motion_common.execution_context import confirm_context_id
+from motion_common.paths import project_dir_for
 from motion_common import command_router, generation as generation_mod, motion_table, topics
 from motion_common.values import finite_float, optional_int
 from motion_control_msgs.msg import MotorStatus
@@ -431,10 +433,8 @@ class MotionRunManager(Node):
         }
 
     def _confirm_execution_context(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        context_id = str(payload.get('context_id') or '').strip()
         with self._run_lock:
-            if not context_id or context_id != self._execution_context.get('context_id'):
-                raise ValueError('확인하려는 실행 컨텍스트가 적용된 설정과 다릅니다')
+            context_id = confirm_context_id(self._execution_context, payload)
             # 부팅 때 스스로 시작하는 기능은 없앴다 · §6-134
             #
             # 켜는 곳이 둘이었고(이 PC · 그룹) 서로 배타적이었다 · 연동을 켜면
@@ -1073,18 +1073,7 @@ class MotionRunManager(Node):
 
     def _project_asset_dirs(self, payload: Dict[str, Any]) -> tuple[str, Path, Path]:
         project_id = str(payload.get('project_id') or '').strip()
-        if (
-            not project_id
-            or project_id != Path(project_id).name
-            or project_id.startswith('.')
-            or '/' in project_id
-            or '\\' in project_id
-        ):
-            raise ValueError('유효한 통합 프로젝트 ID가 필요합니다')
-        root = self.motion_projects_dir.resolve()
-        project_dir = (root / project_id).resolve()
-        if project_dir.parent != root or not (project_dir / 'project.json').is_file():
-            raise ValueError(f'통합 프로젝트를 찾을 수 없습니다: {project_id}')
+        project_dir = project_dir_for(self.motion_projects_dir, project_id)
         return project_id, project_dir / 'motions', project_dir / 'motion_axis_matching'
 
     def _mapping_file_path(self, file_id: Any, directory: Optional[Path] = None) -> Path:

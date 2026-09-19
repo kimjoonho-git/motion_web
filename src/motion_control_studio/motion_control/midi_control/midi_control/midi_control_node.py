@@ -1,5 +1,4 @@
 import json
-import hashlib
 import math
 import os
 import threading
@@ -47,6 +46,8 @@ from midi_control.motion_value_map import (
     safe_motion_range_for_group,
     second_order_low_pass,
 )
+from motion_common.execution_context import confirm_context_id, verify_mapping_fingerprint
+from motion_common.paths import project_dir_for
 from motion_common import command_router, generation as generation_mod, topics
 from motion_common.timing import CONTROL_PERIOD_SEC
 from motion_common import run_state as run_state_rules
@@ -1747,18 +1748,7 @@ class MidiControlNode(Node):
 
     def _select_project_mapping_dir(self, payload: Dict[str, Any]) -> None:
         project_id = str(payload.get('project_id') or '').strip()
-        if (
-            not project_id
-            or project_id != Path(project_id).name
-            or project_id.startswith('.')
-            or '/' in project_id
-            or '\\' in project_id
-        ):
-            raise ValueError('유효한 통합 프로젝트 ID가 필요합니다')
-        root = self._motion_projects_dir.resolve()
-        project_dir = (root / project_id).resolve()
-        if project_dir.parent != root or not (project_dir / 'project.json').is_file():
-            raise ValueError(f'통합 프로젝트를 찾을 수 없습니다: {project_id}')
+        project_dir = project_dir_for(self._motion_projects_dir, project_id)
         self._project_id = project_id
         self._mappings_dir = project_dir / 'motion_axis_matching'
 
@@ -2248,13 +2238,10 @@ class MidiControlNode(Node):
         mapping_file = self._mapping_file_path_or_none(registry.file_id)
         stored_banks = load_midi_banks(mapping_file) if mapping_file else None
         context_id = str(payload.get('context_id') or '').strip()
-        expected_mapping_sha = str(payload.get('mapping_sha256') or '').strip()
-        actual_mapping_sha = (
-            hashlib.sha256(mapping_file.read_bytes()).hexdigest()
-            if mapping_file is not None else ''
+        # 지문이 비어 있으면 **거부**한다 · 전에는 여기만 건너뛰었다 · §6-195
+        actual_mapping_sha = verify_mapping_fingerprint(
+            mapping_file, payload.get('mapping_sha256')
         )
-        if expected_mapping_sha and actual_mapping_sha != expected_mapping_sha:
-            raise ValueError('모션축 설정 파일 버전이 실행 컨텍스트와 다릅니다')
         incoming_banks = MidiBankManager()
         if stored_banks is not None:
             incoming_banks.replace_state(stored_banks)
@@ -2307,13 +2294,8 @@ class MidiControlNode(Node):
 
     def _cmd_confirm_context(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """적용된 실행 컨텍스트를 확인하고 MIDI 제어를 허용한다."""
-        context_id = str(payload.get('context_id') or '').strip()
         with self._lock:
-            if (
-                not context_id
-                or context_id != self._execution_context.get('context_id')
-            ):
-                raise ValueError('확인하려는 실행 컨텍스트가 적용된 설정과 다릅니다')
+            context_id = confirm_context_id(self._execution_context, payload)
             self._execution_context_ready = True
         response = build_snapshot(self)
         response.update({

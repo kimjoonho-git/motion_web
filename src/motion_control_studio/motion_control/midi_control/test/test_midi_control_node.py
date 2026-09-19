@@ -1,3 +1,4 @@
+import hashlib
 import json
 import types
 import threading
@@ -403,6 +404,10 @@ def test_repeated_same_project_context_does_not_release_select(tmp_path, monkeyp
             'project_id': project_id,
             'mapping_file_id': mapping_name,
             'project_generation': 1,
+            # 지문 없이 보내면 이제 거부한다 · 전에는 MIDI 만 통과했다 · §6-195
+            'mapping_sha256': hashlib.sha256(
+                (mappings_dir / mapping_name).read_bytes()
+            ).hexdigest(),
         },
     })))
 
@@ -429,6 +434,9 @@ def test_repeated_same_project_context_does_not_release_select(tmp_path, monkeyp
             'mapping_file_id': mapping_name,
             'project_generation': 1,
             'context_id': 'changed-context',
+            'mapping_sha256': hashlib.sha256(
+                (mappings_dir / mapping_name).read_bytes()
+            ).hexdigest(),
         },
     })))
 
