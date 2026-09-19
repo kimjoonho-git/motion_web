@@ -226,7 +226,7 @@ class MotorConfigService:
 
     def save(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         try:
-            self.bridge._ensure_project_mutation_allowed(
+            self.bridge.ensure_project_mutation_allowed(
                 self.repository.selected_project_id()
             )
             target_file = self._file_from_payload(payload)
@@ -501,31 +501,23 @@ class MotorConfigService:
             **self.bridge.snapshot(),
         }
 
+    #: 실행 적용을 해제했을 때 「정지 중」에 붙는 마무리 문구 · 한 곳에서 쓴다
+    RELEASE_SETTLED_MESSAGE = '실행 적용 해제로 정지 상태를 정리했습니다'
+
     def clear_stopping_release_state(self) -> None:
-        run_lock = getattr(self.bridge, '_motion_run_lock', None)
-        if run_lock is None:
-            run_status = getattr(self.bridge, '_motion_run_status', {}) or {}
-            if str(run_status.get('state') or '') == 'stopping':
-                self.bridge._motion_run_status = {
-                    **dict(run_status),
-                    'state': 'stopped',
-                    'message': '실행 적용 해제로 정지 상태를 정리했습니다',
-                }
-        else:
-            with run_lock:
-                run_status = getattr(self.bridge, '_motion_run_status', {}) or {}
-                if str(run_status.get('state') or '') == 'stopping':
-                    self.bridge._motion_run_status = {
-                        **dict(run_status),
-                        'state': 'stopped',
-                        'message': '실행 적용 해제로 정지 상태를 정리했습니다',
-                    }
+        """실행 적용을 해제했다 · 「정지 중」을 매듭짓는다 · §6-186
+
+        **무엇을 어떻게 적을지는 가진 쪽이 안다** · 전에는 여기서 브리지
+        속으로 손을 넣어 직접 적었고, 자물쇠가 없을 때를 위한 같은 블록이
+        한 벌 더 있었다.
+        """
+        self.bridge.settle_stopping_run_state(self.RELEASE_SETTLED_MESSAGE)
         studio_session = motion_studio_session.session_of(self.bridge)
         if studio_session is not None:
             studio_session.settle_state(
                 when='stopping',
                 becomes='idle',
-                message='실행 적용 해제로 정지 상태를 정리했습니다',
+                message=self.RELEASE_SETTLED_MESSAGE,
             )
 
     def restart_managed_program(self) -> Dict[str, Any]:
@@ -696,7 +688,7 @@ class MotorConfigService:
                 'message': project_blocker,
                 **self.bridge.snapshot(),
             }
-        execution_blocker = self.bridge._coordination_execution_blocker()
+        execution_blocker = self.bridge.coordination_execution_blocker()
         if execution_blocker:
             return {
                 'success': False,

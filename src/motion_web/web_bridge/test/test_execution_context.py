@@ -376,7 +376,7 @@ def test_motion_automation_commands_use_current_execution_context():
         return {'success': True}
 
     bridge._request_motion_run = request
-    bridge._motor_runtime_control_blocker = lambda: ''
+    bridge.motor_runtime_control_blocker = lambda: ''
 
     # 부팅 자동 재생을 빼면서 `start` · `reserve` · `disable` 통로도 함께
     # 없앴다 · §6-134 · 남은 것은 반복 방식 저장뿐이다
@@ -398,7 +398,7 @@ def test_group_motion_commands_include_execution_context_id():
         'context_id': 'context-sha',
         'nodes': {},
     }
-    bridge._motor_runtime_control_blocker = lambda: ''
+    bridge.motor_runtime_control_blocker = lambda: ''
     bridge._request_motion_run = MotionWebBridge._request_motion_run.__get__(
         bridge, MotionWebBridge,
     )
@@ -411,7 +411,7 @@ def test_group_motion_commands_include_execution_context_id():
         'request_id': request_id,
         'status': {},
     }
-    bridge._new_project_request_id = lambda _prefix: 'req-1'
+    bridge.new_project_request_id = lambda _prefix: 'req-1'
     bridge.current_project_generation = lambda: 1
 
     assert bridge.motion_group_prepare({
@@ -487,7 +487,7 @@ def test_range_recovery_flag_is_forwarded_to_motion_supervisor():
         'servo_on': True,
         'fault': False,
     }
-    bridge._new_project_request_id = lambda _prefix: 'recovery-1'
+    bridge.new_project_request_id = lambda _prefix: 'recovery-1'
     bridge.current_project_generation = lambda: 1
     bridge._action_request_publisher = type('Publisher', (), {
         'publish': lambda _self, message: published.append(json.loads(message.data)),
@@ -2236,7 +2236,7 @@ def test_record_does_not_start_when_unified_project_prepare_fails():
 def test_motion_studio_is_blocked_while_dds_group_owns_local_execution():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge._motion_studio_session = MotionStudioSession()
-    bridge._coordination_execution_blocker = (
+    bridge.coordination_execution_blocker = (
         lambda: 'DDS 그룹 실행이 로컬 모션 실행을 사용 중입니다'
     )
     _install_studio_sync(

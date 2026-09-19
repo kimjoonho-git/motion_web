@@ -62,7 +62,7 @@ class ProjectService:
     def ensure_mutation_allowed(self, project_id: Any) -> None:
         """고른 프로젝트인가 · 지금 바꿔도 되나 · §6-183
 
-        **제 검사는 제가 부른다** · 전에는 `bridge._ensure_project_mutation_allowed()`
+        **제 검사는 제가 부른다** · 전에는 `bridge.ensure_project_mutation_allowed()`
         를 거쳤는데, 그 메서드가 하는 일은 `self._project` — 곧 이 객체 — 의
         같은 두 메서드를 부르는 것이었다 · 일곱 자리에서 브리지를 한 바퀴 돌아
         제자리로 왔다.

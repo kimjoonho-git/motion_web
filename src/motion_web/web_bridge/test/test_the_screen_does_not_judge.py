@@ -41,7 +41,7 @@ class _Bridge:
         self._execution_context = type(
             'Ctx', (), {'status': lambda _self, validate_files=True: self._context},
         )()
-        self._motor_runtime_control_blocker = lambda: self._runtime
+        self.motor_runtime_control_blocker = lambda: self._runtime
 
 
 def _reason(**kwargs):

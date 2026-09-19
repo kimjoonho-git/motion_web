@@ -1038,9 +1038,9 @@ class MotionWebBridge(Node):
                 execution_context.get('message')
                 or '현재 프로젝트 실행 설정 적용 대기 중입니다.'
             )
-        return self._motor_runtime_control_blocker()
+        return self.motor_runtime_control_blocker()
 
-    def _motor_runtime_control_blocker(self) -> str:
+    def motor_runtime_control_blocker(self) -> str:
         lock = getattr(self, '_lock', None)
         if lock is None:
             motion_state = copy.deepcopy(getattr(self, '_motion_state', None))
@@ -1081,7 +1081,7 @@ class MotionWebBridge(Node):
             return f'오류 축이 있습니다: {", ".join(faulted)}'
         return ''
 
-    def _establish_project_generation_boundary(self, *, force: bool = False) -> None:
+    def establish_project_generation_boundary(self, *, force: bool = False) -> None:
         """Synchronize the persistent project generation with the command owner.
 
         The supervisor is recreated by a full program restart and therefore
@@ -1096,7 +1096,7 @@ class MotionWebBridge(Node):
             == generation
         ):
             return
-        boundary_id = self._new_project_request_id('project-boundary')
+        boundary_id = self.new_project_request_id('project-boundary')
         boundary = String()
         boundary.data = json.dumps({
             'request_id': boundary_id,
@@ -1261,6 +1261,41 @@ class MotionWebBridge(Node):
             self._project_generation = next_generation
             return int(self._project_generation)
 
+    def settle_stopping_run_state(self, message: str) -> bool:
+        """정지 중이던 실행을 「정지」로 매듭짓는다 · §6-186
+
+        **제 상태는 제가 적는다.**
+
+        전에는 `motor_config_service` 가 브리지 속에 손을 넣어 직접 적었다.
+
+            with run_lock:
+                run_status = getattr(bridge, 'run_status_field', {})
+                if run_status.get('state') == 'stopping':
+                    bridge.run_status_field = {...}   ← 남의 칸에 직접
+
+        그런데 자물쇠가 없을 때를 대비한 **같은 블록이 한 벌 더** 있었다 ·
+        두 벌이 조금씩 달라지면 어느 쪽으로 왔느냐에 따라 「정지 중」이 영영
+        안 풀린다 · 실행 적용 해제 뒤에 모터가 잠긴 것처럼 보인다.
+
+        돌려주는 값은 「정말 매듭지었나」다 · 정지 중이 아니었으면 `False` ·
+        부르는 쪽이 굳이 상태를 먼저 들여다볼 필요가 없다.
+        """
+        # 자물쇠가 아직 없을 수 있다 (노드가 다 서기 전, 시험용 껍데기) ·
+        # 그 예비가 전에는 **부르는 쪽에** 한 벌 더 있었다 · 여기 한 벌만 둔다
+        lock = getattr(self, '_motion_run_lock', None) or contextlib.nullcontext()
+        with lock:
+            status = getattr(self, '_motion_run_status', None) or {}
+            if str(status.get('state') or '') != 'stopping':
+                return False
+            self._motion_run_status = {
+                **dict(status), 'state': 'stopped', 'message': message,
+            }
+            return True
+
+    def execution_context_status(self, *, validate_files: bool = True) -> Dict[str, Any]:
+        """실행 컨텍스트 상태 · 어디 사는지는 브리지만 안다 · §6-186"""
+        return self._execution_context.status(validate_files=validate_files)
+
     def managed_context_nodes(self) -> Dict[str, Any]:
         """실행 컨텍스트를 함께 지키는 노드들 · 이름 → 말 거는 법 · §6-185
 
@@ -1394,7 +1429,7 @@ class MotionWebBridge(Node):
         """
         return self._execution_context.reconcile()
 
-    def _new_project_request_id(self, prefix: str) -> str:
+    def new_project_request_id(self, prefix: str) -> str:
         return generation.new_request_id(prefix, self.current_project_generation())
 
     def _response_matches_current_generation(self, payload: Any) -> bool:
@@ -1433,7 +1468,7 @@ class MotionWebBridge(Node):
         if scan is not None:
             scan.clear_progress()
 
-    def _ensure_project_mutation_allowed(self, project_id: Any) -> None:
+    def ensure_project_mutation_allowed(self, project_id: Any) -> None:
         """검사는 프로젝트 쪽이 한다 · 여기서는 넘기기만 · §6-183
 
         브리지 밖(`motor_config_service`)에서도 이 검사가 필요해서 남겨 둔
@@ -1504,7 +1539,7 @@ class MotionWebBridge(Node):
         policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         policy = policy or self.servo_alarm_policy()
-        request_id = self._new_project_request_id('servo-alarm-policy')
+        request_id = self.new_project_request_id('servo-alarm-policy')
         payload = {
             'request_id': request_id,
             'project_generation': self.current_project_generation(),
@@ -1735,7 +1770,7 @@ class MotionWebBridge(Node):
         payload: Dict[str, Any],
         timeout_sec: float = 2.0,
     ) -> Dict[str, Any]:
-        request_id = self._new_project_request_id('mapping')
+        request_id = self.new_project_request_id('mapping')
         project_generation = self.current_project_generation()
         msg = String()
         request_payload = dict(payload) if isinstance(payload, dict) else {}
@@ -1776,26 +1811,26 @@ class MotionWebBridge(Node):
     def motion_run_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self._request_motion_run('check', payload, timeout_sec=3.0)
 
-    def _coordination_execution_blocker(self) -> str:
+    def coordination_execution_blocker(self) -> str:
         service = getattr(self, '_coordination_web_bridge', None)
         return service.local_execution_blocker() if service is not None else ''
 
     def motion_run_initialize(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         if str(payload.get('request_source') or '') != 'network_control':
-            conflict = self._coordination_execution_blocker()
+            conflict = self.coordination_execution_blocker()
             if conflict:
                 return {'success': False, 'message': f'초기 위치 이동 불가: {conflict}'}
-        blocker = self._motor_runtime_control_blocker()
+        blocker = self.motor_runtime_control_blocker()
         if blocker:
             return {'success': False, 'message': f'초기 위치 이동 불가: {blocker}'}
         return self._request_motion_run('initialize', payload, timeout_sec=2.0)
 
     def motion_run_start(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         if str(payload.get('request_source') or '') != 'network_control':
-            conflict = self._coordination_execution_blocker()
+            conflict = self.coordination_execution_blocker()
             if conflict:
                 return {'success': False, 'message': f'모션 실행 불가: {conflict}'}
-        blocker = self._motor_runtime_control_blocker()
+        blocker = self.motor_runtime_control_blocker()
         if blocker:
             return {'success': False, 'message': f'모션 실행 불가: {blocker}'}
         # 스케줄러처럼 화면 없는 호출자는 무엇을 재생할지 모른다 ·
@@ -1842,7 +1877,7 @@ class MotionWebBridge(Node):
         return self._request_motion_run('stop_after_cycle', {}, timeout_sec=2.0)
 
     def motion_group_prepare(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        blocker = self._motor_runtime_control_blocker()
+        blocker = self.motor_runtime_control_blocker()
         if blocker:
             return {'success': False, 'message': f'그룹 실행 준비 불가: {blocker}'}
         return self._request_motion_run('group_prepare', payload, timeout_sec=2.0)
@@ -1993,7 +2028,7 @@ class MotionWebBridge(Node):
         payload: Dict[str, Any],
         timeout_sec: float = 2.0,
     ) -> Dict[str, Any]:
-        request_id = self._new_project_request_id('midi')
+        request_id = self.new_project_request_id('midi')
         project_generation = self.current_project_generation()
         msg = String()
         request_payload = dict(payload) if isinstance(payload, dict) else {}
@@ -2024,7 +2059,7 @@ class MotionWebBridge(Node):
         payload: Dict[str, Any],
         timeout_sec: float = 2.0,
     ) -> Dict[str, Any]:
-        request_id = self._new_project_request_id('run')
+        request_id = self.new_project_request_id('run')
         project_generation = self.current_project_generation()
         msg = String()
         request_payload = dict(payload) if isinstance(payload, dict) else {}
@@ -2118,7 +2153,7 @@ class MotionWebBridge(Node):
     def delete_motion_file(self, file_id: Any) -> Dict[str, Any]:
         try:
             project_id = self.project_repository.require_selected_project_id()
-            self._ensure_project_mutation_allowed(project_id)
+            self.ensure_project_mutation_allowed(project_id)
             target = motion_file_analysis.motion_file_path(
                 file_id, self.motion_projects_dir / project_id / 'motions'
             )
@@ -2191,7 +2226,7 @@ class MotionWebBridge(Node):
 
     def publish_safety_stop(self, emergency: bool) -> str:
         """Publish a priority safety command without waiting for acknowledgement."""
-        request_id = self._new_project_request_id('safety-stop')
+        request_id = self.new_project_request_id('safety-stop')
         payload = {
             'request_id': request_id,
             'project_generation': self.current_project_generation(),

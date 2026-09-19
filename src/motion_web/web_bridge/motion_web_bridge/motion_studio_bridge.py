@@ -103,7 +103,7 @@ class MotionStudioRosBridge:
         start_generation: Optional[int] = None,
     ) -> Dict[str, Any]:
         bridge = self.bridge
-        request_id = bridge._new_project_request_id('studio')
+        request_id = bridge.new_project_request_id('studio')
         project_generation = bridge.current_project_generation()
         msg = String()
         request_payload = dict(payload) if isinstance(payload, dict) else {}
@@ -153,7 +153,7 @@ class MotionStudioRosBridge:
         timeout_sec: float = STUDIO_EDITOR_TIMEOUT_SEC,
     ) -> Dict[str, Any]:
         bridge = self.bridge
-        request_id = bridge._new_project_request_id('studio-editor')
+        request_id = bridge.new_project_request_id('studio-editor')
         project_generation = bridge.current_project_generation()
         msg = String()
         msg.data = json.dumps({

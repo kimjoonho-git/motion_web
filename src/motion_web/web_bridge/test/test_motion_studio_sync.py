@@ -429,7 +429,7 @@ def test_motion_studio_stop_cancels_start_still_in_preparation():
     bridge._motion_studio_session = MotionStudioSession()
     bridge._motion_studio_session.order_lock = threading.Lock()
     bridge._motion_studio_session.start_generation = 0
-    bridge._motor_runtime_control_blocker = lambda: ''
+    bridge.motor_runtime_control_blocker = lambda: ''
     published = []
 
     class Publisher:
@@ -437,7 +437,7 @@ def test_motion_studio_stop_cancels_start_still_in_preparation():
             published.append(json.loads(message.data))
 
     bridge._motion_studio_request_publisher = Publisher()
-    bridge._new_project_request_id = lambda prefix: f'{prefix}-request'
+    bridge.new_project_request_id = lambda prefix: f'{prefix}-request'
     bridge.current_project_generation = lambda: 1
     _execution_context_of(bridge).context_id = lambda: 'context'
     bridge.project_repository = type(
@@ -479,7 +479,7 @@ def test_motion_studio_start_publishes_before_a_later_stop_generation():
             published.append(json.loads(message.data))
 
     bridge._motion_studio_request_publisher = Publisher()
-    bridge._new_project_request_id = lambda prefix: f'{prefix}-request'
+    bridge.new_project_request_id = lambda prefix: f'{prefix}-request'
     bridge.current_project_generation = lambda: 1
     _execution_context_of(bridge).context_id = lambda: 'context'
     bridge.project_repository = type(

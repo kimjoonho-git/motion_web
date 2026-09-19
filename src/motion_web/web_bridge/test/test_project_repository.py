@@ -2750,7 +2750,7 @@ def test_clear_motor_runtime_application_stops_and_allows_delete(
     bridge._motion_studio_session.status = {'state': 'stopping'}
     bridge._motion_run_lock = threading.Lock()
     bridge._motion_studio_session.lock = threading.Lock()
-    bridge._coordination_execution_blocker = lambda: ''
+    bridge.coordination_execution_blocker = lambda: ''
     _runtime_of(bridge).ethercat_scan_safety_blocker = lambda **_kwargs: ''
     _runtime_of(bridge).managed_service_active = lambda _unit: True
     _runtime_of(bridge).run_managed_service = lambda *_args, **_kwargs: None

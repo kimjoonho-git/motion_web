@@ -171,7 +171,7 @@ class ManualMotorCommandService:
                 **self.bridge.snapshot(),
             }
 
-        request_id = self.bridge._new_project_request_id('jog')
+        request_id = self.bridge.new_project_request_id('jog')
         payload = {
             'request_id': request_id,
             'project_generation': self.bridge.current_project_generation(),
@@ -243,7 +243,7 @@ class ManualMotorCommandService:
                 **self.bridge.snapshot(),
             }
 
-        request_id = self.bridge._new_project_request_id('dynamixel-jog')
+        request_id = self.bridge.new_project_request_id('dynamixel-jog')
         payload = {
             'request_id': request_id,
             'project_generation': self.bridge.current_project_generation(),
@@ -328,7 +328,7 @@ class ManualMotorCommandService:
                 **self.bridge.snapshot(),
             }
 
-        request_id = self.bridge._new_project_request_id('ac-servo-action')
+        request_id = self.bridge.new_project_request_id('ac-servo-action')
         payload = {
             'request_id': request_id,
             'project_generation': self.bridge.current_project_generation(),
@@ -413,7 +413,7 @@ class ManualMotorCommandService:
                 **self.bridge.snapshot(),
             }
 
-        request_id = self.bridge._new_project_request_id('dynamixel-action')
+        request_id = self.bridge.new_project_request_id('dynamixel-action')
         payload = {
             'request_id': request_id,
             'project_generation': self.bridge.current_project_generation(),
@@ -513,7 +513,7 @@ class ManualMotorCommandService:
                 }
             axes = [axis_value]
 
-        request_id = self.bridge._new_project_request_id('ac-servo-control')
+        request_id = self.bridge.new_project_request_id('ac-servo-control')
         payload = {
             'request_id': request_id,
             'project_generation': self.bridge.current_project_generation(),

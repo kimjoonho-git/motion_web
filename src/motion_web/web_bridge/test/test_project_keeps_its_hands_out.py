@@ -63,12 +63,12 @@ def test_it_does_not_hold_someone_elses_lock():
 
 
 def test_the_guard_does_not_go_around_the_bridge_and_come_back():
-    """`bridge._ensure_project_mutation_allowed` 는 이 객체를 되부른다.
+    """`bridge.ensure_project_mutation_allowed` 는 이 객체를 되부른다.
 
     무엇을 보는지 · **부르는 모양**만 본다 · 파일 첫머리 설명에 옛 이름이
     역사로 적혀 있어서, 이름만 찾으면 그 설명에 걸린다.
     """
-    assert 'self.bridge._ensure_project_mutation_allowed(' not in SERVICE_SOURCE
+    assert 'self.bridge.ensure_project_mutation_allowed(' not in SERVICE_SOURCE
     assert 'self.ensure_mutation_allowed(' in SERVICE_SOURCE
 
 

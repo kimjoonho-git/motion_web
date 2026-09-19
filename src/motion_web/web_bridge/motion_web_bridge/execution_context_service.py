@@ -74,7 +74,7 @@ class ExecutionContextService:
                     'stored_context_id': current.get('context_id', ''),
                 })
         runtime_blocker = (
-            self.bridge._motor_runtime_control_blocker()
+            self.bridge.motor_runtime_control_blocker()
             if status.get('ready')
             else ''
         )
@@ -129,7 +129,7 @@ class ExecutionContextService:
         payload = {'context_id': context_id}
         # A forced boundary also stops any command that belonged to the
         # invalidated context, even when the numeric generation is unchanged.
-        self.bridge._establish_project_generation_boundary(force=True)
+        self.bridge.establish_project_generation_boundary(force=True)
         for send in self.bridge.managed_context_nodes().values():
             send('invalidate_context', payload, timeout_sec=0.5)
         self.project.clear_scoped_memory()
@@ -222,7 +222,7 @@ class ExecutionContextService:
             with self._lock:
                 previous = dict(self._status)
             try:
-                self.bridge._establish_project_generation_boundary()
+                self.bridge.establish_project_generation_boundary()
             except ValueError as exc:
                 self._set_status(
                     state='waiting_motor_runtime', ready=False,

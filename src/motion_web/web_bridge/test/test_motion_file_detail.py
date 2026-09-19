@@ -55,7 +55,7 @@ def motion_file_bridge(tmp_path, registered_motion_file_id=''):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge.project_repository = repository
     bridge.motion_projects_dir = projects_dir
-    bridge._ensure_project_mutation_allowed = lambda _project_id: None
+    bridge.ensure_project_mutation_allowed = lambda _project_id: None
     return bridge, repository, project_id
 
 
@@ -103,7 +103,7 @@ def test_motion_file_import_needs_a_motion_axis_setting(tmp_path):
     target_id = repository.create_project('target')['project']['project_id']
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge.project_repository = repository
-    bridge._ensure_project_mutation_allowed = lambda _project_id: None
+    bridge.ensure_project_mutation_allowed = lambda _project_id: None
 
     def _import(name):
         return _project_of(bridge).import_file(target_id, {
@@ -134,7 +134,7 @@ def test_only_motion_files_can_be_brought_into_a_project(tmp_path):
     project_id = repository.create_project('target')['project']['project_id']
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge.project_repository = repository
-    bridge._ensure_project_mutation_allowed = lambda _project_id: None
+    bridge.ensure_project_mutation_allowed = lambda _project_id: None
 
     for category in ('motor_axes', 'motion_axis_matching', 'layers', ''):
         with pytest.raises(ValueError, match='모션 파일뿐입니다'):
@@ -195,7 +195,7 @@ def test_motion_file_registration_is_isolated_between_projects(tmp_path):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge.project_repository = repository
     bridge.motion_projects_dir = projects_dir
-    bridge._ensure_project_mutation_allowed = lambda _project_id: None
+    bridge.ensure_project_mutation_allowed = lambda _project_id: None
 
     result = bridge.delete_motion_file('show.json')
 

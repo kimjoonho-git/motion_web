@@ -477,7 +477,7 @@ class MotorRuntimeService:
                 repository=getattr(self, 'repository', None),
                 workspace_root=getattr(self, 'workspace_root', Path()),
             )
-            execution_context = self.bridge._execution_context.status(validate_files=False)
+            execution_context = self.bridge.execution_context_status(validate_files=False)
             self.reconcile_operation_status(
                 runtime_status,
                 motion_state,
