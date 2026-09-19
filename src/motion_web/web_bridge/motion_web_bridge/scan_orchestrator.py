@@ -274,6 +274,20 @@ class ScanOrchestrator:
             )
             result['partial'] = outcome == 'partial'
             result['success'] = outcome == 'success'
+            # **문구도 판정을 따라간다** · §6-198
+            #
+            # 문구는 `_call_service_locked` 이 노드 응답만 보고 먼저 만든다 ·
+            # 판정은 여기서 프로젝트 기준까지 넣어 다시 내린다 · 그대로 두면
+            # 버튼엔 「완료」, 글에는 「부분 완료」가 같이 뜬다.
+            #
+            # `scan` 이 없을 때는 손대지 않는다 · 그때의 문구는 「서비스 없음」
+            # 같은 구체적인 사정이고, 다시 만들면 그것을 잃는다.
+            if isinstance(result.get('scan'), dict):
+                result['message'] = motor_config_rules.scan_result_message(
+                    outcome == 'success',
+                    result['scan'],
+                    str(result.get('message') or ''),
+                )
             if (
                 current.get('operation_id') == operation_id
                 and current.get('status') == 'running'

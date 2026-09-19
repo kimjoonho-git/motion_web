@@ -1055,7 +1055,7 @@ def test_scan_result_message_preserves_partial_outcome():
     assert 'Dynamixel 0축' in message
 
 
-def test_scan_result_marks_unused_disconnected_master_as_project_compatible_partial():
+def test_an_unused_disconnected_master_does_not_make_the_scan_partial():
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge._motion_studio_session = MotionStudioSession()
     _motor_config_of(bridge).load = lambda: {
@@ -1126,14 +1126,20 @@ def test_scan_result_marks_unused_disconnected_master_as_project_compatible_part
     assert comparison['compatible'] is True
     assert comparison['required_master_indices'] == [0]
     assert comparison['unused_registered_master_indices'] == [1]
+    # **프로젝트가 쓰는 Master 0 은 다 응답했다** · 그러면 완료다 · §6-198
+    #
+    # 전에는 「부분 완료」였다 · 안 쓰는 Master 1 하나가 비어서 `complete` 이
+    # False 였기 때문이다 · 같은 응답이 스스로 「미사용 Master 1 미연결 허용」
+    # 이라고 말하면서 버튼엔 「부분 완료」를 띄웠다 · 사용자는 뭔가 덜 된 줄
+    # 안다.
     assert motor_config_rules.scan_operation_outcome(
         scan,
         operation_type='ac_servo_scan',
         fallback_success=False,
-    ) == 'partial'
-    message = motor_config_rules.scan_result_message(False, scan, 'raw failure')
-    assert message.startswith('모터 검색 부분 완료')
+    ) == 'success'
+    message = motor_config_rules.scan_result_message(True, scan, 'raw failure')
     assert '프로젝트 EtherCAT 구성 확인 완료' in message
+    # 안 쓰는 Master 는 **문구로 알린다** · 결과를 깎지는 않는다
     assert '미사용 Master 1 미연결 허용' in message
 
 

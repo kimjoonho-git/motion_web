@@ -449,7 +449,27 @@ def scan_operation_outcome(
         and ethercat_project.get('compatible') is not True
     ):
         return 'failure'
-    completed = [item.get('complete') is True for item in requested]
+    # **프로젝트가 쓰는 축을 다 찾았으면 EtherCAT 은 된 것이다** · §6-198
+    #
+    # `complete` 는 「등록된 Master 가 전부 응답했나」다 · 그래서 프로젝트가
+    # 쓰지 않는 Master 하나가 랜선이 빠져 있으면 `complete=False` 가 된다.
+    #
+    # 그러면 프로젝트가 필요로 하는 축을 다 찾았는데도 「부분 완료」가 떴다 ·
+    # 같은 응답 안에서 스스로 「미사용 Master 1 미연결 허용」이라고 말해
+    # 놓고서다 · 사용자는 뭔가 덜 된 줄 안다.
+    #
+    # `compatible` 은 「프로젝트가 **필요로 하는** Master 가 다 응답했다」는
+    # 뜻이다 · 그게 곧 이 검색이 하려던 일이다.
+    ethercat_satisfied = (
+        isinstance(ethercat_project, dict)
+        and ethercat_project.get('available') is True
+        and ethercat_project.get('compatible') is True
+    )
+    completed = [
+        item.get('complete') is True
+        or (item is ethercat and ethercat_satisfied)
+        for item in requested
+    ]
     if all(completed):
         return 'success'
     if any(completed):
@@ -457,12 +477,6 @@ def scan_operation_outcome(
     if any(
         scan_item_has_detected_devices(item)
         for item in requested
-    ):
-        return 'partial'
-    if (
-        operation_type in {'full_scan', 'ac_servo_scan'}
-        and isinstance(ethercat_project, dict)
-        and ethercat_project.get('compatible') is True
     ):
         return 'partial'
     return 'failure'
