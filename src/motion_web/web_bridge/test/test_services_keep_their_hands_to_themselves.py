@@ -22,6 +22,14 @@
 가진 쪽이 안다.
 
 여기서 지키는 것 : **결합도는 늘지 않는다.**
+
+상한은 그때그때의 실제 값이다 · 줄면 같이 낮춘다 · 안 그러면 「여기까지는
+괜찮다」는 여유가 생기고, 그 여유는 반드시 쓰인다.
+
+    2026-09-18   project_service 18 → 5
+    2026-09-19   project_service  5 → 0 · scan_orchestrator 4 → 0
+                 manual_motor_commands 4 → 1 · motor_runtime_service 4 → 1
+                 execution_context_service 9 → 2
 """
 
 import re
@@ -37,12 +45,13 @@ SERVICES = WORKSPACE / 'src/motion_web/web_bridge/motion_web_bridge'
 #: 지금 값이다 · 줄이는 것은 환영이고 늘리는 것은 막는다 · 늘려야 한다면
 #: 그 전에 「그 일의 주인이 정말 여기인가」를 묻는다.
 LIMITS = {
-    'project_service.py': 5,
-    'execution_context_service.py': 9,
-    'motor_runtime_service.py': 4,
-    'scan_orchestrator.py': 4,
-    'manual_motor_commands.py': 4,
+    # 0 은 「이제 아예 안 만진다」는 뜻이다 · 다시 생기면 걸린다 · §6-183
+    'project_service.py': 0,
+    'scan_orchestrator.py': 0,
+    'execution_context_service.py': 2,
     'motor_config_service.py': 3,
+    'manual_motor_commands.py': 1,
+    'motor_runtime_service.py': 1,
 }
 
 REACH = re.compile(r'self\.bridge\.(_[a-z_]+)')

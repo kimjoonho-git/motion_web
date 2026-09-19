@@ -1261,6 +1261,87 @@ class MotionWebBridge(Node):
             self._project_generation = next_generation
             return int(self._project_generation)
 
+    def managed_context_nodes(self) -> Dict[str, Any]:
+        """실행 컨텍스트를 함께 지키는 노드들 · 이름 → 말 거는 법 · §6-185
+
+        **같은 목록이 세 곳에 적혀 있었다.**
+
+            무효화   네 노드   invalidate_context   0.5초
+            적용     네 노드   apply_context        2초
+            확인     세 노드   confirm_context      2초
+
+        세 곳 모두 `bridge._request_motion_mapping` · `_request_midi_monitor`
+        · `_request_motion_run` · `_motion_studio_transport().request` 를
+        손으로 나열했다 · 노드가 늘거나 통로 이름이 바뀌면 **세 곳을 모두
+        찾아야** 하고, 한 곳을 놓치면 그 노드만 옛 컨텍스트에 남는다.
+
+        목록은 여기 하나다 · **거는 말과 기다리는 시간은 부르는 쪽이 정한다** ·
+        그것은 세 경우가 실제로 다르기 때문이다 (합치면 거짓말이 된다).
+        """
+        return {
+            'motion_mapping': self._request_motion_mapping,
+            'midi_control': self._request_midi_monitor,
+            'motion_run': self._request_motion_run,
+            'motion_studio': self._motion_studio_transport().request,
+        }
+
+    # 모션 상태는 ROS 콜백이 계속 갈아끼운다 · 1초보다 오래된 것은 없는
+    # 것으로 본다 · 이 값은 운영 수치다 · 바꾸려면 사람이 정한다 · §6-184
+    MOTION_STATE_MAX_AGE_SEC = 1.0
+
+    def motion_state(self) -> Optional[Dict[str, Any]]:
+        """지금 모션 상태 · **복사본**을 준다 · §6-184
+
+        자물쇠 안에서 복사해 내보낸다 · 전에는 `manual_motor_commands` 가
+        자물쇠 안에서 **원본 참조만** 받아 밖에서 읽었다.
+
+            with bridge_lock:
+                state = bridge_motion_state    ← 참조만 받는다
+            motors = state.get('motors', [])   ← 자물쇠 밖에서 읽는다
+
+        그 사이 ROS 콜백이 `_motion_state` 를 통째로 갈아끼우면 읽던 쪽은 옛
+        것을 붙들고 있다 · 자물쇠를 잡은 뜻이 없어진다.
+        """
+        with self._lock:
+            return copy.deepcopy(self._motion_state)
+
+    def motion_state_with_time(self) -> tuple:
+        """상태와 **받은 시각**을 함께 · §6-184
+
+        「오래됐나」를 부르는 쪽마다 다르게 따진다.
+
+            1초가 넘었나                     축을 셀 때
+            정지 명령을 넣은 뒤에 온 것인가   정지를 확인할 때
+
+        기준이 다르니 판정을 여기서 대신해 줄 수 없다 · 대신 **자물쇠를
+        잡는 일**만 맡는다 · 그것이 부르는 쪽마다 틀렸던 부분이다.
+        """
+        with self._lock:
+            return copy.deepcopy(self._motion_state), self._motion_state_received_at
+
+    def fresh_motion_state(
+        self, max_age_sec: Optional[float] = None
+    ) -> Optional[Dict[str, Any]]:
+        """너무 오래된 상태는 없는 것으로 본다 · §6-184
+
+        **같은 검사가 두 곳에 있었다** · `scan_orchestrator` 가 축을 셀 때
+        두 번, 글자 하나까지 똑같이.
+
+            if (not isinstance(motion_state, dict)
+                or received_at is None
+                or time.time() - float(received_at) > 1.0):
+                return []
+
+        한쪽만 고치면 「어떤 길로 왔느냐」에 따라 축이 보였다 안 보였다 한다.
+        """
+        limit = self.MOTION_STATE_MAX_AGE_SEC if max_age_sec is None else max_age_sec
+        state, received_at = self.motion_state_with_time()
+        if not isinstance(state, dict) or received_at is None:
+            return None
+        if time.time() - float(received_at) > float(limit):
+            return None
+        return state
+
     @contextlib.contextmanager
     def changing_project(self) -> Iterator[None]:
         """프로젝트가 바뀐다 · 세대를 올리고 실행 컨텍스트를 멈춘다 · §6-183

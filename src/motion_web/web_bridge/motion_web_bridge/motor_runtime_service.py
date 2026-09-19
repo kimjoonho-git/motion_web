@@ -105,9 +105,7 @@ class MotorRuntimeService:
         if blocker:
             return blocker
 
-        with self.bridge._lock:
-            motion_state = copy.deepcopy(self.bridge._motion_state)
-            received_at = self.bridge._motion_state_received_at
+        motion_state, received_at = self.bridge.motion_state_with_time()
         if not isinstance(motion_state, dict) or received_at is None:
             return (
                 '최신 모터 상태를 확인할 수 없습니다'
@@ -186,9 +184,7 @@ class MotorRuntimeService:
                 not motor_service
                 or self.managed_service_active(motor_service)
             )
-            with self.bridge._lock:
-                motion_state = copy.deepcopy(self.bridge._motion_state)
-                received_at = self.bridge._motion_state_received_at
+            motion_state, received_at = self.bridge.motion_state_with_time()
             online_axes = []
             if (
                 isinstance(motion_state, dict)
@@ -474,8 +470,7 @@ class MotorRuntimeService:
         if not lock.acquire(blocking=False):
             return
         try:
-            with self.bridge._lock:
-                motion_state = copy.deepcopy(self.bridge._motion_state)
+            motion_state = self.bridge.motion_state()
             runtime_status = motor_config_rules.runtime_service_status(
                 motion_state,
                 applied_motor_config_file=getattr(getattr(self.bridge, '_motor_config', None), 'applied', None),

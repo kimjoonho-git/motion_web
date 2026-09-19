@@ -694,14 +694,8 @@ class ScanOrchestrator:
         if runtime is not None:
             return motion_file_analysis.configured_axes_from_runtime_file(runtime)
 
-        with self.bridge._lock:
-            motion_state = copy.deepcopy(self.bridge._motion_state)
-            received_at = self.bridge._motion_state_received_at
-        if (
-            not isinstance(motion_state, dict)
-            or received_at is None
-            or time.time() - float(received_at) > 1.0
-        ):
+        motion_state = self.bridge.fresh_motion_state()
+        if motion_state is None:
             return []
         axes = []
         for motor in motion_state.get('motors') or []:
@@ -731,14 +725,8 @@ class ScanOrchestrator:
 
         # Compatibility fallback for an unmanaged/legacy launch with no
         # durable runtime target.
-        with self.bridge._lock:
-            motion_state = copy.deepcopy(self.bridge._motion_state)
-            received_at = self.bridge._motion_state_received_at
-        if (
-            not isinstance(motion_state, dict)
-            or received_at is None
-            or time.time() - float(received_at) > 1.0
-        ):
+        motion_state = self.bridge.fresh_motion_state()
+        if motion_state is None:
             return []
         axes = []
         for motor in motion_state.get('motors') or []:

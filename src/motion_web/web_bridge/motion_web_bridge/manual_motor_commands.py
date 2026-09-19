@@ -98,8 +98,7 @@ class ManualMotorCommandService:
         )
 
     def _motion_state_motors(self) -> List[Dict[str, Any]]:
-        with self.bridge._lock:
-            state = self.bridge._motion_state
+        state = self.bridge.motion_state()
         if not isinstance(state, dict):
             return []
         motors = state.get('motors', [])

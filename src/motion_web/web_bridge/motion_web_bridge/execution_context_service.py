@@ -20,6 +20,16 @@ from typing import Any, Dict, Iterator
 from motion_web_bridge import motor_config_rules
 
 
+#: 적용할 때만 MIDI 는 다른 말을 알아듣는다 · 나머지는 `apply_context` · §6-185
+APPLY_COMMANDS = {'midi_control': 'select_project'}
+
+#: 확인은 세 노드만 받는다 · `motion_mapping` 은 적용 응답으로 끝난다 · §6-185
+#:
+#: 되묻지 않는 이유 · 매핑 노드는 적용 시점에 파일을 이미 다 읽었다 ·
+#: 나머지 셋은 적용 뒤에도 준비가 더 필요해서 한 번 더 묻는다.
+CONFIRM_NODES = ('midi_control', 'motion_run', 'motion_studio')
+
+
 class ExecutionContextService:
     def __init__(
         self,
@@ -120,10 +130,8 @@ class ExecutionContextService:
         # A forced boundary also stops any command that belonged to the
         # invalidated context, even when the numeric generation is unchanged.
         self.bridge._establish_project_generation_boundary(force=True)
-        self.bridge._request_motion_mapping('invalidate_context', payload, timeout_sec=0.5)
-        self.bridge._request_midi_monitor('invalidate_context', payload, timeout_sec=0.5)
-        self.bridge._request_motion_run('invalidate_context', payload, timeout_sec=0.5)
-        self.bridge._motion_studio_transport().request('invalidate_context', payload, timeout_sec=0.5)
+        for send in self.bridge.managed_context_nodes().values():
+            send('invalidate_context', payload, timeout_sec=0.5)
         self.project.clear_scoped_memory()
 
     def _ack_matches(
@@ -263,18 +271,10 @@ class ExecutionContextService:
                     context=context,
                 )
             nodes = {
-                'motion_mapping': self.bridge._request_motion_mapping(
-                    'apply_context', payload, timeout_sec=2.0
-                ),
-                'midi_control': self.bridge._request_midi_monitor(
-                    'select_project', payload, timeout_sec=2.0
-                ),
-                'motion_run': self.bridge._request_motion_run(
-                    'apply_context', payload, timeout_sec=2.0
-                ),
-                'motion_studio': self.bridge._motion_studio_transport().request(
-                    'apply_context', payload, timeout_sec=2.0
-                ),
+                name: send(
+                    APPLY_COMMANDS.get(name, 'apply_context'), payload, timeout_sec=2.0
+                )
+                for name, send in self.bridge.managed_context_nodes().items()
             }
             failed = {
                 name: str(result.get('message') or '응답 없음')
@@ -307,8 +307,7 @@ class ExecutionContextService:
                 )
                 return self.status()
 
-            with self.bridge._lock:
-                motion_state = copy.deepcopy(self.bridge._motion_state)
+            motion_state = self.bridge.motion_state()
             motor_runtime = motor_config_rules.runtime_service_status(
                 motion_state,
                 applied_motor_config_file=getattr(getattr(self.bridge, '_motor_config', None), 'applied', None),
@@ -334,15 +333,9 @@ class ExecutionContextService:
                 return self.status()
 
             confirmations = {
-                'midi_control': self.bridge._request_midi_monitor(
-                    'confirm_context', payload, timeout_sec=2.0
-                ),
-                'motion_run': self.bridge._request_motion_run(
-                    'confirm_context', payload, timeout_sec=2.0
-                ),
-                'motion_studio': self.bridge._motion_studio_transport().request(
-                    'confirm_context', payload, timeout_sec=2.0
-                ),
+                name: send('confirm_context', payload, timeout_sec=2.0)
+                for name, send in self.bridge.managed_context_nodes().items()
+                if name in CONFIRM_NODES
             }
             confirm_failed = {
                 name: str(result.get('message') or '응답 없음')
