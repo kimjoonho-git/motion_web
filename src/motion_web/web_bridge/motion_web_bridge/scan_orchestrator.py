@@ -230,6 +230,9 @@ class ScanOrchestrator:
             lifecycle_lock.release()
             return {
                 'success': False,
+                # 위 `lifecycle_lock` 과 **다른 상황**이다 · 저쪽은 설정 적용·
+                # 재시작까지 포함하고, 여기는 검색이 이미 도는 중이다 ·
+                # 문구를 합치면 사용자가 무엇을 기다려야 하는지 모른다
                 'message': '다른 모터 검색이 진행 중입니다. 완료 후 다시 시도하세요',
                 'scan': None,
                 'project_id': self.repository.selected_project_id(),
@@ -653,12 +656,22 @@ class ScanOrchestrator:
                         timeout_sec=12.0,
                         motor_service=motor_service,
                     )
+                    # **둘을 가른다** · §6-196
+                    #
+                    # Motor Manager 가 안 돌아온 것   →  진짜 실패
+                    # 축 몇 개가 안 돌아온 것         →  알림 (실패 아님)
+                    #
+                    # 사람이 직접 「검색」을 눌렀다는 것은, 모터가 빠졌거나
+                    # 알람인 것을 이미 보고 누른 것이다 · 그런데 전에는 검색
+                    # 전 설정에 있던 축이 **전부** 돌아와야 성공으로 쳤다 ·
+                    # 빠진 모터 때문에 재검색하면 그 모터가 안 돌아와서
+                    # 「직접 검색 실패」가 떴다 · 축 목록은 제대로 갱신됐는데도.
                     if not recovery.get('recovered'):
-                        restore_error = (
-                            'Motor Manager 재시작 후 서비스·모터 상태 복구 실패: '
-                            f'{len(recovery.get("online_axes") or [])}/'
-                            f'{len(expected_recovery_axes)}축'
-                        )
+                        if not recovery.get('service_active'):
+                            restore_error = 'Motor Manager 가 다시 실행되지 않았습니다'
+                        else:
+                            missing = recovery.get('missing_axes') or []
+                            result['missing_axes'] = missing
                 except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
                     restore_error = str(exc)
 
@@ -674,6 +687,14 @@ class ScanOrchestrator:
                 f'{result.get("message") or "AC Servo 검색 완료"} / '
                 '이전 프로젝트 모터 실행은 정지되었습니다. '
                 '현재 프로젝트 설정을 저장한 뒤 장비에 적용 · 모터 재시작하세요'
+            )
+        missing_axes = result.get('missing_axes') or []
+        if missing_axes and not restore_error:
+            # 검색 결과는 그대로 살린다 · 무엇이 없었는지만 덧붙인다
+            result['message'] = (
+                f'{result.get("message") or "AC Servo 검색 완료"} / '
+                f'검색 전 설정의 {", ".join(str(a) for a in missing_axes)}번 축이 '
+                '돌아오지 않았습니다 · 빠졌거나 알람 상태인지 확인하세요'
             )
         if restore_error:
             result['success'] = False
@@ -766,7 +787,7 @@ class ScanOrchestrator:
             ).strip()
         if not runtime_project_id:
             runtime_project_id = str(
-                self.project.runtime_project_id_from_path(selected_project_id) or ''
+                self.project.runtime_project_id_from_path() or ''
             ).strip()
         return {
             'required': bool(

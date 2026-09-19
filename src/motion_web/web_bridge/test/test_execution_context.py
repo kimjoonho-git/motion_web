@@ -628,8 +628,12 @@ def test_high_frequency_runtime_owner_check_is_independent_from_selection(tmp_pa
         AssertionError('high-frequency status path must not parse project files')
     )
 
-    assert _project_of(bridge).runtime_project_id_from_path('project-1') == 'project-1'
-    assert _project_of(bridge).runtime_project_id_from_path('project-2') == 'project-1'
+    # 인자를 받지 않는다 · 답이 고른 프로젝트와 무관하다는 것이 구조로 드러난다
+    assert _project_of(bridge).runtime_project_id_from_path() == 'project-1'
+
+    # 고른 프로젝트를 바꿔도 답은 그대로다 · 적용된 파일 경로에서 읽기 때문
+    bridge.project_repository.selected_project_id = lambda: 'project-2'
+    assert _project_of(bridge).runtime_project_id_from_path() == 'project-1'
 
 
 def test_status_websocket_reads_disconnect_and_finishes():
@@ -1475,6 +1479,52 @@ def test_ac_servo_scan_temporarily_releases_and_restores_motor_service(monkeypat
     ]
 
 
+def _scan_bridge_with_runtime(monkeypatch):
+    """AC 서보 검색 시험용 브리지 · 0·1번 축이 멀쩡히 돌고 있는 상태."""
+    bridge = MotionWebBridge.__new__(MotionWebBridge)
+    bridge._motion_studio_session = MotionStudioSession()
+    bridge._lock = threading.Lock()
+    bridge._motion_state = {
+        'motors': [
+            {
+                'controller_index': axis,
+                'transport': 'ethercat',
+                'connection_state': 'online',
+                'connection_connected': True,
+                'fault': False,
+                'velocity_deg_s': 0.0,
+                'target_reached': True,
+            }
+            for axis in (0, 1)
+        ],
+    }
+    bridge._motion_state_received_at = time.time()
+    bridge._motion_run_lock = threading.Lock()
+    bridge._motion_run_status = {}
+    bridge._motion_studio_session.lock = threading.Lock()
+    bridge._motion_studio_session.status = {}
+    bridge.project_repository = operation_repository(lambda: 'project-a')
+    operation = bridge.project_repository.runtime.begin_motor_operation(
+        'ac_servo_scan',
+        'preparing',
+    )
+    bridge.snapshot = lambda: {}
+    bridge.current_project_generation = lambda: 3
+    _runtime_of(bridge).managed_service_active = lambda _service: True
+    _runtime_of(bridge).run_managed_service = lambda _action, _service: None
+    monkeypatch.setattr(
+        motor_config_rules, 'wait_for_ethercat_release', lambda timeout_sec: None
+    )
+    bridge._expected_runtime_ethercat_axes = lambda: [0, 1]
+    _scan_of(bridge)._call_service_locked = lambda *_args: {
+        'success': True,
+        'message': 'scan complete',
+        'scan': {'scan_id': 'scan-1'},
+    }
+    monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
+    return bridge
+
+
 def test_ac_servo_scan_fails_when_motor_runtime_does_not_recover(monkeypatch):
     bridge = MotionWebBridge.__new__(MotionWebBridge)
     bridge._motion_studio_session = MotionStudioSession()
@@ -1516,12 +1566,14 @@ def test_ac_servo_scan_fails_when_motor_runtime_does_not_recover(monkeypatch):
         'message': 'scan complete',
         'scan': {'scan_id': 'scan-1'},
     }
+    # **Motor Manager 자체가 안 돌아온 경우** · 이것만 실패다 · §6-196
     _runtime_of(bridge).wait_for_runtime_recovery = lambda *_args, **_kwargs: {
         'required': True,
         'expected_axes': [0, 1],
-        'online_axes': [0],
+        'online_axes': [],
         'recovered': False,
-        'service_active': True,
+        'missing_axes': [0, 1],
+        'service_active': False,
     }
     monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
 
@@ -1535,6 +1587,40 @@ def test_ac_servo_scan_fails_when_motor_runtime_does_not_recover(monkeypatch):
     assert result['success'] is False
     assert result['motor_service_restored'] is False
     assert '복구 실패' in result['message']
+    assert 'Motor Manager 가 다시 실행되지 않았습니다' in result['message']
+
+
+def test_a_motor_that_did_not_come_back_is_not_a_scan_failure(monkeypatch):
+    """빠진 모터 때문에 재검색했는데 「검색 실패」가 뜨던 것 · §6-196
+
+    AC 서보 검색은 EtherCAT 소유권 때문에 Motor Manager 를 껐다 켠다 · 그
+    뒤 「검색 전 설정의 축이 **전부** 돌아왔나」를 봤다.
+
+    모터가 빠져서 재검색하는 경우 그 축은 당연히 안 돌아온다 · 검색은
+    제대로 됐고 축 목록도 갱신됐는데 버튼엔 「직접 검색 실패」가 떴다 ·
+    12초를 기다린 뒤에.
+
+    **사람이 직접 검색을 눌렀다는 것은 모터 상태를 보고 눌렀다는 뜻이다** ·
+    없는 모터가 없다고 나오는 것은 실패가 아니라 그 검색의 답이다.
+    """
+    bridge = _scan_bridge_with_runtime(monkeypatch)
+    _runtime_of(bridge).wait_for_runtime_recovery = lambda *_args, **_kwargs: {
+        'required': True,
+        'expected_axes': [0, 1],
+        'online_axes': [0],
+        'recovered': False,
+        'missing_axes': [1],
+        'service_active': True,          # Motor Manager 는 잘 돌아왔다
+    }
+
+    result = _scan_of(bridge)._call_ethercat_service_locked(
+        object(), '/motor/scan_ac_servo', 10.0,
+    )
+
+    assert result['success'] is True, '검색은 성공했다'
+    assert result['missing_axes'] == [1]
+    assert '1번 축이 돌아오지 않았습니다' in result['message'], '무엇이 없는지 알려야 한다'
+    assert '실패' not in result['message'], '실패라고 말하면 안 된다'
 
 
 def test_ac_servo_scan_restores_service_even_when_stop_command_times_out(monkeypatch):

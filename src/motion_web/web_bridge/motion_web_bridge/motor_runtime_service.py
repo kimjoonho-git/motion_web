@@ -172,6 +172,7 @@ class MotorRuntimeService:
                 'expected_axes': [],
                 'online_axes': [],
                 'recovered': False,
+                'missing_axes': [],
                 'service_active': (
                     not motor_service
                     or self.managed_service_active(motor_service)
@@ -209,6 +210,7 @@ class MotorRuntimeService:
                         'expected_axes': expected,
                         'online_axes': online_axes,
                         'recovered': True,
+                        'missing_axes': [],
                         'service_active': True,
                         'duration_sec': round(time.time() - started_at, 3),
                     }
@@ -218,6 +220,12 @@ class MotorRuntimeService:
             'expected_axes': expected,
             'online_axes': online_axes,
             'recovered': False,
+            # 돌아오지 않은 축 · **실패인지 아닌지는 부르는 쪽이 판단한다** · §6-196
+            #
+            # 사람이 직접 검색을 눌렀다면 모터가 빠졌거나 알람인 것을 이미
+            # 알고 있다 · 그때 이 값은 「실패」가 아니라 「이것들이 없더라」다 ·
+            # Motor Manager 자체가 안 돌아온 것과는 다른 일이라 갈라 놓는다.
+            'missing_axes': [axis for axis in expected if axis not in online_axes],
             'service_active': (
                 not motor_service
                 or self.managed_service_active(motor_service)

@@ -821,7 +821,7 @@ class MotionWebBridge(Node):
         execution_context = self._execution_context.status(validate_files=False)
         motor_operation = self.project_repository.runtime.motor_operation_status()
         selected_project_id = self.project_repository.selected_project_id()
-        runtime_project_id = self._project.runtime_project_id_from_path(selected_project_id)
+        runtime_project_id = self._project.runtime_project_id_from_path()
         stored_context = execution_context.get('context')
         motor_config_applied = bool(
             isinstance(stored_context, dict)

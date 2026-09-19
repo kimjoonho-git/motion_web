@@ -169,12 +169,15 @@ class ProjectService:
             return ''
         return project_id
 
-    def runtime_project_id_from_path(self, selected_project_id: str = '') -> str:
-        """Resolve launch-time runtime ownership without parsing project YAML.
+    def runtime_project_id_from_path(self) -> str:
+        """지금 모터에 적용된 설정이 **어느 프로젝트 것인가** · §6-197
 
-        This helper is used only on high-frequency, read-only status paths.
-        Project mutation and execution-context paths continue to call
-        ``_runtime_project_id`` and perform the full repository validation.
+        적용된 모터축 파일의 경로에서 읽는다 · 프로젝트 YAML 을 파싱하지
+        않으므로 상태 조회처럼 자주 부르는 길에서 쓴다.
+
+        **인자를 받지 않는다** · 전에는 `selected_project_id` 를 받았는데
+        본문에서 쓰지 않았다 · 두 곳이 그 값을 넘기면서 「이 프로젝트 기준으로
+        본다」고 믿고 있었다 · 답은 고른 프로젝트와 무관하다.
         """
         try:
             relative = self.bridge.applied_motor_axes_file().relative_to(
