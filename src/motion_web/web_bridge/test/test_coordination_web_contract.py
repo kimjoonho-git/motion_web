@@ -1,7 +1,7 @@
 from pathlib import Path
 
 
-from motion_web_bridge.routes.system_routes import IndexComposer
+from motion_web_bridge.index_composer import IndexComposer
 
 WORKSPACE = Path(__file__).resolve().parents[4]
 UI = WORKSPACE / 'src/motion_web/web_ui/static'

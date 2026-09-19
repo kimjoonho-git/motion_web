@@ -81,14 +81,93 @@ def test_anyone_can_stop_a_group_run():
 
 
 def test_safety_stop_also_stops_the_group():
-    body = _body(SAFETY, '_stop_group_too')
-    assert 'local_execution_blocker()' in body, '그룹 실행 중인지 보지 않는다'
-    assert "'command': 'stop_now'" in body, '그룹 정지를 보내지 않는다'
-    assert 'is_master' not in body, '정지는 역할과 무관해야 한다'
-    for handler in ('safety_motion_stop', 'safety_emergency_stop'):
-        assert _reaches(SAFETY, handler, '_stop_group_too('), (
-            f'{handler} 가 그룹을 세우지 않는다'
-        )
+    """정지가 그룹도 세우는지 · **HTTP 없이 진짜로 부른다** · §6-191
+
+    전에는 `safety_routes.py` 의 글자를 대조했다 · 정지 로직이 길목 안에
+    있어서 그 방법밖에 없었다 · 이제 서비스가 따로 있으니 실제로 불러 본다.
+
+    정지는 눌러서 확인하기 어려운 기능이다 · 눌러 보려면 장비를 세워야 하고,
+    세우고 나면 프로그램을 다시 시작해야 한다 · 그래서 더더욱 여기서 확인한다.
+    """
+    from motion_web_bridge.safety_service import SafetyService
+
+    sent = []
+
+    class _Group:
+        def __init__(self, running):
+            self.running = running
+
+        def local_execution_blocker(self):
+            return '그룹 실행 중' if self.running else ''
+
+        def request_control(self, payload):
+            sent.append(payload)
+
+    class _Bridge:
+        def __init__(self, group):
+            self.coordination = group
+
+        def publish_safety_stop(self, emergency):
+            sent.append(('로컬 정지', emergency))
+            return 'req-1'
+
+    # 그룹이 도는 중이면 그룹도 세운다
+    result = SafetyService(_Bridge(_Group(running=True))).stop(
+        emergency=False, kind='전체 동작 정지', message='보냈습니다',
+    )
+    assert ('로컬 정지', False) in sent, '이 PC 를 세우지 않는다'
+    assert {'command': 'stop_now'} in sent, '그룹을 세우지 않는다'
+    assert '그룹 실행도 함께 정지 요청' in result['message']
+    # 이 PC 부터 세운다 · 그룹은 HTTP 왕복이라 느리다
+    assert sent.index(('로컬 정지', False)) < sent.index({'command': 'stop_now'})
+
+    # 그룹이 안 도는 중이면 로컬 정지로 충분하다
+    sent.clear()
+    SafetyService(_Bridge(_Group(running=False))).stop(
+        emergency=True, kind='긴급 정지', message='보냈습니다',
+    )
+    assert sent == [('로컬 정지', True)]
+
+    # 연동을 쓰지 않는 PC · 없다고 터지면 안 된다
+    sent.clear()
+    SafetyService(_Bridge(None)).stop(
+        emergency=True, kind='긴급 정지', message='보냈습니다',
+    )
+    assert sent == [('로컬 정지', True)]
+
+
+def test_stopping_never_asks_who_is_master():
+    """정지는 역할과 무관하게 누구나 할 수 있어야 한다 · §6-70"""
+    source = (
+        ROOT / 'motion_web' / 'web_bridge' / 'motion_web_bridge' / 'safety_service.py'
+    ).read_text(encoding='utf-8')
+
+    assert 'is_master' not in source
+
+
+def test_a_failed_group_stop_does_not_undo_the_local_stop():
+    """그룹을 못 세웠다고 예외를 올리면, **이미 선 이 PC 도 실패로 보인다.**"""
+    from motion_web_bridge.safety_service import SafetyService
+
+    class _Broken:
+        def local_execution_blocker(self):
+            return '그룹 실행 중'
+
+        def request_control(self, payload):
+            raise OSError('연동 노드 응답 없음')
+
+    class _Bridge:
+        coordination = _Broken()
+
+        def publish_safety_stop(self, emergency):
+            return 'req-1'
+
+    result = SafetyService(_Bridge()).stop(
+        emergency=True, kind='긴급 정지', message='보냈습니다',
+    )
+
+    assert result['success'] is True, '이 PC 는 실제로 섰다'
+    assert '그룹 정지 요청 실패' in result['message'], '실패를 숨기면 안 된다' 
 
 
 def test_no_pc_revives_playback_on_boot():

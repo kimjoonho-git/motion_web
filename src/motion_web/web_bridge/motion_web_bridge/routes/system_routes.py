@@ -13,58 +13,7 @@ from ament_index_python.packages import get_package_share_directory
 from motion_common import local_clock
 
 from motion_web_bridge import desktop_shortcut
-
-
-#: `<!--#include 경로 -->` · 줄 하나가 통째로 조각 내용으로 바뀐다
-_INCLUDE = re.compile(r'^[ \t]*<!--#include ([A-Za-z0-9_./-]+) -->[ \t]*\r?\n', re.M)
-
-#: 조각 첫머리의 출처 주석 · 소스에만 두고 화면으로는 내보내지 않는다
-_PROVENANCE = re.compile(r'\A<!--.*?-->\r?\n', re.S)
-
-
-class IndexComposer:
-    """`index.html` 셸에 조각을 끼워 넣는다 · §6-44.
-
-    화면 셸이 2,004줄짜리 한 덩이였다. 조각으로 나누되 **끼우는 일은 서버가
-    한다** · 브라우저에서 끼우면 `main.js`가 모듈 적재 시점에 DOM을 찾지 못하고,
-    빌드 때 끼우면 런타임이 소스를 서빙하므로 쓰이지 않는다(§6-42의 함정).
-
-    조각 파일의 `mtime`이 하나라도 바뀌면 다시 조립한다 · `ETag`는 조립 결과에서
-    낸다 · 셸만 보고 만들면 조각을 고쳐도 브라우저가 옛 화면을 쓴다.
-    """
-
-    def __init__(self, index_path: Path) -> None:
-        self.index_path = index_path
-        self._cached_key = None
-        self._cached_html = ''
-        self._cached_etag = ''
-
-    def _parts(self):
-        shell = self.index_path.read_text(encoding='utf-8')
-        names = _INCLUDE.findall(shell)
-        return shell, [self.index_path.parent / name for name in names]
-
-    def _stamp(self, paths):
-        return tuple(
-            (str(path), path.stat().st_mtime_ns, path.stat().st_size)
-            for path in paths
-        )
-
-    def compose(self):
-        """조립한 HTML과 그 `ETag`를 돌려준다."""
-        shell, part_paths = self._parts()
-        key = self._stamp([self.index_path, *part_paths])
-        if key == self._cached_key:
-            return self._cached_html, self._cached_etag
-
-        def replace(match: 're.Match[str]') -> str:
-            part = self.index_path.parent / match.group(1)
-            return _PROVENANCE.sub('', part.read_text(encoding='utf-8'), count=1)
-
-        html = _INCLUDE.sub(replace, shell)
-        etag = hashlib.md5(html.encode('utf-8'), usedforsecurity=False).hexdigest()
-        self._cached_key, self._cached_html, self._cached_etag = key, html, etag
-        return html, etag
+from motion_web_bridge.index_composer import IndexComposer
 
 
 def _is_not_modified(response_headers, request_headers) -> bool:

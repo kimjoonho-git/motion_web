@@ -6,7 +6,7 @@
 
 from pathlib import Path
 
-from motion_web_bridge.routes.system_routes import IndexComposer
+from motion_web_bridge.index_composer import IndexComposer
 
 STATIC = (
     Path(__file__).resolve().parents[2] / 'web_ui' / 'static'
