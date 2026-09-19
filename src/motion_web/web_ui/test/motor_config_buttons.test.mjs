@@ -12,7 +12,7 @@ const api = readFileSync(new URL('../static/js/api.js', import.meta.url), 'utf8'
 const actions = {
   addAxisButton: 'addSelectedAxis',
   updateAxisIdentityButton: 'updateSelectedAxisIdentity',
-  writeEthercatAliasButton: 'writeSelectedEthercatAlias',
+  // 「모델·운전 프로필 설정」과 「고급 장비 설정(EEPROM Alias 변경)」은 지웠다 · §6-205
   deleteAxisButton: 'deleteSelectedAxis',
   toggleAxisButton: 'toggleSelectedAxis',
   sortAxisButton: 'sortAxisNumbers',
@@ -46,9 +46,14 @@ test('position-only legacy axes are merged for explicit batch SII confirmation',
     controller,
     /row\.identityConfirmationRequired = Boolean\(\s*resolved\.confirmationRequired/,
   );
+  // **고른 것 중 해당하는 것만 다룬다** · §6-204
+  //
+  // 전에는 「고른 것이 전부 AC 서보여야」 반영이 켜졌다 · 검색이 나온 것을
+  // 전부 고르게 되면서 다이나믹셀이 섞여 늘 회색이 됐다 · 핸들러는 이미
+  // 해당하는 행만 골라내므로 막을 이유가 없었다.
   assert.match(
     controller,
-    /combinedIdentityRows\.length === selectedRows\.length/,
+    /const canUpdateIdentity = combinedIdentityRows\.length > 0/,
   );
   assert.match(
     controller,

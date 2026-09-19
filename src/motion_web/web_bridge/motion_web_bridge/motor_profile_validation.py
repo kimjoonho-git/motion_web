@@ -225,20 +225,15 @@ def validate_runtime_motor_profiles(payload: Dict[str, Any]) -> None:
                     f'{axis}번 축의 실제 서보 드라이버 모델이 확인되지 않았습니다. '
                     '드라이버 명판을 확인해 실제 드라이버 모델을 입력하세요'
                 )
-            if (
-                str(driver.get('type') or '') == 'minas'
-                and str(driver.get('driver_model') or '').strip()
-                and (
-                    profile_by_axis.get(axis, {}).get(
-                        'model_confirmed',
-                        identity_by_axis.get(axis, {}).get('nameplate_confirmed'),
-                    ) is not True
-                )
-            ):
-                raise ValueError(
-                    f'{axis}번 축의 서보 드라이버 모델이 명판 확인되지 않았습니다. '
-                    '모델·운전 프로필 설정에서 모델을 확인하고 저장하세요'
-                )
+            # 「명판 확인」 요구를 걷었다 · §6-205
+            #
+            # 사람이 드라이버 명판을 눈으로 보고 모델명을 다시 입력해야
+            # 적용이 됐다 · 그런데 모델은 검색이 SII 에서 직접 읽어 온다 ·
+            # 같은 값을 손으로 한 번 더 받는 단계였다.
+            #
+            # 확인이 안 됐다고 **적용을 막으니**, 축을 늘리거나 드라이버를
+            # 바꿀 때마다 거기서 멈췄다 · 아래 `UNVERIFIED_MINAS` 검사는
+            # 남긴다 · 그건 「모델을 아예 모른다」는 뜻이라 다르다.
             for field in required_positive:
                 try:
                     value = float(driver.get(field))

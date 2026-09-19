@@ -173,3 +173,31 @@ test('다시 저장은 언제나 된다', () => {
 
   assert.doesNotMatch(line, /!dirty/, '바뀐 게 없다고 저장을 막습니다');
 });
+
+test('저장하면 팝업으로 알린다', () => {
+  // 바뀐 내용이 없으면 화면이 그대로라 「눌렀는데 아무 일도 없다」로 보였다
+  const config = readFileSync(new URL('../static/js/motor_config.js', import.meta.url), 'utf8');
+
+  assert.match(config, /title: '설정 저장 완료'/);
+  assert.match(config, /title: '설정 저장 실패'/);
+});
+
+test('저장이 끝났다고 버튼을 도로 잠그지 않는다', () => {
+  // finally 에서 다시 껐다 · 한 번 저장하면 회색이 됐다
+  const config = readFileSync(new URL('../static/js/motor_config.js', import.meta.url), 'utf8');
+  const start = config.indexOf('saveButton.textContent = originalText;');
+  const body = config.slice(start, start + 400);
+
+  assert.doesNotMatch(body, /saveButton\.disabled = !/);
+  assert.match(body, /saveButton\.disabled = false/);
+});
+
+test('검색하면 나온 것을 전부 고른다', () => {
+  // 전에는 「손볼 게 있는 축」만 골라, 다 맞는 상태로 검색하면 아무것도
+  // 안 골라지고 위쪽 버튼이 전부 회색이 됐다
+  const config = readFileSync(new URL('../static/js/motor_config.js', import.meta.url), 'utf8');
+  const start = config.indexOf('function autoSelectNewScanAxes');
+  const body = config.slice(start, config.indexOf('\n  }', start));
+
+  assert.match(body, /rows\.filter\(\(row\) => row\.scanRow \|\| row\.proposedMotor\)/);
+});

@@ -390,27 +390,15 @@ def test_runtime_rejects_unverified_ac_servo_profile(tmp_path):
         repository.prepare_runtime_motor_config(project_id)
 
 
-def test_runtime_rejects_unconfirmed_legacy_nameplate_model(tmp_path):
-    repository = ProjectRepository(tmp_path / 'projects')
-    project_id = repository.create_project('unconfirmed nameplate')['project']['project_id']
-    repository.save_file(
-        project_id,
-        'motor_axes',
-        'motor_axes.yaml',
-        'period: 1000000\nmasters:\n- id: 0\n  type: ethercat\n  slaves:\n'
-        '  - controller_index: 0\n    driver_id: 0\n    alias: 0\n    position: 0\n'
-        '    vendor_id: 1647\n    product_id: 1614282756\n'
-        'web_axis_identities:\n- controller_index: 0\n  eeprom_alias: 0\n'
-        '  slave_position: 0\n  vendor_id: 1647\n  product_id: 1614282756\n'
-        '  revision_number: 65536\n  serial_number: 123456\n'
-        '  identity_source: physical_sii\n  nameplate_confirmed: false\n'
-        'drivers:\n- id: 0\n  type: minas\n  driver_model: MADLN05BE\n'
-        '  profile_velocity: 10\n  profile_acceleration: 20\n'
-        '  profile_deceleration: 20\n',
-    )
+# 「서보 드라이버 명판 확인」 요구를 걷었다 · §6-205
+#
+# 사람이 명판을 보고 모델명을 다시 입력해야 적용이 됐다 · 모델은 검색이
+# SII 에서 직접 읽어 오므로 같은 값을 손으로 한 번 더 받는 단계였다 ·
+# 확인이 안 됐다고 적용을 막으니 축을 늘릴 때마다 거기서 멈췄다.
+#
+# 「모델을 아예 모른다」(UNVERIFIED_MINAS)는 여전히 막는다 · 그건 다른 일이다.
 
-    with pytest.raises(ValueError, match='명판 확인되지 않았습니다'):
-        repository.prepare_runtime_motor_config(project_id)
+
 
 
 def test_unconfirmed_ac_servo_can_be_saved_but_not_applied(tmp_path):
@@ -524,41 +512,6 @@ def test_first_motor_config_save_returns_persisted_axes_before_apply(tmp_path):
     assert reloaded['config_revision'] == second['config_revision']
 
 
-def test_runtime_uses_separate_axis_model_profile_confirmation(tmp_path):
-    repository = ProjectRepository(tmp_path / 'projects')
-    project_id = repository.create_project('separate model profile')['project']['project_id']
-    content = (
-        'period: 1000000\nmasters:\n- id: 0\n  type: ethercat\n  slaves:\n'
-        '  - controller_index: 0\n    driver_id: 0\n    alias: 0\n    position: 0\n'
-        '    vendor_id: 1647\n    product_id: 1614282756\n'
-        'web_axis_identities:\n- controller_index: 0\n  eeprom_alias: 0\n'
-        '  slave_position: 0\n  vendor_id: 1647\n  product_id: 1614282756\n'
-        '  revision_number: 65536\n  serial_number: 123456\n'
-        '  identity_source: physical_sii\n'
-        'web_axis_profiles:\n- controller_index: 0\n  driver_model: MADLN05BE\n'
-        '  model_confirmed: false\n  model_source: ""\n'
-        'drivers:\n- id: 0\n  type: minas\n  driver_model: MADLN05BE\n'
-        '  profile_velocity: 10\n  profile_acceleration: 20\n'
-        '  profile_deceleration: 20\n'
-    )
-    repository.save_file(project_id, 'motor_axes', 'motor_axes.yaml', content)
-
-    with pytest.raises(ValueError, match='명판 확인되지 않았습니다'):
-        repository.prepare_runtime_motor_config(project_id)
-
-    repository.save_file(
-        project_id,
-        'motor_axes',
-        'motor_axes.yaml',
-        content.replace('model_confirmed: false', 'model_confirmed: true').replace(
-            'model_source: ""',
-            'model_source: user_nameplate',
-        ),
-    )
-    runtime = repository.prepare_runtime_motor_config(project_id)
-    runtime_payload = yaml.safe_load(Path(runtime['runtime_file']).read_text())
-    assert 'web_axis_identities' not in runtime_payload
-    assert 'web_axis_profiles' not in runtime_payload
 
 
 def test_legacy_untouched_motor_placeholder_is_removed(tmp_path):

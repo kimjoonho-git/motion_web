@@ -47,7 +47,7 @@ import {
   modelTextFromDevice,
   runtimeIsDynamixel,
 } from './motor_type_dynamixel.js';
-import { showConfirm, showPrompt } from './ui_dialogs.js';
+import { showAlert, showConfirm, showPrompt } from './ui_dialogs.js';
 
 export function isEditableMotorConfigPath(pathValue) {
   const path = String(pathValue || '');
@@ -2315,8 +2315,17 @@ export function createMotorConfigController({
       (row) => !row.motor && row.associationCandidate,
     );
     const candidateCount = confirmationRows.length + separateCandidateRows.length;
+    // **검색에서 나온 것은 전부 고른다** · §6-204
+    //
+    // 전에는 「손볼 게 있는 축」만 골랐다 — 새로 나온 축과 확인이 필요한 축 ·
+    // 그래서 이미 다 맞는 상태로 검색하면 **아무것도 안 골라졌고**, 위쪽
+    // 버튼들이 전부 회색이 됐다 · 사용자는 「어떤 때는 선택되고 어떤 때는
+    // 안 되는」 것으로만 보인다.
+    //
+    // 검색을 눌렀다는 것은 「지금 붙어 있는 것을 다루겠다」는 뜻이다 ·
+    // 나온 것을 전부 골라 두고, 뺄 것은 사람이 뺀다.
     selectedAxisIds = new Set(
-      [...newRows, ...confirmationRows].map((row) => row.id),
+      rows.filter((row) => row.scanRow || row.proposedMotor).map((row) => row.id),
     );
     lastAxisRenderSignature = '';
     renderAxisSettings();
@@ -2347,21 +2356,23 @@ export function createMotorConfigController({
     const suspectedExistingRows = addRows.filter(
       (row) => row.scanRow && scanRowLikelyExistingMotor(row.scanRow),
     );
-    const canAdd = addRows.length > 0 && selectedAcProjectRows.length === 0 &&
-      suspectedExistingRows.length === 0;
+    // **고른 것 중 해당하는 것만 다룬다** · §6-204
+    //
+    // 전에는 「고른 것이 전부 같은 종류여야」 했다 · 그래서 서보와 다이나믹셀을
+    // 함께 고르면 서보용 버튼이 전부 회색이 됐다 · 검색이 나온 것을 전부
+    // 고르게 되면서 늘 그 상태가 된다.
+    //
+    // 핸들러는 이미 해당하는 행만 골라낸다 · 막을 이유가 없었다.
+    const canAdd = addRows.length > 0 && suspectedExistingRows.length === 0;
     const combinedIdentityRows = selectedRows.filter(
       (row) => row.motor?.transport === 'ethercat' && row.scanRow && !row.motor.deleted,
     );
-    const canUpdateIdentity = (
-      selectedRows.length > 0 &&
-      combinedIdentityRows.length === selectedRows.length
-    ) || (
+    const canUpdateIdentity = combinedIdentityRows.length > 0 || (
       selectedRows.length === 2 &&
       selectedAcProjectRows.length === 1 &&
       selectedAcScanRows.length === 1
     );
-    const canSetModelProfile = selectedAcProjectRows.length > 0 &&
-      selectedAcProjectRows.length === selectedRows.length;
+    const canSetModelProfile = selectedAcProjectRows.length > 0;
     const writableAliasRows = selectedRows.filter((row) => (
       row.scanRow &&
       row.scanRow.slave_position !== null && row.scanRow.slave_position !== undefined &&
@@ -3114,6 +3125,7 @@ export function createMotorConfigController({
         const message = uiMessage(payload.message, '축 설정 저장 실패');
         setStatusMessage(message);
         setAxisMessage(message);
+        await showAlert(message, { title: '설정 저장 실패', tone: 'danger' });
         return false;
       }
       applyMotorConfigPayload(payload);
@@ -3127,6 +3139,17 @@ export function createMotorConfigController({
         Boolean(modelWarning),
       );
       await onProjectFilesChange?.();
+      // **저장했으면 눈에 보이게 말한다** · §6-203
+      //
+      // 전에는 작은 글씨 한 줄뿐이었다 · 바뀐 내용이 없을 때는 화면이
+      // 그대로라 「눌렀는데 아무 일도 안 일어났다」로 보였다.
+      await showAlert(
+        modelWarning
+          ? `설정 파일에 저장했습니다.\n\n${modelWarning}`
+          : '설정 파일에 저장했습니다.\n\n'
+            + '실제 모터에 반영하려면 오른쪽 「장비에 적용 · 모터 재시작」을 누르세요.',
+        { title: '설정 저장 완료', tone: modelWarning ? 'warning' : 'info' },
+      );
       return true;
     } catch (error) {
       const message = `축 설정 저장 실패: ${error?.message || error}`;
@@ -3136,7 +3159,11 @@ export function createMotorConfigController({
     } finally {
       if (saveButton) {
         saveButton.textContent = originalText;
-        saveButton.disabled = !hasAnyConfigChanges();
+        // 저장이 끝났다고 버튼을 도로 잠그지 않는다 · §6-203
+        //
+        // 여기서 `!hasAnyConfigChanges()` 로 다시 껐다 · 그래서 한 번 저장하면
+        // 버튼이 회색이 되고, 사용자는 「눌렀는데 아무 변화가 없다」고 본다.
+        saveButton.disabled = false;
       }
       renderAxisSettings();
     }
@@ -3362,7 +3389,7 @@ export function createMotorConfigController({
     const rows = selectedAxisRows().filter(
       (row) => row.motor?.transport === 'ethercat' && !row.motor.deleted,
     );
-    if (rows.length === 0 || rows.length !== selectedAxisRows().length) {
+    if (rows.length === 0) {
       setAxisMessage('모델을 확인할 프로젝트 AC 서보 축을 하나 이상 선택하세요.', true);
       return false;
     }
@@ -3422,10 +3449,7 @@ export function createMotorConfigController({
         ? [{ motor: projectRow.motor, scanRow: scanRow.scanRow }]
         : [];
     }
-    if (pairs.length === 0 || (
-      pairs.length !== selectedRows.length
-      && !(selectedRows.length === 2 && pairs.length === 1)
-    )) {
+    if (pairs.length === 0) {
       setAxisMessage(
         '검색값을 반영할 프로젝트 AC 서보 축을 선택하세요.',
         true,
