@@ -1449,9 +1449,15 @@ def test_same_project_reapply_keeps_previous_runtime_session_for_rollback(tmp_pa
     assert Path(restored['config_file']).read_bytes() == previous_content
 
 
-def test_timed_out_motor_apply_restores_previous_target_and_requests_restart(
-    tmp_path, monkeypatch
-):
+def test_a_timed_out_apply_keeps_the_new_project(tmp_path, monkeypatch):
+    """되돌리지 않는다 · 새 설정은 이미 돌고 있다 · §6-199
+
+    전에는 옛 설정으로 롤백하고 두 서비스를 또 재시작했다 · 축 넷 중 셋이
+    붙었는데 하나가 안 붙었을 뿐인데 잘 붙은 셋까지 잃었다 · 화면엔 엉뚱하게
+    옛 프로젝트가 떠서 「내가 만든 프로젝트가 왜 사라졌지」가 됐다.
+
+    안 붙은 축은 **말로 알린다** · 고치는 것은 사람의 몫이다.
+    """
     root = tmp_path / 'projects'
     repository = ProjectRepository(root)
 
@@ -1479,6 +1485,12 @@ def test_timed_out_motor_apply_restores_previous_target_and_requests_restart(
         timeout_sec=1.0,
         details={'previous_runtime': previous},
     )
+    # 실제 흐름은 준비 단계에서 대상 축을 적어 둔다
+    repository.runtime.update_motor_operation(
+        str(operation['operation_id']),
+        'prepared',
+        details={'expected_axes': [0, 1]},
+    )
     repository.runtime.mark_runtime_motor_config_applied(next_id)
     runtime_file = root / '.motor_runtime.json'
     runtime_payload = json.loads(runtime_file.read_text(encoding='utf-8'))
@@ -1498,16 +1510,22 @@ def test_timed_out_motor_apply_restores_previous_target_and_requests_restart(
     monkeypatch.setenv('MOTION_CONTROL_SERVICE_UNIT', 'motion-control.service')
     monkeypatch.setenv('MOTION_MOTOR_SERVICE_UNIT', 'motion-motor.service')
 
-    result = _runtime_of(bridge).reconcile_operation_status({}, {}, {})
-    repeated = _runtime_of(bridge).reconcile_operation_status({}, {}, {})
+    # 0번은 붙었고 1번이 안 붙은 상태로 시간이 지났다
+    state = {'motors': [{'controller_index': 0, 'connection_connected': True}]}
+    result = _runtime_of(bridge).reconcile_operation_status({}, state, {})
+    repeated = _runtime_of(bridge).reconcile_operation_status({}, state, {})
 
     assert result['status'] == 'timeout'
-    assert result['phase'] == 'rollback_requested'
-    assert repeated['phase'] == 'rollback_requested'
-    assert repository.runtime.motor_runtime_state()['target_project_id'] == previous_id
-    assert scheduled == [
-        ('motion-motor.service', 'motion-control.service'),
-    ]
+    assert result['phase'] == 'incomplete', '롤백을 요청하면 안 된다'
+    assert repeated['phase'] == 'incomplete', '두 번 돌아도 같아야 한다'
+
+    # **새 프로젝트가 그대로 남는다**
+    assert repository.runtime.motor_runtime_state()['target_project_id'] == next_id
+    assert scheduled == [], '재시작을 또 걸면 안 된다'
+
+    # **어느 축이 안 왔는지 말해 준다**
+    assert '1번 축이 올라오지 않았습니다' in result['error']
+    assert '붙은 축 1/2' in result['error']
 
 
 def test_service_entrypoint_never_loads_runtime_from_another_project(tmp_path):

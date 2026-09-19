@@ -280,7 +280,10 @@ class DynamixelScanner:
             if not chunk:
                 continue
             data.extend(chunk)
-            for packet_data in self._extract_dynamixel_status_packets(data):
+            for raw_packet in self._extract_dynamixel_status_packets(data):
+                packet_data = self._ping_reply_or_none(raw_packet)
+                if packet_data is None:
+                    continue          # 매니저가 주고받는 다른 패킷이다
                 params = packet_data.get('params', b'')
                 dxl_id = int(packet_data.get('id', -1))
                 if dxl_id < 0:
@@ -321,9 +324,11 @@ class DynamixelScanner:
             if not chunk:
                 continue
             data.extend(chunk)
-            packet_data = self._extract_dynamixel_status_packet(data, dxl_id)
+            packet_data = self._ping_reply_or_none(
+                self._extract_dynamixel_status_packet(data, dxl_id)
+            )
             if packet_data is None:
-                continue
+                continue          # 매니저가 주고받는 다른 패킷이다
             params = packet_data.get('params', b'')
             return {
                 'id': dxl_id,
@@ -389,6 +394,37 @@ class DynamixelScanner:
                 'error': packet[8] if len(packet) > 8 else 0,
                 'params': packet[9:-2],
             }
+
+    #: PING 답장의 파라미터 길이 · 모델 번호 2바이트 + 펌웨어 1바이트
+    PING_PARAM_LENGTH = 3
+
+    @classmethod
+    def _ping_reply_or_none(cls, packet_data: Any) -> Optional[Dict[str, Any]]:
+        """이 상태 패킷이 정말 **PING 답장**인가 · §6-200
+
+        **모터 매니저가 같은 시리얼 포트를 계속 쓰고 있다.**
+
+        검색은 매니저를 멈추지 않는다 (EtherCAT 과 달리 소유권을 뺏을 필요가
+        없다) · 그래서 검색이 브로드캐스트 핑을 쏘는 동안에도 매니저의
+        읽기·쓰기 패킷이 같은 선으로 오간다.
+
+        전에는 상태 패킷이면 **무엇이든** 핑 답장으로 받아들였다 · 매니저의
+        쓰기 응답은 파라미터가 **0바이트**라, 그것을 핑 답장으로 세면
+
+            model_number: None · firmware_version: None
+
+        이 되어 화면에 「FW 미수신 · 모델 미확인」이 떴다 · 모터는 멀쩡히
+        돌고 있는데도 체크가 자동으로 안 켜졌다.
+
+        PING 답장은 규격상 파라미터가 정확히 3바이트다 · 그보다 짧으면 다른
+        명령의 답장이므로 **그냥 흘려보낸다** · 진짜 핑 답장이 뒤이어 온다.
+        """
+        if not isinstance(packet_data, dict):
+            return None
+        params = packet_data.get('params') or b''
+        if len(params) < cls.PING_PARAM_LENGTH:
+            return None
+        return packet_data
 
     def _extract_dynamixel_status_packets(self, data: bytearray) -> List[Dict[str, Any]]:
         packets: List[Dict[str, Any]] = []

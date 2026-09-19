@@ -1382,7 +1382,13 @@ def test_scan_entrypoints_use_distinct_operation_types():
             'release_ethercat': True,
             'operation_type': 'ac_servo_scan',
         }),
+        # 다이나믹셀도 선을 혼자 쓰고 검색한다 · §6-200
+        #
+        # 매니저가 같은 시리얼 선을 10Hz 로 쓰는 동안 검색하면 답장이 섞여
+        # 모델 번호가 0 으로 읽혔다 · 프로토콜상 답장에 「무슨 질문의 답인지」가
+        # 없어 내용으로는 구분할 수 없다.
         ('/motor/scan_dynamixel', {
+            'release_ethercat': True,
             'operation_type': 'dynamixel_scan',
         }),
     ]

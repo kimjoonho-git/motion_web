@@ -819,47 +819,18 @@ def motor_operation_runtime_readiness(
     }
 
 
-def rollback_failed_motor_apply(
-    repository,
-    operation: Dict[str, Any],
-    *,
-    status: str,
-    error: str,
-) -> Dict[str, Any]:
-    operation_id = str(operation.get('operation_id') or '')
-    details = operation.get('details')
-    details = dict(details) if isinstance(details, dict) else {}
-    previous_runtime = details.get('previous_runtime')
-    previous_runtime = (
-        dict(previous_runtime)
-        if isinstance(previous_runtime, dict) else {}
-    )
-    completed = repository.runtime.finish_motor_operation(
-        operation_id,
-        status,
-        phase='rollback_requested',
-        error=error,
-    )
-    repository.runtime.restore_motor_runtime_target(previous_runtime)
-    if (
-        os.environ.get('MOTION_CONTROL_SERVICE_UNIT')
-        == 'motion-control.service'
-        and os.environ.get('MOTION_MOTOR_SERVICE_UNIT')
-        == 'motion-motor.service'
-    ):
-        try:
-            schedule_managed_service_restart(
-                'motion-motor.service',
-                'motion-control.service',
-            )
-        except (OSError, ValueError) as exc:
-            completed = repository.runtime.finish_motor_operation(
-                operation_id,
-                status,
-                phase='rollback_schedule_failed',
-                error=f'{error} · 이전 실행 설정 재시작 요청 실패: {exc}',
-            )
-    return completed
+# 「적용 실패하면 옛 프로젝트로 되돌린다」를 지웠다 · §6-199
+#
+# 실패해도 **새 설정은 그대로 둔다** · 축 넷 중 셋이 붙었는데 하나가 안
+# 붙었다고 잘 붙은 셋까지 잃을 이유가 없다 · 화면에 엉뚱하게 옛 프로젝트가
+# 떠서 「내가 만든 프로젝트가 왜 사라졌지」가 됐다.
+#
+# Motor Manager 가 아예 못 뜬 경우에도 되돌리지 않는다 · 사용자가 고르지도
+# 않은 프로젝트가 장비에 올라가는 것이 더 위험하다 · 어느 설정으로 움직이는지
+# 사람이 알아야 한다.
+#
+# **프로젝트를 고르는 것은 사람의 일이다.**
+
 
 
 # ---------------------------------------------------------------------------

@@ -751,6 +751,37 @@ function dismissMotorErrorPopup() {
   setMotorErrorPopup(false);
 }
 
+/** 어느 축이 안 올라왔는지 · §6-199
+ *
+ * **전에는 「45.1초 동안 완료 조건을 확인하지 못했습니다」 뿐이었다.**
+ *
+ * 서버는 어느 축인지 이미 알고 있었다 · 설정에 적은 축과 지금 붙어 있는
+ * 축을 견주기만 하면 된다 · 그걸 말하지 않아서 사용자는 축 넷을 하나씩
+ * 뒤져야 했다.
+ *
+ * 서버가 문구를 만들어 보내면 그것을 쓰고(`motor_operation.error`),
+ * 아직 안 왔으면 여기서 지금 상태로 만든다.
+ */
+function missingAxisDetail(payload, state) {
+  const served = String(payload?.motor_operation?.error || '').trim();
+  if (served.includes('올라오지 않았습니다')) return served;
+
+  const expected = payload?.motor_operation?.details?.expected_axes;
+  if (!Array.isArray(expected) || expected.length === 0) return '';
+  const online = new Set(
+    (state?.motors || [])
+      .filter((motor) => motor?.connection_connected === true)
+      .map((motor) => Number(motor.controller_index)),
+  );
+  const missing = expected.map(Number).filter((axis) => !online.has(axis));
+  if (missing.length === 0) return '';
+  return (
+    `${missing.join(', ')}번 축이 올라오지 않았습니다 · `
+    + '전원·통신선·드라이버 상태를 확인하세요 '
+    + `(붙은 축 ${expected.length - missing.length}/${expected.length})`
+  );
+}
+
 function restartReadyState(payload) {
   const state = motionStateFromPayload(payload) || appState.latestState;
   const restartMode = appState.restartCheckMode;
@@ -765,7 +796,8 @@ function restartReadyState(payload) {
       ready: false,
       failed: true,
       title: '재시작 확인 시간 초과',
-      detail: `${(elapsedMs / 1000).toFixed(1)}초 동안 완료 조건을 확인하지 못했습니다.`,
+      detail: missingAxisDetail(payload, state)
+        || `${(elapsedMs / 1000).toFixed(1)}초 동안 완료 조건을 확인하지 못했습니다.`,
     };
   }
   const requiresBridgeRestart = restartMode === 'program' || restartMode === 'motor_apply';

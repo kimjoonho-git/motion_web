@@ -193,10 +193,26 @@ class ScanOrchestrator:
         )
 
     def scan_dynamixel(self, timeout_sec: float = DYNAMIXEL_SCAN_TIMEOUT_SEC) -> Dict[str, Any]:
+        """다이나믹셀 검색 · **매니저를 비우고 한다** · §6-200
+
+        검색과 모터 매니저가 **같은 시리얼 선**을 동시에 쓴다 · 매니저는
+        10Hz 로 계속 읽고 쓰는데, 그 사이에 검색이 「누구 있니?」를 방송하면
+        돌아온 답장이 누구 것인지 알 수 없다.
+
+        프로토콜 2.0 의 상태 패킷에는 **무슨 질문의 답인지가 들어 있지 않다** ·
+        그래서 내용만 보고는 구분할 방법이 없다 · 실제로 매니저가 도는 동안
+        검색하면 모델 번호가 `0` 으로 읽혔다 (화면엔 「FW 미수신」).
+
+            매니저 켜진 채   모델=0      FW=0
+            매니저 멈춘 뒤   모델=1130   FW=50  XM540-W150
+
+        AC 서보(EtherCAT)는 이미 이렇게 한다 · 선을 혼자 쓰는 동안만 묻는다.
+        """
         return self._call_service(
             self._scan_dynamixel_client,
             self.scan_dynamixel_service,
             timeout_sec,
+            release_ethercat=True,
             operation_type='dynamixel_scan',
         )
 
@@ -258,6 +274,7 @@ class ScanOrchestrator:
                     service_name,
                     timeout_sec,
                     operation_id=operation_id,
+                    operation_type=operation_type,
                 )
             else:
                 self.repository.runtime.update_motor_operation(
@@ -520,6 +537,7 @@ class ScanOrchestrator:
         timeout_sec: float,
         *,
         operation_id: str = '',
+        operation_type: str = 'ac_servo_scan',
     ) -> Dict[str, Any]:
         """Release the persistent EtherCAT owner for one physical scan.
 
@@ -534,6 +552,13 @@ class ScanOrchestrator:
         if motor_service != 'motion-motor.service':
             return self._call_service_locked(client, service_name, timeout_sec)
 
+        # 다이나믹셀 검색은 EtherCAT 축을 요구하지 않는다 · §6-200
+        #
+        # 「움직이는 축이 있으면 막는다」는 두 경우 모두에 맞다 · 매니저를
+        # 멈추는 것은 같으니까 · 다만 「EtherCAT 축이 보여야 한다」는 조건은
+        # EtherCAT 검색에만 해당한다 · 다이나믹셀만 쓰는 PC 가 그 조건에
+        # 걸려 영영 검색을 못 하면 안 된다.
+        needs_ethercat_axes = operation_type in {'full_scan', 'ac_servo_scan'}
         blocker = self.runtime.ethercat_scan_safety_blocker(
             require_fresh_motor_state=False,
         )
@@ -567,7 +592,8 @@ class ScanOrchestrator:
                 }
 
         expected_ethercat_axes = (
-            self._expected_runtime_ethercat_axes() if restore_runtime else []
+            self._expected_runtime_ethercat_axes()
+            if restore_runtime and needs_ethercat_axes else []
         )
         expected_recovery_axes = (
             self._expected_runtime_axes() if restore_runtime else []
@@ -583,7 +609,7 @@ class ScanOrchestrator:
                     'runtime_handoff': runtime_handoff,
                 },
             )
-        if restore_runtime and not expected_ethercat_axes:
+        if restore_runtime and needs_ethercat_axes and not expected_ethercat_axes:
             return {
                 'success': False,
                 'message': (

@@ -157,6 +157,34 @@ class MotorRuntimeService:
             )
         return ''
 
+    @staticmethod
+    def _missing_axis_message(operation: Dict[str, Any], state_payload: Any) -> str:
+        """어느 축이 안 올라왔는지 말해 준다 · §6-199
+
+        전에는 「45.1초 동안 완료 조건을 확인하지 못했습니다」 뿐이었다 ·
+        서버는 어느 축인지 이미 알고 있는데 말하지 않았다 · 사용자는 네 축을
+        하나씩 뒤져야 했다.
+        """
+        details = operation.get('details')
+        expected = (details or {}).get('expected_axes') if isinstance(details, dict) else None
+        expected = sorted(set(int(axis) for axis in (expected or [])))
+        online = set()
+        motors = (state_payload or {}).get('motors') if isinstance(state_payload, dict) else None
+        for motor in motors or []:
+            if isinstance(motor, dict) and motor.get('connection_connected') is True:
+                try:
+                    online.add(int(motor.get('controller_index')))
+                except (TypeError, ValueError):
+                    continue
+        missing = [axis for axis in expected if axis not in online]
+        if not missing:
+            return '모터 설정 적용 제한시간을 초과했습니다'
+        return (
+            f'{", ".join(str(axis) for axis in missing)}번 축이 올라오지 않았습니다 · '
+            f'전원·통신선·드라이버 상태를 확인하세요 '
+            f'(붙은 축 {len(expected) - len(missing)}/{len(expected)})'
+        )
+
     def wait_for_runtime_recovery(
         self,
         expected_axes: List[int],
@@ -352,13 +380,22 @@ class MotorRuntimeService:
             if str(operation.get('phase') or '') != 'timeout':
                 return operation
             if operation_type == 'motor_apply':
-                return motor_config_rules.rollback_failed_motor_apply(self.repository, 
-                    operation,
-                    status='timeout',
-                    error=str(
-                        operation.get('error')
-                        or '모터 설정 적용 제한시간을 초과했습니다'
-                    ),
+                # **되돌리지 않는다** · §6-199
+                #
+                # 전에는 여기서 옛 설정으로 롤백하고 두 서비스를 또
+                # 재시작했다 · 그런데 **새 설정은 이미 잘 돌고 있다** ·
+                # 축 넷 중 셋이 붙었는데 하나가 안 붙었을 뿐이다.
+                #
+                # 되돌리면 잘 붙은 셋까지 잃고, 화면엔 엉뚱하게 옛 프로젝트가
+                # 뜬다 · 사용자는 「내가 만든 프로젝트가 왜 사라졌지」가 된다 ·
+                # 게다가 재시작이 한 번 더 돌아 30초를 더 쓴다.
+                #
+                # 안 붙은 축은 **말로 알린다** · 고치는 것은 사람의 몫이다.
+                return repository.runtime.finish_motor_operation(
+                    operation_id,
+                    'timeout',
+                    phase='incomplete',
+                    error=self._missing_axis_message(operation, state_payload),
                 )
             if operation_type == 'motor_restart':
                 diagnosis = diagnose_motor_restart_failure(
@@ -427,12 +464,7 @@ class MotorRuntimeService:
         )
         if readiness.get('failed') is True:
             error = str(readiness.get('error') or 'Motor Manager 실행 검증 실패')
-            if operation_type == 'motor_apply':
-                return motor_config_rules.rollback_failed_motor_apply(self.repository, 
-                    operation,
-                    status='failure',
-                    error=error,
-                )
+            # 프로젝트를 되돌리지 않는다 · §6-199 · 고른 사람은 사용자다
             return repository.runtime.finish_motor_operation(
                 operation_id,
                 'failure',
@@ -460,9 +492,16 @@ class MotorRuntimeService:
                     'runtime_config_mismatch',
                 }
             ):
-                return motor_config_rules.rollback_failed_motor_apply(self.repository, 
-                    operation,
-                    status='failure',
+                # 여기서도 되돌리지 않는다 · §6-199
+                #
+                # Motor Manager 가 아예 못 뜬 경우다 · 전에는 옛 프로젝트로
+                # 되돌려 「최소한 뭔가는 돌게」 했다 · 그런데 그러면 사용자가
+                # 고르지도 않은 프로젝트가 장비에 올라간다 · 어느 설정으로
+                # 움직이는지 사람이 모르는 것이 더 위험하다.
+                return repository.runtime.finish_motor_operation(
+                    operation_id,
+                    'failure',
+                    phase='failed',
                     error=str(
                         runtime_status.get('message')
                         or 'Motor Manager 시작 실패'
