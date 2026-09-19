@@ -208,7 +208,7 @@ function renderLatestState(nextState = null) {
   servoAlarm?.renderRuntimeState();
   renderMotorActivity(appState.latestState.motor_activity);
   updateMotorErrorPopup(appState.latestState);
-  enforceEmergencyUi();
+  showEmergencyLatched();
 }
 
 function renderMotorActivity(activity = {}) {
@@ -280,26 +280,39 @@ function acceptProjectPayload(payload) {
   return generation === appState.projectGeneration;
 }
 
-function enforceEmergencyUi() {
+/** 긴급정지가 걸렸음을 **보여준다** · 버튼은 끄지 않는다 · §6-189
+ *
+ * **전에는 화면의 `<button>` 을 전부 껐다.**
+ *
+ *     document.querySelectorAll('button').forEach((button) => {
+ *       if (button === el.programRestartButton || ...) return;
+ *       button.disabled = true;
+ *     });
+ *
+ * 197개 중 128개가 꺼졌다 · 그 안에 **대화상자의 확인·취소**가 있었다.
+ *
+ *     알림이 뜬다            → 「확인」이 회색 → 닫을 수가 없다
+ *     프로그램 재시작을 누른다 → 「재시작」도 「취소」도 회색 → 갇힌다
+ *
+ * 허락된 단 하나의 복구 동작이 그 동작의 확인창 때문에 막혔다 · 탭도
+ * `<button>` 이라 함께 꺼져서 상태를 보러 갈 수도, 기록을 읽을 수도 없었다 ·
+ * 상태를 받을 때마다 이 함수가 다시 도니까 한 번 열린 버튼도 곧 다시 꺼졌다.
+ *
+ * **막는 일은 서버가 한다** · 슈퍼바이저가 여덟 자리에서 모터 명령을 거절한다
+ * (`EMERGENCY_LATCHED_MESSAGE`) · 화면이 같은 판단을 한 벌 더 하면, 두 판단이
+ * 갈리는 날 사람이 갇힌다 · 실제로 갇혔다.
+ *
+ * **버튼마다의 판단도 이미 따로 있다** · `studioMotorActionBlockReason()` 이
+ * 서버가 내려준 `motor_action_blocker` 를 읽어 모터 버튼을 끈다 · 그것이
+ * 주인이 하나인 방식이다 · 여기서 하던 일은 그 위에 덮어씌우는 두 번째
+ * 빗장이었을 뿐이다.
+ *
+ * 그래서 이제 여기서는 **알리기만** 한다 — 띠를 띄우고 몸통에 표시를 남긴다.
+ */
+function showEmergencyLatched() {
   const latched = Boolean(appState.emergencyLatched);
   document.body.classList.toggle('emergency-latched', latched);
   el.emergencyStopBanner?.classList.toggle('hidden', !latched);
-  if (!latched) {
-    document.querySelectorAll('button[data-emergency-forced-disabled]').forEach((button) => {
-      if (button.dataset.emergencyPreviousDisabled === 'false') button.disabled = false;
-      delete button.dataset.emergencyForcedDisabled;
-      delete button.dataset.emergencyPreviousDisabled;
-    });
-    return;
-  }
-  document.querySelectorAll('button').forEach((button) => {
-    if (button === el.programRestartButton || button === el.headerProgramRestartButton) return;
-    if (!button.dataset.emergencyForcedDisabled) {
-      button.dataset.emergencyPreviousDisabled = String(button.disabled);
-      button.dataset.emergencyForcedDisabled = 'true';
-    }
-    button.disabled = true;
-  });
 }
 
 function motionStateFromPayload(payload) {
@@ -432,7 +445,7 @@ function renderServiceManagement(payload) {
       !managed || !motorManaged || !(Number.isFinite(age) && age <= 1.0),
     );
   }
-  enforceEmergencyUi();
+  showEmergencyLatched();
 }
 
 function renderGitVersion(version = {}) {
@@ -1555,7 +1568,7 @@ async function runSafetyStop(emergency) {
 
     if (emergency) {
       appState.emergencyLatched = true;
-      enforceEmergencyUi();
+      showEmergencyLatched();
     }
     const failures = await stopCommandSources();
     if (safetyFailure) failures.unshift(`최종 모터 출력: ${safetyFailure}`);
