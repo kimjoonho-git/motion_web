@@ -24,18 +24,14 @@ test('axis readiness table keeps runtime facts distinct', () => {
     '실제 장치 식별',
     '모델·운전 프로필',
     '설정·실행 적용',
-    '모션 매칭',
     '서보·토크',
-    '조그·동작',
-    '모션 실행',
-    '최종 상태',
   ]) {
     assert.match(html, new RegExp(`<th>${heading}</th>`));
   }
-  assert.match(controller, /motion_axis_configured === true/);
   assert.match(controller, /runtime\.servo_on === true/);
-  assert.match(controller, /축별 실행 이력은 미지원/);
-  assert.match(controller, /실물 검증 미확인/);
+  for (const gone of ['최종 상태', '모션 매칭', '조그·동작', '모션 실행']) {
+    assert.doesNotMatch(html, new RegExp(`<th>${gone}</th>`));
+  }
   assert.doesNotMatch(controller, /aria-label="실제 서보 드라이버 모델"/);
   assert.match(controller, /model_confirmed/);
   assert.match(controller, /모델 미확인/);

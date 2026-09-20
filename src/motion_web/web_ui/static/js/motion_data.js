@@ -2097,7 +2097,30 @@ export function createMotionDataController({
     try {
       const payload = await fetchMotionMapping(requestedMappingId);
       if (loadToken !== mappingLoadToken) return;
-      const loadedDraft = payload.mapping || emptyMappingDraft();
+      if (payload.success === false || !payload.mapping) {
+        // **실패한 응답으로 덮어쓰지 않는다** · §6-237
+        //
+        // 서버는 못 읽었을 때도 **HTTP 200** 에 `success: false` 만 실어
+        // 보낸다 · 그래서 여기는 오류로 치지 않았고, 아래 한 줄이
+        //
+        //     const loadedDraft = payload.mapping || emptyMappingDraft();
+        //
+        // 들고 있던 설정을 **빈 것으로 갈아엎었다** · 「매핑 이름」이 비고
+        // 저절로 돌아오지 않았다 · 파일은 서버에 멀쩡히 있는데도 그랬다.
+        //
+        // 「설정 적용 · 모터 재시작」 뒤에 늘 그랬다 · 웹 서버가 다시 뜨면
+        // 화면이 곧바로 매핑을 다시 읽는데, 그 순간 모션 쪽 노드가 아직
+        // 안 떠서 `success: false` 가 온다 · 실측 34밀리초 만에 지워졌다.
+        //
+        // 못 읽었으면 **아무것도 하지 않는 것이 맞다** · 화면이 들고 있던
+        // 것이 마지막으로 확인된 값이다 · 노드가 뜨면 다시 읽는다.
+        setMappingMessage('모션축 설정을 아직 못 읽었습니다 · 잠시 후 다시 읽습니다');
+        window.setTimeout(() => {
+          if (selectedMappingId === requestedMappingId) selectMapping(requestedMappingId);
+        }, 3000);
+        return;
+      }
+      const loadedDraft = payload.mapping;
       let loadedMotionFileDetail = null;
       let loadedMotionFiles = files;
       if (loadedDraft.motion_file_id) {
@@ -2443,7 +2466,19 @@ export function createMotionDataController({
   }
 
   async function refreshMappingAfterReconnect() {
-    if (!selectedMappingId) return;
+    if (!selectedMappingId) {
+      // 고른 것이 없으면 **목록부터** 다시 읽는다 · §6-236
+      //
+      // 전에는 여기서 그냥 나갔다 · 「모터축 설정」을 적용하면 웹 서버가
+      // 다시 뜨는데, 그때 고른 매핑이 없으면 아무것도 안 읽었다 · 「편집할
+      // 매칭」과 「매핑 이름」이 **빈 채로 남았다** · 프로젝트에 파일이
+      // 멀쩡히 있는데도 그랬다 · 「목록 새로고침」을 누르기 전까지 그대로다.
+      //
+      // 고른 것이 없다는 말은 **읽을 것이 없다는 말이 아니다** · 목록을
+      // 읽으면 첫 파일이 자동으로 잡힌다.
+      await loadMappings();
+      return;
+    }
     if (!mappingDirty) {
       await selectMapping(selectedMappingId);
       return;

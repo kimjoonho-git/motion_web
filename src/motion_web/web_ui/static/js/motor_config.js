@@ -1830,36 +1830,6 @@ export function createMotorConfigController({
     };
   }
 
-  function rowMappingView(row) {
-    const runtime = row.runtimeMotor;
-    if (row.servedRow?.confirmation_required) {
-      return {
-        text: '연결 확인 필요',
-        detail: '검색값과 저장값이 다릅니다',
-        className: 'review',
-        ready: false,
-      };
-    }
-    if (!row.motor || row.motor.deleted || !row.motor.enabled) {
-      return { text: '미사용 축', detail: '모션 적용 제외', className: 'unknown', ready: false };
-    }
-    if (!runtime) {
-      return { text: '확인 불가', detail: '실행 상태 미수신', className: 'review', ready: false };
-    }
-    if (runtime.motion_axis_configured === true && runtime.motion_id) {
-      return {
-        text: '매칭됨',
-        detail: `Motion ${runtime.motion_id}`,
-        className: 'matched',
-        ready: true,
-      };
-    }
-    if (runtime.motion_axis_configured === true) {
-      return { text: '매칭 오류', detail: 'Motion ID 중복·누락', className: 'duplicate', ready: false };
-    }
-    return { text: '미매칭', detail: '모션축 설정 필요', className: 'review', ready: false };
-  }
-
   function rowDriveView(row) {
     const runtime = row.runtimeMotor;
     const driveName = rowMotorType(row) === 'dynamixel' ? '토크' : '서보';
@@ -1878,83 +1848,6 @@ export function createMotorConfigController({
       className: ready ? 'matched' : 'review',
       ready,
     };
-  }
-
-  function rowMotionPermissionView(row, mapping, drive) {
-    const runtime = row.runtimeMotor;
-    const latest = getLatestState?.() || {};
-    const context = latest.execution_context || {};
-    if (!row.motor || row.motor.deleted || !row.motor.enabled) {
-      return { text: '사용 안 함', detail: '프로젝트에서 비활성', className: 'unknown', ready: false };
-    }
-    if (!runtime || runtime.state !== 'detected') {
-      return { text: '동작 차단', detail: '모터 연결 확인 필요', className: 'duplicate', ready: false };
-    }
-    if (runtime.fault) {
-      return { text: '동작 차단', detail: '장치 오류 해제 필요', className: 'duplicate', ready: false };
-    }
-    const current = finiteRuntimeNumber(firstDefined(runtime.position_deg, runtime.position));
-    const lower = finiteRuntimeNumber(runtime.lower);
-    const upper = finiteRuntimeNumber(runtime.upper);
-    if (current === null) {
-      return { text: '동작 차단', detail: '현재 위치 미수신', className: 'duplicate', ready: false };
-    }
-    if (lower === null || upper === null || lower > upper) {
-      return { text: '동작 차단', detail: 'lower / upper 확인 필요', className: 'duplicate', ready: false };
-    }
-    if (current < lower || current > upper) {
-      return { text: '범위 복귀만', detail: `${lower.toFixed(1)}° ~ ${upper.toFixed(1)}°`, className: 'review', ready: false };
-    }
-    if (!drive.ready) {
-      return { text: '동작 대기', detail: `${rowMotorType(row) === 'dynamixel' ? '토크' : '서보'} ON 필요`, className: 'review', ready: false };
-    }
-    if (!context.ready) {
-      return { text: '동작 대기', detail: '실행 설정 적용 필요', className: 'review', ready: false };
-    }
-    return { text: '조그·동작 가능', detail: '현재 조건 충족', className: 'matched', ready: true };
-  }
-
-  function rowMotionRunView(row, mapping, permission) {
-    const run = getLatestState?.()?.motion_run_status || {};
-    if (!mapping.ready) {
-      return { text: '실행 불가', detail: mapping.detail, className: 'review', ready: false };
-    }
-    if (!permission.ready) {
-      return { text: '실행 대기', detail: permission.detail, className: 'review', ready: false };
-    }
-    if (run.active || run.running) {
-      return { text: '모션 실행 중', detail: '현재 실행 상태', className: 'configured', ready: true };
-    }
-    return {
-      text: '실행 가능',
-      detail: '축별 실행 이력은 미지원',
-      className: 'matched',
-      ready: true,
-    };
-  }
-
-  function rowOverallView(row, mapping, drive, permission, motionRun) {
-    if (!row.motor || row.motor.deleted || !row.motor.enabled) {
-      return { text: '관리 제외', detail: '미사용 축', className: 'unknown', ready: false };
-    }
-    if (row.runtimeMotor?.fault) {
-      return { text: '오류', detail: '오류 팝업에서 확인', className: 'duplicate', ready: false };
-    }
-    const physicalMatched = rowMotorType(row) === 'ac_servo'
-      ? Boolean(row.scanRow)
-      : rowMotorType(row) === 'dynamixel'
-        ? Boolean(row.scanDevice)
-        : false;
-    if (!physicalMatched) {
-      return { text: '물리 확인 필요', detail: '장비 검색 후 판정', className: 'review', ready: false };
-    }
-    if (permission.text === '범위 복귀만') {
-      return { text: '복귀 필요', detail: '경계 복귀 후 재확인', className: 'review', ready: false };
-    }
-    if (mapping.ready && drive.ready && permission.ready && motionRun.ready) {
-      return { text: '구동 준비', detail: '실물 검증 미확인', className: 'matched', ready: true };
-    }
-    return { text: '준비 중', detail: permission.detail || mapping.detail, className: 'review', ready: false };
   }
 
   function motorStatusTypeKey(motor) {
@@ -2386,11 +2279,7 @@ export function createMotorConfigController({
           const modelProfile = rowModelProfileView(row);
           const driverModel = rowDriverModelRaw(row);
           const connection = rowConnectionIdentity(row);
-          const mapping = rowMappingView(row);
           const drive = rowDriveView(row);
-          const permission = rowMotionPermissionView(row, mapping, drive);
-          const motionRun = rowMotionRunView(row, mapping, permission);
-          const overall = rowOverallView(row, mapping, drive, permission, motionRun);
           const showAcServoControls = rowMotorType(row) === 'ac_servo' &&
             Boolean(row.motor && !row.motor.deleted && row.motor.enabled);
           return {
@@ -2419,11 +2308,7 @@ export function createMotorConfigController({
             modelProfile,
             driverModel,
             connection,
-            mapping,
             drive,
-            permission,
-            motionRun,
-            overall,
             showAcServoControls,
           };
         });
@@ -2454,11 +2339,7 @@ export function createMotorConfigController({
         modelProfile: view.modelProfile,
         driverModel: view.driverModel,
         connection: view.connection,
-        mapping: view.mapping,
         drive: view.drive,
-        permission: view.permission,
-        motionRun: view.motionRun,
-        overall: view.overall,
         showAcServoControls: view.showAcServoControls,
       })));
 
@@ -2487,7 +2368,6 @@ export function createMotorConfigController({
                 <span class="match-state ${escapeHtml(view.settingClass)}">${displayText(view.settingText)}</span>
                 <small>${displayText(view.runtimeText)}</small>
               </td>
-              <td class="axis-status-stack"><span class="match-state ${escapeHtml(view.mapping.className)}">${displayText(view.mapping.text)}</span><small>${displayText(view.mapping.detail)}</small></td>
               <td class="axis-status-stack">
                 <span class="match-state ${escapeHtml(view.drive.className)}">${displayText(view.drive.text)}</span>
                 <small>${displayText(view.drive.detail)}</small>
@@ -2499,13 +2379,10 @@ export function createMotorConfigController({
                   </div>
                 ` : ''}
               </td>
-              <td class="axis-status-stack"><span class="match-state ${escapeHtml(view.permission.className)}">${displayText(view.permission.text)}</span><small>${displayText(view.permission.detail)}</small></td>
-              <td class="axis-status-stack"><span class="match-state ${escapeHtml(view.motionRun.className)}">${displayText(view.motionRun.text)}</span><small>${displayText(view.motionRun.detail)}</small></td>
-              <td class="axis-status-stack"><span class="match-state ${escapeHtml(view.overall.className)}">${displayText(view.overall.text)}</span><small>${displayText(view.overall.detail)}</small></td>
             </tr>
           `;
         }).join('')
-          : '<tr><td colspan="11" class="empty">설정 파일을 불러오거나 모터 스캔을 실행하세요</td></tr>';
+          : '<tr><td colspan="6" class="empty">설정 파일을 불러오거나 모터 스캔을 실행하세요</td></tr>';
       }
     }
 
