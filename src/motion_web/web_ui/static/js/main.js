@@ -5,7 +5,6 @@ import {
   requestEmergencySafetyStop,
   requestMotionSafetyStop,
   restartManagedProgram,
-  restartMotorControlSystem,
   setMonitoringEnabled,
   stopMotionRun,
   stopMotionStudio,
@@ -25,7 +24,7 @@ import { renderAccess, renderMonitoring } from './monitoring.js';
 import { createOperationProgressManager } from './operation_progress.js';
 import { installDialogManager } from './ui_dialogs.js';
 import { StatusSocket } from './socket.js';
-import { TERMINAL_FAILURES, trackedMotorRestartState } from './restart_tracking.js';
+import { TERMINAL_FAILURES } from './restart_tracking.js';
 import {
   canChangeProjectInWorkspace,
   createWorkspaceRouteState,
@@ -65,7 +64,6 @@ const appState = {
   restartCheckMode: '',
   bridgeInstanceId: '',
   restartPreviousBridgeInstanceId: '',
-  restartOperationId: '',
   restartProgressTimer: null,
   //: 「모터를 움직일 수 있나」의 답 · 판단은 서버가 한다 · §6-171
   //: `null` 은 「아직 안 받았다」 · 「막힘 없음」 과 구별해야 한다
@@ -383,18 +381,6 @@ function renderServiceManagement(payload) {
     el.programRestartButton.disabled = Boolean(programRestartBlockedReason);
     el.programRestartButton.title = programRestartBlockedReason || '상위 프로그램을 재시작합니다';
   }
-  if (el.motorControlRestartButton) {
-    el.motorControlRestartButton.disabled = (
-      !(motorManaged && motorConfigApplied)
-      || motorOperationRunning
-      || appState.configApplyInProgress
-    );
-    el.motorControlRestartButton.title = motorOperationRunning
-      ? '모터 설정·검색·재시작 작업이 진행 중입니다'
-      : motorConfigApplied
-        ? '현재 프로젝트의 모터 제어 서비스를 재시작합니다'
-        : '현재 프로젝트의 모터축 설정을 먼저 적용하세요';
-  }
   if (el.headerProgramRestartButton) {
     el.headerProgramRestartButton.disabled = Boolean(programRestartBlockedReason);
     el.headerProgramRestartButton.title = programRestartBlockedReason || '상위 프로그램을 재시작합니다';
@@ -550,7 +536,6 @@ function clearRestartTracking() {
   appState.configApplyConnectionInterrupted = false;
   appState.restartCheckMode = '';
   appState.restartPreviousBridgeInstanceId = '';
-  appState.restartOperationId = '';
 }
 
 function cancelRestartCompletionCheck() {
@@ -788,10 +773,7 @@ function restartReadyState(payload) {
   const elapsedMs = appState.configApplyStartedAtMs
     ? Date.now() - appState.configApplyStartedAtMs
     : 0;
-  if (
-    elapsedMs >= RESTART_TIMEOUT_MS
-    && (restartMode !== 'motor_control' || !payload)
-  ) {
+  if (elapsedMs >= RESTART_TIMEOUT_MS) {
     return {
       ready: false,
       failed: true,
@@ -827,42 +809,7 @@ function restartReadyState(payload) {
     };
   }
   const motorOperation = payload?.motor_operation || {};
-  if (restartMode === 'motor_control') {
-    const tracked = trackedMotorRestartState(
-      motorOperation,
-      appState.restartOperationId,
-    );
-    if (TERMINAL_FAILURES.has(tracked.state)) {
-      return {
-        ready: false,
-        failed: true,
-        title: '모터 제어 재시작 실패',
-        detail: tracked.detail,
-      };
-    }
-    if (tracked.state === 'success') {
-      return {
-        ready: true,
-        title: '모터 제어 재시작 완료',
-        detail: tracked.detail,
-      };
-    }
-    if (elapsedMs >= RESTART_TIMEOUT_MS + MOTOR_RESTART_STATUS_GRACE_MS) {
-      return {
-        ready: false,
-        failed: true,
-        title: '모터 제어 재시작 실패',
-        detail: '서버의 최종 모터 연결 진단 결과를 받지 못했습니다. Motor Manager 서비스 상태를 확인하세요.',
-      };
-    }
-    return {
-      ready: false,
-      title: appState.restartOperationId
-        ? '모터 제어 재시작 확인 중'
-        : '모터 제어 재시작 요청 중',
-      detail: tracked.detail,
-    };
-  } else if (
+  if (
     restartMode === 'motor_apply'
     && motorOperation.type === 'motor_apply'
   ) {
@@ -1031,12 +978,9 @@ function restartReadyState(payload) {
 function updateRestartProgress(payload = null) {
   if (!appState.configApplyInProgress) return;
   const programRestart = appState.restartCheckMode === 'program';
-  const motorControlRestart = appState.restartCheckMode === 'motor_control';
   const state = restartReadyState(payload);
   const message = programRestart
     ? '웹·Supervisor·모션 실행·MIDI가 다시 연결됐는지 확인하는 중입니다.'
-    : motorControlRestart
-      ? 'Motor Manager 실행과 재시작 이후의 새로운 모터 상태 수신을 확인하는 중입니다.'
     : [
       'motor_manager_node, motion_state_monitor, motion_supervisor, motion_web_bridge 상태를 확인하는 중입니다.',
       'YAML 등록 수가 아니라 직접 검색되거나 실제 감지된 모터를 기준으로 확인합니다.',
@@ -1069,9 +1013,7 @@ function updateRestartProgress(payload = null) {
       true,
       programRestart
         ? '프로그램 재시작 완료 확인 중'
-        : motorControlRestart
-          ? '모터 제어 재시작 완료 확인 중'
-          : '설정 적용·재시작 완료 확인 중',
+        : '설정 적용·재시작 완료 확인 중',
       message,
       state.detail,
     );
@@ -1083,9 +1025,7 @@ function updateRestartProgress(payload = null) {
       true,
       programRestart
         ? '프로그램 재시작 완료 확인 중'
-        : motorControlRestart
-          ? '모터 제어 재시작 완료 확인 중'
-          : '설정 적용·재시작 완료 확인 중',
+        : '설정 적용·재시작 완료 확인 중',
       message,
       state.detail,
     );
@@ -1098,17 +1038,13 @@ function updateRestartProgress(payload = null) {
     title: state.title,
     message: programRestart
       ? '프로그램 재시작과 웹 자동 재연결을 확인했습니다.'
-      : motorControlRestart
-        ? 'Motor Manager 실행과 새로운 모터 상태 수신을 확인했습니다.'
-        : '설정 적용·재시작과 모터 상태 수신을 확인했습니다.',
+      : '설정 적용·재시작과 모터 상태 수신을 확인했습니다.',
     detail: state.detail,
   });
   if (el.bridgeState) el.bridgeState.textContent = '연결됨';
   if (el.summaryText) {
     el.summaryText.textContent = programRestart
       ? '프로그램 재시작 완료'
-      : motorControlRestart
-        ? '모터 제어 재시작 완료'
       : '설정 적용·재시작 완료';
   }
 }
@@ -1271,19 +1207,13 @@ function statusCheckResult(triggerButton, payload) {
 
 async function fetchStatus(triggerButton = el.refreshButton) {
   if (!triggerButton) return;
-  const showStatusPopup = (
-    triggerButton === el.programStatusRefreshButton
-    || triggerButton === el.motorStatusRefreshButton
-  );
+  const showStatusPopup = triggerButton === el.programStatusRefreshButton;
   if (showStatusPopup) {
-    const motorStatus = triggerButton === el.motorStatusRefreshButton;
     setStatusCheckPopup({
       visible: true,
       running: true,
-      title: motorStatus ? '모터 상태 확인 중' : '프로그램 상태 확인 중',
-      message: motorStatus
-        ? '최신 모터 상태와 수신 시각을 확인하고 있습니다.'
-        : '서비스 상태 응답을 기다리고 있습니다.',
+      title: '프로그램 상태 확인 중',
+      message: '서비스 상태 응답을 기다리고 있습니다.',
       detail: '응답 대기',
     });
   }
@@ -1430,12 +1360,6 @@ if (el.programStatusRefreshButton) {
   });
 }
 
-if (el.motorStatusRefreshButton) {
-  el.motorStatusRefreshButton.addEventListener('click', () => {
-    fetchStatus(el.motorStatusRefreshButton);
-  });
-}
-
 if (el.programPageReloadButton) {
   el.programPageReloadButton.addEventListener('click', () => {
     window.location.reload();
@@ -1497,54 +1421,6 @@ if (el.programRestartButton) {
       clearRestartTracking();
       setRestartOverlay(false);
       window.alert(error?.message || String(error));
-    }
-  });
-}
-
-if (el.motorControlRestartButton) {
-  el.motorControlRestartButton.addEventListener('click', async () => {
-    const confirmed = await appDialogs.confirm(
-      '모터 제어 시스템을 재시작합니다.\n\n'
-      + 'Motor Manager와 EtherCAT 통신이 중단되며 AC Servo가 OFF됐다가 자동 ON될 수 있습니다.\n'
-      + '모든 모션이 정지됐고 장비가 안전한지 확인했습니까?',
-      { title: '모터 제어 재시작', confirmLabel: '재시작', tone: 'danger' },
-    );
-    if (!confirmed) return;
-    appState.configApplyInProgress = true;
-    appState.configApplyStartedAtMs = Date.now();
-    appState.configApplyReadySinceMs = null;
-    appState.configApplyConnectionInterrupted = false;
-    appState.restartCheckMode = 'motor_control';
-    appState.restartPreviousBridgeInstanceId = '';
-    appState.restartOperationId = '';
-    setRestartOverlay(
-      true,
-      '모터 제어 재시작 중입니다',
-      'Motor Manager 실행과 새로운 모터 상태 수신을 확인합니다.',
-      '재시작 요청 전송 중',
-    );
-    startRestartProgressPolling();
-    el.motorControlRestartButton.disabled = true;
-    const originalText = el.motorControlRestartButton.textContent;
-    el.motorControlRestartButton.textContent = '모터 제어 재시작 중';
-    try {
-      const payload = await restartMotorControlSystem();
-      if (payload?.success === false) throw new Error(payload.message || '재시작 요청 실패');
-      const operationId = String(payload?.motor_operation?.operation_id || '').trim();
-      if (!operationId) throw new Error('모터 제어 재시작 작업 ID를 받지 못했습니다');
-      appState.restartOperationId = operationId;
-      updateRestartProgress(payload);
-      window.setTimeout(() => fetchStatus(), 1500);
-    } catch (error) {
-      clearRestartTracking();
-      setRestartOverlay(false);
-      await appDialogs.alert(error?.message || String(error), {
-        title: '모터 제어 재시작 실패',
-        tone: 'danger',
-      });
-    } finally {
-      el.motorControlRestartButton.textContent = originalText;
-      window.setTimeout(() => fetchStatus(), 3000);
     }
   });
 }

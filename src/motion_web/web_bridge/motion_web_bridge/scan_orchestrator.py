@@ -112,7 +112,9 @@ class ScanOrchestrator:
         try:
             event = json.loads(msg.data)
         except json.JSONDecodeError:
-            self.bridge.get_logger().warn(f'Invalid {self.scan_progress_topic} JSON received.')
+            self.bridge.get_logger().warn(
+                f'Invalid {self.bridge.scan_progress_topic} JSON received.'
+            )
             return
         self.record_progress_event(event)
 
@@ -175,8 +177,35 @@ class ScanOrchestrator:
             'project_generation': self.bridge.current_project_generation(),
         }
 
+    #: EtherCAT 검색 시도 횟수 · 실패하면 그대로 다시 한다 · §6-234
+    #:
+    #: 모터 프로그램이 죽은 뒤에도 슬레이브가 `OP` 로 남는 일이 5번에 한 번꼴로
+    #: 있다 (검색 30회 중 5회 · 실측) · 그러면 「버스를 놨는지」 검사에 걸려
+    #: 검색이 시작도 못 한다.
+    #:
+    #: 왜 남는지는 `motor_manager_node` 종료 처리에 달려 있고, 그 코드는
+    #: `src/motion_system`(별도 저장소)에 있다 · 판정 규칙을 손대 봤지만
+    #: 실패 지점만 옮겨 갔다.
+    #:
+    #: 실패하면 복구 단계가 모터 프로그램을 다시 켠다 · 그 뒤 다시 하면
+    #: 슬레이브가 정상으로 돌아와 있다 · 사람이 버튼을 다시 누르는 것과 같다.
+    ETHERCAT_SCAN_ATTEMPTS = 3
+
+    def _scan_with_retry(self, *args, **kwargs) -> Dict[str, Any]:
+        result: Dict[str, Any] = {}
+        for attempt in range(1, self.ETHERCAT_SCAN_ATTEMPTS + 1):
+            result = self._call_service(*args, **kwargs)
+            if result.get('success') or result.get('partial'):
+                return result
+            if attempt < self.ETHERCAT_SCAN_ATTEMPTS:
+                self.bridge.get_logger().warn(
+                    f'EtherCAT 검색 {attempt}회차 실패 · 다시 시도합니다 · '
+                    + str(result.get('message') or '')[:120]
+                )
+        return result
+
     def scan_all(self, timeout_sec: float = FULL_SCAN_TIMEOUT_SEC) -> Dict[str, Any]:
-        return self._call_service(
+        return self._scan_with_retry(
             self._scan_client,
             self.scan_service,
             timeout_sec,
@@ -185,7 +214,7 @@ class ScanOrchestrator:
         )
 
     def scan_ac_servo(self, timeout_sec: float = AC_SERVO_SCAN_TIMEOUT_SEC) -> Dict[str, Any]:
-        return self._call_service(
+        return self._scan_with_retry(
             self._scan_ac_servo_client,
             self.scan_ac_servo_service,
             timeout_sec,

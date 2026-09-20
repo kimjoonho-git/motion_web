@@ -211,10 +211,6 @@ def register_system_routes(app: FastAPI, bridge, project_call) -> None:
             desktop_shortcut.create_desktop_shortcut, bridge.workspace_root
         )
 
-    @app.post('/api/system/motor-control/restart')
-    async def restart_motor_control_system():
-        return await project_call(bridge.motor_config.restart_motor_control)
-
     @app.post('/api/system/motor-runtime/clear')
     async def clear_motor_runtime_application():
         return await project_call(bridge.motor_config.clear_runtime_application)

@@ -206,7 +206,6 @@ export const restartManagedProgram = () => request('POST', '/api/system/program/
 
 export const createDesktopShortcut = () => request('POST', '/api/system/desktop-shortcut');
 
-export const restartMotorControlSystem = () => request('POST', '/api/system/motor-control/restart');
 
 export const clearMotorRuntimeApplication = () => request('POST', '/api/system/motor-runtime/clear');
 
@@ -285,7 +284,6 @@ export const fetchMotorConfig = () => request('GET', '/api/motor-config');
 
 export const saveMotorConfig = (payload) => request('PUT', '/api/motor-config', { body: payload });
 
-export const deleteMotorConfig = () => request('DELETE', '/api/motor-config');
 
 export const applyMotorConfig = () => request('POST', '/api/motor-config/apply');
 

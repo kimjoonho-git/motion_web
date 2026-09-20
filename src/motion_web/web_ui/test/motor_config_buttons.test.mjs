@@ -16,7 +16,6 @@ const api = readFileSync(new URL('../static/js/api.js', import.meta.url), 'utf8'
 const actions = {
   saveAxisConfigButton: 'saveAxisConfig',
   applyAxisConfigButton: 'applyConfigRestart',
-  deleteMotorConfigButton: 'deleteCurrentMotorConfig',
   scanAllButton: 'scanAllMotors',
   scanButton: 'scanMotors',
   dynamixelScanButton: 'scanDynamixel',
@@ -32,7 +31,9 @@ test('every motor configuration action button exists and has a controller handle
       `${id} is not wired to ${handler}`,
     );
   }
-  assert.match(controller, /reloadMotorConfigButton\.addEventListener\('click', \(\) => fetchRegistry\(\)\)/);
+  // 「설정 불러오기」·「설정 삭제」는 지웠다 · §6-227
+  // 모터 관리는 **찾고 · 저장하고 · 적용하는** 곳이다 · 파일 관리는 여기 일이 아니다.
+  assert.doesNotMatch(controller, /reloadMotorConfigButton/);
 });
 
 test('the scan result is the list · nothing to add by hand', () => {
@@ -56,23 +57,16 @@ test('apply and restart never writes the project file', () => {
   assert.match(body, /저장된 파일\*\*이 적용됩니다/);
 });
 
-test('program and motor status refresh actions are clearly separated', () => {
+// 「모터 상태 확인」은 지웠다 · §6-228
+// 모터 상태는 평소에도 자동으로 들어온다 · 다시 읽는 단추가 따로 있을 이유가 없다.
+test('program status refresh is the only status check button', () => {
   assert.match(
     html,
     /id="programStatusRefreshButton"[^>]*>프로그램 상태 확인</,
   );
-  assert.match(
-    html,
-    /id="motorStatusRefreshButton"[^>]*>모터 상태 확인</,
-  );
-  assert.match(
-    dom,
-    /motorStatusRefreshButton: document\.getElementById\('motorStatusRefreshButton'\)/,
-  );
-  assert.match(
-    main,
-    /motorStatusRefreshButton\.addEventListener\('click', \(\) => \{\s*fetchStatus\(el\.motorStatusRefreshButton\)/,
-  );
+  assert.doesNotMatch(html, /motorStatusRefreshButton/);
+  assert.doesNotMatch(dom, /motorStatusRefreshButton/);
+  assert.doesNotMatch(main, /motorStatusRefreshButton/);
   assert.match(html, /id="operationProgressModal"/);
   assert.match(html, /id="operationProgressCloseButton"[^>]*disabled/);
   assert.match(main, /function statusCheckResult\(triggerButton, payload\)/);
@@ -132,9 +126,11 @@ test('project-compatible physical scan gaps are displayed as partial, not failur
   assert.match(controller, /const scanPartial = payload\.partial === true;/);
 });
 
-test('motor configuration file deletion uses the matching DELETE endpoint', () => {
-  assert.match(api, /deleteMotorConfig = \(\) => request\('DELETE', '\/api\/motor-config'\)/);
-  assert.match(controller, /const payload = await deleteMotorConfig\(\)/);
+// 「설정 삭제」는 화면에서 지웠다 · §6-227
+// 설정은 하나이고 검색하면 갈아 끼우므로 지우고 다시 만들 일이 없다.
+test('설정 삭제 단추는 없다', () => {
+  assert.doesNotMatch(html, /deleteMotorConfigButton/);
+  assert.doesNotMatch(controller, /deleteCurrentMotorConfig/);
 });
 
 test('저장이 표 편집을 흡수한다 · 중간 단추를 다시 만들지 않는다', () => {
@@ -155,10 +151,8 @@ test('두 단추가 무엇을 하는지 이름만 보고 알 수 있다', () => 
   assert.match(html, /id="applyAxisConfigButton"[^>]*>설정 적용 · 모터 재시작</);
 });
 
-test('motor configuration file actions are concise', () => {
-  assert.match(
-    html,
-    /id="deleteMotorConfigButton"[^>]*>설정 삭제</,
-  );
-  assert.match(html, /id="reloadMotorConfigButton"[^>]*>설정 불러오기</);
+test('모터 관리에는 설정 파일 관리 단추가 없다', () => {
+  assert.doesNotMatch(html, /reloadMotorConfigButton/);
+  assert.doesNotMatch(html, /deleteMotorConfigButton/);
+  assert.doesNotMatch(html, /motor-config-file-panel/);
 });

@@ -47,10 +47,6 @@ def register_motor_routes(app: FastAPI, bridge, project_call) -> None:
             raise HTTPException(status_code=400, detail='request body must be an object')
         return await asyncio.to_thread(bridge.motor_config.save, body)
 
-    @app.delete('/api/motor-config')
-    async def delete_motor_config():
-        return await project_call(bridge.motor_config.delete)
-
     @app.post('/api/motor-config/apply')
     async def apply_motor_config():
         return await asyncio.to_thread(bridge.motor_config.apply)

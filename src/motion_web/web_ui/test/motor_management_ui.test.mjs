@@ -8,23 +8,6 @@ const controller = readFileSync(new URL('../static/js/motor_config.js', import.m
 const motionTest = readFileSync(new URL('../static/js/motion_test.js', import.meta.url), 'utf8');
 const styles = stylesCss;
 
-test('motor management exposes one seven-stage preparation flow', () => {
-  for (const step of [
-    'service',
-    'connection',
-    'configuration',
-    'application',
-    'mapping',
-    'drive',
-    'verification',
-  ]) {
-    assert.match(html, new RegExp(`data-motor-readiness-step="${step}"`));
-    assert.match(controller, new RegExp(`key: '${step}'`));
-  }
-  assert.match(controller, /renderMotorReadiness\(rows, rowViews, changed\)/);
-  assert.match(styles, /\.motor-readiness-steps/);
-});
-
 test('motor readiness summary keeps each title and value on one compact row', () => {
   assert.match(
     styles,
@@ -65,8 +48,13 @@ test('axis readiness table keeps runtime facts distinct', () => {
   assert.match(controller, /SII 참고값/);
 });
 
-test('unsupported Dynamixel torque controls are not presented as working actions', () => {
-  assert.match(html, /Dynamixel · Torque Enable\/Disable · 동작 명령 시 Torque Enable/);
+// 모터 관리 윗부분의 상태 표시는 전부 지웠다 · §6-229
+// 준비 단계 7칸 · 모터 종류 요약표 · 안내 문구 · 「모터 상태 확인」
+test('모터 관리에 상태 표시 덩이가 없다', () => {
+  assert.doesNotMatch(html, /motor-readiness-overview/);
+  assert.doesNotMatch(html, /motorReadinessSteps/);
+  assert.doesNotMatch(html, /motorTypeRows/);
+  assert.doesNotMatch(controller, /renderMotorReadiness|renderMotorTypeStatus/);
   assert.doesNotMatch(html, /id="[^"]*Dynamixel[^"]*Torque/);
 });
 
@@ -96,8 +84,11 @@ test('motor setting tabs use concise names', () => {
 test('motor management actions follow control, edit, save and apply groups', () => {
   assert.match(
     html,
-    /장비 제어[\s\S]*id="allAcServoOnButton"[\s\S]*id="allAcServoOffButton"[\s\S]*시스템[\s\S]*id="motorControlRestartButton"/,
+    /장비 제어[\s\S]*id="allAcServoOnButton"[\s\S]*id="allAcServoOffButton"/,
   );
+  // 「모터 제어 재시작」은 지웠다 · §6-228
+  // 「설정 적용 · 모터 재시작」이 같은 일을 하고 설정까지 새로 반영한다.
+  assert.doesNotMatch(html, /motorControlRestartButton/);
   // 축 편집 버튼은 전부 지웠다 · §6-219
   // 검색이 찾은 것이 그대로 목록이고 사람이 고치는 것은 이름 하나다.
   for (const gone of [
@@ -199,33 +190,3 @@ test('project information is read-only and file actions live in the popup menu',
   assert.match(html, /id="projectFileActionMenu"[\s\S]*id="projectFileOpenEditorButton"[\s\S]*id="projectFileDeleteButton"/);
 });
 
-test('motor type summary separates configuration, physical and runtime facts', () => {
-  const headings = [
-    '프로젝트 설정',
-    '물리 감지',
-    '실행 적용',
-    '런타임 보고 축',
-    '오류',
-    '서보·토크 ON',
-    '제어 가능',
-  ];
-  for (const heading of headings) {
-    assert.match(html, new RegExp(`<th[^>]*[^>]*>${heading}</th>`));
-  }
-  assert.match(
-    html,
-    new RegExp(headings.map((heading) => `>${heading}</th>`).join('[\\s\\S]*')),
-  );
-  assert.doesNotMatch(html, /전체 \/ 온라인/);
-  assert.match(
-    html,
-    /title="motor_manager 상태 메시지에 포함된 축 수이며 물리 연결 수가 아닙니다">런타임 보고 축<\/th>/,
-  );
-  assert.match(controller, /function physicalScanStatus\(typeKey\)/);
-  assert.match(controller, /if \(!scan \|\| scan\.skipped\) return \{ code: 'unknown', text: '미확인'/);
-  assert.match(controller, /motor\.connection_connected === true/);
-  assert.match(controller, /motor\.servo_on === true/);
-  assert.match(controller, /Boolean\(motor\.fault\) \|\| Number\(motor\.errorcode \|\| 0\) !== 0/);
-  assert.match(controller, /return \{ text: '물리 확인 필요', detail: '장비 검색 후 판정'/);
-  assert.match(controller, /view\.row\.runtimeMotor\?\.state === 'detected'[\s\S]*?Boolean\(view\.row\.scanRow\)/);
-});

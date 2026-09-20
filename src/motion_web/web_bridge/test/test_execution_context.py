@@ -1365,7 +1365,8 @@ def test_scan_entrypoints_use_distinct_operation_types():
 
     def call(_client, service_name, _timeout_sec, **kwargs):
         captured.append((service_name, kwargs))
-        return {}
+        # 성공을 돌려준다 · 실패하면 §6-234 재시도가 돌아 세 번씩 찍힌다
+        return {'success': True}
 
     _scan_of(bridge)._call_service = call
 

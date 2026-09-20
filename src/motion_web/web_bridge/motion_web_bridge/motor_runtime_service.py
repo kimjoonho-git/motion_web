@@ -347,7 +347,7 @@ class MotorRuntimeService:
             lock.release()
             return self.repository.runtime.motor_operation_status()
         threading.Thread(
-            target=self._recover_interrupted_scan,
+            target=self.recover_interrupted_scan,
             args=(updated,),
             name='interrupted-ac-servo-scan-recovery',
             daemon=True,
@@ -538,9 +538,24 @@ class MotorRuntimeService:
                 motion_state,
                 execution_context,
             )
-        except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
+        except Exception as exc:  # noqa: BLE001
+            # 여기서 예외가 새면 **브리지의 ROS 쪽이 통째로 죽는다** · §6-235
+            #
+            # 이 함수는 0.2초마다 도는 ROS 타이머다 · rclpy 는 단일 스레드로
+            # 돌기 때문에, 타이머 콜백이 예외를 던지면 `rclpy.spin()` 이 그대로
+            # 빠져나가고 **구독·서비스·타이머가 전부 멈춘다** · 웹(HTTP)만 살아
+            # 남아서 겉보기엔 멀쩡하다.
+            #
+            # 실제로 그렇게 죽었다 · 호출 한 줄이 옛 이름(`_recover_interrupted_scan`)
+            # 을 그대로 부르고 있어서 AttributeError 가 났는데, 전에는 이 자리가
+            # OSError·RuntimeError·ValueError·JSONDecodeError 만 잡아서 그대로
+            # 샜다 · 브리지가 뜬 지 0.23초 만에 모터 상태가 끊겼고 11분간 한 건도
+            # 안 들어왔다 · 화면에는 「최신 모터 상태가 중단되어…」로 나왔다.
+            #
+            # 이름이 또 틀리든 무엇이 나든 **상태 배달은 계속돼야 한다** ·
+            # 여기서 끊고 로그로 남긴다.
             self.bridge.get_logger().error(
-                f'Motor operation reconcile failed: {exc}'
+                f'Motor operation reconcile failed: {type(exc).__name__}: {exc}'
             )
         finally:
             lock.release()

@@ -7,7 +7,6 @@ import {
   fetchMotorScanProgress,
   writeEthercatAlias,
   saveMotorConfig,
-  deleteMotorConfig,
 } from './api.js';
 import {
   clone,
@@ -429,7 +428,6 @@ export function createMotorConfigController({
   }
 
   function setStatusMessage(message) {
-    if (el.motorConfigState) el.motorConfigState.textContent = message;
     if (el.configState) el.configState.textContent = message;
   }
 
@@ -2010,160 +2008,6 @@ export function createMotorConfigController({
     return { code: 'unknown', text: '미확인', count: null };
   }
 
-  function statusCell(text, code = '') {
-    return `<span class="motor-status-value${code ? ` ${escapeHtml(code)}` : ''}">${displayText(text)}</span>`;
-  }
-
-  function renderMotorTypeStatus(rowViews, changed) {
-    if (!el.motorTypeRows) return;
-    const latest = getLatestState?.() || {};
-    const runtime = runtimeMotors();
-    const projectMotors = selectActiveVisibleRegistryMotors(savedRegistry);
-    const projectCounts = countMotorsByStatusType(projectMotors);
-    const runtimeCounts = countMotorsByStatusType(runtime);
-    const feedbackCounts = countMotorsByStatusType(
-      runtime,
-      (motor) => motor.connection_connected === true ||
-        (!Object.prototype.hasOwnProperty.call(motor, 'connection_connected') && motor.state === 'detected'),
-    );
-    const driveCounts = countMotorsByStatusType(runtime, (motor) => motor.servo_on === true);
-    const faultCounts = countMotorsByStatusType(
-      runtime,
-      (motor) => Boolean(motor.fault) || Number(motor.errorcode || 0) !== 0,
-    );
-    const scope = latest.project_scope || {};
-    const runtimeMatchesProject = scope.runtime_matches_selected === true;
-    const runtimeApplied = runtimeMatchesProject && scope.motor_config_applied === true;
-    const types = new Set(['ac_servo', 'dynamixel']);
-    [...projectMotors, ...runtime].forEach((motor) => types.add(motorStatusTypeKey(motor)));
-    const orderedTypes = ['ac_servo', 'dynamixel', 'cubemars', 'unknown']
-      .filter((key) => types.has(key));
-
-    const html = orderedTypes.map((typeKey) => {
-      const physical = physicalScanStatus(typeKey);
-      const typeRows = rowViews.filter(
-        (view) => view.row.motor &&
-          !view.row.motor.deleted &&
-          view.row.motor.enabled &&
-          motorStatusTypeKey(view.row.motor) === typeKey,
-      );
-      const physicalConfirmed = physical.count !== null;
-      const controllable = physicalConfirmed && runtimeApplied && !changed
-        ? typeRows.filter((view) => {
-          const matchedByScan = typeKey === 'ac_servo'
-            ? Boolean(view.row.scanRow)
-            : typeKey === 'dynamixel'
-              ? Boolean(view.row.scanDevice)
-              : false;
-          return matchedByScan && view.overall.ready;
-        }).length
-        : null;
-      const appliedText = !runtimeMatchesProject
-        ? '다른 프로젝트'
-        : !runtimeApplied
-          ? '미적용'
-          : `${formatInt(runtimeCounts.get(typeKey) || 0)}축`;
-      const appliedCode = runtimeApplied ? 'good' : 'warning';
-      const feedbackCount = feedbackCounts.get(typeKey) || 0;
-      const driveCount = driveCounts.get(typeKey) || 0;
-      const faultCount = faultCounts.get(typeKey) || 0;
-      const controllableText = controllable === null
-        ? (physical.code === 'error' ? '검증 불가' : '미확인')
-        : `${formatInt(controllable)}축`;
-      const controllableCode = controllable === null
-        ? (physical.code === 'error' ? 'error' : 'unknown')
-        : controllable > 0 ? 'good' : 'off';
-      return `
-        <tr>
-          <th scope="row">${displayText(motorStatusTypeLabel(typeKey))}</th>
-          <td>${statusCell(`${formatInt(projectCounts.get(typeKey) || 0)}축`, 'configured')}</td>
-          <td>${statusCell(physical.text, physical.code)}</td>
-          <td>${statusCell(appliedText, appliedCode)}</td>
-          <td>${statusCell(`${formatInt(feedbackCount)}축`, feedbackCount > 0 ? 'received' : 'off')}</td>
-          <td>${statusCell(`${formatInt(faultCount)}축`, faultCount > 0 ? 'error' : 'good')}</td>
-          <td>${statusCell(`${formatInt(driveCount)}축`, driveCount > 0 ? 'good' : 'off')}</td>
-          <td>${statusCell(controllableText, controllableCode)}</td>
-        </tr>
-      `;
-    }).join('');
-    if (el.motorTypeRows.innerHTML !== html) el.motorTypeRows.innerHTML = html;
-
-    if (el.motorTypeSummaryDetail) {
-      const summary = getDiscoverySummary();
-      el.motorTypeSummaryDetail.textContent = summary.hasDirectScan
-        ? `최근 물리 검색 결과 · 감지 ${formatInt(summary.discoveredCount)}축`
-        : '물리 감지 미확인 · 장비 검색 후 판정';
-    }
-  }
-
-  function renderMotorReadiness(rows, rowViews, changed) {
-    const latest = getLatestState?.() || {};
-    const configuredRows = rowViews.filter(
-      (view) => view.row.motor && !view.row.motor.deleted && view.row.motor.enabled,
-    );
-    const runtimeFresh = latest.motion_state_age_sec === null ||
-      latest.motion_state_age_sec === undefined ||
-      Number(latest.motion_state_age_sec) <= 2;
-    const runtimeResponding = Array.isArray(latest.motors);
-    const serviceReady = runtimeFresh && (
-      runtimeResponding || Boolean(latest.service_management?.motor_managed)
-    );
-    const connectionReady = configuredRows.length > 0 && configuredRows.every((view) => (
-      view.row.runtimeMotor?.state === 'detected' &&
-      (rowMotorType(view.row) === 'ac_servo'
-        ? Boolean(view.row.scanRow)
-        : rowMotorType(view.row) === 'dynamixel'
-          ? Boolean(view.row.scanDevice)
-          : false)
-    ));
-    const configurationReady = configuredRows.length > 0 && !changed;
-    const applicationReady = configurationReady && selectedMotorConfigAlreadyApplied() && !configApplyPending;
-    const mappingReady = configuredRows.length > 0 && configuredRows.every((view) => view.mapping.ready);
-    const driveReady = configuredRows.length > 0 && configuredRows.every((view) => view.drive.ready);
-    const faults = configuredRows.filter((view) => Boolean(view.row.runtimeMotor?.fault)).length;
-    const readyAxes = configuredRows.filter((view) => view.overall.ready).length;
-    const steps = [
-      { key: 'service', ready: serviceReady, text: serviceReady ? '서비스 응답 정상' : '모터 제어 재시작·응답 확인', next: '모터 제어 서비스를 시작하거나 재시작하세요.' },
-      { key: 'connection', ready: connectionReady, text: connectionReady ? '등록 축 연결됨' : '모터 전원·연결 및 검색 필요', next: '모터 전원을 확인한 뒤 장비 검색을 실행하세요.' },
-      { key: 'configuration', ready: configurationReady, text: configurationReady ? '축 설정 저장됨' : '축 설정 저장 필요', next: '검색 결과를 확인하고 모터축 설정을 저장하세요.' },
-      { key: 'application', ready: applicationReady, text: applicationReady ? '설정 적용됨' : '장비 적용 필요', next: '「설정 적용 · 모터 재시작」을 누르세요.' },
-      { key: 'mapping', ready: mappingReady, text: mappingReady ? '모션축 매칭됨' : '모션축 매칭 필요', next: '모션축 설정에서 각 모터축의 Motion ID를 연결하세요.' },
-      { key: 'drive', ready: driveReady, text: driveReady ? '서보·토크 준비됨' : '서보·토크 상태 확인', next: 'AC 서보를 켜고 Dynamixel 토크 상태를 확인하세요.' },
-      { key: 'verification', ready: false, text: '실물 조그·동작 확인 필요', next: '실제 장비에서 조그와 동작 모드를 확인하세요.' },
-    ];
-    const currentIndex = steps.findIndex((step) => !step.ready);
-
-    if (el.motorReadinessSteps) {
-      steps.forEach((step, index) => {
-        const item = el.motorReadinessSteps.querySelector(`[data-motor-readiness-step="${step.key}"]`);
-        if (!item) return;
-        const state = step.ready ? 'complete' : index === currentIndex
-          ? (faults > 0 ? 'error' : 'current')
-          : 'pending';
-        item.dataset.state = state;
-        const detail = item.querySelector('small');
-        if (detail) detail.textContent = step.text;
-      });
-    }
-    if (el.motorReadinessHeadline) {
-      el.motorReadinessHeadline.textContent = faults > 0
-        ? `오류 ${formatInt(faults)}축 확인 필요`
-        : readyAxes === configuredRows.length && configuredRows.length > 0
-          ? '구동 준비 · 실물 검증 미확인'
-          : '준비 작업 진행 중';
-    }
-    if (el.motorReadinessAxisCount) {
-      el.motorReadinessAxisCount.textContent = `${formatInt(readyAxes)}/${formatInt(configuredRows.length)}축`;
-    }
-    if (el.motorReadinessCurrentStep) {
-      el.motorReadinessCurrentStep.textContent = `${currentIndex + 1}단계 · ${steps[currentIndex]?.text || '확인 완료'}`;
-    }
-    if (el.motorReadinessFaultCount) el.motorReadinessFaultCount.textContent = `${formatInt(faults)}축`;
-    if (el.motorReadinessNextAction) {
-      el.motorReadinessNextAction.textContent = steps[currentIndex]?.next || '현재 조건에서 추가 작업이 없습니다.';
-    }
-  }
-
   function rowById(rowId) {
     return axisRowsData().find((row) => row.id === rowId) || null;
   }
@@ -2379,12 +2223,6 @@ export function createMotorConfigController({
       el.saveAxisConfigButton.title = changed
         ? '검색해서 나온 축과 고친 이름을 설정 파일에 씁니다.'
         : '바뀐 내용은 없지만 지금 값 그대로 다시 저장합니다.';
-    }
-    if (el.deleteMotorConfigButton) {
-      el.deleteMotorConfigButton.disabled = !motorConfigFilePath;
-      el.deleteMotorConfigButton.title = motorConfigFilePath
-        ? '현재 프로젝트의 활성 모터축 설정 파일을 프로젝트 휴지통으로 이동합니다. 실행 중인 장비 설정은 바뀌지 않습니다.'
-        : '현재 프로젝트에 삭제할 모터축 설정 파일이 없습니다.';
     }
     // 축이 없어도 누를 수 있다 · 왜 안 되는지는 서버가 말한다 · §6-203
     if (el.applyAxisConfigButton) {
@@ -2669,8 +2507,6 @@ export function createMotorConfigController({
         }).join('')
           : '<tr><td colspan="11" class="empty">설정 파일을 불러오거나 모터 스캔을 실행하세요</td></tr>';
       }
-      renderMotorReadiness(rows, rowViews, changed);
-      renderMotorTypeStatus(rowViews, changed);
     }
 
     renderAxisButtons(rows);
@@ -2693,13 +2529,6 @@ export function createMotorConfigController({
     motorConfigFileNameDraft = pathBasename(motorConfigFilePath);
     lastConfigTableRenderSignature = '';
     lastConfigRawTextRenderSignature = '';
-    if (el.motorConfigState) {
-      el.motorConfigState.textContent = payload.success === false
-        ? uiMessage(payload.message, '설정 파일 불러오기 실패')
-        : motorConfigFilePath
-          ? '설정 파일 불러옴'
-          : '저장된 설정 파일 없음';
-    }
     renderAxisSettings();
     renderLatestState();
   }
@@ -2707,8 +2536,6 @@ export function createMotorConfigController({
   async function fetchRegistry(expectedToken = projectLoadToken) {
     expectedToken = normalizeProjectLoadToken(expectedToken, projectLoadToken);
     setStatusMessage('설정 파일 불러오는 중');
-    if (el.reloadMotorConfigButton) el.reloadMotorConfigButton.disabled = true;
-    if (el.deleteMotorConfigButton) el.deleteMotorConfigButton.disabled = true;
     try {
       const payload = await fetchMotorConfig();
       if (expectedToken !== projectLoadToken) return;
@@ -2735,65 +2562,6 @@ export function createMotorConfigController({
       setAxisMessage('설정 파일 불러오기 실패');
       renderAxisSettings();
     } finally {
-      if (expectedToken === projectLoadToken && el.reloadMotorConfigButton) {
-        el.reloadMotorConfigButton.disabled = false;
-      }
-    }
-  }
-
-  async function deleteCurrentMotorConfig() {
-    if (!motorConfigFilePath) {
-      setStatusMessage('삭제할 모터축 설정 파일 없음');
-      setAxisMessage('현재 프로젝트에 삭제할 모터축 설정 파일이 없습니다.');
-      renderAxisSettings();
-      return false;
-    }
-    const fileName = pathBasename(motorConfigFilePath);
-    const confirmed = await showConfirm(
-      `${fileName} 파일을 현재 프로젝트의 휴지통으로 이동할까요?\n\n`
-      + '프로젝트의 모터축 설정 목록에서는 제거됩니다.\n'
-      + '현재 실행 중인 모터 제어 설정은 자동으로 변경되거나 재시작되지 않습니다.',
-      { title: '모터축 설정 파일 삭제', confirmLabel: '휴지통으로 이동', tone: 'danger' },
-    );
-    if (!confirmed) {
-      setAxisMessage('모터축 설정 파일 삭제 취소');
-      return false;
-    }
-
-    const expectedToken = projectLoadToken;
-    const button = el.deleteMotorConfigButton;
-    const originalText = button?.textContent || '';
-    if (button) {
-      button.disabled = true;
-      button.textContent = '휴지통 이동 중';
-    }
-    try {
-      const payload = await deleteMotorConfig();
-      if (expectedToken !== projectLoadToken) return false;
-      if (!payload.success) {
-        const message = uiMessage(payload.message, '모터축 설정 파일 삭제 실패');
-        setStatusMessage(message);
-        setAxisMessage(message);
-        return false;
-      }
-      applyMotorConfigPayload(payload);
-      const replacement = String(payload.replacement_active_file || '');
-      const message = replacement
-        ? `${fileName} 파일을 휴지통으로 이동하고 ${replacement} 파일을 불러왔습니다. 실행 설정은 변경되지 않았습니다.`
-        : `${fileName} 파일을 휴지통으로 이동했습니다. 현재 프로젝트에 모터축 설정 파일이 없습니다. 실행 설정은 변경되지 않았습니다.`;
-      setStatusMessage(message);
-      setAxisMessage(message);
-      await onProjectFilesChange?.();
-      return true;
-    } catch (error) {
-      if (error?.staleProjectResponse || expectedToken !== projectLoadToken) return false;
-      const message = `모터축 설정 파일 삭제 실패: ${error?.message || error}`;
-      setStatusMessage(message);
-      setAxisMessage(message);
-      return false;
-    } finally {
-      if (button) button.textContent = originalText;
-      if (expectedToken === projectLoadToken) renderAxisSettings();
     }
   }
 
@@ -3514,12 +3282,6 @@ export function createMotorConfigController({
 
     if (el.saveAxisConfigButton) el.saveAxisConfigButton.addEventListener('click', saveAxisConfig);
     if (el.applyAxisConfigButton) el.applyAxisConfigButton.addEventListener('click', applyConfigRestart);
-    if (el.reloadMotorConfigButton) {
-      el.reloadMotorConfigButton.addEventListener('click', () => fetchRegistry());
-    }
-    if (el.deleteMotorConfigButton) {
-      el.deleteMotorConfigButton.addEventListener('click', deleteCurrentMotorConfig);
-    }
     if (el.scanAllButton) el.scanAllButton.addEventListener('click', scanAllMotors);
     if (el.scanButton) el.scanButton.addEventListener('click', scanMotors);
     if (el.dynamixelScanButton) el.dynamixelScanButton.addEventListener('click', scanDynamixel);

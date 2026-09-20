@@ -21,6 +21,10 @@ from typing import Any, Dict, List, Optional
 from .motor_values import parse_int
 
 
+#: EEPROM 읽기 시도 횟수 · 실패하면 곧바로 다시 요청한다 · §6-230
+SII_READ_ATTEMPTS = 3
+
+
 class EthercatScanner:
     def __init__(self, monitor: Any) -> None:
         self.monitor = monitor
@@ -610,6 +614,29 @@ class EthercatScanner:
         return slaves
 
     def _read_sii_identity(
+        self, master_index: int, slave_position: int
+    ) -> Dict[str, Any]:
+        """EEPROM 을 읽는다 · **실패하면 다시 요청한다** · §6-230
+
+        `ethercat rescan` 직후에는 EEPROM 읽기가 가끔 32바이트도 안 되게
+        돌아온다 · 목록이 안정된 뒤에 읽는데도 그렇다 · 목록이 채워진 것과
+        EEPROM 을 읽을 수 있는 것이 같지 않다.
+
+        한 번 실패하면 그 슬레이브의 alias 를 모르게 되고, 프로젝트에 저장된
+        alias 와 「불일치」로 판정되어 **검색 전체가 실패**가 된다 · 서보도
+        로보티즈도 다 찾은 뒤에 그렇다.
+
+        읽기 한 번이 3ms 라 다시 요청해도 부담이 없다 · 기다리지 않고
+        곧바로 다시 요청한다.
+        """
+        result = None
+        for _ in range(SII_READ_ATTEMPTS):
+            result = self._read_sii_identity_once(master_index, slave_position)
+            if not result.get('sii_error'):
+                return result
+        return result
+
+    def _read_sii_identity_once(
         self, master_index: int, slave_position: int
     ) -> Dict[str, Any]:
         try:

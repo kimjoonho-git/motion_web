@@ -7,15 +7,11 @@ const api = readFileSync(new URL('../static/js/api.js', import.meta.url), 'utf8'
 const html = indexHtml;
 const main = readFileSync(new URL('../static/js/main.js', import.meta.url), 'utf8');
 
-test('program and motor-control restart actions keep distinct API routes', () => {
-  assert.match(
-    api,
-    /restartManagedProgram[\s\S]*?\/api\/system\/program\/restart/,
-  );
-  assert.match(
-    api,
-    /restartMotorControlSystem[\s\S]*?\/api\/system\/motor-control\/restart/,
-  );
+// 「모터 제어 재시작」은 지웠다 · §6-228
+// 「설정 적용 · 모터 재시작」이 같은 일을 하고 설정까지 새로 반영한다.
+test('program restart is the only system restart route', () => {
+  assert.match(api, /restartManagedProgram[\s\S]*?\/api\/system\/program\/restart/);
+  assert.doesNotMatch(api, /motor-control\/restart/);
 });
 
 test('system information creates only the packaged desktop shortcut', () => {
@@ -61,10 +57,7 @@ test('program restart stays in the header and motor restart stays in motor manag
   assert.doesNotMatch(html, /id="headerMotorControlRestartButton"/);
   assert.match(html, /id="headerProgramRestartButton"/);
   assert.match(html, /id="programRestartButton"[^>]*>프로그램 재시작</);
-  assert.match(
-    html,
-    /class="motor-readiness-overview"[\s\S]*?id="motorControlRestartButton"[^>]*>모터 제어 재시작</,
-  );
+  assert.doesNotMatch(html, /motorControlRestartButton/);
   assert.match(
     main,
     /headerProgramRestartButton\.addEventListener\('click'[\s\S]*?programRestartButton\.click\(\)/,
@@ -72,24 +65,15 @@ test('program restart stays in the header and motor restart stays in motor manag
   assert.doesNotMatch(main, /headerMotorControlRestartButton/);
 });
 
-test('restart controls require confirmation and invoke only their matching operation', () => {
+test('program restart requires confirmation', () => {
   const programStart = main.indexOf("el.programRestartButton.addEventListener('click'");
-  const motorStart = main.indexOf("el.motorControlRestartButton.addEventListener('click'");
   const headerStart = main.indexOf("el.headerProgramRestartButton.addEventListener('click'");
-  assert.ok(programStart > 0 && motorStart > programStart && headerStart > motorStart);
-  const programHandler = main.slice(programStart, motorStart);
-  const motorHandler = main.slice(motorStart, headerStart);
+  assert.ok(programStart > 0 && headerStart > programStart);
+  const programHandler = main.slice(programStart, headerStart);
 
   assert.match(programHandler, /await appDialogs\.confirm/);
   assert.match(programHandler, /restartManagedProgram\(\)/);
-  assert.doesNotMatch(programHandler, /restartMotorControlSystem\(\)/);
-  assert.match(motorHandler, /await appDialogs\.confirm/);
-  assert.match(motorHandler, /restartMotorControlSystem\(\)/);
-  assert.match(
-    motorHandler,
-    /await appDialogs\.alert[\s\S]*?title: '모터 제어 재시작 실패'[\s\S]*?tone: 'danger'/,
-  );
-  assert.doesNotMatch(motorHandler, /restartManagedProgram\(\)/);
+  assert.doesNotMatch(main, /restartMotorControlSystem/);
 });
 
 test('program restart readiness does not require motor runtime state', () => {
@@ -108,41 +92,6 @@ test('program restart readiness does not require motor runtime state', () => {
   );
 });
 
-test('motor-control restart waits for its backend operation and has a timeout', () => {
-  assert.match(
-    main,
-    /restartCheckMode = 'motor_control'[\s\S]*?restartOperationId = ''[\s\S]*?restartMotorControlSystem\(\)/,
-  );
-  assert.match(
-    main,
-    /restartMode === 'motor_control'[\s\S]*?trackedMotorRestartState/,
-  );
-  assert.match(main, /RESTART_TIMEOUT_MS = 45000/);
-  assert.match(main, /MOTOR_RESTART_STATUS_GRACE_MS = 10000/);
-  assert.match(main, /startRestartProgressPolling\(\)/);
-  assert.match(
-    main,
-    /restartMode === 'motor_control'[\s\S]*?title: '모터 제어 재시작 실패'/,
-  );
-  assert.match(
-    main,
-    /RESTART_TIMEOUT_MS \+ MOTOR_RESTART_STATUS_GRACE_MS[\s\S]*?서버의 최종 모터 연결 진단 결과를 받지 못했습니다/,
-  );
-});
-
-test('motor-control restart requires the selected project motor config to be applied', () => {
-  assert.match(
-    main,
-    /motorConfigApplied = Boolean\(payload\?\.project_scope\?\.motor_config_applied\)/,
-  );
-  assert.match(
-    main,
-    /motorControlRestartButton\.disabled = \([\s\S]*?motorOperationRunning[\s\S]*?configApplyInProgress/,
-  );
-  assert.match(main, /현재 프로젝트의 모터축 설정을 먼저 적용하세요/);
-  assert.match(main, /모터 설정·검색·재시작 작업이 진행 중입니다/);
-});
-
 test('restart status polling has an HTTP deadline and can stop completion monitoring', () => {
   assert.match(api, /fetchStatusSnapshot = \(timeoutMs = 5000\)/);
   // 표로 옮기면서 축약 옵션 `{ timeoutMs }` 를 놓쳐 시간 제한이 사라진 적이 있다 ·
@@ -159,22 +108,9 @@ test('restart status polling has an HTTP deadline and can stop completion monito
 
 test('motor apply and restart use the backend motor operation state', () => {
   assert.match(main, /const motorOperation = payload\?\.motor_operation \|\| \{\}/);
-  assert.match(main, /trackedMotorRestartState\([\s\S]*?appState\.restartOperationId/);
-  assert.match(
-    main,
-    /payload\?\.motor_operation\?\.operation_id[\s\S]*?appState\.restartOperationId = operationId/,
-  );
   assert.match(main, /motorOperation\.type === 'motor_apply'/);
+  assert.doesNotMatch(main, /'motor_control'/);
   assert.match(main, /TERMINAL_FAILURES\.has\(operationStatus\)/);
   assert.match(main, /operationStatus === 'running'/);
 });
 
-test('motor-control UI projects backend completion without duplicating motor checks', () => {
-  const motorBranchStart = main.indexOf("if (restartMode === 'motor_control')");
-  const motorBranchEnd = main.indexOf("} else if (", motorBranchStart);
-  const motorBranch = main.slice(motorBranchStart, motorBranchEnd);
-
-  assert.match(motorBranch, /tracked\.state === 'success'/);
-  assert.match(motorBranch, /ready: true/);
-  assert.doesNotMatch(motorBranch, /state\.motors|faultMotors|disconnectedMotors/);
-});
