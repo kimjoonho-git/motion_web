@@ -15,7 +15,9 @@ from typing import Any, Dict, List
 from motion_common.values import optional_int
 
 from motion_web_bridge.motor_identity import (
+    DYNAMIXEL_UNKNOWN_MODEL,
     UNKNOWN_DRIVER_MODEL,
+    canonical_dynamixel_model,
     driver_model_from,
     model_is_unknown,
 )
@@ -53,20 +55,21 @@ def normalize_driver_configs(
     return normalized
 
 
+#: 모델 **이름**으로 찾는 운전 값 · 이름 짓기는 `motor_identity` 가 한다 · §6-214
+DYNAMIXEL_DRIVE_VALUES = {
+    'XM540-W150': (66, 396.0),
+    'XM540-W270-R': (37, 222.0),
+}
+
+#: 이름을 모르는 모델의 운전 값 · 느린 쪽으로 둔다
+DYNAMIXEL_DEFAULT_DRIVE_VALUES = (30, 100.0)
+
+
 def default_dynamixel_driver(workspace_root: Path, driver_model: str = '') -> Dict[str, Any]:
-    model = str(driver_model or '').strip().upper().replace('_', '-')
-    if 'XM540-W150' in model:
-        canonical_model = 'XM540-W150'
-        rated_speed_rpm = 66
-        velocity = 396.0
-    elif 'XM540-W270' in model:
-        canonical_model = 'XM540-W270-R'
-        rated_speed_rpm = 37
-        velocity = 222.0
-    else:
-        canonical_model = str(driver_model or 'Dynamixel').strip() or 'Dynamixel'
-        rated_speed_rpm = 30
-        velocity = 100.0
+    canonical_model = canonical_dynamixel_model(driver_model) or DYNAMIXEL_UNKNOWN_MODEL
+    rated_speed_rpm, velocity = DYNAMIXEL_DRIVE_VALUES.get(
+        canonical_model, DYNAMIXEL_DEFAULT_DRIVE_VALUES
+    )
 
     return {
         'driver_model': canonical_model,

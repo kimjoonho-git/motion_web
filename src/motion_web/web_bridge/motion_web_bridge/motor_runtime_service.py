@@ -32,6 +32,10 @@ from motion_web_bridge.motor_restart_coordinator import MotorRestartCoordinator
 from motion_web_bridge.motor_restart_diagnostics import diagnose_motor_restart_failure
 
 
+#: 이 속도를 넘으면 「움직이는 중」으로 본다 (deg/s) · §6-225
+MOVING_DEG_PER_SEC = 10.0
+
+
 class MotorRuntimeService:
     def __init__(
         self,
@@ -134,18 +138,22 @@ class MotorRuntimeService:
             velocity = _monitoring_finite_float(
                 motor.get('velocity_deg_s', motor.get('velocity'))
             )
-            target_reached = motor.get('target_reached') is True
-            # A stopped servo can report roughly 1~2 deg/s of quantization
-            # noise.  Ignore that noise only when the drive also reports that
-            # its target has been reached.  Missing/false target state keeps
-            # the stricter threshold, while clear motion is always blocked.
-            moving = (
-                velocity is not None
-                and (
-                    abs(velocity) > 5.0
-                    or (not target_reached and abs(velocity) > 1.0)
-                )
-            )
+            # **서 있는 서보도 값이 튄다** · §6-225
+            #
+            # 엔코더 한 칸이 초당 0.6866도라, 정지 상태에서도 0~3칸이 그냥
+            # 오간다 (실측 최대 2.06 deg/s) · 전에는 문턱이 1.0 이었고,
+            # `target_reached` 가 흔들리는 순간 그 노이즈에 걸려
+            # 「축 0이 움직이는 중입니다」로 검색이 거부됐다.
+            #
+            #     0.0   ±0.687   ±1.373   ±2.060      ← 서 있는 서보
+            #
+            # 검색 직후 몇 초 동안 `target_reached` 가 True/False 로
+            # 흔들리므로, 검색하고 바로 또 검색하면 반드시 걸렸다.
+            #
+            # 문턱을 10 deg/s 하나로 통일한다 (사용자 지정) · 노이즈의
+            # 다섯 배이고, 한 바퀴 도는 데 36초인 속도다 · `target_reached`
+            # 는 보지 않는다 · 규칙이 둘이면 흔들리는 쪽에 걸린다.
+            moving = velocity is not None and abs(velocity) > MOVING_DEG_PER_SEC
             if moving:
                 moving_axes.append(str(motor.get('controller_index', '?')))
         if require_fresh_motor_state and not observed_axes:

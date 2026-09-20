@@ -139,25 +139,11 @@
               <p id="axisWorkflowDetail">현재 프로젝트와 실제 모터 상태를 확인하고 있습니다.</p>
               <small id="axisWorkflowNext">다음 작업을 확인하고 있습니다.</small>
             </div>
-            <div id="axisActionMessage" class="registry-message">전체 모터 검색을 실행하면 신규 축이 자동 선택됩니다</div>
-            <div class="axis-edit-toolbar">
-              <div class="registry-actions axis-edit-main-actions">
-                <button id="addAxisButton" class="primary" type="button" disabled>선택 축 추가</button>
-                <button id="updateAxisIdentityButton" type="button" disabled>선택 축 검색값 반영</button>
-                <button id="toggleAxisButton" type="button" disabled>선택 축 사용상태 변경</button>
-              </div>
-              <div class="registry-actions axis-edit-list-actions">
-                <button id="sortAxisButton" type="button" disabled>축 번호 정렬</button>
-              </div>
-              <div class="registry-actions axis-edit-danger-actions">
-                <button id="deleteAxisButton" class="danger" type="button" disabled>선택 축 삭제</button>
-              </div>
-            </div>
+            <div id="axisActionMessage" class="registry-message">모터 검색을 실행하면 찾은 축이 그대로 목록이 됩니다 · 이름만 고칠 수 있습니다</div>
             <div class="matching-table-wrap">
               <table class="matching-table">
                 <thead>
                   <tr>
-                    <th>선택</th>
                     <th>축·이름</th>
                     <th>실제 장치 식별</th>
                     <th>모델·운전 프로필</th>
@@ -172,7 +158,7 @@
                 </thead>
                 <tbody id="axisRows">
                   <tr>
-                    <td colspan="11" class="empty">설정 파일을 불러오거나 모터 스캔을 실행하세요</td>
+                    <td colspan="10" class="empty">설정 파일을 불러오거나 모터 스캔을 실행하세요</td>
                   </tr>
                 </tbody>
               </table>

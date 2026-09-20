@@ -80,66 +80,17 @@ export function duplicateEthercatAddress(motors) {
   return null;
 }
 
-function scanAndMotorShareMaster(row, motor) {
-  const scanned = Number(row?.master_index ?? 0);
-  return Number.isInteger(scanned) &&
-    scanned >= 0 &&
-    scanned === configuredEthercatMasterIndex(motor);
-}
-
-export function scanRowMatchesRegistryMotor(row, motor) {
-  if (!scanAndMotorShareMaster(row, motor)) return false;
-  const identity = motor.identity || {};
-  const configuredAlias = motor.config?.alias ?? identity.ethercat_alias;
-  const configuredSerial = motor.config?.serial_number ?? identity.serial_number;
-  if (
-    configuredSerial !== null && configuredSerial !== undefined &&
-    row.serial_number !== null && row.serial_number !== undefined
-  ) {
-    return Number(configuredSerial) === Number(row.serial_number);
-  }
-  if (configuredSerial !== null && configuredSerial !== undefined) return false;
-  if (isAssignedAlias(configuredAlias) &&
-      row.ethercat_alias !== null && row.ethercat_alias !== undefined) {
-    return Number(row.ethercat_alias) === Number(configuredAlias);
-  }
-  if (isAssignedAlias(identity.rotary_alias) && isAssignedAlias(row.rotary_alias)) {
-    return Number(row.rotary_alias) === Number(identity.rotary_alias);
-  }
-  // Slave Position and Control Index describe topology/configuration, not a
-  // stable physical device.  When all aliases are zero, cable reconnection can
-  // change chain positions. Require one explicit user association so the
-  // directly read Serial Number is stored for subsequent automatic matching.
-  return false;
-}
-
-export function scanRowSharesConfiguredPosition(row, motor) {
-  if (!row || !motor || motor.transport !== 'ethercat') return false;
-  if (!scanAndMotorShareMaster(row, motor)) return false;
-  const configuredPosition = motor.identity?.slave_position ?? motor.config?.position;
-  return configuredPosition !== null &&
-    configuredPosition !== undefined &&
-    row.slave_position !== null &&
-    row.slave_position !== undefined &&
-    Number(configuredPosition) === Number(row.slave_position);
-}
-
-export function resolveRegistryMotorForScanRow(row, motors) {
-  const configured = Array.isArray(motors)
-    ? motors.filter((motor) => motor && motor.transport === 'ethercat')
-    : [];
-  const identityMatch = configured.find(
-    (motor) => scanRowMatchesRegistryMotor(row, motor),
-  ) || null;
-  if (identityMatch) {
-    return { motor: identityMatch, confirmationRequired: false };
-  }
-  const positionMatches = configured.filter(
-    (motor) => scanRowSharesConfiguredPosition(row, motor),
-  );
-  if (positionMatches.length !== 1) return null;
-  return { motor: positionMatches[0], confirmationRequired: true };
-}
+/** 짝 맞추기는 **서버가 한다** · §6-216
+ *
+ * 전에는 여기에 있었다 · `scanRowMatchesRegistryMotor` ·
+ * `scanRowSharesConfiguredPosition` · `resolveRegistryMotorForScanRow` ·
+ * 같은 규칙이 서버에도 있어야 했고, 두 쪽이 갈리면 화면과 파일이 다른
+ * 모터를 가리켰다.
+ *
+ * 이제 검색 응답(`scan.axis_rows`)이 짝을 지어 온다 · 규칙은
+ * `motion_web_bridge/scan_axis_rows.py` 한 곳에 있고, 시험은
+ * `test_the_server_pairs_the_scan.py` 가 지킨다.
+ */
 
 export function scanRowMatchesRuntimeMotor(row, motor) {
   if (!row || !motor) return false;

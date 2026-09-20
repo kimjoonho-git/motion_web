@@ -129,17 +129,19 @@ test('저장 버튼은 끄지 않는다', () => {
 
 test('적용(모터 재시작)은 언제든 누를 수 있다', () => {
   // 적용은 곧 모터 재시작이다 · 장비가 이상할 때 가장 먼저 하고 싶은 일이다
-  assert.match(MOTOR_CONFIG, /const canAttemptApply = true;/);
+  assert.match(MOTOR_CONFIG, /el\.applyAxisConfigButton\.disabled = false;/);
   assert.doesNotMatch(
     codeOnly(MOTOR_CONFIG),
-    /canAttemptApply = .*alreadyApplied/,
-    '이미 적용됐다고 막고 있습니다',
+    /applyAxisConfigButton\.disabled = !/,
+    '적용을 조건부로 막고 있습니다',
   );
 });
 
-test('눌리는 버튼에 상태를 쓰지 않는다', () => {
-  // 「장비에 적용됨」은 상태다 · 누를 수 있는 버튼에는 할 일을 쓴다
-  assert.match(MOTOR_CONFIG, /'설정 다시 적용 · 모터 재시작'/);
+test('버튼 이름은 바뀌지 않는다', () => {
+  // 「장비에 적용됨」은 상태다 · 누를 수 있는 버튼에는 할 일을 쓴다 · §6-203
+  // 그리고 이름이 상황에 따라 바뀌면 같은 버튼을 부를 말이 둘이 된다 · §6-226
+  assert.match(codeOnly(MOTOR_CONFIG), /textContent = '설정 적용 · 모터 재시작'/);
+  assert.doesNotMatch(codeOnly(MOTOR_CONFIG), /다시 적용/);
 });
 
 test('보기만 하는 버튼은 막지 않는다', () => {
@@ -192,15 +194,17 @@ test('저장이 끝났다고 버튼을 도로 잠그지 않는다', () => {
   assert.match(body, /saveButton\.disabled = false/);
 });
 
-test('검색하면 나온 것을 전부 고른다', () => {
-  // 전에는 「손볼 게 있는 축」만 골라, 다 맞는 상태로 검색하면 아무것도
-  // 안 골라지고 위쪽 버튼이 전부 회색이 됐다
+test('검색하면 나온 것이 그대로 목록이 된다', () => {
+  // 전에는 검색 결과가 **제안**이라 「선택 축 추가」로 사람이 옮겨야 했다 ·
+  // 고르는 단계 자체를 없앴다 · §6-219
   const config = readFileSync(new URL('../static/js/motor_config.js', import.meta.url), 'utf8');
-  const start = config.indexOf('function autoSelectNewScanAxes');
-  const body = config.slice(start, config.indexOf('\n  }', start));
+  const code = codeOnly(config);
 
-  // 검색 결과가 담기는 칸이 둘이다 · AC 서보 scanRow · 다이나믹셀 scanDevice
-  assert.match(body, /row\.scanRow \|\| row\.scanDevice \|\| row\.proposedMotor/);
+  assert.match(code, /function adoptScanIntoDraft\(\)/);
+  assert.doesNotMatch(code, /selectedAxisIds/, '고르는 단계가 남아 있습니다');
+  assert.doesNotMatch(code, /proposedMotor/, '제안 목록이 남아 있습니다');
+  // 세 가지 검색 모두 목록에 넣는다
+  assert.equal((code.match(/adoptScanIntoDraft\(\);/g) || []).length, 3);
 });
 
 test('전체 검색도 서버 판정을 따른다', () => {
@@ -229,15 +233,21 @@ test('다이나믹셀 축 id 가 서버 규칙과 같다', async () => {
   );
 });
 
-test('서버의 id 규칙이 바뀌지 않았다', () => {
-  // 화면이 이 규칙을 그대로 옮겨 적었다 · 서버가 바뀌면 여기서 걸린다
+test('서버는 축 id 를 한 곳에서만 만든다', () => {
+  // 전에는 서버 안에서도 한 군데에 박혀 있었고 화면이 그것을 옮겨 적었다 ·
+  // 이제 `motor_id_for` 하나가 만든다 · 화면은 검색 응답이 실어 온 id 를 쓴다.
   const rules = readFileSync(
     new URL('../../web_bridge/motion_web_bridge/motor_config_rules.py', import.meta.url),
     'utf8',
   );
 
-  assert.match(rules, /\{motor_type\}_\{transport\}_port_/);
-  assert.match(rules, /quote\(str\(serial_port or ""\), safe=""\)\}_id_\{bus_id\}/);
+  assert.match(rules, /def motor_id_for\(/);
+  assert.match(rules, /\{motor_type\}_\{transport\}_port_\{port\}_id_/);
+  assert.equal(
+    (rules.match(/_id_\{/g) || []).length,
+    1,
+    'id 규칙이 서버 안에서 두 번 적혔습니다',
+  );
 });
 
 test('AC 서보 축 id 도 서버 규칙과 같다', async () => {

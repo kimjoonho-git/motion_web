@@ -9,13 +9,11 @@ const controller = readFileSync(new URL('../static/js/motor_config.js', import.m
 const main = readFileSync(new URL('../static/js/main.js', import.meta.url), 'utf8');
 const api = readFileSync(new URL('../static/js/api.js', import.meta.url), 'utf8');
 
+// 축 편집 버튼을 전부 지웠다 · §6-219
+// 검색이 찾은 것이 그대로 목록이고, 사람이 고치는 것은 **이름 하나**다 ·
+// 「선택 축 추가 · 검색값 반영 · 사용상태 변경 · 축 번호 정렬 · 선택 축 삭제」
+// 는 두 목록 사이를 손으로 옮기던 단계였다.
 const actions = {
-  addAxisButton: 'addSelectedAxis',
-  updateAxisIdentityButton: 'updateSelectedAxisIdentity',
-  // 「모델·운전 프로필 설정」과 「고급 장비 설정(EEPROM Alias 변경)」은 지웠다 · §6-205
-  deleteAxisButton: 'deleteSelectedAxis',
-  toggleAxisButton: 'toggleSelectedAxis',
-  sortAxisButton: 'sortAxisNumbers',
   saveAxisConfigButton: 'saveAxisConfig',
   applyAxisConfigButton: 'applyConfigRestart',
   deleteMotorConfigButton: 'deleteCurrentMotorConfig',
@@ -37,51 +35,25 @@ test('every motor configuration action button exists and has a controller handle
   assert.match(controller, /reloadMotorConfigButton\.addEventListener\('click', \(\) => fetchRegistry\(\)\)/);
 });
 
-test('position-only legacy axes are merged for explicit batch SII confirmation', () => {
-  assert.match(
-    controller,
-    /resolveRegistryMotorForScanRow\(scanRow, axisMotors\(\)\)/,
-  );
-  assert.match(
-    controller,
-    /row\.identityConfirmationRequired = Boolean\(\s*resolved\.confirmationRequired/,
-  );
-  // **고른 것 중 해당하는 것만 다룬다** · §6-204
-  //
-  // 전에는 「고른 것이 전부 AC 서보여야」 반영이 켜졌다 · 검색이 나온 것을
-  // 전부 고르게 되면서 다이나믹셀이 섞여 늘 회색이 됐다 · 핸들러는 이미
-  // 해당하는 행만 골라내므로 막을 이유가 없었다.
-  assert.match(
-    controller,
-    /const canUpdateIdentity = combinedIdentityRows\.length > 0/,
-  );
-  assert.match(
-    controller,
-    /model_source: catalogModel\s*\?\s*'verified_catalog'\s*:\s*'physical_sii_user_confirmed'/,
-  );
-  assert.match(
-    html,
-    /id="updateAxisIdentityButton"[^>]*>선택 축 검색값 반영</,
-  );
+test('the scan result is the list · nothing to add by hand', () => {
+  // 짝은 서버가 맞추고(§6-216), 찾은 축은 바로 목록에 들어간다(§6-219)
+  assert.doesNotMatch(controller, /resolveRegistryMotorForScanRow/);
+  assert.doesNotMatch(controller, /addSelectedAxis/);
+  assert.match(controller, /function adoptScanIntoDraft\(\)/);
 });
 
-test('apply and restart completes pending scan confirmation and save first', () => {
-  const applyFunction = controller.match(
-    /async function applyConfigRestart\(\) \{([\s\S]*?)\n  \}\n\n  function addSelectedAxis/,
-  );
-  assert.ok(applyFunction, 'applyConfigRestart function missing');
-  assert.match(applyFunction[1], /const pendingScanRows = axisRowsData\(\)\.filter/);
-  assert.match(applyFunction[1], /await updateSelectedAxisIdentity\(\)/);
-  assert.match(applyFunction[1], /await saveAxisConfig\(\)/);
-  assert.match(applyFunction[1], /await applyMotorConfig\(\)/);
-  assert.ok(
-    applyFunction[1].indexOf('await updateSelectedAxisIdentity()')
-      < applyFunction[1].indexOf('await saveAxisConfig()'),
-  );
-  assert.ok(
-    applyFunction[1].indexOf('await saveAxisConfig()')
-      < applyFunction[1].indexOf('await applyMotorConfig()'),
-  );
+// 「설정 적용 · 모터 재시작」은 파일을 바꾸지 않는다 · §6-221
+// 파일은 「설정 저장」을 눌렀을 때만 바뀐다.
+test('apply and restart never writes the project file', () => {
+  const start = controller.indexOf('async function applyConfigRestart()');
+  assert.ok(start >= 0, 'applyConfigRestart function missing');
+  const body = controller.slice(start, controller.indexOf('\n  }\n', start));
+
+  assert.doesNotMatch(body, /saveAxisConfig\(\)/, '적용이 저장까지 합니다');
+  assert.doesNotMatch(body, /updateSelectedAxisIdentity/);
+  assert.match(body, /await applyMotorConfig\(\)/);
+  // 막지 않고 말로 알린다
+  assert.match(body, /저장된 파일\*\*이 적용됩니다/);
 });
 
 test('program and motor status refresh actions are clearly separated', () => {

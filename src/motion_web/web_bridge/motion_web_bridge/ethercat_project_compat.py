@@ -121,11 +121,23 @@ def annotate_ethercat_project_compatibility(
         })
 
     if not expected_by_master:
+        # **아직 등록한 축이 없으면 필요한 Master 도 없다** · §6-218
+        #
+        # 전에는 여기서 `compatible: False` 를 줬다 · 그러면 판정이
+        # 「프로젝트가 필요로 하는 것을 못 찾았다」로 떨어지고, 랜선이 빠진
+        # 미사용 Master 하나 때문에 **첫 검색이 늘 실패로 떴다.**
+        #
+        #     설정 파일을 지우고 다시 검색
+        #     → 「전체 모터 검색에 실패했습니다」
+        #     → 버스 위에는 네 대가 멀쩡히 보이는데도
+        #
+        # 필요한 것이 없으면 못 찾은 것도 없다 · §6-198 과 같은 이야기다.
         comparison['ethercat_project'] = {
-            'available': False,
-            'compatible': False,
-            'message': '현재 프로젝트에 EtherCAT 모터축 설정이 없습니다',
+            'available': True,
+            'compatible': True,
+            'message': '현재 프로젝트에 등록된 EtherCAT 축이 없습니다',
             'required_master_indices': [],
+            'masters': [],
         }
         return
 

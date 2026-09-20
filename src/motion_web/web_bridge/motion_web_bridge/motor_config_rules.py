@@ -214,6 +214,51 @@ def prune_unused_drivers(
     ]
 
 
+def motor_id_for(
+    *,
+    motor_type: str,
+    transport: str,
+    axis: Any,
+    ethercat_master_index: Any = 0,
+    alias: Any = None,
+    rotary_alias: Any = None,
+    slave_position: Any = None,
+    serial_port: Any = None,
+    bus_id: Any = None,
+) -> str:
+    """축 하나의 **이름** · §6-215
+
+    이름이 갈리면 화면이 기억하던 선택이 통째로 풀린다 · 실제로 축을 추가하고
+    저장하면 다이나믹셀 두 줄의 체크가 사라졌다 (§6-209) · 저장하면 서버가
+    설정 파일을 읽어 이름을 다시 만들기 때문이다.
+
+    전에는 서버와 화면이 각자 만들었고 규칙이 미묘하게 달랐다 · 화면은
+    alias 가 없을 때 `rotary_alias` 를 봤는데 서버는 안 봤다 · 이제 이름은
+    여기서만 만든다.
+
+        alias 가 있으면        ..._master_0_alias_103
+        rotary 가 있으면       ..._master_0_rotary_52
+        둘 다 없으면           ..._master_0_slave_1
+        직렬이면               ..._port_%2Fdev%2F..._id_3
+    """
+    def assigned(value: Any) -> bool:
+        number = optional_int(value, None)
+        return number is not None and number > 0
+
+    if transport == 'ethercat':
+        master = optional_int(ethercat_master_index, 0) or 0
+        head = f'{motor_type}_{transport}_master_{master}'
+        if assigned(alias):
+            return f'{head}_alias_{optional_int(alias, 0)}'
+        if assigned(rotary_alias):
+            return f'{head}_rotary_{optional_int(rotary_alias, 0)}'
+        return f'{head}_slave_{optional_int(slave_position, 0)}'
+    if bus_id is not None:
+        port = quote(str(serial_port or ''), safe='')
+        return f'{motor_type}_{transport}_port_{port}_id_{optional_int(bus_id, 0)}'
+    return f'{motor_type}_{transport}_axis_{axis}'
+
+
 def axis_profile(
     web_profile: Dict[str, Any],
     web_identity: Dict[str, Any],
@@ -303,20 +348,16 @@ def registry_from_motor_config(config: Dict[str, Any]) -> Dict[str, Any]:
                 slave.get('ring_position', slave.get('position')), index
             )
             name = str(slave.get('name') or f'{axis}번 축')
-            motor_id = (
-                f'{motor_type}_{transport}_master_{ethercat_master_index}_alias_{alias}'
-                if transport == 'ethercat' and alias is not None and alias > 0
-                else (
-                    f'{motor_type}_{transport}_master_'
-                    f'{ethercat_master_index}_slave_{slave_position}'
-                )
-                if transport == 'ethercat'
-                else (
-                    f'{motor_type}_{transport}_port_'
-                    f'{quote(str(serial_port or ""), safe="")}_id_{bus_id}'
-                )
-                if bus_id is not None
-                else f'{motor_type}_{transport}_axis_{axis}'
+            motor_id = motor_id_for(
+                motor_type=motor_type,
+                transport=transport,
+                axis=axis,
+                ethercat_master_index=ethercat_master_index,
+                alias=alias,
+                rotary_alias=optional_int(web_identity.get('rotary_alias'), None),
+                slave_position=slave_position,
+                serial_port=serial_port,
+                bus_id=bus_id,
             )
             motors.append(
                 normalize_motor_entry(

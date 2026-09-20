@@ -33,6 +33,7 @@ from motion_web_bridge import (
     ethercat_project_compat,
     motion_file_analysis,
     motor_config_rules,
+    scan_axis_rows,
 )
 
 
@@ -523,6 +524,21 @@ class ScanOrchestrator:
             ethercat_project_compat.annotate_ethercat_project_compatibility(
                 scan, self.load_motor_config
             )
+            # **짝은 서버가 맞춘다** · §6-216
+            #
+            # 전에는 날것(`ethercat_scan.slaves` · `dynamixel_scan.devices`)만
+            # 보내고 화면이 스스로 「이 슬레이브가 몇 번 축인가」를 정했다 ·
+            # 같은 판단이 서버에도 있었고 규칙이 미묘하게 달라서 모델 이름과
+            # 축 이름이 갈렸다.
+            #
+            # 날것은 그대로 둔다 · 화면이 옛 칸을 보고 있어도 그대로 돈다.
+            #
+            # 프로젝트를 안 고르고도 검색은 된다 (§6-115) · 그때는 짝 맞출
+            # 축이 없으므로 찾은 장치가 전부 「새 장치」가 된다.
+            registry = {}
+            if scan_project_id:
+                registry = (self.load_motor_config() or {}).get('registry') or {}
+            scan['axis_rows'] = scan_axis_rows.axis_rows_from_scan(registry, scan)
         message = motor_config_rules.scan_result_message(
             bool(response.success),
             scan,

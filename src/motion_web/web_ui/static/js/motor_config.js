@@ -32,11 +32,8 @@ import {
   detectedScanRow,
   runtimeIsAcServo,
   runtimeMotorConfirmsRegistryMotor,
-  resolveRegistryMotorForScanRow,
   scanKey,
-  scanRowMatchesRegistryMotor,
   scanRowMatchesRuntimeMotor,
-  scanRowSharesConfiguredPosition,
   scanRowToMotor as acServoScanRowToMotor,
   siiReportedAcServoModel,
   verifiedAcServoModel,
@@ -116,8 +113,57 @@ export function motorConfigApplyIdentityBlock(identityError, scanAvailable, alia
 // 「새로 검색했는데 왜 지금 것이 안 나오냐」가 여기였다 · 모델을 못 읽던
 // 시절에 저장된 프로젝트는 「검색값 반영」을 누르기 전까지 영영 옛 값을
 // 보여 줬다 · 다이나믹셀도 같다 (검색은 XM540-W150 을 읽어 왔다).
+// **검색 결과가 곧 목록이다** · §6-219
+//
+// 전에는 축 목록이 둘이었다 · 편집 중인 `axisConfig` 와, 검색이 찾았지만
+// 아직 목록에 없는 `proposedMotor` · 화면은 둘을 합쳐 그렸고 저장은 앞의
+// 것만 썼다 · 그래서 네 줄이 보이는데 「0축 모터 설정은 저장할 수 없습니다」
+// 가 떴고, 「선택 축 추가」로 사람이 손수 옮겨야 했다.
+//
+// 이제 검색이 찾은 축은 `adoptScanIntoDraft` 가 곧바로 목록에 넣는다 ·
+// 여기서는 목록을 그리고 검색 날것을 붙이기만 한다.
+export function buildAxisRows({
+  motors = [],
+  served = null,
+  findAcServoScanRow = () => null,
+  findDynamixelDevice = () => null,
+  runtimeForMotor = () => null,
+  sortValue = axisRowSortValue,
+} = {}) {
+  const servedById = new Map(
+    (served?.axes || []).map((item) => [String(item.id), item]),
+  );
+
+  return motors.map((motor) => {
+    const servedRow = servedById.get(String(motor.id)) || null;
+    const scanned = servedRow?.scanned || null;
+    const acServo = servedRow?.transport === 'ethercat';
+    return {
+      id: motor.id,
+      motor,
+      servedRow,
+      scanRow: scanned && acServo ? findAcServoScanRow(scanned) : null,
+      scanDevice: scanned && !acServo ? findDynamixelDevice(scanned) : null,
+      runtimeMotor: runtimeForMotor(motor),
+    };
+  }).sort((a, b) => {
+    const axisDiff = sortValue(a) - sortValue(b);
+    if (axisDiff !== 0) return axisDiff;
+    return String(a.id).localeCompare(String(b.id));
+  });
+}
+
+function axisRowSortValue(row) {
+  const motor = row?.motor;
+  const axis = Number(motor?.config?.controller_index ?? motor?.axis ?? 9999);
+  return Number.isFinite(axis) ? axis : 9999;
+}
+
 export function axisRowScannedModel(row) {
   if (!row) return '';
+  // 서버가 정해 보낸 이름이 있으면 그것이 답이다 · §6-216
+  if (row.servedRow?.scanned?.model) return String(row.servedRow.scanned.model).trim();
+  if (row.servedRow?.model) return String(row.servedRow.model).trim();
   if (row.scanRow) return siiReportedAcServoModel(row.scanRow);
   if (row.scanDevice) return modelTextFromDevice(row.scanDevice);
   return '';
@@ -127,7 +173,7 @@ export function axisRowScannedModel(row) {
 export function axisRowDriverModel(row) {
   const scanned = axisRowScannedModel(row);
   if (scanned) return scanned;
-  const motor = row?.motor || row?.proposedMotor;
+  const motor = row?.motor;
   const stored = String(motor?.profile?.driver_model || '').trim();
   return modelIsUnknown(stored) ? '' : stored;
 }
@@ -188,7 +234,6 @@ export function createMotorConfigController({
   let latestScan = null;
   let savedRegistry = normalizeAxisRegistry({});
   let axisConfig = normalizeAxisRegistry({});
-  let selectedAxisIds = new Set();
   let lastAxisRenderSignature = '';
   let configApplyPending = false;
   let rowEditDrafts = new Map();
@@ -510,18 +555,6 @@ export function createMotorConfigController({
     return nextAxisAboveMax();
   }
 
-  function uniqueAxisForMotor(motor) {
-    const used = new Set(axisMotors()
-      .filter((item) => !item.deleted && item.id !== motor.id)
-      .map(motorAxisValue)
-      .filter((axis) => axis !== null));
-    const proposed = Number(motor.config?.controller_index ?? motor.axis);
-    if (Number.isInteger(proposed) && !used.has(proposed)) {
-      return proposed;
-    }
-    return used.size === 0 ? 0 : Math.max(...used) + 1;
-  }
-
   function firstDynamixelDriverId() {
     const motor = axisMotors().find((item) => {
       const driverId = item.config?.driver_id;
@@ -530,10 +563,16 @@ export function createMotorConfigController({
     return motor ? Number(motor.config.driver_id) : 1;
   }
 
-  function dynamixelScanDeviceToMotor(device, baseMotor = null, nextAxis = nextAvailableAxis) {
-    return buildDynamixelScanDeviceToMotor(device, baseMotor, {
-      nextAvailableAxis: nextAxis,
+  // 이름을 겹치지 않게 한다 · §6-217
+  //
+  // 전에는 이 감싸개가 바깥 함수와 **같은 이름**이었고 세 번째 인자만 달랐다
+  // (여기선 함수, 바깥에선 옵션 객체) · 부르는 쪽이 옵션 객체를 넘기자
+  // `options.nextAvailableAxis is not a function` 으로 검색이 통째로 죽었다.
+  function proposedDynamixelMotor(device, { axis, model } = {}) {
+    return buildDynamixelScanDeviceToMotor(device, null, {
+      nextAvailableAxis: typeof axis === 'function' ? axis : nextAvailableAxis,
       firstDynamixelDriverId,
+      model,
     });
   }
 
@@ -604,18 +643,6 @@ export function createMotorConfigController({
     return motors.find((motor) => scanRowMatchesRuntimeMotor(row, motor)) || null;
   }
 
-  function dynamixelMotorMatchesDevice(motor, device) {
-    if (!motor || !device) return false;
-    const identity = motor.identity || {};
-    const config = motor.config || {};
-    const configuredId = firstDefined(identity.bus_id, identity.node_id, config.bus_id);
-    if (configuredId === null || configuredId === undefined) return false;
-    if (Number(configuredId) !== Number(device.id)) return false;
-    const configuredPort = firstDefined(identity.serial_port, config.serial_port);
-    if (configuredPort && device.port && String(configuredPort) !== String(device.port)) return false;
-    return true;
-  }
-
   function runtimeMotorForDynamixelDevice(device, motors = runtimeMotors()) {
     if (!device) return null;
     return motors.find((motor) => {
@@ -639,28 +666,6 @@ export function createMotorConfigController({
     }));
   }
 
-  function selectedProjectAcMatchingSummary(slaves) {
-    const configured = activeAxisMotors().filter(
-      (motor) => motor.transport === 'ethercat' && motor.enabled,
-    );
-    const matchedIds = new Set();
-    let matched = 0;
-    slaves.forEach((slave) => {
-      const motor = configured.find((item) => scanRowMatchesRegistryMotor(slave, item));
-      if (!motor) return;
-      matched += 1;
-      matchedIds.add(motor.id);
-    });
-    return {
-      matched,
-      configured: 0,
-      unregistered: Math.max(0, slaves.length - matched),
-      missing: configured.filter((motor) => !matchedIds.has(motor.id)).length,
-      duplicate_axis: 0,
-      total: slaves.length + configured.filter((motor) => !matchedIds.has(motor.id)).length,
-    };
-  }
-
   function dynamixelScanDevices() {
     return Array.isArray(latestScan?.dynamixel_scan?.devices)
       ? latestScan.dynamixel_scan.devices
@@ -676,22 +681,18 @@ export function createMotorConfigController({
   }
 
   function rowMotorType(row) {
-    const motor = row.motor || row.proposedMotor;
+    const motor = row.motor;
     if (motor?.motor_type) return motor.motor_type;
     if (row.scanDevice) return 'dynamixel';
     if (row.scanRow) return 'ac_servo';
     return 'unknown';
   }
 
+  // 축 번호는 사람이 고치지 않는다 · §6-219 · 이름만 고친다
   function rowAxisRaw(row) {
-    const draft = rowDraft(row);
-    if (row.associationCandidate && draft.axis === undefined) return null;
     return firstDefined(
-      draft.axis,
       row.motor?.config?.controller_index,
       row.motor?.axis,
-      row.proposedMotor?.config?.controller_index,
-      row.proposedMotor?.axis,
       row.scanRow?.controller_index,
       row.runtimeMotor?.controller_index,
     );
@@ -710,7 +711,7 @@ export function createMotorConfigController({
   }
 
   function rowIdRaw(row) {
-    const motor = row.motor || row.proposedMotor;
+    const motor = row.motor;
     const motorType = rowMotorType(row);
     if (motorType === 'ac_servo' || motor?.transport === 'ethercat' || row.scanRow) {
       return firstDefined(
@@ -753,7 +754,7 @@ export function createMotorConfigController({
   }
 
   function acIdentityValue(row, field) {
-    const motor = row.motor || row.proposedMotor;
+    const motor = row.motor;
     if (rowMotorType(row) !== 'ac_servo' && motor?.transport !== 'ethercat') return '-';
     if (field === 'eeprom_alias') {
       return row.scanRow
@@ -801,11 +802,7 @@ export function createMotorConfigController({
   function rowNameRaw(row) {
     const draft = rowDraft(row);
     if (draft.name !== undefined) return draft.name;
-    if (row.associationCandidate) {
-      return `검색 장비 · Slave ${formatInt(row.scanRow?.slave_position)}`;
-    }
     if (row.motor) return registryMotorLabel(row.motor);
-    if (row.proposedMotor) return registryMotorLabel(row.proposedMotor);
     return '-';
   }
 
@@ -1620,10 +1617,10 @@ export function createMotorConfigController({
       if (deviceState.includes('ERROR')) {
         return [`EtherCAT ${deviceState}`, 'delete'];
       }
-      if (row.associationCandidate || row.identityConfirmationRequired) {
+      if (row.servedRow?.confirmation_required) {
         return ['기존 축 연결 필요', 'review'];
       }
-      const motor = row.motor || row.proposedMotor;
+      const motor = row.motor;
       const identity = motor?.identity || {};
       const expectedRotary = identity.rotary_alias;
       const scannedRotary = row.scanRow.rotary_alias;
@@ -1677,15 +1674,8 @@ export function createMotorConfigController({
     return [`${stateLabel(state)} / 축 ${axis}`, state === 'detected' ? 'matched' : 'review'];
   }
 
-  function scanRowLikelyExistingMotor(scanRow) {
-    if (!scanRow) return null;
-    return activeAxisMotors().find(
-      (motor) => scanRowSharesConfiguredPosition(scanRow, motor),
-    ) || null;
-  }
-
   function settingStatus(row) {
-    if (row.associationCandidate || row.identityConfirmationRequired) {
+    if (row.servedRow?.confirmation_required) {
       return ['연결 확인 필요', 'review'];
     }
     const motor = row.motor;
@@ -1773,7 +1763,7 @@ export function createMotorConfigController({
   }
 
   function rowModelProfileView(row) {
-    const motor = row.motor || row.proposedMotor;
+    const motor = row.motor;
     if (!motor) {
       const siiName = firstDefined(row.scanRow?.sii_order_number, row.scanRow?.sii_device_name);
       return {
@@ -1829,7 +1819,7 @@ export function createMotorConfigController({
         detail: `EEPROM ${displayText(directScanAliasValue(row))} · Station ${displayText(acIdentityValue(row, 'rotary_alias'))}`,
       };
     }
-    const motor = row.motor || row.proposedMotor;
+    const motor = row.motor;
     const port = firstDefined(
       row.scanDevice?.port,
       motor?.identity?.serial_port,
@@ -1844,10 +1834,10 @@ export function createMotorConfigController({
 
   function rowMappingView(row) {
     const runtime = row.runtimeMotor;
-    if (row.associationCandidate || row.identityConfirmationRequired) {
+    if (row.servedRow?.confirmation_required) {
       return {
         text: '연결 확인 필요',
-        detail: row.motor ? '검색값 반영 후 저장' : '기존 축과 1:1 선택',
+        detail: '검색값과 저장값이 다릅니다',
         className: 'review',
         ready: false,
       };
@@ -2254,185 +2244,126 @@ export function createMotorConfigController({
     renderAxisSettings();
   }
 
+  // **짝은 서버가 맞춘다** · §6-216
+  //
+  // 전에는 여기서 「이 슬레이브가 프로젝트의 몇 번 축인가」를 화면이 정했다 ·
+  // 같은 판단이 서버에도 있었고 규칙이 미묘하게 달라서 모델 이름과 축 이름이
+  // 갈렸다 · 저장하면 선택이 통째로 풀린 것도 그 때문이다.
+  //
+  // 이제 서버가 `scan.axis_rows` 로 짝을 지어 보낸다 · 화면은 그 짝에 맞는
+  // 날것을 찾아 붙이기만 한다 (찾기는 판단이 아니다).
+  // 「이 축의 검색 행」도 서버 짝을 따른다 · §6-216
+  function servedRowFor(motorId) {
+    return (serverAxisRows()?.axes || []).find(
+      (row) => String(row.id) === String(motorId),
+    ) || null;
+  }
+
+  function scanRowForMotor(motor) {
+    const served = servedRowFor(motor?.id);
+    return served?.scanned ? rawAcServoScanRow(served.scanned) : null;
+  }
+
+  function registryMotorForAxis(axis) {
+    if (axis === null || axis === undefined) return null;
+    return activeAxisMotors().find(
+      (motor) => Number(motorAxisValue(motor)) === Number(axis),
+    ) || null;
+  }
+
+  function serverAxisRows() {
+    const rows = latestScan?.axis_rows;
+    return rows && Array.isArray(rows.axes) ? rows : null;
+  }
+
+  function rawAcServoScanRow(scanned) {
+    if (!scanned) return null;
+    return acServoScanRows().find((row) => (
+      Number(row.master_index ?? 0) === Number(scanned.master_index ?? 0)
+      && Number(row.slave_position) === Number(scanned.slave_position)
+    )) || null;
+  }
+
+  function rawDynamixelDevice(scanned) {
+    if (!scanned) return null;
+    return dynamixelScanDevices().find((device) => (
+      Number(device.id) === Number(scanned.bus_id)
+      && String(device.port || '') === String(scanned.serial_port || '')
+    )) || null;
+  }
+
+  function attachScanned(row, served) {
+    const scanned = served?.scanned;
+    if (!scanned) return;
+    if (served.transport === 'ethercat') row.scanRow = rawAcServoScanRow(scanned);
+    else row.scanDevice = rawDynamixelDevice(scanned);
+  }
+
   function axisRowsData() {
-    const rows = [];
-    const byId = new Map();
-    const usedAcScan = new Set();
-    const usedDynamixelScan = new Set();
     const runtime = runtimeMotors();
-    const acRuntime = runtime.filter((motor) => runtimeIsAcServo(motor));
-    const dynamixelRuntime = runtime.filter((motor) => runtimeIsDynamixel(motor));
-    const scanAxisAllocator = createAxisAllocator(axisMotors());
-
-    axisMotors().forEach((motor) => {
-      const row = {
-        id: motor.id,
-        motor,
-        proposedMotor: null,
-        scanRow: null,
-        scanDevice: null,
-        runtimeMotor: runtimeMotorForRegistryMotor(motor, runtime),
-      };
-      rows.push(row);
-      byId.set(motor.id, row);
-    });
-
-    acServoScanRows().forEach((scanRow) => {
-      const resolved = resolveRegistryMotorForScanRow(scanRow, axisMotors());
-      const matched = resolved?.motor || null;
-      if (matched) {
-        const row = byId.get(matched.id);
-        if (row) {
-          row.scanRow = scanRow;
-          row.identityConfirmationRequired = Boolean(
-            resolved.confirmationRequired,
-          );
-          row.runtimeMotor = row.runtimeMotor || runtimeMotorForRegistryMotor(matched, acRuntime);
-        }
-        usedAcScan.add(scanKey(scanRow));
-        return;
-      }
-      const proposedMotor = acServoScanRowToMotor(scanRow, scanAxisAllocator);
-      const associationCandidate = scanRowLikelyExistingMotor(scanRow);
-      rows.push({
-        id: `scan:ac:${scanKey(scanRow)}`,
-        motor: null,
-        proposedMotor,
-        associationCandidate,
-        scanRow,
-        scanDevice: null,
-        runtimeMotor: runtimeMotorForScanRow(scanRow, acRuntime),
-      });
-      usedAcScan.add(scanKey(scanRow));
-    });
-
-    dynamixelScanDevices().forEach((device) => {
-      const key = dynamixelScanDeviceKey(device);
-      const matched = axisMotors().find((motor) => dynamixelMotorMatchesDevice(motor, device)) || null;
-      if (matched) {
-        const row = byId.get(matched.id);
-        if (row) {
-          row.scanDevice = device;
-          row.runtimeMotor = row.runtimeMotor || runtimeMotorForRegistryMotor(matched, dynamixelRuntime);
-        }
-        usedDynamixelScan.add(key);
-        return;
-      }
-      rows.push({
-        id: `scan:dynamixel:${key}`,
-        motor: null,
-        proposedMotor: dynamixelScanDeviceToMotor(device, null, scanAxisAllocator),
-        scanRow: null,
-        scanDevice: device,
-        runtimeMotor: runtimeMotorForDynamixelDevice(device, dynamixelRuntime),
-      });
-      usedDynamixelScan.add(key);
-    });
-
-    return rows.sort((a, b) => {
-      const axisDiff = axisSortValue(a) - axisSortValue(b);
-      if (axisDiff !== 0) return axisDiff;
-      return String(a.id).localeCompare(String(b.id));
+    return buildAxisRows({
+      motors: axisMotors(),
+      served: serverAxisRows(),
+      findAcServoScanRow: rawAcServoScanRow,
+      findDynamixelDevice: rawDynamixelDevice,
+      runtimeForMotor: (motor) => runtimeMotorForRegistryMotor(motor, runtime),
+      sortValue: axisSortValue,
     });
   }
 
-  function selectedAxisRows(rows = axisRowsData()) {
-    return rows.filter((row) => selectedAxisIds.has(row.id));
-  }
-
-  function removeMissingSelectedAxisIds(rows) {
-    const validIds = new Set(rows.map((row) => row.id));
-    selectedAxisIds = new Set([...selectedAxisIds].filter((id) => validIds.has(id)));
-  }
-
-  function autoSelectNewScanAxes() {
+  // 검색이 목록에 무엇을 넣었는지 말한다 · §6-219
+  function scanAdoptedMessage(head) {
     const rows = axisRowsData();
-    const newRows = rows.filter(
-      (row) => !row.motor && row.proposedMotor && !row.associationCandidate,
-    );
-    const confirmationRows = rows.filter(
-      (row) => row.motor && row.scanRow && row.identityConfirmationRequired,
-    );
-    const separateCandidateRows = rows.filter(
-      (row) => !row.motor && row.associationCandidate,
-    );
-    const candidateCount = confirmationRows.length + separateCandidateRows.length;
-    // **검색에서 나온 것은 전부 고른다** · §6-204
-    //
-    // 전에는 「손볼 게 있는 축」만 골랐다 — 새로 나온 축과 확인이 필요한 축 ·
-    // 그래서 이미 다 맞는 상태로 검색하면 **아무것도 안 골라졌고**, 위쪽
-    // 버튼들이 전부 회색이 됐다 · 사용자는 「어떤 때는 선택되고 어떤 때는
-    // 안 되는」 것으로만 보인다.
-    //
-    // 검색을 눌렀다는 것은 「지금 붙어 있는 것을 다루겠다」는 뜻이다 ·
-    // 나온 것을 전부 골라 두고, 뺄 것은 사람이 뺀다.
-    //
-    // **검색 결과가 담기는 칸이 둘이다** · AC 서보는 `scanRow`, 다이나믹셀은
-    // `scanDevice` · 처음에 `scanRow` 만 보다가 다이나믹셀이 빠졌다.
-    selectedAxisIds = new Set(
-      rows
-        .filter((row) => row.scanRow || row.scanDevice || row.proposedMotor)
-        .map((row) => row.id),
-    );
-    lastAxisRenderSignature = '';
-    renderAxisSettings();
-    return { newCount: newRows.length, candidateCount };
+    const parts = [`${head} · ${formatInt(rows.length)}축`];
+    parts.push('이름을 고친 뒤 「설정 저장」을 누르세요');
+    return parts.join(' · ');
   }
 
-  function toggleAxisSelection(id) {
-    if (!id) return;
-    selectedAxisIds = new Set(selectedAxisIds);
-    if (selectedAxisIds.has(id)) {
-      selectedAxisIds.delete(id);
-    } else {
-      selectedAxisIds.add(id);
-    }
+  // **검색하면 목록을 갈아 끼운다** · §6-219
+  //
+  // 기존 목록을 지우고 이번 검색이 찾은 것으로 채운다 · 그것이 목록이고
+  // 그대로 저장된다 · 「선택 축 추가」로 사람이 옮기던 단계를 없앴다.
+  //
+  // 「AC Servo 검색」을 누르면 서보만 남는다 · 둘 다 쓰려면 「전체 모터
+  // 검색」을 누른다 · 통로별로 반쪽만 바꾸게 했더니 서보를 검색했는데
+  // 표에 4축이 떠서 무엇을 찾은 것인지 알 수 없었다.
+  //
+  // 사람이 붙인 이름만 남긴다 · 고칠 수 있는 것이 이름 하나뿐이므로
+  // 다시 검색했다고 지워지면 안 된다.
+  function adoptScanIntoDraft() {
+    const served = serverAxisRows();
+    if (!served) return;
+
+    const namesById = new Map(
+      axisConfig.motors.map((motor) => [motor.id, motor.name]),
+    );
+    axisConfig.motors = [];
+
+    const found = [
+      ...(served.axes || []).filter((item) => item.state === 'matched'),
+      ...(served.new_devices || []),
+    ];
+    found.forEach((item) => {
+      const acServo = item.transport === 'ethercat';
+      const scanRow = acServo ? rawAcServoScanRow(item.scanned) : null;
+      const scanDevice = acServo ? null : rawDynamixelDevice(item.scanned);
+      if (acServo ? !scanRow : !scanDevice) return;
+      const axisFor = () => Number(item.proposed_axis ?? item.axis ?? 0);
+      const motor = acServo
+        ? acServoScanRowToMotor(scanRow, axisFor)
+        : proposedDynamixelMotor(scanDevice, { axis: axisFor, model: item.model });
+      const name = namesById.get(motor.id);
+      upsertMotorInRegistry(
+        axisConfig,
+        name ? normalizeMotor({ ...motor, name }) : motor,
+      );
+    });
   }
+
+
 
   function renderAxisButtons(rows) {
-    const selectedRows = selectedAxisRows(rows);
-    const addRows = selectedRows.filter((row) => (
-      (!row.motor || row.motor.deleted) && (row.proposedMotor || row.motor)
-    ));
-    const editableRows = selectedRows.filter((row) => row.motor && !row.motor.deleted);
     const hasConfiguredAxes = axisMotors().some((motor) => !motor.deleted);
-    const selectedAcProjectRows = selectedRows.filter(
-      (row) => row.motor?.transport === 'ethercat' && !row.motor.deleted,
-    );
-    const selectedAcScanRows = selectedRows.filter((row) => Boolean(row.scanRow));
-    const suspectedExistingRows = addRows.filter(
-      (row) => row.scanRow && scanRowLikelyExistingMotor(row.scanRow),
-    );
-    // **고른 것 중 해당하는 것만 다룬다** · §6-204
-    //
-    // 전에는 「고른 것이 전부 같은 종류여야」 했다 · 그래서 서보와 다이나믹셀을
-    // 함께 고르면 서보용 버튼이 전부 회색이 됐다 · 검색이 나온 것을 전부
-    // 고르게 되면서 늘 그 상태가 된다.
-    //
-    // 핸들러는 이미 해당하는 행만 골라낸다 · 막을 이유가 없었다.
-    const canAdd = addRows.length > 0 && suspectedExistingRows.length === 0;
-    const combinedIdentityRows = selectedRows.filter(
-      (row) => row.motor?.transport === 'ethercat' && row.scanRow && !row.motor.deleted,
-    );
-    const canUpdateIdentity = combinedIdentityRows.length > 0 || (
-      selectedRows.length === 2 &&
-      selectedAcProjectRows.length === 1 &&
-      selectedAcScanRows.length === 1
-    );
-    const canSetModelProfile = selectedAcProjectRows.length > 0;
-    const writableAliasRows = selectedRows.filter((row) => (
-      row.scanRow &&
-      row.scanRow.slave_position !== null && row.scanRow.slave_position !== undefined &&
-      row.scanRow.ethercat_alias !== null && row.scanRow.ethercat_alias !== undefined &&
-      row.scanRow.vendor_id !== null && row.scanRow.vendor_id !== undefined &&
-      row.scanRow.product_code !== null && row.scanRow.product_code !== undefined &&
-      row.scanRow.serial_number !== null && row.scanRow.serial_number !== undefined
-    ));
-    const canWriteAlias = selectedRows.length === 1 && writableAliasRows.length === 1 &&
-      !pendingAliasWrite;
-    const canDelete = editableRows.length > 0;
-    const canToggle = editableRows.length > 0;
-    const canSort = hasConfiguredAxes;
     const changed = hasAnyConfigChanges();
     const recoveryMessage = acHardwareRecoveryMessage();
     const identityError = acHardwareIdentityErrorMessage();
@@ -2440,46 +2371,13 @@ export function createMotorConfigController({
     const modelWarningMessage = modelProfileWarningMessage();
     const applyBlockMessage = identityApplyBlockMessage || modelWarningMessage;
     const alreadyApplied = selectedMotorConfigAlreadyApplied();
-    // **적용은 언제든 누를 수 있다** · §6-203
-    //
-    // 전에는 「이미 적용됐거나 저장 안 한 변경이 있으면」 껐다 · 그런데 적용은
-    // 곧 **모터 재시작**이다 · 장비가 이상할 때 사람이 가장 먼저 하고 싶은
-    // 일인데 그때 회색이었다.
-    //
-    // 저장 안 한 변경이 있으면 **저장된 파일**이 적용된다 · 그건 막을 일이
-    // 아니라 알려줄 일이다 (아래 title).
-    // 축이 없어도 누를 수 있다 · 왜 안 되는지는 서버가 말한다 · §6-203
-    // (「등록된 모터축이 없어 설정을 적용할 수 없습니다」)
-    const canAttemptApply = true;
     onIdentityStatusChange?.(motionControlBlockMessage());
 
-    if (el.addAxisButton) el.addAxisButton.disabled = !canAdd;
-    if (el.updateAxisIdentityButton) el.updateAxisIdentityButton.disabled = !canUpdateIdentity;
-    if (el.setAxisModelProfileButton) {
-      el.setAxisModelProfileButton.disabled = !canSetModelProfile;
-      el.setAxisModelProfileButton.title = canSetModelProfile
-        ? '선택한 AC 서보 축의 명판 모델을 확인하고 현재 운전 프로필에 연결합니다.'
-        : '모델을 확인할 프로젝트 AC 서보 축을 하나 이상 선택하세요.';
-    }
-    if (el.writeEthercatAliasButton) el.writeEthercatAliasButton.disabled = !canWriteAlias;
-    if (el.deleteAxisButton) el.deleteAxisButton.disabled = !canDelete;
-    if (el.sortAxisButton) el.sortAxisButton.disabled = !canSort;
-    if (el.toggleAxisButton) {
-      el.toggleAxisButton.disabled = !canToggle;
-      if (editableRows.length > 0) {
-        const shouldTurnOn = editableRows.some((row) => !row.motor.enabled);
-        el.toggleAxisButton.textContent = shouldTurnOn
-          ? '선택 축 사용'
-          : '선택 축 미사용';
-      } else {
-        el.toggleAxisButton.textContent = '선택 축 사용상태 변경';
-      }
-    }
     // 저장은 언제나 누를 수 있다 · §6-203 · 다시 저장해서 나쁠 일이 없다
     if (el.saveAxisConfigButton) {
       el.saveAxisConfigButton.disabled = false;
       el.saveAxisConfigButton.title = changed
-        ? '변경한 내용을 설정 파일에 씁니다.'
+        ? '검색해서 나온 축과 고친 이름을 설정 파일에 씁니다.'
         : '바뀐 내용은 없지만 지금 값 그대로 다시 저장합니다.';
     }
     if (el.deleteMotorConfigButton) {
@@ -2488,12 +2386,14 @@ export function createMotorConfigController({
         ? '현재 프로젝트의 활성 모터축 설정 파일을 프로젝트 휴지통으로 이동합니다. 실행 중인 장비 설정은 바뀌지 않습니다.'
         : '현재 프로젝트에 삭제할 모터축 설정 파일이 없습니다.';
     }
-    if (el.applyAxisConfigButton) el.applyAxisConfigButton.disabled = !canAttemptApply;
+    // 축이 없어도 누를 수 있다 · 왜 안 되는지는 서버가 말한다 · §6-203
     if (el.applyAxisConfigButton) {
-      // 눌리는 버튼에 「적용됨」이라 쓰면 상태인지 동작인지 모른다 · §6-203
-      el.applyAxisConfigButton.textContent = alreadyApplied
-        ? '설정 다시 적용 · 모터 재시작'
-        : '설정 적용 · 모터 재시작';
+      el.applyAxisConfigButton.disabled = false;
+      // **버튼 이름은 바뀌지 않는다** · §6-226
+      //
+      // 전에는 이미 적용된 상태면 「설정 다시 적용 · 모터 재시작」으로
+      // 글자가 바뀌었다 · 같은 버튼을 부를 이름이 둘이 되어 말이 안 통했다.
+      el.applyAxisConfigButton.textContent = '설정 적용 · 모터 재시작';
       el.applyAxisConfigButton.title = !hasConfiguredAxes
         ? (applyBlockMessage || '적용할 프로젝트 축 설정이 없습니다.')
         : changed
@@ -2502,21 +2402,6 @@ export function createMotorConfigController({
             ? '이미 적용된 설정입니다 · 다시 누르면 모터를 재시작합니다.'
             : applyBlockMessage || recoveryMessage
               || '저장된 현재 프로젝트 설정을 실행 시스템에 적용합니다.';
-    }
-    if (el.addAxisButton) {
-      el.addAxisButton.title = canAdd
-        ? '선택한 검색 축을 편집 초안에 추가합니다. 파일은 아직 변경되지 않습니다.'
-        : '프로젝트에 없는 검색 축을 선택하세요.';
-    }
-    if (el.updateAxisIdentityButton) {
-      el.updateAxisIdentityButton.title = canUpdateIdentity
-        ? '검색된 SII 모델·Serial·연결정보를 선택한 프로젝트 축의 편집 초안에 반영합니다.'
-        : '검색값을 반영할 프로젝트 AC 서보 축을 선택하세요.';
-    }
-    if (el.saveAxisConfigButton) {
-      el.saveAxisConfigButton.title = changed
-        ? '현재 편집 초안을 프로젝트 모터축 설정 파일에 저장합니다.'
-        : '저장할 변경 내용이 없습니다.';
     }
     if (el.configState) {
       el.configState.textContent = changed
@@ -2552,12 +2437,9 @@ export function createMotorConfigController({
       )
       : [];
     const connectionCandidateCount = rows.filter(
-      (row) => row.identityConfirmationRequired
-        || (!row.motor && row.associationCandidate),
+      (row) => row.servedRow?.confirmation_required,
     ).length;
-    const scanOnlyCount = rows.filter(
-      (row) => !row.motor && !row.associationCandidate && (row.scanRow || row.scanDevice),
-    ).length;
+    const scanOnlyCount = 0;
     let state = '정상';
     let detail = '프로젝트 저장값과 검색된 실제 연결값이 일치합니다.';
     let next = '다음 작업: 모터 동작 상태를 확인하세요.';
@@ -2625,31 +2507,26 @@ export function createMotorConfigController({
 
   function renderAxisSettings() {
     const rows = axisRowsData();
-    removeMissingSelectedAxisIds(rows);
 
     const configured = axisMotors().filter((motor) => !motor.deleted);
     const disabled = configured.filter((motor) => !motor.enabled);
     const connectionCandidates = rows.filter(
-      (row) => row.identityConfirmationRequired
-        || (!row.motor && row.associationCandidate),
+      (row) => row.servedRow?.confirmation_required,
     );
-    const scanOnly = rows.filter(
-      (row) => !row.motor && !row.associationCandidate && (row.scanRow || row.scanDevice),
-    );
+    const unreachable = rows.filter((row) => row.servedRow?.state === 'unreachable');
     const changed = hasAnyConfigChanges();
-    const selectedCount = selectedAxisIds.size;
 
     if (el.axisSummary) {
-      el.axisSummary.textContent = `설정 ${formatInt(configured.length)}축, 미사용 ${formatInt(disabled.length)}축, 연결 확인 ${formatInt(connectionCandidates.length)}축, 신규 ${formatInt(scanOnly.length)}축, 선택 ${formatInt(selectedCount)}축, ${changed ? '저장 필요' : '저장됨'}`;
+      el.axisSummary.textContent = `설정 ${formatInt(configured.length)}축, 미사용 ${formatInt(disabled.length)}축, 연결 확인 ${formatInt(connectionCandidates.length)}축, 응답 없음 ${formatInt(unreachable.length)}축, ${changed ? '저장 필요' : '저장됨'}`;
     }
 
     if (el.axisRows) {
       const rowViews = rows.map((row) => {
-          const selected = selectedAxisIds.has(row.id);
+
           const [settingText, settingClass] = settingStatus(row);
           const [scanText, scanClass] = scanStatus(row);
           const [runtimeText, runtimeClass] = runtimeStatus(row);
-          const motor = row.motor || row.proposedMotor;
+          const motor = row.motor;
           const typeText = row.motor
             ? motorKind(row.motor)
             : row.scanDevice
@@ -2666,7 +2543,7 @@ export function createMotorConfigController({
           const rotaryView = acIdentityView(row, 'rotary_alias');
           const slaveView = acIdentityView(row, 'slave_position');
           const axisValue = rowAxisRaw(row);
-          const editable = !row.associationCandidate && !(row.motor && row.motor.deleted);
+          const editable = !(row.motor && row.motor.deleted);
           const identity = rowDeviceIdentity(row);
           const modelProfile = rowModelProfileView(row);
           const driverModel = rowDriverModelRaw(row);
@@ -2680,7 +2557,6 @@ export function createMotorConfigController({
             Boolean(row.motor && !row.motor.deleted && row.motor.enabled);
           return {
             row,
-            selected,
             settingText,
             settingClass,
             scanText,
@@ -2715,7 +2591,6 @@ export function createMotorConfigController({
         });
       const renderSignature = JSON.stringify(rowViews.map((view) => ({
         id: view.row.id,
-        selected: view.selected,
         axis: view.axisValue,
         idText: view.idText,
         projectAlias: view.projectAlias,
@@ -2756,10 +2631,9 @@ export function createMotorConfigController({
           const row = view.row;
           const disabled = view.editable ? '' : ' disabled';
           return `
-            <tr class="${view.selected ? 'selected-row' : ''}" data-axis-row="${escapeHtml(row.id)}">
-              <td><input type="checkbox" data-axis-select="${escapeHtml(row.id)}"${view.selected ? ' checked' : ''}></td>
+            <tr data-axis-row="${escapeHtml(row.id)}">
               <td class="axis-combined-cell">
-                <input class="axis-edit-input axis-number-input mono" aria-label="축 번호" data-axis-edit="axis" data-axis-row-id="${escapeHtml(row.id)}" type="number" min="0" step="1" value="${escapeHtml(view.axisValue ?? '')}"${disabled}>
+                <span class="axis-number-label mono">${displayText(view.axisValue)}</span>
                 <input class="axis-edit-input axis-name-input" aria-label="축 이름" data-axis-edit="name" data-axis-row-id="${escapeHtml(row.id)}" value="${escapeHtml(view.name === '-' ? '' : view.name)}"${disabled}>
               </td>
               <td class="axis-status-stack">
@@ -2933,7 +2807,6 @@ export function createMotorConfigController({
     savedRegistry = normalizeAxisRegistry({});
     axisConfig = normalizeAxisRegistry({});
     latestScan = null;
-    selectedAxisIds = new Set();
     selectedConfigMotorId = '';
     rowEditDrafts = new Map();
     configTableDrafts = new Map();
@@ -3057,7 +2930,7 @@ export function createMotorConfigController({
     for (const motor of activeAxisMotors().filter(
       (item) => item.transport === 'ethercat' && item.enabled,
     )) {
-      const scanRow = scan.slaves.find((item) => scanRowMatchesRegistryMotor(item, motor));
+      const scanRow = scanRowForMotor(motor);
       if (!scanRow) {
         return `Control Index ${formatInt(motorAxisValue(motor))}의 Slave Position을 검색 결과에서 찾지 못했습니다.`;
       }
@@ -3097,7 +2970,7 @@ export function createMotorConfigController({
 
     let unavailableCount = 0;
     for (const motor of enabledAcMotors) {
-      const scanRow = scan.slaves.find((item) => scanRowMatchesRegistryMotor(item, motor));
+      const scanRow = scanRowForMotor(motor);
       if (!scanRow) return '';
       const expectedSlave = motor.identity?.slave_position;
       if (expectedSlave === null || expectedSlave === undefined ||
@@ -3219,27 +3092,17 @@ export function createMotorConfigController({
   }
 
   async function applyConfigRestart() {
-    const pendingScanRows = axisRowsData().filter((row) => (
-      row.motor?.transport === 'ethercat'
-      && !row.motor.deleted
-      && row.scanRow
-      && (
-        row.identityConfirmationRequired
-        || modelIsUnknown(row.motor.profile?.driver_model)
-      )
-    ));
-    if (pendingScanRows.length > 0) {
-      selectedAxisIds = new Set(pendingScanRows.map((row) => row.id));
-      const scanValuesApplied = await updateSelectedAxisIdentity();
-      if (!scanValuesApplied) return false;
-      const saved = await saveAxisConfig();
-      if (!saved) return false;
-    }
-    if (hasAnyConfigChanges()) {
-      setAxisMessage('저장하지 않은 축 설정이 있습니다. 먼저 변경 내용 저장을 누르세요.');
-      renderAxisSettings();
-      return false;
-    }
+    // **「설정 적용 · 모터 재시작」은 파일을 바꾸지 않는다** · §6-221
+    //
+    // 한때 여기서 저장을 대신 눌러 줬다 · 그러면 사람이 「설정 저장」을
+    // 누르지 않았는데 프로젝트 파일이 바뀐다 · 검색이 아무것도 못 잡은
+    // 상태에서 이 버튼을 누르면 프로젝트가 비워진다.
+    //
+    // **파일은 「설정 저장」을 눌렀을 때만 바뀐다** · 여기서는 저장된
+    // 파일을 그대로 적용하고, 다른 점이 있으면 확인창에서 말로 알린다.
+    const unsavedWarning = hasAnyConfigChanges()
+      ? '저장하지 않은 변경이 있습니다 · **저장된 파일**이 적용됩니다.\n\n'
+      : '';
     if (!axisMotors().some((motor) => !motor.deleted)) {
       setAxisMessage('설정 적용할 축이 없습니다.');
       renderAxisSettings();
@@ -3264,7 +3127,8 @@ export function createMotorConfigController({
     // 모델을 몰라도 막지 않는다 · 확인창에서 말로 알린다 · §6-213
     const modelWarning = modelWarningMessage ? `${modelWarningMessage}\n\n` : '';
     const confirmed = await showConfirm(
-      modelWarning
+      unsavedWarning
+      + modelWarning
       + recoveryWarning
       + '주의: 설정 적용 중 motor_manager_node를 재시작합니다.\n\n'
       + '재시작 중에는 AC 서보 / 다이나믹셀 통신이 잠시 끊기거나 재초기화될 수 있습니다.\n'
@@ -3320,412 +3184,6 @@ export function createMotorConfigController({
         applyButton.disabled = !axisMotors().some((motor) => !motor.deleted) || hasAnyConfigChanges();
       }
     }
-  }
-
-  function addSelectedAxis() {
-    const rows = selectedAxisRows();
-    if (rows.length === 0) {
-      setAxisMessage('축을 먼저 선택하세요');
-      return 0;
-    }
-
-    const nextSelectedIds = new Set();
-    let changedCount = 0;
-    let skippedCount = 0;
-
-    rows.forEach((row) => {
-      if (row.motor && row.motor.deleted) {
-        const restored = normalizeMotor({
-          ...row.motor,
-          deleted: false,
-          enabled: true,
-          hidden: false,
-        });
-        upsertMotorInRegistry(axisConfig, restored);
-        nextSelectedIds.add(restored.id);
-        changedCount += 1;
-        return;
-      }
-      if (row.motor || !row.proposedMotor) {
-        skippedCount += 1;
-        return;
-      }
-      const proposed = motorWithRowDraft(row.proposedMotor, row);
-      const axis = uniqueAxisForMotor(proposed);
-      const motor = normalizeMotor({
-        ...proposed,
-        axis,
-        config: {
-          ...(proposed.config || {}),
-          controller_index: axis,
-        },
-        enabled: true,
-        hidden: false,
-        deleted: false,
-      });
-      upsertMotorInRegistry(axisConfig, motor);
-      rowEditDrafts.delete(row.id);
-      nextSelectedIds.add(motor.id);
-      changedCount += 1;
-    });
-
-    if (changedCount === 0) {
-      setAxisMessage('추가할 축 정보가 없습니다');
-      return 0;
-    }
-    selectedAxisIds = nextSelectedIds;
-    const suffix = skippedCount > 0 ? `, 제외 ${formatInt(skippedCount)}축` : '';
-    setAxisMessage(`선택 ${formatInt(changedCount)}축 추가 예정${suffix}`);
-    renderAxisSettings();
-    return changedCount;
-  }
-
-  function deleteSelectedAxis() {
-    const rows = selectedAxisRows().filter((row) => row.motor && !row.motor.deleted);
-    if (rows.length === 0) {
-      setAxisMessage('삭제할 설정 축을 선택하세요');
-      return;
-    }
-
-    const nextSelectedIds = new Set();
-    let removedUnsavedCount = 0;
-    let markedDeletedCount = 0;
-
-    rows.forEach((row) => {
-      const saved = savedMotorById(row.motor.id);
-      if (!saved) {
-        axisConfig.motors = axisConfig.motors.filter((motor) => motor.id !== row.motor.id);
-        removedUnsavedCount += 1;
-        return;
-      }
-      const deleted = normalizeMotor({
-        ...row.motor,
-        deleted: true,
-        hidden: false,
-      });
-      upsertMotorInRegistry(axisConfig, deleted);
-      nextSelectedIds.add(deleted.id);
-      markedDeletedCount += 1;
-    });
-
-    selectedAxisIds = nextSelectedIds;
-    const parts = [];
-    if (markedDeletedCount > 0) parts.push(`삭제 예정 ${formatInt(markedDeletedCount)}축`);
-    if (removedUnsavedCount > 0) parts.push(`추가 예정 제거 ${formatInt(removedUnsavedCount)}축`);
-    setAxisMessage(parts.join(', '));
-    renderAxisSettings();
-  }
-
-  function toggleSelectedAxis() {
-    const rows = selectedAxisRows().filter((row) => row.motor && !row.motor.deleted);
-    if (rows.length === 0) {
-      setAxisMessage('사용 상태를 바꿀 설정 축을 선택하세요');
-      return;
-    }
-    const shouldTurnOn = rows.some((row) => !row.motor.enabled);
-    const nextSelectedIds = new Set();
-    rows.forEach((row) => {
-      const updated = normalizeMotor({
-        ...row.motor,
-        enabled: shouldTurnOn,
-        hidden: false,
-      });
-      upsertMotorInRegistry(axisConfig, updated);
-      nextSelectedIds.add(updated.id);
-    });
-    selectedAxisIds = nextSelectedIds;
-    setAxisMessage(`선택 ${formatInt(rows.length)}축 ${shouldTurnOn ? '사용' : '미사용'} 예정`);
-    renderAxisSettings();
-  }
-
-  async function setSelectedAxisModelProfile() {
-    const rows = selectedAxisRows().filter(
-      (row) => row.motor?.transport === 'ethercat' && !row.motor.deleted,
-    );
-    if (rows.length === 0) {
-      setAxisMessage('모델을 확인할 프로젝트 AC 서보 축을 하나 이상 선택하세요.', true);
-      return false;
-    }
-    const models = [...new Set(rows.map((row) => rowDriverModelRaw(row)).filter(Boolean))];
-    const input = await showPrompt(
-      `선택 ${formatInt(rows.length)}축에 적용할 서보 드라이버 명판 모델을 입력하세요.\n`
-      + '실제 장치 식별값은 변경되지 않으며 각 축의 기존 운전 프로필 값은 유지됩니다.',
-      {
-        title: '모델·운전 프로필 설정',
-        defaultValue: models.length === 1 && models[0] !== 'UNVERIFIED_MINAS' ? models[0] : '',
-        confirmLabel: '확인',
-      },
-    );
-    if (input === null) return false;
-    const model = String(input).trim();
-    if (!model) {
-      setAxisMessage('명판 모델을 입력해야 합니다.', true);
-      return false;
-    }
-    const confirmed = await showConfirm(
-      `선택 ${formatInt(rows.length)}축의 실제 명판 모델을 "${model}"로 확인합니다.\n`
-      + 'Vendor ID, Product Code, Revision Number, Serial Number, EEPROM Alias, '
-      + 'Slave Position은 장비 검색값 그대로 유지됩니다.',
-      {
-        title: '명판 모델 확인',
-        confirmLabel: '모델 확인 반영',
-      },
-    );
-    if (!confirmed) return false;
-
-    rows.forEach((row) => {
-      upsertMotorInRegistry(axisConfig, editedMotor(row.motor, row, 'driver_model', model));
-    });
-    lastAxisRenderSignature = '';
-    setAxisMessage(
-      `선택 ${formatInt(rows.length)}축 모델 확인됨 · ${model} · 변경 내용 저장 필요`,
-    );
-    renderAxisSettings();
-    return true;
-  }
-
-  async function updateSelectedAxisIdentity() {
-    const selectedRows = selectedAxisRows();
-    let pairs = selectedRows
-      .filter((row) => (
-        row.motor?.transport === 'ethercat'
-        && !row.motor.deleted
-        && row.scanRow
-      ))
-      .map((row) => ({ motor: row.motor, scanRow: row.scanRow }));
-    if (pairs.length !== selectedRows.length && selectedRows.length === 2) {
-      const projectRow = selectedRows.find(
-        (row) => row.motor?.transport === 'ethercat' && !row.motor.deleted,
-      );
-      const scanRow = selectedRows.find((row) => Boolean(row.scanRow));
-      pairs = projectRow && scanRow
-        ? [{ motor: projectRow.motor, scanRow: scanRow.scanRow }]
-        : [];
-    }
-    if (pairs.length === 0) {
-      setAxisMessage(
-        '검색값을 반영할 프로젝트 AC 서보 축을 선택하세요.',
-        true,
-      );
-      return false;
-    }
-
-    const changeText = pairs.map(({ motor, scanRow }) => {
-      const model = verifiedAcServoModel(scanRow)
-        || siiReportedAcServoModel(scanRow)
-        || '모델 미확인';
-      return `축 ${formatInt(motorAxisValue(motor))} · Slave `
-        + `${formatInt(scanRow.slave_position)} · ${model} · Serial `
-        + `${formatInt(scanRow.serial_number)}`;
-    }).join('\n');
-    const confirmed = await showConfirm(
-      `선택 ${formatInt(pairs.length)}축에 실제 검색값을 반영합니다.\n\n`
-      + `${changeText}\n\n`
-      + '각 Slave가 프로젝트의 해당 축과 맞는지 확인했습니까?\n'
-      + '반영 후 변경 내용 검증 및 저장을 눌러야 프로젝트 파일에 저장됩니다.',
-      { title: 'AC Servo 검색값 반영', confirmLabel: '검색값 반영', tone: 'warning' },
-    );
-    if (!confirmed) {
-      setAxisMessage('검색값 반영 취소');
-      return false;
-    }
-
-    const updatedIds = new Set();
-    pairs.forEach(({ motor, scanRow }) => {
-      const oldIdentity = motor.identity || {};
-      const eepromAlias = scanRow.ethercat_alias ?? 0;
-      const catalogModel = verifiedAcServoModel(scanRow);
-      const siiModel = siiReportedAcServoModel(scanRow);
-      const confirmedModel = catalogModel || siiModel;
-      const updated = normalizeMotor({
-        ...motor,
-        identity: {
-          ...oldIdentity,
-          ethercat_alias: eepromAlias,
-          rotary_alias: scanRow.rotary_alias ?? null,
-          slave_position: scanRow.slave_position ?? null,
-          // The device identity source remains the physical SII scan.
-          // User confirmation belongs to the independent model/profile fields.
-          identity_source: 'physical_sii',
-          vendor_id: scanRow.vendor_id ?? null,
-          product_code: scanRow.product_code ?? null,
-          revision_number: scanRow.revision_number ?? null,
-          serial_number: scanRow.serial_number ?? null,
-          sii_order_number: scanRow.sii_order_number || scanRow.order_number || '',
-          sii_device_name: scanRow.sii_device_name || scanRow.device_name || '',
-        },
-        profile: confirmedModel ? {
-          ...(motor.profile || {}),
-          driver_model: confirmedModel,
-          model_confirmed: true,
-          model_source: catalogModel
-            ? 'verified_catalog'
-            : 'physical_sii_user_confirmed',
-        } : motor.profile,
-        config: {
-          ...(motor.config || {}),
-          alias: eepromAlias,
-          position: Number(eepromAlias) === 0
-            ? Number(scanRow.slave_position ?? 0)
-            : 0,
-          vendor_id: scanRow.vendor_id ?? motor.config?.vendor_id,
-          product_id: scanRow.product_code ?? motor.config?.product_id,
-          revision_number: scanRow.revision_number ?? null,
-          serial_number: scanRow.serial_number ?? null,
-        },
-      });
-      upsertMotorInRegistry(axisConfig, updated);
-      updatedIds.add(updated.id);
-    });
-    identityUpdatePending = true;
-    selectedAxisIds = updatedIds;
-    lastAxisRenderSignature = '';
-    setAxisMessage(
-      `선택 ${formatInt(updatedIds.size)}축 검색값을 편집 초안에 반영했습니다. `
-      + '변경 내용 검증 후 저장을 누르세요.',
-    );
-    renderAxisSettings();
-    return true;
-  }
-
-  async function writeSelectedEthercatAlias() {
-    const selectedRows = selectedAxisRows();
-    if (selectedRows.length !== 1 || !selectedRows[0].scanRow) {
-      setAxisMessage('EEPROM Alias를 쓸 검색된 AC 서보 축 하나를 선택하세요.', true);
-      return false;
-    }
-    const scanRow = selectedRows[0].scanRow;
-    const masterIndex = Number(scanRow.master_index ?? 0);
-    const currentAlias = Number(scanRow.ethercat_alias);
-    const input = await showPrompt(
-      `Master ${formatInt(masterIndex)} · Slave ${formatInt(scanRow.slave_position)}의 `
-      + '새 EEPROM Alias를 입력하세요.\n'
-      + '범위: 0~65535 (0은 Alias 제거)',
-      {
-        title: 'EEPROM Alias 변경',
-        defaultValue: String(currentAlias),
-        confirmLabel: '다음',
-        tone: 'danger',
-      },
-    );
-    if (input === null) return false;
-    const text = String(input).trim();
-    const newAlias = /^0x[0-9a-f]+$/i.test(text)
-      ? Number.parseInt(text.slice(2), 16)
-      : Number(text);
-    if (!Number.isInteger(newAlias) || newAlias < 0 || newAlias > 65535) {
-      window.alert('EEPROM Alias는 0~65535 범위의 정수여야 합니다.');
-      return false;
-    }
-    if (newAlias === currentAlias) {
-      window.alert('새 EEPROM Alias가 현재 값과 같습니다.');
-      return false;
-    }
-    const confirmed = await showConfirm(
-      '실제 서보 드라이버의 SII EEPROM 값을 변경합니다.\n\n'
-      + `EtherCAT Master: ${formatInt(masterIndex)}\n`
-      + `Slave Position: ${formatInt(scanRow.slave_position)}\n`
-      + `Serial Number: ${formatInt(scanRow.serial_number)}\n`
-      + `EEPROM Alias: ${formatInt(currentAlias)} → ${formatInt(newAlias)}\n\n`
-      + '프로젝트 파일은 자동 변경되지 않습니다.\n'
-      + '쓰기 후 서보 드라이버 제어 전원을 재투입하고 다시 검색해야 합니다.\n'
-      + '선택한 실제 장비와 새 Alias를 확인했습니까?',
-      { title: 'EEPROM Alias 쓰기', confirmLabel: '실제 장비에 쓰기', tone: 'danger' },
-    );
-    if (!confirmed) {
-      setAxisMessage('EEPROM Alias 쓰기 취소');
-      return false;
-    }
-
-    const button = el.writeEthercatAliasButton;
-    const originalText = button?.textContent || '';
-    if (button) {
-      button.disabled = true;
-      button.textContent = 'EEPROM 쓰는 중';
-    }
-    try {
-      const payload = await writeEthercatAlias({
-        confirmed: true,
-        master_index: masterIndex,
-        slave_position: Number(scanRow.slave_position),
-        new_alias: newAlias,
-        expected: {
-          ethercat_alias: currentAlias,
-          vendor_id: Number(scanRow.vendor_id),
-          product_code: Number(scanRow.product_code),
-          serial_number: Number(scanRow.serial_number),
-        },
-      });
-      if (!payload.success) {
-        const message = uiMessage(payload.message, 'EEPROM Alias 쓰기 실패');
-        window.alert(message);
-        setAxisMessage(message, true);
-        return false;
-      }
-      pendingAliasWrite = {
-        masterIndex,
-        slavePosition: Number(scanRow.slave_position),
-        newAlias,
-      };
-      selectedAxisIds = new Set();
-      const message = uiMessage(payload.message, 'EEPROM Alias 쓰기 완료');
-      window.alert(message);
-      setAxisMessage(message, true);
-      renderAxisSettings();
-      return true;
-    } catch (error) {
-      const message = `EEPROM Alias 쓰기 실패: ${error?.message || error}`;
-      window.alert(message);
-      setAxisMessage(message, true);
-      return false;
-    } finally {
-      if (button) button.textContent = originalText;
-    }
-  }
-
-  function sortAxisNumbers() {
-    const motors = axisMotors()
-      .filter((motor) => !motor.deleted)
-      .slice()
-      .sort((a, b) => {
-        const axisDiff = Number(firstDefined(motorAxisValue(a), 9999)) -
-          Number(firstDefined(motorAxisValue(b), 9999));
-        if (axisDiff !== 0) return axisDiff;
-        const typeDiff = motorKind(a).localeCompare(motorKind(b));
-        if (typeDiff !== 0) return typeDiff;
-        return String(a.id || '').localeCompare(String(b.id || ''));
-      });
-
-    if (motors.length === 0) {
-      setAxisMessage('정렬할 설정 축이 없습니다');
-      return;
-    }
-
-    let changedCount = 0;
-    motors.forEach((motor, index) => {
-      const currentAxis = motorAxisValue(motor);
-      if (currentAxis === index) return;
-      const updated = normalizeMotor({
-        ...motor,
-        axis: index,
-        config: {
-          ...(motor.config || {}),
-          controller_index: index,
-        },
-      });
-      upsertMotorInRegistry(axisConfig, updated);
-      changedCount += 1;
-    });
-
-    if (changedCount === 0) {
-      setAxisMessage('축 번호가 이미 0부터 연속으로 정렬되어 있습니다');
-      renderAxisSettings();
-      return;
-    }
-
-    lastAxisRenderSignature = '';
-    setAxisMessage(`축 번호 정렬됨: ${formatInt(motors.length)}축을 0부터 연속 번호로 재배정`);
-    renderAxisSettings();
   }
 
   function mergeAcServoScan(scan) {
@@ -3848,15 +3306,9 @@ export function createMotorConfigController({
       const payload = await requestAcServoScan();
       if (expectedToken !== projectLoadToken) return;
       renderScan(mergeAcServoScan(payload.scan));
-      const selection = autoSelectNewScanAxes();
-      const identityError = acHardwareIdentityErrorMessage();
-      setAxisMessage(selection.candidateCount > 0
-        ? `AC 서보 검색 완료 · 기존 축 연결 확인 ${formatInt(selection.candidateCount)}축 자동 선택. `
-          + '축과 Slave를 확인한 뒤 선택 축 검색값 반영을 누르세요.'
-        : identityError
-          ? `${identityError} 기존 프로젝트 축과 검색 축을 선택해 연결정보 반영을 확인하세요.`
-          : `AC 서보 검색 완료 · 신규 ${formatInt(selection.newCount)}축 자동 선택`,
-      Boolean(identityError) || selection.candidateCount > 0);
+      adoptScanIntoDraft();
+      renderAxisSettings();
+      setAxisMessage(scanAdoptedMessage('AC 서보 검색 완료'));
       if (payload.motion_state) renderLatestState(payload.motion_state);
       const scanPartial = payload.partial === true
         || payload.motor_operation?.status === 'partial';
@@ -3869,9 +3321,9 @@ export function createMotorConfigController({
         payload.success,
         payload.success
           ? 'AC 서보 검색 완료'
-          : scanPartial
-            ? conciseMotorScanMessage(payload.message || 'AC 서보 검색 부분 완료')
-            : 'AC 서보 검색 실패',
+          : conciseMotorScanMessage(
+            uiMessage(payload.message, scanPartial ? 'AC 서보 검색 부분 완료' : 'AC 서보 검색 실패'),
+          ),
         scanPartial ? 'partial' : '',
       );
     } catch (error) {
@@ -3896,11 +3348,17 @@ export function createMotorConfigController({
       const payload = await requestDynamixelScan();
       if (expectedToken !== projectLoadToken) return;
       renderDynamixelScan(mergeDynamixelScan(payload.scan));
-      const selection = autoSelectNewScanAxes();
-      setAxisMessage(`다이나믹셀 검색 완료 · 신규 ${formatInt(selection.newCount)}축 자동 선택`);
+      adoptScanIntoDraft();
+      renderAxisSettings();
+      setAxisMessage(scanAdoptedMessage('다이나믹셀 검색 완료'));
       if (payload.motion_state) renderLatestState(payload.motion_state);
       el.dynamixelScanButton.textContent = payload.success ? '검색 완료' : '검색 실패';
-      await finishScanProgressPopup(payload.success, payload.success ? 'Dynamixel 검색 완료' : 'Dynamixel 검색 실패');
+      await finishScanProgressPopup(
+        payload.success,
+        payload.success
+          ? 'Dynamixel 검색 완료'
+          : conciseMotorScanMessage(uiMessage(payload.message, 'Dynamixel 검색 실패')),
+      );
     } catch (error) {
       if (el.dynamixelScanResult) el.dynamixelScanResult.textContent = '다이나믹셀 연결 확인 실패';
       el.dynamixelScanButton.textContent = '검색 실패';
@@ -3925,9 +3383,9 @@ export function createMotorConfigController({
       latestScan = payload.scan || null;
       renderScan(latestScan);
       renderDynamixelScan(latestScan);
-      const selection = autoSelectNewScanAxes();
+      adoptScanIntoDraft();
+      renderAxisSettings();
       const summary = getDiscoverySummary();
-      const identityError = acHardwareIdentityErrorMessage();
       // **서버 판정을 따른다** · §6-206
       //
       // 전에는 `scan.scan_complete` 를 봤다 · 그 값은 「등록된 Master 가 전부
@@ -3942,27 +3400,31 @@ export function createMotorConfigController({
       const dynamixelError = payload.scan?.dynamixel_scan?.error || '';
       if (el.scanAllResult) {
         el.scanAllResult.textContent = scanComplete
-          ? `검색 완료 · AC 서보 ${formatInt(summary.ethercatCount)}축 · 다이나믹셀 ${formatInt(summary.dynamixelCount)}축 · 신규 ${formatInt(selection.newCount)}축`
+          ? `검색 완료 · AC 서보 ${formatInt(summary.ethercatCount)}축 · 다이나믹셀 ${formatInt(summary.dynamixelCount)}축`
           : scanPartial
             ? conciseMotorScanMessage(`부분 완료 · AC 서보 ${formatInt(summary.ethercatCount)}축 · 다이나믹셀 실패: ${dynamixelError || '직접 응답 없음'}`)
             : conciseMotorScanMessage(uiMessage(payload.message, '전체 모터 검색 실패'));
       }
-      setAxisMessage(selection.candidateCount > 0
-        ? `기존 축 연결 확인 ${formatInt(selection.candidateCount)}축을 자동 선택했습니다. `
-          + '축과 Slave를 확인한 뒤 선택 축 검색값 반영을 누르세요.'
-        : scanComplete
-          ? identityError
-            ? `${identityError} 기존 프로젝트 축과 검색 축을 선택해 연결정보 반영을 확인하세요.`
-            : `신규 ${formatInt(selection.newCount)}축을 자동 선택했습니다. 이름과 축 번호를 확인한 뒤 선택 축 추가를 누르세요.`
-          : scanPartial
-            ? conciseMotorScanMessage(`일부 검색만 완료됐습니다. ${dynamixelError || '연결되지 않은 모터 종류를 확인하세요.'}`)
-            : conciseMotorScanMessage(uiMessage(payload.message, '전체 모터 검색 실패')),
-      Boolean(identityError) || selection.candidateCount > 0 || !scanComplete);
+      setAxisMessage(scanComplete
+        ? scanAdoptedMessage('전체 모터 검색 완료')
+        : scanPartial
+          ? conciseMotorScanMessage(`일부 검색만 완료됐습니다. ${dynamixelError || '연결되지 않은 모터 종류를 확인하세요.'}`)
+          : conciseMotorScanMessage(uiMessage(payload.message, '전체 모터 검색 실패')),
+      !scanComplete);
       if (payload.motion_state) renderLatestState(payload.motion_state);
       el.scanAllButton.textContent = scanComplete ? '검색 완료' : (scanPartial ? '부분 완료' : '검색 실패');
+      // **실패하면 서버가 말한 이유를 그대로 보여준다** · §6-224
+      //
+      // 전에는 고정 문구 「전체 모터 검색 실패」만 띄우고 `payload.message`
+      // 를 버렸다 · 서버는 「AC Servo 축 0이 움직이는 중입니다」처럼 무엇을
+      // 해야 하는지까지 말해 주는데 사람은 그걸 못 봤다.
       await finishScanProgressPopup(
         scanComplete,
-        scanComplete ? '전체 모터 검색 완료' : (scanPartial ? '전체 모터 검색 부분 완료' : '전체 모터 검색 실패'),
+        scanComplete
+          ? '전체 모터 검색 완료'
+          : conciseMotorScanMessage(
+            uiMessage(payload.message, scanPartial ? '전체 모터 검색 부분 완료' : '전체 모터 검색 실패'),
+          ),
         scanPartial ? 'partial' : '',
       );
     } catch (error) {
@@ -4004,16 +3466,6 @@ export function createMotorConfigController({
     }
 
     if (el.axisRows) {
-      el.axisRows.addEventListener('pointerdown', (event) => {
-        if (event.target.closest('[data-axis-edit], button')) return;
-        if (event.button !== undefined && event.button !== 0) return;
-        const row = event.target.closest('tr[data-axis-row]');
-        if (!row) return;
-        event.preventDefault();
-        toggleAxisSelection(row.dataset.axisRow || '');
-        renderAxisSettings();
-      });
-
       el.axisRows.addEventListener('change', (event) => {
         const input = event.target.closest('[data-axis-edit]');
         if (!input) return;
@@ -4060,19 +3512,6 @@ export function createMotorConfigController({
       });
     }
 
-    if (el.addAxisButton) el.addAxisButton.addEventListener('click', addSelectedAxis);
-    if (el.updateAxisIdentityButton) {
-      el.updateAxisIdentityButton.addEventListener('click', updateSelectedAxisIdentity);
-    }
-    if (el.setAxisModelProfileButton) {
-      el.setAxisModelProfileButton.addEventListener('click', setSelectedAxisModelProfile);
-    }
-    if (el.writeEthercatAliasButton) {
-      el.writeEthercatAliasButton.addEventListener('click', writeSelectedEthercatAlias);
-    }
-    if (el.deleteAxisButton) el.deleteAxisButton.addEventListener('click', deleteSelectedAxis);
-    if (el.toggleAxisButton) el.toggleAxisButton.addEventListener('click', toggleSelectedAxis);
-    if (el.sortAxisButton) el.sortAxisButton.addEventListener('click', sortAxisNumbers);
     if (el.saveAxisConfigButton) el.saveAxisConfigButton.addEventListener('click', saveAxisConfig);
     if (el.applyAxisConfigButton) el.applyAxisConfigButton.addEventListener('click', applyConfigRestart);
     if (el.reloadMotorConfigButton) {

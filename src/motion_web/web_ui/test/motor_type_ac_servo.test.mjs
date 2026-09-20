@@ -1,12 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+// 짝 맞추기 규칙의 시험은 서버로 갔다 · §6-216
+// `web_bridge/test/test_the_server_pairs_the_scan.py` 가 지킨다.
 import {
   duplicateEthercatAddress,
-  resolveRegistryMotorForScanRow,
   runtimeMotorConfirmsRegistryMotor,
-  scanRowMatchesRegistryMotor,
-  scanRowSharesConfiguredPosition,
   scanRowToMotor,
   siiReportedAcServoModel,
   verifiedAcServoModel,
@@ -34,18 +33,6 @@ function configuredMotor({ alias = 0, position = 0, masterIndex = 0 } = {}) {
 }
 
 
-test('unconfigured alias zero never auto-matches only by slave position', () => {
-  const motor = configuredMotor({ alias: 0, position: 0 });
-  const scanRow = {
-    slave_position: 0,
-    ethercat_alias: 103,
-    rotary_alias: 403,
-  };
-
-  assert.equal(scanRowMatchesRegistryMotor(scanRow, motor), false);
-  assert.equal(scanRowSharesConfiguredPosition(scanRow, motor), true);
-});
-
 test('SII order number is exposed as the physical scan model reference', () => {
   assert.equal(siiReportedAcServoModel({
     sii_order_number: 'MCDLN35BE',
@@ -54,83 +41,6 @@ test('SII order number is exposed as the physical scan model reference', () => {
   assert.equal(siiReportedAcServoModel({
     sii_device_name: 'MADLN05BE',
   }), 'MADLN05BE');
-});
-
-test('one position match is merged as an explicit confirmation candidate', () => {
-  const motor = configuredMotor({ alias: 0, position: 3 });
-  const resolved = resolveRegistryMotorForScanRow({
-    slave_position: 3,
-    ethercat_alias: 0,
-    serial_number: 605164099,
-  }, [motor]);
-
-  assert.equal(resolved.motor, motor);
-  assert.equal(resolved.confirmationRequired, true);
-});
-
-test('ambiguous position matches are never merged', () => {
-  const first = configuredMotor({ alias: 0, position: 3 });
-  const second = configuredMotor({ alias: 0, position: 3 });
-
-  assert.equal(resolveRegistryMotorForScanRow({
-    slave_position: 3,
-    ethercat_alias: 0,
-    serial_number: 605164099,
-  }, [first, second]), null);
-});
-
-
-test('unconfigured alias zero never matches a different slave position', () => {
-  const motor = configuredMotor({ alias: 0, position: 0 });
-  const scanRow = {
-    slave_position: 1,
-    ethercat_alias: 103,
-    rotary_alias: 403,
-  };
-
-  assert.equal(scanRowMatchesRegistryMotor(scanRow, motor), false);
-  assert.equal(scanRowSharesConfiguredPosition(scanRow, motor), false);
-});
-
-
-test('stored physical serial matches after EtherCAT chain position changes', () => {
-  const motor = configuredMotor({ alias: 0, position: 2 });
-  motor.identity.serial_number = 571478791;
-
-  assert.equal(scanRowMatchesRegistryMotor({
-    slave_position: 4,
-    ethercat_alias: 0,
-    serial_number: 571478791,
-  }, motor), true);
-  assert.equal(scanRowMatchesRegistryMotor({
-    slave_position: 2,
-    ethercat_alias: 0,
-    serial_number: 571484229,
-  }, motor), false);
-});
-
-test('the same slave position and alias on different masters never auto-match', () => {
-  const motor = configuredMotor({ alias: 103, position: 0, masterIndex: 0 });
-
-  assert.equal(scanRowMatchesRegistryMotor({
-    master_index: 1,
-    slave_position: 0,
-    ethercat_alias: 103,
-  }, motor), false);
-  assert.equal(scanRowSharesConfiguredPosition({
-    master_index: 1,
-    slave_position: 0,
-    ethercat_alias: 0,
-  }, motor), false);
-});
-
-test('the same alias-zero slave position is valid on different EtherCAT masters', () => {
-  const motors = [
-    configuredMotor({ alias: 0, position: 0, masterIndex: 0 }),
-    configuredMotor({ alias: 0, position: 0, masterIndex: 1 }),
-  ];
-
-  assert.equal(duplicateEthercatAddress(motors), null);
 });
 
 test('duplicate EtherCAT addresses are rejected only within the same master', () => {
@@ -156,24 +66,6 @@ test('duplicate EtherCAT addresses are rejected only within the same master', ()
     addressType: 'alias',
     value: 103,
   });
-});
-
-
-test('configured non-zero alias remains an identity requirement', () => {
-  const motor = configuredMotor({ alias: 103, position: 0 });
-
-  assert.equal(scanRowMatchesRegistryMotor({
-    slave_position: 0,
-    ethercat_alias: 103,
-  }, motor), true);
-  assert.equal(scanRowMatchesRegistryMotor({
-    slave_position: 0,
-    ethercat_alias: 104,
-  }, motor), false);
-  assert.equal(scanRowMatchesRegistryMotor({
-    slave_position: 0,
-    ethercat_alias: 0,
-  }, motor), false);
 });
 
 

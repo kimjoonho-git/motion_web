@@ -1902,7 +1902,8 @@ def test_ac_servo_scan_is_blocked_while_runtime_velocity_is_nonzero(monkeypatch)
             'connection_state': 'online',
             'connection_connected': True,
             'fault': False,
-            'velocity_deg_s': 1.5,
+            # 문턱 10 deg/s 를 넘는 분명한 움직임 · §6-225
+            'velocity_deg_s': 30.0,
             'target_reached': False,
         }],
     }
@@ -2032,7 +2033,7 @@ def test_ac_servo_scan_still_blocks_observed_motion_during_project_handoff(
             'connection_state': 'online',
             'connection_connected': True,
             'fault': False,
-            'velocity_deg_s': 6.0,
+            'velocity_deg_s': 30.0,
             'target_reached': False,
         }],
     }
@@ -2075,7 +2076,8 @@ def test_ac_servo_scan_ignores_stopped_servo_velocity_quantization_noise():
             'connection_state': 'online',
             'connection_connected': True,
             'fault': False,
-            'velocity_deg_s': 2.1,
+            # 실측 노이즈 최대 · 문턱 10 아래라 막지 않는다 · §6-225
+            'velocity_deg_s': 2.06,
             'target_reached': True,
         }],
     }
@@ -2104,7 +2106,8 @@ def test_ac_servo_scan_blocks_clear_motion_even_when_target_is_reached():
             'connection_state': 'online',
             'connection_connected': True,
             'fault': False,
-            'velocity_deg_s': 5.1,
+            # `target_reached` 가 True 여도 문턱을 넘으면 막는다 · §6-225
+            'velocity_deg_s': 30.0,
             'target_reached': True,
         }],
     }

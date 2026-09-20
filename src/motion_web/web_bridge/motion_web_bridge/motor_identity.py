@@ -75,3 +75,35 @@ def driver_model_from(
         or identity.get('sii_device_name')
         or ''
     ).strip()
+
+
+# --------------------------------------------------------------------------- #
+# 장치 모델의 **이름** · §6-214
+#
+# 이름과 운전 값은 다른 사실이다 · 이름은 여기 한 곳에서만 정하고, 운전 값은
+# `motor_config_build` 가 그 이름으로 찾는다.
+#
+# 전에는 이름 짓기가 세 곳에 있었다 · 서버의 `default_dynamixel_driver`,
+# 화면의 `canonicalDynamixelModel`, 그리고 검색기의 모델 번호 표 ·
+# 검색기는 1120 을 `XM540-W270` 이라 읽고 서버는 `XM540-W270-R` 로 적어서
+# 같은 모터를 두 이름으로 불렀다.
+# --------------------------------------------------------------------------- #
+
+#: 검색이 읽어 온 이름 → 이 프로그램이 쓰는 이름
+DYNAMIXEL_MODEL_NAMES = (
+    ('XM540-W150', 'XM540-W150'),
+    ('XM540-W270', 'XM540-W270-R'),
+)
+
+#: 이름을 모르는 다이나믹셀
+DYNAMIXEL_UNKNOWN_MODEL = 'Dynamixel'
+
+
+def canonical_dynamixel_model(value: Any) -> str:
+    """검색이 읽어 온 모델 이름을 이 프로그램이 쓰는 이름으로 바꾼다."""
+    text = str(value or '').strip()
+    needle = text.upper().replace('_', '-')
+    for scanned, canonical in DYNAMIXEL_MODEL_NAMES:
+        if scanned in needle:
+            return canonical
+    return text

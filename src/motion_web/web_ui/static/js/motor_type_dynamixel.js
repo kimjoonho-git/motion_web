@@ -22,38 +22,26 @@ function normalizedModelName(value) {
   return String(value || '').trim().toLowerCase();
 }
 
-/** 서버와 **같은 이름으로 부른다** · §6-212
+/** 모델 이름은 **서버가 정한다** · §6-216
  *
- * 검색기는 모델 번호 1120 을 `XM540-W270` 이라고 읽는다 · 서버는 드라이버를
- * 만들 때 그것을 `XM540-W270-R` 로 적는다
- * (`motor_config_build.default_dynamixel_driver`).
+ * 전에는 여기에 이름표가 있었다 · 검색기가 모델 번호 1120 을
+ * `XM540-W270` 이라 읽고, 서버는 드라이버를 만들 때 `XM540-W270-R` 로
+ * 적어서 같은 모터를 두 이름으로 불렀다 · 화면에 표를 하나 더 두고 두 언어를
+ * 시험으로 묶어 두는 방식이었다 (누더기였다).
  *
- * 그래서 같은 모터를 두 곳이 다른 이름으로 불렀다 · 화면은 검색한 이름,
- * 파일은 정규 이름 · 검색할 때마다 모델 칸의 글자가 왔다 갔다 했다.
- *
- * 표가 두 언어에 나뉘어 있으므로 `dynamixel_model_names.test.mjs` 가 두
- * 쪽이 같은 글자인지 지킨다.
+ * 이제 검색 응답(`scan.axis_rows`)이 이미 정해진 이름을 실어 온다 · 여기서는
+ * 장치가 말한 날것만 꺼내고, 이름은 서버가 준 것을 쓴다.
  */
-const DYNAMIXEL_CANONICAL_MODELS = [
-  ['XM540-W150', 'XM540-W150'],
-  ['XM540-W270', 'XM540-W270-R'],
-];
-
-export function canonicalDynamixelModel(value) {
-  const text = String(value ?? '').trim();
-  const model = text.toUpperCase().replace(/_/g, '-');
-  const hit = DYNAMIXEL_CANONICAL_MODELS.find(([needle]) => model.includes(needle));
-  return hit ? hit[1] : text;
-}
-
 export function modelTextFromDevice(device) {
   if (!device) return '';
-  return canonicalDynamixelModel(
-    device.model_name ||
-    device.model ||
-    device.driver_model ||
-    (device.model_number ? `Model ${Number(device.model_number).toLocaleString('ko-KR', { maximumFractionDigits: 0 })}` : ''),
-  );
+  return String(
+    device.model_name
+    || device.model
+    || device.driver_model
+    || (device.model_number
+      ? `Model ${Number(device.model_number).toLocaleString('ko-KR', { maximumFractionDigits: 0 })}`
+      : ''),
+  ).trim();
 }
 
 export function dynamixelScanDeviceKey(device) {
@@ -92,7 +80,8 @@ export function dynamixelMotorIdFromDevice(device) {
 
 export function dynamixelScanDeviceToMotor(device, baseMotor = null, options = {}) {
   const axis = baseMotor?.config?.controller_index ?? baseMotor?.axis ?? options.nextAvailableAxis();
-  const model = modelTextFromDevice(device) || baseMotor?.profile?.driver_model || 'Dynamixel';
+  const scannedModel = String(options.model || modelTextFromDevice(device) || '').trim();
+  const model = scannedModel || baseMotor?.profile?.driver_model || 'Dynamixel';
   const busId = device?.id === null || device?.id === undefined ? null : Number(device.id);
   const baudrate = DYNAMIXEL_BAUDRATE;
   const port = String(device?.port || baseMotor?.identity?.serial_port || baseMotor?.config?.serial_port || '');
@@ -118,8 +107,8 @@ export function dynamixelScanDeviceToMotor(device, baseMotor = null, options = {
     },
     profile: {
       driver_model: model,
-      model_confirmed: Boolean(modelTextFromDevice(device)),
-      model_source: modelTextFromDevice(device) ? 'physical_protocol' : '',
+      model_confirmed: Boolean(scannedModel),
+      model_source: scannedModel ? 'physical_protocol' : '',
     },
     config: {
       ...existingConfig,

@@ -75,6 +75,15 @@ def register_system_routes(app: FastAPI, bridge, project_call) -> None:
             return Response(status_code=304, headers=headers)
         return Response(content=html, media_type='text/html; charset=utf-8', headers=headers)
 
+    @app.get('/favicon.ico')
+    async def favicon():
+        """탭 아이콘 · 없어도 되지만 **404 를 남기지 않는다** · §6-223
+
+        브라우저가 페이지를 열 때마다 자동으로 요청한다 · 없으면 콘솔에 늘
+        빨간 줄이 하나 남고, 진짜 오류가 났을 때 그 속에 묻힌다.
+        """
+        return Response(status_code=204)
+
     @app.get('/static/{asset_path:path}')
     async def static_asset(asset_path: str, request: Request = None):
         relative_path = Path(asset_path)

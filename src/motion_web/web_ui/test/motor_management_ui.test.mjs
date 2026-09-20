@@ -59,12 +59,10 @@ test('axis readiness table keeps runtime facts distinct', () => {
   assert.match(controller, /Vendor \$\{displayText\(vendor\)\}/);
   assert.match(controller, /EEPROM Alias \$\{displayText\(eepromAlias\)\}/);
   assert.match(controller, /Slave Position \$\{displayText\(position\)\}/);
-  assert.match(controller, /id="setAxisModelProfileButton"|setAxisModelProfileButton/);
   assert.match(controller, /기존 축 연결 확인/);
-  assert.match(controller, /identityConfirmationRequired/);
-  assert.match(controller, /!row\.associationCandidate/);
+  // 확인 필요 여부도 서버가 말한다 · §6-216
+  assert.match(controller, /servedRow\?\.confirmation_required/);
   assert.match(controller, /SII 참고값/);
-  assert.match(controller, /UNVERIFIED_MINAS/);
 });
 
 test('unsupported Dynamixel torque controls are not presented as working actions', () => {
@@ -100,10 +98,18 @@ test('motor management actions follow control, edit, save and apply groups', () 
     html,
     /장비 제어[\s\S]*id="allAcServoOnButton"[\s\S]*id="allAcServoOffButton"[\s\S]*시스템[\s\S]*id="motorControlRestartButton"/,
   );
-  assert.match(
-    html,
-    /class="axis-edit-toolbar"[\s\S]*id="addAxisButton"[\s\S]*id="updateAxisIdentityButton"[\s\S]*id="toggleAxisButton"[\s\S]*id="sortAxisButton"[\s\S]*id="deleteAxisButton"/,
-  );
+  // 축 편집 버튼은 전부 지웠다 · §6-219
+  // 검색이 찾은 것이 그대로 목록이고 사람이 고치는 것은 이름 하나다.
+  for (const gone of [
+    'addAxisButton', 'updateAxisIdentityButton', 'toggleAxisButton',
+    'sortAxisButton', 'deleteAxisButton', 'axis-edit-toolbar',
+  ]) {
+    assert.doesNotMatch(html, new RegExp(gone), `${gone} 가 남아 있습니다`);
+  }
+  // 고칠 수 있는 칸은 이름뿐이다
+  assert.match(controller, /aria-label="축 이름"/);
+  assert.doesNotMatch(controller, /aria-label="축 번호"/);
+  assert.doesNotMatch(html, /<th>선택<\/th>/);
   assert.match(
     html,
     /3\. 저장하고 설정 적용[\s\S]*id="saveAxisConfigButton"[\s\S]*id="applyAxisConfigButton"/,
