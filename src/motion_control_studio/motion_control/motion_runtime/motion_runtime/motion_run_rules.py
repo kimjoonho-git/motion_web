@@ -54,6 +54,7 @@ def _status_from_plan(state: str, message: str, plan: Dict[str, Any]) -> Dict[st
         'network_operation_id': plan.get('network_operation_id', ''),
         'operation_generation': int(plan.get('operation_generation') or 0),
         'request_source': plan.get('request_source', 'motion_run'),
+        'schedule_id': str(plan.get('schedule_id') or ''),
         'group_execution': bool(plan.get('group_execution')),
         'execution_id': str(plan.get('execution_id') or ''),
         'group_cycle_number': int(plan.get('group_cycle_number') or 0),
@@ -106,6 +107,8 @@ def _empty_status() -> Dict[str, Any]:
         'countdown_sec': 0.0,
         'operation_generation': 0,
         'request_source': 'motion_run',
+        # 누가 켰는가 · 스케줄이 켰으면 그 스케줄 이름표가 남는다 · §6-270
+        'schedule_id': '',
         'group_execution': False,
         'execution_id': '',
         'group_cycle_number': 0,

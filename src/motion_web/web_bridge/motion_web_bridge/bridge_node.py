@@ -1920,7 +1920,44 @@ class MotionWebBridge(Node):
             return {'success': False, 'message': f'초기 위치 이동 불가: {blocker}'}
         return self._request_motion_run('initialize', payload, timeout_sec=2.0)
 
+    def schedule_start_blocked_by_manual_mode(self, payload: Dict[str, Any]) -> str:
+        """스케줄이 보낸 시작인가 · 그렇다면 정말 스케줄 모드인가 · §6-270
+
+        스케줄 노드는 운전 모드를 **0.5초짜리 조회**로 받는다 · 못 받으면
+        「스케줄」로 친다(`DEFAULT_RUN_MODE`) · 그래서 브릿지가 잠깐 막히면
+        사람이 걸어 둔 「수동」이 무시된다.
+
+        실측으로 17:58:17 에 브릿지가 626ms 막혔고, 같은 초에 스케줄이 수동
+        모드인데도 모터를 돌렸다 · 저장 파일은 그때도 `manual` 이었다.
+
+        그래서 **받는 쪽에서 한 번 더 본다** · 여기서는 조회가 아니라
+        **저장 파일**을 읽으므로 브릿지가 막혀도 흔들리지 않는다 · 사람이 손으로
+        누른 시작(`schedule_id` 가 없다)은 그대로 통과시킨다.
+        """
+        if not str(payload.get('schedule_id') or '').strip():
+            return ''
+        try:
+            from motion_common.schedule_store import (
+                SCHEDULE_MODE, ScheduleStore,
+            )
+            project_id = self.project_repository.selected_project_id()
+            if not project_id:
+                return '현재 프로젝트가 없습니다'
+            store = ScheduleStore(
+                projects_dir=str(self.workspace_root / 'motion_projects'),
+                current_project_id=project_id,
+            )
+            if store.mode != SCHEDULE_MODE:
+                return '운전 모드가 「수동」입니다 · 스케줄은 시작시키지 않습니다'
+        except (OSError, ValueError) as exc:
+            self.get_logger().warn(f'스케줄 시작 확인 실패: {exc}')
+        return ''
+
     def motion_run_start(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        manual = self.schedule_start_blocked_by_manual_mode(payload)
+        if manual:
+            self.get_logger().warn(f'스케줄 시작 거절 · {manual}')
+            return {'success': False, 'message': f'모션 실행 불가: {manual}'}
         if str(payload.get('request_source') or '') != 'network_control':
             conflict = self.coordination_execution_blocker()
             if conflict:

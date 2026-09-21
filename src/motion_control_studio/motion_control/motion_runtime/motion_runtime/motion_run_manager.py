@@ -705,6 +705,13 @@ class MotionRunManager(Node):
                 'request_source': str(
                     payload.get('request_source') or 'motion_run'
                 ),
+                # **누가 켰는지 기억한다** · §6-270
+                #
+                # 전에는 스케줄이 보낸 `schedule_id` 를 받고도 버렸다 · 그래서
+                # 스케줄은 돌고 있는 모션이 자기가 켠 것인지 알 수 없었고,
+                # 구간이 끝나도 멈출 근거가 없었다 · 실측으로 16~18시 스케줄이
+                # 17:58 에 켠 모션이 18:16 까지 돌았다.
+                'schedule_id': str(payload.get('schedule_id') or ''),
                 'phase_started_at': time.time(),
             })
             self._set_status(preparing_status)
