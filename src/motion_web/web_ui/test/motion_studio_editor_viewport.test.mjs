@@ -23,7 +23,6 @@ function fixture() {
     studioEditorValueZoomOutButton: button(),
     studioEditorValueRangeLockButton: button(),
     studioEditorFitAllButton: button(),
-    studioEditorFitSelectionButton: button(),
   };
   const editor = {
     working: { frames: [{ time_sec: 2, values: {} }] },
@@ -64,7 +63,6 @@ function fixture() {
     selectedMotionAxisRange: () => ({
       motionId: '1-1', minValue: -20, maxValue: 20,
     }),
-    selectedPointRange: () => ({ points: [{}, {}] }),
     editorDuration: () => 2,
   });
   return {
@@ -101,10 +99,16 @@ test('editor viewport owns zoom, fit, and value range interactions', () => {
   assert.deepEqual(view.resetOptions(), { unlock: true, preserveLockedRange: true });
   assert.deepEqual(view.editor.valueView, { minValue: -20, maxValue: 20 });
 
-  view.el.studioEditorFitSelectionButton.click();
-  assert.equal(view.editor.viewStart, 0.5);
-  assert.equal(view.editor.viewEnd, 1.5);
-  assert.ok(view.drawCount() >= 4);
+  assert.ok(view.drawCount() >= 3);
+});
+
+test('「선택 포인트 맞춤」은 없앴다 · 누를 수 있는 상태가 없었다 · §6-249', () => {
+  // 꺼지는 조건이 pointMode 였고, 동작 조건은 포인트 두 개 선택이었다 ·
+  // 두 점을 고를 수 있는 모드에서는 꺼져 있고, 켜져 있는 모드에서는
+  // 두 점이 없어 오류 문구만 떴다 · 어느 쪽에서도 쓸 수 없었다.
+  const view = fixture();
+  view.controller.bind();
+  assert.equal(typeof view.controller.fitSelection, 'undefined');
 });
 
 test('editor viewport schedules drag redraws without drawing immediately', () => {

@@ -388,7 +388,33 @@ export function bindMotionStudioGraphEvents(context) {
   el.studioEditorGraph?.addEventListener('mousedown', (event) => {
     const editor = state.editor;
     const metrics = editor?.graphMetrics;
-    if (!editor || !metrics || event.button !== 0) return;
+    if (!editor || !metrics) return;
+    // 가운데 버튼(휠 클릭)은 **언제나 화면만 끈다** · §6-248
+    //
+    // 끌기는 전부터 있었다 · 다만 빈 곳을 눌렀을 때만 시작했다 · 확대할수록
+    // 포인트가 화면을 채워서 「빈 곳」이 사라지고, 누르는 족족 포인트가
+    // 잡혀 곡선이 움직였다 · 그래서 확대한 뒤에는 이동이 사실상 막혔다.
+    //
+    // 포인트와 겹치지 않는 버튼을 하나 준다 · 누르는 자리를 가리지 않는다.
+    if (event.button === 1) {
+      event.preventDefault();
+      editor.draggingPoint = null;
+      editor.draggingHandle = null;
+      editor.panningGraph = {
+        startX: canvasPoint(event, metrics).x,
+        startY: canvasPoint(event, metrics).y,
+        startViewStart: editor.viewStart,
+        startViewEnd: editor.viewEnd,
+        startMinValue: metrics.minValue,
+        startMaxValue: metrics.maxValue,
+        timeSpan: editor.viewEnd - editor.viewStart,
+        valueSpan: metrics.maxValue - metrics.minValue,
+        moved: false,
+      };
+      editor.suppressGraphClick = true;
+      return;
+    }
+    if (event.button !== 0) return;
     if (editor.autoApplyingPointDrag) {
       setEditorMessage('이전 포인트 이동을 계산하고 있습니다.', true);
       return;
@@ -508,6 +534,11 @@ export function bindMotionStudioGraphEvents(context) {
     }
   });
 
+  // 가운데 버튼의 브라우저 기본 동작(자동 스크롤)을 막는다
+  el.studioEditorGraph?.addEventListener('auxclick', (event) => {
+    if (event.button === 1) event.preventDefault();
+  });
+
   el.studioEditorGraph?.addEventListener('wheel', (event) => {
     const editor = state.editor;
     if (!editor) return;
@@ -516,6 +547,18 @@ export function bindMotionStudioGraphEvents(context) {
     if (event.shiftKey) {
       const delta = Math.sign(event.deltaY) * span * 0.12;
       editorViewport.setView(editor.viewStart + delta, editor.viewEnd + delta);
+      return;
+    }
+    // Alt + 휠 로 위아래 · 축 범위를 고정해 두었으면 세로는 움직이지 않는다
+    if (event.altKey) {
+      if (editor.valueRangeLock) return;
+      const metrics = editor.graphMetrics;
+      const minValue = Number(metrics?.minValue);
+      const maxValue = Number(metrics?.maxValue);
+      if (!Number.isFinite(minValue) || !Number.isFinite(maxValue)) return;
+      const step = Math.sign(event.deltaY) * (maxValue - minValue) * 0.12;
+      editor.valueView = { minValue: minValue + step, maxValue: maxValue + step };
+      drawEditorGraph();
       return;
     }
     const center = editor.cursor?.timeSec ?? ((editor.viewStart + editor.viewEnd) / 2);

@@ -235,7 +235,23 @@ class MotionStudioSync:
             and isinstance(result.get('composition'), dict)
             and 'conflicts' in result.get('composition')
         )
-        if not studio_busy and not workspace_matches:
+        # **아예 안 붙어 있으면 도는 중이어도 붙인다** · §6-253
+        #
+        # 「한가할 때만 붙인다」는 도는 중에 프로젝트를 **갈아끼우지** 않으려는
+        # 규칙이다 · 그런데 아예 안 붙어 있는 것은 갈아끼우는 일이 아니라
+        # 처음 붙이는 일이다 · 막을 이유가 없다.
+        #
+        # 서비스가 다시 뜨면 스튜디오 노드는 빈손으로 시작한다 · 그때 편집
+        # 중이면 `studio_busy` 라서 다시 붙이기를 건너뛰었고, 「다시 붙이고 한
+        # 번 더 보내는」 길(§6-109)이 두 번 다 거부당했다 · 사람에게는 한참
+        # 기다리다 저장 실패로 보였다.
+        #
+        #     [WARN] studio command without an attached project: replace_layer_data
+        #     [WARN] studio command without an attached project: update_layer
+        attached_to_project = (
+            str(current_project.get('workspace_project_id') or '') != ''
+        )
+        if (not studio_busy or not attached_to_project) and not workspace_matches:
             layers_by_id: Dict[str, Dict[str, Any]] = {}
             for folder in detail.get('tree') or []:
                 if folder.get('category') != 'layers':

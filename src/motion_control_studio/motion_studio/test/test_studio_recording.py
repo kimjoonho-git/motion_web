@@ -228,9 +228,10 @@ def test_merge_commit_rebuilds_all_source_points_when_editor_preview_omits_them(
 
     merged = result['project']['layers'][-1]
     assert merged['name'] == '방어 병합'
+    # 원본 곡선은 그대로 · 빈 구간을 메우는 곡선이 더 붙을 수 있다 · §6-252
     assert {
         curve['curve_id'] for curve in merged['point_curves']
-    } == {'curve-source', 'curve-source-b'}
+    } >= {'curve-source', 'curve-source-b'}
     appended_curve = next(
         curve for curve in merged['point_curves']
         if curve['curve_id'] == 'curve-source-b'

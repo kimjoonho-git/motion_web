@@ -6,6 +6,8 @@ import {
   motionStudioShortcutAllowed,
   motionStudioTypingTarget,
 } from './motion_studio_editor_shortcuts.js';
+import { motionStudioAxisEndpoints } from './motion_studio_tracks.js';
+import { displayText } from './format.js';
 import {
   editMotionStudioLayer,
   saveMotionStudioLayerData,
@@ -384,8 +386,17 @@ export function createMotionStudioEditorController({
         : '-';
     }
     if (el.studioEditorPointAddButton) {
+      // **포인트 선택 모드면 언제든 된다** · §6-254
+      //
+      // 전에는 편집 방식이 「포인트 곡선」일 때만 켜졌다(`pointMode`) ·
+      // 그래프에서 포인트를 골라 놓고도 방식을 먼저 바꾸지 않으면 추가·삭제가
+      // 회색이라, 왜 안 되는지 알 수 없었다.
+      //
+      // 가르는 것은 편집 방식이 아니라 **무엇을 고르는 중인가**다 ·
+      // 「구간 선택」 쪽에 서 있으면 포인트를 건드리지 않고, 그 외에는
+      // 포인트를 고른 그대로 다룰 수 있어야 한다.
       const candidate = editor?.pendingPointCandidate;
-      const canAddPoint = pointMode
+      const canAddPoint = !rangeChosen
         && Boolean(candidate)
         && !editor?.preview
         && editorSelectedMotionIds().length === 1;
@@ -395,10 +406,12 @@ export function createMotionStudioEditorController({
         : '그래프에서 추가할 위치를 먼저 선택하세요';
     }
     [el.studioEditorPointTime, el.studioEditorPointValue, el.studioEditorPointMode].forEach((field) => {
-      if (field) field.disabled = !pointMode || !point || !editablePointCurve;
+      // 고른 포인트의 값을 고치는 칸도 같은 기준을 쓴다 · §6-254
+      if (field) field.disabled = rangeChosen || !point || !editablePointCurve;
     });
     if (el.studioEditorPointDeleteButton) {
-      const canDeletePoint = pointMode
+      // 포인트 선택 모드면 언제든 된다 · §6-254
+      const canDeletePoint = !rangeChosen
         && Boolean(point)
         && editablePointCurve
         && (editor?.pointDraft?.points?.length || 0) > 2;
@@ -736,9 +749,6 @@ export function createMotionStudioEditorController({
     ).forEach((control) => {
       control.disabled = Boolean(editor?.preview) || pointMode || selectedAxisPointBacked;
     });
-    if (el.studioEditorFitSelectionButton) {
-      el.studioEditorFitSelectionButton.disabled = pointMode;
-    }
     if (el.studioEditorValueRangeLockButton) {
       const availableRange = selectedEditorMotionAxisRange();
       const locked = Boolean(editor?.valueRangeLock);
@@ -869,6 +879,53 @@ export function createMotionStudioEditorController({
         .filter(Boolean),
       devicePixelRatio: window.devicePixelRatio || 1,
     });
+    renderAxisEndpoints();
+  }
+
+  /** 축 하나만 골랐을 때 시작·끝을 표로 적는다 · §6-249
+   *
+   * 그래프를 눈으로 훑어 「어디서 시작해 어디서 끝나나」를 읽던 것을 숫자로
+   * 적어 준다 · 편집본과 원본을 나란히 두어 얼마나 바꿨는지 함께 보인다.
+   *
+   * **하나만 골랐을 때만** 보여준다 · 여럿이면 어느 줄이 어느 축인지
+   * 헷갈리고, 그건 이미 그래프가 색으로 말하고 있다.
+   */
+  /** 고른 축 하나의 시작·끝 · **네 가지만** · §6-249
+   *
+   * 시작 시간 · 시작 각도 · 끝 시간 · 끝 각도 · 그뿐이다 · 길이도 변화량도
+   * 원본과의 비교도 넣었다가 뺐다 · 표가 커지면 옆 단추들이 밀린다.
+   *
+   * 자리는 왼쪽 사이드바의 「선택 축 삭제」 아래 빈 곳이다 · 그래프 밑에
+   * 두었더니 아래 편집 단추들이 밀렸다.
+   */
+  function renderAxisEndpoints() {
+    const box = el.studioEditorAxisEndpoints;
+    const rows = el.studioEditorAxisEndpointRows;
+    if (!box || !rows) return;
+    const editor = state.editor;
+    const selectedIds = editorSelectedMotionIds();
+    const hide = () => { box.classList.add('hidden'); rows.innerHTML = ''; };
+    if (!editor || selectedIds.length !== 1) return hide();
+    const motionId = String(selectedIds[0]);
+    const ends = motionStudioAxisEndpoints(
+      cachedLayerTracks(editor.preview || editor.working).get(motionId),
+    );
+    if (!ends) return hide();
+    if (el.studioEditorAxisEndpointsTitle) {
+      el.studioEditorAxisEndpointsTitle.textContent = `모션 ID ${motionId}`;
+    }
+    const line = (label, timeSec, valueDeg) => (
+      `<tr>
+        <th scope="row">${displayText(label)}</th>
+        <td class="mono">${displayText(Number(timeSec).toFixed(3))}s</td>
+        <td class="mono">${displayText(Number(valueDeg).toFixed(2))}°</td>
+      </tr>`
+    );
+    rows.innerHTML = (
+      line('시작', ends.startTimeSec, ends.startValueDeg)
+      + line('끝', ends.endTimeSec, ends.endValueDeg)
+    );
+    box.classList.remove('hidden');
   }
 
   const editorGraphScheduler = createMotionStudioGraphScheduler({

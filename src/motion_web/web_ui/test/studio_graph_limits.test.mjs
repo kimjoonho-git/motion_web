@@ -75,19 +75,23 @@ const CSS = readFileSync(
   'utf8',
 );
 
-test('the toolbar sits inside the graph box', () => {
-  const wrap = PANEL.slice(PANEL.indexOf('studio-editor-canvas-wrap'));
-  const toolbarAt = wrap.indexOf('studio-editor-toolbar');
-  const wrapEndsAt = wrap.indexOf('studioEditorLegend');
-  assert.ok(toolbarAt > 0 && toolbarAt < wrapEndsAt, '도구 줄이 그래프 밖에 있다');
+test('도구 줄은 그래프 위에 따로 선다 · 그림을 가리지 않는다 · §6-247', () => {
+  // 전에는 그래프 안에 띄워(position: absolute) 오른쪽 위에 얹었다 ·
+  // 높이를 아끼려던 것인데 그림 위에 상자가 겹쳐 앉아 그래프를 가렸다.
+  const toolbarAt = PANEL.indexOf('studio-editor-toolbar');
+  const canvasAt = PANEL.indexOf('studio-editor-canvas-wrap');
+  assert.ok(toolbarAt > 0 && canvasAt > 0, '도구 줄 또는 그래프를 못 찾았다');
+  assert.ok(toolbarAt < canvasAt, '도구 줄이 아직 그래프 아래에 있다');
+
+  const wrap = PANEL.slice(canvasAt, PANEL.indexOf('studioEditorLegend'));
+  assert.ok(!wrap.includes('studio-editor-toolbar'), '도구 줄이 아직 그래프 상자 안에 있다');
 });
 
-test('the toolbar stands vertically on the right', () => {
+test('도구 줄은 가로 한 줄로 눕는다', () => {
   const block = CSS.slice(CSS.indexOf('.studio-editor-toolbar {'));
-  assert.match(block, /position: absolute;/);
-  assert.match(block, /right: \d+px;/);
-  assert.match(block, /flex-direction: column;/, '가로로 눕혀 있다');
-  assert.match(block, /flex-wrap: nowrap;/, '줄바꿈으로 흩어질 수 있다');
+  assert.doesNotMatch(block.slice(0, 400), /position: absolute;/, '아직 그래프 위에 떠 있다');
+  assert.match(block, /flex-direction: row;/);
+  assert.match(block, /flex-wrap: wrap;/);
 });
 
 test('the graph keeps a taller minimum height', () => {
@@ -96,12 +100,29 @@ test('the graph keeps a taller minimum height', () => {
   assert.ok(Number(match[1]) >= 400, `아직 ${match[1]}px 이다`);
 });
 
-test('the graph row no longer shares space with a toolbar row', () => {
+test('남는 높이는 그래프가 가져간다', () => {
+  // 첫 줄은 도구 줄(auto) · 그 다음이 그래프(1fr) 다 · 줄을 안 늘리면
+  // 도구가 「그래프 자리」를 차지해 실측 414px 로 부풀었다
   const block = CSS.slice(CSS.indexOf('.studio-editor-main {'));
   assert.match(
-    block.slice(0, 300),
-    /grid-template-rows: minmax\(var\(--studio-editor-graph-min-height\), 1fr\)/,
+    block,
+    /grid-template-rows: auto minmax\(var\(--studio-editor-graph-min-height\), 1fr\)/,
   );
+});
+
+test('짧은 화면에서도 아래 편집 구역에 닿을 수 있다 · §6-250', () => {
+  // 그래프 최소 높이가 420px 로 못 박혀 있고 바깥이 overflow: hidden 이라,
+  // 화면이 짧으면 편집 단추가 대화상자 밖으로 밀리고 스크롤도 막혔다.
+  const block = CSS.slice(CSS.indexOf('.studio-editor-main {'));
+  assert.match(block.slice(0, 900), /overflow-y: auto;/, '넘쳐도 내려갈 수 없다');
+  // 화면이 낮으면 그래프를 줄여 한 화면에 담는다
+  assert.match(CSS, /@media \(max-height: 900px\)/);
+  assert.match(CSS, /@media \(max-height: 820px\)/);
+  assert.match(CSS, /@media \(max-height: 720px\)/);
+  // 오류 목록이 길어도 아래를 밀어내지 않는다
+  const details = CSS.slice(CSS.indexOf('.studio-editor-validation-details {'));
+  assert.match(details.slice(0, 300), /max-height: \d+px;/);
+  assert.match(details.slice(0, 300), /overflow-y: auto;/);
 });
 
 // 그리기가 끝까지 돌아야 한다 · §6-120

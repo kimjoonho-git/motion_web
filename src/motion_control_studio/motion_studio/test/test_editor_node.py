@@ -285,7 +285,7 @@ def test_editor_merge_response_preserves_source_point_curves():
     assert result['success'] is True
     assert {
         curve['curve_id'] for curve in result['layer']['point_curves']
-    } == {'curve-a', 'curve-b'}
+    } >= {'curve-a', 'curve-b'}   # 빈 구간 곡선이 더 붙을 수 있다 · §6-252
     appended_curve = next(
         curve for curve in result['layer']['point_curves']
         if curve['curve_id'] == 'curve-b'

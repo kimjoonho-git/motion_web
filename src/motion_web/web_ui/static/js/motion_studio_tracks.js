@@ -168,3 +168,41 @@ export function motionStudioEditorIssueTimes(validation = {}, selectedMotionIds 
       .map((item) => Number(item.time_sec)),
   ].filter(Number.isFinite);
 }
+
+/** 축 하나의 **시작과 끝** · §6-249
+ *
+ * 축을 하나만 골랐을 때 「어디서 시작해 어디서 끝나는가」를 표로 보여준다 ·
+ * 그래프를 눈으로 훑어 읽던 것을 숫자로 적어 준다.
+ *
+ * 편집 중인 것(`working`)과 원본(`original`)을 나란히 준다 · 무엇을 얼마나
+ * 바꿨는지 그 자리에서 보인다.
+ *
+ * 값이 없으면 `null` 을 준다 · 빈 표를 그리지 않기 위해서다.
+ */
+export function motionStudioAxisEndpoints(points) {
+  if (!Array.isArray(points) || points.length === 0) return null;
+  const first = points[0];
+  const last = points[points.length - 1];
+  // `Number(null)` 은 **0 이다** · 그냥 Number 로 바꾸면 값이 비었는데도
+  // 「0°」 라고 적힌다 · 없는 것과 0 은 다른 일이다.
+  const number = (value) => (
+    value === null || value === undefined || value === '' ? NaN : Number(value)
+  );
+  const startTimeSec = number(first?.timeSec);
+  const endTimeSec = number(last?.timeSec);
+  const startValueDeg = number(first?.value);
+  const endValueDeg = number(last?.value);
+  if (
+    !Number.isFinite(startTimeSec) || !Number.isFinite(endTimeSec)
+    || !Number.isFinite(startValueDeg) || !Number.isFinite(endValueDeg)
+  ) return null;
+  return {
+    startTimeSec,
+    endTimeSec,
+    startValueDeg,
+    endValueDeg,
+    durationSec: endTimeSec - startTimeSec,
+    deltaDeg: endValueDeg - startValueDeg,
+    frameCount: points.length,
+  };
+}

@@ -231,7 +231,13 @@ export function motionStudioEditorGraphClickAction({
   }
   const regionCurveId = String(pointRegion?.curve_id || '');
   const activeId = String(activeCurveId || '');
-  if (pointMode) {
+  // 빈 곳을 누르면 **포인트 추가 자리**다 · 선택 방식이 정한다 · §6-254
+  //
+  // 전에는 기능 탭이 「포인트 곡선」일 때만(`pointMode`) 추가 자리로 쳤다 ·
+  // 바로 위 §6-121 에서 「기능 탭은 클릭의 뜻에 관여하지 않는다」고 해 놓고
+  // 여기만 그대로였다 · 그래서 포인트를 골라 놓고도 탭을 먼저 바꾸지 않으면
+  // 추가·삭제가 회색이었다.
+  if (!rangeSelection) {
     if (pointRegion && (!activeId || regionCurveId !== activeId)) {
       return 'select_curve';
     }

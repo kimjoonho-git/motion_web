@@ -321,9 +321,13 @@ test('LOCK 선택 방식 버튼 둘은 누르면 그 방식이 된다', () => {
 });
 
 test('LOCK 구간 선택 중에는 포인트 끌기가 시작되지 않는다', () => {
-  const mousedown = INTERACTIONS.slice(
+  // 글자 수로 자르지 않는다 · 앞에 줄이 늘면 찾던 것이 창 밖으로 밀린다 · §6-248
+  const fromMousedown = INTERACTIONS.slice(
     INTERACTIONS.indexOf("addEventListener('mousedown'"),
-  ).slice(0, 900);
+  );
+  const mousedown = fromMousedown.slice(
+    0, fromMousedown.indexOf("addEventListener('mousemove'"),
+  );
   assert.match(mousedown, /motionStudioRangeSelectionChosen\(editor\)/);
 });
 

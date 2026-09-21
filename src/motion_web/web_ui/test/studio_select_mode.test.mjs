@@ -161,9 +161,13 @@ const INTERACTIONS = readFileSync(
 );
 
 test('pressing a point never starts a drag while in range mode', () => {
-  const mousedown = INTERACTIONS.slice(
+  // 글자 수로 자르지 않는다 · 앞에 줄이 늘면 찾던 것이 창 밖으로 밀린다 · §6-248
+  const fromMousedown = INTERACTIONS.slice(
     INTERACTIONS.indexOf("addEventListener('mousedown'"),
-  ).slice(0, 900);
+  );
+  const mousedown = fromMousedown.slice(
+    0, fromMousedown.indexOf("addEventListener('mousemove'"),
+  );
   assert.match(
     mousedown,
     /if \(motionStudioRangeSelectionChosen\(editor\)\)/,

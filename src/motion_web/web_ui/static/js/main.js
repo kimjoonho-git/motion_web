@@ -1500,11 +1500,18 @@ async function runSafetyStop(emergency) {
 el.headerMotionStopButton?.addEventListener('click', () => runSafetyStop(false));
 el.headerEmergencyStopButton?.addEventListener('click', () => runSafetyStop(true));
 
-window.addEventListener('keydown', (event) => {
-  if (!(event.ctrlKey && event.shiftKey && event.code === 'KeyE')) return;
-  event.preventDefault();
-  if (!appState.emergencyLatched) runSafetyStop(true);
-});
+/* 긴급정지에 단축키를 두지 않는다 · §6-251
+ *
+ * `Ctrl + Shift + E` 하나로 긴급정지가 걸렸다 · 확인창도 없고, 화면 어디서나
+ * 먹었다 · 그래프 편집 중이든 글자를 치는 중이든 상관없었다.
+ *
+ * 걸리면 모터 명령이 전부 막히고 **프로그램을 다시 띄우는 수밖에 없다** ·
+ * 실수로 눌러 놓고 왜 막혔는지 모르는 일이 실제로 있었다.
+ *
+ * 긴급정지는 급할 때 **손이 가는 큰 단추**로 누르는 것이다 · 외워야 하는
+ * 조합키로 누르는 것이 아니다 · 확인창을 붙이는 쪽도 아니다(급할 때 한 번
+ * 더 누르게 되어 오히려 느려진다).
+ */
 
 if (el.motorErrorConfirmButton) {
   el.motorErrorConfirmButton.addEventListener('click', () => {

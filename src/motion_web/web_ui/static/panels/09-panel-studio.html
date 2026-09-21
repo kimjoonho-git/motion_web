@@ -255,24 +255,31 @@
                   <small>현재 레이어의 축만 변경합니다.</small>
                 </div>
               </section>
+              <section id="studioEditorAxisEndpoints" class="studio-editor-axis-endpoints hidden" aria-label="선택 축 시작·끝" aria-live="polite">
+                <strong id="studioEditorAxisEndpointsTitle">모션 ID</strong>
+                <table>
+                  <tbody id="studioEditorAxisEndpointRows"></tbody>
+                </table>
+              </section>
             </aside>
             <div class="studio-editor-main">
-            <div class="studio-editor-canvas-wrap"><canvas id="studioEditorGraph" height="360"></canvas>
-<div class="studio-editor-toolbar">
-                <div class="studio-editor-tool-group" aria-label="시간축 도구">
-                  <span>시간</span>
-                  <button id="studioEditorTimeZoomInButton" type="button">확대</button>
-                  <button id="studioEditorTimeZoomOutButton" type="button">축소</button>
-                </div>
-                <div class="studio-editor-tool-group" aria-label="값축 도구">
-                  <span>값</span>
-                  <button id="studioEditorValueZoomInButton" type="button">확대</button>
-                  <button id="studioEditorValueZoomOutButton" type="button">축소</button>
-                </div>
-                <button id="studioEditorValueRangeLockButton" type="button" aria-pressed="false">축 범위 고정</button>
-                <button id="studioEditorFitSelectionButton" type="button">선택 포인트 맞춤</button>
-                <button id="studioEditorFitAllButton" type="button">전체 맞춤</button>
+            <div class="studio-editor-toolbar">
+              <span class="studio-editor-select-mode" role="group" aria-label="선택 방식"><button id="studioEditorPointSelectButton" type="button" aria-pressed="true">포인트 선택</button><button id="studioEditorRangeSelectButton" type="button" aria-pressed="false">구간 선택</button></span>
+              <div class="studio-editor-tool-group" aria-label="시간축 도구">
+                <span>시간</span>
+                <button id="studioEditorTimeZoomInButton" type="button">확대</button>
+                <button id="studioEditorTimeZoomOutButton" type="button">축소</button>
               </div>
+              <div class="studio-editor-tool-group" aria-label="값축 도구">
+                <span>값</span>
+                <button id="studioEditorValueZoomInButton" type="button">확대</button>
+                <button id="studioEditorValueZoomOutButton" type="button">축소</button>
+              </div>
+              <button id="studioEditorValueRangeLockButton" type="button" aria-pressed="false">축 범위 고정</button>
+              <button id="studioEditorFitAllButton" type="button">전체 맞춤</button>
+              <span class="studio-editor-pan-hint">휠 클릭 드래그로 이동 · Shift+휠 좌우 · Alt+휠 상하</span>
+            </div>
+            <div class="studio-editor-canvas-wrap"><canvas id="studioEditorGraph" height="360"></canvas>
             </div>
             <div id="studioEditorLegend" class="studio-layer-graph-legend"></div>
               <div class="studio-editor-feedback">
@@ -367,7 +374,7 @@
                   <section id="studioEditorRangeActions" class="studio-editor-range-actions" aria-label="선택 구간 편집">
                     <div class="studio-editor-range-head">
                       <strong>포인트·구간 편집</strong>
-                      <span class="studio-editor-select-mode" role="group" aria-label="선택 방식"><button id="studioEditorPointSelectButton" type="button" aria-pressed="true">포인트 선택</button><button id="studioEditorRangeSelectButton" type="button" aria-pressed="false">구간 선택</button></span>
+                      
                     </div>
                     <span id="studioEditorRangeStatus" class="studio-editor-range-status" aria-live="polite">포인트 선택은 그래프의 포인트 하나를 고릅니다. 구간 선택은 시작·종료 포인트 두 개를 고릅니다. 구간 복사는 「복사 시작(초)」에 적은 시간에 붙이며, 그 자리에 있던 포인트는 대체됩니다.</span>
                     <div class="studio-editor-point-action-row">

@@ -702,7 +702,8 @@
 }
 
 .studio-editor-sidebar {
-  grid-template-rows: auto auto minmax(70px, 140px) minmax(0, 1fr);
+  /* 마지막 줄은 「선택 축 시작·끝」 표다 · 남는 자리에 앉는다 · §6-249 */
+  grid-template-rows: auto auto minmax(70px, 140px) minmax(0, 1fr) auto;
   padding: 7px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -802,10 +803,16 @@
   font-size: 12px;
 }
 
+/* 오류 목록이 길어도 **아래 편집 구역을 밀어내지 않는다** · §6-250
+ *
+ * 오류가 여러 건이면 이 상자가 그만큼 길어지고, 그 아래 편집 단추들이
+ * 화면 밖으로 밀렸다 · 상자는 제 안에서만 굴러간다. */
 .studio-editor-validation-details {
   flex: 1 0 100%;
   display: grid;
   gap: 4px;
+  max-height: 130px;
+  overflow-y: auto;
   padding: 7px 9px;
   border: 1px solid #f0b2ac;
   border-radius: 6px;
@@ -965,31 +972,30 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* 그래프 오른쪽에 세로로 세운다 · §6-120
-   가로 한 줄이 차지하던 높이를 그래프가 가져간다. */
+/* 그래프 **위에** 한 줄로 놓는다 · §6-247
+ *
+ * 전에는 그래프 안에 띄워(`position: absolute`) 오른쪽 위에 얹었다 · 높이를
+ * 아끼려던 것인데, 그림 위에 상자가 겹쳐 앉아 **그래프를 가렸다**.
+ *
+ * 단추 크기는 그대로 둔다 · 자리만 그래프 바깥 위로 옮긴다. */
 .studio-editor-toolbar {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  z-index: 2;
-  flex-direction: column;
-  align-items: stretch;
-  flex-wrap: nowrap;
-  gap: 4px;
-  padding: 5px;
+  align-items: center;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+  padding: 5px 6px;
   border: 1px solid #dfe6ee;
   border-radius: 7px;
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: 0 2px 6px rgba(15, 23, 32, 0.08);
+  background: #ffffff;
 }
 
 .studio-editor-toolbar .studio-editor-tool-group {
-  display: flex;
-  justify-content: space-between;
-  padding-right: 0;
-  border-right: 0;
-  border-bottom: 1px solid var(--line);
-  padding-bottom: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding-right: 8px;
+  border-right: 1px solid var(--line);
 }
 
 .studio-editor-toolbar button {
@@ -1028,8 +1034,25 @@
 .studio-editor-main {
   align-content: stretch;
   gap: 4px;
-  grid-template-rows: minmax(var(--studio-editor-graph-min-height), 1fr) auto auto auto;
-  overflow: hidden;
+  /* **잘리면 내려갈 수 있어야 한다** · §6-250
+   *
+   * 그래프 최소 높이가 420px 로 못 박혀 있는데 바깥이 `overflow: hidden`
+   * 이었다 · 화면이 짧으면 아래 편집 단추가 대화상자 밖으로 밀려나고
+   * 스크롤도 막혀 **손댈 방법이 없었다**.
+   *
+   *   화면 757 → 편집 단추 아래 845 (99px 잘림)
+   *   화면 625 → 843 (227px)
+   *   화면 557 → 842 (293px)
+   *
+   * 자리가 모자라면 이 칸이 스크롤된다 · 그래프는 최소 높이를 지킨다. */
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* 첫 줄은 이제 **도구 묶음**이다 · 남는 높이는 그래프가 가져간다 · §6-247
+   *
+   * 도구를 그래프 위로 빼면서 줄이 하나 늘었는데 이 값을 안 고쳤더니,
+   * 「그래프 자리」로 잡아 둔 첫 줄(1fr)을 도구가 차지해 실측 414px 로
+   * 부풀고 그래프는 눌렸다. */
+  grid-template-rows: auto minmax(var(--studio-editor-graph-min-height), 1fr) auto auto auto;
   padding-right: 2px;
 }
 
@@ -1080,9 +1103,23 @@
 }
 
 /* 선택 방식 두 개 · 하나만 눌린 것처럼 붙여 둔다 · §6-121 */
+/* 선택 방식은 **그래프 위**에 둔다 · §6-255
+ *
+ * 우측 하단 구석에 있었다 · 포인트와 구간을 자주 오가는데 손이 멀었다 ·
+ * 그래프를 보면서 바로 누를 수 있어야 한다. */
 .studio-editor-select-mode {
   display: inline-flex;
   gap: 0;
+  margin-right: 8px;
+  padding-right: 8px;
+  border-right: 1px solid var(--line);
+}
+
+.studio-editor-toolbar .studio-editor-select-mode button[aria-pressed="true"] {
+  border-color: #1f6feb;
+  background: #e8f1ff;
+  color: #1f4b99;
+  font-weight: 700;
 }
 
 .studio-editor-select-mode button:first-child {
@@ -1303,3 +1340,83 @@
   height: 100%;
 }
 
+/* 이동 방법을 화면에 적어 둔다 · §6-248
+ *
+ * 끌기는 전부터 됐는데 아무 데도 적혀 있지 않았다 · 확대하면 포인트가
+ * 화면을 채워 끌기가 안 잡히니, 되는 줄도 모르고 막힌 것처럼 보였다. */
+.studio-editor-pan-hint {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* 고른 축 하나의 시작·끝 · §6-249
+ *
+ * 왼쪽 사이드바 「선택 축 삭제」 아래 빈 곳에 앉는다 · 처음에는 그래프
+ * 밑에 두었는데, 한 줄이 늘어난 만큼 아래 편집 단추들이 밀렸다.
+ *
+ * 적는 것은 **네 가지뿐**이다 · 시작 시간·각도, 끝 시간·각도. */
+.studio-editor-axis-endpoints {
+  margin-top: 6px;
+  padding: 6px 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #ffffff;
+  font-size: 12px;
+}
+
+.studio-editor-axis-endpoints > strong {
+  display: block;
+  margin-bottom: 3px;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.studio-editor-axis-endpoints table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.studio-editor-axis-endpoints th,
+.studio-editor-axis-endpoints td {
+  padding: 1px 0;
+  border: 0;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.studio-editor-axis-endpoints th[scope="row"] {
+  width: 2.4em;
+  color: var(--muted);
+  font-weight: 600;
+  text-align: left;
+}
+
+.studio-editor-axis-endpoints td.mono {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* 짧은 화면에서는 그래프를 낮춘다 · §6-250
+ *
+ * 420px 을 고집하면 세로가 짧은 노트북에서 아래 편집 단추가 늘 스크롤
+ * 밖으로 나간다 · 그래프를 조금 줄여 한 화면에 들어오게 한다. */
+@media (max-height: 900px) {
+  .studio-editor-dialog {
+    --studio-editor-graph-min-height: 300px;
+  }
+}
+
+@media (max-height: 820px) {
+  .studio-editor-dialog {
+    --studio-editor-graph-min-height: 180px;
+  }
+}
+
+@media (max-height: 720px) {
+  .studio-editor-dialog {
+    --studio-editor-graph-min-height: 150px;
+  }
+}

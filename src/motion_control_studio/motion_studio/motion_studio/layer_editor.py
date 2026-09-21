@@ -855,20 +855,29 @@ def edit_layer(layer: Dict[str, Any], request: Dict[str, Any]) -> Dict[str, Any]
         if copying and target_start < 0.0:
             raise ValueError('붙일 시간은 0초 이상이어야 합니다')
         changed: List[str] = []
-        for curve in list(working.get('point_curves') or []):
-            motion_id = str(curve.get('motion_id') or '')
-            if motion_id not in selected:
-                continue
-            points = list(curve.get('points') or [])
-            inside = [
-                point for point in points
-                if _inside(_finite(point.get('time_sec'), '포인트 시간'),
-                           start_sec, end_sec)
-            ]
-            if len(inside) < (2 if copying else 1):
-                continue
-            order = point_curve_order(curve)
-            if copying:
+        if copying:
+            # 붙인 포인트는 **붙인 자리의 곡선**에 들어간다 · §6-256
+            #
+            # 전에는 포인트를 떠 온 곡선에 그대로 도로 넣었다 · 한 축에 곡선이
+            # 하나뿐이면 같은 말이지만, 여럿이면 떠 온 곡선이 붙인 자리까지
+            # 늘어나 **옆 곡선을 통째로 덮었다** · 덮인 곡선은 그대로 남고
+            # 프레임만 사라져서, 미리보기·반영은 멀쩡하다가 저장할 때
+            # 「포인트 곡선과 20ms 프레임이 다릅니다」로 터졌다.
+            for motion_id in selected:
+                curves = [
+                    curve for curve in working.get('point_curves') or []
+                    if str(curve.get('motion_id') or '') == motion_id
+                ]
+                taken = sorted(
+                    ((curve, point) for curve in curves
+                     for point in curve.get('points') or []
+                     if _inside(_finite(point.get('time_sec'), '포인트 시간'),
+                                start_sec, end_sec)),
+                    key=lambda item: _finite(item[1].get('time_sec'), '포인트 시간'),
+                )
+                if len(taken) < 2:
+                    continue
+                inside = [point for _curve, point in taken]
                 offset = round(
                     target_start - _finite(inside[0].get('time_sec'), '포인트 시간'), 9
                 )
@@ -882,16 +891,53 @@ def edit_layer(layer: Dict[str, Any], request: Dict[str, Any]) -> Dict[str, Any]
                     moved.append(copy_point)
                 paste_start = _finite(moved[0].get('time_sec'), '포인트 시간')
                 paste_end = _finite(moved[-1].get('time_sec'), '포인트 시간')
-                kept = [
-                    point for point in points
-                    if not _inside(_finite(point.get('time_sec'), '포인트 시간'),
-                                   paste_start, paste_end)
-                ]
-                next_points = sorted(
-                    kept + moved,
-                    key=lambda item: _finite(item.get('time_sec'), '포인트 시간'),
+                landing = []
+                for curve in curves:
+                    curve_start, curve_end = point_curve_bounds(curve)
+                    if curve_start <= paste_end and curve_end >= paste_start:
+                        landing.append(curve)
+                if len(landing) > 1:
+                    raise ValueError(
+                        f'{motion_id} · 붙일 자리가 포인트 곡선 여럿에 걸칩니다 · '
+                        '곡선 하나 안으로 붙이세요'
+                    )
+                if landing:
+                    destination = landing[0]
+                    destination_id = str(destination.get('curve_id') or '')
+                    order = point_curve_order(destination)
+                    kept = [
+                        point for point in destination.get('points') or []
+                        if not _inside(_finite(point.get('time_sec'), '포인트 시간'),
+                                       paste_start, paste_end)
+                    ]
+                    next_points = sorted(
+                        kept + moved,
+                        key=lambda item: _finite(item.get('time_sec'), '포인트 시간'),
+                    )
+                else:
+                    # 곡선이 없는 자리에는 **곡선을 새로 만든다** · 끝에 이어
+                    # 붙이는 것이 가장 흔하다 · 옆 곡선을 늘려서 그 사이를
+                    # 평평하게 덮어 버리지 않는다
+                    destination_id = f'curve_{uuid.uuid4().hex[:8]}'
+                    order = point_curve_order(taken[0][0])
+                    next_points = moved
+                _rewrite_curve(
+                    working, tracks, destination_id, motion_id, order, next_points,
                 )
-            else:
+                changed.append(motion_id)
+        else:
+            for curve in list(working.get('point_curves') or []):
+                motion_id = str(curve.get('motion_id') or '')
+                if motion_id not in selected:
+                    continue
+                points = list(curve.get('points') or [])
+                inside = [
+                    point for point in points
+                    if _inside(_finite(point.get('time_sec'), '포인트 시간'),
+                               start_sec, end_sec)
+                ]
+                if not inside:
+                    continue
                 next_points = [
                     point for point in points
                     if not _inside(_finite(point.get('time_sec'), '포인트 시간'),
@@ -900,11 +946,11 @@ def edit_layer(layer: Dict[str, Any], request: Dict[str, Any]) -> Dict[str, Any]
                 if len(next_points) < 2:
                     # 곡선은 포인트가 둘 이상이어야 한다 · 이 축은 건너뛴다
                     continue
-            _rewrite_curve(
-                working, tracks, str(curve.get('curve_id') or ''), motion_id,
-                order, next_points,
-            )
-            changed.append(motion_id)
+                _rewrite_curve(
+                    working, tracks, str(curve.get('curve_id') or ''), motion_id,
+                    point_curve_order(curve), next_points,
+                )
+                changed.append(motion_id)
         if not changed:
             raise ValueError(
                 '선택한 구간에서 다룰 포인트가 없습니다 · 축과 구간을 다시 보세요'
@@ -1100,6 +1146,128 @@ def edit_layer(layer: Dict[str, Any], request: Dict[str, Any]) -> Dict[str, Any]
         raise ValueError(f'편집 결과가 최대 {MAX_EDIT_FRAMES:,}프레임을 초과합니다')
     working['edit_revision'] = int(working.get('edit_revision') or 0) + 1
     return normalize_layer(working)
+
+
+def extend_point_curves_to_frames(layer: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    """합친 레이어의 빈 구간에 **곡선을 따로 만든다** · §6-252
+
+    합치기는 둘을 따로 만든다.
+
+        frames = render_project(...)              전체 길이를 꽉 채운다
+        point_curves = 원본에서 그대로 복사        원본이 덮던 구간만
+
+    그래서 합친 뒤에는 곡선 밖에 프레임만 있는 구간이 남았다 · 그래프에는
+    앞뒤로 평평한 선이 그어지는데 **집을 포인트가 없어** 그 구간은 편집할 수
+    없었다 · 녹화만 한 레이어는 둘이 같은 구간이라 이런 일이 없어서,
+    「어떨 땐 있고 없을 때도 있다」로 보였다.
+
+    **원래 곡선에 포인트를 이어 붙이지 않는다.** 붙이면 이웃이 생겨 원래
+    곡선의 접선이 달라지고, 그린 결과가 프레임과 어긋난다(실측 83개 표본이
+    최대 3.65° 벗어났다) · 한 축에 곡선을 여럿 둘 수 있으므로(겹치지만
+    않으면 된다) **빈 구간에 새 곡선을 만든다** · 원래 곡선은 손대지 않는다.
+
+    채운 뒤 **스스로 검사**한다 · 그린 결과가 프레임과 다르면 그 구간은
+    포기한다(맞추지 못했다고 망가뜨리지는 않는다).
+    """
+    normalized = normalize_layer(copy.deepcopy(dict(layer)))
+    frames_by_id = _tracks(normalized)
+    curves = copy.deepcopy(list(layer.get('point_curves') or []))
+    if not curves or not frames_by_id:
+        return curves
+
+    covered: Dict[str, List[tuple[float, float]]] = {}
+    for curve in curves:
+        points = list(curve.get('points') or [])
+        if len(points) < 2:
+            continue
+        covered.setdefault(str(curve.get('motion_id') or ''), []).append((
+            round(float(points[0].get('time_sec')), 9),
+            round(float(points[-1].get('time_sec')), 9),
+        ))
+
+    filled: List[Dict[str, Any]] = []
+    for motion_id, samples in frames_by_id.items():
+        spans = sorted(covered.get(motion_id) or [])
+        if not spans or len(samples) < 2:
+            continue
+        for gap in _uncovered_gaps(samples, spans):
+            piece = _curve_from_samples(motion_id, gap)
+            if piece is None:
+                continue
+            probe = {'frames': list(layer.get('frames') or []), 'point_curves': [piece]}
+            if not point_curve_frame_mismatches(probe):
+                filled.append(piece)
+
+    if not filled:
+        return curves
+    merged = curves + filled
+    try:
+        validate_point_curve_overlaps(merged)
+    except ValueError:
+        return curves
+    return merged
+
+
+def _uncovered_gaps(
+    samples: Sequence[tuple[float, float]],
+    spans: Sequence[tuple[float, float]],
+) -> List[List[tuple[float, float]]]:
+    """곡선이 덮지 않은 프레임 묶음들 · 곡선 사이 20ms 는 비워 둔다."""
+    gaps: List[List[tuple[float, float]]] = []
+    current: List[tuple[float, float]] = []
+    for time_sec, value in samples:
+        inside = any(
+            start - EPSILON <= time_sec <= end + EPSILON for start, end in spans
+        )
+        touching = any(
+            abs(time_sec - start) < DEFAULT_PERIOD_SEC - EPSILON
+            or abs(time_sec - end) < DEFAULT_PERIOD_SEC - EPSILON
+            for start, end in spans
+        )
+        if inside or touching:
+            if len(current) >= 2:
+                gaps.append(current)
+            current = []
+            continue
+        current.append((time_sec, value))
+    if len(current) >= 2:
+        gaps.append(current)
+    return gaps
+
+
+def _curve_from_samples(
+    motion_id: str, samples: Sequence[tuple[float, float]]
+) -> Optional[Dict[str, Any]]:
+    """프레임 묶음을 곡선 하나로 · 값이 바뀌는 자리만 포인트로 남긴다."""
+    if len(samples) < 2:
+        return None
+    chosen: List[tuple[float, float]] = []
+    previous = None
+    for index, (time_sec, value) in enumerate(samples):
+        if index in (0, len(samples) - 1) or previous is None or abs(value - previous) > 1e-9:
+            chosen.append((time_sec, value))
+        previous = value
+    guarded: List[tuple[float, float]] = []
+    for time_sec, value in chosen:
+        if guarded and time_sec - guarded[-1][0] < DEFAULT_PERIOD_SEC - EPSILON:
+            continue
+        guarded.append((time_sec, value))
+    if len(guarded) < 2:
+        return None
+    return {
+        'curve_id': f'curve_{uuid.uuid4().hex[:8]}',
+        'motion_id': motion_id,
+        'interpolation_order': 1,
+        'points': [
+            {
+                'point_id': f'point_{uuid.uuid4().hex[:8]}',
+                'time_sec': round(float(time_sec), 9),
+                'value_deg': float(value),
+                'tangent_mode': 'linear',
+            }
+            for time_sec, value in guarded
+        ],
+    }
 
 
 def collect_merged_point_curves(
@@ -1329,6 +1497,9 @@ def merge_layers(
         'frames': frames,
         'point_curves': merged_point_curves,
     })
+    # 곡선을 프레임 전체로 늘린다 · 편집할 수 없는 구간을 남기지 않는다 · §6-252
+    merged['point_curves'] = extend_point_curves_to_frames(merged)
+    merged = normalize_layer(merged)
     merged['merge_report'] = {
         'mode': 'append' if append_id else 'preserve',
         'append_layer_id': append_id,

@@ -477,15 +477,30 @@ test('graph click intent keeps point creation separate from range selection', ()
     pointRegion: null,
     activeCurveId: 'curve-active',
   }), 'add_point');
+  // 기능 탭이 무엇이든 **포인트 선택 모드**면 빈 곳은 추가 자리다 · §6-254
   assert.equal(motionStudioEditorGraphClickAction({
     operation: 'time_shift',
     motionTarget,
     pointRegion: activeRegion,
+    activeCurveId: 'curve-active',
+  }), 'add_point');
+  assert.equal(motionStudioEditorGraphClickAction({
+    operation: 'time_shift',
+    motionTarget,
+    pointRegion: null,
+  }), 'add_point');
+  // 「구간 선택」 쪽에 서 있으면 예전 그대로다
+  assert.equal(motionStudioEditorGraphClickAction({
+    operation: 'time_shift',
+    motionTarget,
+    pointRegion: activeRegion,
+    rangeSelection: true,
   }), 'select_curve');
   assert.equal(motionStudioEditorGraphClickAction({
     operation: 'time_shift',
     motionTarget,
     pointRegion: null,
+    rangeSelection: true,
   }), 'select_motion');
 });
 
@@ -628,10 +643,11 @@ test('editor keeps the graph and compact range toolbar in one viewport layout', 
     styles,
     /grid-template-columns:\s*230px minmax\(0,\s*1fr\)/,
   );
-  // 도구 줄이 그래프 안으로 들어가 한 칸이 줄었다 · §6-120
+  // 도구 줄이 그래프 **위**로 나와 한 칸이 늘었다 · §6-247
+  // (전에는 그래프 안에 띄워 두어 그림을 가렸다)
   assert.match(
     styles,
-    /grid-template-rows:\s*minmax\(var\(--studio-editor-graph-min-height\), 1fr\) auto auto auto/,
+    /grid-template-rows:\s*auto minmax\(var\(--studio-editor-graph-min-height\), 1fr\) auto auto auto/,
   );
   assert.match(
     html,

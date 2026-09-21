@@ -786,14 +786,15 @@ def test_merge_preserves_point_curves_from_each_source_layer():
         ['a', 'b'],
     )
 
+    # 원본 곡선은 그대로 남는다 · 빈 구간을 메우는 곡선이 더 붙을 수 있다 · §6-252
     assert {
         curve['curve_id'] for curve in merged['point_curves']
-    } == {'curve-a', 'curve-b'}
+    } >= {'curve-a', 'curve-b'}
     assert {
         point['point_id']
         for curve in merged['point_curves']
         for point in curve['points']
-    } == {'a-start', 'a-end', 'b-start', 'b-end'}
+    } >= {'a-start', 'a-end', 'b-start', 'b-end'}
     assert point_curve_frame_mismatches(merged) == []
 
 
@@ -837,10 +838,10 @@ def test_merged_point_curves_remain_isolated_between_two_projects():
 
     assert {
         curve['curve_id'] for curve in first['point_curves']
-    } == {'project-a-curve-1', 'project-a-curve-2'}
+    } >= {'project-a-curve-1', 'project-a-curve-2'}   # 빈 구간 곡선이 더 붙을 수 있다 · §6-252
     assert {
         curve['curve_id'] for curve in second['point_curves']
-    } == {'project-b-curve-1', 'project-b-curve-2'}
+    } >= {'project-b-curve-1', 'project-b-curve-2'}   # 빈 구간 곡선이 더 붙을 수 있다 · §6-252
     assert first['frames'] != second['frames']
 
 
@@ -951,7 +952,9 @@ def test_merging_a_recorded_layer_with_a_point_backed_one_keeps_both():
 
     merged = merge_layers({'layers': [recorded, edited]}, ['a', 'c'])
 
-    assert len(merged['point_curves']) == 1
+    # 원본 곡선 하나는 그대로 · 빈 구간을 메우는 곡선이 더 붙는다 · §6-252
+    kept = [c for c in merged['point_curves'] if c['curve_id'] == 'curve-c-1-2']
+    assert len(kept) == 1
     assert merged['point_curves'][0]['motion_id'] == '1-2'
     # 합친 결과도 시스템의 불변식을 지킨다 · 다시 합칠 수 있다
     assert point_curve_frame_mismatches(merged) == []

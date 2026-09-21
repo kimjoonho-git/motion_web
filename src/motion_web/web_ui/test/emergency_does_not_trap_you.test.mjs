@@ -257,3 +257,26 @@ test('AC 서보 축 id 도 서버 규칙과 같다', async () => {
   // 서버: f'{motor_type}_{transport}_master_{index}_alias_{alias}'
   assert.equal(motor.id, 'ac_servo_ethercat_master_0_alias_103');
 });
+
+/** 긴급정지에 단축키를 두지 않는다 · §6-251
+ *
+ * `Ctrl + Shift + E` 하나로 긴급정지가 걸렸다 · 확인창도 없고, 화면 어디서나
+ * 먹었다 · 그래프 편집 중이든 글자를 치는 중이든 상관없었다.
+ *
+ * 걸리면 모터 명령이 전부 막히고 프로그램을 다시 띄우는 수밖에 없다 ·
+ * 실수로 눌러 놓고 왜 막혔는지 모르는 일이 실제로 있었다.
+ *
+ * 긴급정지는 급할 때 손이 가는 **큰 단추**로 누르는 것이다.
+ */
+test('긴급정지에 단축키가 없다 · 실수로 걸리지 않는다', () => {
+  const main = readFileSync(new URL('../static/js/main.js', import.meta.url), 'utf8');
+  const html = readFileSync(new URL('../static/panels/01-topbar.html', import.meta.url), 'utf8');
+
+  assert.doesNotMatch(main, /KeyE/, '긴급정지 단축키가 아직 살아 있다');
+  assert.doesNotMatch(main, /event\.ctrlKey && event\.shiftKey/);
+  assert.doesNotMatch(html, /Control\+Shift\+E/, '단추에 아직 단축키가 적혀 있다');
+
+  // 누르는 길은 큰 단추 하나뿐이다
+  assert.match(html, /id="headerEmergencyStopButton"/);
+  assert.match(main, /el\.headerEmergencyStopButton\?\.addEventListener\('click', \(\) => runSafetyStop\(true\)\)/);
+});

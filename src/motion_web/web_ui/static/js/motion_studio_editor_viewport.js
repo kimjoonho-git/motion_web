@@ -2,12 +2,11 @@ export function createMotionStudioEditorViewportController({
   el,
   getEditor,
   drawGraph,
+  setMessage,
   scheduleGraph,
   renderEditor,
-  setMessage,
   resetValueView,
   selectedMotionAxisRange,
-  selectedPointRange,
   editorDuration,
 }) {
   function setView(start, end, scheduleDraw = false) {
@@ -87,18 +86,6 @@ export function createMotionStudioEditorViewportController({
       const editor = getEditor(); if (!editor) return;
       resetValueView();
       setView(0, Math.max(0.04, editorDuration(editor.working)));
-    });
-    el.studioEditorFitSelectionButton?.addEventListener('click', () => {
-      const editor = getEditor();
-      if (!selectedPointRange(editor)) {
-        setMessage('먼저 같은 포인트 곡선의 서로 다른 포인트 두 개를 선택하세요.', true);
-        return;
-      }
-      resetValueView();
-      setView(
-        Number(editor.rangeSelection.start.timeSec),
-        Number(editor.rangeSelection.end.timeSec),
-      );
     });
   }
 
