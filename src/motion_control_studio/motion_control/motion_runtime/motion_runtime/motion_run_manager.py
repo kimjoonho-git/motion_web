@@ -278,8 +278,17 @@ class MotionRunManager(Node):
                     self._action_results.pop(key, None)
 
     #: 실행 컨텍스트가 서 있어야 처리하는 명령
+    #: **모터를 움직이는 명령만** 여기 넣는다 · §6-269
+    #:
+    #: `automation_configure` 가 여기 있었다 · 그것은 반복 방식을 파일에 적는
+    #: 일이고 모터를 건드리지 않는다 · 처리기도 실행 컨텍스트를 읽기만 하고
+    #: 쓰지 않는다 · 그런데 모터가 준비되지 않으면 저장이 「현재 프로젝트 실행
+    #: 컨텍스트 적용 대기 중입니다」로 거절됐다 (실측 3회 전부 실패).
+    #:
+    #: 화면은 드롭다운을 회색으로 만들지도 않는다 · 고를 수는 있는데 저장만
+    #: 실패했다 · 같은 성격인 스튜디오 레이어 저장·모션축 설정 읽기·MIDI 뱅크
+    #: 편집은 모두 열려 있다.
     COMMANDS_REQUIRING_CONTEXT = frozenset({
-        'automation_configure',
         'check',
         'initialize',
         'start',
