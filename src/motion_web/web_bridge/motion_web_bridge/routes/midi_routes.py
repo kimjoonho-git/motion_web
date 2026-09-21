@@ -42,6 +42,3 @@ def register_midi_routes(app: FastAPI, bridge) -> None:
     async def connect_midi_device():
         return await asyncio.to_thread(bridge.connect_midi_device)
 
-    @app.post('/api/midi-monitor/device/disconnect')
-    async def disconnect_midi_device():
-        return await asyncio.to_thread(bridge.disconnect_midi_device)

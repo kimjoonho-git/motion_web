@@ -391,8 +391,6 @@ export const resetMidiRuntimeValues = () => request('POST', '/api/midi-monitor/r
 
 export const connectMidiDevice = () => request('POST', '/api/midi-monitor/device/connect');
 
-export const disconnectMidiDevice = () => request('POST', '/api/midi-monitor/device/disconnect');
-
 export const requestAcServoJog = (payload) => request('POST', '/api/motion-test/ac-servo/jog', { body: payload });
 
 export const requestDynamixelJog = (payload) => request('POST', '/api/motion-test/dynamixel/jog', { body: payload });

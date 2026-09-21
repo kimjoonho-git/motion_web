@@ -6,6 +6,7 @@ import { indexHtml } from '../tools/index_html.mjs';
 const html = indexHtml;
 const dom = readFileSync(new URL('../static/js/dom.js', import.meta.url), 'utf8');
 const controller = readFileSync(new URL('../static/js/midi_monitor.js', import.meta.url), 'utf8');
+const api = readFileSync(new URL('../static/js/api.js', import.meta.url), 'utf8');
 
 test('MIDI device connection and recent input activity are displayed separately', () => {
   assert.match(html, /id="midiConnectionState"/);
@@ -33,7 +34,21 @@ test('being handed over is not shown as a disconnected device', () => {
     controller,
     /connectMidiDeviceButton\.disabled = loading \|\| !surfaceOwned/,
   );
-  assert.match(controller, /resetMidiRuntimeButton\.disabled = loading \|\| !surfaceOwned/);
+});
+
+test('끊는 길은 두지 않는다 · 돌아올 수 없기 때문이다 · §6-246', () => {
+  // 「연결 해제」를 누르면 입력 브리지가 auto_reconnect 를 끄고 포트를 닫는다 ·
+  // 그러면 「장치 주인」이 이 PC 가 아닌 것으로 바뀌어 표면 권한까지 놓고,
+  // 「MIDI 연결」 단추마저 꺼져서 다시 붙일 방법이 없어진다.
+  for (const gone of ['disconnectMidiDeviceButton', 'resetMidiRuntimeButton']) {
+    assert.doesNotMatch(html, new RegExp(`id=["']${gone}["']`), `${gone} 가 화면에 남아 있다`);
+    assert.doesNotMatch(dom, new RegExp(`${gone}:`), `${gone} 가 dom.js 에 남아 있다`);
+    assert.doesNotMatch(controller, new RegExp(`el\\.${gone}`), `${gone} 를 아직 쓴다`);
+  }
+  assert.doesNotMatch(api, /disconnectMidiDevice/);
+  // 연결은 남는다 · USB 를 뽑았다 꽂는 것은 입력 브리지가 알아서 다시 연다
+  assert.match(html, /id="connectMidiDeviceButton"/);
+  assert.match(controller, /async function connectDevice\(\)/);
 });
 
 test('a verified MIDI bank save reports the new mapping file revision', () => {

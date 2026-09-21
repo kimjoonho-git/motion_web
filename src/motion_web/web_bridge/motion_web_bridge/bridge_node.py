@@ -2067,10 +2067,6 @@ class MotionWebBridge(Node):
     def connect_midi_device(self) -> Dict[str, Any]:
         return self._request_midi_monitor('connect_device', {}, timeout_sec=2.0)
 
-    def disconnect_midi_device(self) -> Dict[str, Any]:
-        return self._request_midi_monitor('disconnect_device', {}, timeout_sec=2.0)
-
-
     def _persist_midi_bank_result(self, updated: Dict[str, Any]) -> Dict[str, Any]:
         if updated.get('success') is False:
             return updated
