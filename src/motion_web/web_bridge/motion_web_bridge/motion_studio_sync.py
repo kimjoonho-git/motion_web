@@ -40,10 +40,43 @@ class MotionStudioSync:
     def clear_project_memory(self) -> None:
         self.session.clear_project_memory()
 
+    def blocked_reason(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        """막힌 이유를 **아는 쪽이** 붙인다 · §6-258
+
+        스튜디오 노드는 「실행 컨텍스트가 아직 아니다」까지만 안다 · 왜
+        아닌지는 브릿지가 안다 · 모터가 꺼져 있는지, 설정이 어긋났는지.
+
+        붙이지 않으면 사람에게는 이렇게 보인다.
+
+            저장 실패 · 먼저 왼쪽에서 통합 프로젝트를 선택하세요
+
+        왼쪽은 멀쩡한데 왼쪽을 보라고 한다 · 실제로는 모터 네 대가 전부
+        꺼져 있어서 막힌 것이었다.
+
+        문구 글자를 맞춰 보지 않는다 · 노드가 달아 준 표시만 본다.
+        """
+        if result.get('project_attached') is not False and result.get('context_ready') is not False:
+            return result
+        context = getattr(self.bridge, '_execution_context', None)
+        status = context.status(validate_files=False) if context is not None else {}
+        if status.get('ready'):
+            return result
+        reasons = [
+            str(value) for value in (status.get('failures') or {}).values() if value
+        ]
+        detail = reasons[0] if reasons else str(status.get('message') or '')
+        if detail:
+            result = dict(result)
+            result['message'] = f"{result.get('message') or '요청 실패'} · {detail}"
+            result['blocked_by'] = 'execution_context'
+        return result
+
     def sync_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
         bridge = self.bridge
         repository = getattr(bridge, 'project_repository', None)
-        if repository is None or result.get('success') is False:
+        if result.get('success') is False:
+            return self.blocked_reason(result)
+        if repository is None:
             return result
         selected_project_id = repository.selected_project_id()
         result_project = (

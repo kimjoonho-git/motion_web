@@ -32,7 +32,7 @@ from .project_commands import StudioProjectCommands
 from .project_store import ProjectStore
 from .recording_session import StudioRecordingSession
 from .ros_gateway import StudioRosGateway
-from .workspace_session import StudioWorkspaceSession
+from .workspace_session import ExecutionContextNotReady, StudioWorkspaceSession
 from motion_common import command_router, generation, rpc, topics
 
 
@@ -229,6 +229,9 @@ class MotionStudioNode(Node):
                 request.command, request.generation, request.payload
             )
             result = self._handle(request.command, request.payload)
+        except ExecutionContextNotReady as exc:
+            # 막은 쪽은 브릿지다 · 이유는 아는 쪽이 붙인다 · §6-258
+            result = command_router.error_response(exc, context_ready=False)
         except ProjectNotAttached as exc:
             # 노드가 프로젝트를 놓쳤다는 사실을 **말로** 알린다 · §6-109
             #

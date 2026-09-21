@@ -13,8 +13,16 @@ from .layer_validation import (
     project_point_curve_frame_mismatches,
     validate_ranges,
 )
-from .project_store import ProjectStore
 from .timeline import layer_conflicts
+
+
+class ExecutionContextNotReady(ValueError):
+    """모터를 움직여도 되는지 아직 확인되지 않았다 · §6-258
+
+    막은 쪽은 이 노드가 아니라 브릿지의 실행 컨텍스트다 · 이 노드는 **왜**
+    아닌지 모른다(모터가 꺼져 있는지, 설정이 어긋났는지) · 그래서 표시만
+    달아 보내고, 이유는 아는 쪽이 붙인다.
+    """
 
 
 class StudioWorkspaceSession:
@@ -100,7 +108,9 @@ class StudioWorkspaceSession:
             or project_id != studio._workspace_project_id
             or self.context_generation() != int(studio._project_generation or 0)
         ):
-            raise ValueError('현재 프로젝트 실행 컨텍스트 적용 대기 중입니다')
+            raise ExecutionContextNotReady(
+                '현재 프로젝트 실행 컨텍스트 적용 대기 중입니다'
+            )
         path = (
             studio.motion_projects_dir
             / project_id
@@ -119,12 +129,28 @@ class StudioWorkspaceSession:
             )
 
     def invalidate(self) -> Dict[str, Any]:
+        """**실행을 막는다 · 열어 둔 파일까지 덮지는 않는다** · §6-257
+
+        여기는 사실을 두 개 들고 있었다.
+
+            어느 프로젝트의 파일인가   `_current_project`   레이어 목록·편집·저장
+            실행해도 되는가            `_execution_context`  재생·녹화·초기이동
+
+        `invalidate_context` 의 뜻은 **두 번째**다 · 「지금 이 프로젝트로
+        모터를 움직이면 안 된다」 · 그런데 첫 번째까지 같이 지웠다.
+
+        브릿지는 모터가 준비되지 않으면 **1초마다** 이것을 보낸다 · 모터가
+        꺼져 있으면 열어 둔 레이어가 1초마다 사라져서, 저장이 그 창과
+        경주했다 · 사람에게는 「먼저 왼쪽에서 통합 프로젝트를 선택하세요」로
+        보였다 · 왼쪽은 멀쩡한데.
+
+        파일을 여는 쪽은 `select()` 가 따로 본다 · 통로가 모든 요청에
+        `project_id` 를 넣어 주므로, 프로젝트가 바뀌면 거기서 지워진다 ·
+        여기서 또 지울 이유가 없다.
+        """
         studio = self.studio
         with studio._lock:
             studio._operation_machine().cancel()
-            studio._store = ProjectStore()
-            studio._workspace_project_id = ''
-            studio._current_project = None
             self.clear_composition_cache()
             studio._workspace_catalog_cache = None
             studio._execution_context = {}
@@ -140,8 +166,8 @@ class StudioWorkspaceSession:
             studio._status = studio._empty_status()
         return {
             'success': True,
-            'message': '모션 스튜디오 프로젝트 메모리 폐기',
-            'project_id': '',
+            'message': '모션 스튜디오 실행 대기 · 열어 둔 레이어는 유지',
+            'project_id': studio._workspace_project_id,
             'context_id': '',
             'status': studio.snapshot(),
         }
