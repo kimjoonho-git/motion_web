@@ -7,12 +7,32 @@
  * 판정을 순수 함수로 떼어 둔다 · 브라우저 없이도 시험할 수 있다.
  */
 
-/** 글자를 치는 중인가 · 입력칸에서는 Del 이 글자 지우기여야 한다 */
+/** 체크칸은 **글자를 치는 곳이 아니다** · §6-264
+ *
+ * 입력칸에서는 Del 이 글자 지우기여야 하므로 단축키를 받지 않는다 · 그런데
+ * 「모션축 선택」의 체크칸도 `<input>` 이라 여기에 걸렸다.
+ *
+ *     전체 해제 → 축 하나 체크 → 초점이 그 체크칸에 남는다
+ *     → 그래프에서 포인트를 골라도 **Del 이 먹지 않는다**
+ *     → 그래프를 한 번 누르면 초점이 빠져서 그때부터 먹는다
+ *
+ * 사람에게는 「포인트 삭제가 안 되다가 다른 걸 만지면 되더라」로 보였다 ·
+ * 체크칸에 생기는 **검은 테두리**가 초점이 거기 있다는 표시였다.
+ *
+ * 체크칸·단추에서는 Del 로 지울 글자가 없다 · 라디오와 선택칸은 화살표로
+ * 값이 바뀌므로 그대로 둔다.
+ */
+const NOT_TYPING_INPUT_TYPES = new Set([
+  'checkbox', 'button', 'submit', 'reset',
+]);
+
 export function motionStudioTypingTarget(target) {
   if (!target) return false;
   if (target.isContentEditable) return true;
   const tag = String(target.tagName || '').toLowerCase();
-  return tag === 'input' || tag === 'select' || tag === 'textarea';
+  if (tag === 'select' || tag === 'textarea') return true;
+  if (tag !== 'input') return false;
+  return !NOT_TYPING_INPUT_TYPES.has(String(target.type || 'text').toLowerCase());
 }
 
 /** 이 키가 어떤 편집 동작인가 · 아니면 빈 문자열 */
