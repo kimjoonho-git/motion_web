@@ -445,6 +445,24 @@ class ProjectRepository:
         )
         return value
 
+    def active_file_name(self, project_id: Any, category: str) -> str:
+        """이 프로젝트에 **등록된** 파일 이름 · 없으면 빈 글자 · §6-238
+
+        프로젝트는 갈래마다 파일을 하나씩 물고 있다(`active_files`) · 그런데
+        그 값을 밖으로 내주는 길이 없어서, 화면은 **목록의 첫 번째**를 골라
+        썼다 · 파일이 하나일 때는 우연히 맞고 여럿이면 엉뚱한 것이 떴다.
+
+        `execution_context()` 도 같은 값을 알지만 그쪽은 파일마다 내용을
+        읽어 해시를 뜬다 · 이름 하나 알자고 부를 것이 아니다.
+        """
+        try:
+            project_dir = self._project_dir(project_id)
+            manifest = self._read_manifest(project_dir)
+        except (OSError, ValueError, json.JSONDecodeError):
+            return ''
+        active = manifest.get('active_files') or {}
+        return str(active.get(str(category)) or '').strip()
+
     def execution_context(self, project_id: Any) -> Dict[str, Any]:
         """Return one immutable identity for the project's active runtime files."""
         project_dir = self._project_dir(project_id)

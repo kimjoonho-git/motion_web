@@ -352,8 +352,6 @@ export const validateMotionMapping = (payload) => request('POST', '/api/motion-m
 /** 재생 등록만 바꾼다 · 모션축 설정은 안 건드린다 · §6-160 */
 export const saveRegisteredMotionFile = (payload) => request('POST', '/api/motion-mappings/motion-file', { body: payload });
 
-export const deleteMotionMapping = (fileId) =>
-  request('DELETE', `/api/motion-mappings/${encodeURIComponent(fileId)}`);
 
 export const fetchMotionRunStatus = () => request('GET', '/api/motion-run/status');
 

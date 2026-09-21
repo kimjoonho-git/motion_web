@@ -132,16 +132,36 @@ def test_the_narrow_path_exists_end_to_end():
 def test_the_revision_ignores_the_registration():
     """재생 등록이 바뀌었다고 모션축 설정이 바뀐 것으로 세면 안 된다.
 
-    MIDI 뱅크는 처음부터 빠져 있었다 · 재생 등록만 남아 창을 띄웠다.
-    """
-    source = MANAGER.read_text(encoding='utf-8')
-    start = source.index('def _mapping_revision(')
-    body = source[start:source.index('def _normalize_mapping(', start)]
+    **글자가 아니라 값을 잰다** · §6-242
 
-    assert "key != 'motion_file_id'" in body, (
-        '개정 번호가 아직 재생 등록을 세고 있습니다 · '
-        '모션 파일만 바꿔도 「모션축 설정 저장 충돌」 이 뜹니다'
-    )
+    전에는 이 시험이 소스에서 `key != 'motion_file_id'` 라는 **글자**를
+    찾았다 · 그래서 빼는 칸을 하나 더 늘려 고쳤더니, 동작은 더 맞아졌는데
+    시험이 깨졌다 · 재는 것이 틀렸던 것이다 · 이제 함수를 직접 불러 본다.
+    """
+    import sys
+    sys.path.insert(0, str(MANAGER.parent.parent))
+    from motion_runtime.motion_mapping_manager import MotionMappingManager
+
+    base = {
+        'file_id': 'show.yaml',
+        'name': 'show',
+        'motion_file_id': '',
+        'mappings': [{'motion_id': '1-1', 'enabled': True, 'motor_axis': 0}],
+    }
+
+    assert MotionMappingManager._mapping_revision(dict(base)) == (
+        MotionMappingManager._mapping_revision({**base, 'motion_file_id': 'show.json'})
+    ), '개정 번호가 아직 재생 등록을 센다 · 모션 파일만 바꿔도 창이 뜬다'
+
+    assert MotionMappingManager._mapping_revision(dict(base)) == (
+        MotionMappingManager._mapping_revision({**base, 'midi_banks': {'version': 1}})
+    ), '개정 번호가 아직 MIDI 뱅크를 센다 · 저장 한 번 뒤 다음 저장이 막힌다'
+
+    assert MotionMappingManager._mapping_revision(dict(base)) != (
+        MotionMappingManager._mapping_revision({
+            **base, 'mappings': [{'motion_id': '1-1', 'enabled': True, 'motor_axis': 1}],
+        })
+    ), '모션축 설정을 고쳤는데 개정 번호가 그대로다'
 
 
 def test_running_motion_still_blocks_the_swap():

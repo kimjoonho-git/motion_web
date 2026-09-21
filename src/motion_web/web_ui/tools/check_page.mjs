@@ -101,6 +101,31 @@ for (const event of events) {
   }
 }
 
+// 탭을 옮겨 **그려 보게** 한다 · §6-240
+//
+// 화면 조각은 숨어 있는 동안 한 번도 안 그려진다 · 그래서 「모터 관리」만
+// 열어보면 다른 탭의 그리기 오류를 못 잡는다 · 실제로 모션축 편집 표를
+// 손보다가 없는 변수를 남겼는데, 글자 검사 548개가 전부 통과했고 이 탭을
+// 열어 본 뒤에야 `initialMoveTimeDisabled is not defined` 가 나왔다.
+for (const tab of ['motion-mapping', 'motion-midi', 'motion-run']) {
+  await send('Runtime.evaluate', {
+    expression: `document.querySelector('[data-workspace-tab="${tab}"]')?.click()`,
+  });
+  await sleep(4000);
+  const drawn = await send('Runtime.evaluate', {
+    expression: `(() => {
+      const table = document.querySelector('[data-motion-panel] table');
+      const wrap = document.querySelector('.motion-mapping-table-wrap');
+      return JSON.stringify({
+        탭: ${JSON.stringify(tab)},
+        보임: Boolean(table && table.getBoundingClientRect().width > 0),
+        가로넘침: wrap ? wrap.scrollWidth > wrap.clientWidth + 1 : null,
+      });
+    })()`,
+  });
+  console.log('  탭 확인:', drawn.result?.result?.value);
+}
+
 const shown = await send('Runtime.evaluate', {
   expression: `JSON.stringify({
     rows: [...document.querySelectorAll('#axisRows tr[data-axis-row]')].length,

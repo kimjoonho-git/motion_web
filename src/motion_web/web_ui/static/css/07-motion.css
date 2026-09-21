@@ -516,9 +516,22 @@
   background: #ffffff;
 }
 
+/* 모션 ID 칸은 「1-1」 정도가 전부다 · 폭을 내용에 맞춘다 · §6-240
+ *
+ * 88px 은 「1-1」 을 담기에 두 배 넘게 넓었다 · 칸이 열다섯이라 한 칸이
+ * 넓으면 오른쪽이 밀려 가로로 스크롤해야 보인다. */
 .motion-mapping-table .motion-id-input {
-  width: 88px;
-  min-width: 88px;
+  width: 100%;
+  min-width: 0;
+  padding: 0 6px;
+  text-align: center;
+}
+
+.motion-mapping-table .motion-id-head,
+.motion-mapping-table .motion-id-cell {
+  width: 58px;
+  min-width: 58px;
+  max-width: 58px;
 }
 
 .motion-mapping-table input[type="checkbox"] {
@@ -1218,4 +1231,21 @@
 }
 #scheduleTimezoneDrift:empty {
   display: none;
+}
+
+/* 모터 ID 칸이 표를 밀어낸다 · 폭을 묶는다 · §6-240
+ *
+ * 고르는 상자 안의 글이 길어서 실측 730px 까지 늘어났고, 표 전체가
+ * 1591px 이 되어 화면(1171px)을 넘겼다 · 가로로 밀어야 「상태」가 보였다. */
+.motion-mapping-table .mapping-motor-head,
+.motion-mapping-table .mapping-motor-cell {
+  width: 240px;
+  min-width: 240px;
+  max-width: 240px;
+}
+
+.motion-mapping-table .mapping-motor-cell select {
+  width: 100%;
+  min-width: 0;
+  text-overflow: ellipsis;
 }

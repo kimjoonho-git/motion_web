@@ -543,10 +543,28 @@ class MotionMappingManager(Node):
         설정을 되돌릴지 물으니 무슨 말인지 알 수가 없다.
 
         셋은 서로 상관이 없다 · 개정 번호는 **제 주인의 것만** 센다.
+
+        **`midi_banks` 도 빼야 한다** · §6-242
+
+        「MIDI 는 처음부터 빠져 있었다」는 말은 **파일에서 읽을 때만** 맞았다 ·
+        정규화가 그 칸을 버리기 때문이다 · 그런데 저장하는 길은 다르다.
+
+            mapping['midi_banks'] = midi_banks      # 메모리 객체에 끼워 넣고
+            'file': self._mapping_file_summary(path, mapping=mapping)
+
+        그 객체로 개정 번호를 세니 **MIDI 뱅크가 섞인 값**이 나왔다 · 화면은
+        그 값을 기준으로 들고 가는데, 서버는 다음 저장 때 **파일에서 읽은
+        값**(MIDI 빠진 것)과 비교한다 · 둘이 언제나 다르다.
+
+        그래서 **한 번 저장하고 나면 그 다음 저장이 반드시 충돌**했다 ·
+        실측: 저장 응답 87a61175… / 실제 파일 b36833a6… · 사람은 「모션축
+        설정 저장 충돌」 창을 보고 편집을 버리는 수밖에 없었다.
+
+        어느 쪽에서 세든 같은 값이 나와야 한다.
         """
         counted = {
             key: value for key, value in mapping.items()
-            if key != 'motion_file_id'
+            if key not in ('motion_file_id', 'midi_banks')
         }
         encoded = json.dumps(
             counted,

@@ -14,35 +14,14 @@
           <div class="motion-mapping-layout">
             <section class="motion-file-subsection settings-step-card" aria-label="모션축 설정 파일">
               <div class="section-head compact">
-                <strong>1. 설정 파일 선택</strong>
+                <strong>1. 모션축 설정 파일</strong>
                 <span id="motionMappingMessage">현재 매칭 확인 중</span>
-              </div>
-              <div class="motion-mapping-toolbar">
-                <label class="manual-field">
-                  <span>편집할 매칭</span>
-                  <select id="motionMappingSelect">
-                    <option value="">매핑 파일 없음</option>
-                  </select>
-                </label>
-                <div class="registry-actions">
-                  <button id="refreshMotionMappingsButton" type="button">목록 새로고침</button>
-                  <button id="newMotionMappingButton" type="button">새 매칭 작성</button>
-                </div>
               </div>
               <div class="motion-mapping-form">
                 <label class="manual-field">
-                  <span>매핑 이름</span>
-                  <input id="motionMappingName" type="text" value="" placeholder="예: face_test_mapping" autocomplete="off" autocapitalize="off" spellcheck="false">
+                  <span>설정 파일</span>
+                  <strong id="motionMappingFileName" class="mono">-</strong>
                 </label>
-                <label class="manual-field">
-                  <span>모션 파일</span>
-                  <select id="motionMappingFileSelect">
-                    <option value="">모션 파일 선택</option>
-                  </select>
-                </label>
-                <div class="registry-actions align-end">
-                  <button id="importMotionIdsButton" type="button">모션 ID 반영</button>
-                </div>
               </div>
             </section>
 
@@ -59,45 +38,26 @@
                 <table class="motion-mapping-table">
                   <thead>
                     <tr>
-                      <th><span class="mapping-head-label">모션 ID</span><span class="mapping-head-unit"></span></th>
+                      <th class="motion-id-head"><span class="mapping-head-label">모션 ID</span><span class="mapping-head-unit"></span></th>
                       <th><span class="mapping-head-label">사용</span><span class="mapping-head-unit"></span></th>
-                      <th><span class="mapping-head-label">모터 ID</span><span class="mapping-head-unit">현재 축 번호 자동 해석</span></th>
+                      <th class="mapping-motor-head"><span class="mapping-head-label">모터 ID</span><span class="mapping-head-unit">현재 축 번호 자동 해석</span></th>
                       <th class="mapping-number-head"><span class="mapping-head-label">감속비</span><span class="mapping-head-unit">x</span></th>
                       <th class="mapping-number-head"><span class="mapping-head-label">기준점</span><span class="mapping-head-unit">deg</span></th>
-                      <th><span class="mapping-head-label">기준 사용·캡처</span><span class="mapping-head-unit"></span></th>
+                      <th><span class="mapping-head-label">기준점 캡처</span><span class="mapping-head-unit"></span></th>
                       <th class="mapping-number-head"><span class="mapping-head-label">최솟값</span><span class="mapping-head-unit">deg</span></th>
                       <th class="mapping-number-head"><span class="mapping-head-label">최댓값</span><span class="mapping-head-unit">deg</span></th>
                       <th><span class="mapping-head-label">초기 방식</span><span class="mapping-head-unit"></span></th>
                       <th class="mapping-number-head"><span class="mapping-head-label">초기위치</span><span class="mapping-head-unit">deg</span></th>
-                      <th class="mapping-number-head"><span class="mapping-head-label">초기이동</span><span class="mapping-head-unit">s</span></th>
                       <th><span class="mapping-head-label">반전</span><span class="mapping-head-unit"></span></th>
-                      <th class="mapping-number-head"><span class="mapping-head-label">모션 보정값</span><span class="mapping-head-unit">deg</span></th>
-                      <th class="mapping-number-head"><span class="mapping-head-label">배율</span><span class="mapping-head-unit">x</span></th>
                       <th><span class="mapping-head-label">상태</span><span class="mapping-head-unit"></span></th>
                     </tr>
                   </thead>
                   <tbody id="motionMappingRows">
                     <tr>
-                      <td colspan="15" class="empty">모션 파일을 선택하고 모션 ID를 반영하세요</td>
+                      <td colspan="12" class="empty">모션 ID를 추가하거나 모터축 행 자동 생성을 누르세요</td>
                     </tr>
                   </tbody>
                 </table>
-              </div>
-              <div class="motion-mapping-guide motion-mapping-guide-below">
-                <div>
-                  <strong>값 기준</strong>
-                  <span>모션 ID는 사용자가 정하는 모션축 번호입니다. 양의 정수-양의 정수 형식으로 입력합니다(예: 1-1, 2-3).</span>
-                  <span>모션값·최솟값/최댓값·초기 위치·보정값은 모션/출력축 deg 기준입니다.</span>
-                  <span>기준점과 최종 모터 목표는 모터축 deg 기준입니다.</span>
-                  <span>기준점 사용을 해제하면 계산 기준점은 0 deg가 됩니다.</span>
-                  <span>최솟값/최댓값 초과 데이터는 실행을 막지 않고 경계값으로 제한해 명령합니다.</span>
-                </div>
-                <div>
-                  <strong>계산 흐름</strong>
-                  <span>제한 모션값 = 모션값을 최솟값~최댓값 범위로 제한</span>
-                  <span>출력축 값 = (제한 모션값 + 보정값) × 배율 × 반전 부호</span>
-                  <span>모터축 목표 = 기준점 + (출력축 값 × 감속비)</span>
-                </div>
               </div>
             </section>
 
@@ -109,45 +69,12 @@
               <div class="registry-actions settings-step-actions motion-mapping-final-actions">
                 <button id="saveMotionMappingButton" class="primary" type="button">검증·미리보기·저장</button>
                 <button id="resetMotionMappingButton" type="button">저장된 내용으로 되돌리기</button>
-                <button id="deleteMotionMappingButton" class="danger" type="button" disabled>현재 설정 파일 삭제</button>
               </div>
               <div id="motionMappingValidation" class="motion-value-table">
                 <div class="empty">검증·미리보기·저장을 누르면 결과가 표시됩니다</div>
               </div>
             </section>
 
-            <section class="motion-file-subsection settings-reference-card" aria-label="미사용 모터 축">
-              <div class="section-head compact">
-                <strong>미사용 모터축</strong>
-                <span>현재 매핑에서 비어 있는 축</span>
-              </div>
-              <div class="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>축 번호</th>
-                      <th>ID</th>
-                      <th>모터 종류</th>
-                      <th>이름</th>
-                      <th>상태</th>
-                    </tr>
-                  </thead>
-                  <tbody id="motionMappingUnusedMotorRows">
-                    <tr>
-                      <td colspan="5" class="empty">모터 상태 수신 대기</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </section>
-
-            <section class="motion-file-subsection settings-reference-card" aria-label="모션축 설정 YAML 원본">
-              <div class="section-head compact">
-                <strong>고급: 매핑 YAML 원본</strong>
-                <span>읽기 전용</span>
-              </div>
-              <pre id="motionMappingRawText" class="motion-file-preview-text">매핑 파일을 선택하거나 저장하면 YAML 원본이 표시됩니다</pre>
-            </section>
           </div>
         </div>
 

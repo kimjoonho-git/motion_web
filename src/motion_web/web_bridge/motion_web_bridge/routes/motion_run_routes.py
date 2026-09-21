@@ -57,10 +57,6 @@ def register_motion_run_routes(app: FastAPI, bridge, safety_first_stop) -> None:
     async def motion_mapping(file_id: str):
         return await asyncio.to_thread(bridge.load_motion_mapping, file_id)
 
-    @app.delete('/api/motion-mappings/{file_id}')
-    async def delete_motion_mapping(file_id: str):
-        return await asyncio.to_thread(bridge.delete_motion_mapping, file_id)
-
     @app.get('/api/motion-run/status')
     async def motion_run_status():
         return await asyncio.to_thread(bridge.motion_run_status)

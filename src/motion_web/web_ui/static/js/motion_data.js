@@ -3,7 +3,6 @@ import { motionScheduleResumeNote } from './schedule_scope.js';
 import {
   checkMotionRun,
   configureMotionAutomation,
-  deleteMotionMapping,
   deleteMotionFile,
   fetchMotionFile,
   fetchMotionFiles,
@@ -89,6 +88,28 @@ function peerSummaryText(role = {}) {
     return `${name}${peer.is_master ? '(마스터)' : ''} ${state}`;
   });
   return [here, ...others].join(' · ');
+}
+
+/** 어느 모션축 설정 파일을 열 것인가 · §6-238
+ *
+ * 프로젝트는 이 파일을 **하나만** 물고 쓴다 · 그 하나를 서버가
+ * `active_file_id` 로 알려준다 · 전에는 그 값이 없어서 화면이 목록의
+ * **첫 번째**를 골랐다 · 파일이 하나뿐이면 우연히 맞았고, 그래서 오래
+ * 들키지 않았다 · 여럿이면 프로젝트가 쓰는 것과 다른 것을 편집하게 된다.
+ *
+ * 등록된 것이 목록에 없으면(지워졌거나 아직 등록 전) 첫 번째로 물러선다 ·
+ * 목록이 비면 빈 글자를 준다 · 그때는 새로 만들어 저장하는 자리다.
+ *
+ * **함수로 빼 둔다** · 화면 안에 묻어 두면 시험이 글자만 훑게 되고, 이
+ * 판단이 틀려도 통과한다 · 실제로 그런 일이 있었다.
+ */
+export function mappingFileToOpen({ files = [], activeFileId = '' } = {}) {
+  const ids = (Array.isArray(files) ? files : [])
+    .map((file) => String(file?.id || '').trim())
+    .filter(Boolean);
+  const registered = String(activeFileId || '').trim();
+  if (registered && ids.includes(registered)) return registered;
+  return ids[0] || '';
 }
 
 export function motionRunTargetView({ role = {}, chosen = 'local' } = {}) {
@@ -520,6 +541,20 @@ function drawGraph(canvas, messageEl, analysis, hiddenIds = new Set()) {
   }
 }
 
+/** 프로젝트가 쓰는 모션축 설정 파일 이름 · §6-239
+ *
+ * 프로젝트마다 이 파일은 **하나**다 · 사람이 이름을 지을 일이 없으므로
+ * 고정한다 · 이미 다른 이름으로 만들어 둔 프로젝트는 그 파일을 그대로
+ * 쓴다(서버가 `active_file_id` 로 알려준다) · 이 이름은 **처음 만들 때만**
+ * 쓰인다.
+ *
+ * **함수 안이 아니라 여기에 둔다** · 안에 두었더니 `createMotionDataController`
+ * 가 도는 도중 `emptyMappingDraft()` 가 먼저 불려서 선언 전에 읽혔고,
+ * 화면이 통째로 못 떴다(`Cannot access 'DEFAULT_MAPPING_NAME' before
+ * initialization`) · 검사는 통과했고 **띄워 보고서야** 드러났다.
+ */
+const DEFAULT_MAPPING_NAME = 'motion_axis';
+
 export function createMotionDataController({
   el,
   getLatestState = () => null,
@@ -537,7 +572,6 @@ export function createMotionDataController({
   let selectedMappingId = null;
   let mappingDraft = emptyMappingDraft();
   let registeredMotionFileIdValue = '';
-  let mappingRawText = '';
   let mappingValidation = null;
   let mappingMotionFileDetail = null;
   let loading = false;
@@ -574,21 +608,45 @@ export function createMotionDataController({
       || text.includes('모션축 설정 버전 정보가 없습니다');
   }
 
+  /** 저장된 내용이 이 화면과 달라졌을 때 사람에게 묻는다 · §6-243
+   *
+   * **말이 사람 말이어야 한다** · 전에는 이랬다.
+   *
+   *     「저장된 내용 불러오기」   ← 무엇을 잃는지 안 적혀 있다
+   *     「편집 내용 유지」         ← 유지해서 어쩌라는 것인지 안 적혀 있다
+   *
+   * 게다가 「편집 내용 유지」는 **막다른 길**이었다 · `mappingRevisionConflict`
+   * 가 참으로 남아서 저장을 다시 눌러도 같은 창만 뜨고 영영 저장되지 않았다 ·
+   * 남는 길은 편집을 버리는 것뿐인데, 그걸 고르는 창이 두 갈래로 보였다.
+   *
+   * 이제 묻는 것은 하나다 — **지금 고친 것을 버릴 것인가.**
+   */
   async function resolveMappingRevisionConflict(message) {
     mappingRevisionConflict = true;
-    setMappingMessage(`매핑 저장 실패: ${message}`);
+    setMappingMessage(`저장하지 못했습니다: ${message}`);
     const reload = await showConfirm(
-      '저장된 모션축 설정과 이 화면이 기준으로 삼은 설정이 다릅니다.\n'
-      + '현재 편집 내용은 저장되지 않았습니다.\n\n'
-      + '저장된 내용으로 되돌린 후 다시 변경·저장하시겠습니까?',
+      '저장된 모션축 설정이 이 화면을 연 뒤에 바뀌었습니다.\n'
+      + '지금 고친 내용은 저장되지 않았습니다.\n\n'
+      + '저장된 내용을 다시 불러오면 지금 고친 것은 사라집니다.',
       {
-        title: '모션축 설정 저장 충돌',
-        confirmLabel: '저장된 내용 불러오기',
-        cancelLabel: '편집 내용 유지',
+        title: '저장하지 못했습니다',
+        confirmLabel: '고친 것을 버리고 다시 불러오기',
+        cancelLabel: '그대로 두기',
         tone: 'warning',
       },
     );
-    if (reload && selectedMappingId) await selectMapping(selectedMappingId);
+    if (reload && selectedMappingId) {
+      await selectMapping(selectedMappingId);
+      return;
+    }
+    // 「그대로 두기」를 골라도 **다시 저장은 해볼 수 있어야 한다** · 화면에
+    // 남은 편집이 유일한 사본이다 · 막아두면 사람이 손으로 옮겨 적는 수밖에
+    // 없다 · 그 사이 파일이 또 바뀌었으면 이 창이 다시 뜰 뿐이다.
+    mappingRevisionConflict = false;
+    setMappingMessage(
+      '고친 내용을 화면에 두었습니다 · 다시 저장을 누르면 한 번 더 시도합니다',
+    );
+    renderMappingPanel();
   }
 
   function mappingFileRevision(file) {
@@ -610,19 +668,6 @@ export function createMotionDataController({
         : 'MIDI Bank 저장을 반영했습니다 · 모션축 설정을 계속 편집할 수 있습니다',
     );
     return true;
-  }
-
-  async function confirmDiscardMappingChanges(action) {
-    if (!mappingDirty) return true;
-    return showConfirm(
-      `저장하지 않은 모션축 설정 변경이 있습니다.\n변경 내용을 버리고 ${action}하시겠습니까?`,
-      { title: '저장하지 않은 변경', confirmLabel: '변경 버리기', tone: 'warning' },
-    );
-  }
-
-  function forceMappingNameInput(value = '') {
-    if (!el.motionMappingName) return;
-    el.motionMappingName.value = String(value || '');
   }
 
   function setMotionRunMessage(message) {
@@ -648,7 +693,7 @@ export function createMotionDataController({
   function emptyMappingDraft() {
     return {
       file_id: '',
-      name: '',
+      name: DEFAULT_MAPPING_NAME,
       motion_file_id: '',
       created_at: null,
       updated_at: null,
@@ -675,13 +720,6 @@ export function createMotionDataController({
     return motors
       .filter((motor) => Number.isFinite(Number(motor?.controller_index)))
       .sort((a, b) => Number(a.controller_index) - Number(b.controller_index));
-  }
-
-  function motorIdText(motor) {
-    const value = motor?.alias ?? motor?.bus_id ?? motor?.node_id ?? motor?.id ?? motor?.device_id;
-    if (value === null || value === undefined || value === '') return '-';
-    const numeric = Number(value);
-    return Number.isFinite(numeric) ? formatInt(numeric) : String(value);
   }
 
   function motorOptionLabel(motor) {
@@ -813,14 +851,7 @@ export function createMotionDataController({
   }
 
   function displayReferencePosition(row) {
-    if (row.reference_enabled === false) {
-      return 0.0;
-    }
     return numericOr(row.reference_position_deg, 0.0);
-  }
-
-  function displayInitialMoveTime(row) {
-    return numericOr(row.initial_move_time_sec, 5.0);
   }
 
   function motorPositionDeg(motor) {
@@ -1610,33 +1641,17 @@ export function createMotionDataController({
     }
   }
 
-  function renderMappingSelect() {
-    if (!el.motionMappingSelect) return;
-    const options = [
-      '<option value="">새 매핑 또는 파일 선택</option>',
-      ...mappingFiles.map((file) => {
-        const label = `${file.name || file.filename} (${formatInt(file.enabled_count)} / ${formatInt(file.mapping_count)})`;
-        const selected = file.id === selectedMappingId ? ' selected' : '';
-        return `<option value="${displayText(file.id)}"${selected}>${displayText(label)}</option>`;
-      }),
-    ];
-    el.motionMappingSelect.innerHTML = options.join('');
-    el.motionMappingSelect.value = selectedMappingId || '';
-  }
-
-  function renderMappingMotionFileSelect() {
-    if (!el.motionMappingFileSelect) return;
-    const options = [
-      '<option value="">모션 파일 선택</option>',
-      ...files.map((file) => {
-        const selected = file.id === mappingDraft.motion_file_id ? ' selected' : '';
-        const analysis = analysisOf(file);
-        const label = `${file.filename} · ID ${formatInt(analysis.motion_id_count)}`;
-        return `<option value="${displayText(file.id)}"${selected}>${displayText(label)}</option>`;
-      }),
-    ];
-    el.motionMappingFileSelect.innerHTML = options.join('');
-    el.motionMappingFileSelect.value = mappingDraft.motion_file_id || '';
+  function renderMappingFileName() {
+    // 고르는 자리가 아니라 **보여주는 자리**다 · §6-239
+    //
+    // 프로젝트는 모션축 설정 파일을 **하나만** 물고 쓴다 · 전에는 목록에서
+    // 고르게 했는데, 고를 일이 없으니 고르는 상자와 「새 매칭 작성」·「목록
+    // 새로고침」·「현재 설정 파일 삭제」가 다 쓸모없는 손잡이였다 · 그것들이
+    // 만들 수 있는 어긋난 상태(등록된 파일과 다른 것을 편집하고 있다)만
+    // 남았다.
+    if (!el.motionMappingFileName) return;
+    const file = mappingFiles.find((item) => item.id === selectedMappingId);
+    el.motionMappingFileName.textContent = file?.filename || selectedMappingId || '아직 없음 · 저장하면 만들어집니다';
   }
 
   function mappingDuplicateAxisCounts() {
@@ -1714,32 +1729,23 @@ export function createMotionDataController({
     el.motionMappingRows.innerHTML = rows.map((row, index) => {
       const status = mappingValidationRowStatus(row, mappingRowStatus(row, duplicateCounts));
       const initialMode = row.initial_mode || 'first_frame';
-      const referenceDisabled = row.reference_enabled === false;
-      const initialTimeOverridden = motionRunInitialMoveTimeSec() !== null;
-      const initialMoveTimeDisabled = initialTimeOverridden;
       const firstFrameInitial = initialMode === 'first_frame';
       const initialPositionDisabled = firstFrameInitial;
       const dynamixelGearFixed = isDynamixelMappingRow(row);
       const referencePositionValue = displayReferencePosition(row);
       const initialPositionValue = displayInitialPosition(row);
-      const initialMoveTimeValue = displayInitialMoveTime(row);
       const gearRatioValue = mappingGearRatioValue(row);
-      const referenceDisabledAttr = referenceDisabled ? ' disabled' : '';
-      const initialMoveTimeDisabledAttr = initialMoveTimeDisabled
-        ? ' disabled title="모션 동작 탭의 초기 이동 시간이 일괄 적용됩니다"'
-        : '';
       const initialPositionDisabledAttr = initialPositionDisabled ? ' disabled' : '';
       const gearRatioDisabledAttr = dynamixelGearFixed ? ' disabled title="다이나믹셀은 감속비를 사용하지 않으며 1로 고정됩니다"' : '';
       return (
         `<tr data-mapping-index="${index}">
-          <td><input class="motion-id-input mono" type="text" pattern="[1-9]\\d*-[1-9]\\d*" title="양의 정수-양의 정수 형식으로 입력하세요. 예: 1-1, 2-3" data-motion-mapping-field="motion_id" value="${displayText(row.motion_id)}" placeholder="예: 1-1" autocomplete="off" autocapitalize="off" spellcheck="false"></td>
+          <td class="motion-id-cell"><input class="motion-id-input mono" type="text" pattern="[1-9]\\d*-[1-9]\\d*" title="양의 정수-양의 정수 형식으로 입력하세요. 예: 1-1, 2-3" data-motion-mapping-field="motion_id" value="${displayText(row.motion_id)}" placeholder="예: 1-1" autocomplete="off" autocapitalize="off" spellcheck="false"></td>
           <td><input type="checkbox" data-motion-mapping-field="enabled" ${row.enabled ? 'checked' : ''}></td>
-          <td>${motorSelectHtml(row)}</td>
+          <td class="mapping-motor-cell">${motorSelectHtml(row)}</td>
           <td class="mapping-number-cell ${dynamixelGearFixed ? 'mapping-disabled-cell' : ''}"><input class="numeric-input mapping-number-input" type="number" min="0.0001" step="0.0001" data-motion-mapping-field="gear_ratio" value="${displayText(gearRatioValue)}"${gearRatioDisabledAttr}></td>
-          <td class="mapping-number-cell ${referenceDisabled ? 'mapping-disabled-cell' : ''}"><input class="numeric-input mapping-number-input" type="number" step="0.001" data-motion-mapping-field="reference_position_deg" value="${displayText(referencePositionValue)}"${referenceDisabledAttr}></td>
-          <td class="${referenceDisabled ? 'mapping-disabled-cell' : ''}">
-            <label class="mapping-reference-toggle"><input type="checkbox" data-motion-mapping-field="reference_enabled"${row.reference_enabled !== false ? ' checked' : ''}>사용</label>
-            <button class="mapping-mini-button" type="button" data-motion-mapping-action="capture_reference"${referenceDisabledAttr}>캡처</button>
+          <td class="mapping-number-cell"><input class="numeric-input mapping-number-input" type="number" step="0.001" data-motion-mapping-field="reference_position_deg" value="${displayText(referencePositionValue)}"></td>
+          <td>
+            <button class="mapping-mini-button" type="button" data-motion-mapping-action="capture_reference">캡처</button>
           </td>
           <td class="mapping-number-cell"><input class="numeric-input mapping-number-input" type="number" step="0.001" data-motion-mapping-field="motion_lower_deg" value="${displayText(row.motion_lower_deg)}"></td>
           <td class="mapping-number-cell"><input class="numeric-input mapping-number-input" type="number" step="0.001" data-motion-mapping-field="motion_upper_deg" value="${displayText(row.motion_upper_deg)}"></td>
@@ -1750,41 +1756,11 @@ export function createMotionDataController({
             </select>
           </td>
           <td class="mapping-number-cell ${initialPositionDisabled ? 'mapping-disabled-cell' : ''}"><input class="numeric-input mapping-number-input" type="number" step="0.001" data-motion-mapping-field="initial_motion_position_deg" value="${displayText(initialPositionValue)}"${initialPositionDisabledAttr}></td>
-          <td class="mapping-number-cell ${initialMoveTimeDisabled ? 'mapping-disabled-cell' : ''}"><input class="numeric-input mapping-number-input" type="number" min="0.001" step="0.001" data-motion-mapping-field="initial_move_time_sec" value="${displayText(initialMoveTimeValue)}"${initialMoveTimeDisabledAttr}></td>
           <td><input type="checkbox" data-motion-mapping-field="invert" ${row.invert ? 'checked' : ''}></td>
-          <td class="mapping-number-cell"><input class="numeric-input mapping-number-input" type="number" step="0.001" data-motion-mapping-field="offset_deg" value="${displayText(row.offset_deg)}"></td>
-          <td class="mapping-number-cell"><input class="numeric-input mapping-number-input" type="number" step="0.0001" data-motion-mapping-field="scale" value="${displayText(row.scale)}"></td>
           <td><span class="motion-state-pill ${status.className}">${displayText(status.text)}</span> <button class="mapping-mini-button" type="button" data-motion-mapping-action="delete">삭제</button></td>
         </tr>`
       );
     }).join('');
-  }
-
-  function renderUnusedMotors() {
-    if (!el.motionMappingUnusedMotorRows) return;
-    const usedAxes = new Set(
-      mappingDraft.mappings
-        .filter((row) => row.enabled && mappingTargetKey(row))
-        .map((row) => mappingTargetKey(row)),
-    );
-    const unused = sortedRuntimeMotors().filter((motor) => (
-      !usedAxes.has(motionMotorTargetKey(motor))
-    ));
-    if (!unused.length) {
-      el.motionMappingUnusedMotorRows.innerHTML = emptyRow(5, '미사용 모터축이 없습니다');
-      return;
-    }
-    el.motionMappingUnusedMotorRows.innerHTML = unused.map((motor) => (
-      `<tr>
-        <td class="mono">${formatInt(motor.controller_index)}</td>
-        <td class="mono">${displayText(motorIdText(motor))}</td>
-        <td>${displayText(({
-          ac_servo: 'AC 서보', dynamixel: '다이나믹셀', cubemars: '큐브마스',
-        })[normalizeMotorTypeKey(motor.motor_type, motor.motor_type_label)] || '확인 불가')}</td>
-        <td>${displayText(motor.display_name || '-')}</td>
-        <td>${displayText(motor.status_text || motor.state || '-')}</td>
-      </tr>`
-    )).join('');
   }
 
   function renderMappingValidation() {
@@ -1872,29 +1848,14 @@ export function createMotionDataController({
   }
 
   function renderMappingPanel() {
-    renderMappingSelect();
-    renderMappingMotionFileSelect();
-    if (el.motionMappingName && document.activeElement !== el.motionMappingName) {
-      el.motionMappingName.value = mappingDraft.name || '';
-    }
-    if (el.deleteMotionMappingButton) el.deleteMotionMappingButton.disabled = !selectedMappingId || mappingLoading;
+    renderMappingFileName();
     if (el.saveMotionMappingButton) el.saveMotionMappingButton.disabled = mappingLoading;
-    if (el.importMotionIdsButton) el.importMotionIdsButton.disabled = !mappingDraft.motion_file_id || mappingLoading;
-    if (el.motionMappingSelect) el.motionMappingSelect.disabled = mappingLoading;
-    if (el.refreshMotionMappingsButton) el.refreshMotionMappingsButton.disabled = mappingLoading;
-    if (el.newMotionMappingButton) el.newMotionMappingButton.disabled = mappingLoading;
     if (el.addMotionIdButton) el.addMotionIdButton.disabled = mappingLoading;
     if (el.generateMotionIdsButton) el.generateMotionIdsButton.disabled = mappingLoading;
     if (el.resetMotionMappingButton) el.resetMotionMappingButton.disabled = mappingLoading;
-    if (el.motionMappingName) el.motionMappingName.disabled = mappingLoading;
-    if (el.motionMappingFileSelect) el.motionMappingFileSelect.disabled = mappingLoading;
     el.motionMappingRows?.closest('table')?.classList.toggle('mapping-loading', mappingLoading);
     renderMappingRows();
     renderMappingValidation();
-    renderUnusedMotors();
-    if (el.motionMappingRawText) {
-      el.motionMappingRawText.textContent = mappingRawText || '매핑 파일을 선택하거나 저장하면 YAML 원본이 표시됩니다';
-    }
   }
 
   function renderRuntimeMappingState() {
@@ -1902,17 +1863,11 @@ export function createMotionDataController({
     const activeElement = document.activeElement;
     if (
       activeElement &&
-      (
-        activeElement.closest?.('#motionMappingRows') ||
-        activeElement === el.motionMappingName ||
-        activeElement === el.motionMappingFileSelect ||
-        activeElement === el.motionMappingSelect
-      )
+      activeElement.closest?.('#motionMappingRows')
     ) {
       return;
     }
     renderMappingRows();
-    renderUnusedMotors();
   }
 
   function renderRuntimeState() {
@@ -1932,36 +1887,6 @@ export function createMotionDataController({
     renderMotionRunPanel();
   }
 
-  function mappingRowsFromMotionFile(file, previousRows = []) {
-    const previousById = new Map(previousRows.map((row) => [String(row.motion_id), row]));
-    const motionIds = Array.isArray(file?.analysis?.motion_ids) ? file.analysis.motion_ids : [];
-    return motionIds.map((item) => {
-      const motionId = String(item.motion_id);
-      const previous = previousById.get(motionId);
-      const previousMode = previous?.initial_mode || 'first_frame';
-      const firstValue = numericOr(item.first_value, 0.0);
-      return {
-        motion_id: motionId,
-        enabled: previous?.enabled ?? true,
-        motor_ref: previous?.motor_ref ?? '',
-        motor_axis: previous?.motor_axis ?? null,
-        reference_enabled: previous?.reference_enabled ?? true,
-        reference_position_deg: numericOr(previous?.reference_position_deg, 0.0),
-        motion_lower_deg: numericOr(previous?.motion_lower_deg, -180.0),
-        motion_upper_deg: numericOr(previous?.motion_upper_deg, 180.0),
-        initial_mode: previousMode,
-        initial_motion_position_deg: previousMode === 'first_frame'
-          ? firstValue
-          : numericOr(previous?.initial_motion_position_deg, firstValue),
-        initial_move_time_sec: numericOr(previous?.initial_move_time_sec, 5.0),
-        invert: previous?.invert ?? false,
-        offset_deg: numericOr(previous?.offset_deg, 0.0),
-        scale: numericOr(previous?.scale, 1.0),
-        gear_ratio: numericOr(previous?.gear_ratio, 1.0),
-      };
-    });
-  }
-
   function newMotionAxisRow(motionId, motorAxis = null) {
     return defaultMotionAxisRow(motionId, motorAxis);
   }
@@ -1979,7 +1904,6 @@ export function createMotionDataController({
       return;
     }
     mappingDraft.mappings.push(newMotionAxisRow(motionId));
-    mappingRawText = '';
     mappingValidation = null;
     markMappingDirty();
     setMappingMessage(`모션 ID ${motionId} 추가 완료`);
@@ -1994,7 +1918,6 @@ export function createMotionDataController({
     }
     upgradeLegacyMappingRefs();
     mappingDraft.mappings = buildGeneratedMotionAxisRows(motors, mappingDraft.mappings);
-    mappingRawText = '';
     mappingValidation = null;
     markMappingDirty();
     setMappingMessage(`${motors.length}개 모터축 행을 만들었습니다. 모션 ID를 직접 확인·수정하세요`);
@@ -2049,8 +1972,13 @@ export function createMotionDataController({
         await selectMapping(selectMappingId);
         return;
       }
-      if (!selectedMappingId && mappingFiles.length) {
-        await selectMapping(mappingFiles[0].id);
+      // **프로젝트가 물고 있는 파일**을 연다 · 판단은 밖에 있다 · §6-238
+      const openId = mappingFileToOpen({
+        files: mappingFiles,
+        activeFileId: payload.active_file_id,
+      });
+      if (openId && openId !== selectedMappingId) {
+        await selectMapping(openId);
         return;
       }
       if (selectedMappingId && !mappingFiles.some((file) => file.id === selectedMappingId)) {
@@ -2058,7 +1986,6 @@ export function createMotionDataController({
         mappingRevision = '';
         mappingDraft = emptyMappingDraft();
         registeredMotionFileIdValue = '';
-        mappingRawText = '';
         mappingValidation = null;
         mappingDirty = false;
         mappingRevisionConflict = false;
@@ -2082,7 +2009,6 @@ export function createMotionDataController({
       selectedMappingId = null;
       mappingDraft = emptyMappingDraft();
       registeredMotionFileIdValue = '';
-      mappingRawText = '';
       mappingValidation = null;
       mappingMotionFileDetail = null;
       mappingDirty = false;
@@ -2142,7 +2068,6 @@ export function createMotionDataController({
       upgradeLegacyMappingRefs();
       selectedMappingId = payload.file?.id || mappingDraft.file_id || requestedMappingId;
       mappingRevision = mappingFileRevision(payload.file);
-      mappingRawText = payload.content || '';
       mappingValidation = payload.validation || null;
       mappingMotionFileDetail = loadedMotionFileDetail;
       normalizeDynamixelGearRatios();
@@ -2162,78 +2087,6 @@ export function createMotionDataController({
         mappingLoading = false;
         renderMappingPanel();
       }
-    }
-  }
-
-  async function newMappingDraft() {
-    const hasExistingDraft = Boolean(
-      selectedMappingId
-      || mappingDraft.motion_file_id
-      || mappingDraft.mappings?.length,
-    );
-    if (hasExistingDraft && !await confirmDiscardMappingChanges('새 매칭을 작성')) return;
-    const enteredName = String(el.motionMappingName?.value || '').trim();
-    if (!enteredName) {
-      setMappingMessage('매핑 이름을 먼저 입력한 뒤 새 매칭 작성을 누르세요');
-      el.motionMappingName?.focus();
-      return;
-    }
-    const currentFile = selectedMappingFile();
-    const currentName = String(currentFile?.name || '').trim();
-    if (selectedMappingId && currentName && enteredName === currentName) {
-      setMappingMessage('기존 매핑과 다른 새 매핑 이름을 입력하세요');
-      el.motionMappingName?.focus();
-      el.motionMappingName?.select();
-      return;
-    }
-    const baseFile = selectedFile || null;
-    selectedMappingId = null;
-    registeredMotionFileIdValue = '';
-    mappingRevision = '';
-    mappingRawText = '';
-    mappingValidation = null;
-    mappingMotionFileDetail = baseFile;
-    mappingDraft = {
-      ...emptyMappingDraft(),
-      name: enteredName,
-      motion_file_id: baseFile?.id || '',
-      mappings: baseFile ? mappingRowsFromMotionFile(baseFile) : [],
-    };
-    mappingDirty = true;
-    mappingRevisionConflict = false;
-    forceMappingNameInput(enteredName);
-    setMappingMessage(`새 매핑 작성 중: ${enteredName} · 아직 파일로 저장되지 않음`);
-    renderMappingPanel();
-  }
-
-  async function importMotionIds() {
-    if (!mappingDraft.motion_file_id) {
-      setMappingMessage('모션 파일을 먼저 선택하세요');
-      return;
-    }
-    mappingLoading = true;
-    setMappingMessage('모션 ID 반영 중');
-    renderMappingPanel();
-    try {
-      const detail = await ensureMappingMotionFileDetail(mappingDraft.motion_file_id);
-      if (!detail?.analysis?.motion_ids?.length) {
-        setMappingMessage('선택 파일에 모션 ID가 없습니다');
-        return;
-      }
-      mappingDraft.mappings = mappingRowsFromMotionFile(detail, mappingDraft.mappings);
-      normalizeDynamixelGearRatios();
-      if (!mappingDraft.name) {
-        mappingDraft.name = `${detail.filename.replace(/\.json$/i, '')}_mapping`;
-      }
-      mappingRawText = '';
-      mappingValidation = null;
-      markMappingDirty();
-      setMappingMessage(`모션 ID ${formatInt(mappingDraft.mappings.length)}개 반영 완료`);
-    } catch (error) {
-      setMappingMessage(`모션 ID 반영 실패: ${error?.message || error}`);
-    } finally {
-      mappingLoading = false;
-      renderMappingPanel();
     }
   }
 
@@ -2368,12 +2221,6 @@ export function createMotionDataController({
    * 치고 넘어갔고, 그 사이 「고쳐진 중」 표시만 남아 버튼이 죽었다.
    */
   async function saveCurrentMapping() {
-    if (mappingRevisionConflict) {
-      await resolveMappingRevisionConflict(
-        '최신 저장 내용을 다시 불러와야 저장할 수 있습니다.',
-      );
-      return false;
-    }
     const draftError = validateMappingDraft();
     if (draftError) {
       mappingValidation = null;
@@ -2419,7 +2266,6 @@ export function createMotionDataController({
       registeredMotionFileIdValue = registeredMotionFileId(mappingDraft);
       selectedMappingId = payload.file?.id || mappingDraft.file_id || selectedMappingId;
       mappingRevision = mappingFileRevision(payload.file);
-      mappingRawText = payload.content || '';
       mappingDirty = false;
       mappingRevisionConflict = false;
       setMappingMessage(payload.message || (
@@ -2456,11 +2302,9 @@ export function createMotionDataController({
     }
     mappingDraft = emptyMappingDraft();
     mappingMotionFileDetail = null;
-    mappingRawText = '';
     mappingValidation = null;
     mappingDirty = false;
     mappingRevisionConflict = false;
-    forceMappingNameInput('');
     setMappingMessage(`${label}의 저장하지 않은 편집 내용을 버렸습니다`);
     renderMappingPanel();
   }
@@ -2500,47 +2344,13 @@ export function createMotionDataController({
     }
   }
 
-  async function deleteCurrentMapping() {
-    if (!selectedMappingId) return;
-    const confirmed = await showConfirm(
-      `선택한 모션축 설정 파일을 현재 프로젝트 휴지통으로 이동합니다.\n${selectedMappingId}`,
-      { title: '모션축 설정 파일 삭제', confirmLabel: '휴지통으로 이동', tone: 'danger' },
-    );
-    if (!confirmed) return;
-    mappingLoading = true;
-    setMappingMessage('매핑 삭제 중');
-    renderMappingPanel();
-    try {
-      const payload = await deleteMotionMapping(selectedMappingId);
-      mappingFiles = Array.isArray(payload.files) ? payload.files : [];
-      selectedMappingId = null;
-      mappingRevision = '';
-      mappingDraft = emptyMappingDraft();
-      registeredMotionFileIdValue = '';
-      mappingRawText = '';
-      mappingValidation = null;
-      mappingDirty = false;
-      mappingRevisionConflict = false;
-      setMappingMessage(payload.message || '매핑 삭제 완료');
-      await onProjectFilesChange?.();
-    } catch (error) {
-      setMappingMessage(`매핑 삭제 실패: ${error?.message || error}`);
-    } finally {
-      mappingLoading = false;
-      renderMappingPanel();
-    }
-  }
-
   function updateMappingRow(rowIndex, field, value, checked = false) {
     const row = mappingDraft.mappings[Number(rowIndex)];
     if (!row) return;
     if (field === 'motion_id') {
       row.motion_id = String(value || '').trim();
-    } else if (field === 'enabled' || field === 'invert' || field === 'reference_enabled') {
+    } else if (field === 'enabled' || field === 'invert') {
       row[field] = Boolean(checked);
-      if (field === 'reference_enabled' && !row.reference_enabled) {
-        row.reference_position_deg = 0.0;
-      }
     } else if (field === 'motor_ref') {
       const selectionValue = String(value || '');
       const motor = motorForSelectionValue(selectionValue);
@@ -2558,9 +2368,7 @@ export function createMotionDataController({
         if (firstValue !== null) row.initial_motion_position_deg = firstValue;
       }
     } else if (
-      field === 'offset_deg'
-      || field === 'scale'
-      || field === 'gear_ratio'
+      field === 'gear_ratio'
       || field === 'reference_position_deg'
       || field === 'motion_lower_deg'
       || field === 'motion_upper_deg'
@@ -2574,7 +2382,6 @@ export function createMotionDataController({
         row.gear_ratio = 1.0;
       }
     }
-    mappingRawText = '';
     mappingValidation = null;
     markMappingDirty();
     renderMappingPanel();
@@ -2597,7 +2404,6 @@ export function createMotionDataController({
     }
     row.reference_position_deg = position;
     row.reference_enabled = true;
-    mappingRawText = '';
     mappingValidation = null;
     markMappingDirty();
     setMappingMessage(`모션 ID ${motionId} 기준점 캡처: ${formatNumber(position, 3)} deg`);
@@ -2613,14 +2419,12 @@ export function createMotionDataController({
     mappingRevision = '';
     mappingDraft = emptyMappingDraft();
     registeredMotionFileIdValue = '';
-    mappingRawText = '';
     mappingValidation = null;
     mappingMotionFileDetail = null;
     mappingDirty = false;
     mappingRevisionConflict = false;
     fileLoadToken += 1;
     mappingLoadToken += 1;
-    forceMappingNameInput('');
     motionRunStatus = null;
     motionRunLastResult = null;
     motionRunGraphFileId = '';
@@ -2988,54 +2792,12 @@ export function createMotionDataController({
         renderMappingPanel();
       });
     }
-    if (el.motionMappingSelect) {
-      el.motionMappingSelect.addEventListener('change', async () => {
-        if (!await confirmDiscardMappingChanges('다른 매칭 파일을 불러오기')) {
-          renderMappingSelect();
-          return;
-        }
-        selectMapping(el.motionMappingSelect.value);
-      });
-    }
-    if (el.refreshMotionMappingsButton) {
-      el.refreshMotionMappingsButton.addEventListener('click', async () => {
-        if (await confirmDiscardMappingChanges('목록을 새로고침')) loadMappings();
-      });
-    }
-    if (el.newMotionMappingButton) {
-      el.newMotionMappingButton.addEventListener('click', newMappingDraft);
-    }
     el.addMotionIdButton?.addEventListener('click', addMotionId);
     el.generateMotionIdsButton?.addEventListener('click', generateMotionIdsFromMotors);
     if (el.saveMotionMappingButton) {
       el.saveMotionMappingButton.addEventListener('click', saveCurrentMapping);
     }
     el.resetMotionMappingButton?.addEventListener('click', resetCurrentMapping);
-    if (el.deleteMotionMappingButton) {
-      el.deleteMotionMappingButton.addEventListener('click', deleteCurrentMapping);
-    }
-    if (el.importMotionIdsButton) {
-      el.importMotionIdsButton.addEventListener('click', importMotionIds);
-    }
-    if (el.motionMappingName) {
-      el.motionMappingName.addEventListener('input', () => {
-        mappingDraft.name = el.motionMappingName.value;
-        mappingRawText = '';
-        mappingValidation = null;
-        markMappingDirty();
-      });
-    }
-    if (el.motionMappingFileSelect) {
-      el.motionMappingFileSelect.addEventListener('change', () => {
-        mappingDraft.motion_file_id = el.motionMappingFileSelect.value;
-        mappingMotionFileDetail = null;
-        mappingRawText = '';
-        mappingValidation = null;
-        markMappingDirty();
-        setMappingMessage('모션 파일이 변경되었습니다. 모션 ID 반영을 눌러 목록을 갱신하세요');
-        renderMappingPanel();
-      });
-    }
     if (el.motionMappingRows) {
       el.motionMappingRows.addEventListener('click', (event) => {
         const action = event.target?.dataset?.motionMappingAction;
@@ -3050,7 +2812,6 @@ export function createMotionDataController({
         } else if (action === 'delete') {
           const deletedMotionId = String(mappingRow.motion_id || '');
           mappingDraft.mappings.splice(rowIndex, 1);
-          mappingRawText = '';
           mappingValidation = null;
           markMappingDirty();
           setMappingMessage(`모션 ID ${deletedMotionId} 삭제 완료`);

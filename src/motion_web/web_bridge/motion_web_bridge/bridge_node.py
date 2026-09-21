@@ -1671,10 +1671,19 @@ class MotionWebBridge(Node):
 
     def list_motion_mappings(self) -> Dict[str, Any]:
         result = self._request_motion_mapping('list', {})
-        if not self.project_repository.selected_project_id():
+        project_id = self.project_repository.selected_project_id()
+        if not project_id:
             result['message'] = NO_PROJECT_SELECTED
         else:
             result['message'] = '현재 프로젝트 모션축 설정을 불러왔습니다'
+        # 어느 것이 **등록된** 파일인가를 같이 말한다 · §6-238
+        #
+        # 전에는 안 말해줬다 · 그래서 화면은 목록의 **첫 번째**를 골랐다 ·
+        # 파일이 하나뿐이면 우연히 맞지만, 프로젝트가 물고 있는 파일이
+        # 무엇인지와는 아무 상관이 없는 규칙이었다.
+        result['active_file_id'] = self.project_repository.active_file_name(
+            project_id, 'motion_axis_matching'
+        ) if project_id else ''
         return result
 
     def _present_motor_refs(self) -> set:
@@ -1849,24 +1858,6 @@ class MotionWebBridge(Node):
 
     def validate_motion_mapping(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self._request_motion_mapping('validate', payload)
-
-    def delete_motion_mapping(self, file_id: Any) -> Dict[str, Any]:
-        project_id = self.project_repository.selected_project_id()
-        if not project_id:
-            return {'success': False, 'message': NO_PROJECT_SELECTED, 'files': []}
-        blocker = self._project.change_blocker()
-        if blocker:
-            return {'success': False, 'message': blocker, 'files': []}
-        try:
-            deleted = self.project_repository.delete_file(
-                project_id, 'motion_axis_matching', file_id
-            )
-        except (OSError, ValueError) as exc:
-            return {'success': False, 'message': str(exc), 'files': []}
-        result = self.list_motion_mappings()
-        result['message'] = '모션축 설정 파일을 프로젝트 휴지통으로 이동했습니다'
-        result['project'] = deleted.get('project')
-        return result
 
     def _request_motion_mapping(
         self,

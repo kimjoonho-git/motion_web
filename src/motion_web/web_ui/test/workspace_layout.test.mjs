@@ -87,13 +87,10 @@ test('settings workflows preserve action IDs and expose their defined steps', ()
     'dynamixelScanButton',
     'saveAxisConfigButton',
     'applyAxisConfigButton',
-    'refreshMotionMappingsButton',
-    'newMotionMappingButton',
     'addMotionIdButton',
     'generateMotionIdsButton',
     'saveMotionMappingButton',
     'resetMotionMappingButton',
-    'deleteMotionMappingButton',
   ]) {
     assert.equal(countId(id), 1, `${id} must remain unique`);
   }
@@ -101,7 +98,7 @@ test('settings workflows preserve action IDs and expose their defined steps', ()
   assert.match(html, /2\. 검색 결과 확인 및 축 편집/);
   assert.match(html, /3\. 저장하고 설정 적용/);
   assert.doesNotMatch(html, /4\. 실제 시스템 적용/);
-  assert.match(html, /1\. 설정 파일 선택/);
+  assert.match(html, /1\. 모션축 설정 파일/);
   assert.match(html, /2\. 모션축 편집/);
   assert.match(html, /3\. 검증·미리보기·저장/);
   assert.doesNotMatch(html, /4\. 저장/);
