@@ -322,26 +322,36 @@ class MotionRunManager(Node):
         return router
 
     def _invalidate_execution_context(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """실행 컨텍스트와 자동화 상태를 버린다 · 동작 중에는 거부한다."""
+        """**실행 허용만 거둔다 · 사람이 저장한 설정은 그대로 둔다** · §6-267
+
+        브릿지는 실행 컨텍스트가 준비되지 않으면 **1초마다** 이것을 보낸다 ·
+        전에는 그때마다 자동 반복 설정과 그것이 어느 프로젝트 것인지까지
+        지웠다.
+
+        `_automation_project_id` 가 비면 저장이 **「자동 반복을 저장할 현재
+        프로젝트가 없습니다」**로 거절된다 · 사람이 설정을 고치는 동안 1초마다
+        그 상태가 되었다.
+
+        자동 반복 설정은 파일에 저장되고 `select_project` 가 다시 읽는다 ·
+        여기서 지울 이유가 없다 · 스튜디오 §6-257 · MIDI §6-265 와 같은 원칙.
+
+        동작 중에는 여전히 거부한다.
+        """
         with self._run_lock:
             if self._run_thread is not None and self._run_thread.is_alive():
                 raise ValueError('모션 동작 중에는 프로젝트 메모리를 폐기할 수 없습니다')
             self._execution_context = {}
             self._execution_context_ready = False
-            self.motion_files_dir = self.motion_projects_dir
-            self.mappings_dir = self.motion_projects_dir
-            self._status = motion_run_rules._empty_status()
-            self._automation_project_id = ''
-            self._automation_state = default_automation_state()
             self._automation_runtime = {
                 'state': 'off',
                 'message': '',
                 'stop_after_cycle': False,
             }
+            project_id = self._automation_project_id
         return {
             'success': True,
-            'message': '모션 실행 프로젝트 메모리 폐기',
-            'project_id': '',
+            'message': '모션 실행 대기 · 저장된 자동 반복 설정은 유지',
+            'project_id': project_id,
             'context_id': '',
             'status': self.status(),
         }

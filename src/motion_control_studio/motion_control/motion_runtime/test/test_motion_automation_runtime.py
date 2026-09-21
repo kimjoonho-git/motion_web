@@ -242,3 +242,47 @@ def test_confirmed_context_no_longer_revives_playback():
     assert not hasattr(manager, '_automation_resume_pending')
     assert 'resume_pending' not in manager._automation_runtime
     assert not hasattr(manager, '_coordination_enabled')
+
+
+# --------------------------------------------------------------------------- #
+# 실행 허용을 거둘 때 **사람이 저장한 설정**까지 지우지 않는다 · §6-267
+#
+# 브릿지는 실행 컨텍스트가 준비되지 않으면 1초마다 `invalidate_context` 를
+# 보낸다 · 실측으로 12초에 11번 왔다 · 전에는 그때마다 자동 반복 설정과 그것이
+# 어느 프로젝트 것인지까지 지웠다 · `_automation_project_id` 가 비면 저장이
+# 「자동 반복을 저장할 현재 프로젝트가 없습니다」로 거절된다.
+# --------------------------------------------------------------------------- #
+
+
+def _invalidated(manager):
+    manager._run_thread = None      # 동작 중이 아니다
+    return manager._invalidate_execution_context({})
+
+
+def test_invalidate_keeps_the_saved_automation():
+    manager = _manager()
+    manager._automation_state = {**manager._automation_state, 'enabled': True}
+    before = dict(manager._automation_state)
+
+    _invalidated(manager)
+
+    assert manager._automation_state == before
+    assert manager._automation_project_id == 'project'
+
+
+def test_invalidate_still_takes_the_permission():
+    manager = _manager()
+    manager._execution_context = {'context_id': 'abc'}
+    manager._execution_context_ready = True
+
+    _invalidated(manager)
+
+    assert manager._execution_context == {}
+    assert manager._execution_context_ready is False
+
+
+def test_invalidate_answers_with_the_project_it_kept():
+    response = _invalidated(_manager())
+
+    assert response['project_id'] == 'project'
+    assert '유지' in response['message']

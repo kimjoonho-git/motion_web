@@ -115,7 +115,24 @@ def test_invalidate_context_does_not_select_a_project(monkeypatch):
     _send(manager, 'invalidate_context')
     assert recorder.selected == []
     assert manager._execution_context == {}
-    assert manager.mappings_dir is manager.motion_projects_dir
+
+
+def test_invalidate_keeps_the_folder_it_was_looking_at(monkeypatch, tmp_path):
+    """**실행 허용만 거둔다 · 보던 곳은 그대로 둔다** · §6-267
+
+    브릿지는 실행 컨텍스트가 준비되지 않으면 1초마다 이것을 보낸다 · 실측으로
+    12초에 11번 왔다 · 그때마다 보던 폴더를 되돌리면 그 사이 조회가 엉뚱한
+    곳을 본다 · 어디를 보는가는 `select_project` 가 정한다.
+    """
+    manager, _recorder = _manager(monkeypatch)
+    manager.mappings_dir = tmp_path / 'proj' / 'motion_axis_matching'
+    manager.motion_files_dir = tmp_path / 'proj' / 'motions'
+
+    _send(manager, 'invalidate_context')
+
+    assert manager.mappings_dir == tmp_path / 'proj' / 'motion_axis_matching'
+    assert manager.motion_files_dir == tmp_path / 'proj' / 'motions'
+    assert manager._execution_context == {}
 
 
 @pytest.mark.parametrize('command', sorted(EXPECTED_COMMANDS - {'invalidate_context'}))

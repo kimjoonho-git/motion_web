@@ -109,14 +109,20 @@ class MotionMappingManager(Node):
         return router
 
     def _invalidate_context(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """실행 컨텍스트를 버리고 경로를 프로젝트 루트로 되돌린다."""
-        self.mappings_dir = self.motion_projects_dir
-        self.motion_files_dir = self.motion_projects_dir
+        """**실행 허용만 거둔다 · 보던 곳은 그대로 둔다** · §6-267
+
+        브릿지는 실행 컨텍스트가 준비되지 않으면 **1초마다** 이것을 보낸다 ·
+        실측으로 12초에 11번 왔다 · 그때마다 보던 폴더를 프로젝트 루트로
+        되돌리면, 그 사이에 들어온 조회는 엉뚱한 곳을 본다.
+
+        어느 프로젝트를 보는가는 `select_project` 가 정한다 · 여기서 또
+        되돌릴 이유가 없다 · 스튜디오 §6-257 · MIDI §6-265 와 같은 원칙.
+        """
         self._execution_context = {}
         return {
             'success': True,
-            'message': '모션축 설정 실행 컨텍스 폐기',
-            'project_id': '',
+            'message': '모션축 설정 실행 대기 · 보던 설정은 유지',
+            'project_id': self._project_id if hasattr(self, '_project_id') else '',
             'context_id': '',
         }
 
