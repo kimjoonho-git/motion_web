@@ -31,29 +31,28 @@ test('연동을 쓰지 않으면 마스터라는 말을 쓰지 않는다', () =>
   assert.match(motionScheduleScopeNote(status()), /이 PC 의 등록된 모션/);
 });
 
-test('연동 마스터로 참가 중이면 그룹 전체가 움직인다고 말한다', () => {
+test('묶여 있어도 같은 말을 한다 · 스케줄은 그것과 상관없다 · §6-266', () => {
   const now = status({ coordination_enabled: true, coordination_joined: true });
   const state = motionScheduleBadgeState(now);
-  assert.equal(state.scope, 'group');
-  assert.equal(state.text, '스케줄러: 마스터 (2개 등록)');
+  assert.equal(state.text, '스케줄러: 동작 중 (2개 등록)');
   assert.equal(state.warning, '');
-  assert.match(motionScheduleScopeNote(now), /그룹에 참가한 모든 PC/);
+  assert.doesNotMatch(motionScheduleScopeNote(now), /연동|그룹|마스터/);
 });
 
-test('빠져 있으면 발화해도 실행되지 않는다고 띄운다', () => {
-  // 조정 노드가 `먼저 DDS 그룹에 참가하세요` 로 거부한다 · 전에는 로그에만
-  // 남아서 "스케줄이 발화했는데 아무 일도 안 났다" 가 됐다 · §6-68
+test('묶이지 않았어도 경고하지 않는다 · 혼자 돈다 · §6-266', () => {
+  // 전에는 「시각이 되어도 실행되지 않습니다」라고 했고 실제로 그랬다 ·
+  // 16~18시 구간 안에서 15분 동안 7번 거절당하며 한 번도 돌지 않았다 ·
+  // 이제 묶이지 않으면 이 PC 혼자 돈다 · 그 경고는 사실이 아니다.
   const now = status({
     coordination_enabled: true,
     coordination_joined: false,
     coordination_node_connected: true,
   });
   const state = motionScheduleBadgeState(now);
-  assert.equal(state.tone, 'warn');
-  assert.match(state.text, /그룹에서 빠져 있음/);
-  assert.match(state.warning, /시각이 되어도 실행되지 않습니다/);
-  assert.match(state.warning, /「다시 참가」/);
-  assert.equal(state.canEdit, true, '빠져 있어도 스케줄은 고칠 수 있다');
+  assert.equal(state.tone, 'ok');
+  assert.equal(state.warning, '');
+  assert.equal(state.canEdit, true);
+  assert.doesNotMatch(state.text, /빠져 있음/);
 });
 
 test('슬레이브는 고칠 수 없고 왜인지 말한다', () => {
@@ -64,20 +63,18 @@ test('슬레이브는 고칠 수 없고 왜인지 말한다', () => {
   assert.equal(state.scope, 'slave');
   assert.equal(state.canEdit, false);
   assert.match(state.blockedReason, /아무 일을 하지 않습니다/);
-  assert.match(state.blockedReason, /「연동 탈퇴」/);
+  assert.match(state.blockedReason, /「전체 동작 정지」/);
 });
 
-test('연동 노드가 안 붙으면 빠졌다고 단정하지 않는다', () => {
-  // 브리지만 재시작한 직후에는 조정 노드 상태를 아직 못 받는다 · 그때
-  // "빠져 있음" 이라 띄우면 없는 문제를 만든다
+test('다른 노드 상태를 못 받아도 스케줄은 그대로다 · §6-266', () => {
   const now = status({
     coordination_enabled: true,
     coordination_joined: false,
     coordination_node_connected: false,
   });
   const state = motionScheduleBadgeState(now);
-  assert.match(state.text, /연동 상태 확인 중/);
-  assert.equal(state.warning, '', '확인 중에는 경고하지 않는다');
+  assert.equal(state.text, '스케줄러: 동작 중 (2개 등록)');
+  assert.equal(state.warning, '');
 });
 
 test('수동 모드면 스케줄이 손대지 않는다고 말한다', () => {
@@ -103,7 +100,7 @@ test('슬레이브에서는 수동 모드가 앞에 나서지 않는다', () => 
   }));
   assert.equal(state.scope, 'slave');
   assert.equal(state.canEdit, false, '슬레이브에서는 실행 관리도 잠겨야 한다');
-  assert.match(state.blockedReason, /「연동 탈퇴」/);
+  assert.match(state.blockedReason, /「전체 동작 정지」/);
 });
 
 test('슬레이브에서는 실행 관리 칸이 잠긴다', () => {
@@ -188,7 +185,7 @@ test('세 번 연달아 거부당하면 빨강으로 올린다', () => {
 test('거부가 없으면 예전 그대로 초록이다', () => {
   const state = motionScheduleBadgeState(rejected(0));
   assert.equal(state.tone, 'ok');
-  assert.match(state.text, /마스터/);
+  assert.match(state.text, /동작 중/);
 });
 
 test('수동 모드에서는 묵은 거부를 떠들지 않는다', () => {

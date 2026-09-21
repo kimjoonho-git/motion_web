@@ -39,6 +39,7 @@ def _node(tmp_path, *, run_state, run_mode='schedule', schedules=None, group=Non
     )
     node.get_logger = lambda: _Logger()
     node._coordination_enabled = lambda: False
+    node._coordination_joined = lambda: False
     node._local_run_state = lambda: run_state
     node._group_execution = lambda: dict(group or {})
     node._run_mode = run_mode

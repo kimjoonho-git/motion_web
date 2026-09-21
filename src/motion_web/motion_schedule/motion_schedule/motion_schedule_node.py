@@ -227,6 +227,24 @@ class MotionScheduleNode(Node):
             self.get_logger().debug(f"조회 실패 [{endpoint}] · {exc}")
             return None
 
+    def _coordination_joined(self) -> bool:
+        """지금 **실제로** 여러 대로 묶여 있는가 · §6-266
+
+        「쓰겠다」는 설정이고 「지금 묶여 있다」는 상태다 · 둘은 다르다 ·
+        설정만 보고 그쪽으로 보내면, 묶이지 않은 PC 에서는 받을 데가 없어
+        매번 거절당한다.
+
+        실측으로 16~18시 구간 안에서 1분마다 거절이 쌓였고(15분에 7회),
+        그동안 모션은 한 번도 돌지 않았다 · 단독으로 도는 길은 이미 있고
+        같은 요청을 넣어 보면 「초기 위치 이동 → 연속 모션 실행 중」까지
+        정상으로 간다 · 스케줄만 그 길로 갈 방법이 없었다.
+        """
+        payload = self._read_json('/api/coordination')
+        runtime = (payload or {}).get('runtime') if isinstance(payload, dict) else None
+        if not isinstance(runtime, dict):
+            return False
+        return runtime.get('joined') is True
+
     def _local_run_state(self) -> str:
         """이 PC 의 모션이 지금 어느 단계인가 · 못 읽으면 빈 문자열."""
         payload = self._read_json('/api/motion-run/status')
@@ -332,7 +350,7 @@ class MotionScheduleNode(Node):
         except (OSError, ValueError) as exc:
             self.get_logger().warning(f"Failed to read motion_automation.json: {exc}")
             
-        if self._coordination_enabled():
+        if self._coordination_enabled() and self._coordination_joined():
             payload = {
                 "command": "start_group",
                 "run_mode": "continuous",
@@ -358,7 +376,7 @@ class MotionScheduleNode(Node):
         name = getattr(item, 'schedule_name', '구간 밖')
         schedule_id = getattr(item, 'schedule_id', '')
         self.get_logger().info(f"[SCHEDULE TRIGGER] STOP-AFTER-CYCLE -> '{name}'")
-        if self._coordination_enabled():
+        if self._coordination_enabled() and self._coordination_joined():
             self._send_http_request("/api/coordination/control", {
                 "command": "stop_after_cycle",
                 "schedule_id": schedule_id or 'reconcile',
@@ -379,6 +397,9 @@ class MotionScheduleNode(Node):
                 'schedule_id', None,
             ),
             "run_mode": self._run_mode,
+            # 단독으로 돌았는지 화면이 알 수 있게 남긴다 · §6-266
+            "coordination_enabled": self._coordination_enabled(),
+            "coordination_joined": self._coordination_joined(),
             # 마지막으로 거부당한 시도 · 비어 있으면 정상이다
             "last_failure": dict(self._last_failure),
             # 멈춰도 몇 초 뒤에 다시 맞추는가 · 화면이 사람에게 알려준다 · §6-149

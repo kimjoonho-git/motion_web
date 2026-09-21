@@ -301,7 +301,7 @@ const ScheduleManager = {
         if (!modal) return;
 
         document.getElementById('schedEditId').value = scheduleItem ? scheduleItem.schedule_id : '';
-        document.getElementById('schedName').value = scheduleItem ? scheduleItem.schedule_name : '새 연동 스케줄';
+        document.getElementById('schedName').value = scheduleItem ? scheduleItem.schedule_name : '새 스케줄';
         document.getElementById('schedStartTime').value = scheduleItem ? scheduleItem.start_time : '09:00:00';
         document.getElementById('schedStopTime').value = scheduleItem ? (scheduleItem.stop_time || '18:00:00') : '18:00:00';
         document.getElementById('schedRepeatType').value = scheduleItem ? scheduleItem.repeat_type : 'daily';

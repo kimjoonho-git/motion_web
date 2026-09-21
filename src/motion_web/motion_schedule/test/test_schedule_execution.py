@@ -40,6 +40,8 @@ def _node(tmp_path, *, coordination_enabled, is_master=True):
     )
     node.get_logger = lambda: _Logger()
     node._coordination_enabled = lambda: coordination_enabled
+    # 「쓰겠다」와 「지금 묶여 있다」는 다르다 · §6-266 · 시험에서는 같이 준다
+    node._coordination_joined = lambda: coordination_enabled
     node._is_master_pc = lambda: is_master
     node.sent = []
     node._send_http_request = lambda endpoint, payload: (

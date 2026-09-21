@@ -42,14 +42,14 @@ export function motionScheduleBadgeState(status) {
   if (enabled && !isMaster) {
     return {
       scope: 'slave',
-      text: '스케줄러: 슬레이브 · 마스터 PC 에서 설정',
+      text: '스케줄러: 이 PC 에서는 설정하지 않습니다',
       tone: 'muted',
       canEdit: false,
       warning: '',
       blockedReason:
-        '이 PC 는 연동 슬레이브입니다 · 스케줄도 실행 관리도 여기서는 '
-        + '아무 일을 하지 않습니다 · 마스터가 보내는 그룹 실행만 이 PC 를 '
-        + '움직입니다 · 정비하려면 PC 연동 화면에서 「연동 탈퇴」를 누르세요',
+        '이 PC 는 받는 쪽이라 스케줄도 실행 관리도 여기서는 '
+        + '아무 일을 하지 않습니다 · 다른 PC 가 보내는 실행만 이 PC 를 '
+        + '움직입니다 · 여기서 멈추려면 「전체 동작 정지」를 누르세요',
     };
   }
   // 수동 모드면 스케줄은 아무것도 하지 않는다 · §6-143
@@ -106,31 +106,15 @@ export function motionScheduleBadgeState(status) {
       blockedReason: '',
     };
   }
-  if (!nodeConnected) {
-    return {
-      scope: 'group',
-      text: '스케줄러: 마스터 · 연동 상태 확인 중',
-      tone: 'muted',
-      canEdit: true,
-      warning: '',
-      blockedReason: '',
-    };
-  }
-  if (!joined) {
-    return {
-      scope: 'group',
-      text: '스케줄러: 마스터 · 그룹에서 빠져 있음',
-      tone: 'warn',
-      canEdit: true,
-      warning:
-        '이 PC 가 그룹에서 빠져 있어, 시각이 되어도 실행되지 않습니다 · '
-        + 'PC 연동 화면에서 「다시 참가」를 누르세요.',
-      blockedReason: '',
-    };
-  }
+  // **스케줄은 묶였는지와 상관없이 돈다** · §6-266
+  //
+  // 전에는 묶이지 않았으면 「시각이 되어도 실행되지 않습니다」라고 했다 ·
+  // 실제로 그랬고, 16~18시 구간 안에서 15분 동안 7번 거절당하며 한 번도
+  // 돌지 않았다 · 이제 묶이지 않으면 이 PC 혼자 돈다 · 그러니 그 경고는
+  // 사실이 아니고, 여기서 남의 화면 이야기를 할 이유도 없다.
   return {
     scope: 'group',
-    text: `스케줄러: 마스터 ${registered}`,
+    text: `스케줄러: 동작 중 ${registered}`,
     tone: 'ok',
     canEdit: true,
     warning: '',
@@ -153,8 +137,8 @@ export function motionScheduleScopeNote(status) {
     return state.blockedReason + '.';
   }
   if (state.scope === 'group') {
-    return '시각이 되면 그룹에 참가한 모든 PC 가 각자의 등록된 모션을 '
-      + '연속 시작하고, 종료 시각에 현재 회차 후 정지합니다.';
+    return '시각이 되면 등록된 모션을 연속 시작하고, '
+      + '종료 시각에 현재 회차 후 정지합니다.';
   }
   return '스케줄러 상태를 확인하고 있습니다.';
 }

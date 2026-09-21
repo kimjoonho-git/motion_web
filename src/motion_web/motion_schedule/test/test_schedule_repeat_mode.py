@@ -34,6 +34,7 @@ def _node(tmp_path, project_id='proj-a'):
     node.store = SimpleNamespace(current_project_id=project_id)
     node.get_logger = lambda: _Logger()
     node._coordination_enabled = lambda: False
+    node._coordination_joined = lambda: False
     node.sent = []
     node._send_http_request = lambda endpoint, payload: (
         node.sent.append((endpoint, payload)) or True
@@ -88,6 +89,7 @@ def test_broken_repeat_mode_falls_back_to_the_default(tmp_path):
 def test_the_group_path_sends_the_same_mode(tmp_path):
     node = _node(tmp_path)
     node._coordination_enabled = lambda: True
+    node._coordination_joined = lambda: True
 
     node._execute_start(ScheduleItem(schedule_id='s1'))
 

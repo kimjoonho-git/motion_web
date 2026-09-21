@@ -9,6 +9,7 @@
 소스에서 확인한다.
 """
 
+import re
 from pathlib import Path
 
 NODE = (
@@ -71,18 +72,25 @@ def test_schedule_button_is_disabled_on_a_slave():
     ).read_text(encoding='utf-8')
     start = manager.index('updateStatusBadge()')
     body = manager[start:start + 1600]
-    # 무엇을 잠글지는 `schedule_scope.js` 가 정한다 · 네 상태를 가른다 · §6-133
-    # (연동 안 씀 · 마스터 · 마스터인데 빠짐 · 슬레이브)
+    # 무엇을 잠글지는 `schedule_scope.js` 가 정한다 · §6-133 · §6-266
+    #
+    # 「묶여 있지 않으면 실행되지 않는다」는 상태는 없어졌다 · 이제 혼자 돈다 ·
+    # 받는 쪽 PC 에서만 잠근다.
     assert 'motionScheduleBadgeState(this.status)' in body, '상태 판단을 쓰지 않는다'
-    assert 'button.disabled = !state.canEdit' in body, '슬레이브에서 버튼이 잠기지 않는다'
+    assert 'button.disabled = !state.canEdit' in body, '받는 쪽에서 버튼이 잠기지 않는다'
     assert 'state.blockedReason' in body, '왜 못 쓰는지 알려주지 않는다'
 
     scope = (
         Path(__file__).resolve().parents[2]
         / 'web_ui' / 'static' / 'js' / 'schedule_scope.js'
     ).read_text(encoding='utf-8')
-    assert '마스터 PC 에서 설정' in scope, '슬레이브에게 어디서 설정하는지 알려주지 않는다'
-    assert '시각이 되어도 실행되지 않습니다' in scope, '빠져 있을 때 조용히 실패한다'
+    # 주석에는 옛 문구를 적어 둘 수 있다 · 주석을 빼고 본다
+    shown = re.sub(r'/\*[\s\S]*?\*/', '', scope)
+    shown = re.sub(r'^\s*//.*$', '', shown, flags=re.M)
+    assert '이 PC 에서는 설정하지 않습니다' in shown, '어디서 설정하는지 알려주지 않는다'
+    assert '시각이 되어도 실행되지 않습니다' not in shown, (
+        '이제 혼자 돈다 · 실행되지 않는다는 말은 사실이 아니다'
+    )
 
 
 # 「지문은 이 PC 가 찍는다」(§6-150) 도 `schedule_service.save_schedule()` 로
@@ -104,3 +112,51 @@ def test_an_old_schedule_without_a_fingerprint_still_loads():
     from motion_common.schedule_models import ScheduleItem
 
     assert ScheduleItem.from_dict({'schedule_name': '옛것'}).saved_timezone is None
+
+
+# --------------------------------------------------------------------------- #
+# 쓰겠다는 **설정**과 지금 묶여 있다는 **상태**는 다르다 · §6-266
+#
+# 설정만 보고 그쪽으로 보내면, 묶이지 않은 PC 에서는 받을 데가 없어 매번
+# 거절당한다 · 실측으로 16~18시 구간 안에서 1분마다 거절이 쌓였고(15분에 7회)
+# 그동안 모션은 한 번도 돌지 않았다 · 단독으로 도는 길은 이미 있고 잘 돈다.
+# --------------------------------------------------------------------------- #
+
+
+def test_start_checks_the_state_not_only_the_setting():
+    body = _body('_execute_start')
+
+    assert 'self._coordination_joined()' in body, '지금 묶여 있는지를 보지 않는다'
+    assert (
+        'self._coordination_enabled() and self._coordination_joined()' in body
+    ), '설정과 상태를 함께 보아야 한다'
+
+
+def test_stop_uses_the_same_rule():
+    body = _body('_execute_stop_after_cycle')
+
+    assert 'self._coordination_enabled() and self._coordination_joined()' in body
+
+
+def test_joined_reads_the_live_runtime():
+    body = _body('_coordination_joined')
+
+    assert "/api/coordination" in body, '지금 상태를 물어보지 않는다'
+    assert "runtime" in body
+    assert "joined" in body
+
+
+def test_joined_is_false_when_the_answer_is_not_usable():
+    """못 읽으면 단독으로 본다 · 그룹 명령이 실패하는 것보다 낫다."""
+    body = _body('_coordination_joined')
+
+    assert 'return False' in body
+    assert "is True" in body, '참인 경우에만 묶인 것으로 본다'
+
+
+def test_the_status_says_which_way_it_went():
+    """단독으로 돌았는지 화면이 알 수 있어야 한다."""
+    body = _body('_publish_status')
+
+    assert '"coordination_enabled"' in body
+    assert '"coordination_joined"' in body

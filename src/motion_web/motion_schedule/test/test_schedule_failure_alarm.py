@@ -46,6 +46,9 @@ def _node(monkeypatch, payload=None, *, boom=None):
     node._last_failure = {}
     node.logger = _Logger()
     node.get_logger = lambda: node.logger
+    # 상태 알림이 「쓰겠다·묶여 있다」를 같이 싣는다 · §6-266
+    node._coordination_enabled = lambda: False
+    node._coordination_joined = lambda: False
 
     def fake_urlopen(_request, timeout=None):
         if boom is not None:
