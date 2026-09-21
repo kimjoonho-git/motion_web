@@ -7,6 +7,7 @@ from motion_studio.layer_editor import (
     edit_layer,
     layer_point_coverage_issues,
     merge_layers,
+    one_curve_per_axis,
 )
 from motion_studio.layer_validation import point_curve_frame_mismatches
 from motion_studio.motion_model import normalize_layer
@@ -1241,7 +1242,11 @@ def test_both_sides_pointed_still_merges():
 
     merged = merge_layers({'layers': [first, second]}, ['A', 'B'], append_layer_id='B')
 
-    assert len(merged['point_curves']) == 2
+    # 합쳐도 **축마다 곡선 하나**다 · §6-281
+    #
+    # 전에는 원본 레이어의 곡선을 그대로 가져와 한 축에 둘이 됐다 · 조각이
+    # 나면 화면에 흰 줄이 생기고 구간 지우기가 조각마다 따로 놀았다.
+    assert len(merged['point_curves']) == 1
     assert layer_point_coverage_issues(merged) == [], '축이 반쪽으로 남았다'
 
 
@@ -1618,3 +1623,146 @@ def test_no_filler_curve_is_made_past_the_last_value():
         f'값이 끝난 뒤에 곡선이 만들어졌다: {ends}'
     )
     assert point_curve_frame_mismatches(merged) == []
+
+
+# --------------------------------------------------------------------------- #
+# 구간 지우기는 **작은 곡선도 지운다** · §6-279
+#
+# 전에는 지우고 나서 포인트가 둘 미만으로 남는 곡선을 그냥 건너뛰었다 ·
+# 합친 레이어에는 2~3점짜리 곡선이 여럿 생겨서, 구간을 지워도 그것들만
+# 그대로 남았다 · 그 포인트는 옮길 수는 있는데 지워지지가 않았다.
+# --------------------------------------------------------------------------- #
+
+def _two_curve_layer():
+    frames = [
+        {'frame': index, 'time_sec': round(index * 0.02, 9),
+         'values': {'1-1': float(index)}}
+        for index in range(1, 11)
+    ]
+    return normalize_layer({
+        'layer_id': 'L', 'name': 'L', 'frames': frames,
+        'point_curves': [
+            {
+                'curve_id': 'big', 'motion_id': '1-1', 'interpolation_order': 1,
+                'points': [
+                    {'time_sec': 0.02, 'value': 1.0},
+                    {'time_sec': 0.06, 'value': 3.0},
+                    {'time_sec': 0.10, 'value': 5.0},
+                ],
+            },
+            {
+                'curve_id': 'small', 'motion_id': '1-1', 'interpolation_order': 1,
+                'points': [
+                    {'time_sec': 0.16, 'value': 8.0},
+                    {'time_sec': 0.20, 'value': 10.0},
+                ],
+            },
+        ],
+    })
+
+
+def test_deleting_a_range_removes_a_two_point_curve_whole():
+    layer = _two_curve_layer()
+
+    edited = edit_layer(layer, {
+        'operation': 'delete_point_range',
+        'motion_ids': ['1-1'],
+        'start_sec': 0.14,
+        'end_sec': 0.22,
+    })
+
+    assert [curve['curve_id'] for curve in edited['point_curves']] == ['big']
+    left = [
+        frame['time_sec'] for frame in edited['frames']
+        if 0.16 - 1e-9 <= frame['time_sec'] <= 0.20 + 1e-9
+    ]
+    assert left == [], f'곡선은 지웠는데 그 구간 프레임이 남았다: {left}'
+
+
+def test_deleting_part_of_a_curve_still_trims_it():
+    """구간이 곡선 일부만 덮으면 지금까지대로 그 포인트만 뺀다."""
+    layer = _two_curve_layer()
+
+    edited = edit_layer(layer, {
+        'operation': 'delete_point_range',
+        'motion_ids': ['1-1'],
+        'start_sec': 0.05,
+        'end_sec': 0.07,
+    })
+
+    # 지운 포인트만 빠지고, 남은 조각은 하나로 모인다 · §6-281
+    assert len(edited['point_curves']) == 1
+    assert [point['time_sec'] for point in edited['point_curves'][0]['points']] == [
+        0.02, 0.10, 0.16, 0.20,
+    ]
+
+
+# --------------------------------------------------------------------------- #
+# 한 축의 그래프는 **하나다** · §6-281
+#
+# 곡선은 한 축에 여럿 있을 수 있게 만들어져 있었고, 편집할 때마다 조각이 늘었다 ·
+# 실측으로 사용자의 녹화 레이어 한 축이 곡선 4개로 갈라져 있었고 그 사이가
+# 흰 줄(값도 곡선도 없는 구간)로 남았다.
+#
+# 어떤 편집이든 끝나면 축마다 곡선 하나로 모은다.
+# --------------------------------------------------------------------------- #
+
+def _split_layer():
+    frames = [
+        {'frame': index, 'time_sec': round(index * 0.02, 9),
+         'values': {'1-1': float(index), '1-2': float(index)}}
+        for index in range(1, 11)
+    ]
+    return normalize_layer({
+        'layer_id': 'S', 'name': 'S', 'frames': frames,
+        'point_curves': [
+            {'curve_id': 'a1', 'motion_id': '1-1', 'interpolation_order': 1,
+             'points': [{'time_sec': 0.02, 'value_deg': 1.0},
+                        {'time_sec': 0.06, 'value_deg': 3.0}]},
+            {'curve_id': 'a2', 'motion_id': '1-1', 'interpolation_order': 1,
+             'points': [{'time_sec': 0.14, 'value_deg': 7.0},
+                        {'time_sec': 0.20, 'value_deg': 10.0}]},
+            {'curve_id': 'b1', 'motion_id': '1-2', 'interpolation_order': 1,
+             'points': [{'time_sec': 0.02, 'value_deg': 1.0},
+                        {'time_sec': 0.20, 'value_deg': 10.0}]},
+        ],
+    })
+
+
+def test_any_edit_leaves_one_curve_for_each_axis():
+    layer = _split_layer()
+
+    edited = edit_layer(layer, {
+        'operation': 'value_offset', 'motion_ids': ['1-1'],
+        'start_sec': 0.02, 'end_sec': 0.06, 'offset_deg': 1.0,
+    })
+
+    per_axis = {}
+    for curve in edited['point_curves']:
+        per_axis[curve['motion_id']] = per_axis.get(curve['motion_id'], 0) + 1
+    assert per_axis == {'1-1': 1, '1-2': 1}
+    assert point_curve_frame_mismatches(edited) == []
+
+
+def test_joining_the_pieces_fills_the_hole():
+    """조각 사이의 빈 시간이 이어지면서 메워진다 · 흰 줄이 사라진다."""
+    joined = one_curve_per_axis(_split_layer())
+
+    times = [
+        frame['time_sec'] for frame in joined['frames']
+        if '1-1' in (frame.get('values') or {})
+    ]
+    holes = [
+        round(b - a, 9) for a, b in zip(times, times[1:])
+        if round(b - a, 9) > 0.02 + 1e-9
+    ]
+    assert holes == [], f'조각 사이가 아직 비어 있다: {holes}'
+
+
+def test_an_axis_that_is_already_one_curve_is_left_alone():
+    layer = _split_layer()
+    layer['point_curves'] = [
+        curve for curve in layer['point_curves'] if curve['motion_id'] == '1-2'
+    ]
+
+    assert one_curve_per_axis(layer) is layer

@@ -730,6 +730,62 @@ def approximate_motion_points(
     }
 
 
+def _unique_point_ids(points: Sequence[Any]) -> List[Dict[str, Any]]:
+    """한 곡선 안에서 포인트 id 는 겹치면 안 된다 · §6-280
+
+    곡선 둘을 하나로 합치면 각자 쓰던 id 가 한자리에 모인다 · 서로 다른
+    곡선에서 만들어진 id 는 겹칠 수 있다 · 겹치는 것만 새로 준다.
+    """
+    seen: set[str] = set()
+    result: List[Dict[str, Any]] = []
+    for point in points:
+        item = dict(point)
+        point_id = str(item.get('point_id') or '')
+        if not point_id or point_id in seen:
+            point_id = f'point_{uuid.uuid4().hex[:8]}'
+        seen.add(point_id)
+        item['point_id'] = point_id
+        result.append(item)
+    return result
+
+
+def _near(time_sec: float, start_sec: float, end_sec: float) -> bool:
+    """붙인 구간이거나 그 양옆 한 칸인가 · §6-280
+
+    곡선의 포인트는 서로 20ms 이상 떨어져야 한다 · 붙인 포인트 바로 옆에 옛
+    포인트가 남으면 그 규칙을 어겨 곡선을 그릴 수 없다 · 한 칸 여유를 두고
+    비운다.
+    """
+    return (
+        start_sec - DEFAULT_PERIOD_SEC + EPSILON
+        <= time_sec
+        <= end_sec + DEFAULT_PERIOD_SEC - EPSILON
+    )
+
+
+def _remove_curve(
+    working: Dict[str, Any],
+    tracks: Dict[str, List[tuple[float, float]]],
+    curve: Mapping[str, Any],
+) -> None:
+    """곡선 하나를 그 구간의 프레임까지 함께 없앤다 · §6-279
+
+    `_rewrite_curve` 의 앞쪽 절반과 같은 일을 한다 · 새 포인트로 갈아 끼우는
+    대신 아무것도 넣지 않는다.
+    """
+    curve_id = str(curve.get('curve_id') or '')
+    motion_id = str(curve.get('motion_id') or '')
+    start_sec, end_sec = point_curve_bounds(curve)
+    tracks[motion_id] = [
+        point for point in tracks.get(motion_id, [])
+        if not _inside(point[0], start_sec, end_sec)
+    ]
+    working['point_curves'] = [
+        item for item in working.get('point_curves') or []
+        if str(item.get('curve_id') or '') != curve_id
+    ]
+
+
 def _rewrite_curve(
     working: Dict[str, Any],
     tracks: Dict[str, List[tuple[float, float]]],
@@ -772,8 +828,58 @@ def _rewrite_curve(
     }]
 
 
+def one_curve_per_axis(layer: Dict[str, Any]) -> Dict[str, Any]:
+    """한 축의 그래프는 **하나다** · §6-281
+
+    포인트 곡선은 한 축에 여러 개 있을 수 있게 만들어져 있었다(겹치지만
+    않으면 된다) · 그러다 보니 편집할 때마다 조각이 늘었다 ·
+
+        구간 복사   붙인 자리에 곡선이 없으면 새로 만들었다
+        합치기      원본 레이어의 곡선을 그대로 가져왔다
+        빈 구간     그 자리를 메우는 곡선을 따로 만들었다
+
+    조각이 나면 사람 눈에 드러난다 · 파란 배경 사이에 흰 줄이 생기고, 구간
+    지우기가 조각마다 따로 놀고, 한 조각만 고쳐도 옆이 안 따라온다.
+
+    그래서 **편집이 끝나면 축마다 곡선 하나로 모은다** · 조각 사이는 이어지며
+    메워진다 · 보간 차수는 포인트가 가장 많은 조각의 것을 따른다.
+    """
+    curves = list(layer.get('point_curves') or [])
+    by_axis: Dict[str, List[Dict[str, Any]]] = {}
+    for curve in curves:
+        by_axis.setdefault(str(curve.get('motion_id') or ''), []).append(curve)
+    if all(len(pieces) < 2 for pieces in by_axis.values()):
+        return layer
+    working = normalize_layer(copy.deepcopy(layer))
+    tracks = _tracks(working)
+    for motion_id, pieces in by_axis.items():
+        if len(pieces) < 2:
+            continue
+        pieces = sorted(pieces, key=lambda item: point_curve_bounds(item)[0])
+        order = point_curve_order(
+            max(pieces, key=lambda item: len(item.get('points') or []))
+        )
+        keep_id = str(pieces[0].get('curve_id') or '')
+        points = _unique_point_ids(sorted(
+            (point for piece in pieces for point in piece.get('points') or []),
+            key=lambda item: _finite(item.get('time_sec'), '포인트 시간'),
+        ))
+        for piece in pieces[1:]:
+            _remove_curve(working, tracks, piece)
+        _rewrite_curve(working, tracks, keep_id, motion_id, order, points)
+    working['frames'] = _frames(tracks)
+    return normalize_layer(working)
+
+
 def edit_layer(layer: Dict[str, Any], request: Dict[str, Any]) -> Dict[str, Any]:
-    """Apply one operation to a temporary layer and return a new layer."""
+    """Apply one operation to a temporary layer and return a new layer.
+
+    **어떤 편집이든 끝나면 축마다 곡선 하나다** · §6-281
+    """
+    return one_curve_per_axis(_edit_layer_once(layer, request))
+
+
+def _edit_layer_once(layer: Dict[str, Any], request: Dict[str, Any]) -> Dict[str, Any]:
     working = normalize_layer(copy.deepcopy(layer))
     if working.get('locked'):
         raise ValueError('잠긴 레이어는 편집할 수 없습니다')
@@ -891,36 +997,34 @@ def edit_layer(layer: Dict[str, Any], request: Dict[str, Any]) -> Dict[str, Any]
                     moved.append(copy_point)
                 paste_start = _finite(moved[0].get('time_sec'), '포인트 시간')
                 paste_end = _finite(moved[-1].get('time_sec'), '포인트 시간')
-                landing = []
+                # 붙이고 나면 **그 축은 곡선 하나**다 · §6-280
+                #
+                # 전에는 붙일 자리에 곡선이 없으면 새로 만들었다 · 그래서 끝에
+                # 이어 붙일 때마다 곡선이 하나씩 늘었고, 기존 데이터 끝과 붙인
+                # 자리 사이는 **곡선도 프레임도 없는 빈 구간**으로 남았다 ·
+                # 화면에서는 파란 배경 사이의 흰 줄로 보였고, 그 조각난 곡선
+                # 때문에 구간 지우기까지 어긋났다.
+                #
+                # 나눌 이유가 없다 · 한 축의 곡선을 전부 모아 하나로 쓴다 ·
+                # 빈 구간은 이어지면서 자연히 메워진다.
+                destination_id = str(taken[0][0].get('curve_id') or '')
+                order = point_curve_order(taken[0][0])
+                kept = [
+                    point
+                    for curve in curves
+                    for point in curve.get('points') or []
+                    if not _near(
+                        _finite(point.get('time_sec'), '포인트 시간'),
+                        paste_start, paste_end,
+                    )
+                ]
+                next_points = _unique_point_ids(sorted(
+                    kept + moved,
+                    key=lambda item: _finite(item.get('time_sec'), '포인트 시간'),
+                ))
                 for curve in curves:
-                    curve_start, curve_end = point_curve_bounds(curve)
-                    if curve_start <= paste_end and curve_end >= paste_start:
-                        landing.append(curve)
-                if len(landing) > 1:
-                    raise ValueError(
-                        f'{motion_id} · 붙일 자리가 포인트 곡선 여럿에 걸칩니다 · '
-                        '곡선 하나 안으로 붙이세요'
-                    )
-                if landing:
-                    destination = landing[0]
-                    destination_id = str(destination.get('curve_id') or '')
-                    order = point_curve_order(destination)
-                    kept = [
-                        point for point in destination.get('points') or []
-                        if not _inside(_finite(point.get('time_sec'), '포인트 시간'),
-                                       paste_start, paste_end)
-                    ]
-                    next_points = sorted(
-                        kept + moved,
-                        key=lambda item: _finite(item.get('time_sec'), '포인트 시간'),
-                    )
-                else:
-                    # 곡선이 없는 자리에는 **곡선을 새로 만든다** · 끝에 이어
-                    # 붙이는 것이 가장 흔하다 · 옆 곡선을 늘려서 그 사이를
-                    # 평평하게 덮어 버리지 않는다
-                    destination_id = f'curve_{uuid.uuid4().hex[:8]}'
-                    order = point_curve_order(taken[0][0])
-                    next_points = moved
+                    if str(curve.get('curve_id') or '') != destination_id:
+                        _remove_curve(working, tracks, curve)
                 _rewrite_curve(
                     working, tracks, destination_id, motion_id, order, next_points,
                 )
@@ -944,7 +1048,18 @@ def edit_layer(layer: Dict[str, Any], request: Dict[str, Any]) -> Dict[str, Any]
                                    start_sec, end_sec)
                 ]
                 if len(next_points) < 2:
-                    # 곡선은 포인트가 둘 이상이어야 한다 · 이 축은 건너뛴다
+                    # 남는 게 한 점 이하면 **곡선째 지운다** · §6-279
+                    #
+                    # 전에는 그냥 건너뛰었다 · 곡선은 포인트가 둘 이상이어야
+                    # 하니 고칠 수 없다는 뜻이었는데, 결과가 "그 포인트들만
+                    # 안 지워진다" 였다 · 합친 레이어에는 2~3점짜리 작은
+                    # 곡선이 여럿 생겨서 구간을 지워도 그것들이 그대로 남았다 ·
+                    # 사람 눈에는 "지워지지 않는 포인트" 로만 보인다.
+                    #
+                    # 지우라고 했으면 지운다 · 곡선과 그 구간의 프레임을 함께
+                    # 없앤다.
+                    _remove_curve(working, tracks, curve)
+                    changed.append(motion_id)
                     continue
                 _rewrite_curve(
                     working, tracks, str(curve.get('curve_id') or ''), motion_id,
@@ -1537,7 +1652,8 @@ def merge_layers(
     })
     # 곡선을 프레임 전체로 늘린다 · 편집할 수 없는 구간을 남기지 않는다 · §6-252
     merged['point_curves'] = extend_point_curves_to_frames(merged)
-    merged = normalize_layer(merged)
+    # 합쳐도 **축마다 곡선 하나**다 · §6-281
+    merged = one_curve_per_axis(normalize_layer(merged))
     merged['merge_report'] = {
         'mode': 'append' if append_id else 'preserve',
         'append_layer_id': append_id,

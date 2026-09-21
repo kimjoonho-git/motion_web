@@ -1,16 +1,16 @@
-"""구간 복사는 **붙인 자리의 곡선**에 넣는다 · §6-256
+"""구간 복사는 **그 축을 곡선 하나로** 만든다 · §6-256 §6-280
 
-한 축에 곡선이 여럿일 수 있다(겹치지만 않으면 된다) · 합친 레이어의 빈 구간을
-따로 채우면서 1-2 축은 곡선이 셋이 됐다.
+처음에는 떠 온 곡선에 도로 넣었다 · 앞 곡선의 포인트를 30초에 붙이면 그 곡선이
+늘어나 가운데 곡선을 통째로 덮었고, 저장할 때 「포인트 곡선과 20ms 프레임이
+다릅니다」로 터졌다(실측 1499개 표본).
 
-전에는 포인트를 떠 온 곡선에 도로 넣었다 · 그래서 앞 곡선(0.02~12.98)의
-포인트를 30초에 붙이면 그 곡선이 0.02~42.96 으로 늘어나 가운데
-곡선(13.00~53.38)을 통째로 덮었다 · 덮인 곡선은 그대로 남고 프레임만
-사라져서 미리보기·반영은 멀쩡했고 **저장할 때** 터졌다.
+그래서 붙인 자리의 곡선에 넣고, 없으면 새로 만들게 했다 · 이번에는 **끝에 이어
+붙일 때마다 곡선이 하나씩 늘었다** · 기존 데이터 끝과 붙인 자리 사이는 곡선도
+프레임도 없는 빈 구간으로 남아 화면에 흰 줄로 보였고, 조각난 곡선 때문에 구간
+지우기까지 어긋났다.
 
-    저장 실패 · 1-2 포인트 곡선과 20ms 프레임이 다릅니다
-
-실측으로 어긋난 표본이 1499개였다.
+나눌 이유가 없다 · **붙이고 나면 그 축의 곡선은 하나다** · 빈 구간은 이어지면서
+메워진다.
 """
 
 import copy
@@ -78,21 +78,22 @@ def _paste(layer, start_sec, end_sec, target_start_sec):
     })
 
 
-def test_the_curve_we_copied_from_does_not_grow():
+def test_pasting_leaves_one_curve():
+    """붙이면 그 축은 곡선 하나가 된다 · 나뉘어 있던 둘도 합쳐진다."""
     layer = _layer()
 
     pasted = _paste(layer, 0.0, 0.04, 0.12)
 
-    assert _spans(pasted) == [(0.0, 0.04), (0.10, 0.20)]
+    assert _spans(pasted) == [(0.0, 0.20)]
 
 
-def test_the_curve_at_that_time_takes_the_points():
+def test_the_pasted_values_land_at_the_target():
     layer = _layer()
 
     pasted = _paste(layer, 0.0, 0.04, 0.12)
 
-    tail = next(c for c in pasted['point_curves'] if c['curve_id'] == 'tail')
-    values = {p['time_sec']: p['value_deg'] for p in tail['points']}
+    curve = pasted['point_curves'][0]
+    values = {p['time_sec']: p['value_deg'] for p in curve['points']}
     assert values[0.12] == 0.0
     assert values[0.14] == 5.0
     assert values[0.16] == 10.0
@@ -106,40 +107,39 @@ def test_saving_it_would_not_fail():
     assert point_curve_frame_mismatches(pasted) == []
 
 
-def test_pasting_across_two_curves_is_refused():
+def test_pasting_across_two_curves_is_no_longer_refused():
+    """예전에는 두 곡선에 걸치면 거부했다 · 이제 하나로 합치므로 걸칠 것이 없다."""
     layer = _layer()
 
-    # 0.08 초 길이를 0.02 초에 붙이면 0.02~0.10 · 두 곡선에 걸친다
-    with pytest.raises(ValueError, match='곡선 여럿에 걸칩니다'):
-        _paste(layer, 0.10, 0.18, 0.02)
+    pasted = _paste(layer, 0.10, 0.18, 0.02)
+
+    assert len([c for c in pasted['point_curves'] if c['motion_id'] == '1-1']) == 1
+    assert point_curve_frame_mismatches(pasted) == []
 
 
-def test_pasting_where_there_is_no_curve_makes_a_new_one():
-    # 가장 흔한 쓰임이 **끝에 이어 붙이기**다 · 옆 곡선을 늘려 그 사이를
-    # 평평하게 덮지 않고, 붙인 자리에 곡선을 따로 만든다
+def test_pasting_past_the_end_leaves_no_hole():
+    """끝에 이어 붙여도 곡선은 하나다 · 그 사이가 비지 않는다."""
     layer = _layer()
 
     pasted = _paste(layer, 0.0, 0.04, 0.30)
 
-    assert _spans(pasted) == [(0.0, 0.04), (0.10, 0.20), (0.30, 0.34)]
+    assert _spans(pasted) == [(0.0, 0.34)]
     assert point_curve_frame_mismatches(pasted) == []
+    times = [frame['time_sec'] for frame in pasted['frames']]
+    holes = [
+        round(b - a, 9) for a, b in zip(times, times[1:])
+        if round(b - a, 9) > PERIOD + 1e-9
+    ]
+    assert holes == [], f'붙인 자리 앞이 비었다: {holes}'
 
 
-def test_the_new_curve_keeps_the_values_we_copied():
+def test_the_pasted_values_are_kept():
     layer = _layer()
 
     pasted = _paste(layer, 0.0, 0.04, 0.30)
 
-    fresh = next(c for c in pasted['point_curves']
-                 if c['points'][0]['time_sec'] == 0.30)
-    assert [p['value_deg'] for p in fresh['points']] == [0.0, 5.0, 10.0]
+    curve = pasted['point_curves'][0]
+    tail = [p['value_deg'] for p in curve['points'] if p['time_sec'] >= 0.30]
+    assert tail == [0.0, 5.0, 10.0]
 
 
-def test_one_curve_per_axis_works_as_before():
-    layer = _layer()
-    layer['point_curves'] = [layer['point_curves'][1]]
-
-    pasted = _paste(layer, 0.10, 0.14, 0.16)
-
-    assert _spans(pasted) == [(0.10, 0.20)]
-    assert point_curve_frame_mismatches(pasted) == []
