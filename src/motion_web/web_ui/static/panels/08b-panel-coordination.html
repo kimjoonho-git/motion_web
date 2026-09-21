@@ -52,17 +52,23 @@
               </div>
               <p class="coordination-persistence-note">
                 연동 모션이 도는 중에는 탈퇴할 수 없습니다 · 먼저 정지하세요 ·
-                프로그램을 다시 켜면 아래 「연동 사용」 설정을 따라 자동으로 다시 참가합니다.
+                탈퇴하면 프로그램을 다시 켜도 나간 채로 있습니다 · 참가도 그대로 유지됩니다.
               </p>
             <details class="coordination-settings-details" open>
               <summary class="section-head compact">
                 <strong>이 PC 연동 설정</strong>
                 <span id="coordinationNodeState">연동 노드 확인 중</span>
               </summary>
+              <!-- 화면에는 **사람이 정하는 것**만 둔다 · §6-283
+                   표시 이름과 필수 참가 명단은 화면에서 뺐다 · 값은 그대로
+                   쓰이고 저장도 유지된다 · 명단은 아래 「현재 접속 PC로 명단
+                   확정」이 채운다. -->
               <div class="coordination-settings-fields">
-                <!-- 「연동 사용」이 맨 앞이다 · §6-132
-                     이름이 「연동 설정」이라 구역 제목(「이 PC 연동 설정」)과
-                     겹쳤다 · 이 칸이 정하는 것은 **쓸지 말지**다. -->
+                <!-- 사람이 정하는 것부터 · 읽기만 하는 것은 뒤로 · §6-283
+                     「연동 사용」이 맨 앞이다 · 이 칸이 정하는 것은 쓸지 말지다 ·
+                     표시 이름과 필수 참가 명단은 화면에서 뺐다 · 값은 그대로
+                     쓰이고 저장도 유지된다 · 명단은 아래 「현재 접속 PC로 명단
+                     확정」이 채운다. -->
                 <label class="compact-field"><span>연동 사용</span>
                   <select id="coordinationEnabled" class="compact-select">
                     <option value="false">사용 안 함</option>
@@ -75,25 +81,19 @@
                     <option value="true">마스터</option>
                   </select>
                 </label>
-                <p class="coordination-persistence-note span-2">
-                  이 두 가지는 <strong>저장하면 계속 유지됩니다</strong> ·
-                  프로그램을 다시 켜도 그대로입니다.
-                </p>
-                <label class="compact-field"><span>이 PC ID</span>
-                  <input id="coordinationPcId" type="text" readonly>
-                </label>
-                <label class="compact-field"><span>표시 이름</span>
-                  <input id="coordinationDisplayName" type="text" maxlength="128" placeholder="예: 무대 왼쪽 PC">
-                </label>
                 <label class="compact-field"><span>그룹 ID</span>
                   <input id="coordinationGroupId" type="text" maxlength="128" placeholder="예: stage-a">
                 </label>
                 <label class="compact-field"><span>DDS Domain ID</span>
                   <input id="coordinationDomainId" type="number" min="0" max="101" value="21">
                 </label>
-                <label class="compact-field span-2"><span>필수 참가 명단</span>
-                  <input id="coordinationRequiredPeers" type="text" placeholder="예: pc-1, pc-2">
+                <label class="compact-field"><span>이 PC ID</span>
+                  <input id="coordinationPcId" type="text" readonly>
                 </label>
+                <p class="coordination-persistence-note span-3">
+                  같은 <strong>그룹 ID</strong>와 <strong>DDS Domain ID</strong>를 넣은 PC 끼리 묶입니다 ·
+                  여기 설정은 <strong>저장하면 계속 유지됩니다</strong> · 프로그램을 다시 켜도 그대로입니다.
+                </p>
               </div>
               <div class="coordination-settings-actions">
                 <button id="coordinationSaveButton" class="primary" type="button">설정 저장·연동 재시작</button>

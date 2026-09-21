@@ -433,7 +433,7 @@ export function createCoordinationController({ el }) {
     }
   }
 
-  async function save(customSuccessMessage = null, customSuccessTitle = null) {
+  async function save(customSuccessMessage = null, customSuccessTitle = null, overrides = {}) {
     if (loading) return;
     // 마스터를 켜는데 그룹에 이미 마스터가 있으면 저장 뒤에야 MULTIPLE_MASTERS
     // 오류로 알게 된다 · 실행 중이면 그 자리에서 멈춘다. 저장 전에 묻는다 · §6-70
@@ -453,14 +453,24 @@ export function createCoordinationController({ el }) {
     loading = true;
     render();
     try {
-      const result = await saveCoordinationSettings({
+      // 화면에 없는 칸은 **보내지 않는다** · §6-283
+      //
+      // 서버는 안 온 항목을 지금 값 그대로 둔다 · 빈 값으로 보내면 표시 이름과
+      // 필수 참가 명단이 저장할 때마다 지워진다.
+      const payload = {
         enabled: el.coordinationEnabled?.value === 'true',
         is_master: el.coordinationIsMaster?.value === 'true',
-        required_peers: el.coordinationRequiredPeers?.value?.split(',').map(s => s.trim()).filter(Boolean) || [],
         group_id: el.coordinationGroupId?.value?.trim() || '',
         dds_domain_id: Number(el.coordinationDomainId?.value ?? 21),
-        display_name: el.coordinationDisplayName?.value?.trim() || '',
-      });
+      };
+      if (el.coordinationDisplayName) {
+        payload.display_name = el.coordinationDisplayName.value?.trim() || '';
+      }
+      if (el.coordinationRequiredPeers) {
+        payload.required_peers = el.coordinationRequiredPeers.value
+          ?.split(',').map((item) => item.trim()).filter(Boolean) || [];
+      }
+      const result = await saveCoordinationSettings({ ...payload, ...overrides });
       formDirty = false;
       if (el.coordinationConfigMessage) el.coordinationConfigMessage.textContent = result.message || '';
       if (!result.success) {
@@ -561,7 +571,7 @@ export function createCoordinationController({ el }) {
     const confirmed = await showConfirm(
       '이 PC 를 그룹에서 뺍니다.\n\n'
       + '단독 모션·모션 스튜디오를 사용할 수 있습니다.\n'
-      + '프로그램을 다시 켜면 「연동 사용」 설정을 따라 자동으로 다시 참가합니다.',
+      + '프로그램을 다시 켜도 나간 채로 있습니다 · 다시 쓰려면 「연동 참가」를 누르세요.',
       {
         title: '연동 탈퇴',
         confirmLabel: '탈퇴',
@@ -653,7 +663,7 @@ export function createCoordinationController({ el }) {
     el.coordinationLeaveButton?.addEventListener('click', leaveGroup);
 
     el.coordinationAcknowledgeErrorButton?.addEventListener('click', () => control('acknowledge_group_error'));
-    [el.coordinationDisplayName, el.coordinationGroupId, el.coordinationDomainId, el.coordinationEnabled, el.coordinationIsMaster, el.coordinationRequiredPeers]
+    [el.coordinationGroupId, el.coordinationDomainId, el.coordinationEnabled, el.coordinationIsMaster]
       .forEach((field) => field?.addEventListener('input', () => { formDirty = true; }));
 
     el.midiTargetChoices?.addEventListener('click', async (event) => {
@@ -673,7 +683,7 @@ export function createCoordinationController({ el }) {
       if (localId) ids.add(localId);
       
       const rosterList = Array.from(ids);
-      if (rosterList.length > 0 && el.coordinationRequiredPeers) {
+      if (rosterList.length > 0) {
         const confirmed = await showConfirm(
           `현재 접속된 아래 PC 인원으로 필수 참가 명단을 확정하고 시스템에 저장하시겠습니까?\n\n`
           + `[ 확정 명단 (${rosterList.length}대) ]\n`
@@ -686,13 +696,17 @@ export function createCoordinationController({ el }) {
           },
         );
         if (!confirmed) return;
-        el.coordinationRequiredPeers.value = rosterList.join(', ');
+        if (el.coordinationRequiredPeers) {
+          el.coordinationRequiredPeers.value = rosterList.join(', ');
+        }
         formDirty = true;
+        // 명단은 **값으로 실어 보낸다** · 화면에 칸이 없어도 저장된다 · §6-283
         await save(
           `[ 확정 명단: ${rosterList.join(', ')} ]\n\n`
           + `필수 참가 명단 확정이 완료되었습니다.\n`
           + `PC 재부팅 시 해당 명단의 모든 PC가 준비되면 모션이 자동 시작됩니다.`,
           '명단 확정 저장 완료',
+          { required_peers: rosterList },
         );
       } else {
         await showAlert('현재 방에 접속한 참가 PC가 없거나 네트워크 통신 연결을 확인해야 합니다.', { title: '명단 확정 불가', tone: 'danger' });
@@ -721,10 +735,10 @@ export function createCoordinationController({ el }) {
       );
       if (!confirmed) return;
 
-      const currentRequired = (el.coordinationRequiredPeers?.value || '')
-        .split(',')
-        .map(s => s.trim())
-        .filter(Boolean);
+      // 지금 명단은 **저장된 설정**에서 읽는다 · 화면에 칸이 없어도 된다 · §6-283
+      const currentRequired = Array.isArray(snapshot?.config?.required_peers)
+        ? snapshot.config.required_peers.map((item) => String(item).trim()).filter(Boolean)
+        : [];
 
       let updatedList = [];
       if (isRemoving) {
@@ -746,14 +760,15 @@ export function createCoordinationController({ el }) {
 
       if (el.coordinationRequiredPeers) {
         el.coordinationRequiredPeers.value = updatedList.join(', ');
-        formDirty = true;
-        await save(
-          isRemoving
-            ? `PC [ ${targetPcId} ]를 필수 참가 명단에서 제외했습니다.\n\n[ 변경된 확정 명단: ${updatedList.join(', ') || '없음'} ]`
-            : `PC [ ${targetPcId} ]를 필수 참가 명단에 추가했습니다.\n\n[ 변경된 확정 명단: ${updatedList.join(', ')} ]`,
-          isRemoving ? '명단 제외 저장 완료' : '명단 추가 저장 완료',
-        );
       }
+      formDirty = true;
+      await save(
+        isRemoving
+          ? `PC [ ${targetPcId} ]를 필수 참가 명단에서 제외했습니다.\n\n[ 변경된 확정 명단: ${updatedList.join(', ') || '없음'} ]`
+          : `PC [ ${targetPcId} ]를 필수 참가 명단에 추가했습니다.\n\n[ 변경된 확정 명단: ${updatedList.join(', ')} ]`,
+        isRemoving ? '명단 제외 저장 완료' : '명단 추가 저장 완료',
+        { required_peers: updatedList },
+      );
     });
   }
 

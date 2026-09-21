@@ -27,6 +27,8 @@ from motion_coordination_interfaces.msg import (
     GroupTimeSync,
     GroupSystemInfo,
 )
+from dataclasses import replace
+
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
@@ -37,6 +39,7 @@ from motion_common.group_config import (
     GroupConfig,
     load_group_config,
     migrate_legacy_group_config,
+    save_group_config,
 )
 from .group_execution import GroupExecution, Member, MemberRegistry, ScheduledAction
 from .group_peer_display import enrich_peer_row
@@ -104,8 +107,14 @@ class MotionCoordinationNode(Node):
             or workspace / 'config/motion_coordination.yaml'
         ).expanduser()
         self._config = config or load_group_config(config_path)
+        self._config_path = config_path
         self._boot_id = f'boot-{uuid.uuid4().hex}'
-        self._joined = bool(self._config.configured)
+        # **마지막으로 누른 것을 따른다** · §6-282
+        #
+        # 전에는 설정만 보고 뜰 때마다 자동으로 참가했다 · 「그룹 나가기」가
+        # 메모리에만 남아 서비스가 다시 뜨면 도로 들어갔고, 사람 눈에는
+        # 화면에서만 막히는 것처럼 보였다.
+        self._joined = bool(self._config.configured and self._config.joined)
         self._sequence = 0
         self._git_branch = ''
         self._git_hash = ''
@@ -1198,6 +1207,34 @@ class MotionCoordinationNode(Node):
             self._alarm_pub.publish(alarm)
         return {'success': True, 'message': '그룹 동기화 오류 확인 완료'}
 
+    def _warn(self, message: str) -> None:
+        """경고를 남긴다 · 남기지 못해도 하던 일은 계속한다 · §6-282
+
+        나가기는 **어떤 이유로도 막히면 안 된다** · 기록이 안 되는 것 때문에
+        그룹에서 못 나가는 일이 생기지 않게 한다.
+        """
+        try:
+            self.get_logger().warning(message)
+        except Exception:
+            pass
+
+    def _remember_joined(self, joined: bool) -> None:
+        """참가·나가기를 **설정 파일에 적는다** · §6-282
+
+        적지 못해도 지금 상태는 그대로 간다 · 다시 뜰 때만 옛 값으로
+        돌아간다 · 그때는 로그로 남겨 왜 되돌아갔는지 알 수 있게 한다.
+        """
+        path = getattr(self, '_config_path', None)
+        if path is None or self._config.joined == bool(joined):
+            return
+        config = replace(self._config, joined=bool(joined))
+        try:
+            save_group_config(path, config)
+        except (OSError, ValueError) as exc:
+            self._warn(f'그룹 참가 상태를 설정에 남기지 못했습니다: {exc}')
+            return
+        self._config = config
+
     def _leave_group(self) -> Dict[str, Any]:
         """이 PC 를 그룹에서 뺀다 · §6-164
 
@@ -1227,6 +1264,18 @@ class MotionCoordinationNode(Node):
             self._alarm_registry.clear_coordination()
             joined = self._joined
             self._joined = False
+        self._remember_joined(False)
+        # 넘겨 둔 MIDI 도 되찾는다 · §6-282
+        #
+        # 「나갈 때는 조건 없이 비운다」(§6-164)에 이것만 빠져 있었다 · 이 PC 의
+        # 페이더를 다른 PC 에 넘겨 둔 채로 그룹에서 나가면, 나갔는데도 내 표면이
+        # 남의 것으로 남아 있었다 · 그룹이 계속 잡고 있는 것처럼 보인다.
+        relay = getattr(self, '_midi_relay', None)
+        if relay is not None:
+            try:
+                relay.set_target('')
+            except Exception as exc:  # 되돌리기가 나가기를 막으면 안 된다
+                self._warn(f'MIDI 되돌리기 실패: {exc}')
         if joined and self._config.configured:
             self._publish_heartbeat(joined=False)
         return {
@@ -1295,6 +1344,7 @@ class MotionCoordinationNode(Node):
                 if self._duplicate_pc_boot_id:
                     raise ValueError('중복 PC ID를 먼저 수정하세요')
                 self._joined = True
+                self._remember_joined(True)
                 result = {'success': True, 'message': 'DDS 그룹 참가'}
             elif command == 'leave':
                 result = self._leave_group()

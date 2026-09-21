@@ -23,6 +23,15 @@ class GroupConfig:
     group_id: str
     dds_domain_id: int
     is_master: bool = False
+    #: 이 PC 가 **지금 그룹에 들어가 있는가** · §6-282
+    #:
+    #: 전에는 이 값이 없어서 노드가 뜰 때마다 설정만 보고 자동으로 참가했다 ·
+    #: 「그룹 나가기」는 메모리에만 남아, 서비스가 다시 뜨면 도로 들어갔다 ·
+    #: 화면에서만 막히는 것처럼 보였다.
+    #:
+    #: 마지막으로 누른 것이 그대로 남는다 · 참가했으면 다시 떠도 참가,
+    #: 나갔으면 다시 떠도 나간 채다.
+    joined: bool = False
     required_peers: tuple[str, ...] = ()
     heartbeat_sec: float = 0.5
     warning_timeout_sec: float = 1.5
@@ -62,6 +71,9 @@ def load_group_config(path: Path) -> GroupConfig:
     if group_id:
         _identifier(group_id, 'group_id')
     enabled = bool(value.get('enabled', False)) if version == 2 else False
+    # 옛 설정에는 이 값이 없다 · 그때는 「설정돼 있으면 참가」였으므로 그대로
+    # 옮긴다 · 갱신했다고 돌던 그룹이 빠지면 안 된다 · §6-282
+    joined = bool(value.get('joined', enabled)) if version == 2 else False
     is_master = bool(value.get('is_master', False))
     required_peers = tuple(str(x).strip() for x in value.get('required_peers') or [] if str(x).strip())
     domain = _integer(value.get('dds_domain_id'), 21, 'dds_domain_id')
@@ -102,6 +114,7 @@ def load_group_config(path: Path) -> GroupConfig:
         pc_id=pc_id,
         display_name=display_name,
         enabled=enabled,
+        joined=joined,
         is_master=is_master,
         required_peers=required_peers,
         group_id=group_id,
@@ -129,6 +142,7 @@ def save_group_config(path: Path, config: GroupConfig) -> None:
         'pc_id': config.pc_id,
         'display_name': config.display_name,
         'enabled': bool(config.enabled),
+        'joined': bool(config.joined),
         'is_master': bool(config.is_master),
         'required_peers': list(config.required_peers),
         'group_id': config.group_id,

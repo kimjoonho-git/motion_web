@@ -37,6 +37,11 @@
   grid-column: span 2;
 }
 
+/* 남는 칸을 안내 문구가 채운다 · 빈 칸이 덩그러니 남지 않는다 · §6-283 */
+.coordination-settings-fields .span-3 {
+  grid-column: span 3;
+}
+
 .coordination-settings-actions {
   display: flex;
   justify-content: flex-end;
