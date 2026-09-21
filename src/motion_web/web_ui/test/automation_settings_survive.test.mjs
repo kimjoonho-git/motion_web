@@ -66,3 +66,49 @@ test('반복 방식 기본값이 화면 어디서나 같다', () => {
     );
   }
 });
+
+
+// --------------------------------------------------------------------------- //
+// 저장된 값을 **화면에 넣어야** 한다 · §6-268
+//
+// 전에는 `automation.repeat_mode` 를 읽어 놓고 선택칸에 넣지 않았다 · 화면은
+// 언제나 HTML 의 기본값을 보여 줬고, 파일에 다른 값이 적혀 있어도 그대로였다 ·
+// 실측으로 파일과 서버는 `direct` 인데 화면은 20초를 기다려도 `reinitialize`
+// 였다.
+//
+// 더 나쁜 것은 그다음이다 · 사람이 다른 값을 고르면 화면에 보이던 잘못된 값이
+// 그대로 파일에 덮어써졌다 · 저장해 둔 설정이 화면을 한 번 열었다는 이유로
+// 바뀌었다.
+// --------------------------------------------------------------------------- //
+
+function renderBody() {
+  const start = motionData.indexOf('const repeatMode = String(automation.repeat_mode');
+  const end = motionData.indexOf('function renderMotionRunPanel(', start);
+  return motionData
+    .slice(start, end > start ? end : start + 3000)
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
+}
+
+test('저장된 반복 방식을 선택칸에 넣는다', () => {
+  assert.match(
+    renderBody(),
+    /motionAutomationRepeatMode\.value\s*=\s*repeatMode/,
+    '읽기만 하고 화면에 넣지 않는다',
+  );
+});
+
+test('저장된 대기 시간도 칸에 넣는다', () => {
+  assert.match(
+    renderBody(),
+    /motionAutomationDwellSec\.value\s*=/,
+    '대기 시간을 화면에 넣지 않는다',
+  );
+});
+
+test('사람이 그 칸을 만지는 중에는 건드리지 않는다', () => {
+  // 고르는 도중에 값이 바뀌면 손이 미끄러진 것처럼 보인다
+  const body = renderBody();
+  const guards = [...body.matchAll(/document\.activeElement !== el\.motionAutomation\w+/g)];
+  assert.ok(guards.length >= 2, `보호가 모자라다: ${guards.length}곳`);
+});

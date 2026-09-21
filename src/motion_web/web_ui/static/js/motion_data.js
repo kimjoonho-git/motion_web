@@ -1389,14 +1389,35 @@ export function createMotionDataController({
     const dwellSec = Number(automation.dwell_sec);
     const busy = motionRunLoading;
 
+    // **저장된 값을 선택칸에 넣는다** · §6-268
+    //
+    // 전에는 `repeatMode` 를 읽어 놓고 선택칸에 넣지 않았다 · 그래서 화면은
+    // 언제나 HTML 의 기본값(`초기 위치 이동 후 다음`)을 보여 줬고, 파일에
+    // `바로 다음 모션` 이 적혀 있어도 그대로였다.
+    //
+    // 더 나쁜 것은 그다음이다 · 사람이 다른 값을 고르면 **화면에 보이던
+    // 잘못된 값이 그대로 파일에 덮어써졌다** · 저장해 둔 설정이 화면을 한 번
+    // 열었다는 이유로 바뀌었다.
+    //
+    // 사람이 그 칸을 만지는 중이면 건드리지 않는다 · 고르는 도중에 값이
+    // 바뀌면 손이 미끄러진 것처럼 보인다.
     if (el.motionAutomationRepeatMode) {
       el.motionAutomationRepeatMode.disabled = busy;
+      if (document.activeElement !== el.motionAutomationRepeatMode
+        && el.motionAutomationRepeatMode.value !== repeatMode) {
+        el.motionAutomationRepeatMode.value = repeatMode;
+      }
     }
     const currentRepeatMode = el.motionAutomationRepeatMode?.value || repeatMode;
     const showDwell = currentRepeatMode === 'dwell' || currentRepeatMode === 'dwell_reinitialize';
     el.motionAutomationDwellWrap?.classList.toggle('hidden', !showDwell);
     if (el.motionAutomationDwellSec) {
       el.motionAutomationDwellSec.disabled = busy;
+      if (document.activeElement !== el.motionAutomationDwellSec
+        && Number.isFinite(dwellSec)
+        && Number(el.motionAutomationDwellSec.value) !== dwellSec) {
+        el.motionAutomationDwellSec.value = String(dwellSec);
+      }
     }
     if (el.motionAutomationDetail) {
       const fileName = motionRunSelectedMotionFile()?.filename
