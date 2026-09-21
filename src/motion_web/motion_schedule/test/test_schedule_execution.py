@@ -19,6 +19,7 @@ from motion_schedule.motion_schedule_node import MotionScheduleNode
 class _Logger:
     def info(self, *_args): pass
     def debug(self, *_args): pass
+    def warn(self, *_args): pass        # 조회 실패를 여기에 적는다 · §6-271
     def warning(self, *_args): pass
     def error(self, *_args): pass
 

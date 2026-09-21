@@ -114,8 +114,16 @@ def test_manual_mode_does_nothing_at_all(tmp_path):
     assert node.sent == [], '수동 모드인데 스케줄이 시작시켰다'
 
 
-def test_manual_mode_does_not_stop_a_running_motion_either(tmp_path):
-    """손으로 돌리는 중인데 구간이 끝났다고 세우면 안 된다."""
+def test_manual_mode_still_stops_when_the_window_ends(tmp_path):
+    """**구간이 끝나면 멈춘다 · 모드와 상관없이** · §6-270
+
+    전에는 반대였다 — 손으로 돌리는 중이면 세우지 않았다 · 그런데 수동
+    모드에서는 정지 자체를 검사하지 않아서, 스케줄이 잘못 켠 모션이 구간이
+    끝나도 영영 돌았다 (실측 17:58 시작 → 18:16 까지 18분).
+
+    「구간 밖에서는 아무것도 돌지 않는다」가 규칙이다 · 누가 켰는지는 묻지
+    않는다.
+    """
     node = _node(
         tmp_path, run_state='running', run_mode='manual',
         schedules=[_day_schedule()],
@@ -123,7 +131,8 @@ def test_manual_mode_does_not_stop_a_running_motion_either(tmp_path):
 
     node._reconcile(DAY.replace(hour=20))
 
-    assert node.sent == []
+    assert len(node.sent) == 1, '구간이 끝났는데 정지를 안 보냈다'
+    assert 'stop-after-cycle' in node.sent[0][0] or 'stop_after_cycle' in str(node.sent[0][1])
 
 
 def test_switching_back_to_schedule_mode_resumes_management(tmp_path):

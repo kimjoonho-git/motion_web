@@ -73,6 +73,8 @@ class MotionScheduleNode(Node):
         # 로그에 `success` 라고 찍히고 끝이라, 화면 배지는 초록불이었다 ·
         # 한 시간 내내 매분 거부당하는 동안 아무도 몰랐다.
         self._last_failure = {}
+        #: 조회가 연달아 몇 번 실패했나 · 상태가 바뀔 때만 적는다 · §6-271
+        self._read_failures: Dict[str, int] = {}
 
         # Status publisher
         self.status_pub = self.create_publisher(String, topics.SCHEDULE_STATUS, 10)
@@ -219,13 +221,36 @@ class MotionScheduleNode(Node):
         self._last_failure = {}
 
     def _read_json(self, endpoint: str, timeout_sec: float = 0.5):
+        """브릿지에 물어본다 · **실패를 조용히 넘기지 않는다** · §6-271
+
+        전에는 `debug` 로만 남겼다 · 디버그 기록은 꺼져 있어 아무 데도 안
+        남았다 · 그래서 17:58 에 수동 모드인데 모터가 돌기 시작했을 때, 조회가
+        실패했는지조차 확인할 수 없었다.
+
+        1초마다 물어보므로 실패할 때마다 적으면 로그가 넘친다 · **상태가
+        바뀔 때만** 적는다 · 처음 실패할 때 한 번, 다시 될 때 한 번.
+        """
         url = f"http://127.0.0.1:8000{endpoint}"
         try:
             with urllib.request.urlopen(url, timeout=timeout_sec) as response:
-                return json.loads(response.read().decode())
+                answer = json.loads(response.read().decode())
         except (OSError, ValueError) as exc:
-            self.get_logger().debug(f"조회 실패 [{endpoint}] · {exc}")
+            # 시험은 노드를 `__init__` 없이 만든다 · 없으면 여기서 만든다
+            counts = getattr(self, '_read_failures', None)
+            if counts is None:
+                counts = {}
+                self._read_failures = counts
+            failures = counts.get(endpoint, 0) + 1
+            counts[endpoint] = failures
+            if failures == 1:
+                self.get_logger().warn(
+                    f"조회 실패 [{endpoint}] · {exc} · 제한 {timeout_sec}초"
+                )
             return None
+        failures = getattr(self, '_read_failures', {}).pop(endpoint, 0)
+        if failures:
+            self.get_logger().warn(f"조회 회복 [{endpoint}] · {failures}번 실패한 뒤")
+        return answer
 
     def _coordination_joined(self) -> bool:
         """지금 **실제로** 여러 대로 묶여 있는가 · §6-266
@@ -282,7 +307,13 @@ class MotionScheduleNode(Node):
             if api_proj and api_proj != self.store.current_project_id:
                 self.get_logger().info(f"Syncing active project from Web API: {api_proj}")
                 self.store.load_project(api_proj)
-        self._run_mode = normalize_run_mode((data or {}).get('run_mode'))
+        # **못 읽었으면 짐작하지 않는다** · 직전 값을 그대로 쓴다 · §6-271
+        #
+        # 전에는 `normalize_run_mode(None)` 이 기본값인 「스케줄」을 돌려줬다 ·
+        # 사람이 걸어 둔 「수동」이 조회 한 번 실패로 풀렸고, 그 순간 구간
+        # 안이면 모터가 돌기 시작했다 · 모르면 아무것도 바꾸지 않는 쪽이 맞다.
+        if isinstance(data, dict) and data.get('run_mode') is not None:
+            self._run_mode = normalize_run_mode(data.get('run_mode'))
 
         if not self.store.current_project_id:
             self._load_active_project_from_file()
@@ -307,57 +338,35 @@ class MotionScheduleNode(Node):
         시각을 지나갔는지 보지 않는다 · **지금 구간 안인가**만 본다 · 그래서
         재부팅해도, 시작을 놓쳐도, 어긋나도 다음 점검에서 스스로 맞춘다.
         """
+        wanted = self.engine.active(now, self.store.list_schedules())
+        running = self._motion_is_running()
+
+        # **구간이 끝나면 멈춘다 · 모드와 상관없이** · §6-270
+        #
+        # 전에는 수동 모드면 맨 앞에서 돌아갔다 · 그래서 정지도 검사하지
+        # 않았다 · 실측으로 16~18시 스케줄이 17:58 에 켠 모션이, 그 뒤 수동
+        # 모드가 되자 18시가 지나도 아무도 멈추지 않아 18분을 더 돌았다.
+        #
+        # 누가 켰는지는 묻지 않는다 · 구간 밖에서는 아무것도 돌지 않는 것이
+        # 규칙이다 · 사람이 손으로 켠 것도 구간이 끝나면 멈춘다.
+        if wanted is None and running:
+            self.get_logger().info("[점검] 구간 밖인데 돌고 있다 · 회차 후 정지")
+            self._execute_stop_after_cycle(None)
+            return
+
         if self._run_mode != SCHEDULE_MODE:
             # 수동 모드 · 스케줄은 **새로 시작하지 않는다** · §6-143
             #
             # 전에는 「사람이 멈췄나」를 요청 내용으로 추측했다 · 그룹 정지나
             # 안전 정지까지 사람이 멈춘 것으로 읽어서, 1회 연동 실행만 해도
             # "사람이 모션을 정지했습니다" 가 떴다 · 추측을 없앴다.
-            #
-            # **다만 자기가 켠 것은 끈다** · §6-270 · 수동 모드는 「새로
-            # 시작하지 않는다」이지 「이미 켠 것을 방치한다」가 아니다 ·
-            # 실측으로 16~18시 스케줄이 17:58 에 켠 모션이, 그 뒤 수동 모드가
-            # 되자 18시가 지나도 아무도 멈추지 않아 18:16 까지 돌았다.
-            self._stop_what_we_started(now)
             return
-
-        wanted = self.engine.active(now, self.store.list_schedules())
-        running = self._motion_is_running()
 
         if wanted is not None and not running:
             self.get_logger().info(
                 f"[점검] 구간 안인데 멈춰 있다 · 시작 · {wanted.schedule_name}"
             )
             self._execute_start(wanted)
-            return
-
-        if wanted is None and running:
-            self.get_logger().info("[점검] 구간 밖인데 돌고 있다 · 회차 후 정지")
-            self._execute_stop_after_cycle(None)
-
-    def _stop_what_we_started(self, now: datetime) -> None:
-        """구간이 끝났는데 **내가 켠 모션**이 아직 돌고 있으면 끈다 · §6-270
-
-        사람이 손으로 켠 것은 건드리지 않는다 · 모션 실행이 들고 있는
-        `schedule_id` 로 가른다 · 비어 있으면 사람이 켠 것이다.
-        """
-        payload = self._read_json('/api/motion-run/status')
-        if not isinstance(payload, dict):
-            return
-        status = payload.get('status') if isinstance(payload.get('status'), dict) else payload
-        if not is_running(str(status.get('state') or '')):
-            return
-        started_by = str(status.get('schedule_id') or '').strip()
-        if not started_by:
-            return
-        if self.engine.active(now, self.store.list_schedules()) is not None:
-            return
-        self.get_logger().info(
-            f"[점검] 수동 모드지만 스케줄이 켠 모션이다 · 구간 밖 · 회차 후 정지 · {started_by}"
-        )
-        self._send_http_request("/api/motion-run/stop-after-cycle", {
-            "schedule_id": started_by,
-        })
 
     def _execute_start(self, item: ScheduleItem):
         self.get_logger().info(f"[SCHEDULE TRIGGER] START -> {item.schedule_name} ({item.schedule_id})")
