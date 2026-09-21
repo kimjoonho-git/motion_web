@@ -530,7 +530,7 @@ export function createMidiMonitorController({ el, onMappingFileSaved }) {
     if (invalid) {
       status = {
         ...(status || {}),
-        message: `채널 ${invalid.channel + 1}: 모션 ID 형식, 최솟값/최댓값 퍼센트와 필터 0~13단계를 확인하세요`,
+        message: `채널 ${invalid.channel + 1}: 모션 ID 형식, 최소값/최대값 퍼센트와 필터 0~13단계를 확인하세요`,
       };
       render();
       return;

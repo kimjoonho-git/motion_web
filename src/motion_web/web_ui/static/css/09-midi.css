@@ -24,6 +24,33 @@
   margin-bottom: 12px;
 }
 
+/* 이름과 값이 붙어 있었다 · §6-244
+ *
+ *   연결연결 대기      MIDI 입력현재 입력 없음      최근 MIDI 입력입력 기록 없음
+ *
+ * 한 칸 안에 `<span>이름</span><strong>값</strong>` 두 개가 그냥 붙어 있어서
+ * 읽을 때 낱말이 엉켰다 · 이름을 왼쪽에, 값을 오른쪽에 떼어 놓는다. */
+.midi-monitor-summary > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.midi-monitor-summary > div > span {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.midi-monitor-summary > div > strong {
+  text-align: right;
+}
+
 .midi-bank-controls {
   display: flex;
   gap: 10px;
@@ -32,14 +59,51 @@
   margin-bottom: 8px;
 }
 
+/* 다른 화면의 같은 칸과 크기를 맞춘다 · §6-244
+ *
+ * 실측으로 어긋나 있었다.
+ *
+ *              라벨 글자   상자 높이   상자 여백
+ *   MIDI 뱅크    13px      19~21px     0 / 1px 2px   ← 손대지 않은 기본값
+ *   다른 화면    12px      32px        4px 8px
+ *
+ * 상자가 글자 높이만 해서 옆 단추(32px)보다 낮았고, 같은 줄에 선 것들이
+ * 들쭉날쭉했다. */
+.midi-bank-controls .compact-field > span {
+  font-size: 12px;
+}
+
 .midi-bank-controls select,
 .midi-bank-controls input {
   min-width: 150px;
+  /* 같은 줄에 선 단추가 38px 이다 · 32px 로 두면 칸만 주저앉아 보인다 */
+  height: 38px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font: inherit;
+  background: #ffffff;
+}
+
+.midi-bank-controls .midi-device-actions {
+  margin-top: 6px;
 }
 
 .midi-bank-name-field {
-  flex: 1 1 220px;
-  max-width: 360px;
+  flex: 0 1 260px;
+  max-width: 260px;
+}
+
+/* 이름표는 접히지 않는다 · §6-244
+ *
+ * 「뱅크 이름」 넉 자가 두 줄로 접혀 그 칸만 옆줄보다 두 배 높았다 ·
+ * 실측 38px, 옆의 「활성 뱅크」는 19px · 줄일 것은 글이 아니라 입력칸이다. */
+.midi-bank-controls .compact-field > span {
+  white-space: nowrap;
+}
+
+.midi-bank-name-field > span {
+  flex: 0 0 auto;
 }
 
 .midi-bank-name-field input {
@@ -55,22 +119,35 @@
 }
 
 .midi-monitor-table {
-  min-width: 1240px;
+  /* 표가 화면을 넘지 않게 · §6-244
+   *
+   * 1240px 을 최소 폭으로 못 박아 두어서, 칸을 줄여도 표가 그만큼 버텼다 ·
+   * 실측 화면 폭은 1171px 이라 언제나 가로로 밀어야 했다. */
+  min-width: 0;
 }
 
 .midi-monitor-table input[type="number"] {
-  width: 96px;
+  width: 62px;
+  padding: 0 4px;
+  text-align: center;
 }
 
+/* 모션 ID 칸 셋이 표를 밀어낸다 · §6-244
+ *
+ * 「1-1」 정도가 전부인데 한 칸이 88px 이라 셋이 292px 을 먹었다 · 표가
+ * 1277px 이 되어 화면(1171px)을 넘겼고, 가로로 밀어야 「입력 상태」가
+ * 보였다 · 글자 수에 맞춰 줄인다. */
 .midi-motion-id-input {
-  width: 88px;
+  width: 58px;
+  padding: 0 4px;
+  text-align: center;
 }
 
 .midi-motion-id-group {
   display: grid;
-  grid-template-columns: repeat(3, 88px);
+  grid-template-columns: repeat(3, 58px);
   gap: 4px;
-  min-width: 268px;
+  min-width: 0;
 }
 
 .midi-motion-id-input.input-invalid,

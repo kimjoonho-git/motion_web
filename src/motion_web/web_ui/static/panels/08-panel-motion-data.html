@@ -44,8 +44,8 @@
                       <th class="mapping-number-head"><span class="mapping-head-label">감속비</span><span class="mapping-head-unit">x</span></th>
                       <th class="mapping-number-head"><span class="mapping-head-label">기준점</span><span class="mapping-head-unit">deg</span></th>
                       <th><span class="mapping-head-label">기준점 캡처</span><span class="mapping-head-unit"></span></th>
-                      <th class="mapping-number-head"><span class="mapping-head-label">최솟값</span><span class="mapping-head-unit">deg</span></th>
-                      <th class="mapping-number-head"><span class="mapping-head-label">최댓값</span><span class="mapping-head-unit">deg</span></th>
+                      <th class="mapping-number-head"><span class="mapping-head-label">최소값</span><span class="mapping-head-unit">deg</span></th>
+                      <th class="mapping-number-head"><span class="mapping-head-label">최대값</span><span class="mapping-head-unit">deg</span></th>
                       <th><span class="mapping-head-label">초기 방식</span><span class="mapping-head-unit"></span></th>
                       <th class="mapping-number-head"><span class="mapping-head-label">초기위치</span><span class="mapping-head-unit">deg</span></th>
                       <th><span class="mapping-head-label">반전</span><span class="mapping-head-unit"></span></th>
@@ -80,14 +80,11 @@
 
         <div class="motion-tab-panel hidden" data-motion-panel="midi">
           <div class="midi-monitor-layout">
-            <section class="motion-file-subsection" aria-label="MIDI 연결 테스트">
+
+            <section class="motion-file-subsection settings-step-card" aria-label="MIDI 뱅크">
               <div class="section-head compact">
-                <strong>MIDI 연결 테스트</strong>
-                <span id="midiMonitorMessage">MIDI 모니터 상태 확인 중</span>
-              </div>
-              <div class="midi-safety-notice">
-                <strong>모터 출력 비활성</strong>
-                <span>실제 모터축 제어 명령은 전송하지 않습니다. 손을 뗀 MIDI 페이더가 현재 위치에 머물도록 해당 페이더에만 유지값을 한 번 보냅니다.</span>
+                <strong>1. 뱅크</strong>
+                <span>뱅크 하나가 채널 설정 한 벌입니다</span>
               </div>
               <div class="midi-bank-controls">
                 <label class="compact-field">
@@ -101,11 +98,57 @@
                 <div class="registry-actions midi-bank-actions">
                   <button id="addMidiBankButton" type="button">뱅크 추가</button>
                   <button id="deleteMidiBankButton" class="danger" type="button">뱅크 삭제</button>
-                  <button id="saveMidiMappingButton" class="primary" type="button">MIDI 뱅크 설정 저장</button>
-                  <button id="loadMidiBanksFileButton" type="button">파일에서 불러오기</button>
+                  <button id="saveMidiMappingButton" class="primary" type="button">뱅크 저장</button>
+                  <button id="loadMidiBanksFileButton" type="button">저장된 뱅크 다시 읽기</button>
+                </div>
+                <div class="registry-actions midi-device-actions">
+                  <button id="connectMidiDeviceButton" class="primary" type="button">MIDI 연결</button>
+                  <button id="disconnectMidiDeviceButton" type="button">연결 해제</button>
+                  <button id="refreshMidiMonitorButton" type="button">상태 새로고침</button>
+                  <button id="resetMidiRuntimeButton" class="danger" type="button">페이더 0으로 되돌리기</button>
                 </div>
               </div>
               <div id="midiMappingPath" class="registry-message">모션축 설정 파일의 MIDI 뱅크 상태 확인 중</div>
+            </section>
+
+            <section class="motion-file-subsection" aria-label="MIDI 채널값">
+              <div class="section-head compact">
+                <strong>2. 채널 설정과 실시간 값</strong>
+                <span>MIDI 값 → 필터 출력 → 최종 출력 → 모션값</span>
+              </div>
+              <div class="table-wrap midi-monitor-table-wrap">
+                <table class="midi-monitor-table">
+                  <thead>
+                    <tr>
+                      <th>사용</th>
+                      <th>채널</th>
+                      <th>셀렉트</th>
+                      <th>모션 ID · 최대 3</th>
+                      <th>MIDI 값</th>
+                      <th>필터 출력</th>
+                      <th>최소값 (%)</th>
+                      <th>최대값 (%)</th>
+                      <th>반전</th>
+                      <th>필터 0~13</th>
+                      <th>최종 출력</th>
+                      <th>미디 비율</th>
+                      <th>모션값 (deg)</th>
+                      <th>입력 상태</th>
+                    </tr>
+                  </thead>
+                  <tbody id="midiMonitorRows">
+                    <tr><td colspan="14" class="empty">MIDI 모니터 노드 상태 수신 대기</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="registry-message">한 MIDI 채널에 Motion ID를 최대 3개까지 연결할 수 있습니다. 현재는 연결된 축의 모션 최소·최대 범위가 모두 같아야 하며, SELECT 시 현재 모션값도 서로 가까워야 합니다. 모션값 하나를 각 모션축 설정으로 변환해 연결된 모터에 동시에 전달합니다. 필터 출력은 2차 저역통과 필터만 적용한 값이고, 최종 출력은 반전과 최소값/최대값(%)까지 적용한 값입니다.</div>
+            </section>
+
+            <section class="motion-file-subsection settings-step-card" aria-label="MIDI 장치 연결">
+              <div class="section-head compact">
+                <strong>3. 장치 상태</strong>
+                <span id="midiMonitorMessage">MIDI 모니터 상태 확인 중</span>
+              </div>
               <div id="midiMonitorSummary" class="motion-file-summary midi-monitor-summary">
                 <div><span>연결</span><strong id="midiConnectionState">대기</strong></div>
                 <div><span>MIDI 입력</span><strong id="midiInputState">입력 대기</strong></div>
@@ -116,45 +159,10 @@
                 <div><span>필터</span><strong>2차 저역통과</strong></div>
                 <div><span>모터 출력</span><strong id="midiMotorOutputState">사용 안 함</strong></div>
               </div>
-              <div class="registry-actions">
-                <button id="connectMidiDeviceButton" class="primary" type="button">MIDI 연결</button>
-                <button id="disconnectMidiDeviceButton" type="button">연결 해제</button>
-                <button id="refreshMidiMonitorButton" type="button">상태 새로고침</button>
-                <button id="resetMidiRuntimeButton" class="danger" type="button">실시간 값 초기화</button>
+              <div class="midi-safety-notice">
+                <strong>모터는 움직이지 않습니다</strong>
+                <span>이 화면에서는 실제 모터축 제어 명령을 보내지 않습니다. 손을 뗀 MIDI 페이더가 현재 위치에 머물도록 그 페이더에만 유지값을 한 번 보냅니다.</span>
               </div>
-            </section>
-
-            <section class="motion-file-subsection" aria-label="MIDI 채널값">
-              <div class="section-head compact">
-                <strong>채널값 및 필터 출력</strong>
-                <span>14bit MIDI → 필터 → 뱅크 출력 범위</span>
-              </div>
-              <div class="table-wrap midi-monitor-table-wrap">
-                <table class="midi-monitor-table">
-                  <thead>
-                    <tr>
-                      <th>사용</th>
-                      <th>채널</th>
-                      <th>셀렉트</th>
-                      <th>모션 ID (최대 3개)</th>
-                      <th>MIDI 값</th>
-                      <th>필터 출력</th>
-                      <th>최솟값 (%)</th>
-                      <th>최댓값 (%)</th>
-                      <th>반전</th>
-                      <th>필터 (0~13단계)</th>
-                      <th>최종 출력</th>
-                      <th>최종 비율</th>
-                      <th>모션값 (deg)</th>
-                      <th>입력 상태</th>
-                    </tr>
-                  </thead>
-                  <tbody id="midiMonitorRows">
-                    <tr><td colspan="14" class="empty">MIDI 모니터 노드 상태 수신 대기</td></tr>
-                  </tbody>
-                </table>
-              </div>
-              <div class="registry-message">한 MIDI 채널에 Motion ID를 최대 3개까지 연결할 수 있습니다. 현재는 연결된 축의 모션 최소·최대 범위가 모두 같아야 하며, SELECT 시 현재 모션값도 서로 가까워야 합니다. 모션값 하나를 각 모션축 설정으로 변환해 연결된 모터에 동시에 전달합니다. 필터 출력은 2차 저역통과 필터만 적용한 값이고, 최종 출력은 반전과 최솟값/최댓값(%)까지 적용한 값입니다.</div>
             </section>
           </div>
         </div>
@@ -322,8 +330,8 @@
                           <th>모션 ID</th>
                           <th>모터 축</th>
                           <th>종류</th>
-                          <th>최솟값</th>
-                          <th>최댓값</th>
+                          <th>최소값</th>
+                          <th>최대값</th>
                           <th>초기 목표</th>
                           <th>모터 목표 범위</th>
                           <th>모션 시작/종료</th>
