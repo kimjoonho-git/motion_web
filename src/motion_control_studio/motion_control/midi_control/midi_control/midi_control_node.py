@@ -2308,28 +2308,41 @@ class MidiControlNode(Node):
         return response
 
     def _cmd_invalidate_context(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """프로젝트 매핑·뱅크 메모리를 버린다."""
+        """**실행을 막는다 · 열어 둔 뱅크까지 버리지는 않는다** · §6-265
+
+        여기는 사실을 두 개 들고 있었다.
+
+            어느 프로젝트의 뱅크인가   `_banks`               화면에 보이고 손으로 고친다
+            실행해도 되는가            `_execution_context`   모터로 내보내도 되는가
+
+        `invalidate_context` 의 뜻은 **두 번째**다 · 그런데 첫 번째까지 버렸다.
+
+        브릿지는 실행 컨텍스트가 준비되지 않으면 **1초마다** 이것을 보낸다 ·
+        실측으로 12초에 11번 왔고, 그때마다 뱅크가 빈 것으로 바뀌었다가
+        뒤이은 `select_project` 가 파일에서 다시 읽었다 · 15초 동안 활성
+        뱅크가 `bank_1` ↔ `bank_2` 로 696번 뒤집혔다 · 화면에서는 활성
+        뱅크가 보였다 안 보였다 했고 MIDI 도 듣지 않았다.
+
+        **저장 안 한 편집이 말없이 사라지던 것도 같은 줄기다** ·
+        `_bank_file_dirty` 를 내리는 자리는 원래 파일에 적었을 때와 파일에서
+        읽었을 때 둘뿐인데, 여기가 세 번째로 내리고 있었다.
+
+        프로젝트가 바뀌면 `select_project` 가 알아서 갈아 끼운다 ·
+        여기서 또 버릴 이유가 없다.
+        """
         with self._lock:
-            self._project_id = ''
-            self._mappings_dir = self._motion_projects_dir
-            self._axis_registry = MotionAxisRegistry(self._motion_projects_dir)
-            self._selected_mapping_file_id = ''
-            self._preferred_mapping_file_id = ''
             self._run_mapping_file_id = ''
             self._latest_motion_state = {}
-            self._bank_config_file = None
-            self._banks = MidiBankManager()
             self._execution_context = {}
             self._execution_context_ready = False
-            self._bank_file_loaded = False
-            self._bank_file_dirty = False
             self._current_motion_values = {}
             self._reset_bank_change_state_locked()
+            project_id = self._project_id
         response = build_snapshot(self)
         response.update({
-            'project_id': '',
+            'project_id': project_id,
             'context_id': '',
-            'message': 'MIDI 프로젝트 매핑·뱅크 메모리 폐기',
+            'message': 'MIDI 실행 대기 · 열어 둔 뱅크는 유지',
         })
         return response
 
