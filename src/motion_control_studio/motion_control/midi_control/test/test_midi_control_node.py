@@ -2547,10 +2547,16 @@ def test_feedback_skipped_without_the_surface_is_not_marked_as_sent():
     )
 
 
-def _follow_node(owned):
-    """`_channel_follows_playback_locked` 만 떼어 보는 최소 대역."""
+def _follow_node(owned, now_sec=0.0):
+    """`_channel_follows_playback_locked` 만 떼어 보는 최소 대역.
+
+    `owned` 는 `{motion_id: [(시작, 끝), ...]}` · `now_sec` 는 재생 시각이다.
+    """
     node = MidiControlNode.__new__(MidiControlNode)
-    node._studio_playback_motion_ids = owned
+    node._studio_playback_spans = owned
+    node._playback_running = False
+    node._playback_elapsed_sec = now_sec
+    node._playback_elapsed_at = 0.0
     return node
 
 
@@ -2576,37 +2582,156 @@ def test_overdub_follows_only_the_axes_playback_owns():
         모터 = control_enabled
     그래서 "SELECT 는 되는데 모터만 안 움직인다" 로 보였다.
     """
-    node = _follow_node({'1-1'})
+    node = _follow_node({'1-1': [(0.0, 10.0)]}, now_sec=5.0)
 
     assert node._channel_follows_playback_locked(0, {'motion_id': '1-1'}) is True
     assert node._channel_follows_playback_locked(1, {'motion_id': '1-2'}) is False
 
 
+def test_an_axis_is_mine_once_its_recorded_part_has_passed():
+    """25초까지 녹화된 축은 **25초가 지나면 내 것**이다 · §6-273
+
+    실측 · 1-4 가 3.16~25.06초까지 녹화된 프로젝트에서 추가 녹화를 걸면 모터는
+    25초에 풀리는데 MIDI 는 끝까지 안 풀렸다 · 축 이름만 보고 "재생 것"이라
+    판정했기 때문이다 · 페이더를 움직여도 아무것도 기록되지 않았다.
+    """
+    spans = {'1-4': [(3.16, 25.06)]}
+
+    assert _follow_node(spans, now_sec=10.0)._channel_follows_playback_locked(
+        3, {'motion_id': '1-4'}
+    ) is True, '녹화된 구간 안은 재생 것이다'
+
+    assert _follow_node(spans, now_sec=25.06)._channel_follows_playback_locked(
+        3, {'motion_id': '1-4'}
+    ) is True, '끝 시각까지는 재생 것이다'
+
+    assert _follow_node(spans, now_sec=25.08)._channel_follows_playback_locked(
+        3, {'motion_id': '1-4'}
+    ) is False, '구간을 지나면 내가 잡아 이어 녹화한다'
+
+    assert _follow_node(spans, now_sec=1.0)._channel_follows_playback_locked(
+        3, {'motion_id': '1-4'}
+    ) is False, '시작 전도 내 차례다'
+
+
+def test_the_playback_clock_runs_between_status_messages():
+    """실행 노드는 0.5초마다 알려 준다 · 그 사이는 단조 시계로 잇는다 · §6-273"""
+    import time as time_module
+
+    node = _follow_node({'1-4': [(0.0, 10.0)]})
+    node._playback_running = True
+    node._playback_elapsed_sec = 9.9
+    node._playback_elapsed_at = time_module.monotonic() - 0.4
+
+    assert node._playback_time_sec_locked() > 10.0, '받은 값에 멈춰 있다'
+    assert node._channel_follows_playback_locked(
+        3, {'motion_id': '1-4'}
+    ) is False, '구간이 끝났는데 다음 소식을 기다린다'
+
+
+def _role_node(spans, now_sec, *, following=(), controlling=()):
+    """`_apply_playback_span_roles_locked` 만 떼어 보는 최소 대역."""
+    node = MidiControlNode.__new__(MidiControlNode)
+    node._studio_playback_spans = spans
+    node._playback_running = False
+    node._playback_elapsed_sec = now_sec
+    node._playback_elapsed_at = 0.0
+    node._ensure_playback_follow_state_locked = lambda: None
+    node._playback_follow_enabled = [
+        index in following for index in range(MIDI_CHANNEL_COUNT)
+    ]
+    node._control_enabled = [
+        index in controlling for index in range(MIDI_CHANNEL_COUNT)
+    ]
+    node._motor_command_state = [''] * MIDI_CHANNEL_COUNT
+    node._motor_command_message = [''] * MIDI_CHANNEL_COUNT
+    node._banks = types.SimpleNamespace(snapshot=lambda: {'active_bank': {'mappings': [
+        {'motion_id': f'1-{index + 1}'} for index in range(MIDI_CHANNEL_COUNT)
+    ]}})
+    node.handed = []
+    node._set_playback_follow_enabled_locked = (
+        lambda channel, enabled, mapping: node.handed.append(('재생', channel, enabled))
+    )
+    node._take_control_of_channel_locked = (
+        lambda channel, mappings, now: node.handed.append(('나', channel))
+    )
+    return node
+
+
+def test_the_axis_goes_back_to_playback_when_its_part_starts():
+    """구간 앞에서 잡아 둔 축은 구간이 시작되면 재생에 돌려준다 · §6-273
+
+    1-4 는 3.16초부터 녹화돼 있다 · 카운트다운 직후에 SELECT 를 누르면 그때는
+    구간 밖이라 내 것이 된다 · 그대로 두면 **재생이 그 축을 못 움직인다** ·
+    실측으로 재생은 축 3 에 명령을 보내는데 MIDI 가 쥐고 있어 안 돌았다.
+    """
+    node = _role_node({'1-4': [(3.16, 25.06)]}, 5.0, controlling=(3,))
+
+    node._apply_playback_span_roles_locked(0.0)
+
+    assert node.handed == [('재생', 3, True)]
+
+
+def test_the_axis_comes_to_me_when_its_part_ends():
+    """구간이 끝나면 따라가던 축이 내 손으로 넘어온다 · §6-273"""
+    node = _role_node({'1-4': [(3.16, 25.06)]}, 25.5, following=(3,))
+
+    node._apply_playback_span_roles_locked(0.0)
+
+    assert node.handed == [('나', 3)]
+
+
+def test_a_channel_nobody_selected_is_left_alone():
+    """SELECT 가 꺼진 채널은 넘길 것이 없다 · 손대지 않는다."""
+    node = _role_node({'1-4': [(3.16, 25.06)]}, 30.0)
+
+    node._apply_playback_span_roles_locked(0.0)
+
+    assert node.handed == []
+
+
+def test_normal_playback_never_hands_anything_over():
+    """스튜디오 녹화가 아니면 지금까지대로 둔다 · §6-273"""
+    node = _role_node(None, 30.0, following=(0, 1), controlling=(2,))
+
+    node._apply_playback_span_roles_locked(0.0)
+
+    assert node.handed == []
+
+
 def test_plain_recording_leaves_every_channel_to_the_operator():
     """보통 녹화는 재생이 쥔 축이 없다 · 전 채널이 조종이어야 한다."""
-    node = _follow_node(set())
+    node = _follow_node({})
 
     assert node._channel_follows_playback_locked(0, {'motion_id': '1-1'}) is False
 
 
 def test_linked_motion_ids_count_as_owned():
     """한 채널이 여러 축을 묶어 쓰면 그중 하나만 걸려도 재생이 쥔 것이다."""
-    node = _follow_node({'1-2'})
+    node = _follow_node({'1-2': [(0.0, 10.0)]}, now_sec=1.0)
 
     assert node._channel_follows_playback_locked(
         0, {'motion_id': '1-1', 'linked_motion_ids': ['1-2']}
     ) is True
 
 
-def _select_off_node(owned, mappings):
-    """`_force_all_select_off_for_playback_locked` 만 떼어 보는 최소 대역."""
+def _select_off_node(owned, mappings, following=()):
+    """`_force_all_select_off_for_playback_locked` 만 떼어 보는 최소 대역.
+
+    `following` 은 지금 재생을 따라가던 채널들이다 · 놓을 대상은 그것이다.
+    """
     node = MidiControlNode.__new__(MidiControlNode)
-    node._studio_playback_motion_ids = owned
+    node._studio_playback_spans = owned
+    node._playback_running = False
+    node._playback_elapsed_sec = 0.0
+    node._playback_elapsed_at = 0.0
     node._banks = types.SimpleNamespace(
         snapshot=lambda: {'active_bank': {'mappings': mappings}}
     )
     node._control_enabled = [True] * MIDI_CHANNEL_COUNT
-    node._playback_follow_enabled = [False] * MIDI_CHANNEL_COUNT
+    node._playback_follow_enabled = [
+        index in following for index in range(MIDI_CHANNEL_COUNT)
+    ]
     node._playback_follow_targets = [None] * MIDI_CHANNEL_COUNT
     node._playback_follow_resume_not_before = [0.0] * MIDI_CHANNEL_COUNT
     node._motor_follow_active = [False] * MIDI_CHANNEL_COUNT
@@ -2638,11 +2763,13 @@ def test_overdub_keeps_the_recorded_axis_selected_when_playback_ends():
     mappings = [{'motion_id': '1-1'}, {'motion_id': '1-2'}] + [
         {'motion_id': f'9-{index}'} for index in range(MIDI_CHANNEL_COUNT - 2)
     ]
-    node = _select_off_node({'1-1'}, mappings)
+    node = _select_off_node(
+        {'1-1': [(0.0, 10.0)]}, mappings, following=(0,),
+    )
 
     node._force_all_select_off_for_playback_locked('모션 동작 종료 · SELECT OFF')
 
-    assert node._control_enabled[0] is False, '재생이 쥔 축은 놓아야 한다'
+    assert node._control_enabled[0] is False, '재생을 따라가던 축은 놓아야 한다'
     assert node._control_enabled[1] is True, '녹화 중인 축은 유지해야 한다'
 
 

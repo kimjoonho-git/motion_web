@@ -880,7 +880,13 @@ def test_merge_append_moves_the_user_selected_whole_layer_after_the_other_layer(
         for key in ('mode', 'append_layer_id', 'append_offset_sec')
     } == {'mode': 'append', 'append_layer_id': 'b', 'append_offset_sec': 0.04}
     # 이음매에서 얼마나 튀는지도 함께 알린다 · 막지는 않는다 · §6-116
-    assert [item['motion_id'] for item in report['append_seam']] == ['1-1', '2-1']
+    #
+    # **이음매 앞에 값이 있던 축만** 본다 · §6-278
+    #
+    # 2-1 은 뒤 레이어에서 처음 나오는 축이라 이음매 앞에 값이 없다 · 전에는
+    # 합성이 그 앞을 첫 값으로 미리 채워서 「0도 튐」이 보고에 끼었다 ·
+    # 합치기가 없던 값을 만들지 않게 되면서 그 가짜 항목이 사라졌다.
+    assert [item['motion_id'] for item in report['append_seam']] == ['1-1']
     assert values(append_first, '1-1') == [20.0, 21.0, 0.0, 1.0]
     assert append_first['merge_report']['append_layer_id'] == 'a'
     assert point_curve_frame_mismatches(append_second) == []
@@ -1538,3 +1544,77 @@ def test_the_context_draws_points_on_the_recorded_samples():
         for p in points
     )
     assert max(context.errors_of(points)) >= 0.0
+
+
+# --------------------------------------------------------------------------- #
+# 합치기는 **없던 값을 만들지 않는다** · §6-278
+#
+# 실측 · 1-4 가 3.16~38.04초까지만 있는데 합치고 나니 0.02~654.40초로 저장됐다 ·
+# 그 빈 구간마다 2점짜리 곡선이 생겨서, 화면에는 끝까지 평평한 선과 **집을 수도
+# 지울 수도 없는 끝점**이 남았다.
+#
+# 모터가 도는 모양은 그대로다 · 재생할 때 합성이 마지막 값을 물고 가므로
+# 레이어에 적어 두지 않아도 같다.
+# --------------------------------------------------------------------------- #
+
+def _merged_span(layer, motion_id):
+    times = [
+        float(frame['time_sec']) for frame in layer['frames']
+        if motion_id in (frame.get('values') or {})
+    ]
+    return (min(times), max(times)) if times else None
+
+
+def test_a_short_axis_keeps_its_own_end():
+    long_layer = create_all_axis_points({
+        'layer_id': 'long', 'name': '녹화 1', 'frames': [
+            {'frame': index, 'time_sec': round(index * 0.02, 9),
+             'values': {'1-1': float(index)}}
+            for index in range(1, 51)
+        ],
+    })
+    short_layer = create_all_axis_points({
+        'layer_id': 'short', 'name': '추가 녹화 1', 'frames': [
+            {'frame': index, 'time_sec': round(index * 0.02, 9),
+             'values': {'1-4': float(index)}}
+            for index in range(1, 6)
+        ],
+    })
+    project = {'period_sec': 0.02, 'layers': [long_layer, short_layer]}
+
+    merged = merge_layers(project, ['long', 'short'], name='합친 레이어')
+
+    assert _merged_span(merged, '1-1') == (0.02, 1.0)
+    assert _merged_span(merged, '1-4') == (0.02, 0.1), (
+        '짧은 축이 긴 축의 끝까지 늘어났다'
+    )
+
+
+def test_no_filler_curve_is_made_past_the_last_value():
+    long_layer = create_all_axis_points({
+        'layer_id': 'long', 'name': '녹화 1', 'frames': [
+            {'frame': index, 'time_sec': round(index * 0.02, 9),
+             'values': {'1-1': float(index)}}
+            for index in range(1, 51)
+        ],
+    })
+    short_layer = create_all_axis_points({
+        'layer_id': 'short', 'name': '추가 녹화 1', 'frames': [
+            {'frame': index, 'time_sec': round(index * 0.02, 9),
+             'values': {'1-4': float(index)}}
+            for index in range(1, 6)
+        ],
+    })
+    project = {'period_sec': 0.02, 'layers': [long_layer, short_layer]}
+
+    merged = merge_layers(project, ['long', 'short'], name='합친 레이어')
+
+    ends = [
+        float(curve['points'][-1]['time_sec'])
+        for curve in merged['point_curves']
+        if curve['motion_id'] == '1-4' and curve.get('points')
+    ]
+    assert ends and max(ends) <= 0.1 + 1e-9, (
+        f'값이 끝난 뒤에 곡선이 만들어졌다: {ends}'
+    )
+    assert point_curve_frame_mismatches(merged) == []

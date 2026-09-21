@@ -138,3 +138,67 @@ def test_judging_and_publishing_agree_on_the_same_axis():
     published = _filter(plan, {0: 1.0, 1: 2.0}, 5.0)
     judged = {a['motor_axis'] for a in _owned_axes(plan)}
     assert set(published) == judged
+
+
+# --------------------------------------------------------------------------- #
+# 판정도 **시각**을 본다 · §6-274
+#
+# 발행(`_owned_positions`)은 처음부터 시각을 봤는데, "지금 내가 모는 축이
+# 무엇이냐"를 정하는 `_playback_axes` 는 축에 구간이 있는지만 봤다 · 같은 표를
+# 보면서 묻는 것이 달랐다.
+#
+# 실측 · 1-4 가 3.2~25.1초에 녹화된 프로젝트에서 26초에 페이더로 그 축을 잡자
+# 재생이 「MIDI 제어가 축 3를 사용 중이어서 모션을 시작할 수 없습니다」로 죽었다 ·
+# 녹화는 계속되는데 1-1·1-2·1-3 이 통째로 멈췄다.
+# --------------------------------------------------------------------------- #
+
+_axes_at = MotionPlayer._playback_axes
+
+
+def _gap_plan(spans):
+    return {
+        'axes': [{'motor_axis': 0}, {'motor_axis': 3}],
+        'axis_playback_spans': spans,
+    }
+
+
+def test_an_axis_in_the_gap_is_not_mine():
+    """구간 사이의 빈 시간에는 그 축이 재생의 것이 아니다."""
+    plan = _gap_plan({3: [(3.2, 25.1)]})
+
+    assert [a['motor_axis'] for a in _axes_at(plan, 10.0)] == [0, 3]
+    assert [a['motor_axis'] for a in _axes_at(plan, 26.0)] == [0], (
+        '구간이 끝났는데 아직 내 축이라고 우긴다'
+    )
+    assert [a['motor_axis'] for a in _axes_at(plan, 1.0)] == [0], '시작 전도 남의 차례다'
+
+
+def test_two_layers_of_the_same_axis_leave_a_gap():
+    """이어 녹화하면 같은 축에 구간이 둘 생긴다 · 그 사이는 내 손이다."""
+    plan = _gap_plan({3: [(3.2, 25.1), (27.8, 45.4)]})
+
+    assert [a['motor_axis'] for a in _axes_at(plan, 26.5)] == [0]
+    assert [a['motor_axis'] for a in _axes_at(plan, 30.0)] == [0, 3]
+
+
+def test_without_spans_every_axis_is_playbacks():
+    """로컬·그룹 실행은 이 표를 주지 않는다 · 지금까지대로 전부 재생이다."""
+    plan = {'axes': [{'motor_axis': 0}, {'motor_axis': 3}]}
+
+    assert [a['motor_axis'] for a in _axes_at(plan, 99.0)] == [0, 3]
+
+
+def test_an_axis_with_no_span_at_all_is_mine():
+    """레이어에 없는 축은 빈 목록으로 온다 · 전 구간 내 것이다."""
+    plan = _gap_plan({3: []})
+
+    assert [a['motor_axis'] for a in _axes_at(plan, 0.0)] == [0]
+    assert [a['motor_axis'] for a in _axes_at(plan, 50.0)] == [0]
+
+
+def test_the_old_call_without_a_time_still_works():
+    """시각을 안 주는 옛 호출은 있던 그대로 판단한다."""
+    plan = _gap_plan({3: [(3.2, 25.1)]})
+
+    assert [a['motor_axis'] for a in _axes_at(plan)] == [0, 3]
+    assert [a['motor_axis'] for a in _axes_at(_gap_plan({3: []}))] == [0]

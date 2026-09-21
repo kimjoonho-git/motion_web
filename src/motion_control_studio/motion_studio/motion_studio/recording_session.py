@@ -143,15 +143,29 @@ class StudioRecordingSession:
             # 레이어에 없는 축(새로 녹화할 축)까지 조종이 꺼져서, SELECT 불은
             # 켜지는데 모터가 안 움직였다 · 재생이 끝나야 비로소 잡혔다.
             #
-            # 목록은 이미 있다 · `start()` 가 만들어 테이크에 넣어 두고
-            # 런타임에도 `axis_playback_spans` 로 같은 값을 보낸다 · 여기서는
-            # 그 축 이름만 넘긴다 · 새로 계산하지 않는다.
+            # **구간째 넘긴다** · 축 이름만 넘기면 시간이 사라진다 · §6-273
+            #
+            # 소유는 축 × 시간인데 여기서만 시간을 버렸다 · 모터에는
+            # `axis_playback_spans` 로 구간을 주면서 MIDI 에는 이름만 줬다 ·
+            # 그래서 1-4 가 25초까지 녹화돼 있으면 그 뒤로도 영영 재생 것이라,
+            # 25초가 지나 모터는 풀렸는데 SELECT 는 조종이 되지 않았다 ·
+            # 페이더를 움직여도 아무것도 기록되지 않았다.
+            #
+            # 값은 이미 있다 · `start()` 가 만들어 테이크에 넣어 둔 그것이다 ·
+            # 새로 계산하지 않는다.
             with studio._lock:
                 take = studio._take
                 ownership = dict(take.ownership) if take and take.ownership else {}
             response = studio._request_midi(
                 'studio_recording_ready',
-                {'playback_motion_ids': sorted(ownership)},
+                {
+                    'playback_motion_spans': {
+                        str(motion_id): [
+                            [float(start), float(end)] for start, end in spans
+                        ]
+                        for motion_id, spans in ownership.items()
+                    },
+                },
                 5.0,
             )
             if not response.get('success'):
@@ -390,6 +404,32 @@ class StudioRecordingSession:
             studio._status['recorded_frames'] = index
             studio._status['updated_at'] = time.time()
 
+    def without_owned_values(self, frames):
+        """이미 녹화된 구간의 값은 **레이어에 못 들어간다** · §6-277
+
+        새 레이어는 기존 레이어와 **절대 겹치지 않는다** · 겹치면 합성이 그
+        프로젝트의 재생을 통째로 거부하기 때문이다 · 한 번 겹치면 그 뒤로
+        추가 녹화가 안 걸린다.
+
+        `record_tick` 이 이미 매 순간 버린다 · 여기는 **마지막 그물**이다 ·
+        녹화 시계와 재생 시계가 한 프레임 어긋나도 겹친 값이 남지 않는다 ·
+        판정은 같은 `owned_at` 이라 두 곳이 갈릴 수 없다.
+        """
+        take = self.studio._take
+        ownership = take.ownership if take else None
+        if not ownership:
+            return list(frames)
+        kept = []
+        for frame in frames:
+            time_sec = float(frame.get('time_sec') or 0.0)
+            values = {
+                motion_id: value
+                for motion_id, value in (frame.get('values') or {}).items()
+                if not owned_at(ownership.get(str(motion_id), ()), time_sec)
+            }
+            kept.append({**frame, 'values': values})
+        return kept if any(frame['values'] for frame in kept) else []
+
     def finish_locked(self, message: str = '모션 녹화 완료') -> str:
         """녹화된 프레임을 레이어로 남긴다 · **테이크는 닫지 않는다** · §6-80
 
@@ -408,13 +448,22 @@ class StudioRecordingSession:
         layer_name = next_numbered_layer_name(
             layers, self.mode_label(studio._take.kind if studio._take else 'record')
         )
+        frames = self.without_owned_values(studio._record_frames)
+        if not frames:
+            studio._record_frames = []
+            studio._recorded_motion_ids = set()
+            studio._status['message'] = (
+                '기록된 축이 없어 레이어를 만들지 않았습니다 · '
+                '이미 녹화된 구간은 재생 차례라 기록되지 않습니다'
+            )
+            return ''
         layer = {
             'layer_id': f'layer_{uuid.uuid4().hex[:8]}',
             'name': layer_name,
             'enabled': True,
             'locked': False,
             'created_at': time.time(),
-            'frames': list(studio._record_frames),
+            'frames': frames,
         }
         layers.append(layer)
         studio._current_project = studio._store.save_project(

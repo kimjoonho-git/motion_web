@@ -274,3 +274,68 @@ class _BoardStudio:
 
     def _project_status_locked(self, message):
         pass
+
+
+# --------------------------------------------------------------------------- #
+# 새 레이어는 기존 레이어와 **절대 겹치지 않는다** · §6-277
+#
+# 겹치면 `require_conflict_free_layers` 가 그 프로젝트의 재생을 통째로 거부한다 ·
+# 한 번 겹쳐 두면 그 뒤로 추가 녹화가 아예 안 걸린다 · 실측으로 그렇게 막혔다.
+#
+# `record_tick` 이 매 순간 버리지만, 녹화 시계와 재생 시계가 한 프레임 어긋나도
+# 값이 새지 않도록 레이어를 만들기 직전에 한 번 더 거른다.
+# --------------------------------------------------------------------------- #
+
+def _session_with(ownership):
+    import types
+    from motion_studio.recording_session import StudioRecordingSession
+
+    session = StudioRecordingSession.__new__(StudioRecordingSession)
+    session.studio = types.SimpleNamespace(
+        _take=types.SimpleNamespace(ownership=ownership),
+    )
+    return session
+
+
+def test_values_inside_a_recorded_span_never_reach_the_layer():
+    session = _session_with({'1-4': [(3.2, 25.1)]})
+    frames = [
+        {'frame': 1, 'time_sec': 10.0, 'values': {'1-4': 1.0}},
+        {'frame': 2, 'time_sec': 26.0, 'values': {'1-4': 2.0}},
+    ]
+
+    kept = session.without_owned_values(frames)
+
+    assert kept[0]['values'] == {}, '이미 녹화된 시간인데 값이 들어갔다'
+    assert kept[1]['values'] == {'1-4': 2.0}, '빈 시간의 값까지 버렸다'
+
+
+def test_two_recorded_spans_leave_only_the_gap():
+    session = _session_with({'1-4': [(3.2, 25.1), (27.8, 45.4)]})
+    frames = [
+        {'frame': 1, 'time_sec': 26.5, 'values': {'1-4': 1.0}},
+        {'frame': 2, 'time_sec': 30.0, 'values': {'1-4': 2.0}},
+        {'frame': 3, 'time_sec': 50.0, 'values': {'1-4': 3.0}},
+    ]
+
+    kept = session.without_owned_values(frames)
+
+    assert [frame['values'] for frame in kept] == [
+        {'1-4': 1.0}, {}, {'1-4': 3.0},
+    ]
+
+
+def test_a_recording_entirely_inside_a_span_makes_no_layer():
+    """다 버려지면 레이어를 만들지 않는다 · 빈 레이어가 쌓이지 않는다."""
+    session = _session_with({'1-4': [(0.0, 60.0)]})
+    frames = [{'frame': 1, 'time_sec': 10.0, 'values': {'1-4': 1.0}}]
+
+    assert session.without_owned_values(frames) == []
+
+
+def test_a_plain_recording_keeps_everything():
+    """보통 녹화는 소유 구간이 없다 · 그대로 둔다."""
+    session = _session_with({})
+    frames = [{'frame': 1, 'time_sec': 10.0, 'values': {'1-1': 1.0}}]
+
+    assert session.without_owned_values(frames) == frames

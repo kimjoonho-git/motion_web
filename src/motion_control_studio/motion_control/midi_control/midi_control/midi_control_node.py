@@ -4,7 +4,7 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
 
 import rclpy
 import yaml
@@ -48,7 +48,7 @@ from midi_control.motion_value_map import (
 )
 from motion_common.execution_context import confirm_context_id, verify_mapping_fingerprint
 from motion_common.paths import project_dir_for
-from motion_common import command_router, generation as generation_mod, topics
+from motion_common import axis_ownership, command_router, generation as generation_mod, topics
 from motion_common.timing import CONTROL_PERIOD_SEC
 from motion_common import run_state as run_state_rules
 
@@ -217,12 +217,21 @@ class MidiControlNode(Node):
         self._motion_run_request_source = ''
         self._motion_studio_state = 'idle'
         self._playback_phase = 'idle'
-        # 스튜디오 녹화 중 **재생이 쥔 축** · 녹화가 아니면 `None` · §6-105
+        # 스튜디오 녹화 중 **재생이 쥔 축 × 시간** · 녹화가 아니면 `None` ·
+        # §6-105 §6-273
         #
-        # `None` 과 빈 집합은 뜻이 다르다 · `None` 은 "스튜디오 녹화가 아니다"
-        # (평소 재생이므로 전 채널 추종) · 빈 집합은 "녹화인데 재생이 쥔 축이
+        # `None` 과 빈 사전은 뜻이 다르다 · `None` 은 "스튜디오 녹화가 아니다"
+        # (평소 재생이므로 전 채널 추종) · 빈 사전은 "녹화인데 재생이 쥔 축이
         # 없다"(전 채널 조종)다.
-        self._studio_playback_motion_ids: Optional[Set[str]] = None
+        #
+        # 값은 `{motion_id: [(시작초, 끝초), ...]}` · 축 이름만 들고 있으면
+        # 한 번 녹화된 축은 그 뒤로 영영 재생 것이 된다 · §6-273
+        self._studio_playback_spans: Optional[Dict[str, List[tuple]]] = None
+        # 재생 시계 · 실행 노드가 0.5초마다 보내는 값과 그것을 받은 시각 ·
+        # 사이는 단조 시계로 잇는다 · §6-273
+        self._playback_elapsed_sec = 0.0
+        self._playback_elapsed_at = 0.0
+        self._playback_running = False
         self._playback_follow_enabled = [False] * MIDI_CHANNEL_COUNT
         self._playback_follow_targets: List[int | None] = [
             None
@@ -672,78 +681,9 @@ class MidiControlNode(Node):
                             '활성화 불가: 현재 뱅크에서 이 라인의 사용이 꺼져 있습니다'
                         )
                     else:
-                        # Validate and calculate the pickup point before releasing
-                        # another line which currently owns the same motor axis.
-                        # A failed handover must leave the old owner untouched.
-                        try:
-                            group = self._mapping_group_locked(mappings[channel])
-                            motion_value, pickup_source = (
-                                self._pickup._pickup_reference_for_group_locked(group)
-                            )
-                            safe_range = safe_motion_range_for_group(group)
-                            fader_target = raw_fader_for_motion(
-                                motion_value,
-                                group[0]['row'],
-                                mappings[channel],
-                                safe_range,
-                            )
-                        except ValueError as exc:
-                            self._control_enabled[channel] = False
-                            self._pickup._clear_pickup_state_locked(channel)
-                            self._motor_command_state[channel] = 'activation_rejected'
-                            self._motor_command_message[channel] = f'활성화 불가: {exc}'
-                            self._clear_pending_channel_locked(channel)
-                            self._motor_follow_active[channel] = False
-                        else:
-                            self._set_group_motion_value_locked(group, motion_value)
-                            selected_axes = {int(item['axis']) for item in group}
-                            # Multiple MIDI lines may include the same motor axis,
-                            # but only one line may own that motor at runtime.
-                            for other_channel, other_mapping in enumerate(mappings):
-                                if other_channel == channel:
-                                    continue
-                                other_axes = {
-                                    self._axis_registry.motor_axis(motion_id)
-                                    for motion_id in mapping_motion_ids(other_mapping)
-                                }
-                                if (
-                                    self._control_enabled[other_channel]
-                                    and selected_axes.intersection(other_axes)
-                                ):
-                                    self._deactivate_control_channel_locked(other_channel)
-                            self._control_enabled[channel] = True
-                            self._faders.zero_required[channel] = False
-                            self._pickup.pending[channel] = True
-                            self._pickup.reference_motion[channel] = motion_value
-                            self._pickup.previous_motion[channel] = None
-                            self._pickup.reference_source[channel] = pickup_source
-                            self._faders._queue_fader_position_locked(
-                                channel, fader_target
-                            )
-                            self._faders.sync_targets[channel] = fader_target
-                            self._faders.awaiting_sync[channel] = True
-                            self._faders.sync_not_before[channel] = (
-                                now + FADER_SYNC_MIN_DURATION_SEC
-                            )
-                            self._motor_command_state[channel] = 'waiting_pickup'
-                            self._motor_command_message[channel] = (
-                                f'{len(group)}개 연동 축 Pickup 대기 · '
-                                f'기준 {motion_value:.3f}°'
-                            )
-                            logical_targets = {
-                                int(item['axis']): require_motion_value_within_limits(
-                                    item['motion_id'],
-                                    motion_value,
-                                    item['row'],
-                                    item['motor'],
-                                )
-                                for item in group
-                            }
-                            self._last_group_motor_targets[channel] = logical_targets
-                            self._last_motor_target[channel] = logical_targets[
-                                int(group[0]['axis'])
-                            ]
-                            self._motor_follow_active[channel] = False
+                        self._take_control_of_channel_locked(
+                            channel, mappings, now,
+                        )
                 elif select_rising and select_lock_reason:
                     self._motor_command_state[channel] = (
                         'studio_initializing'
@@ -978,8 +918,51 @@ class MidiControlNode(Node):
             ],
         }
 
+    def _apply_playback_span_roles_locked(self, now: float) -> None:
+        """구간이 바뀌면 **역할을 넘긴다** · §6-273
+
+        추가 녹화에서 SELECT 는 "이 축은 내 관심사" 라는 뜻이고, 그 순간
+        재생과 나 중 누가 쥐는지는 **시각이 정한다** ·
+
+            구간 안  재생 것 · 페이더가 재생을 따라간다
+            구간 밖  내 것   · 페이더로 움직이고 그대로 녹화된다
+
+        누를 때 한 번만 정하면 어긋난다 · 1-4 가 3.16초부터 녹화돼 있으면
+        카운트다운 직후에 누른 SELECT 가 축을 가져가 버려 **재생이 그 축을 못
+        움직였다** · 반대로 25초에 재생이 놓아도 내 손으로 넘어오지 않았다.
+
+        페이더는 추종하는 동안 이미 재생 위치에 붙어 있다 · 그래서 넘겨받을 때
+        튀지 않는다.
+        """
+        spans = getattr(self, '_studio_playback_spans', None)
+        if spans is None:
+            return
+        self._ensure_playback_follow_state_locked()
+        mappings = self._banks.snapshot()['active_bank']['mappings']
+        for channel in range(MIDI_CHANNEL_COUNT):
+            following = self._playback_follow_enabled[channel]
+            controlling = self._control_enabled[channel]
+            if not following and not controlling:
+                # SELECT 가 꺼진 채널은 아무도 안 쥔다 · 넘길 것이 없다
+                continue
+            playback_turn = self._channel_follows_playback_locked(
+                channel, mappings[channel]
+            )
+            if playback_turn and controlling:
+                try:
+                    self._set_playback_follow_enabled_locked(
+                        channel, True, mappings[channel]
+                    )
+                except ValueError as exc:
+                    self._motor_command_state[channel] = 'playback_follow_rejected'
+                    self._motor_command_message[channel] = f'재생 위치 추종 불가: {exc}'
+            elif not playback_turn and following:
+                self._take_control_of_channel_locked(channel, mappings, now)
+
     def _publish_motor_request_batch(self) -> None:
         with self._lock:
+            # 구간 경계에서 재생과 나 사이에 축을 넘긴다 · §6-273
+            self._apply_playback_span_roles_locked(time.monotonic())
             # 장치가 이 PC 것이 아니면 **아무것도 내보내지 않는다** · §6-94
             #
             # USB 를 뽑아 다른 PC 에 꽂은 것과 같아야 한다 · 연동에서 MIDI 를
@@ -993,6 +976,93 @@ class MidiControlNode(Node):
             payload = self._take_motor_request_batch_locked()
         if payload is not None:
             self._publish_json(self._motor_request_publisher, payload)
+
+    def _take_control_of_channel_locked(
+        self, channel: int, mappings, now: float
+    ) -> None:
+        """이 채널이 축을 잡는다 · SELECT 를 눌렀을 때와 구간이 끝났을 때 · §6-273
+
+        손으로 누르든 시간이 넘겨주든 하는 일은 같아야 한다 · 두 벌로 두면
+        한쪽만 고쳐졌을 때 조용히 어긋난다.
+        """
+        # Validate and calculate the pickup point before releasing
+        # another line which currently owns the same motor axis.
+        # A failed handover must leave the old owner untouched.
+        try:
+            group = self._mapping_group_locked(mappings[channel])
+            motion_value, pickup_source = (
+                self._pickup._pickup_reference_for_group_locked(group)
+            )
+            safe_range = safe_motion_range_for_group(group)
+            fader_target = raw_fader_for_motion(
+                motion_value,
+                group[0]['row'],
+                mappings[channel],
+                safe_range,
+            )
+        except ValueError as exc:
+            self._control_enabled[channel] = False
+            self._pickup._clear_pickup_state_locked(channel)
+            self._motor_command_state[channel] = 'activation_rejected'
+            self._motor_command_message[channel] = f'활성화 불가: {exc}'
+            self._clear_pending_channel_locked(channel)
+            self._motor_follow_active[channel] = False
+        else:
+            self._set_group_motion_value_locked(group, motion_value)
+            selected_axes = {int(item['axis']) for item in group}
+            # Multiple MIDI lines may include the same motor axis,
+            # but only one line may own that motor at runtime.
+            for other_channel, other_mapping in enumerate(mappings):
+                if other_channel == channel:
+                    continue
+                other_axes = {
+                    self._axis_registry.motor_axis(motion_id)
+                    for motion_id in mapping_motion_ids(other_mapping)
+                }
+                if (
+                    self._control_enabled[other_channel]
+                    and selected_axes.intersection(other_axes)
+                ):
+                    self._deactivate_control_channel_locked(other_channel)
+            self._control_enabled[channel] = True
+            # 구간이 끝나 재생이 놓은 축을 이어 잡는 길이다 ·
+            # 추종 표시가 남아 있으면 페이더가 주인을 둘 섬긴다 ·
+            # §6-273
+            self._playback_follow_enabled[channel] = False
+            self._playback_follow_targets[channel] = None
+            self._playback_follow_resume_not_before[channel] = 0.0
+            self._faders.zero_required[channel] = False
+            self._pickup.pending[channel] = True
+            self._pickup.reference_motion[channel] = motion_value
+            self._pickup.previous_motion[channel] = None
+            self._pickup.reference_source[channel] = pickup_source
+            self._faders._queue_fader_position_locked(
+                channel, fader_target
+            )
+            self._faders.sync_targets[channel] = fader_target
+            self._faders.awaiting_sync[channel] = True
+            self._faders.sync_not_before[channel] = (
+                now + FADER_SYNC_MIN_DURATION_SEC
+            )
+            self._motor_command_state[channel] = 'waiting_pickup'
+            self._motor_command_message[channel] = (
+                f'{len(group)}개 연동 축 Pickup 대기 · '
+                f'기준 {motion_value:.3f}°'
+            )
+            logical_targets = {
+                int(item['axis']): require_motion_value_within_limits(
+                    item['motion_id'],
+                    motion_value,
+                    item['row'],
+                    item['motor'],
+                )
+                for item in group
+            }
+            self._last_group_motor_targets[channel] = logical_targets
+            self._last_motor_target[channel] = logical_targets[
+                int(group[0]['axis'])
+            ]
+            self._motor_follow_active[channel] = False
 
     def _deactivate_control_channel_locked(
         self, channel: int, *, request_motor_hold: bool = True
@@ -1055,23 +1125,19 @@ class MidiControlNode(Node):
         재생이 끝나면 여기가 돌면서 **전 채널**의 SELECT 를 껐다 · 지금 손으로
         녹화하던 축까지 같이 꺼져서 거기서 녹화가 끊겼다.
 
-        재생이 쥔 축만 놓으면 된다 · 그 판정은 SELECT 를 나눌 때와 같은
-        `_channel_follows_playback_locked` 를 쓴다 · 두 곳이 다른 기준을 쓰면
-        한쪽만 고쳐졌을 때 조용히 어긋난다.
+        **지금 재생을 따라가던 채널만** 놓는다 · §6-273
+
+        전에는 "재생이 쥔 축이냐" 로 골랐다 · 소유가 축 × 시간이 되면서 그
+        기준은 여기서 못 쓴다 · 재생이 끝난 시각은 이미 모든 구간 밖이라
+        아무도 안 놓게 된다. 따라가던 채널은 그대로 남아 있으므로 그것을 본다 ·
+        손으로 조종 중인 채널(녹화 중인 축)은 건드리지 않는다.
         """
         self._ensure_playback_follow_state_locked()
         now = time.monotonic()
-        # 평소 재생이면 전 채널을 놓는다 · 뱅크를 볼 일이 없다 · 스튜디오
-        # 녹화일 때만 어느 축이 재생 것인지 가린다.
-        owned = getattr(self, '_studio_playback_motion_ids', None)
-        mappings = (
-            self._banks.snapshot()['active_bank']['mappings']
-            if owned is not None else None
-        )
+        # 평소 재생이면 전 채널을 놓는다 · 스튜디오 녹화일 때만 가린다.
+        spans = getattr(self, '_studio_playback_spans', None)
         for channel in range(MIDI_CHANNEL_COUNT):
-            if mappings is not None and not self._channel_follows_playback_locked(
-                channel, mappings[channel]
-            ):
+            if spans is not None and not self._playback_follow_enabled[channel]:
                 continue
             was_selected = bool(
                 self._control_enabled[channel]
@@ -1651,9 +1717,18 @@ class MidiControlNode(Node):
         except (AttributeError, TypeError, ValueError):
             return
         mapping_file_id = str(payload.get('mapping_file_id') or '').strip()
+        # 재생이 지금 몇 초인가 · 축을 언제 놓아줄지 이것으로 판단한다 · §6-273
+        progress = payload.get('progress')
+        elapsed = (
+            progress.get('elapsed_sec') if isinstance(progress, dict) else None
+        )
         with self._lock:
             self._ensure_playback_follow_state_locked()
             self._motion_run_state = str(payload.get('state') or 'idle')
+            self._playback_running = self._motion_run_state == 'running'
+            if isinstance(elapsed, (int, float)):
+                self._playback_elapsed_sec = float(elapsed)
+                self._playback_elapsed_at = time.monotonic()
             self._motion_run_request_source = str(
                 payload.get('request_source') or ''
             )
@@ -2152,29 +2227,46 @@ class MidiControlNode(Node):
             'device_connected': connected,
         }
 
+    def _playback_time_sec_locked(self) -> float:
+        """재생이 지금 몇 초인가 · §6-273
+
+        실행 노드는 0.5초마다 알려 준다 · 그 사이는 단조 시계로 잇는다 ·
+        구간이 끝나는 순간을 0.5초씩 놓치면 그만큼 축을 늦게 놓는다.
+        """
+        if not self._playback_running or self._playback_elapsed_at <= 0.0:
+            return self._playback_elapsed_sec
+        return self._playback_elapsed_sec + max(
+            0.0, time.monotonic() - self._playback_elapsed_at
+        )
+
     def _channel_follows_playback_locked(self, channel: int, mapping) -> bool:
-        """이 채널의 SELECT 가 「재생 추종」이어야 하는가 · §6-105
+        """이 채널의 SELECT 가 「재생 추종」이어야 하는가 · §6-105 §6-273
 
         평소 재생(모션 실행)을 구경할 때는 모든 채널이 따라간다 · 지금까지의
         동작 그대로다.
 
-        추가 녹화 중에는 다르다 · **레이어에 있는 축만** 재생이 쥔다 ·
-        레이어에 없는 축은 지금 새로 녹화하는 축이므로 SELECT 가 원래 뜻대로
-        "내가 이 축을 잡는다" 여야 한다.
+        추가 녹화 중에는 다르다 · 재생이 쥐는 것은 **축이 아니라 축 × 시간**
+        이다 · 1-4 가 25초까지 녹화돼 있으면 25초까지만 재생 것이고, 그 뒤는
+        새로 얹을 자리라 SELECT 가 "내가 이 축을 잡는다" 여야 한다.
 
-        예전에는 "지금 재생 중이냐" 하나만 보고 전 채널을 추종으로 돌렸다 ·
-        새로 녹화할 축까지 조종이 꺼져서, SELECT 불은 켜지는데 모터가 안
-        움직였고 재생이 끝나야 비로소 잡혔다.
+        전에는 축 이름만 봤다 · 한 번 녹화된 축은 그 뒤로 영영 재생 것이 되어,
+        모터는 25초에 풀리는데 페이더는 끝까지 못 잡았다 · 움직여도 아무것도
+        기록되지 않았다.
 
-        목록은 스튜디오가 준다 · 여기서 다시 계산하지 않는다.
+        구간은 스튜디오가 준다 · 여기서 다시 계산하지 않는다.
         """
-        owned = getattr(self, '_studio_playback_motion_ids', None)
-        if owned is None:
+        spans = getattr(self, '_studio_playback_spans', None)
+        if spans is None:
             # 스튜디오 녹화가 아니다 · 평소 재생이므로 지금까지대로 따라간다
             return True
-        return bool({
-            str(motion_id) for motion_id in mapping_motion_ids(mapping)
-        } & owned)
+        now_sec = self._playback_time_sec_locked()
+        # 판정은 `axis_ownership` 하나뿐이다 · 발행·재생 판정과 같은 함수 · §6-275
+        return any(
+            axis_ownership.playback_owns(
+                spans, str(motion_id), now_sec, missing_is_playbacks=False,
+            )
+            for motion_id in mapping_motion_ids(mapping)
+        )
 
     def _finish_studio_recording_initialization_locked(self) -> None:
         self._studio_select_locked = False
@@ -2532,21 +2624,17 @@ class MidiControlNode(Node):
     def _cmd_studio_recording_ready(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """SELECT 잠금을 풀어 녹화 축 선택을 허용한다.
 
-        `playback_motion_ids` 는 **재생이 쥔 축**이다 · 추가 녹화에서 스튜디오가
-        보낸다 · 그 축만 SELECT 가 재생 추종이 되고, 나머지는 조종이다 · §6-105
+        `playback_motion_spans` 는 **재생이 쥔 축과 그 시간**이다 · 추가 녹화에서
+        스튜디오가 보낸다 · 그 구간 안에서만 SELECT 가 재생 추종이고, 밖에서는
+        조종이다 · §6-105 §6-273
         """
         with self._lock:
             # 키가 **없으면** 녹화 해제다 · 이 명령은 절차가 실패했을 때
-            # 되돌리는 용도로도 `{}` 로 불린다 · 그때 빈 집합으로 두면
+            # 되돌리는 용도로도 `{}` 로 불린다 · 그때 빈 사전으로 두면
             # "녹화인데 재생이 쥔 축이 없다" 가 되어 평소 재생 추종이 깨진다.
-            raw = payload.get('playback_motion_ids')
-            self._studio_playback_motion_ids = (
-                None if raw is None
-                else {
-                    str(motion_id or '').strip()
-                    for motion_id in raw
-                    if str(motion_id or '').strip()
-                }
+            raw = payload.get('playback_motion_spans')
+            self._studio_playback_spans = (
+                None if raw is None else axis_ownership.parse_spans(raw)
             )
             self._finish_studio_recording_initialization_locked()
         response = build_snapshot(self)

@@ -18,6 +18,8 @@ import time
 import traceback
 from typing import Any, Dict, List, Mapping, Optional
 
+from motion_common import axis_ownership
+
 from motion_common import repeat_policy
 
 from motion_common.values import finite_float
@@ -77,7 +79,7 @@ class MotionPlayer:
             ownership_error = self.manager._playback_ownership_error(
                 axes=[
                     int(axis_plan['motor_axis'])
-                    for axis_plan in self._playback_axes(plan)
+                    for axis_plan in self._playback_axes(plan, 0.0)
                 ]
             )
             if ownership_error:
@@ -267,7 +269,7 @@ class MotionPlayer:
             automation_run = bool(plan.get('automation_run'))
             repeat_mode = repeat_policy.normalize_repeat_mode(plan.get('repeat_mode'))
             dwell_sec = max(float(plan.get('dwell_sec') or 0.0), 0.0)
-            self._require_playback_command_allowed(self._playback_axes(plan))
+            self._require_playback_command_allowed(self._playback_axes(plan, 0.0))
             motors = self.manager._current_motors()
             self._prepare_motion_stream(motors, plan['axes'])
             motion_started_at = time.time()
@@ -319,7 +321,9 @@ class MotionPlayer:
                         status['cycle_count'] = cycle_count
                         self.manager._set_status(status)
                         return
-                    self._require_playback_command_allowed(self._playback_axes(plan))
+                    self._require_playback_command_allowed(
+                        self._playback_axes(plan, float(sample['time_sec'])),
+                    )
                     if automation_run and self._current_servo_alarm_grade() == 1:
                         grade1_seen = True
                     positions = self._owned_positions(
@@ -415,7 +419,7 @@ class MotionPlayer:
                             '반복 초기위치 이동 완료 후 정지',
                         )
                         return
-                    self._require_playback_command_allowed(self._playback_axes(plan))
+                    self._require_playback_command_allowed(self._playback_axes(plan, 0.0))
                     motors = self.manager._current_motors()
                     self._prepare_motion_stream(motors, plan['axes'])
                     self._restore_running_status(
@@ -871,10 +875,9 @@ class MotionPlayer:
         return {
             motor_axis: value
             for motor_axis, value in positions.items()
-            if motor_axis not in spans
-            or any(
-                start - 1e-9 <= time_sec <= end + 1e-9
-                for start, end in spans[motor_axis]
+            # 판정은 `axis_ownership` 하나뿐이다 · §6-275
+            if axis_ownership.playback_owns(
+                spans, motor_axis, time_sec, missing_is_playbacks=True,
             )
         }
 
@@ -997,7 +1000,9 @@ class MotionPlayer:
         )
 
     @staticmethod
-    def _playback_axes(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _playback_axes(
+        plan: Dict[str, Any], time_sec: Optional[float] = None,
+    ) -> List[Dict[str, Any]]:
         """재생이 **실제로 모는** 축만 · §6-107
 
         계획의 `axes` 는 모션에 적힌 축 전부다 · 추가 녹화에서는 그중 일부만
@@ -1010,15 +1015,35 @@ class MotionPlayer:
         발행이 서로 다른 것을 보면 반드시 어긋난다.
 
         표가 없으면 전부가 재생의 축이다 · 로컬·그룹 실행은 지금 그대로다.
+
+        **시각까지 본다** · §6-274
+
+        전에는 "이 축에 구간이 있느냐" 만 봤다 · 그러면 1-4 가 3~25초에
+        녹화돼 있을 때, 26초에 MIDI 가 그 축을 잡아도 재생은 여전히 자기
+        축이라 여기고 "MIDI 가 축 3 을 쓰는 중" 이라며 **실행 전체를 오류로
+        끝냈다** · 녹화는 계속되는데 1-1·1-2·1-3 이 통째로 멈췄다.
+
+        발행하는 `_owned_positions` 는 처음부터 시각을 봤다 · 같은 표를 보면서
+        묻는 것이 달랐던 것이 병이다 · 이제 둘이 같은 질문을 한다.
         """
         axes = list(plan.get('axes') or [])
         spans = plan.get('axis_playback_spans')
         if not spans:
             return axes
-        return [
-            axis_plan for axis_plan in axes
-            if spans.get(int(axis_plan['motor_axis']), True)
-        ]
+        kept = []
+        for axis_plan in axes:
+            motor_axis = int(axis_plan['motor_axis'])
+            if time_sec is None:
+                # 시각을 모르는 옛 호출 · 구간이 하나라도 있으면 재생의 축이다
+                if spans.get(motor_axis, True):
+                    kept.append(axis_plan)
+                continue
+            # 발행(`_owned_positions`)과 **같은 함수**로 묻는다 · §6-275
+            if axis_ownership.playback_owns(
+                spans, motor_axis, time_sec, missing_is_playbacks=True,
+            ):
+                kept.append(axis_plan)
+        return kept
 
     def _require_playback_command_allowed(self, axes=None) -> None:
         """재생을 계속해도 되는지 · 안 되면 멈춘다 · §6-106

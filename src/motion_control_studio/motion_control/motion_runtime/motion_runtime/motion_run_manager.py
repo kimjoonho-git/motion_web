@@ -897,6 +897,28 @@ class MotionRunManager(Node):
             'status': self.status(),
         }
 
+    def _axes_held_by_others(self, axes) -> Dict[int, str]:
+        """이 축들 중 **남이 쥔 것**과 그 주인 · §6-276
+
+        재생이 그 축만 놓고 나머지는 계속 몰 수 있도록, 이유가 아니라 **축
+        목록**을 돌려준다 · 판정 자체는 감독자가 축별로 들고 있는 표를 본다.
+        """
+        lock = getattr(self, '_safety_status_lock', None)
+        if lock is None:
+            return {}
+        with lock:
+            payload = getattr(self, '_latest_safety_status', None)
+            status = dict(payload) if isinstance(payload, dict) else None
+        axis_owners = status.get('command_axis_owners') if status else None
+        if not isinstance(axis_owners, dict) or axes is None:
+            return {}
+        held: Dict[int, str] = {}
+        for axis in axes:
+            holder = str(axis_owners.get(str(int(axis))) or 'none').strip().lower()
+            if holder not in ('none', 'playback'):
+                held[int(axis)] = holder
+        return held
+
     def _playback_ownership_error(self, axes=None) -> str:
         """재생이 지금 모터를 몰 수 없는 이유 · 없으면 빈 문자열.
 
@@ -938,13 +960,21 @@ class MotionRunManager(Node):
             blanket = str(axis_owners.get('all') or 'none').strip().lower()
             if blanket not in ('none', 'playback'):
                 return f"{owner_names.get(blanket, blanket)}가 사용 중이어서 모션을 시작할 수 없습니다"
-            for axis in axes:
-                holder = str(axis_owners.get(str(int(axis))) or 'none').strip().lower()
-                if holder not in ('none', 'playback'):
-                    return (
-                        f"{owner_names.get(holder, holder)}가 축 {int(axis)}를 "
-                        '사용 중이어서 모션을 시작할 수 없습니다'
-                    )
+            taken = self._axes_held_by_others(axes)
+            # **한 축이라도 남았으면 계속한다** · §6-276
+            #
+            # 전에는 축 하나만 남이 쥐어도 곧바로 실행 전체를 오류로 끝냈다 ·
+            # 추가 녹화에서 사람이 1-4 를 잡는 순간 1-1·1-2·1-3 의 재생까지
+            # 같이 죽었다 · 축 하나의 다툼이 전부를 세울 이유가 없다.
+            #
+            # 몰 축이 하나도 안 남았을 때만 멈춘다 · 그때는 정말로 남이
+            # 이 모션을 대신 몰고 있는 것이다.
+            if taken and len(taken) >= len(set(int(axis) for axis in axes)):
+                axis, holder = sorted(taken.items())[0]
+                return (
+                    f"{owner_names.get(holder, holder)}가 축 {axis}를 "
+                    '사용 중이어서 모션을 시작할 수 없습니다'
+                )
             return ''
         # 축을 모르는 옛 호출 · 표를 못 받은 상태 · 지금까지대로 축약형을 본다
         owner = str(status.get('command_owner') or 'none').strip().lower()

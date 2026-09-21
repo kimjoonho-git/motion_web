@@ -167,11 +167,11 @@ def test_handler_value_error_becomes_a_response():
     assert published[0]['request_id'] == 'req-1'
 
 
-def test_recording_ready_reads_the_axes_playback_owns(monkeypatch):
-    """추가 녹화가 알려 준 축만 재생 추종이 된다 · §6-105
+def test_recording_ready_reads_the_spans_playback_owns(monkeypatch):
+    """추가 녹화가 알려 준 **축과 시간**을 그대로 받는다 · §6-105 §6-273
 
     키가 **없으면** 녹화 해제다 · 이 명령은 절차가 실패했을 때 되돌리는
-    용도로도 `{}` 로 불린다 · 그때 빈 집합으로 두면 "녹화인데 재생이 쥔 축이
+    용도로도 `{}` 로 불린다 · 그때 빈 사전으로 두면 "녹화인데 재생이 쥔 축이
     없다" 가 되어 평소 재생 추종이 깨진다.
     """
     from midi_control import midi_control_node as node_module
@@ -179,14 +179,29 @@ def test_recording_ready_reads_the_axes_playback_owns(monkeypatch):
     node = MidiControlNode.__new__(MidiControlNode)
     node._lock = threading.RLock()
     node._finish_studio_recording_initialization_locked = lambda: None
-    node._studio_playback_motion_ids = None
+    node._studio_playback_spans = None
     monkeypatch.setattr(node_module, 'build_snapshot', lambda _node: {})
 
-    node._cmd_studio_recording_ready({'playback_motion_ids': ['1-1', '', None]})
-    assert node._studio_playback_motion_ids == {'1-1'}
+    node._cmd_studio_recording_ready({
+        'playback_motion_spans': {'1-4': [[3.16, 25.06]], '': [[0.0, 1.0]]},
+    })
+    assert node._studio_playback_spans == {'1-4': [(3.16, 25.06)]}
 
-    node._cmd_studio_recording_ready({'playback_motion_ids': []})
-    assert node._studio_playback_motion_ids == set(), '보통 녹화는 빈 집합'
+    node._cmd_studio_recording_ready({'playback_motion_spans': {}})
+    assert node._studio_playback_spans == {}, '보통 녹화는 빈 사전'
 
     node._cmd_studio_recording_ready({})
-    assert node._studio_playback_motion_ids is None, '해제는 None 이어야 한다'
+    assert node._studio_playback_spans is None, '해제는 None 이어야 한다'
+
+
+def test_a_bad_span_is_dropped_not_guessed():
+    """숫자가 아니거나 뒤집힌 구간은 버린다 · 축은 남는다 · §6-273"""
+    # 해석도 공용이다 · 네 곳이 같은 표를 같은 규칙으로 읽는다 · §6-275
+    from motion_common.axis_ownership import parse_spans
+
+    spans = parse_spans({
+        '1-1': [[0.0, 10.0], ['x', 2.0], [5.0], [9.0, 8.0]],
+        '1-2': 'not a list',
+    })
+    assert spans == {'1-1': [(0.0, 10.0)]}
+

@@ -29,7 +29,7 @@ from .point_curve_operations import (
     validate_point_curve_overlaps,
 )
 from .motion_model import normalize_layer, point_curve_bounds, unique_motion_ids
-from .timeline import layer_conflicts, render_project
+from .timeline import layer_conflicts, owned_at, playback_ownership, render_project
 
 
 MAX_EDIT_FRAMES = 500_000
@@ -1364,6 +1364,41 @@ def _shift_layer_time(layer: Mapping[str, Any], offset_sec: float) -> Dict[str, 
     return shifted
 
 
+def _only_recorded_values(
+    frames: List[Dict[str, Any]],
+    spans: Mapping[str, List[tuple[float, float]]],
+) -> List[Dict[str, Any]]:
+    """합치기는 **없던 값을 만들지 않는다** · §6-278
+
+    합성(`render_project`)은 재생을 위해 모든 축을 매 순간 채운다 · 값이 없는
+    시간은 마지막 값을 그대로 물고 간다 · 모터는 언제나 갈 자리가 있어야 하니
+    재생에는 그게 맞다.
+
+    그런데 합친 **레이어**에 그대로 넣으면, 25초짜리 축이 654초까지 늘어난
+    채로 저장된다 · 그 뒤 `extend_point_curves_to_frames` 가 그 빈 구간마다
+    2점짜리 곡선을 만들고, 화면에는 끝까지 평평한 선과 집을 수 없는 끝점이
+    남는다 · 실측으로 1-4(3.16~38.04초)가 0.02~654.40초로 저장됐고 그 끝점은
+    선택도 삭제도 되지 않았다.
+
+    그래서 **원래 값이 있던 시간만** 남긴다 · 판정은 `owned_at` 하나뿐이라
+    재생·녹화·MIDI 와 같은 답을 쓴다 · 빠진 시간은 재생할 때 합성이 그대로
+    물고 가므로 **모터가 도는 모양은 달라지지 않는다**.
+    """
+    if not spans:
+        return frames
+    trimmed = []
+    for frame in frames:
+        time_sec = float(frame.get('time_sec') or 0.0)
+        values = {
+            motion_id: value
+            for motion_id, value in (frame.get('values') or {}).items()
+            if str(motion_id) not in spans
+            or owned_at(spans[str(motion_id)], time_sec)
+        }
+        trimmed.append({**frame, 'values': values})
+    return trimmed
+
+
 def merge_layers(
     project: Dict[str, Any],
     layer_ids: Iterable[Any],
@@ -1483,9 +1518,12 @@ def merge_layers(
             f"{first['second_layer_name']} · "
             f"{first['start_sec']:.3f}~{first['end_sec']:.3f}초"
         )
-    frames = render_project(
-        temporary,
-        initial_motion_values_deg=initial_motion_values_deg,
+    frames = _only_recorded_values(
+        render_project(
+            temporary,
+            initial_motion_values_deg=initial_motion_values_deg,
+        ),
+        playback_ownership(temporary),
     )
     merged_point_curves = collect_merged_point_curves(selected_layers)
     merged = normalize_layer({

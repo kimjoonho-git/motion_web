@@ -405,6 +405,11 @@ export function createMidiMonitorController({ el, onMappingFileSaved }) {
       el.midiMonitorMessage.classList.toggle('status-bad', Boolean(bankMissing));
     }
     if (el.midiMappingPath) {
+      // 여기 세는 것은 **노드가 들고 있는 뱅크 수**다 · 파일에 적힌 수가 아니다 · §6-272
+      //
+      // 「저장된 뱅크: 1개」라고 써 놓고 바로 뒤에 「파일에 저장되지 않음」을
+      // 붙였다 · 새 프로젝트는 파일에 `midi_banks` 가 없어 실제로 0개인데
+      // 한 줄이 서로 반대말을 했다.
       const count = banks.length || 1;
       const configPath = String(status?.bank_config_file || '').trim();
       const configName = configPath || pathBasename(status?.bank_config_file);
@@ -412,7 +417,7 @@ export function createMidiMonitorController({ el, onMappingFileSaved }) {
         ? '현재 노드값과 파일 일치'
         : '현재 노드값이 파일에 저장되지 않음';
       el.midiMappingPath.textContent = (
-        `모션축 설정: ${configName} · midi_banks · 저장된 뱅크: ${count}개`
+        `모션축 설정: ${configName} · midi_banks · 뱅크: ${count}개`
         + ` (최대 ${status?.max_banks || 8}개) · ${saveState}`
       );
     }

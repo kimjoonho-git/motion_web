@@ -11,6 +11,7 @@ from typing import Any, Dict, Iterable, List, Mapping
 
 from .constants import DEFAULT_PERIOD_SEC
 from .motion_model import unique_motion_ids
+from motion_common import axis_ownership
 
 
 def recording_values(
@@ -304,15 +305,15 @@ def playback_ownership(
 
 
 def owned_at(spans: Iterable[tuple[float, float]], time_sec: float) -> bool:
-    """이 시각이 소유 구간 안인가 · §6-77
+    """이 시각이 소유 구간 안인가 · §6-77 §6-275
 
     재생과 녹화가 **같은 판정**을 써야 한다. 한쪽이 "재생 소유" 라고 보고 다른
     쪽이 "MIDI 차례" 라고 보면 그 축은 두 주인이 동시에 밀거나 아무도 안 민다.
+
+    판정 자체는 `motion_common.axis_ownership` 에 하나만 있다 · 실행 노드와
+    MIDI 노드도 그것을 부른다 · 여기서 다시 쓰지 않는다.
     """
-    return any(
-        start - 1e-9 <= time_sec <= end + 1e-9
-        for start, end in spans
-    )
+    return axis_ownership.owned_at(spans, time_sec)
 
 
 def _merge_ranges(
