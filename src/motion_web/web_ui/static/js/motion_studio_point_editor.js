@@ -236,10 +236,23 @@ export function bindMotionStudioPointEditorEvents(context) {
   el.studioEditorPointDeleteButton?.addEventListener('click', () => {
     const editor = state.editor;
     const point = selectedDraftPoint(editor);
-    if (!editor?.pointDraft || !point) return;
+    // 왜 안 되는지는 **누른 뒤에** 말한다 · 회색으로 막지 않는다 · §6-263
+    if (!editor?.pointDraft) {
+      setEditorMessage('그래프에서 지울 포인트를 먼저 누르세요.', true);
+      return;
+    }
+    if (!point) {
+      setEditorMessage(
+        '지울 포인트가 없습니다 · 그래프에서 동그란 포인트를 눌러 고르세요.',
+        true,
+      );
+      return;
+    }
+    const pointCount = (editor.pointDraft.points || []).length;
     if (!deleteMotionStudioDraftPoint(editor, point.point_id).ok) {
       setEditorMessage(
-        '곡선을 유지하려면 포인트가 최소 2개 필요하므로 더 삭제할 수 없습니다.',
+        `이 곡선은 포인트가 ${pointCount}개뿐이라 지울 수 없습니다 · `
+        + '곡선에는 최소 2개가 남아야 합니다 · 먼저 「포인트 추가」로 포인트를 만드세요.',
         true,
       );
       return;

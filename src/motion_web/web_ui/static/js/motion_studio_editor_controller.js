@@ -409,21 +409,21 @@ export function createMotionStudioEditorController({
       // 고른 포인트의 값을 고치는 칸도 같은 기준을 쓴다 · §6-254
       if (field) field.disabled = rangeChosen || !point || !editablePointCurve;
     });
+    const draftPointCount = editor?.pointDraft?.points?.length || 0;
+    const canDeletePoint = !rangeChosen
+      && Boolean(point)
+      && editablePointCurve
+      && draftPointCount > 2;
     if (el.studioEditorPointDeleteButton) {
-      // 포인트 선택 모드면 언제든 된다 · §6-254
-      const canDeletePoint = !rangeChosen
-        && Boolean(point)
-        && editablePointCurve
-        && (editor?.pointDraft?.points?.length || 0) > 2;
-      el.studioEditorPointDeleteButton.disabled = !canDeletePoint;
-      const draftPointCount = editor?.pointDraft?.points?.length || 0;
+      // **회색으로 막지 않는다** · 눌러 보고 안 되면 이유를 말한다 · §6-263
+      //
+      // 전에는 조건이 맞을 때만 켜졌다 · 포인트를 골랐는데도 회색이면 사람은
+      // 고장으로 읽는다 · 이유는 마우스를 올려야 보이는 설명에만 있었고,
+      // 그 설명을 본 사람은 없었다 · 막는 판단은 누른 뒤에 하고 말로 한다.
+      el.studioEditorPointDeleteButton.disabled = false;
       el.studioEditorPointDeleteButton.title = canDeletePoint
         ? '선택한 포인트만 삭제하고 남은 포인트로 곡선을 다시 계산합니다'
-        : (point && editablePointCurve && draftPointCount <= 2
-          // 「최소 2개 필요」는 2개를 들고 있는 사람에게는 말이 안 된다 · §6-262
-          ? `이 곡선은 포인트가 ${draftPointCount}개뿐입니다 · 하나를 지우면 곡선이 `
-            + '남지 않습니다 · 먼저 포인트를 추가하세요'
-          : '지울 포인트를 그래프에서 먼저 선택하세요');
+        : '눌러 보면 왜 안 되는지 알려 줍니다';
     }
     if (el.studioEditorRangeStatus) {
       el.studioEditorRangeStatus.textContent = rangeReady
