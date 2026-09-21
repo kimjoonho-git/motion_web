@@ -1,3 +1,4 @@
+import { maxOf, minOf } from './format.js';
 export function applyMotionStudioProjectPatch(project, patch) {
   if (!patch || typeof patch !== 'object') return project || null;
   const metadata = (
@@ -102,11 +103,11 @@ export function motionStudioMergePreviewProject(project, layerIds) {
 }
 
 export function motionStudioLayerDuration(layer) {
-  return Math.max(
-    0,
-    ...(layer?.frames || [])
+  return maxOf(
+    (layer?.frames || [])
       .map((frame) => Number(frame.time_sec))
       .filter((timeSec) => Number.isFinite(timeSec) && timeSec >= 0),
+    0,
   );
 }
 
@@ -136,7 +137,7 @@ export function motionStudioCanCreatePointCurve(layer, motionId) {
     .filter((frame) => Object.hasOwn(frame?.values || {}, targetId))
     .map((frame) => Number(frame.values[targetId]));
   if (!values.length || values.some((value) => !Number.isFinite(value))) return false;
-  return Math.max(...values) - Math.min(...values) < 1e-9;
+  return maxOf(values) - minOf(values) < 1e-9;
 }
 
 export function motionStudioPointCurveIsApplied(layer, curveId) {

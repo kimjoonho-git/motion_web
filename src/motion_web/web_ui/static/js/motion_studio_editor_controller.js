@@ -416,9 +416,14 @@ export function createMotionStudioEditorController({
         && editablePointCurve
         && (editor?.pointDraft?.points?.length || 0) > 2;
       el.studioEditorPointDeleteButton.disabled = !canDeletePoint;
+      const draftPointCount = editor?.pointDraft?.points?.length || 0;
       el.studioEditorPointDeleteButton.title = canDeletePoint
         ? '선택한 포인트만 삭제하고 남은 포인트로 곡선을 다시 계산합니다'
-        : '곡선을 유지하려면 포인트가 최소 2개 필요합니다';
+        : (point && editablePointCurve && draftPointCount <= 2
+          // 「최소 2개 필요」는 2개를 들고 있는 사람에게는 말이 안 된다 · §6-262
+          ? `이 곡선은 포인트가 ${draftPointCount}개뿐입니다 · 하나를 지우면 곡선이 `
+            + '남지 않습니다 · 먼저 포인트를 추가하세요'
+          : '지울 포인트를 그래프에서 먼저 선택하세요');
     }
     if (el.studioEditorRangeStatus) {
       el.studioEditorRangeStatus.textContent = rangeReady

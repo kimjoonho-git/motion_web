@@ -54,6 +54,7 @@ const FRAME_SCALE_FILES = [
   'motion_studio_editor_controller.js',
   'motion_studio.js',
   'motion_data.js',
+  'motion_studio_project_model.js',
 ];
 
 test('프레임을 다루는 파일에 Math.min/max 펼치기가 없다', () => {

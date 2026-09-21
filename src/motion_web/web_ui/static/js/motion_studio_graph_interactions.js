@@ -307,8 +307,19 @@ export function bindMotionStudioGraphEvents(context) {
         pointTarget.curve,
         pointTarget.point.point_id,
       )) return;
+      // 포인트가 둘뿐인 곡선은 **삭제가 안 된다** · 그 말을 화면에 한다 · §6-262
+      //
+      // 하나를 지우면 곡선에 점이 하나만 남아 곡선이 못 된다 · 막는 것은
+      // 맞지만, 전에는 마우스를 올려야 보이는 설명에만 적혀 있었다 · 사람에게는
+      // 「눌러도 삭제가 안 되다가 다른 것을 만지면 되더라」로 보였다 ·
+      // 합친 레이어의 빈 구간을 채운 곡선이 2점이라 특히 자주 걸린다.
+      const selectedCurvePoints = (pointTarget.curve.points || []).length;
       setEditorMessage(
-        `${pointTarget.curve.motion_id} 포인트 선택 · 포인트를 드래그하거나 시간·모션값을 수정하세요.`,
+        selectedCurvePoints > 2
+          ? `${pointTarget.curve.motion_id} 포인트 선택 · 포인트를 드래그하거나 시간·모션값을 수정하세요.`
+          : `${pointTarget.curve.motion_id} 포인트 선택 · 이 곡선은 포인트가 `
+            + `${selectedCurvePoints}개뿐이라 삭제할 수 없습니다 · 곡선에는 최소 2개가 `
+            + '남아야 합니다 · 먼저 포인트를 추가하세요.',
       );
       return;
     }
