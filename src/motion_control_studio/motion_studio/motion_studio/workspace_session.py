@@ -147,11 +147,17 @@ class StudioWorkspaceSession:
         파일을 여는 쪽은 `select()` 가 따로 본다 · 통로가 모든 요청에
         `project_id` 를 넣어 주므로, 프로젝트가 바뀌면 거기서 지워진다 ·
         여기서 또 지울 이유가 없다.
+
+        **합성 결과 캐시도 같은 이유로 지우지 않는다** · §6-260 · 그것은 열어
+        둔 레이어에서 나온 값이고, 브릿지는 그 캐시가 차 있는지로 「이 노드가
+        붙어 있나」를 판정한다 · 매초 지우면 판정이 늘 「아니오」가 되어
+        **조회할 때마다 프로젝트를 통째로 다시 붙였다** · 실측으로 읽기만 하는
+        조회 한 번이 4.9초였고 레이어 파일 8.4MB 가 매번 다시 쓰였다 ·
+        레이어가 바뀌면 `composition()` 이 그때 다시 계산한다.
         """
         studio = self.studio
         with studio._lock:
             studio._operation_machine().cancel()
-            self.clear_composition_cache()
             studio._workspace_catalog_cache = None
             studio._execution_context = {}
             studio._execution_context_ready = False

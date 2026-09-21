@@ -211,14 +211,6 @@ export function createMotionStudioPlaybackController({
     }
     const message = overdubHint || playback.message;
     if (el.studioPlaybackMessage) el.studioPlaybackMessage.textContent = message;
-    if (el.studioPlaybackQuickPhase) {
-      el.studioPlaybackQuickPhase.className = `status-chip ${playback.chip}`;
-      el.studioPlaybackQuickPhase.textContent = playback.label;
-    }
-    if (el.studioPlaybackQuickTime) {
-      el.studioPlaybackQuickTime.textContent = `${timeText(playback.elapsed)} / ${timeText(playback.total)}`;
-    }
-    if (el.studioPlaybackQuickMessage) el.studioPlaybackQuickMessage.textContent = message;
     return playback;
   }
 

@@ -26,14 +26,6 @@
               <button id="studioStopButton" class="off" type="button" disabled>■ 녹화·재생 정지</button>
             </div>
             <div id="studioOverdubHint" class="studio-overdub-hint hidden"></div>
-            <div class="studio-time"><strong id="studioElapsed">00:00.000</strong><span id="studioFrameCount">0프레임 · 20ms</span></div>
-            <div class="studio-playback-quick" aria-label="합성 재생 현재 상태">
-              <div>
-                <span id="studioPlaybackQuickPhase" class="status-chip off">대기</span>
-                <strong id="studioPlaybackQuickTime">00:00.000 / 00:00.000</strong>
-              </div>
-              <small id="studioPlaybackQuickMessage">레이어 재생 대기</small>
-            </div>
           </section>
 
           <!-- 내보내기는 접기 밖으로 꺼냈다 · §6-100 · 스튜디오 작업의
@@ -52,24 +44,6 @@
             </div>
             <small>스튜디오 편집본과 독립된 파일로 저장되며, 모션 실행에서 별도로 재생 등록합니다.</small>
           </section>
-
-          <details class="motion-file-subsection studio-axis-panel">
-            <summary><strong>축 상태</strong><span>필요할 때 펼쳐서 확인</span></summary>
-            <div class="studio-secondary-grid">
-              <div class="studio-axis-status">
-                <div class="section-head compact">
-                  <strong>녹화 대상 Motion ID</strong>
-                  <span>모션축 설정에 포함된 축 · MIDI 선택된 축만 실제 녹화</span>
-                </div>
-                <div id="studioMappingInfo" class="registry-message">현재 프로젝트의 모션축 설정 파일을 확인하세요</div>
-                <div class="table-wrap">
-                  <table><thead><tr><th>모션 ID</th><th>모터 축</th><th>MIDI 선택</th><th>모션값</th></tr></thead>
-                    <tbody id="studioAxisRows"><tr><td colspan="4" class="empty">프로젝트를 불러오세요</td></tr></tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-          </details>
 
           <section class="motion-file-subsection studio-layer-panel">
             <div class="section-head compact studio-layer-main-head">

@@ -59,6 +59,8 @@ class _Studio:
         self._recorded_motion_ids = {'1-1'}
         self._status = {'state': 'idle'}
         self._project_generation = 101
+        self._composition_cache_project_id = ''
+        self._composition_cache = {}
         self.motion_projects_dir = Path('/tmp/motion_projects_test')
 
     def _require_idle_locked(self):
@@ -116,6 +118,34 @@ def test_a_running_operation_is_cancelled():
     session.invalidate()
 
     assert studio._machine.cancelled is True
+
+
+def test_the_composition_cache_survives():
+    """브릿지는 이 캐시로 「붙어 있나」를 판정한다 · 매초 지우면 판정이 늘
+    「아니오」가 되어 조회마다 프로젝트를 통째로 다시 붙였다 · §6-260"""
+    studio, session = _session()
+    studio._composition_cache_project_id = '개선테스트-5c1c819b'
+    studio._composition_cache = {'conflicts': [], 'conflict_free': True}
+
+    session.invalidate()
+
+    assert studio._composition_cache == {'conflicts': [], 'conflict_free': True}
+    assert studio._composition_cache_project_id == '개선테스트-5c1c819b'
+
+
+def test_changing_the_project_still_clears_the_composition(tmp_path):
+    """프로젝트가 바뀌면 그 값은 남의 것이다 · 거기서는 지운다."""
+    other = tmp_path / '다른프로젝트-00000000'
+    other.mkdir()
+    (other / 'project.json').write_text('{}', encoding='utf-8')
+    studio, session = _session()
+    studio.motion_projects_dir = tmp_path
+    studio._composition_cache_project_id = '개선테스트-5c1c819b'
+    studio._composition_cache = {'conflicts': []}
+
+    session.select({'project_id': '다른프로젝트-00000000'})
+
+    assert studio._composition_cache == {}
 
 
 def test_recording_leftovers_are_cleared():

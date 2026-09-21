@@ -15,8 +15,7 @@
   min-width: 0;
 }
 
-.studio-transport-panel,
-.studio-axis-panel {
+.studio-transport-panel {
   grid-column: 1 / -1;
 }
 
@@ -27,8 +26,7 @@
   align-items: center;
 }
 
-.studio-transport-panel > .section-head,
-.studio-playback-quick {
+.studio-transport-panel > .section-head {
   grid-column: 1 / -1;
 }
 
@@ -47,100 +45,10 @@
   grid-row: 2;
   min-width: 0;
 }
-
-.studio-axis-panel {
-  grid-row: 3;
-  min-width: 0;
-}
 #studioExportName {
   min-height: 36px;
 }
 
-.studio-time {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  margin: 0;
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: rgba(0, 0, 0, 0.18);
-}
-
-.studio-time strong {
-  font: 700 22px/1 monospace;
-}
-
-.studio-playback-quick {
-  display: grid;
-  grid-template-columns: auto minmax(140px, 1fr);
-  align-items: center;
-  gap: 8px 12px;
-  margin: 0;
-  padding: 10px 12px;
-  border: 1px solid #dce4ec;
-  border-radius: 8px;
-  background: #f8fafc;
-}
-
-.studio-playback-quick > div {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.studio-playback-quick strong {
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
-}
-
-.studio-playback-quick small {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.studio-playback-quick .status-chip {
-  padding: 3px 8px;
-  border: 1px solid #cbd5df;
-  border-radius: 999px;
-  background: #eef2f6;
-  color: #536170;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.studio-playback-quick .status-chip.on {
-  border-color: #9ed2b0;
-  background: #e5f5ea;
-  color: #137333;
-}
-
-.studio-playback-quick .status-chip.warn {
-  border-color: #e7c277;
-  background: #fff3d6;
-  color: #8a5700;
-}
-
-.studio-playback-quick .status-chip.danger {
-  border-color: #efb3b3;
-  background: #ffe7e7;
-  color: var(--red);
-}
-
-@media (max-width: 700px) {
-  .studio-playback-quick { grid-template-columns: 1fr auto; }
-  .studio-playback-quick small { grid-column: 1 / -1; grid-row: 2; }
-}
-
-.studio-axis-panel .status-chip.warn {
-  color: #7a4b00;
-  border-color: #e1ad4f;
-  background: #fff3cf;
-}
 
 .error-text {
   color: #ff7979 !important;
@@ -152,7 +60,6 @@
   .studio-transport-panel > * { grid-column: 1; }
   .studio-layer-panel { grid-column: 1; grid-row: 2; }
   .studio-graph-panel { grid-column: 1; grid-row: 3; }
-  .studio-axis-panel { grid-column: 1; grid-row: 4; }
 }
 
 * {

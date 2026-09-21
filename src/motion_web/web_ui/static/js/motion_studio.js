@@ -239,63 +239,6 @@ export function createMotionStudioController({
   function renderLists() {
   }
 
-  function renderMapping() {
-    const mapping = activeMapping();
-    if (!el.studioMappingInfo) return;
-    if (!mapping) {
-      el.studioMappingInfo.textContent = '현재 프로젝트의 모션축 설정 파일을 선택하세요';
-      return;
-    }
-    const checksum = String(mapping.sha256 || '').slice(0, 12);
-    el.studioMappingInfo.textContent = `읽기 전용 · 모션 ID ${mapping.motion_ids.length}개 · SHA-256 ${checksum}…`;
-  }
-
-  function renderAxes() {
-    if (!el.studioAxisRows) return;
-    const mapping = activeMapping();
-    if (!mapping || !state.project) {
-      if (state.axisRenderKey !== 'empty') {
-        el.studioAxisRows.innerHTML = '<tr><td colspan="4" class="empty">왼쪽에서 프로젝트를 선택하세요</td></tr>';
-        state.axisRenderKey = 'empty';
-      }
-      return;
-    }
-    const selected = selectedMidi();
-    const selectLocked = Boolean(state.midi?.select_locked);
-    const renderKey = JSON.stringify([
-      state.project.project_id,
-      mapping.file_id,
-      mapping.rows.map((row) => [row.motion_id, row.motor_ref, row.motor_axis]),
-    ]);
-    if (state.axisRenderKey !== renderKey) {
-      el.studioAxisRows.innerHTML = mapping.rows.map((row) => (
-        `<tr data-studio-motion-id="${escapeHtml(row.motion_id)}">
-          <td>${escapeHtml(row.motion_id)}</td><td>${escapeHtml(row.motor_ref || `이전 형식 축 ${row.motor_axis ?? '-'}`)}</td>
-          <td><span class="status-chip off" data-studio-select-state>미선택</span></td>
-          <td data-studio-motion-value>-</td></tr>`
-      )).join('');
-      state.axisRenderKey = renderKey;
-    }
-    const rows = new Map(
-      [...el.studioAxisRows.querySelectorAll('tr[data-studio-motion-id]')]
-        .map((row) => [row.dataset.studioMotionId, row]),
-    );
-    for (const mappingRow of mapping.rows) {
-      const motionId = String(mappingRow.motion_id);
-      const row = rows.get(motionId);
-      if (!row) continue;
-      const channel = selected.get(motionId);
-      const selectState = row.querySelector('[data-studio-select-state]');
-      if (selectState) {
-        selectState.className = `status-chip ${selectLocked ? 'warn' : channel ? 'on' : 'off'}`;
-        selectState.textContent = selectLocked ? '초기화 잠금' : channel ? '선택됨' : '미선택';
-      }
-      const value = Number(channel?.motion_value_deg);
-      const valueCell = row.querySelector('[data-studio-motion-value]');
-      if (valueCell) valueCell.textContent = Number.isFinite(value) ? `${value.toFixed(3)}°` : '-';
-    }
-  }
-
   function renderLayers() {
     if (!el.studioLayerRows) return;
     const layers = state.project?.layers || [];
@@ -760,8 +703,6 @@ export function createMotionStudioController({
     const hasSingleExportLayer = enabledLayerCount === 1;
     const motorBlockReason = motorActionBlockReason();
     if (el.studioState) el.studioState.textContent = state.status?.message || '대기';
-    if (el.studioElapsed) el.studioElapsed.textContent = timeText(state.status?.elapsed_sec);
-    if (el.studioFrameCount) el.studioFrameCount.textContent = `${state.status?.recorded_frames || 0}프레임 · 20ms`;
     if (el.studioRecordButton) {
       el.studioRecordButton.disabled = state.busy || running || !hasProject || !hasMotionAxes || Boolean(motorBlockReason);
       el.studioRecordButton.title = motorBlockReason || '';
@@ -836,7 +777,7 @@ export function createMotionStudioController({
   }
 
   function render() {
-    renderLists(); renderMapping(); renderAxes(); renderLayers();
+    renderLists(); renderLayers();
     if (!el.studioLayerManagerModal?.classList.contains('hidden')) {
       renderLayerManager();
     }
@@ -1027,11 +968,10 @@ export function createMotionStudioController({
     eventsBound = true;
     const studioGrid = el.studioLayerDetail?.closest('.studio-grid');
     const layerPanel = el.studioLayerRows?.closest('.studio-layer-panel');
-    const axisPanel = el.studioAxisRows?.closest('.studio-axis-panel');
-    if (studioGrid && layerPanel && axisPanel && el.studioLayerDetail) {
+    // 축 상태 패널을 지운 뒤에도 그래프는 레이어 표 위로 올라가야 한다 · §6-259
+    if (studioGrid && layerPanel && el.studioLayerDetail) {
       el.studioLayerDetail.classList.add('motion-file-subsection', 'studio-graph-panel');
       studioGrid.insertBefore(el.studioLayerDetail, layerPanel);
-      studioGrid.appendChild(axisPanel);
     }
     bindMotionStudioEvent(el.studioConflictInfo, 'click', (event) => {
       const button = event.target.closest('[data-resolve-point-curve]');
@@ -1413,25 +1353,7 @@ export function createMotionStudioController({
     }
     if (midiStatus) state.midi = midiStatus;
     syncPlaybackClock();
-    const axesKey = JSON.stringify([
-      Boolean(state.midi?.select_locked),
-      (state.midi?.channels || []).map((channel) => [
-        channel?.motion_id,
-        channel?.select_enabled ?? channel?.control_enabled,
-        Number(channel?.motion_value_deg),
-      ]),
-    ]);
-    if (state.snapshotAxesKey !== axesKey) {
-      state.snapshotAxesKey = axesKey;
-      renderAxes();
-    }
     if (el.studioState) el.studioState.textContent = state.status?.message || '대기';
-    if (el.studioElapsed) {
-      el.studioElapsed.textContent = timeText(state.status?.elapsed_sec);
-    }
-    if (el.studioFrameCount) {
-      el.studioFrameCount.textContent = `${state.status?.recorded_frames || 0}프레임 · 20ms`;
-    }
     const controlsKey = JSON.stringify([
       state.status?.state,
       state.status?.phase,

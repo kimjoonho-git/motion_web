@@ -257,34 +257,6 @@
   font-size: 12px;
 }
 
-.studio-axis-panel > summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  cursor: pointer;
-  list-style-position: inside;
-  color: var(--text, inherit);
-}
-
-.studio-axis-panel > summary span {
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 400;
-}
-
-.studio-axis-panel[open] > summary {
-  margin-bottom: 12px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--line);
-}
-
-/* 접기 안에는 축 상태만 남았다 · 한 칸이면 격자가 필요 없다 · §6-100 */
-.studio-secondary-grid {
-  display: block;
-}
-
-.studio-axis-status,
 .studio-export-panel {
   min-width: 0;
 }
@@ -346,11 +318,6 @@
   color: #92400e;
 }
 
-@media (max-width: 900px) {
-  .studio-secondary-grid {
-    grid-template-columns: 1fr;
-  }
-}
 
 .studio-layer-detail {
   margin-top: 12px;

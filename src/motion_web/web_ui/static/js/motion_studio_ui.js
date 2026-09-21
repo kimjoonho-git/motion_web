@@ -6,13 +6,12 @@ export function createMotionStudioState() {
     status: {}, midi: {}, composition: {
       conflicts: [], point_curve_mismatches: [], conflict_free: true,
     }, busy: false,
-    axisRenderKey: '', selectedLayerId: '', layerDetailMode: 'composition',
+    selectedLayerId: '', layerDetailMode: 'composition',
     activeLayerDetailTab: 'graph',
     editor: null, detailGraph: null, playbackGraphRenderedAt: 0,
     lastPlaybackDisplayState: 'idle',
     playbackClock: null, playbackAnimationFrame: 0,
     recordingPreviewKey: '',
-    snapshotAxesKey: '',
     snapshotControlsKey: '',
     layerManagerTab: 'create', mergeLayerIds: new Set(),
     mergeMode: 'preserve', mergeAppendLayerId: '',
@@ -31,7 +30,6 @@ export function resetMotionStudioProjectState(state) {
     conflicts: [], point_curve_mismatches: [], conflict_free: true,
   };
   state.busy = false;
-  state.axisRenderKey = '';
   state.selectedLayerId = '';
   state.layerDetailMode = 'composition';
   state.activeLayerDetailTab = 'graph';
@@ -42,7 +40,6 @@ export function resetMotionStudioProjectState(state) {
   state.playbackClock = null;
   state.playbackAnimationFrame = 0;
   state.recordingPreviewKey = '';
-  state.snapshotAxesKey = '';
   state.snapshotControlsKey = '';
   state.layerManagerTab = 'create';
   state.mergeLayerIds = new Set();

@@ -1609,7 +1609,14 @@ connectSocket();
 fetchStatus();
 motorConfig.fetchRegistry();
 motionData.fetchFiles();
-motionStudio.refresh(false);
+// 스튜디오를 **보고 있을 때만** 받는다 · §6-260
+//
+// 레이어를 다 실어 오므로 10분짜리 모션이 있으면 한 번에 5.2MB 다 · 탭을
+// 누를 때도 같은 것을 받으므로, 다른 화면으로 시작하면 아무도 안 보는 것을
+// 받고 곧바로 또 받았다 · 실측으로 탭을 여는 데 11.2초였다.
+if (normalizeWorkspaceRoute(workspaceRouteState.current()) === 'studio') {
+  motionStudio.refresh(false);
+}
 projectExplorer.refresh(true);
 servoAlarm.refresh();
 
