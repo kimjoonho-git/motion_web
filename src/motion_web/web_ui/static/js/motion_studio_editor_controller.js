@@ -7,7 +7,7 @@ import {
   motionStudioTypingTarget,
 } from './motion_studio_editor_shortcuts.js';
 import { motionStudioAxisEndpoints } from './motion_studio_tracks.js';
-import { displayText } from './format.js';
+import { displayText, maxOf, minOf } from './format.js';
 import {
   editMotionStudioLayer,
   saveMotionStudioLayerData,
@@ -262,11 +262,11 @@ export function createMotionStudioEditorController({
     clearPendingPointCandidate(editor);
     clearEditorPointRange(editor);
     enterEditorPointMode(editor);
-    const lastTime = Math.max(
-      0,
-      ...(editor.pointDraft.points || []).map(
+    const lastTime = maxOf(
+      (editor.pointDraft.points || []).map(
         (point) => Number(point.time_sec) || 0,
       ),
+      0,
     );
     if (lastTime > editor.pointTimelineEnd) editor.pointTimelineEnd = lastTime;
     if (lastTime > editor.viewEnd) editor.viewEnd = lastTime;
@@ -621,8 +621,8 @@ export function createMotionStudioEditorController({
       .map((frame) => Number(frame.time_sec))
       .filter((timeSec) => Number.isFinite(timeSec) && timeSec >= 0);
     return {
-      start: times.length ? Math.min(...times) : 0,
-      end: times.length ? Math.max(...times) : MOTION_STUDIO_PERIOD_SEC,
+      start: times.length ? minOf(times) : 0,
+      end: times.length ? maxOf(times) : MOTION_STUDIO_PERIOD_SEC,
     };
   }
 

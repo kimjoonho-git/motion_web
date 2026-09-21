@@ -26,6 +26,8 @@ import {
   formatMoment,
   formatNumber,
   normalizeMotorTypeKey,
+  maxOf,
+  minOf,
 } from './format.js';
 import {
   showAlert,
@@ -489,10 +491,10 @@ function drawGraph(canvas, messageEl, analysis, hiddenIds = new Set()) {
     return;
   }
 
-  const minTime = Math.min(...points.map((point) => Number(point.time_sec)));
-  const maxTime = Math.max(...points.map((point) => Number(point.time_sec)));
-  const minValue = Math.min(...points.map((point) => Number(point.value)));
-  const maxValue = Math.max(...points.map((point) => Number(point.value)));
+  const minTime = minOf(points.map((point) => Number(point.time_sec)));
+  const maxTime = maxOf(points.map((point) => Number(point.time_sec)));
+  const minValue = minOf(points.map((point) => Number(point.value)));
+  const maxValue = maxOf(points.map((point) => Number(point.value)));
   const timeRange = Math.max(maxTime - minTime, 1e-9);
   const valueRange = Math.max(maxValue - minValue, 1e-9);
   const padLeft = 46;
@@ -1070,10 +1072,10 @@ export function createMotionDataController({
       return;
     }
 
-    const minTime = Math.min(...points.map((point) => Number(point.time_sec)));
-    const maxTime = Math.max(...points.map((point) => Number(point.time_sec)));
-    const minValue = Math.min(...points.map((point) => Number(point.value)));
-    const maxValue = Math.max(...points.map((point) => Number(point.value)));
+    const minTime = minOf(points.map((point) => Number(point.time_sec)));
+    const maxTime = maxOf(points.map((point) => Number(point.time_sec)));
+    const minValue = minOf(points.map((point) => Number(point.value)));
+    const maxValue = maxOf(points.map((point) => Number(point.value)));
     const timeRange = Math.max(maxTime - minTime, 1e-9);
     const valueRange = Math.max(maxValue - minValue, 1e-9);
     const padLeft = 54;

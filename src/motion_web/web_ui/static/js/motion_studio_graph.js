@@ -1,4 +1,4 @@
-import { escapeHtml } from './format.js';
+import { escapeHtml, maxOf, minOf } from './format.js';
 import { motionStudioEditorValueBounds } from './motion_studio_editor_math.js';
 import { motionStudioPointCurvePreview } from './motion_studio_point_model.js';
 import { MOTION_STUDIO_PERIOD_SEC } from './motion_studio_constants.js';
@@ -329,9 +329,9 @@ export function drawMotionStudioEditorGraph({
     ...(workingTracks.get(id) || []), ...(originalTracks.get(id) || []),
   ]);
   const automaticMinValue = valueSource.length
-    ? Math.min(0, ...valueSource.map((point) => point.value)) : -1;
+    ? minOf(valueSource.map((point) => point.value), 0) : -1;
   const automaticMaxValue = valueSource.length
-    ? Math.max(0, ...valueSource.map((point) => point.value)) : 1;
+    ? maxOf(valueSource.map((point) => point.value), 0) : 1;
   const { minValue, maxValue } = motionStudioEditorValueBounds(
     automaticMinValue,
     automaticMaxValue,

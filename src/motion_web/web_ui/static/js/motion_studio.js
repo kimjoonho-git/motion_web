@@ -1,4 +1,4 @@
-import { escapeHtml, formatMoment } from './format.js';
+import { escapeHtml, formatMoment, maxOf, minOf } from './format.js';
 import {
   commitMotionStudioMerge,
   createMotionStudioLayer,
@@ -581,8 +581,8 @@ export function createMotionStudioController({
           const values = points.map((point) => point.value);
           return `<tr><td>${escapeHtml(motionId)}</td><td>${first.timeSec.toFixed(3)}초</td>`
             + `<td>${first.value.toFixed(3)}°</td><td>${last.timeSec.toFixed(3)}초</td>`
-            + `<td>${last.value.toFixed(3)}°</td><td>${Math.min(...values).toFixed(3)}°</td>`
-            + `<td>${Math.max(...values).toFixed(3)}°</td><td>${points.length}</td></tr>`;
+            + `<td>${last.value.toFixed(3)}°</td><td>${minOf(values).toFixed(3)}°</td>`
+            + `<td>${maxOf(values).toFixed(3)}°</td><td>${points.length}</td></tr>`;
         }).join('')
         : '<tr><td colspan="8" class="empty">기록된 Motion ID가 없습니다</td></tr>';
     }

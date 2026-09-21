@@ -137,3 +137,33 @@ export function aliasText(value) {
 export function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
+
+/** 가장 작은 값 · **펼치기(...)를 쓰지 않는다** · §6-261
+ *
+ * `Math.min(0, ...values)` 는 값을 전부 **인자로** 넘긴다 · 인자 수에는
+ * 한계가 있어서 10분짜리 모션(27,473프레임 × 3축 = 8만 값)에서 터졌다.
+ *
+ *     RangeError: Maximum call stack size exceeded
+ *
+ * 그래프 그리는 중에 터지므로 **편집 창이 통째로 비어 보였다** · 사람에게는
+ * 「용량이 커서 안 나오나」로 보였다 · 값 개수는 한계가 없다.
+ */
+export function minOf(values, seed = Infinity) {
+  let smallest = seed;
+  for (const value of values) {
+    // `Number(null)` 은 0 이다 · 빈 칸을 0 으로 읽어 축 범위를 망가뜨린다
+    if (typeof value !== 'number' || !Number.isFinite(value)) continue;
+    if (value < smallest) smallest = value;
+  }
+  return smallest;
+}
+
+/** 가장 큰 값 · 같은 이유로 펼치기를 쓰지 않는다 · §6-261 */
+export function maxOf(values, seed = -Infinity) {
+  let largest = seed;
+  for (const value of values) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) continue;
+    if (value > largest) largest = value;
+  }
+  return largest;
+}

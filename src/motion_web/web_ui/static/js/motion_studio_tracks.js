@@ -1,3 +1,4 @@
+import { maxOf, minOf } from './format.js';
 import { MOTION_STUDIO_PERIOD_SEC } from './motion_studio_constants.js';
 
 export function motionStudioLayerTracks(layer) {
@@ -50,9 +51,9 @@ export function motionStudioCompositionTracks(layers, mappingRows = []) {
       if (!current || points[0].timeSec < current.timeSec) firstPoints.set(motionId, points[0]);
     }
   }
-  const duration = Math.max(0, ...enabledLayers.flatMap((layer) => (
+  const duration = maxOf(enabledLayers.flatMap((layer) => (
     (layer.frames || []).map((frame) => Number(frame.time_sec || 0))
-  )));
+  )), 0);
   const sampleCount = Math.max(0, Math.ceil(duration / MOTION_STUDIO_PERIOD_SEC));
   const tracks = new Map([...motionIds].map((motionId) => [motionId, []]));
   const lastValues = new Map([...motionIds].map((motionId) => {
