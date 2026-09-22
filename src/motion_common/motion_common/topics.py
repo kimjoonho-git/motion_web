@@ -225,7 +225,24 @@ GROUP_HEARTBEAT = '/motion_group/heartbeat'
 GROUP_COMMAND = '/motion_group/command'
 GROUP_EVENT = '/motion_group/event'
 GROUP_ALARM = '/motion_group/alarm'
+#: 시계 맞추기 **결과** · 도착이 보장돼야 한다 · RELIABLE
 GROUP_TIME_SYNC = '/motion_group/time_sync'
+
+#: 시계 맞추기 **왕복 측정** · 최선형이어야 한다 · §6-299
+#:
+#: 탐침과 응답으로 왕복 시간을 잰다 · 이 측정을 순서 보장(RELIABLE) 통로에
+#: 실으면 **잰 값이 통로 탓으로 오염된다**:
+#:
+#:     탐침 1개 유실 → 뒤 것 전부 대기(순서 보장) → 보수 요청은 라이터의
+#:     주기 HEARTBEAT 를 기다린다 · Fast DDS 기본 3초 → 그 대기시간이
+#:     그대로 "왕복 1,827ms" 로 계산된다 → 허용치 20ms 초과 → 실행 취소
+#:
+#: 2026-09-22 11:30 회차 5 가 이것으로 멈췄다 · pc-a 는 정상이었고 시계도
+#: 안 어긋났다 · 무선에서 패킷 하나가 빠졌을 뿐이다.
+#:
+#: 최선형에서는 유실이 **"표본 1개 없음"** 으로 끝난다 · 남은 탐침을 더 쏘면
+#: 그만이다 (`trigger_sync_samples * 3` 까지).
+GROUP_TIME_PROBE = '/motion_group/time_probe'
 GROUP_SYSTEM_INFO = '/motion_group/system_info'
 
 #: 원시 MIDI 중계 · §6-94 · 200Hz 최선형 · 깊이 1

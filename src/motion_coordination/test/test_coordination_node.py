@@ -117,6 +117,8 @@ def _node():
         'trigger_sync_source': 'dds_relative_monotonic',
     }
     node._midi_relay = _MidiRelay()
+    node._time_sync_pub = _Publisher()
+    node._time_probe_pub = _Publisher()
     return node
 
 
@@ -1384,3 +1386,117 @@ def test_the_status_path_uses_the_named_timeout():
     body = source[start:source.index('\n    def ', start)]
     assert 'LOCAL_RUNTIME_HTTP_TIMEOUT_SEC' in body
     assert 'timeout_sec=0.' not in body, '숫자를 다시 박았다'
+
+
+# --------------------------------------------------------------------------- #
+# 시계 왕복 측정은 최선형 통로로 · §6-299
+# --------------------------------------------------------------------------- #
+#
+# 2026-09-22 11:30, 회차 5 에서 `TRIGGER_SYNC_FAILED` 로 그룹 실행이 멈췄다 ·
+# 「pc-a DDS 트리거 동기화 불확실성 913.666ms」 · 허용치는 20ms 다.
+#
+# pc-a 는 멀쩡했고 시계도 안 어긋났다 · 무선에서 패킷 하나가 빠졌을 뿐이다.
+#
+#     탐침 15발  11:30:10.3 ~ 11:30:11.74   (0.1초 간격 · 정상 발사)
+#     응답 15개  11:30:13.36 ~ 11:30:13.56  (0.2초 안에 한꺼번에)
+#
+# 탐침이 상한 15발까지 나간 것 자체가 증거다 · 응답을 하나라도 받았으면
+# 표본 5개에서 멈춘다.
+#
+# 왕복 측정을 순서 보장(RELIABLE) 통로에 실었던 것이 원인이다 · 하나가 빠지면
+# 뒤 것이 전부 대기하고, 보수 요청은 라이터의 주기 HEARTBEAT 를 기다린다
+# (Fast DDS 기본 3초) · **그 대기시간이 그대로 왕복 시간으로 계산된다.**
+#
+# 잰 값이 통로 탓으로 오염되면 안 된다 · 유실은 「표본 1개 없음」이어야 한다.
+
+
+def test_the_probe_channel_is_best_effort():
+    """이 값이 순서 보장으로 바뀌면 **아무 오류 없이** 그 버그가 돌아온다."""
+    from rclpy.qos import ReliabilityPolicy
+
+    assert (
+        coordination_node.TRIGGER_PROBE_QOS.reliability
+        is ReliabilityPolicy.BEST_EFFORT
+    )
+
+
+def test_the_two_clock_channels_are_not_the_same_topic():
+    """재는 통로와 알리는 통로는 요구가 반대다 · 한 토픽에 둘 다 못 얹는다."""
+    from motion_common import topics
+
+    assert topics.GROUP_TIME_PROBE != topics.GROUP_TIME_SYNC
+
+
+def test_probes_go_out_on_the_best_effort_channel():
+    """탐침은 재는 쪽이다 · 순서 보장 통로로 나가면 안 된다."""
+    node = _node()
+    node._execution.execution_id = 'exec-a'
+    node._execution.coordinator_id = 'pc-a'
+    node._execution.participants = ('pc-a', 'pc-b')
+
+    node._begin_trigger_sync('start')
+    node._drive_trigger_sync()
+
+    sent = [message.kind for message in node._time_probe_pub.messages]
+    assert sent == ['probe'], sent
+    assert node._time_sync_pub.messages == [], '탐침이 순서 보장 통로로 샜다'
+
+
+def test_responses_go_back_on_the_best_effort_channel():
+    """응답도 재는 쪽이다 · 왕복의 절반이 여기 실린다."""
+    node = _node()
+    node._joined = True
+    node._execution.execution_id = 'exec-a'
+    node._execution.coordinator_id = 'pc-b'
+
+    node._time_sync_callback(GroupTimeSync(
+        group_id='stage-a', execution_id='exec-a', coordinator_id='pc-b',
+        target_pc_id='pc-a', kind='probe', sample_number=1,
+        t1_monotonic_ns=time.monotonic_ns(),
+    ))
+
+    sent = [message.kind for message in node._time_probe_pub.messages]
+    assert sent == ['response'], sent
+    assert node._time_sync_pub.messages == [], '응답이 순서 보장 통로로 샜다'
+
+
+def test_the_result_acknowledgement_stays_reliable():
+    """결과는 알리는 쪽이다 · 이것을 놓치면 그 PC 는 영영 준비되지 않는다."""
+    node = _node()
+    node._joined = True
+    node._execution.execution_id = 'exec-a'
+    node._execution.coordinator_id = 'pc-b'
+
+    node._time_sync_callback(GroupTimeSync(
+        group_id='stage-a', execution_id='exec-a', coordinator_id='pc-b',
+        target_pc_id='pc-a', responder_pc_id='pc-a', kind='result',
+        sample_number=3, offset_ns=1234, uncertainty_ns=1_000_000,
+    ))
+
+    sent = [message.kind for message in node._time_sync_pub.messages]
+    assert sent == ['result_ack'], sent
+    assert node._time_probe_pub.messages == [], '결과 확인이 최선형으로 샜다'
+    assert node._trigger_sync_status['trigger_sync_state'] == 'ready'
+
+
+def test_one_lost_probe_no_longer_counts_as_clock_drift():
+    """유실은 **표본 1개 없음**이어야 한다 · 남은 탐침을 더 쏘면 그만이다.
+
+    탐침 1번이 통째로 없어져도, 2·3·4번이 각각 1ms 에 돌아오면 판정은
+    1ms 여야 한다 · 예전에는 1번을 기다리느라 생긴 공백이 그대로 왕복
+    시간으로 들어가 1,827ms 가 됐다.
+    """
+    from motion_coordination.trigger_sync import TriggerSyncEstimator
+
+    estimator = TriggerSyncEstimator()
+    base = time.monotonic_ns()
+    for index in range(1, 4):  # 1번은 없어졌다 · 2·3·4번만 들어온다
+        t1 = base + index * 100_000_000
+        estimator.add_exchange(
+            t1_ns=t1,
+            t2_ns=t1 + 500_000,
+            t3_ns=t1 + 500_000,
+            t4_ns=t1 + 1_000_000,
+        )
+
+    assert estimator.estimate().uncertainty_ms == pytest.approx(0.5, abs=0.01)

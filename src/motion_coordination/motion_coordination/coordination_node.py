@@ -75,6 +75,18 @@ LOCAL_RUNTIME_ACTIVE_TIMEOUT_SEC = 0.5
 #: 8대를 돌려 보고 정한다.
 LOCAL_RUNTIME_HTTP_TIMEOUT_SEC = 0.30
 
+#: 시계 왕복을 재는 통로의 QoS · **최선형이어야 한다** · §6-299
+#:
+#: 여기만 밖으로 꺼내 둔 이유가 있다 · 이 값이 순서 보장으로 바뀌면 **아무
+#: 오류 없이** 옛 버그가 돌아온다 · 탐침 하나가 빠지면 뒤 것이 전부 대기하고,
+#: 그 대기시간(Fast DDS 기본 보수 주기 3초)이 그대로 「상대 시계가 1.8초
+#: 어긋났다」로 읽힌다 · 그래서 시험이 이 값을 직접 붙잡는다.
+#:
+#: 사연은 `topics.GROUP_TIME_PROBE`.
+TRIGGER_PROBE_QOS = QoSProfile(
+    depth=32, reliability=ReliabilityPolicy.BEST_EFFORT,
+)
+
 
 def _stamp_to_float(stamp: Any) -> float:
     return float(stamp.sec) + (float(stamp.nanosec) / 1_000_000_000.0)
@@ -171,6 +183,7 @@ class MotionCoordinationNode(Node):
         self._command_dispatcher.start()
 
         reliable = QoSProfile(depth=32, reliability=ReliabilityPolicy.RELIABLE)
+        probe_qos = TRIGGER_PROBE_QOS
         heartbeat_qos = QoSProfile(
             depth=8,
             reliability=ReliabilityPolicy.RELIABLE,
@@ -204,6 +217,9 @@ class MotionCoordinationNode(Node):
         self._time_sync_pub = self.create_publisher(
             GroupTimeSync, topics.GROUP_TIME_SYNC, reliable
         )
+        self._time_probe_pub = self.create_publisher(
+            GroupTimeSync, topics.GROUP_TIME_PROBE, probe_qos
+        )
         self._heartbeat_sub = self.create_subscription(
             GroupHeartbeat, topics.GROUP_HEARTBEAT, self._heartbeat_callback, heartbeat_qos
         )
@@ -222,6 +238,10 @@ class MotionCoordinationNode(Node):
         self._time_sync_sub = self.create_subscription(
             GroupTimeSync, topics.GROUP_TIME_SYNC,
             self._time_sync_callback, reliable,
+        )
+        self._time_probe_sub = self.create_subscription(
+            GroupTimeSync, topics.GROUP_TIME_PROBE,
+            self._time_sync_callback, probe_qos,
         )
 
         # 원시 MIDI 중계 · §6-94 · 규칙은 `midi_relay`, 배선은 `midi_relay_bridge`
@@ -507,7 +527,17 @@ class MotionCoordinationNode(Node):
         )
 
     def _time_sync_callback(self, message: GroupTimeSync) -> None:
-        """Handle one execution-local DDS monotonic clock exchange."""
+        """시계 맞추기 한 통 · **통로가 둘이다** · §6-299
+
+            probe · response      `GROUP_TIME_PROBE`   최선형
+            result · result_ack   `GROUP_TIME_SYNC`    순서 보장
+
+        앞의 둘은 **왕복을 재는 것**이라 유실이 값에 섞이면 안 된다 · 빠지면
+        그 표본만 없는 것이고, 남은 탐침을 더 쏘면 그만이다.
+
+        뒤의 둘은 **정해진 값을 알리는 것**이라 반드시 도착해야 한다 ·
+        result_ack 를 놓치면 그 PC 는 영영 준비되지 않은 채로 남는다.
+        """
         if (
             message.group_id != self._config.group_id
             or not self._joined
@@ -530,7 +560,7 @@ class MotionCoordinationNode(Node):
             response.t1_monotonic_ns = int(message.t1_monotonic_ns)
             response.t2_monotonic_ns = time.monotonic_ns()
             response.t3_monotonic_ns = time.monotonic_ns()
-            self._time_sync_pub.publish(response)
+            self._time_probe_pub.publish(response)
             return
         if kind == 'response':
             if message.coordinator_id != self._config.pc_id:
@@ -674,7 +704,7 @@ class MotionCoordinationNode(Node):
                 self._sync_probes[(pc_id, sent + 1)] = int(
                     probe.t1_monotonic_ns
                 )
-                self._time_sync_pub.publish(probe)
+                self._time_probe_pub.publish(probe)
 
     def _complete_trigger_sync_if_ready(self) -> None:
         if not self._sync_next_action:

@@ -100,6 +100,7 @@ def test_group_topics_never_get_the_prefix():
     assert topics.GROUP_COMMAND == '/motion_group/command'
     assert topics.GROUP_ALARM == '/motion_group/alarm'
     assert topics.GROUP_TIME_SYNC == '/motion_group/time_sync'
+    assert topics.GROUP_TIME_PROBE == '/motion_group/time_probe'
     assert topics.GROUP_EVENT == '/motion_group/event'
     assert topics.GROUP_SYSTEM_INFO == '/motion_group/system_info'
 
