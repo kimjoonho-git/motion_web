@@ -908,9 +908,9 @@ class MotionWebBridge(Node):
             'motion_state': motion_state,
         }
 
-    def coordination_local_readiness(self) -> Dict[str, Any]:
+    def coordination_local_readiness(self, payload: Any = None) -> Dict[str, Any]:
         """Check the currently active local execution files and safety state."""
-        return local_motion_readiness(self)
+        return local_motion_readiness(self, payload)
 
     def coordination_local_status(self) -> Dict[str, Any]:
         """Return only the runtime fields needed by the loopback DDS adapter."""

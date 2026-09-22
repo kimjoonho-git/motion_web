@@ -91,3 +91,21 @@ def test_leaving_also_gives_the_midi_surface_back():
 
     assert "relay.set_target('')" in leave
     assert 'self._remember_joined(False)' in leave
+
+
+# 준비 확인 예산은 **설정 하나**에서 나온다 · §6-297
+#
+# 전에는 기다리는 시간(4초)과 브리지가 안에서 쓰는 시간(10초)이 따로 적혀
+# 있었고 서로 어긋났다 · 모터가 멀쩡해도 「로컬 Web Bridge 응답 없음: timed
+# out」이 떴고, 진짜 원인은 어디에도 안 실렸다.
+
+def test_the_readiness_budget_comes_from_the_settings():
+    source = (
+        Path(__file__).resolve().parents[1]
+        / 'motion_coordination' / 'coordination_node.py'
+    ).read_text(encoding='utf-8')
+    body = source[source.index('def _local_readiness'):source.index('def _call_local_control')]
+
+    assert 'self._config.prepare_timeout_sec' in body, '예산이 설정에서 안 나온다'
+    assert "'budget_sec': budget" in body, '브리지에 예산을 안 알려 준다'
+    assert 'timeout_sec=budget' in body, '기다리는 시간이 예산과 다르다'

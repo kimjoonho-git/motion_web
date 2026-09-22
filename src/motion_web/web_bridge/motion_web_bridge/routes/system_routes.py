@@ -169,8 +169,16 @@ def register_system_routes(app: FastAPI, bridge, project_call) -> None:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post('/api/coordination/local-readiness')
-    async def coordination_local_readiness():
-        return await asyncio.to_thread(bridge.coordination_local_readiness)
+    async def coordination_local_readiness(request: Request):
+        # 부르는 쪽이 자기 예산(`budget_sec`)을 실어 보낸다 · §6-297
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        return await asyncio.to_thread(
+            bridge.coordination_local_readiness,
+            body if isinstance(body, dict) else {},
+        )
 
     @app.get('/api/coordination/local-status')
     async def coordination_local_status(request: Request):

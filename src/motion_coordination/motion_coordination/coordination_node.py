@@ -2022,7 +2022,21 @@ class MotionCoordinationNode(Node):
         return local_target_ns
 
     def _local_readiness(self) -> Dict[str, Any]:
-        return self._local_http('/api/coordination/local-readiness', {})
+        """이 PC 가 지금 시작할 수 있는가 · **예산은 설정 하나에서 나온다** · §6-297
+
+        전에는 여기서 4초를 기다리는데 브리지는 안에서 최대 10초를 썼다 ·
+        그래서 모터가 멀쩡해도 「로컬 Web Bridge 응답 없음: timed out」이 떴고,
+        정작 원인(모터 피드백 끊김)은 어디에도 안 실렸다.
+
+        기다리는 시간은 `prepare_timeout_sec` 하나가 정한다 · 그 값을 함께
+        보내서 브리지가 그보다 짧게 쓰도록 한다.
+        """
+        budget = max(1.5, float(self._config.prepare_timeout_sec))
+        return self._local_http(
+            '/api/coordination/local-readiness',
+            {'budget_sec': budget},
+            timeout_sec=budget,
+        )
 
     def _call_local_control(
         self, payload: Mapping[str, Any], *, timeout_sec: float = 4.0,

@@ -9,7 +9,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any, Callable, Dict, Mapping
+from typing import Any, Callable, Dict, Mapping, Optional
 
 from motion_common import repeat_policy
 from motion_common import run_state
@@ -288,15 +288,66 @@ class CoordinationWebBridge:
         }
 
 
-def local_motion_readiness(bridge: Any) -> Dict[str, Any]:
-    """Run the existing local motion readiness check using local active files."""
+def readiness_failure_text(context: Mapping[str, Any]) -> str:
+    """준비가 안 된 **진짜 이유**를 한 줄로 · §6-297
+
+    실행 컨텍스트는 노드마다 실패 사유를 들고 있다 · 그런데 위로 올라가는 것은
+    「모터 관리 노드 상태 확인 대기 중」 같은 뭉뚱그린 말 하나뿐이었다 ·
+    정작 아래에는 「motor_manager_node 시작 후 첫 모터 상태를 기다리는 중」이
+    적혀 있었는데 아무도 그것을 보지 못했다.
+
+    아는 쪽이 말하게 한다 · 뭉뚱그린 말 뒤에 노드 이름과 사유를 붙인다.
+    """
+    summary = str(context.get('message') or '적용 대기 중')
+    failures = context.get('failures')
+    if not isinstance(failures, Mapping) or not failures:
+        return summary
+    detail = ' · '.join(
+        f'{name}: {str(reason)[:120]}'
+        for name, reason in sorted(failures.items())
+        if str(reason or '').strip()
+    )
+    return f'{summary} · {detail}' if detail else summary
+
+
+#: 부르는 쪽이 기다려 주는 시간에서 **떼어 둘 몫** · §6-297
+#:
+#: 답이 돌아가는 데도 시간이 든다 · 안쪽이 바깥 예산을 꽉 채우면, 일은 끝났는데
+#: 답이 늦어 「응답 없음」이 된다.
+READINESS_MARGIN_SEC = 1.0
+
+#: 예산을 못 받았을 때 · 옛 호출과 시험을 위한 값
+DEFAULT_READINESS_BUDGET_SEC = 4.0
+
+
+def local_motion_readiness(
+    bridge: Any, payload: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """이 PC 가 지금 그룹 모션을 시작할 수 있는가 · 못 하면 **이유를 적어** 답한다.
+
+    **안쪽 일은 바깥이 기다려 주는 시간보다 짧아야 한다** · §6-297
+
+    전에는 부르는 쪽이 4초를 기다리는데 여기서 최대 10초를 썼다 · 그러면 모터가
+    멀쩡해도 「로컬 Web Bridge 응답 없음: timed out」이 뜬다 · 실측으로 준비
+    확인이 10.2초가 걸렸고, 화면에는 브리지가 죽은 것처럼 보였다 · 정작 원인은
+    모터 피드백이 끊긴 것이었는데 그 말은 어디에도 안 실렸다.
+
+    이제 부르는 쪽이 `budget_sec` 로 자기 예산을 알려 준다 · 여기서는 그보다
+    한 칸 짧게 쓴다 · 그래서 **시간이 다 되면 「왜 안 되는지」가 돌아간다**.
+    """
+    request = payload if isinstance(payload, Mapping) else {}
+    try:
+        budget = float(request.get('budget_sec') or DEFAULT_READINESS_BUDGET_SEC)
+    except (TypeError, ValueError):
+        budget = DEFAULT_READINESS_BUDGET_SEC
+    timeout_sec = max(0.5, budget - READINESS_MARGIN_SEC)
     # A group prepare must not race the periodic project-context reconciler.
     # Apply and verify the context synchronously before reporting this PC ready.
     reconcile = getattr(
         getattr(bridge, '_execution_context', None), 'reconcile_blocking', None
     )
     if callable(reconcile):
-        context = reconcile(timeout_sec=10.0)
+        context = reconcile(timeout_sec=timeout_sec)
     else:
         context = bridge._execution_context.reconcile()
     if not context.get('ready'):
@@ -304,7 +355,7 @@ def local_motion_readiness(bridge: Any) -> Dict[str, Any]:
             'success': False,
             'message': (
                 '현재 프로젝트 실행 컨텍스트를 적용할 수 없습니다: '
-                + str(context.get('message') or '적용 대기 중')
+                + readiness_failure_text(context)
             ),
         }
     try:
