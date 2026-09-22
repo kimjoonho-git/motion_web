@@ -1219,6 +1219,35 @@
 .schedule-badge.tone-bad { background-color: var(--red); }
 .schedule-badge.tone-muted { background-color: var(--muted); }
 
+/* 한눈에 보는 두 칸 · §6-286
+ *
+ * 배지를 셋으로 늘렸더니 상단이 두 줄로 밀리고 정작 다른 단추가 안 보였다 ·
+ * 칸을 붙여 하나의 알약처럼 만들고, 글자를 줄이고, 줄바꿈을 막는다. */
+.header-condition-badges {
+  display: inline-flex;
+  margin-right: 8px;
+  border-radius: 4px;
+  overflow: hidden;
+  white-space: nowrap;
+  flex: none;
+}
+
+.header-condition-badges span {
+  padding: 4px 7px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+  color: #fff;
+  background-color: var(--muted);
+}
+
+.header-condition-badges span + span {
+  border-left: 1px solid rgba(255, 255, 255, 0.35);
+}
+
+.header-condition-badges span.on { background-color: var(--green); }
+.header-condition-badges span.off { background-color: var(--muted); }
+
 
 /* 스케줄이 태어난 시간대와 이 PC 가 어긋났다 · §6-150 */
 #scheduleTimezoneDrift {

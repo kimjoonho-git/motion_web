@@ -23,6 +23,10 @@ function readStatus(status) {
     manual: String(status.run_mode || 'schedule') === 'manual',
     // 시각이 되어 시도했는데 거부당했나 · §6-147
     failure: status.last_failure || {},
+    // 시각을 못 읽어 **영영 안 도는** 스케줄 · §6-285
+    unreadable: Array.isArray(status.unreadable_schedules)
+      ? status.unreadable_schedules.filter(Boolean)
+      : [],
   };
 }
 
@@ -83,6 +87,28 @@ export function motionScheduleBadgeState(status) {
   //
   // 한 번은 경합일 수 있다(그룹 정리 중 등) · 노랑으로 두고, 세 번 연달아
   // 거부당하면(3분) 빨강으로 올린다 · 처음부터 빨강이면 곧 아무도 안 읽는다.
+  // **시각을 못 읽는 스케줄이 맨 앞이다** · §6-285
+  //
+  // 24:00 처럼 못 읽는 시각은 구간이 없는 것과 같아 조용히 건너뛴다 · 화면도
+  // 스위치도 멀쩡해 보이는데 아무 일이 안 일어난다 · 실측으로 21:00~24:00
+  // 스케줄이 21:21 에도 「구간 밖」이었고, 사람은 이유를 알 길이 없었다.
+  //
+  // 거부보다 먼저 띄운다 · 이건 아예 시도조차 안 하는 상태라 거부 횟수도
+  // 안 쌓인다.
+  if (read.unreadable.length > 0) {
+    return {
+      scope: enabled ? 'group' : 'local',
+      text: `스케줄러: 시각을 읽을 수 없음 (${read.unreadable.length}개)`,
+      tone: 'bad',
+      canEdit: true,
+      warning:
+        '시각을 읽을 수 없어 이 스케줄은 돌지 않습니다 · '
+        + `${read.unreadable.join(' · ')} · `
+        + '시각은 00:00~23:59 로 적으세요 (끝 시각은 24:00 도 됩니다)',
+      blockedReason: '',
+    };
+  }
+
   const failCount = Number(read.failure.count) || 0;
   if (failCount > 0) {
     const reason = String(read.failure.message || '이유를 알려주지 않았습니다');

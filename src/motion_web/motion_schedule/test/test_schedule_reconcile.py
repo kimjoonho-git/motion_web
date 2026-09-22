@@ -229,3 +229,54 @@ def test_a_finished_group_execution_does_not_block_the_start(tmp_path):
 
     assert node.sent, '끝난 그룹 실행 때문에 시작하지 못했다'
     assert node.sent[0][0] == '/api/motion-run/start'
+
+
+# --------------------------------------------------------------------------- #
+# **원하는 대로 되어 있으면 지난 거부는 잊는다** · §6-287
+#
+# 전에는 「다음 번 보내기가 성공할 때」만 지웠다 · 한 번 성공해 돌기 시작하면
+# 더 보낼 일이 없어서, 이미 풀린 거부 문구가 화면에 몇 시간이고 남았다 ·
+# 실측으로 모터는 도는데 스케줄 창에는 「MIDI 제어가 사용 중이어서 시작할 수
+# 없습니다」가 그대로 떠 있었다.
+# --------------------------------------------------------------------------- #
+
+def test_running_inside_the_window_clears_an_old_refusal(tmp_path):
+    node = _node(tmp_path, run_state='running', schedules=[_day_schedule()])
+    node._last_failure = {'endpoint': '/x', 'message': 'MIDI 제어가 사용 중', 'count': 3}
+
+    node._reconcile(DAY.replace(hour=13))
+
+    assert node._last_failure == {}, '돌고 있는데 거부 문구가 남았다'
+
+
+def test_stopped_outside_the_window_clears_an_old_refusal(tmp_path):
+    node = _node(tmp_path, run_state='stopped', schedules=[_day_schedule()])
+    node._last_failure = {'endpoint': '/x', 'message': '옛 거부', 'count': 1}
+
+    node._reconcile(DAY.replace(hour=20))
+
+    assert node._last_failure == {}
+
+
+def test_a_refusal_stays_while_it_is_still_true(tmp_path):
+    """구간 안인데 멈춰 있으면 아직 못 돈다 · 그때는 문구가 남아야 한다."""
+    node = _node(tmp_path, run_state='stopped', schedules=[_day_schedule()])
+    node._last_failure = {'endpoint': '/x', 'message': '아직 거부됨', 'count': 2}
+    node._send_http_request = lambda endpoint, payload: False
+
+    node._reconcile(DAY.replace(hour=13))
+
+    assert node._last_failure['message'] == '아직 거부됨'
+
+
+def test_manual_mode_also_forgets_when_it_matches(tmp_path):
+    """수동 모드에서도 사실이 아니게 된 문구는 지운다."""
+    node = _node(
+        tmp_path, run_state='running', run_mode='manual',
+        schedules=[_day_schedule()],
+    )
+    node._last_failure = {'endpoint': '/x', 'message': '옛 거부', 'count': 1}
+
+    node._reconcile(DAY.replace(hour=13))
+
+    assert node._last_failure == {}

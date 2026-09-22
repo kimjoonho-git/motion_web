@@ -117,6 +117,11 @@ class ScheduleService:
             'run_mode': self.store.mode,
             # 시각이 됐는데 거부당했는가 · 비어 있으면 정상 · §6-147
             'last_failure': node.get('last_failure') or {},
+            # 시각을 못 읽어 **영영 안 도는** 스케줄 · §6-285
+            #
+            # 24:00 처럼 못 읽는 시각은 구간이 없는 것과 같아 조용히 건너뛰었다 ·
+            # 화면·스위치는 멀쩡해 보이는데 아무 일도 일어나지 않았다.
+            'unreadable_schedules': list(node.get('unreadable_schedules') or []),
             'schedule_node_seen': bool(node.get('received')),
             # 지금 멈추면 스케줄이 되돌리는가 · §6-149
             'active_schedule_id': node.get('active_schedule_id') or '',

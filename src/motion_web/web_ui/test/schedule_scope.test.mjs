@@ -293,3 +293,44 @@ test('여러 곳에서 만들어졌으면 전부 적는다', () => {
   assert.match(note, /America\/New_York, Asia\/Seoul/);
   assert.doesNotMatch(note, /Europe\/Paris 에서/, '지금과 같은 것은 빼야 한다');
 });
+
+
+// 시각을 못 읽는 스케줄은 **화면이 빨간 줄로 말한다** · §6-285
+//
+// 24:00 처럼 못 읽는 시각은 구간이 없는 것과 같아 조용히 건너뛴다 · 화면도
+// 스위치도 멀쩡해 보이는데 아무 일이 안 일어났다 · 실측으로 21:00~24:00
+// 스케줄이 21:21 에도 「구간 밖」이었고 이유를 알 길이 없었다.
+
+test('시각을 못 읽으면 빨간 줄로 알린다', () => {
+  const state = motionScheduleBadgeState({
+    status: 'ok', schedule_count: 1, run_mode: 'schedule',
+    unreadable_schedules: ['새 스케줄 (21:00:00~25:00:00)'],
+  });
+
+  assert.equal(state.tone, 'bad');
+  assert.match(state.text, /시각을 읽을 수 없음/);
+  assert.match(state.warning, /돌지 않습니다/);
+  assert.match(state.warning, /새 스케줄/);
+});
+
+test('거부보다 먼저 띄운다', () => {
+  // 시도조차 못 하는 상태라 거부 횟수가 안 쌓인다 · 그쪽 문구를 기다리면
+  // 영영 아무 말도 안 나온다
+  const state = motionScheduleBadgeState({
+    status: 'ok', schedule_count: 1, run_mode: 'schedule',
+    unreadable_schedules: ['새 스케줄 (21:00:00~25:00:00)'],
+    last_failure: { count: 5, message: '연동 거부' },
+  });
+
+  assert.match(state.text, /시각을 읽을 수 없음/);
+});
+
+test('멀쩡하면 아무 말도 하지 않는다', () => {
+  const state = motionScheduleBadgeState({
+    status: 'ok', schedule_count: 1, run_mode: 'schedule',
+    unreadable_schedules: [],
+  });
+
+  assert.doesNotMatch(state.text, /시각/);
+  assert.equal(state.warning, '');
+});

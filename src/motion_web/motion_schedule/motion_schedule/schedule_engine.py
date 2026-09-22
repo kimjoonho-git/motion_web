@@ -25,7 +25,18 @@ DAY_ABBREVIATIONS = ('MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN')
 
 
 def parse_time_of_day(value) -> Optional[tuple]:
-    """"HH:MM" · "HH:MM:SS" 를 (시, 분, 초) 로 · 못 읽으면 None."""
+    """"HH:MM" · "HH:MM:SS" 를 (시, 분, 초) 로 · 못 읽으면 None.
+
+    **24:00 은 자정이다** · §6-285
+
+    사람은 「21시부터 24시까지」라고 쓴다 · 그런데 24 는 시각 범위(0~23)를
+    벗어나서 못 읽는 값이 됐고, 그러면 `window_of` 가 구간을 못 만들어 그
+    스케줄은 **아무 말 없이 영영 안 돌았다** · 실측으로 21:00~24:00 스케줄이
+    21:21 에도 「구간 밖」이었다.
+
+    24:00 은 00:00 으로 읽는다 · 끝 시각이면 `window_of` 가 "끝이 시작보다
+    이르다" 로 보아 다음 날로 넘기므로 그날 자정이 된다.
+    """
     parts = str(value or '').strip().split(':')
     if len(parts) < 2:
         return None
@@ -36,6 +47,8 @@ def parse_time_of_day(value) -> Optional[tuple]:
     while len(numbers) < 3:
         numbers.append(0)
     hour, minute, second = numbers
+    if hour == 24 and minute == 0 and second == 0:
+        hour = 0
     if not (0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= second <= 59):
         return None
     return hour, minute, second
@@ -75,6 +88,27 @@ def window_of(item: ScheduleItem, start_day: datetime) -> Optional[tuple]:
     if ends_at <= starts_at:
         ends_at += timedelta(days=1)
     return starts_at, ends_at
+
+
+def unreadable_schedules(schedules: List[ScheduleItem]) -> List[str]:
+    """시각을 못 읽어 **영영 안 도는** 스케줄의 이름 · §6-285
+
+    못 읽는 시각은 구간이 없는 것과 같아서 조용히 건너뛴다 · 사람 눈에는
+    「켜 뒀는데 안 돈다」로만 보인다 · 이름을 돌려주어 말이라도 하게 한다.
+    """
+    broken = []
+    for item in schedules:
+        if not item.enabled:
+            continue
+        if (
+            parse_time_of_day(item.start_time) is None
+            or parse_time_of_day(item.stop_time) is None
+        ):
+            broken.append(
+                f'{item.schedule_name or item.schedule_id} '
+                f'({item.start_time}~{item.stop_time})'
+            )
+    return broken
 
 
 def active_schedule(

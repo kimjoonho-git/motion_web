@@ -16,6 +16,7 @@ import {
     motionScheduleScopeNote,
     motionScheduleTimezoneDrift,
 } from './schedule_scope.js';
+import { motionHeaderConditionsUpdate } from './header_conditions.js';
 
 /** 그 PC 의 벽시계 글자 · 브라우저 시간대로 옮기지 않는다 · §6-147 */
 function wallClockText(epochMs, offsetText) {
@@ -180,6 +181,13 @@ const ScheduleManager = {
             badge.className = TONE_CLASS[state.tone] || TONE_CLASS.muted;
             badge.textContent = state.text;
         }
+
+        // 한눈에 보는 두 칸 · 구간 여부는 여기가 안다 · §6-286
+        motionHeaderConditionsUpdate({
+            enabled: Boolean(this.status?.coordination_enabled),
+            joined: Boolean(this.status?.coordination_joined),
+            inWindow: Boolean(String(this.status?.active_schedule_id || '').trim()),
+        });
 
         // 발화해도 실행되지 않는 상태는 목록 위에 띄운다 · 전에는 로그에만
         // 남아서 "스케줄이 발화했는데 아무 일도 안 났다" 가 됐다 · §6-68

@@ -36,7 +36,7 @@ def test_runtime_allows_idle_or_existing_playback_owner(owner):
 
 @pytest.mark.parametrize(
     ('owner', 'expected'),
-    [('midi', 'MIDI 제어'), ('manual', '수동 제어')],
+    [('manual', '수동 제어')],
 )
 def test_runtime_rejects_incompatible_command_owner(owner, expected):
     manager = run_manager_with_safety_status({
@@ -79,14 +79,33 @@ def test_runtime_rejects_missing_or_stale_supervisor_status():
     assert '갱신되지 않았습니다' in stale._playback_ownership_error()
 
 
-def test_runtime_stream_guard_raises_before_publishing_for_midi_owner():
+def test_midi_never_blocks_playback(manager_owner='midi'):
+    """**MIDI 는 모션 시작을 막지 않는다** · §6-290
+
+    중재기는 재생이 MIDI 를 뺏도록 돼 있다(`_PREEMPTS`) · 그런데 시작 판정이
+    그보다 엄격해서, 어느 PC 에서 페이더 하나만 잡고 있어도 그 PC 가 「준비 안
+    됨」으로 답했고 **그룹 전체가 취소**됐다 · 실측으로 pc-a 의 MIDI 때문에
+    세 대짜리 그룹이 못 떴다.
+    """
     manager = run_manager_with_safety_status({
         'command_owner': 'midi',
         'commands_blocked': False,
         'emergency_latched': False,
     })
 
-    with pytest.raises(RuntimeError, match='MIDI 제어'):
+    assert manager._playback_ownership_error() == ''
+    manager._player._require_playback_command_allowed()
+
+
+def test_manual_jog_still_blocks_playback():
+    """수동 조그는 그대로 막는다 · 재생이 그것은 못 뺏는다."""
+    manager = run_manager_with_safety_status({
+        'command_owner': 'manual',
+        'commands_blocked': False,
+        'emergency_latched': False,
+    })
+
+    with pytest.raises(RuntimeError, match='수동 제어'):
         manager._player._require_playback_command_allowed()
 
 
@@ -106,7 +125,8 @@ def test_playback_keeps_running_when_midi_owns_a_different_axis():
     })
 
     assert manager._playback_ownership_error(axes=[1]) == '', '내 축은 비어 있다'
-    assert '축 0' in manager._playback_ownership_error(axes=[0]), '남이 쥔 축은 막는다'
+    # MIDI 가 쥔 축도 막지 않는다 · 재생이 뺏어 온다 · §6-290
+    assert manager._playback_ownership_error(axes=[0]) == ''
 
 
 def test_a_blanket_owner_still_blocks_every_axis():
@@ -124,9 +144,9 @@ def test_a_blanket_owner_still_blocks_every_axis():
 def test_without_the_axis_table_the_old_summary_still_decides():
     """표를 못 받은 상대(옛 supervisor)와도 돈다 · 지금까지대로 축약형을 본다."""
     manager = run_manager_with_safety_status({
-        'command_owner': 'midi',
+        'command_owner': 'manual',
         'commands_blocked': False,
         'emergency_latched': False,
     })
 
-    assert 'MIDI 제어' in manager._playback_ownership_error(axes=[1])
+    assert '수동 제어' in manager._playback_ownership_error(axes=[1])

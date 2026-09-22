@@ -47,6 +47,20 @@ DEFAULT_MOTION_PROJECTS_DIR = (
 )
 
 
+#: 재생이 **비켜 주지 않아도 되는** 주인 · §6-290
+#:
+#: 중재기는 재생이 MIDI 를 뺏도록 돼 있다(`_PREEMPTS`) · 그런데 시작 판정은
+#: 그보다 엄격해서, 어느 PC 에서 페이더 하나만 잡고 있어도 그 PC 가 「준비 안
+#: 됨」으로 답했고 **그룹 전체가 취소**됐다 · 실측으로 pc-a 의 MIDI 때문에
+#: 세 대짜리 그룹이 못 떴다.
+#:
+#: 모션 실행은 MIDI 와 상관없이 시작한다 · 축은 중재기가 넘겨준다.
+#:
+#: 수동 조그는 그대로 막는다 · 재생이 그것은 못 뺏는다 · 사람이 손으로 움직이는
+#: 중에 모션이 끼어들면 안 된다.
+PLAYBACK_MAY_TAKE_FROM = ('none', 'playback', 'midi')
+
+
 class MotionRunManager(Node):
     """Runs a saved motion file through a saved motion-axis mapping.
 
@@ -915,7 +929,7 @@ class MotionRunManager(Node):
         held: Dict[int, str] = {}
         for axis in axes:
             holder = str(axis_owners.get(str(int(axis))) or 'none').strip().lower()
-            if holder not in ('none', 'playback'):
+            if holder not in PLAYBACK_MAY_TAKE_FROM:
                 held[int(axis)] = holder
         return held
 
@@ -958,7 +972,7 @@ class MotionRunManager(Node):
         axis_owners = status.get('command_axis_owners')
         if isinstance(axis_owners, dict) and axes is not None:
             blanket = str(axis_owners.get('all') or 'none').strip().lower()
-            if blanket not in ('none', 'playback'):
+            if blanket not in PLAYBACK_MAY_TAKE_FROM:
                 return f"{owner_names.get(blanket, blanket)}가 사용 중이어서 모션을 시작할 수 없습니다"
             taken = self._axes_held_by_others(axes)
             # **한 축이라도 남았으면 계속한다** · §6-276
@@ -978,7 +992,7 @@ class MotionRunManager(Node):
             return ''
         # 축을 모르는 옛 호출 · 표를 못 받은 상태 · 지금까지대로 축약형을 본다
         owner = str(status.get('command_owner') or 'none').strip().lower()
-        if owner not in ('none', 'playback'):
+        if owner not in PLAYBACK_MAY_TAKE_FROM:
             return f"{owner_names.get(owner, owner)}가 사용 중이어서 모션을 시작할 수 없습니다"
         return ''
 

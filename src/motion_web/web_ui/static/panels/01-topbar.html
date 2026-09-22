@@ -34,6 +34,11 @@
             </div>
             <span class="topbar-operation-divider" aria-hidden="true"></span>
             <div class="topbar-operation-group topbar-restart-actions" aria-label="재시작 및 스케줄 조작">
+              <!-- 한눈에 보는 네 가지 · §6-286
+                   연동에 들어가 있나 · 지금이 스케줄 시간 안인가 · 모션이
+                   연동으로 도나 단독으로 도나 · 이게 안 보여서 「왜 안 도나」를
+                   매번 파야 했다. -->
+              <span id="headerConditionBadges" class="header-condition-badges"></span>
               <span id="scheduleStatusBadge" class="schedule-badge tone-muted">스케줄러: 확인 중</span>
               <button id="btnScheduleModal" type="button" class="primary" style="background-color: #2b6cb0; color: #fff; border: none; padding: 4px 10px; border-radius: 4px; cursor: pointer;">📅 모션 스케줄</button>
               <button id="headerProgramRestartButton" type="button" disabled>프로그램 재시작</button>

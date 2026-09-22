@@ -30,9 +30,9 @@ from motion_common.schedule_store import (
 )
 
 try:
-    from motion_schedule.schedule_engine import ScheduleEngine
+    from motion_schedule.schedule_engine import ScheduleEngine, unreadable_schedules
 except ImportError:
-    from .schedule_engine import ScheduleEngine
+    from .schedule_engine import ScheduleEngine, unreadable_schedules
 
 PACKAGE_HINT = 'motion_schedule'
 
@@ -216,7 +216,7 @@ class MotionScheduleNode(Node):
         }
 
     def _forget_failure(self) -> None:
-        if self._last_failure:
+        if getattr(self, '_last_failure', None):
             self.get_logger().info('스케줄 시도가 다시 받아들여졌습니다')
         self._last_failure = {}
 
@@ -338,8 +338,10 @@ class MotionScheduleNode(Node):
         시각을 지나갔는지 보지 않는다 · **지금 구간 안인가**만 본다 · 그래서
         재부팅해도, 시작을 놓쳐도, 어긋나도 다음 점검에서 스스로 맞춘다.
         """
-        wanted = self.engine.active(now, self.store.list_schedules())
+        schedules = self.store.list_schedules()
+        wanted = self.engine.active(now, schedules)
         running = self._motion_is_running()
+        self._warn_about_unreadable(schedules)
 
         # **구간이 끝나면 멈춘다 · 모드와 상관없이** · §6-270
         #
@@ -354,6 +356,18 @@ class MotionScheduleNode(Node):
             self._execute_stop_after_cycle(None)
             return
 
+        # **원하는 대로 되어 있으면 지난 거부는 잊는다** · §6-287
+        #
+        # 전에는 「다음 번 보내기가 성공할 때」만 지웠다 · 그런데 한 번 성공해
+        # 돌기 시작하면 더 보낼 일이 없어서, 이미 풀린 거부 문구가 화면에
+        # 몇 시간이고 남았다 · 실측으로 모터는 도는데 스케줄 창에는 「MIDI 제어가
+        # 사용 중이어서 시작할 수 없습니다」가 그대로 떠 있었다.
+        #
+        # 사람이 직접 고쳐서 풀린 경우도 마찬가지다 · 스케줄이 다시 보내지
+        # 않아도 사실이 아니게 된다.
+        if (wanted is not None) == running:
+            self._forget_failure()
+
         if self._run_mode != SCHEDULE_MODE:
             # 수동 모드 · 스케줄은 **새로 시작하지 않는다** · §6-143
             #
@@ -367,6 +381,28 @@ class MotionScheduleNode(Node):
                 f"[점검] 구간 안인데 멈춰 있다 · 시작 · {wanted.schedule_name}"
             )
             self._execute_start(wanted)
+
+    def _warn_about_unreadable(self, schedules) -> None:
+        """시각을 못 읽는 스케줄은 **말이라도 한다** · §6-285
+
+        못 읽는 시각(예전의 `24:00`)은 구간이 없는 것과 같아서 조용히 건너뛴다 ·
+        켜 뒀는데 안 도는 이유를 알 길이 없었다 · 한 번만 남기고, 고쳐지면
+        다시 말할 수 있게 기억해 둔다.
+        """
+        try:
+            broken = unreadable_schedules(schedules)
+        except Exception:
+            return
+        previous = getattr(self, '_unreadable_schedules', None)
+        if broken == previous:
+            return
+        self._unreadable_schedules = broken
+        if broken:
+            self.get_logger().warning(
+                '[점검] 시각을 읽을 수 없어 돌지 않는 스케줄: ' + ' · '.join(broken)
+            )
+        elif previous:
+            self.get_logger().info('[점검] 시각을 못 읽던 스케줄이 정상으로 돌아왔다')
 
     def _execute_start(self, item: ScheduleItem):
         self.get_logger().info(f"[SCHEDULE TRIGGER] START -> {item.schedule_name} ({item.schedule_id})")
@@ -426,15 +462,19 @@ class MotionScheduleNode(Node):
         })
 
     def _publish_status(self, now: datetime):
+        schedules = self.store.list_schedules()
         status = {
             "is_master": self._is_master_pc(),
             "active_project_id": self.store.current_project_id,
             "current_time": now.isoformat(),
-            "schedule_count": len(self.store.list_schedules()),
+            "schedule_count": len(schedules),
             "active_schedule_id": getattr(
-                self.engine.active(now, self.store.list_schedules()),
+                self.engine.active(now, schedules),
                 'schedule_id', None,
             ),
+            # 시각을 못 읽어 **영영 안 도는** 스케줄 · 화면이 빨간 줄로 띄운다 ·
+            # §6-285 · 전에는 조용히 건너뛰어 「켜 뒀는데 안 돈다」로만 보였다
+            "unreadable_schedules": unreadable_schedules(schedules),
             "run_mode": self._run_mode,
             # 단독으로 돌았는지 화면이 알 수 있게 남긴다 · §6-266
             "coordination_enabled": self._coordination_enabled(),

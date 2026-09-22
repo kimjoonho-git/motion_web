@@ -5,6 +5,7 @@ import {
 } from './api.js';
 import { showAlert, showConfirm, dismissAllDialogs } from './ui_dialogs.js';
 import { midiTargetView } from './midi_target.js';
+import { motionHeaderConditionsUpdate } from './header_conditions.js';
 
 function text(value) {
   return String(value ?? '').replace(/[&<>"']/g, (character) => ({
@@ -182,6 +183,14 @@ export function createCoordinationController({ el }) {
   function render() {
     const config = snapshot?.config || {};
     const runtime = snapshot?.runtime || {};
+    // 상단 두 칸 · **연동 여부는 여기가 가장 먼저 안다** · §6-288
+    //
+    // 전에는 상단이 스케줄 상태(5초)에만 묶여 있어 「연동 탈퇴」를 눌러도
+    // 최대 5초를 옛 값으로 버텼다 · 여기는 1초마다 받는다.
+    motionHeaderConditionsUpdate({
+      enabled: Boolean((runtime.config || config).enabled),
+      joined: Boolean(runtime.joined),
+    });
     const runtimeConfig = runtime.config || config;
     const execution = runtime.execution || { state: 'idle', participants: [] };
     const peers = Array.isArray(runtime.peers) ? runtime.peers : [];
@@ -209,24 +218,11 @@ export function createCoordinationController({ el }) {
         : '';
     }
 
-    // 이 모듈의 다른 요소는 모두 주입받은 등록부를 쓴다 · 여기만 전역
-    // `document` 를 잡고 있어서 노드 없이 렌더를 검증할 수 없었다.
-    const rosterBanner = el.coordinationConfirmedRosterBanner;
-    if (rosterBanner) {
-      if (requiredPeersList.length > 0) {
-        // 색조도 실제 팔레트(`--green` #16834a)에 맞춘다 · 전에는 테두리만
-        // 없는 변수라 바탕과 테두리가 서로 다른 초록이었다
-        rosterBanner.innerHTML = `<span style="color: var(--green);">✅ 현재 그룹 필수 참가 명단:</span> ${requiredPeersList.join(', ')}`;
-        rosterBanner.style.backgroundColor = 'rgba(22, 131, 74, 0.10)';
-        rosterBanner.style.border = '1px solid var(--green)';
-        rosterBanner.style.color = '';
-      } else {
-        rosterBanner.innerHTML = `⚠️ 시스템을 시작하려면 아래 표에서 명단을 확정하세요 (명단 미확정)`;
-        rosterBanner.style.backgroundColor = 'rgba(198, 40, 40, 0.10)';
-        rosterBanner.style.border = '1px solid var(--red)';
-        rosterBanner.style.color = 'var(--red)';
-      }
-    }
+    // 명단 배너는 화면에서 뺐다 · §6-289
+    //
+    // 화면 한 줄을 통째로 쓰면서 늘 같은 말을 되풀이했다 · 명단은 바로 아래
+    // 「그룹 참가 PC」 표에 PC 마다 「필수」 표시로 이미 나온다 · 값과 기능은
+    // 그대로다.
 
     if (el.coordinationNodeState) {
       el.coordinationNodeState.textContent = snapshot?.node_connected ? 'DDS 연동 노드 연결됨' : 'DDS 연동 노드 응답 없음';
