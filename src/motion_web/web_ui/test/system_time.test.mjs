@@ -53,17 +53,19 @@ test('목록을 못 받았어도 막히지 않는다', () => {
   assert.equal(command, 'sudo timedatectl set-timezone Europe/Paris');
 });
 
-test('화면에 자리가 있다', () => {
+test('시간대 바꾸기는 화면에서 뺐다', () => {
+  // 해외 설치는 우분투에서 직접 바꾼다 · `sudo timedatectl set-timezone …`
+  // 한 줄이면 되고, 화면에 자리를 차지할 만큼 자주 하는 일이 아니다 · §6-291
   for (const id of [
     'systemTimezoneNow', 'systemTimezonePick', 'systemTimezoneList',
     'systemTimezoneCommand', 'btnCopyTimezoneCommand', 'systemTimezoneMismatch',
   ]) {
-    assert.ok(indexHtml.includes(`id="${id}"`), `${id} 자리가 없다`);
+    assert.ok(!indexHtml.includes(`id="${id}"`), `${id} 가 아직 화면에 있다`);
   }
 });
 
-test('시간대를 바꾼 뒤 다시 빌드하라고 알려준다', () => {
-  // 돌고 있던 노드가 옛 시간대를 들고 있다 · 이 말이 없으면 바꿔 놓고도
-  // 왜 그대로인지 모른다
-  assert.match(indexHtml, /다시 빌드 명령.{0,40}한 번 더/s);
+test('명령을 만드는 코드는 그대로 둔다', () => {
+  // 자리가 없으면 아무 일도 하지 않는다 · 다시 쓰고 싶을 때 코드가 남아 있다
+  const { command } = timezoneCommand({ zones: ZONES, chosen: 'Europe/Paris' });
+  assert.equal(command, 'sudo timedatectl set-timezone Europe/Paris');
 });

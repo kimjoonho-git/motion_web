@@ -16,33 +16,13 @@
           <pre class="terminal-howto-command">bash src/motion_web/install.sh</pre>
           <span>빌드 동안 이 웹 화면은 잠깐 끊깁니다 · <strong>터미널은 안 끊깁니다</strong> · 끝나면 <code>설치 완료</code> 가 찍힙니다</span>
         </div>
-        <!-- 시간대 바꾸기 · §6-150
-             해외 설치에서 유일하게 사람이 직접 해야 하는 일이다 · NTP 는 UTC 만
-             맞추고 시간대는 안 바꾼다 · 안 바꾸면 한국 시각으로 돌아서, 09:17
-             스케줄이 파리 현지 02:17 에 돈다.
+        <!-- 시간대 바꾸기는 화면에서 뺐다 · §6-291
+             해외 설치는 **우분투에서 직접** 바꾼다 · `sudo timedatectl set-timezone …`
+             한 줄이면 되고, 그 뒤 이 프로그램을 다시 띄우면 된다 · 화면에 자리를
+             차지할 만큼 자주 하는 일이 아니다.
 
-             여기서 바꾸지 않고 **칠 명령만 만들어 준다** · `timedatectl` 은 root
-             권한이 필요하고, 그 권한을 웹 서비스에 주는 것이 더 위험하다 ·
-             자동 감지도 하지 않는다 · 틀려도 모르는 것이 가장 나쁘다. -->
-        <div class="registry-message terminal-howto timezone-howto">
-          <strong>시간대 바꾸기</strong> · 이 PC 를 다른 나라에 설치할 때만 합니다
-          <div class="timezone-now">
-            지금 이 PC · <strong id="systemTimezoneNow">확인 중</strong>
-          </div>
-          <div id="systemTimezoneMismatch" class="timezone-mismatch"></div>
-          <label class="timezone-pick">
-            <span>설치할 곳</span>
-            <input id="systemTimezonePick" list="systemTimezoneList" autocomplete="off"
-                   placeholder="도시 이름을 입력하세요 (예: Paris, New York)">
-            <datalist id="systemTimezoneList"></datalist>
-          </label>
-          <pre class="terminal-howto-command" id="systemTimezoneCommand">시간대를 고르면 칠 명령이 여기 나옵니다</pre>
-          <div class="timezone-actions">
-            <button type="button" id="btnCopyTimezoneCommand" class="secondary">명령 복사</button>
-            <span id="systemTimezoneCopied" class="timezone-copied"></span>
-          </div>
-          <span>아래 터미널에 붙여넣어 실행한 뒤, <strong>위의 다시 빌드 명령</strong>을 한 번 더 돌리세요 · 돌고 있던 노드가 옛 시간대를 들고 있습니다</span>
-        </div>
+             코드(`system_time.js`)는 그대로 둔다 · 자리가 없으면 아무 일도
+             하지 않는다. -->
         <div style="flex: 1; display: flex; flex-direction: column; width: 100%; min-height: calc(100vh - 200px);">
           <iframe id="terminalIframe" style="flex: 1; width: 100%; height: 100%; min-height: 600px; border: none;"></iframe>
         </div>
