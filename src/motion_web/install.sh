@@ -204,9 +204,40 @@ initialize_rosdep() {
   rosdep update
 }
 
+#: 죽은 노드가 남긴 공유메모리 조각을 치운다 · §6-298
+#:
+#: 노드가 비정상으로 죽으면 `/dev/shm` 에 Fast DDS 조각이 남는다 · 다음에 뜬
+#: 노드가 같은 번호를 잡으면 **그 죽은 조각에 붙는다** · 그러면 보내는 쪽은
+#: 초당 수천 건을 내보내는데 받는 쪽은 **한 건도 못 받는다** · 아무 오류도
+#: 안 난다.
+#:
+#: 실측 · 모터 노드가 여덟 번 죽은 날 조각이 29개 쌓였고, 그중 하나를 밟아
+#: 모터 피드백이 끊겼다 · 화면에는 「로컬 Web Bridge 응답 없음」으로 떠서
+#: 원인을 찾는 데 한 시간이 걸렸다.
+#:
+#: **세 서비스가 전부 꺼졌을 때만 지운다** · 살아 있는 노드가 쓰는 조각을
+#: 지우면 그 순간 통신이 끊긴다 · 여기는 갱신 절차가 셋을 모두 내린 직후라
+#: 남은 것은 전부 쓰레기다.
+clean_dead_dds_segments() {
+  local unit
+  for unit in motion-control motion-motor motion-coordination; do
+    if systemctl --user is-active --quiet "${unit}.service"; then
+      echo "[건너뜀] ${unit} 가 아직 돌고 있어 공유메모리를 건드리지 않습니다"
+      return 0
+    fi
+  done
+  local count
+  count=$(ls -1 /dev/shm/fastrtps_* 2>/dev/null | wc -l)
+  if [[ "${count}" -gt 0 ]]; then
+    rm -f /dev/shm/fastrtps_* 2>/dev/null || true
+    echo "죽은 공유메모리 조각 ${count}개 정리"
+  fi
+}
+
 build_workspace() {
   systemctl --user stop motion-control.service motion-motor.service motion-coordination.service 2>/dev/null || true
   systemctl --user reset-failed 2>/dev/null || true
+  clean_dead_dds_segments
   # 옛 작업공간이 환경에 남아 있으면 그쪽 경로를 먼저 본다 · 깨끗한 ROS 만 켠다
   unset AMENT_PREFIX_PATH CMAKE_PREFIX_PATH COLCON_PREFIX_PATH || true
   unset ROS_PACKAGE_PATH LD_LIBRARY_PATH PYTHONPATH || true
