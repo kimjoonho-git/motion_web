@@ -105,6 +105,8 @@ export function motionStudioEditorHistoryEntry(editor, clone = structuredClone) 
   return {
     layer: clone(editor.working),
     validation: clone(editor.validation),
+    // 되돌리면 그때의 판정도 함께 돌아와야 한다 · §6-292
+    framesDerived: Boolean(editor.workingFramesDerived),
     curveId: String(editor.pointDraft?.curve_id || ''),
     selectedPointId: String(editor.selectedPointId || ''),
   };
@@ -981,6 +983,7 @@ export function createMotionStudioEditorController({
     );
     editor.preview = null;
     editor.previewValidation = null;
+    editor.previewFramesDerived = false;
     editor.operationReport = null;
     editor.previewOperation = '';
     editor.pendingCurveId = '';
@@ -1028,6 +1031,7 @@ export function createMotionStudioEditorController({
     });
     editor.redo = [];
     editor.working = clone(editor.preview);
+    editor.workingFramesDerived = Boolean(editor.previewFramesDerived);
     editor.validation = clone(
       editor.previewValidation || { conflicts: [], playable: true },
     );
@@ -1297,6 +1301,8 @@ export function createMotionStudioEditorController({
       editor.operationReport = result.operation_report || null;
       editor.previewOperation = operation;
       editor.preview = clone(result.layer);
+      // 프레임을 다시 그릴 수 있나 · 판정은 서버 것이다 · §6-292
+      editor.previewFramesDerived = Boolean(result.frames_are_curve_derived);
       refreshEditorTimeline(editor.preview, editor.working);
       if (operation === 'point_curve' && editor.pointDraft) {
         const calculated = editorPointCurves(editor.preview).find(
@@ -1523,6 +1529,7 @@ export function createMotionStudioEditorController({
       const previous = editor.undo.pop();
       const replacedLayer = editor.working;
       editor.working = previous.layer;
+      editor.workingFramesDerived = Boolean(previous.framesDerived);
       editor.validation = previous.validation;
       const previousCurve = editorPointCurves(editor.working).find(
         (curve) => String(curve.curve_id || '') === String(previous.curveId || ''),
@@ -1548,6 +1555,7 @@ export function createMotionStudioEditorController({
       const following = editor.redo.pop();
       const replacedLayer = editor.working;
       editor.working = following.layer;
+      editor.workingFramesDerived = Boolean(following.framesDerived);
       editor.validation = following.validation;
       const followingCurve = editorPointCurves(editor.working).find(
         (curve) => String(curve.curve_id || '') === String(following.curveId || ''),
@@ -1571,6 +1579,9 @@ export function createMotionStudioEditorController({
       const activeCurveId = editor.pointDraft?.curve_id;
       editor.original = clone(savedLayer);
       editor.working = clone(savedLayer);
+      // 저장된 것을 새로 받았다 · 다시 편집하기 전까지는 **통째로 보낸다** · §6-292
+      editor.workingFramesDerived = false;
+      editor.previewFramesDerived = false;
       editor.preview = null;
       editor.previewValidation = null;
       if (validation) editor.validation = clone(validation);
@@ -1634,10 +1645,18 @@ export function createMotionStudioEditorController({
       editor.saveState = 'saving';
       editor.saveError = '';
       renderEditor();
+      // 프레임은 **곡선에서 다시 그릴 수 있으면 안 보낸다** · §6-292
+      //
+      // 10분짜리 레이어에서 3.7 MB 가 60 KB 로 준다 · 서버가 같은 코드로 다시
+      // 그리므로 값이 달라지지 않는다 · 판정은 서버가 편집 응답에 실어 준 것을
+      // 그대로 쓴다 · 모르면(거짓) 통째로 보낸다.
+      const body = editor.workingFramesDerived
+        ? { ...editor.working, frames: [] }
+        : editor.working;
       const result = await run(() => saveMotionStudioLayerData({
         layer_id: editor.layerId,
         original_revision: Number(editor.original.edit_revision || 0),
-        layer: editor.working,
+        layer: body,
       }), {
         onError: (error) => {
           if (state.editor !== editor) return;

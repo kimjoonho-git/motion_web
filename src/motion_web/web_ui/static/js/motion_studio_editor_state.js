@@ -19,6 +19,15 @@ export function createMotionStudioEditorSession({
     layerId: layer.layer_id,
     original: clone(layer),
     working: clone(layer),
+    // 지금 작업본의 프레임을 **곡선에서 다시 그릴 수 있나** · §6-292
+    //
+    // 그렇다면 「작업본 반영」에서 프레임을 빼고 보낸다 (10분짜리에서 3.7 MB →
+    // 60 KB) · 판정은 서버가 편집 응답에 실어 준다 · 여기서 다시 계산하지
+    // 않는다.
+    //
+    // 기본은 **거짓**이다 · 모르면 통째로 보낸다 · 잘못 빼면 값이 사라진다.
+    workingFramesDerived: false,
+    previewFramesDerived: false,
     preview: null,
     previewValidation: null,
     undo: [],

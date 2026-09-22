@@ -12,6 +12,7 @@ from std_msgs.msg import String
 from .layer_editor import (
     approximate_motion_points,
     edit_layer,
+    frames_are_curve_derived,
     merge_layers,
 )
 from .layer_validation import point_curve_frame_mismatches, validate_ranges
@@ -109,6 +110,10 @@ class MotionStudioEditorNode(Node):
                 'success': True,
                 'message': '편집 결과를 임시 반영했습니다',
                 'layer': layer,
+                # 프레임을 다시 그릴 수 있나 · 화면은 이 답만 보고 판단한다 · §6-292
+                #
+                # 같은 규칙을 화면에도 두면 언젠가 갈린다 · 판정은 여기 한 곳이다.
+                'frames_are_curve_derived': frames_are_curve_derived(layer),
                 'operation_report': operation_report,
                 'validation': {
                     'conflicts': conflicts,

@@ -8,7 +8,7 @@ import time
 import uuid
 from typing import Any, Dict, List
 
-from .layer_editor import merge_layers
+from .layer_editor import frames_from_point_curves, merge_layers
 from .layer_validation import point_curve_frame_mismatches, validate_ranges
 from .motion_model import layer_motion_ids, normalize_layer
 
@@ -127,6 +127,29 @@ class StudioLayerCommands:
                 raise ValueError('편집 중 원본 레이어가 변경되었습니다. 편집 창을 다시 열어 작업하세요')
             original_motion_ids = layer_motion_ids(original)
             updated = dict(replacement)
+            # **프레임을 안 보냈으면 곡선에서 다시 그린다** · §6-292
+            #
+            # 곡선이 있으면 프레임은 파생물이다 · 화면이 들고 있던 프레임도
+            # 원래 이 서버가 같은 코드로 그려 보낸 것이라 값이 같다 ·
+            # 10분짜리 레이어에서 오가는 양이 3.7 MB → 60 KB 로 준다.
+            #
+            # 곡선이 없으면 다시 그릴 수 없다 · 그때는 화면이 프레임을 보낸다 ·
+            # 안 보냈다면 그것은 잘못이므로 분명히 말하고 멈춘다.
+            if not updated.get('frames'):
+                updated['frames'] = frames_from_point_curves(updated)
+                # **축이 사라지면 멈춘다** · §6-292
+                #
+                # 화면이 잘못 판단해 프레임을 뺐는데 그 축에 곡선이 없으면,
+                # 다시 그릴 재료가 없어 그 축의 값이 통째로 없어진다 · 조용히
+                # 저장되면 되돌릴 방법이 없다 · 원본에 있던 축은 반드시 남아야
+                # 한다.
+                missing_axes = layer_motion_ids(original) - layer_motion_ids(updated)
+                if missing_axes:
+                    raise ValueError(
+                        '곡선이 없어 다시 그릴 수 없는 축이 있습니다: '
+                        + ', '.join(sorted(missing_axes))
+                        + ' · 편집 창을 다시 열어 저장하세요'
+                    )
             updated.update({
                 'layer_id': layer_id,
                 'enabled': original.get('enabled') is not False,

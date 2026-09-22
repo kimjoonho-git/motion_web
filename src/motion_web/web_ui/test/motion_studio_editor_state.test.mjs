@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
@@ -165,4 +166,53 @@ test('single point and tangent drags clear range state and competing gestures', 
   assert.deepEqual(editor.draggingHandle, { side: 'out' });
   assert.equal(editor.draggingPoint, null);
   assert.equal(editor.rangeSelection.phase, 'inactive');
+});
+
+
+// 「작업본 반영」이 프레임을 안 보내도 되는가 · §6-292
+//
+// 곡선이 있으면 프레임은 파생물이다 · 그런데 화면은 반영할 때마다 곡선과
+// 프레임을 둘 다 올렸다 (10분 레이어 3.7 MB) · 판정은 서버가 한 번 하고
+// 화면은 그 답을 나른다 · 규칙을 두 벌로 두면 언젠가 갈린다.
+
+test('처음에는 통째로 보낸다', () => {
+  // 모르면 보낸다 · 잘못 빼면 값이 사라진다
+  const editor = createMotionStudioEditorSession({
+    layer: { layer_id: 'L', frames: [], point_curves: [] },
+    operation: 'time_scale', duration: 1, pointTimelineEnd: 1,
+  });
+
+  assert.equal(editor.workingFramesDerived, false);
+  assert.equal(editor.previewFramesDerived, false);
+});
+
+test('되돌리기 기록에 판정이 함께 실린다', () => {
+  // 되돌리면 그때의 작업본으로 가므로, 그때의 판정도 함께 돌아와야 한다
+  const source = readFileSync(
+    new URL('../static/js/motion_studio_editor_controller.js', import.meta.url), 'utf8',
+  );
+  const entry = source.slice(
+    source.indexOf('export function motionStudioEditorHistoryEntry'),
+    source.indexOf('export function createMotionStudioEditorController'),
+  );
+
+  assert.match(entry, /framesDerived: Boolean\(editor\.workingFramesDerived\)/);
+});
+
+test('반영은 판정이 참일 때만 프레임을 뺀다', () => {
+  const source = readFileSync(
+    new URL('../static/js/motion_studio_editor_controller.js', import.meta.url), 'utf8',
+  );
+
+  assert.match(source, /editor\.workingFramesDerived\s*\n?\s*\?\s*\{ \.\.\.editor\.working, frames: \[\] \}/);
+  assert.match(source, /: editor\.working;/);
+});
+
+test('저장된 것을 새로 받으면 다시 통째로 보낸다', () => {
+  const source = readFileSync(
+    new URL('../static/js/motion_studio_editor_controller.js', import.meta.url), 'utf8',
+  );
+  const accept = source.slice(source.indexOf('const acceptSavedEditorLayer'));
+
+  assert.match(accept.slice(0, 900), /editor\.workingFramesDerived = false/);
 });

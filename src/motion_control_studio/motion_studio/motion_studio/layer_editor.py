@@ -1415,6 +1415,72 @@ def collect_merged_point_curves(
     return merged_point_curves
 
 
+def frames_are_curve_derived(layer: Mapping[str, Any]) -> bool:
+    """이 레이어의 프레임은 **곡선에서 다시 그릴 수 있는가** · §6-292
+
+    그렇다면 프레임은 파생물이다 · 곡선만 있으면 언제든 같은 값이 나온다 ·
+    화면이 「작업본 반영」을 보낼 때 프레임을 뺄 수 있다는 뜻이다 · 10분짜리
+    레이어에서 3.7 MB 가 60 KB 로 준다.
+
+    판정은 싸게 한다 · 곡선을 다시 그려 보지 않고 **구간만** 본다 ·
+    `render_point_curve` 는 첫 포인트부터 마지막 포인트까지 20ms 격자를 빠짐없이
+    채우므로, 그 축의 모든 프레임 시각이 어느 곡선 구간 안에 들면 덮인 것이다.
+
+    녹화만 한 축(곡선 없음)이 하나라도 있으면 거짓이다 · 그 값은 곡선에서
+    나오지 않으므로 프레임이 원본이다.
+    """
+    spans: Dict[str, List[tuple[float, float]]] = {}
+    for curve in layer.get('point_curves') or []:
+        points = list(curve.get('points') or [])
+        if len(points) < 2:
+            continue
+        spans.setdefault(str(curve.get('motion_id') or ''), []).append(
+            point_curve_bounds(curve)
+        )
+    if not spans:
+        return False
+    for frame in layer.get('frames') or []:
+        if not isinstance(frame, Mapping):
+            continue
+        try:
+            time_sec = _finite(frame.get('time_sec'), '프레임 시간')
+        except ValueError:
+            return False
+        for motion_id in (frame.get('values') or {}):
+            ranges = spans.get(str(motion_id))
+            if not ranges:
+                return False
+            if not any(
+                start - EPSILON <= time_sec <= end + EPSILON
+                for start, end in ranges
+            ):
+                return False
+    return True
+
+
+def frames_from_point_curves(layer: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    """곡선만 받아 **프레임을 다시 그린다** · §6-292
+
+    화면이 프레임을 빼고 보냈을 때 서버가 이것으로 채운다 · 같은
+    `render_point_curve` 로 그리므로 화면이 미리보기에서 본 값과 같다 ·
+    그 프레임도 원래 서버가 만들어 보낸 것이다.
+    """
+    tracks: Dict[str, List[tuple[float, float]]] = {}
+    for curve in layer.get('point_curves') or []:
+        points = list(curve.get('points') or [])
+        if len(points) < 2:
+            continue
+        _normalized, rendered = render_point_curve(
+            points, point_curve_order(curve)
+        )
+        tracks.setdefault(str(curve.get('motion_id') or ''), []).extend(rendered)
+    if not tracks:
+        raise ValueError('포인트 곡선이 없어 프레임을 다시 그릴 수 없습니다')
+    return _frames({
+        motion_id: sorted(samples) for motion_id, samples in tracks.items()
+    })
+
+
 def layer_point_coverage_issues(layer: Mapping[str, Any]) -> List[str]:
     """포인트 곡선으로 덮이지 **않은** 축 · 편집기가 묻는 질문이다 · §6-90
 
