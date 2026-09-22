@@ -22,6 +22,22 @@ from .timeline import layer_conflicts
 from motion_common import command_router, topics
 
 
+def _project_axes(project: Dict[str, Any]) -> set:
+    """이 프로젝트 사본에 프레임이 실려 있는 축 · §6-293
+
+    화면이 걸러 보낸 사본이라 모든 축이 들어 있지 않다 · 무엇이 들어 있는지
+    적어 두어야 다음 편집에 그대로 써도 되는지 알 수 있다.
+    """
+    axes = set()
+    for layer in project.get('layers') or []:
+        if not isinstance(layer, dict):
+            continue
+        for frame in layer.get('frames') or []:
+            if isinstance(frame, dict):
+                axes.update(str(key) for key in (frame.get('values') or {}))
+    return axes
+
+
 class MotionStudioEditorNode(Node):
     def __init__(self) -> None:
         super().__init__('motion_studio_editor_node')
@@ -64,6 +80,40 @@ class MotionStudioEditorNode(Node):
     _manual_values = staticmethod(manual_initial_values)
     _layer_motion_ids = staticmethod(layer_motion_ids)
 
+    def _project_for(self, payload: Dict[str, Any]):
+        """편집에 쓸 프로젝트 · **한 번만 받아 기억한다** · §6-293
+
+        편집 노드가 프로젝트를 쓰는 곳은 **충돌 판정 한 군데**다 · 그런데
+        화면이 편집할 때마다 프로젝트를 통째로 올렸다 · 실측으로 2.98 MB 였고,
+        레이어까지 합쳐 한 번에 4.2 MB 가 오갔다 · 포인트 하나를 끌 때마다다.
+
+        프로젝트가 바뀌면 `project_generation` 이 올라간다 · 같은 세대면 기억한
+        것을 그대로 쓴다 · 다르면 화면에 「보내 주세요」라고 답하고, 화면이 그때
+        한 번 실어 보낸다.
+
+        기억은 **한 세대만** 둔다 · 옛 세대로 판정하면 이미 지워진 레이어와
+        충돌한다고 말하게 된다.
+        """
+        generation = payload.get('project_generation')
+        # **키가 있으면 그대로 쓴다** · 빈 프로젝트도 뜻이 있다(비교할 레이어가
+        # 없다) · 키가 아예 없을 때만 기억한 것을 찾는다 · §6-293
+        given = payload.get('project') if 'project' in payload else None
+        if isinstance(given, dict):
+            self._project_cache = (generation, given, _project_axes(given))
+            return given
+        cached = getattr(self, '_project_cache', None)
+        if cached is None or cached[0] != generation:
+            return None
+        # **고른 축이 다르면 못 쓴다** · §6-293
+        #
+        # 화면은 프로젝트를 보낼 때 그 편집에 걸린 축의 프레임만 남겨 보낸다 ·
+        # 다른 축을 편집하면서 그것을 그대로 쓰면, 없는 축은 충돌이 없다고
+        # 보게 된다 · 겹치는 레이어를 그냥 지나친다.
+        needed = self._layer_motion_ids(payload.get('layer') or {})
+        if not needed.issubset(cached[2]):
+            return None
+        return cached[1]
+
     def _handle(self, command: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         ranges = self._ranges(payload)
         if command == 'edit':
@@ -91,7 +141,14 @@ class MotionStudioEditorNode(Node):
             original_layer = payload.get('layer') or {}
             layer = edit_layer(original_layer, payload)
             range_issues = validate_ranges(layer, ranges)
-            source_project = payload.get('project') or {}
+            source_project = self._project_for(payload)
+            if source_project is None:
+                # 기억한 것이 없다 · 화면이 한 번만 보내 주면 된다 · §6-293
+                return {
+                    'success': False,
+                    'need_project': True,
+                    'message': '프로젝트를 함께 보내세요 (편집 노드에 기억된 것이 없습니다)',
+                }
             project = dict(source_project)
             project['layers'] = list(source_project.get('layers') or [])
             for index, existing in enumerate(project['layers']):

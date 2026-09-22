@@ -259,19 +259,39 @@ export function createMotionStudioEditorController({
     return operation;
   }
 
-  function activatePointDraftMutation(editor, message) {
+  function activatePointDraftMutation(editor, message, revealTimeSec = null) {
     if (!editor?.pointDraft) return;
     clearPendingPointCandidate(editor);
     clearEditorPointRange(editor);
+    // **보던 범위를 그대로 물려준다** · §6-296
+    //
+    // 편집 방식이 「포인트 곡선」으로 바뀌면 시간축이 포인트 시간축으로 갈린다 ·
+    // 그래서 20~30초를 확대해 보다가 점 하나만 더해도 화면이 통째로 튀었다 ·
+    // 사람은 방금 누른 자리를 계속 보고 있어야 한다.
+    const keepStart = editor.viewStart;
+    const keepEnd = editor.viewEnd;
     enterEditorPointMode(editor);
-    const lastTime = maxOf(
-      (editor.pointDraft.points || []).map(
-        (point) => Number(point.time_sec) || 0,
-      ),
-      0,
-    );
-    if (lastTime > editor.pointTimelineEnd) editor.pointTimelineEnd = lastTime;
-    if (lastTime > editor.viewEnd) editor.viewEnd = lastTime;
+    editor.viewStart = keepStart;
+    editor.viewEnd = keepEnd;
+    // **보던 자리를 그대로 둔다** · §6-296
+    //
+    // 전에는 편집 묶음의 마지막 점까지 화면을 넓혔다 · 묶음에 점이 하나뿐이던
+    // 시절에는 그게 곧 방금 더한 점이라 티가 안 났다 · 이제는 기존 곡선(예:
+    // 96점, 63초)을 통째로 싣기 때문에, 20~30초를 확대해 보다가 점 하나만
+    // 더해도 화면이 0~63초 전체로 튀었다.
+    //
+    // 더하는 자리는 사람이 화면에서 누른 자리다 · 이미 보이는 곳이라 넓힐
+    // 이유가 없다 · 편집할 수 있는 시간축 끝(`pointTimelineEnd`)만 필요하면
+    // 늘린다 · 그것은 화면이 아니라 자료의 길이다.
+    const touched = Number.isFinite(revealTimeSec)
+      ? Number(revealTimeSec)
+      : maxOf(
+        (editor.pointDraft.points || []).map(
+          (point) => Number(point.time_sec) || 0,
+        ),
+        0,
+      );
+    if (touched > editor.pointTimelineEnd) editor.pointTimelineEnd = touched;
     setEditorMessage(message);
     renderEditor();
   }
@@ -1454,8 +1474,29 @@ export function createMotionStudioEditorController({
         );
       }
     };
+    // 후보 자리에 이미 곡선이 있으면 **그 곡선을 편집 묶음으로 싣는다** · §6-294
+    //
+    // 전에는 편집 묶음이 없으면 **빈 묶음**을 새로 만들고 거기에 포인트를
+    // 넣었다 · 화면에는 원래 곡선(예: 96점)이 그려져 있는데 실제로 만진 것은
+    // 점 하나짜리 딴 묶음이라, 후보만 사라지고 아무 일도 안 나는 것처럼 보였다 ·
+    // 그 뒤로는 그 유령 묶음 때문에 다른 축 선택도 막혔다.
+    const adoptCurveAtCandidate = (editor, candidate) => {
+      if (!editor || !candidate) return;
+      if (editor.pointDraft && editor.pointDraft.motion_id === candidate.motionId) return;
+      const found = editorPointCurves(editor.working).find((curve) => {
+        if (String(curve.motion_id || '') !== String(candidate.motionId)) return false;
+        const points = curve.points || [];
+        if (points.length < 2) return false;
+        const first = Number(points[0].time_sec);
+        const last = Number(points[points.length - 1].time_sec);
+        return candidate.timeSec >= first - MOTION_STUDIO_PERIOD_SEC
+          && candidate.timeSec <= last + MOTION_STUDIO_PERIOD_SEC;
+      });
+      if (found) loadPointDraft(found, '');
+    };
     bindMotionStudioPointEditorEvents({
       state, el, selectedDraftPoint, discardEditorPreview, setEditorMessage,
+      adoptCurveAtCandidate,
       syncPointControls, editorDuration, clearEditorPointRange, renderEditor,
       editorSelectedMotionIds, clearPendingPointCandidate, pointCurveIsApplied,
       pointCurveCanBeCreated, editorId, selectedEditorPointRange,

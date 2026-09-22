@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
@@ -65,4 +66,66 @@ test('range copy and deletion replace one draft without changing the source curv
     points: [point('a', 0), point('copy', 0.2)],
   }), true);
   assert.deepEqual(editor.pointDraft.points.map((item) => item.point_id), ['a', 'copy']);
+});
+
+
+// 곡선 위에 포인트를 더할 때는 **그 곡선에 넣는다** · §6-294
+//
+// 전에는 편집 묶음이 없으면 빈 묶음을 새로 만들고 거기에 넣었다 · 화면에는
+// 원래 곡선(96점)이 그려져 있는데 실제로 만진 것은 점 하나짜리 딴 묶음이라,
+// 후보만 사라지고 아무 일도 안 나는 것처럼 보였다 · 그 뒤로는 그 유령 묶음
+// 때문에 다른 축 선택까지 막혔다.
+
+test('편집 묶음이 없으면 빈 묶음이 생긴다 (고치기 전 모습)', () => {
+  const editor = { pointDraft: null, selectedPointId: '' };
+
+  const result = addMotionStudioDraftPoint(
+    editor, { motionId: '1-1', timeSec: 0.5, valueDeg: 3 },
+    { curveId: 'new', pointId: 'p1', interpolationOrder: 1 },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(editor.pointDraft.points.length, 1, '점 하나짜리 묶음이 된다');
+  assert.equal(editor.pointDraft.curve_id, 'new');
+});
+
+test('기존 곡선을 먼저 실으면 그 곡선에 더해진다', () => {
+  // 편집기가 후보 자리의 곡선을 실어 준 뒤의 모습
+  const editor = {
+    pointDraft: {
+      curve_id: 'c1', motion_id: '1-1', interpolation_order: 1,
+      points: [
+        { point_id: 'a', time_sec: 0.02, value_deg: 0 },
+        { point_id: 'b', time_sec: 1.00, value_deg: 10 },
+      ],
+    },
+    selectedPointId: '',
+  };
+
+  const result = addMotionStudioDraftPoint(
+    editor, { motionId: '1-1', timeSec: 0.5, valueDeg: 5 },
+    { curveId: 'ignored', pointId: 'p2', interpolationOrder: 1 },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(editor.pointDraft.curve_id, 'c1', '원래 곡선에 들어가야 한다');
+  assert.deepEqual(
+    editor.pointDraft.points.map((point) => point.time_sec),
+    [0.02, 0.5, 1.00],
+  );
+});
+
+test('편집기가 후보 자리의 곡선을 찾아 싣는다', () => {
+  const source = readFileSync(
+    new URL('../static/js/motion_studio_editor_controller.js', import.meta.url), 'utf8',
+  );
+
+  assert.match(source, /const adoptCurveAtCandidate = \(editor, candidate\)/);
+  assert.match(source, /if \(found\) loadPointDraft\(found, ''\);/);
+
+  const handler = readFileSync(
+    new URL('../static/js/motion_studio_point_editor.js', import.meta.url), 'utf8',
+  );
+  const addBlock = handler.slice(handler.indexOf('studioEditorPointAddButton'));
+  assert.match(addBlock.slice(0, 2200), /adoptCurveAtCandidate\?\.\(editor, candidate\)/);
 });

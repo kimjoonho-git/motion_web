@@ -848,8 +848,13 @@ test('point range actions reset stale selection and use the point-curve apply pa
   assert.match(html, /id="studioEditorRangeCopyTarget"[^>]*step="0\.02"[^>]*disabled/);
   assert.match(html, /id="studioEditorRangeCopyButton"[^>]*disabled>구간 복사</);
   assert.match(html, /id="studioEditorRangeDeleteButton"[^>]*disabled>구간 삭제</);
-  assert.match(addFlow, /clearEditorPointRange\(editor\)/);
-  assert.match(deleteFlow, /clearEditorPointRange\(editor\)/);
+  // 구간 선택을 푸는 일은 이제 `activatePointDraftMutation` 이 한다 · §6-295
+  //
+  // 포인트를 더하거나 지우면 편집 방식도 「포인트 곡선」으로 옮겨야 한다 ·
+  // 그 일을 하는 함수가 이미 있었는데 아무도 부르지 않아서, 포인트를 더해도
+  // 「변경 미리보기」가 계속 꺼져 있었다 · 이제 둘 다 그 함수를 부른다.
+  assert.match(addFlow, /activatePointDraftMutation\(/);
+  assert.match(deleteFlow, /activatePointDraftMutation\(/);
   assert.match(rangeFlow, /motionStudioCopyPointRange/);
   assert.match(rangeFlow, /motionStudioDeletePointRange/);
   assert.match(rangeFlow, /activatePointDraftMutation/);

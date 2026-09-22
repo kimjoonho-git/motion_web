@@ -118,7 +118,8 @@ export function applyMotionStudioDeletedPointRange(editor, curve, result) {
 export function bindMotionStudioPointEditorEvents(context) {
   const {
     state, el, selectedDraftPoint, discardEditorPreview, setEditorMessage,
-    syncPointControls, editorDuration, clearEditorPointRange, renderEditor,
+    adoptCurveAtCandidate, syncPointControls, editorDuration,
+    clearEditorPointRange, renderEditor,
     editorSelectedMotionIds, clearPendingPointCandidate, pointCurveIsApplied,
     pointCurveCanBeCreated, editorId, selectedEditorPointRange,
     activatePointDraftMutation, selectedEditorTimeRange, applyEditorOperation,
@@ -214,6 +215,9 @@ export function bindMotionStudioPointEditorEvents(context) {
       );
       return;
     }
+    // 그 자리에 곡선이 있으면 **그 곡선에 넣는다** · 빈 묶음을 새로 만들지
+    // 않는다 · §6-294
+    adoptCurveAtCandidate?.(editor, candidate);
     const result = addMotionStudioDraftPoint(editor, candidate, {
       curveId: editorId('curve'),
       pointId: editorId('point'),
@@ -225,13 +229,20 @@ export function bindMotionStudioPointEditorEvents(context) {
       renderEditor();
       return;
     }
-    clearPendingPointCandidate(editor);
-    clearEditorPointRange(editor);
-    setEditorMessage(
+    // 포인트를 건드렸으면 **편집 방식도 「포인트 곡선」으로 옮긴다** · §6-295
+    //
+    // 전에는 포인트만 더해 놓고 편집 방식은 그대로였다 · 그래서 「변경
+    // 미리보기」와 「작업본 반영」이 계속 꺼져 있었고, 실행 취소만 켜졌다 ·
+    // 사람 눈에는 「포인트 추가를 눌러도 아무 일도 안 난다」로 보였다.
+    //
+    // 이 일을 하는 `activatePointDraftMutation` 이 이미 있었는데 **넘겨만 주고
+    // 아무도 부르지 않았다** · 후보 지우기·구간 풀기·시간축 늘리기까지 한다.
+    activatePointDraftMutation(
+      editor,
       `${candidate.motionId} 포인트 추가 · `
       + `${result.point.time_sec.toFixed(2)}초 · ${result.point.value_deg.toFixed(3)}°`,
+      result.point.time_sec,
     );
-    renderEditor();
   });
   el.studioEditorPointDeleteButton?.addEventListener('click', () => {
     const editor = state.editor;
@@ -258,9 +269,12 @@ export function bindMotionStudioPointEditorEvents(context) {
       return;
     }
     discardEditorPreview();
-    clearEditorPointRange(editor);
-    setEditorMessage('포인트를 작업본에서 제거했습니다 · 결과 계산 전에는 저장되지 않습니다.');
-    renderEditor();
+    // 지운 것도 같다 · 편집 방식을 「포인트 곡선」으로 옮긴다 · §6-295
+    activatePointDraftMutation(
+      editor,
+      '포인트를 작업본에서 제거했습니다 · 결과 계산 전에는 저장되지 않습니다.',
+      point.time_sec,
+    );
   });
   // 선택 방식은 둘 중 하나 · §6-121
   //
